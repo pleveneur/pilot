@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pilot - Éditeur Markdown</title>
+  <link rel="stylesheet" href="/src/css/style.css" />
+  <link rel="stylesheet" href="/node_modules/katex/dist/katex.min.css" />
+</head>
+<body class="theme-dark">
+
+  <!-- Barre Latérale (Gauche) -->
+  <aside id="sidebar">
+    <div id="project-selector">
+      <button id="btn-open-project" title="Projets">
+        <img id="btn-project-logo" src="icon.png" alt="Logo" />
+        <span>Projets</span>
+        <span class="dropdown-arrow">▼</span>
+      </button>
+      <div id="projects-dropdown" class="projects-dropdown hidden">
+        <button id="dd-new-project">📁 Nouveau projet</button>
+        <div class="dropdown-separator"></div>
+        <div id="dd-recent-list"></div>
+        <div class="dropdown-separator" id="dd-close-separator"></div>
+        <button id="dd-close-project" class="hidden">✕ Fermer le projet</button>
+      </div>
+      <span id="project-name"></span>
+    </div>
+    <div id="tree-filter-wrapper" class="hidden">
+      <input type="search" id="tree-filter" placeholder="Filtrer les fichiers..." autocomplete="off" />
+    </div>
+    <div id="favorites-section" class="hidden"></div>
+    <div id="file-tree">
+      <p class="empty-message">Aucun projet ouvert</p>
+    </div>
+  </aside>
+  <div id="sidebar-separator"></div>
+
+  <!-- Panneau d'Actions (Bas Gauche) -->
+  <div id="action-panel">
+    <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)">📝</button>
+    <button id="btn-settings" title="Paramètres">⚙️</button>
+    <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur">📂</button>
+    <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal">🖥️</button>
+    <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent">π</button>
+    <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder">🧩</button>
+    <button id="btn-help" title="Aide sur Pilot (poser une question)">❓</button>
+    <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer">🌐 <b id="remote-badge-count">0</b></span>
+  </div>
+
+  <!-- Zone de Travail (Droite) -->
+  <main id="main-area">
+    <div id="tab-bar"></div>
+    <div id="main-content">
+      <div id="editor-container">
+        <p class="empty-message">Ouvrez un fichier depuis l'explorateur</p>
+      </div>
+      <!-- Panneau Outline (table des matières) -->
+      <div id="outline-panel" class="hidden">
+        <div class="outline-header">
+          <span>Table des matières</span>
+          <button id="outline-close-btn" title="Fermer">✕</button>
+        </div>
+        <div id="outline-list"></div>
+      </div>
+    </div>
+
+    <!-- Panneau de recherche globale -->
+    <div id="search-panel" class="hidden">
+      <div class="search-header">
+        <input type="search" id="search-input" placeholder="Rechercher dans les fichiers…" autocomplete="off" />
+        <label class="search-option"><input type="checkbox" id="search-regex-toggle" /> Regex</label>
+        <input type="text" id="search-ext-input" placeholder=".js,.md" class="search-ext-input" />
+        <button id="search-close-btn" title="Fermer">✕</button>
+      </div>
+      <div id="search-results-count"></div>
+      <div id="search-results-list"></div>
+      <div id="search-loading" class="hidden">⏳ Recherche en cours…</div>
+    </div>
+    <div id="status-bar">
+      <span id="status-cursor"></span>
+      <span id="status-stats"></span>
+      <span id="status-filetype"></span>
+      <span id="status-encoding"></span>
+      <span id="status-eol"></span>
+      <span id="status-autosave"></span>
+      <button id="btn-shortcuts" title="Raccourcis clavier">⌨️</button>
+    </div>
+  </main>
+
+  <!-- Modale Raccourcis clavier -->
+  <div id="shortcuts-modal" class="modal hidden">
+    <div class="modal-content shortcuts-content">
+      <h2>⌨️ Raccourcis clavier</h2>
+      <div class="shortcuts-grid">
+        <div class="shortcuts-section">
+          <h3>Fichier</h3>
+          <div class="shortcut-row"><kbd>Ctrl+S</kbd><span>Sauvegarder</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+S</kbd><span>Enregistrer sous</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+W</kbd><span>Fermer l'onglet</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+P</kbd><span>Filtrer les fichiers</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+N</kbd><span>Ouvrir le brouillon</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+B</kbd><span>Ajouter aux favoris</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Navigation</h3>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+P</kbd><span>Palette de commandes</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+F</kbd><span>Recherche globale</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+O</kbd><span>Table des matières</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+G</kbd><span>Aller à la ligne</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Tab</kbd><span>Onglet suivant</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+Tab</kbd><span>Onglet précédent</span></div>
+          <div class="shortcut-row"><kbd>F11</kbd><span>Mode Zen (plein écran)</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Markdown</h3>
+          <div class="shortcut-row"><kbd>Ctrl+B</kbd><span>Gras</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+I</kbd><span>Italique</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+K</kbd><span>Lien</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+E</kbd><span>Split éditeur / aperçu</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Éditeur</h3>
+          <div class="shortcut-row"><kbd>Ctrl+F</kbd><span>Rechercher</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+H</kbd><span>Remplacer</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+D</kbd><span>Sélection suivante</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Z</kbd><span>Annuler</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+Z</kbd><span>Rétablir</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Space</kbd><span>Auto-complétion IA</span></div>
+          <div class="shortcut-row"><kbd>Alt+Z</kbd><span>Renvoi à la ligne automatique</span></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-close-shortcuts">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Palette de commandes -->
+  <div id="command-palette" class="hidden">
+    <div class="palette-backdrop"></div>
+    <div class="palette-content">
+      <input type="text" id="palette-input" placeholder="Tapez une commande…" autocomplete="off" />
+      <ul id="palette-list"></ul>
+    </div>
+  </div>
+
+  <!-- Modale Paramètres -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content settings-content">
+      <h2>⚙️ Paramètres</h2>
+      <div class="settings-grid">
+
+        <!-- Colonne 1 : Apparence + Éditeur -->
+        <div class="settings-column">
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">🎨 Apparence</h3>
+            <div class="setting-row">
+              <label for="setting-theme">Thème :</label>
+              <select id="setting-theme">
+                <option value="dark">Sombre</option>
+                <option value="light">Clair</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">📝 Éditeur</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-word-wrap" />
+              <label for="setting-word-wrap">Renvoi à la ligne automatique</label>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-auto-save" />
+              <label for="setting-auto-save">Sauvegarde automatique</label>
+            </div>
+            <div class="setting-row">
+              <label for="setting-auto-save-delay">Délai auto-save (ms) :</label>
+              <input type="number" id="setting-auto-save-delay" min="500" max="30000" step="500" value="3000" />
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-integrated-terminal" />
+              <label for="setting-integrated-terminal">Intégrer le terminal</label>
+            </div>
+          </div>
+
+          <div class="settings-section" id="settings-remote-section">
+            <h3 class="settings-section-title">🌐 Accès distant (mode remote)</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-web-enabled" />
+              <label for="setting-web-enabled">Activer le serveur web distant (supervision navigateur)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-bind">Adresse d'écoute :</label>
+              <input type="text" id="setting-web-bind" placeholder="127.0.0.1" />
+              <small>127.0.0.1 = local uniquement · IP Tailscale (100.x) pour accès distant via mesh</small>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-port">Port :</label>
+              <input type="number" id="setting-web-port" min="1" max="65535" value="8787" />
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-web-readonly" />
+              <label for="setting-web-readonly">Lecture seule (interdit prompt / changement de projet depuis le web)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-ttl">Durée de session (heures) :</label>
+              <input type="number" id="setting-web-ttl" min="1" max="8760" value="168" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-roots">Racines autorisées au parcours (une par ligne ; vide = parents des projets récents) :</label>
+              <textarea id="setting-web-roots" rows="3" placeholder="C:\Users\…\Projets
+/home/user/projets"></textarea>
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-web-keepalive" />
+              <label for="setting-web-keepalive">Garder en tray après fermeture de la fenêtre (serveur web + agent pi restent actifs en arrière-plan)</label>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-web-tailscale-serve" />
+              <label for="setting-web-tailscale-serve">Exposer en HTTPS automatique (Tailscale Serve) — plus aucune commande à taper</label>
+              <small class="muted">Configure Tailscale Serve (HTTPS 443 → 127.0.0.1:port) et resync au changement de port. Exige « Adresse d'écoute » = 127.0.0.1.</small>
+            </div>
+            <div class="setting-row setting-row-indent" id="tailscale-block">
+              <div class="setting-row">
+                <span id="tailscale-badge" class="tailscale-badge muted">Tailscale : détection…</span>
+              </div>
+              <div class="setting-row">
+                <label for="tailscale-url">Adresse d'accès distant :</label>
+                <input type="text" id="tailscale-url" readonly placeholder="https://<hostname>.ts.net/" />
+                <button id="btn-tailscale-copy" type="button" class="web-btn">📋 Copier</button>
+              </div>
+              <div class="setting-row tailscale-qr-row">
+                <div id="tailscale-qrcode" class="tailscale-qrcode" title="Scannez avec le téléphone pour ouvrir l'accès distant"></div>
+                <small id="tailscale-serve-status" class="muted">Statut serve : —</small>
+              </div>
+              <div class="setting-row">
+                <button id="btn-tailscale-reconfigure" type="button" class="web-btn">🔄 Reconfigurer maintenant</button>
+              </div>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row">
+              <label>Mot de passe distant :</label>
+              <span id="web-pw-status" class="web-pw-status muted">—</span>
+              <button id="btn-web-set-password" type="button" class="web-btn">Définir / changer</button>
+              <button id="btn-web-clear-password" type="button" class="web-btn web-btn-danger">Effacer</button>
+            </div>
+            <div class="setting-row">
+              <label>Clients connectés :</label>
+              <span id="web-active-count" class="web-pw-status">0</span>
+              <button id="btn-web-kick" type="button" class="web-btn web-btn-danger" disabled>Déconnecter tous</button>
+            </div>
+            <div class="setting-row">
+              <label>Journal d'audit distant :</label>
+              <button id="btn-web-audit" type="button" class="web-btn">📜 Ouvrir le journal</button>
+            </div>
+            <div class="setting-row">
+              <small class="muted">Après un changement d'activation / adresse / port, cliquez « Enregistrer » puis le serveur recharge à chaud automatiquement.</small>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Colonne 2 : Agent Pi -->
+        <div class="settings-column">
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">🤖 Agent Pi</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-rpc-agent" />
+              <label for="setting-rpc-agent">Gestion RPC de l'agent pi</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-rpc-path">Chemin de l'exécutable pi :</label>
+              <input type="text" id="setting-rpc-path" placeholder="pi (ou chemin complet)" />
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-rpc-no-session" />
+              <label for="setting-rpc-no-session">Mode sans session (--no-session)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-rpc-session-dir">Dossier des sessions :</label>
+              <input type="text" id="setting-rpc-session-dir" placeholder="~/.pi/agent/sessions" />
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-show-thinking" />
+              <label for="setting-show-thinking">Afficher la pensée de l'agent</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-show-tools" />
+              <label for="setting-show-tools">Afficher les tools utilisés</label>
+            </div>
+            <div class="setting-row">
+              <label for="setting-command">Commande pour lancer l'agent :</label>
+              <input type="text" id="setting-command" placeholder="ex: python main.py" />
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-auto-load" />
+              <label for="setting-auto-load">Charger le dernier projet au démarrage</label>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-auto-run" />
+              <label for="setting-auto-run">Lancer la commande de l'agent au démarrage</label>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Colonne 3 : Modèles IA -->
+        <div class="settings-column">
+
+          <div class="settings-section">
+            <h3 class="settings-section-title">🧠 Modèles IA</h3>
+            <div class="setting-row">
+              <label for="setting-pdf-md-model">Modèle pour PDF → MD :</label>
+              <select id="setting-pdf-md-model">
+                <option value="">Modèle par défaut</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-orchestration" />
+              <label for="setting-orchestration">Mode Orchestration (architecte + codeur)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orchestrator-model">Modèle orchestrateur :</label>
+              <select id="setting-orchestrator-model">
+                <option value="">Modèle par défaut</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-coder-model">Modèle codeur :</label>
+              <select id="setting-coder-model">
+                <option value="">Modèle par défaut</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-orch-confirm-model-switch" />
+              <label for="setting-orch-confirm-model-switch">Confirmer chaque bascule de modèle (plus lent mais plus sûr)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-coder-context-window">Fenêtre de contexte du codeur (tokens, 0 = auto) :</label>
+              <input type="number" id="setting-coder-context-window" min="0" max="200000" step="1000" value="0" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-idle-timeout">Timeout d'inactivité du codeur (ms) :</label>
+              <input type="number" id="setting-orch-idle-timeout" min="10000" max="600000" step="1000" value="120000" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-revision-interval">Révision mid-plan toutes les N tâches :</label>
+              <input type="number" id="setting-orch-revision-interval" min="0" max="50" step="1" value="5" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-granularity">Taille des tâches :</label>
+              <select id="setting-orch-granularity">
+                <option value="fine">Fine (~30-60 lignes, max 2 fichiers)</option>
+                <option value="medium">Moyenne (~60-120 lignes, max 3 fichiers)</option>
+                <option value="large">Large (~100-200 lignes, max 5 fichiers)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-batch-size">Regroupement des tâches (batch) :</label>
+              <select id="setting-orch-batch-size">
+                <option value="-1">Auto (désactivé — contexte frais par tâche, recommandé)</option>
+                <option value="0">Désactivé</option>
+                <option value="3">Par 3 tâches</option>
+                <option value="5">Par 5 tâches</option>
+                <option value="10">Par 10 tâches</option>
+              </select>
+            </div>
+          </div>
+
+
+        </div>
+
+      </div>
+
+      <div class="modal-actions">
+        <button id="btn-save-settings">Enregistrer</button>
+        <button id="btn-close-settings">Annuler</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Menu contextuel -->
+  <div id="context-menu" class="context-menu hidden">
+    <button id="ctx-preview-csv">📊 Prévisualiser le CSV</button>
+    <button id="ctx-preview">👁️ Prévisualiser</button>
+    <button id="ctx-export-pdf">📕 Exporter en PDF</button>
+    <button id="ctx-open-browser">🌐 Ouvrir dans le navigateur</button>
+    <button id="ctx-send-agent">📤 Envoyer à l'agent Pi</button>
+    <button id="ctx-add-prompt-builder">🧩 Ajouter au Prompt Builder</button>
+    <button id="ctx-favorite">⭐ Ajouter aux favoris</button>
+    <button id="ctx-create-file">📄 Créer un fichier</button>
+    <button id="ctx-create-folder">📁 Créer un dossier</button>
+    <button id="ctx-rename">📝 Renommer</button>
+    <button id="ctx-delete">🗑️ Supprimer</button>
+    <button id="ctx-create-md">📝 Créer un fichier Markdown</button>
+  </div>
+
+  <!-- Indicateur de chargement global -->
+  <div id="loading-overlay" class="hidden">
+    <div class="loading-spinner"></div>
+    <div class="loading-message"></div>
+  </div>
+
+  <!-- Modale : journal d'audit distant (mode remote) -->
+  <div id="audit-modal" class="modal hidden">
+    <div class="modal-content audit-content">
+      <div class="modal-header">
+        <h2>📜 Journal d'audit distant</h2>
+        <button id="audit-close" class="modal-close" title="Fermer">✕</button>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-audit-refresh" class="web-btn">🔄 Actualiser</button>
+        <button id="btn-audit-clear" class="web-btn web-btn-danger">🗑 Effacer le journal</button>
+        <span id="audit-count" class="muted" style="margin-left:auto;align-self:center"></span>
+      </div>
+      <div class="audit-table-wrap">
+        <table id="audit-table" class="audit-table">
+          <thead>
+            <tr><th>Heure</th><th>IP</th><th>Session</th><th>Action</th><th>Détail</th><th>État</th></tr>
+          </thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/js/main.js"></script>
+</body>
+</html>

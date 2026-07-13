@@ -1,0 +1,10 @@
+{
+  "name": "web-to-markdown",
+  "version": "1.0.0",
+  "description": "Pi extension to fetch web pages and convert them to Markdown",
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "jsdom": "^25.0.0",
+    "turndown": "^7.2.0"
+  }
+}

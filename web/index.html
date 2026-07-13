@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Pilot — Accès distant</title>
+  <link rel="stylesheet" href="/css/web.css" />
+</head>
+<body>
+  <!-- Écran de connexion -->
+  <section id="login-screen" class="screen">
+    <div class="login-card">
+      <h1>🚀 Pilot</h1>
+      <p class="subtitle">Accès distant</p>
+      <form id="login-form">
+        <input type="password" id="login-password" placeholder="Mot de passe" autocomplete="current-password" />
+        <button type="submit" id="login-btn">Se connecter</button>
+        <p id="login-error" class="error" hidden></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- Application -->
+  <section id="app-screen" class="screen" hidden>
+    <!-- Zone fixe en haut : titre + onglets + model-select (tout empilé verticalement) -->
+    <header class="top-area">
+      <span class="app-title">🚀 Pilot web-remote</span>
+
+      <nav id="tabbar" class="top-area-tabbar">
+        <button data-view="chat" class="active">💬 Chat</button>
+        <button data-view="files">📂 Fichiers</button>
+        <button data-view="projects">📁 Projet</button>
+      </nav>
+
+      <!-- Sélecteur modèle (visible seulement en onglet Chat) -->
+      <div id="chat-model-bar" class="top-area-modelbar">
+        <select id="model-select"></select>
+        <span id="agent-status" class="status idle">idle</span>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Chat -->
+      <div id="view-chat" class="view active">
+
+        <div id="chat-messages"></div>
+        <div id="chat-controls">
+          <button id="btn-new" class="ctrl">🆕 New</button>
+          <button id="btn-abort" class="ctrl" disabled>⏹ Stop</button>
+          <button id="btn-compact" class="ctrl">🗜 Compact</button>
+          <button id="btn-load-history" class="ctrl">⏫ Historique</button>
+        </div>
+        <form id="prompt-form" class="prompt-bar">
+          <textarea id="prompt-input" placeholder="Instruction à l'agent…" rows="2"></textarea>
+          <button type="button" id="prompt-mic" class="prompt-mic" title="Dictée vocale (requiert HTTPS)" aria-label="Dictée vocale">🎙️</button>
+          <button type="submit" id="prompt-send">➤</button>
+        </form>
+      </div>
+
+      <!-- Fichiers -->
+      <div id="view-files" class="view">
+        <div id="file-tree"></div>
+        <div id="file-viewer">
+          <div id="file-bar">
+            <span id="file-path" class="muted"></span>
+            <span id="file-actions">
+              <button id="btn-file-new" class="ctrl" hidden>📄 Nouveau</button>
+              <button id="btn-file-edit" class="ctrl" hidden>✏️ Éditer</button>
+              <button id="btn-file-save" class="ctrl" hidden>💾 Enregistrer</button>
+              <button id="btn-file-cancel" class="ctrl" hidden>Annuler</button>
+            </span>
+          </div>
+          <pre><code id="file-content"></code></pre>
+          <textarea id="file-editor" class="file-editor" hidden spellcheck="false"></textarea>
+        </div>
+      </div>
+
+      <!-- Projets -->
+      <div id="view-projects" class="view">
+        <h3>Projet courant</h3>
+        <div id="current-project" class="muted"></div>
+        <button id="btn-new-project" class="ctrl">＋ Nouveau projet</button>
+        <h3>Récents</h3>
+        <div id="recent-projects"></div>
+        <h3>Parcourir</h3>
+        <div id="browse-roots"></div>
+        <div id="browse-list"></div>
+      </div>
+    </main>
+  </section>
+
+  <!-- Modale : création de projet (choix racine + nom) -->
+  <div id="modal-new-project" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <h3>📁 Nouveau projet</h3>
+      <label class="modal-label" for="newproj-root">Racine</label>
+      <select id="newproj-root" class="modal-select"></select>
+      <label class="modal-label" for="newproj-name">Nom du dossier</label>
+      <input id="newproj-name" class="modal-input" type="text" placeholder="mon-projet" autocomplete="off" spellcheck="false" />
+      <p id="newproj-error" class="error" hidden></p>
+      <div class="modal-actions">
+        <button id="newproj-cancel" class="ctrl">Annuler</button>
+        <button id="newproj-create" class="ctrl ctrl-primary">Créer</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/app.js?v=2"></script>
+</body>
+</html>

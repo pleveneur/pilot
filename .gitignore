@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+target/
+
+# Tauri build
+src-tauri/target/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Pi extensions node_modules (already covered by node_modules/ above)
+.pi/extensions/*/node_modules/
+
+# Local config overrides
+*.local
+
+# Local project data (plan.json, tests artifacts, etc.)
+.pilot/
+
+# Local dev/temp files
+nul
+_fix_md.js
+exemplesession.jsonl
+sessions.md
+rtk_analyse.md
+pi-docs/
+rapport_tmp.md
