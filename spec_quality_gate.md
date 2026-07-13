@@ -1,9 +1,9 @@
 # Spec — Quality-gate interne à Pilot (skill embarqué, activable dans l'onglet agent)
 
-> Document de spécification — Statut : **planifié, non implémenté**.
+> Document de spécification — Statut : **✅ Implémenté**.
 > Décision initiale 10/07/2026, **modifiée 10/07/2026** (skill global supprimé par
 > l'utilisateur ; le quality-gate devient un skill **embarqué dans Pilot**, activable
-> depuis l'onglet de l'agent).
+> depuis l'onglet de l'agent). Implémenté le 13/07/2026.
 > Suivi : voir « Évolution 7 » dans `Bugs et Evolutions.md`.
 
 ---
@@ -92,7 +92,7 @@ Windows, équivalent multi-plateforme via `app.path().app_config_dir()`).
 
 ---
 
-## 5. Plan d'implémentation
+## 5. Plan d'implémentation — ✅ Terminé (13/07/2026)
 
 - [ ] **`src-tauri/skills/quality-gate/SKILL.md`** : nouveau fichier, copie du skill
       global actuel (voir §7). Embarqué via `include_str!`.
@@ -119,7 +119,7 @@ Windows, équivalent multi-plateforme via `app.path().app_config_dir()`).
 
 ---
 
-## 6. Points ouverts / à valider
+## 6. Points ouverts — résolus à l'implémentation
 
 1. **Relance immédiate vs au prochain démarrage** : au clic sur 🛡️, doit-on relancer
    l'agent tout de suite (applique le set de skills immédiatement, mais interrompt

@@ -194,3 +194,211 @@ Actuellement, un fichier modifié extérieurement est juste marqué en flash rou
 - [ ] 22.3 Auto-rechargement intelligent : si je n'ai pas modifié le fichier, recharger silencieusement
 
 Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. Un vrai dialogue de résolution de conflit est la base du CRUD fichier.
+
+---
+
+## 23. Brainstorming du 13/07/2026 — pipeline d'évolutions
+
+> Récapitulatif de tout ce qu'il reste à faire, organisé par thème, avec pour
+> chaque idée les **fichiers concernés**. Les idées déjà couvertes plus haut (1-22)
+> ne sont pas reprises ici sauf si re-priorisées. La priorisation recommandée est
+> en fin de section.
+
+### 🅰️ Productivité agent IA (cœur de Pilot)
+
+#### A1 — Snapshots / point de restauration avant tâche d'orchestration
+- [ ] Avant chaque tâche d'orchestration, snapshot des fichiers concernés dans `.pilot/snapshots/<taskId>/`. Bouton « ↩️ Annuler la dernière tâche » restore.
+- **Fichiers :** `src/js/orchestration.js` (capture/restore), `src/js/agent-pi.js` (UI bouton + handler), `src-tauri/src/lib.rs` (commandes `snapshot_task` / `restore_snapshot`), `spec_orchestration.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen
+
+#### A2 — Bibliothèque de prompts favoris / snippets
+- [ ] Prompts réutilisables taggés, insertion 1 clic dans la zone agent.
+- **Fichiers :** nouveau `src/js/prompt-library.js`, `src/js/agent-pi.js` (branchement UI), `src-tauri/src/lib.rs` (config `prompt_snippets` + commandes CRUD), `index.html`, `src/css/style.css`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### A3 — Pinning de fichiers dans le contexte agent
+- [ ] Fichiers « épinglés » toujours envoyés en contexte implicite à chaque prompt (ex: `AGENTS.md`, `spec_pilot.md`).
+- **Fichiers :** `src/js/agent-pi.js` (injection contexte + UI pin), `src/js/sidebar.js` (action clic-droit « Épingler au contexte agent »), `src-tauri/src/lib.rs` (config `pinned_context_files`), `spec_rpc.md`.
+- **Valeur :** 🟡 haute · **Effort :** moyen
+
+#### A4 — Mode « diff review » agent (Accepter / Rejeter par hunk)
+- [ ] Après qu'un outil de l'agent a modifié un fichier, afficher le diff inline (avant/après) avec Accepter/Rejeter par hunk. **Composant partagé avec C1 (Git).**
+- **Fichiers :** nouveau `src/js/diff-view.js`, `src/js/agent-pi.js` (interception tool_execution_end + UI), `src-tauri/src/lib.rs` (snapshot avant modif via tool), `src/css/style.css` (styles diff), `spec_rpc.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen-haut
+
+#### A5 — Branche parallèle « scratch session »
+- [ ] Lancer un 2e prompt « what-if » sans polluer la session principale (pi `--no-session` temporaire, comme l'aide).
+- **Fichiers :** `src/js/agent-pi.js` (UI onglet/fenêtre secondaire), `src-tauri/src/rpc_manager.rs` (réutiliser `convert_text_with_pi` / pattern temporaire), `src-tauri/src/lib.rs` (commande `ask_agent_scratch`).
+- **Valeur :** 🟡 haute · **Effort :** moyen
+
+#### A6 — Coût cumulé par projet + onglet « 📊 Usage »
+- [ ] Agrégation des `session_stats` par projet dans `.pilot/usage.json`, graphe simple.
+- **Fichiers :** nouveau `src/js/usage.js`, `src/js/main.js` (onglet), `src-tauri/src/lib.rs` (commandes `record_usage` / `get_usage`), `index.html`, `src/css/style.css`.
+- **Valeur :** 🟠 moyenne · **Effort :** faible
+
+### 🅱️ Édition / éditeur
+
+#### B1 — Multi-curseurs / sélection en colonne
+- [ ] Activer les extensions CodeMirror 6 multi-curseurs (`@codemirror/search` cursorAt + `multipleSelections`).
+- **Fichiers :** `src/js/editor.js` (extensions CodeMirror), `package.json` (dépendance si besoin).
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### B2 — Lint diagnostics inline dans l'éditeur
+- [ ] Afficher les erreurs `check_syntax` (déjà appelé par orchestration) via `@codemirror/lint` pour l'édition manuelle aussi.
+- **Fichiers :** `src/js/editor.js` (extension lint), `src-tauri/src/lib.rs` (réutiliser `check_syntax` en commande standalone), `package.json` (`@codemirror/lint`).
+- **Valeur :** 🟡 haute · **Effort :** moyen
+
+#### B3 — Find & Replace dans projet (pas seulement search)
+- [ ] Étendre `search-panel.js` en replace avec preview (remplacement unitaire / tous).
+- **Fichiers :** `src/js/search-panel.js` (UI replace + handler), `src-tauri/src/lib.rs` (commande `replace_in_files`), `src/css/style.css`, `index.html`.
+- **Valeur :** 🟡 haute · **Effort :** faible-moyen
+
+#### B4 — MiniMap CodeMirror (déjà noté idée 16)
+- [ ] Intégrer `@codemirror/minimap` + toggle paramètres + sync scroll.
+- **Fichiers :** `src/js/editor.js`, `src/js/settings.js` (toggle), `src-tauri/src/lib.rs` (config `minimap_enabled`), `package.json` (`@codemirror/minimap`), `src/css/style.css`.
+- **Valeur :** 🟠 moyenne · **Effort :** faible
+
+#### B5 — Snippets / templates de fichier
+- [ ] Clic droit → « Nouveau fichier depuis template » (ex: `spec_*.md`, `AGENTS.md`, `main.rs`). Templates dans `app_data_dir/templates/`.
+- **Fichiers :** `src/js/sidebar.js` (menu contextuel + modale), `src-tauri/src/lib.rs` (commandes `list_templates` / `create_from_template`), `index.html`, `src/css/style.css`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### B6 — Drag & drop de fichiers dans l'éditeur → lien/chemin
+- [ ] Étendre `image-paste.js` : drop d'un fichier non-image insère un chemin relatif (ou `![]()` pour images).
+- **Fichiers :** `src/js/image-paste.js` (généralisation), `src/js/tabs.js` (drop handler).
+- **Valeur :** 🟠 moyenne · **Effort :** faible
+
+### 🅲️ Organisation / navigation projet
+
+#### C1 — Git intégré (déjà noté idée 1) — statut + diff visuel
+- [ ] 1.1 Statut modifié/indexé dans l'arborescence (couleurs + badges).
+- [ ] 1.2 Diff visuel entre version sauvegardée et version courante (réutilise A4 `diff-view.js`).
+- **Fichiers :** `src-tauri/src/lib.rs` (commandes `git_status` / `git_diff` via `git2` ou CLI `git`), nouveau `src-tauri/src/git.rs`, `src/js/sidebar.js` (badges statut), `src/js/diff-view.js` (partagé avec A4), `src/css/style.css`, `spec_pilot.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen
+
+#### C2 — Workspace multi-projets
+- [ ] Ouvrir plusieurs projets en onglets de sidebar, chacun avec son agent pi séparé.
+- **Fichiers :** `src-tauri/src/lib.rs` (AppState multi-sessions), `src-tauri/src/rpc_manager.rs` (multi-session), `src/js/sidebar.js`, `src/js/main.js`, `src/js/agent-pi.js`. ⚠️ Gros chantier (pi partagé, state).
+- **Valeur :** 🟠 moyenne · **Effort :** haut
+
+#### C3 — Tags / labels sur fichiers
+- [ ] Au-delà des favoris, tags colorés filtrables (ex: « à revoir », « draft », « spec »).
+- **Fichiers :** `src/js/sidebar.js` (UI tags + filtre), `src-tauri/src/lib.rs` (config `file_tags: HashMap<String, Vec<String>>`), `src/css/style.css`.
+- **Valeur :** 🟠 moyenne · **Effort :** moyen
+
+#### C4 — Recent files popover (`Ctrl+Alt+R`)
+- [ ] Liste des 20 derniers fichiers ouverts dans le projet, fuzzy search.
+- **Fichiers :** `src/js/main.js` (raccourci + popover), `src/js/session-persistence.js` (historique), `index.html`, `src/css/style.css`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+### 🅳️ Mode remote / supervision
+
+#### D1 — Notifications desktop « agent terminé à distance »
+- [ ] Toast desktop quand l'agent termine une tâche longue lancée depuis le téléphone.
+- **Fichiers :** `src-tauri/src/lib.rs` (notification native via `tauri-plugin-notification` à `agent_end` si origine web), `src/js/main.js` (listener), `package.json` + `src-tauri/Cargo.toml` (plugin notification), `spec_web_remote.md`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### D2 — Vue « activité » web (dashboard supervision)
+- [ ] Page web condensée : plan d'orchestration en cours + tâches cochées, sans le chat complet.
+- **Fichiers :** `web/index.html` (nouvelle vue), `web/js/app.js` (route vue), `web/css/web.css`, `src-tauri/src/web_server.rs` (route `/api/plan` si orchestration), `spec_web_remote.md`.
+- **Valeur :** 🟠 moyenne · **Effort :** moyen
+
+#### D3 — WebAuthn / passkey sur le web remote
+- [ ] Remplace la passphrase par biométrie téléphone (anticipé §6.8 spec web remote).
+- **Fichiers :** `web/index.html` + `web/js/app.js` (WebAuthn API), `src-tauri/src/web_auth.rs` (vérification assertion), `src-tauri/Cargo.toml` (dépendances webauthn), `spec_web_remote.md`.
+- **Valeur :** 🟠 moyenne · **Effort :** moyen-haut
+
+#### D4 — Partage de session en lecture seule (URL temporaire)
+- [ ] Token jetable pour montrer une conversation sans accès aux commandes.
+- **Fichiers :** `src-tauri/src/web_auth.rs` (tokens jetables read-only), `src-tauri/src/web_server.rs` (scope read-only), `web/js/app.js` (mode dégradé), `spec_web_remote.md`.
+- **Valeur :** 🟠 moyenne · **Effort :** moyen
+
+### 🅴️ Robustesse / qualité
+
+#### E0 — Observabilité des échecs du codeur ✅ TERMINÉ
+- [x] Journal des tentatives par tâche (marqueur, raison, durée, fichiers, extrait réponse, erreurs linting) + détection de bouclage + bloc repliable dans le panneau d'orchestration. Voir [`spec_orchestration_observability.md`](./spec_orchestration_observability.md) (validé 2026-07-13).
+- [x] **Nudge proactif après arrêt prématuré en réflexion** (validé 2026-07-13) : détection des modèles faibles (9B) qui s'arrêtent après la Phase 1 (REFLEXION_DONE sans bloc) → relance in-session vers la Phase 2 (max 2 par tâche) pour éviter l'escalade cloud systématique. Voir `spec_orchestration_observability.md` §5.
+- **Fichiers :** `src/js/orchestration.js` (fonctions pures `createAttemptLog`/`detectLoop`/`summarizeTaskAttempts`/`normalizeForLoop`/`makeExcerpt`/`detectReflectionOnly`/`buildNudgeAfterReflectionPrompt`), `src/js/agent-pi.js` (`logTaskAttempt`/`deriveFailureMarker`/`renderOrchestrationAttempts` + instrumentation `handleTaskFailure`/SELF_FIX/lint/DONE/escalade + branche nudge), `src/css/style.css` (`.orch-attempts*`), `spec_orchestration_observability.md`.
+
+#### E1 — Quality-gate interne ✅ TERMINÉ
+- [x] Bouton 🛡️ embarqué, `--skill` Pilot, persistance config. Voir `spec_quality_gate.md` et Évolution 7 dans `Bugs et Evolutions.md` (validé 2026-07-11).
+
+#### E2 — Auto-test post-modification (mode Orchestration)
+- [ ] Après chaque tâche, lancer les tests du projet (`npm test` / `cargo test` / `pytest`) au lieu de juste `check_syntax`.
+- **Fichiers :** `src/js/orchestration.js` (détection test runner + prompt SELF_FIX), `src/js/agent-pi.js` (handler linting loop), `src-tauri/src/lib.rs` (commande `run_project_tests`), `spec_orchestration.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen
+
+#### E3 — Tests d'intégration multi-plateforme (déjà noté spec_rpc §12)
+- [ ] CI macOS/Linux pour le RPC (Tauri + pi).
+- **Fichiers :** nouveau `.github/workflows/ci.yml` (ou équivalent), `src-tauri/src/rpc_manager.rs` (tests `#[cfg(test)]`), `spec_rpc.md`.
+- **Valeur :** 🟡 haute · **Effort :** moyen
+
+#### E4 — Health check pi au démarrage
+- [ ] `get_available_models` au lancement ; si pi absent, désactiver l'onglet agent gracieusement.
+- **Fichiers :** `src/js/main.js` (check au démarrage), `src/js/agent-pi.js` (UI désactivée), `src-tauri/src/lib.rs` (commande `pi_health_check`).
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+### 🅵️ Export / partage
+
+#### F1 — Export HTML autonome (déjà noté 21.1)
+- [ ] Un `.html` avec CSS inline, partageable sans Pilot.
+- **Fichiers :** `src/js/pdf-export.js` (généralisation en `exportMarkdownTo`), `src/js/sidebar.js` (menu contextuel), `src/css/style.css` (CSS inline), `spec_pilot.md`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### F2 — Export conversation agent (déjà noté spec_rpc §12)
+- [ ] Sauver le chat agent en Markdown/HTML pour archivage.
+- **Fichiers :** `src/js/agent-pi.js` (bouton + export), `src-tauri/src/lib.rs` (commande `export_session` optionnelle), `spec_rpc.md`.
+- **Valeur :** 🟡 haute · **Effort :** faible
+
+#### F3 — Copy as HTML (déjà noté 21.3)
+- [ ] Copier le rendu Markdown dans le presse-papiers.
+- **Fichiers :** `src/js/preview.js` (action), `src/js/sidebar.js` (menu contextuel), `index.html`.
+- **Valeur :** 🟠 moyenne · **Effort :** faible
+
+#### F4 — Live share d'un fichier (URL Tailscale temporaire)
+- [ ] Exposer un `.md` en lecture sans login complet.
+- **Fichiers :** `src-tauri/src/web_server.rs` (route publique `/share/<token>`), `src-tauri/src/web_auth.rs` (token share), `spec_web_remote.md`.
+- **Valeur :** 🟢 basse · **Effort :** moyen
+
+### 🅶️ UX / confort
+
+#### G1 — Thèmes personnalisés (déjà noté 19)
+- [ ] 19.1 Thème CSS custom (`theme-user.css` dans `app_data_dir`) · 19.2 Éditeur visuel · 19.3 Thèmes prédéfinis (Catppuccin, Nord, Solarized).
+- **Fichiers :** `src/css/style.css` (variables à extraire), `src/js/theme.js` (chargement custom), `src/js/settings.js` (sélecteur + éditeur), `src-tauri/src/lib.rs` (config `theme` étendue).
+- **Valeur :** 🟠 moyenne · **Effort :** faible-moyen
+
+#### G2 — Raccourcis personnalisables (déjà noté 18)
+- [ ] 18.1 Section paramètres remapper · 18.2 Stockage config · 18.3 Prévisualisation conflits.
+- **Fichiers :** `src/js/main.js` (keymap depuis config), `src/js/settings.js` (UI), `src-tauri/src/lib.rs` (config `keybindings: HashMap`).
+- **Valeur :** 🟠 moyenne · **Effort :** moyen
+
+#### G3 — Command palette étendue (symboles + récents)
+- [ ] Ajouter actions « sauter à un symbole » (fonctions/headers) + récents.
+- **Fichiers :** `src/js/main.js` (palette), `src/js/languages.js` (extraction symboles), `index.html`.
+- **Valeur :** 🟠 moyenne · **Effort :** faible
+
+#### G4 — Status bar : dernier save + horloge session
+- [ ] Info « dernier save il y a Xs » pour rassurer.
+- **Fichiers :** `src/js/tabs.js` (statut bar), `index.html`, `src/css/style.css`.
+- **Valeur :** 🟢 basse · **Effort :** faible
+
+### Priorisation recommandée (ratio valeur/effort)
+
+| Rang | Idée | Fichiers principaux |
+|------|------|---------------------|
+| 🥇 | E1 — Quality-gate interne ✅ | (déjà fait) |
+| 🥈 | E0 — Observabilité des échecs ✅ | (déjà fait) |
+| 🥉 | A4 — Diff review agent | `diff-view.js` (nouveau), `agent-pi.js`, `lib.rs` |
+| 4 | C1 — Git intégré | `git.rs` (nouveau), `lib.rs`, `sidebar.js`, `diff-view.js` |
+| 4 | A1 — Snapshots avant tâche | `orchestration.js`, `agent-pi.js`, `lib.rs` |
+| 5 | E2 — Auto-test post-modification | `orchestration.js`, `agent-pi.js`, `lib.rs` |
+| 6 | A3 — Pinning fichiers contexte | `agent-pi.js`, `sidebar.js`, `lib.rs` |
+| 7 | F1 + F2 — Export HTML + conversation | `pdf-export.js`, `agent-pi.js`, `sidebar.js` |
+| 8 | D1 — Notifications desktop « agent terminé » | `lib.rs`, `main.js`, plugin notification |
+
+### Décisions à trancher avant implémentation
+
+1. **Priorité produit** : consolider le pôle **agent IA** (A4, A1, E2) ou le pôle **éditeur classique** (C1 Git, B1, B3) en premier ?
+2. **Snapshots vs Git** : si C1 (Git) est fait, A1 (snapshots) devient-il redondant (Git = restauration) ou garde-t-on un mécanisme Pilot spécifique sans dépendre d'un repo Git ?
+3. **Diff review (A4) partagé avec Git (C1)** : confirmes-tu un seul composant `diff-view.js` pour les deux usages ?
+4. **Thèmes non couverts** : y a-t-il un axe que j'ai manqué (collaboration temps réel, plugins/extensions Pilot, marketplace de prompts, intégration LSP) ?

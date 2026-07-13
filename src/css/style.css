@@ -3268,6 +3268,101 @@ body.pilot-loading *::after {
   font-weight: 500;
 }
 
+/* ── Observabilité : journal des tentatives (spec_orchestration_observability.md) ── */
+.orch-attempts {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-color, #333);
+  margin: 4px 0;
+  font-size: 11px;
+  background: var(--bg-panel, rgba(0,0,0,0.15));
+}
+.orch-attempts-header {
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-muted, #888);
+  font-weight: 500;
+}
+.orch-attempts-header:hover {
+  color: var(--text-color, #ddd);
+}
+.orch-attempts-body {
+  padding: 2px 8px 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.orch-attempt {
+  border-left: 3px solid var(--border-color, #333);
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.orch-attempt:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.05));
+}
+.orch-attempt-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-color, #ddd);
+}
+.orch-attempt-n {
+  font-weight: 600;
+  color: var(--text-muted, #888);
+}
+.orch-attempt-marker {
+  color: var(--accent-color, #4fc3f7);
+  font-weight: 500;
+}
+.orch-attempt-action {
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.orch-attempt-badge {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.orch-attempt-loop {
+  background: rgba(244, 63, 54, 0.2);
+  color: #f44336;
+  border: 1px solid #f44336;
+}
+.orch-attempt-reason {
+  color: var(--text-muted, #888);
+  margin-top: 2px;
+}
+.orch-attempt-detail {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-color, #333);
+}
+.orch-attempt-excerpt {
+  color: var(--text-color, #ddd);
+  font-family: var(--mono-font, monospace);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.orch-attempt-lint {
+  color: #ffb700;
+  font-family: var(--mono-font, monospace);
+  font-size: 10px;
+  white-space: pre-wrap;
+  margin-top: 4px;
+}
+.orch-attempt-files {
+  color: var(--text-muted, #888);
+  margin-top: 4px;
+}
+
 /* Bouton Orchestration actif */
 .agent-btn[data-action="orchestration"].active {
   background: rgba(79, 195, 247, 0.2) !important;

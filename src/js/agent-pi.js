@@ -17,6 +17,8 @@ import {
   parseSearchReplaceBlocks, applySearchReplaceBlocks,
   buildLintFailurePrompt, determineEscalationAction, estimateTokens, compactTaskPrompt,
   buildSelfFixPrompt, detectCoderMarker,
+  createAttemptLog, detectLoop, summarizeTaskAttempts,
+  detectReflectionOnly, buildNudgeAfterReflectionPrompt,
 } from "./orchestration.js";
 
 // ── État global de l'autocomplétion ──
@@ -143,9 +145,25 @@ export async function createAgentPi(container) {
       <span class="orchestration-progress-text" id="orch-progress-text">0/0 tâches</span>
     </div>
     <div class="orch-metrics" id="orch-metrics"></div>
+    <div class="orch-attempts hidden" id="orch-attempts">
+      <div class="orch-attempts-header" id="orch-attempts-header">📋 Journal des tentatives ▶</div>
+      <div class="orch-attempts-body hidden" id="orch-attempts-body"></div>
+    </div>
     <div class="orchestration-tasks" id="orch-tasks"></div>
   `;
   wrapper.appendChild(orchestrationPanel);
+
+  // Toggle repliable du journal des tentatives (observabilité).
+  (function setupAttemptsToggle() {
+    const header = orchestrationPanel.querySelector("#orch-attempts-header");
+    if (!header) return;
+    header.addEventListener("click", () => {
+      const body = orchestrationPanel.querySelector("#orch-attempts-body");
+      if (!body) return;
+      body.classList.toggle("hidden");
+      // Le glyphe ▶/▼ est rafraîchi au prochain renderOrchestrationAttempts.
+    });
+  })();
 
   // ── Zone de saisie ──
   const inputBar = document.createElement("div");
@@ -210,6 +228,7 @@ export async function createAgentPi(container) {
     orchestrationTurnId: 0, // identifiant de tour incrémenté à chaque new_session (point 5.7)
     orchestrationCurrentFileState: {}, // état des fichiers de la tâche en cours (pour validation post-tâche)
     orchestrationLintAttempts: {}, // compteur de corrections syntaxiques par tâche (V2 linting-in-the-loop)
+    orchestrationNudgeAttempts: {}, // compteur de relances (nudge) après arrêt prématuré en réflexion (max 2 par tâche)
     orchestrationCurrentTaskCycles: 0, // V3 : compteur de cycles SELF_FIX (auto-controle codeur) pour la tâche courante (max 3)
     orchestrationReadFilesInTask: new Set(), // fichiers lus par le codeur pendant la tâche courante (point 5.3)
     orchestrationToolCallsInTask: [], // outils utilisés par le codeur pendant la tâche courante (point 5.10)
@@ -936,6 +955,7 @@ export async function createAgentPi(container) {
           state.orchestrationCachedTree = null;
           state.orchestrationActiveRole = null;
           state.orchestrationLintAttempts = {};
+          state.orchestrationNudgeAttempts = {};
           state._previousPlan = null;
           state.orchestrationTasksInBatch = 0;
           state.orchestrationFinalReview = false;
@@ -1005,6 +1025,7 @@ export async function createAgentPi(container) {
         state.orchestrationTasksSinceRevision = 0;
         state.orchestrationCachedTree = null;
         state.orchestrationLintAttempts = {};
+        state.orchestrationNudgeAttempts = {};
         state._previousPlan = null;
         state.orchestrationTasksInBatch = 0;
         state.orchestrationFinalReview = false;
@@ -1614,7 +1635,58 @@ export async function createAgentPi(container) {
       }
     }
 
+    renderOrchestrationAttempts(st);
     updateOrchestrationButtons(st);
+  }
+
+  /**
+   * Rend le journal des tentatives de la tâche en cours (observabilité).
+   * Voir spec_orchestration_observability.md. Bloc repliable ; clic sur une
+   * entrée déplie l'excerpt + erreurs de linting.
+   */
+  function renderOrchestrationAttempts(st) {
+    const panel = document.getElementById("orch-attempts");
+    const header = document.getElementById("orch-attempts-header");
+    const body = document.getElementById("orch-attempts-body");
+    if (!panel || !header || !body) return;
+    const progress = st.orchestrationPlan && st.orchestrationPlan.progress;
+    const taskId = progress && progress.current_task;
+    const logs = (progress && progress.task_logs && Array.isArray(progress.task_logs[taskId]))
+      ? progress.task_logs[taskId]
+      : [];
+    if (!taskId || logs.length === 0) {
+      panel.classList.add("hidden");
+      return;
+    }
+    panel.classList.remove("hidden");
+    header.textContent = `📋 Journal des tentatives (tâche #${taskId}) ${body.classList.contains("hidden") ? "▶" : "▼"}`;
+    body.innerHTML = logs.map((l) => {
+      const loopBadge = l.loop ? `<span class="orch-attempt-badge orch-attempt-loop">🔄 bouclage</span>` : "";
+      const dur = (typeof l.durationMs === "number" && l.durationMs > 0) ? ` · ${Math.round(l.durationMs / 1000)}s` : "";
+      const markerLabel = escapeHtml(l.marker || "?");
+      const actionLabel = escapeHtml(l.action || "?");
+      const reason = escapeHtml(l.reason || "");
+      const excerpt = escapeHtml(l.responseExcerpt || "");
+      const lint = l.lintErrors ? `<div class="orch-attempt-lint">🧹 ${escapeHtml(l.lintErrors)}</div>` : "";
+      const files = (Array.isArray(l.filesChanged) && l.filesChanged.length > 0)
+        ? `<div class="orch-attempt-files">📝 ${l.filesChanged.map(escapeHtml).join(", ")}</div>` : "";
+      return `<div class="orch-attempt" data-attempt-n="${l.n}">
+        <div class="orch-attempt-head">
+          <span class="orch-attempt-n">#${l.n}</span>
+          <span class="orch-attempt-marker">${markerLabel}</span>
+          <span class="orch-attempt-action">${actionLabel}</span>${dur}
+          ${loopBadge}
+        </div>
+        <div class="orch-attempt-reason">${reason}</div>
+        <div class="orch-attempt-detail hidden">${excerpt ? `<div class="orch-attempt-excerpt">${excerpt}</div>` : ""}${lint}${files}</div>
+      </div>`;
+    }).join("");
+    body.querySelectorAll(".orch-attempt").forEach((el) => {
+      el.addEventListener("click", () => {
+        const detail = el.querySelector(".orch-attempt-detail");
+        if (detail) detail.classList.toggle("hidden");
+      });
+    });
   }
 
   /** Met à jour les boutons du panneau d'orchestration */
@@ -2100,6 +2172,93 @@ export async function createAgentPi(container) {
     await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Timeout d'inactivité (pas d'activité pendant ${secs}s)`);
   }
 
+  /**
+   * Detecte si le codeur a emis un DONE indiquant qu'aucune modification n'etait
+   * necessaire (cas NO_CHANGE formule naturellement, sans le marqueur explicite).
+   * Voir spec_orchestration_observability.md - Bug NO_CHANGE.
+   * @param {string} text - reponse brute du codeur
+   * @returns {boolean}
+   */
+  function detectNoChangeDone(text) {
+    if (!text || typeof text !== "string") return false;
+    const lower = text.toLowerCase();
+    return lower.includes("no_change")
+      || lower.includes("aucun changement")
+      || lower.includes("aucune modification")
+      || lower.includes("aucune modification n")
+      || lower.includes("deja conforme")
+      || lower.includes("déjà conforme")
+      || lower.includes("deja align")
+      || lower.includes("déjà align")
+      || lower.includes("rien a modifier")
+      || lower.includes("rien à modifier")
+      || lower.includes("rien a faire")
+      || lower.includes("rien à faire")
+      || lower.includes("rien a changer")
+      || lower.includes("déjà implémenté")
+      || lower.includes("deja implemente")
+      || lower.includes("déjà présent")
+      || lower.includes("deja present")
+      || lower.includes("déjà en place")
+      || lower.includes("deja en place")
+      || lower.includes("déjà géré")
+      || lower.includes("deja gere")
+      || lower.includes("déjà fait")
+      || lower.includes("deja fait")
+      || lower.includes("no change required")
+      || lower.includes("already aligned")
+      || lower.includes("already implemented")
+      || lower.includes("already in place");
+  }
+
+  /**
+   * Déduit un marker lisible d'une raison d'échec (heuristique MVP).
+   * @param {string} errorReason
+   * @returns {string}
+   */
+  function deriveFailureMarker(errorReason) {
+    if (!errorReason) return "failure";
+    const r = errorReason.toLowerCase();
+    if (/timeout/.test(r)) return "timeout";
+    if (/need_help/.test(r)) return "NEED_HELP";
+    if (/self_fix|3 cycles/.test(r)) return "self_fix_exhausted";
+    if (/lint|syntaxe|eslint|py_compile|cargo check/.test(r)) return "syntax_error";
+    if (/format invalide|non conforme/.test(r)) return "format_invalid";
+    if (/validation/.test(r)) return "validation_fail";
+    if (/application/.test(r)) return "apply_failed";
+    return "failure";
+  }
+
+  /**
+   * Ajoute une entrée au journal des tentatives d'une tâche (observabilité).
+   * Voir spec_orchestration_observability.md. Détecte le bouclage en comparant
+   * l'excerpt à celui de la tentative précédente.
+   * @param {object} st - état agent
+   * @param {number} taskId - ID de la tâche
+   * @param {object} partial - champs de l'entrée (marker, reason, action, ...)
+   */
+  function logTaskAttempt(st, taskId, partial) {
+    if (!st.orchestrationPlan || !taskId) return;
+    const progress = st.orchestrationPlan.progress;
+    if (!progress) return;
+    if (!progress.task_logs) progress.task_logs = {};
+    const logs = Array.isArray(progress.task_logs[taskId]) ? progress.task_logs[taskId] : [];
+    const attemptNumber = (progress.task_attempts && typeof progress.task_attempts[taskId] === "number")
+      ? progress.task_attempts[taskId]
+      : logs.length + 1;
+    // Détection de bouclage avec la dernière entrée
+    const prev = logs.length > 0 ? logs[logs.length - 1] : null;
+    let loop = false;
+    if (prev && prev.responseExcerpt && partial.responseExcerpt) {
+      loop = detectLoop(prev.responseExcerpt, partial.responseExcerpt);
+    }
+    const entry = createAttemptLog({ ...partial, loop }, attemptNumber);
+    if (entry) {
+      logs.push(entry);
+      progress.task_logs[taskId] = logs;
+    }
+  }
+
   /** Gère un échec de tâche (NEED_HELP, timeout, validation échec, ou absence de DONE). */
   async function handleTaskFailure(st, messagesEl, statusEl, task, errorReason) {
     // Casser le batch : une erreur force un nouveau contexte vierge au prochain tour
@@ -2110,6 +2269,22 @@ export async function createAgentPi(container) {
     progress.task_attempts[taskId] = (progress.task_attempts[taskId] || 0) + 1;
     progress.last_error = errorReason;
     const attempts = progress.task_attempts[taskId];
+
+    // Observabilité — journaliser la tentative avec marker déduit d'errorReason
+    // et action déterminée (retry / subdivide / escalate). Voir spec_orchestration_observability.md.
+    const alreadySubdivided = Array.isArray(progress.subdivided) && progress.subdivided.includes(taskId);
+    const isSubtask = !!task.subtask;
+    const failureAction = attempts < 3
+      ? "retry"
+      : (!isSubtask && !alreadySubdivided ? "subdivide" : "escalate");
+    const failureMarker = deriveFailureMarker(errorReason);
+    logTaskAttempt(st, taskId, {
+      marker: failureMarker,
+      reason: errorReason,
+      action: failureAction,
+      responseExcerpt: st.lastAssistantRawText || "",
+      cycles: st.orchestrationCurrentTaskCycles || 0,
+    });
 
     if (attempts < 3) {
       if (!progress.retrying) progress.retrying = [];
@@ -2122,8 +2297,6 @@ export async function createAgentPi(container) {
     } else {
       if (!progress.retrying) progress.retrying = [];
       progress.retrying = progress.retrying.filter((id) => id !== taskId);
-      const alreadySubdivided = Array.isArray(progress.subdivided) && progress.subdivided.includes(taskId);
-      const isSubtask = !!task.subtask;
       if (!isSubtask && !alreadySubdivided) {
         // Subdivision (point M) : demander à l'orchestrateur de découper la tâche en sous-tâches
         st.orchestrationSubdividing = true;
@@ -2230,9 +2403,27 @@ export async function createAgentPi(container) {
 
     // Erreur de connexion déjà gérée dans le case "message" (option 1) —
     // ne pas traiter la fin d'agent (sinon la tâche serait marquée « effectuée » à tort).
+    // MAIS si le codeur a quand même répondu avec un marqueur valide (DONE/SELF_FIX/
+    // NEED_HELP/blocs) malgré un retry transitoire (auto_retry_start faux positif,
+    // ex. latence cloud ou 429), on traite la fin — sinon le plan reste bloqué en
+    // pause alors que le codeur a livré son travail. Voir spec_orchestration.md Bug 7.
     if (st.orchestrationConnectionError) {
-      st.orchestrationConnectionError = false;
-      return;
+      // Récupérer la réponse pour vérifier si elle est exploitable.
+      const probeBubble = messagesEl.querySelector('.agent-bubble-assistant:last-child');
+      const probeText = st.lastAssistantRawText || (probeBubble ? (probeBubble.textContent || '') : '');
+      const hasValidMarker = /\b(?:DONE|SELF_FIX|NEED_HELP|NO_CHANGE)\s*:/i.test(probeText)
+        || /SEARCH\/REPLACE:|CREATE:/i.test(probeText);
+      if (hasValidMarker) {
+        // Le codeur a répondu malgré le retry transitoire : traiter la fin.
+        appendSystemMessage(messagesEl, `ℹ️ Réponse du codeur reçue malgré un retry transitoire — traitement de la fin de tâche.`);
+        st.orchestrationConnectionError = false;
+        st.orchestrationPaused = false;
+        st.orchestrationRunning = true;
+        // Ne pas return — on continue le traitement normal ci-dessous.
+      } else {
+        st.orchestrationConnectionError = false;
+        return;
+      }
     }
 
     // Récupérer le contenu de la dernière réponse
@@ -2325,7 +2516,7 @@ export async function createAgentPi(container) {
         st.orchestrationPlan = {
           plan: normalizePlan(reviewPlan),
           global_directive: globalDirective,
-          progress: { current_task: 0, completed: [], failed: [], escalated: [], retrying: [], task_attempts: {}, task_metrics: {}, subdivided: [] }
+          progress: { current_task: 0, completed: [], failed: [], escalated: [], retrying: [], task_attempts: {}, task_metrics: {}, subdivided: [], task_logs: {} }
         };
         st.orchestrationRunning = true;
         st.orchestrationTasksSinceRevision = 0;
@@ -2446,7 +2637,10 @@ export async function createAgentPi(container) {
       if (hasNeedHelp && !hasDone) {
         appendSystemMessage(messagesEl, `⚠️ Tâche ${currentTaskId} escaladée mais l'orchestrateur a demandé de l'aide. On passe à la suite.`);
       } else {
-        appendSystemMessage(messagesEl, `✅ Tâche ${currentTaskId} réalisée par l'orchestrateur (escalade).`);
+        // Synthèse des tentatives du codeur avant escalade (observabilité).
+        const taskLogsEsc = (progress.task_logs && progress.task_logs[currentTaskId]) || [];
+        const synthEsc = taskLogsEsc.length > 1 ? ` (${summarizeTaskAttempts(taskLogsEsc)})` : "";
+        appendSystemMessage(messagesEl, `✅ Tâche ${currentTaskId} réalisée par l'orchestrateur (escalade).${synthEsc}`);
       }
     }
 
@@ -2547,6 +2741,16 @@ export async function createAgentPi(container) {
       st.orchestrationCurrentTaskCycles = cycles;
       const cyclesRemaining = 3 - cycles;
       appendSystemMessage(messagesEl, `🔁 Tâche ${currentTaskId} — SELF_FIX (auto-contrôle, cycle ${cycles}/3) : le codeur corrige « ${coderMarker.payload || "défaut non précisé"} » in-session...`);
+      // Observabilité — journaliser le cycle SELF_FIX.
+      logTaskAttempt(st, currentTaskId, {
+        marker: "SELF_FIX",
+        reason: `Auto-contrôle cycle ${cycles}/3 : ${coderMarker.payload || "défaut non précisé"}`,
+        action: "self_fix",
+        filesChanged: srSelfFix.hasBlocks ? srSelfFix.blocks.map((b) => b.path).filter(Boolean) : [],
+        responseExcerpt: responseText,
+        durationMs: (progress.task_metrics && progress.task_metrics[currentTaskId] && progress.task_metrics[currentTaskId].durationMs) || null,
+        cycles,
+      });
       // Renvoyer le prompt de correction DANS LA MEME SESSION (pas de new_session)
       if (st.currentModel !== st.coderModel) {
         await switchToCoder(st);
@@ -2561,6 +2765,45 @@ export async function createAgentPi(container) {
         await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Erreur envoi SELF_FIX : ${e}`);
       }
       return;
+    } else if (!coderMarker.marker && detectReflectionOnly(responseText)) {
+      // ── Nudge proactif : le codeur s'est arrêté après la Phase 1 (RÉFLEXION) ──
+      // sans exécuter la Phase 2. Cas typique des modèles faibles (9B) face à un
+      // prompt multi-phases. On le relance DANS LA MÊME SESSION pour qu'il reprenne
+      // à la Phase 2, sans consommer un cycle d'échec (ce n'est pas un retry).
+      // Voir spec_orchestration_observability.md § nudge.
+      const nudgeCount = (st.orchestrationNudgeAttempts && st.orchestrationNudgeAttempts[currentTaskId]) || 0;
+      const MAX_NUDGES = 2;
+      if (nudgeCount < MAX_NUDGES) {
+        st.orchestrationNudgeAttempts = st.orchestrationNudgeAttempts || {};
+        st.orchestrationNudgeAttempts[currentTaskId] = nudgeCount + 1;
+        const nudgesRemaining = MAX_NUDGES - (nudgeCount + 1);
+        appendSystemMessage(messagesEl, `🔁 Tâche ${currentTaskId} — arrêt après RÉFLEXION (aucun fichier modifié). Relance du codeur vers la Phase 2 (nudge ${nudgeCount + 1}/${MAX_NUDGES})...`);
+        // Observabilité — journaliser le nudge.
+        logTaskAttempt(st, currentTaskId, {
+          marker: "REFLECTION_ONLY",
+          reason: "Arrêt prématuré après RÉFLEXION (aucun bloc produit)",
+          action: "nudge",
+          responseExcerpt: responseText,
+          cycles: st.orchestrationCurrentTaskCycles || 0,
+        });
+        if (st.currentModel !== st.coderModel) {
+          await switchToCoder(st);
+        }
+        const nudgePrompt = buildNudgeAfterReflectionPrompt(currentTask, st.orchestrationPlan?.global_directive, nudgesRemaining);
+        try {
+          await invoke("send_agent_prompt", { message: nudgePrompt });
+          resetOrchestrationIdleTimer(st, messagesEl, statusEl);
+        } catch (e) {
+          console.error("Erreur envoi nudge:", e);
+          appendErrorMessage(messagesEl, `❌ Erreur envoi nudge : ${e}`);
+          await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Erreur envoi nudge : ${e}`);
+        }
+        return;
+      }
+      // Si 2 nudges déjà épuisés sans succès, on tombe dans le flux normal
+      // (validation échec → handleTaskFailure → retry/escalade). On log l'épuisement.
+      appendSystemMessage(messagesEl, `⚠️ Tâche ${currentTaskId} — 2 relances (nudges) épuisées sans modification. Traitement comme échec.`);
+      // On laisse le flux continuer vers la branche V2 (validation échec).
     } else {
       // ── Mode Orchestration V2 : édition chirurgicale + linting-in-the-loop ──
       const sr = parseSearchReplaceBlocks(responseText);
@@ -2600,6 +2843,17 @@ export async function createAgentPi(container) {
         const lintAttempt = st.orchestrationLintAttempts[currentTaskId];
         if (lintAttempt <= 3) {
           appendSystemMessage(messagesEl, `🧹 Erreur de syntaxe détectée (correction ${lintAttempt}/3). Envoi au codeur pour correction...`);
+          // Observabilité — journaliser l'échec de linting (correction demandée).
+          logTaskAttempt(st, currentTaskId, {
+            marker: "syntax_error",
+            reason: `Erreur de syntaxe (correction ${lintAttempt}/3)`,
+            action: "lint_correction",
+            filesChanged: filesToLint,
+            responseExcerpt: responseText,
+            lintErrors: lint.output || null,
+            durationMs: (progress.task_metrics && progress.task_metrics[currentTaskId] && progress.task_metrics[currentTaskId].durationMs) || null,
+            cycles: st.orchestrationCurrentTaskCycles || 0,
+          });
           const lintPrompt = buildLintFailurePrompt(lint.output, currentTask);
           await sendLintCorrectionPrompt(st, messagesEl, statusEl, currentTask, lintPrompt);
           return;
@@ -2622,6 +2876,15 @@ export async function createAgentPi(container) {
           ok: true,
           reason: `${changedFiles.length} fichier(s) écrit(s) via SEARCH/REPLACE/CREATE : ${changedFiles.join(", ")}`,
         };
+      } else if (hasDone && !sr.hasBlocks && detectNoChangeDone(responseText)) {
+        // NO_CHANGE legitime : le codeur a lu les fichiers et constate qu'aucune
+        // modification n'est necessaire (deja conforme). Tache satisfaite —
+        // sans cette branche le cas tombait dans validation echec -> retry -> boucle
+        // (jusqu'a « tentative 4+ »), puis escalade abusive vers l'orchestrateur.
+        validation = {
+          ok: true,
+          reason: "NO_CHANGE — aucun changement requis (deja conforme)",
+        };
       } else {
         validation = await checkTaskFilesChanged(currentTask, st.orchestrationCurrentFileState || {}, invoke, responseText, window._pilotProjectPath);
       }
@@ -2634,6 +2897,7 @@ export async function createAgentPi(container) {
         if (progress.failed) progress.failed = progress.failed.filter((id) => id !== currentTaskId);
         // Réinitialiser les compteurs de lint pour cette tâche
         delete st.orchestrationLintAttempts[currentTaskId];
+        delete st.orchestrationNudgeAttempts[currentTaskId];
         storeTaskSummary(currentTaskId, responseText);
         // Métriques (point N) : marquer la tâche comme réussie
         if (!progress.task_metrics) progress.task_metrics = {};
@@ -2643,7 +2907,21 @@ export async function createAgentPi(container) {
           attempts: progress.task_attempts[currentTaskId] || 0,
         };
         const tag = hasDone ? 'terminée' : 'terminée (fichiers modifiés, pas de marqueur DONE)';
-        appendSystemMessage(messagesEl, `✅ Tâche ${currentTaskId} ${tag}. (${validation.reason})`);
+        // Observabilité — journaliser la tentative réussie.
+        const durMs = (progress.task_metrics && progress.task_metrics[currentTaskId] && progress.task_metrics[currentTaskId].durationMs) || null;
+        logTaskAttempt(st, currentTaskId, {
+          marker: hasDone ? "DONE" : "NO_CHANGE",
+          reason: validation.reason || tag,
+          action: "complete",
+          filesChanged: changedFiles,
+          responseExcerpt: responseText,
+          durationMs: durMs,
+          cycles: st.orchestrationCurrentTaskCycles || 0,
+        });
+        // Synthèse des tentatives (si > 1 entrée, indique les retries traversés).
+        const taskLogs = (progress.task_logs && progress.task_logs[currentTaskId]) || [];
+        const synth = taskLogs.length > 1 ? ` (${summarizeTaskAttempts(taskLogs)})` : "";
+        appendSystemMessage(messagesEl, `✅ Tâche ${currentTaskId} ${tag}.${synth} (${validation.reason})`);
         // Incrémenter le compteur de batch
         st.orchestrationTasksInBatch = (st.orchestrationTasksInBatch || 0) + 1;
       } else {
@@ -3180,6 +3458,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // Mode Orchestration : gérer la fin d'une tâche
       if (state.orchestrationEnabled && state.orchestrationRunning) {
         orchFns.handleOrchestrationAgentEnd(state, messagesEl, statusEl);
+      } else if (state.orchestrationEnabled && state.orchestrationPlan && !state.orchestrationRunning) {
+        // Diagnostic : un plan existe mais orchestrationRunning est false à la fin
+        // d'une réponse — c'est anormal (le codeur vient de répondre mais le plan
+        // n'avance pas). Voir spec_orchestration_observability.md.
+        appendSystemMessage(messagesEl, `⚠️ [diagnostic] Réponse reçue mais le plan est inactif (running=false, paused=${state.orchestrationPaused}, planId=${state.orchestrationPlan.progress?.current_task}). Clique ▶️ pour reprendre.`);
       } else if (state.orchestrationEnabled && !state.orchestrationPlan && !state.orchestrationRunning) {
         // L'orchestrateur vient de répondre — essayer de parser le plan
         const rawText = state.lastAssistantRawText || '';
@@ -3228,7 +3511,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           state.orchestrationPlan = {
             plan: plan,
             global_directive: globalDirective,
-            progress: { current_task: 0, completed: [], failed: [], escalated: [], retrying: [], task_attempts: {}, task_metrics: {}, subdivided: [] }
+            progress: { current_task: 0, completed: [], failed: [], escalated: [], retrying: [], task_attempts: {}, task_metrics: {}, subdivided: [], task_logs: {} }
           };
           state.orchestrationRunning = true;
           state.orchestrationRevising = false;
@@ -3482,6 +3765,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           if (state.currentThinkingBlock) {
             if (showThinkingEnabled) {
               const contents = state.currentThinkingBlock.querySelectorAll(".agent-thinking-content");
+              // Reset timer d'inactivite orchestration (pensée en cours, ne pas timeout).
+              if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+                orchFns.resetIdleTimer(state, messagesEl, statusEl);
+              }
               const contentEl = contents[contents.length - 1];
               if (contentEl) {
                 contentEl.textContent += delta.delta || "";
@@ -3492,7 +3779,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
               if (dotsEl) {
                 const current = dotsEl.textContent;
                 const dotsCount = (current.match(/\./g) || []).length;
-                const nextDots = dotsCount >= 3 ? 1 : dotsCount + 1;
+                // Reset timer d'inactivite orchestration (pensée masquée en cours).
+              if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+                orchFns.resetIdleTimer(state, messagesEl, statusEl);
+              }
+              const nextDots = dotsCount >= 3 ? 1 : dotsCount + 1;
                 dotsEl.textContent = "pensée" + ".".repeat(nextDots);
               }
             }
@@ -3523,6 +3814,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           break;
 
         case "toolcall_start":
+          // Reset du timer d'inactivite en mode orchestration (le codeur fait un
+          // tool call read_file etc. — il ne faut pas le timeout pendant l'outil).
+          if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+            orchFns.resetIdleTimer(state, messagesEl, statusEl);
+          }
           // Ne pas afficher encore — on attend tool_execution_start pour avoir le vrai nom
           state.pendingToolCalls.set(delta.toolCallId || "unknown", {
             name: delta.toolName || "",
@@ -3531,6 +3827,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           break;
 
         case "toolcall_delta":
+          // Reset du timer d'inactivite en mode orchestration (arguments de tool call en cours).
+          if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+            orchFns.resetIdleTimer(state, messagesEl, statusEl);
+          }
           // Mise à jour progressive des arguments — pour l'instant on ignore
           break;
 
@@ -3585,6 +3885,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     }
 
     case "tool_execution_start": {
+      // Reset timer d'inactivite orchestration (un outil s'execute — read_file etc.
+      // peut etre long, il ne faut pas timeout pendant l'execution de l'outil).
+      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+        orchFns.resetIdleTimer(state, messagesEl, statusEl);
+      }
       const toolId = payload.toolCallId;
       const toolName = payload.toolName || "";
       const toolArgs = payload.args || {};
@@ -3629,6 +3934,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     }
 
     case "tool_execution_end": {
+      // Reset timer d'inactivite orchestration (un outil vient de finir — le codeur
+      // va probablement reprendre, ne pas timeout maintenant).
+      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
+        orchFns.resetIdleTimer(state, messagesEl, statusEl);
+      }
       if (showToolsEnabled && state.currentAssistantBlock) {
         const toolName = payload.toolName || "";
         if (toolName) {

@@ -15,6 +15,8 @@
 | Mode Orchestration V3 | [`spec_orchestration.md`](spec_orchestration.md) | ✅ Implémenté (2026-06-29) — Triptyque Réfléchir/Faire/Contrôler (SELF_FIX in-session), 3 tentatives, vérification finale par le codeur, contrôles utilisateur par tâche, batch désactivé par défaut, métriques temps réel |
 | Automatisation Tailscale Serve | [`spec_web_remote.md`](spec_web_remote.md) §14 | ✅ Implémenté (2026-07-11) — proxy HTTPS 443 auto, resync port, URL + QR code (opt-in) |
 | Aide intégrée (❓) | [`spec_help.md`](spec_help.md) | ✅ Implémenté (2026-07-11) — Niveau 1 Option A : chat LLM sur handbook généré depuis les specs (blocs HELP), process pi temporaire cadré, isolé de l'agent de coding |
+| Quality-gate interne | [`spec_quality_gate.md`](spec_quality_gate.md) | ✅ Implémenté (2026-07-11) — bouton 🛡️ dans la toolbar agent, skill embarqué via `--skill`, persistance config, relance immédiate de l'agent |
+| Observabilité orchestration | [`spec_orchestration_observability.md`](spec_orchestration_observability.md) | ✅ Implémenté (2026-07-13) — journal des tentatives du codeur par tâche (marqueur, raison, durée, bouclage), bloc repliable dans le panneau d'orchestration, synthèse dans les messages système |
 
 ## Ce qui reste
 
@@ -35,4 +37,4 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-07-03*
+*Dernière mise à jour : 2026-07-13*

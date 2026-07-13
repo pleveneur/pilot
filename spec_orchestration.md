@@ -731,6 +731,18 @@ Avant : `shouldRevise` était forcé à `true` dès que l'intervalle était atte
 ### 12.3 Validation post-tâche fiabilisée (Bug 3)
 Avant : la validation reposait sur la comparaison `mtime` des fichiers listés — peu fiable sous Windows (résolution ~1 s : un fichier réécrit dans la même seconde était vu « inchangé » → escalades injustifiées). Corrigé : quand des fichiers ont été écrits via `applySearchReplaceBlocks` (`changedFiles.length > 0`), c'est la **source de vérité** — on valide directement sans interroger le `mtime`. Le garde-fou `checkTaskFilesChanged` (mtime + fichiers mentionnés) reste pour les cas sans blocs (`NO_CHANGE`, réponse texte sans format, etc.).
 
+### 12.3b NO_CHANGE non géré comme succès (Bug 6 — 2026-07-13)
+Avant : quand le codeur répondait `DONE` en indiquant qu'aucune modification n'était nécessaire (ex. « déjà aligné sur pi, aucun changement requis »), sans produire de bloc `SEARCH/REPLACE`/`CREATE`, la validation tombait dans `checkTaskFilesChanged` → échec (aucun fichier modifié) → retry → boucle (jusqu'à « tentative 4+ ») → escalade abusive vers l'orchestrateur. Corrigé : ajout d'une branche `else if (hasDone && !sr.hasBlocks && detectNoChangeDone(responseText))` qui force `validation = { ok: true, reason: "NO_CHANGE — ..." }`. La détection (`detectNoChangeDone` dans `agent-pi.js`) couvre le marqueur explicite `NO_CHANGE:` ET les formulations naturelles (« aucun changement », « déjà aligné », « rien à modifier », « déjà implémenté », « already aligned », etc.).
+
+### 12.3c Enchaînement bloqué après retry transitoire (Bug 7 — 2026-07-13)
+Avant : quand pi RPC émettait `auto_retry_start` (retry transitoire — latence cloud, 429, etc.), `handleOrchestrationConnectionError` mettait `orchestrationConnectionError = true` + `orchestrationPaused = true`. Si le codeur finissait quand même par répondre (DONE + blocs), `handleOrchestrationAgentEnd` voyait le flag et **returnait immédiatement sans traiter la fin** → la tâche n'était jamais marquée `completed` → le plan restait bloqué en pause alors que le codeur avait livré son travail. Corrigé : si `orchestrationConnectionError` est true mais la réponse contient un marqueur valide (`DONE`/`SELF_FIX`/`NEED_HELP`/`NO_CHANGE`/blocs), on traite quand même la fin (reset des flags, reprise du plan). Sinon, comportement inchangé (vraie erreur de connexion → pause).
+
+### 12.3d Timer d'inactivité non reset pendant thinking/tool calls (Bug 8 — 2026-07-13)
+Avant : le timer d'inactivité (120 s) était reset uniquement à `text_delta`, pas pendant `thinking_delta`, `toolcall_start/delta`, ni `tool_execution_start/end`. Si le codeur faisait une longue Phase 1 (réflexion + `read_file`) de plus de 120 s avant de produire du texte, le timer se déclenchait → `handleOrchestrationTimeout` → abort du codeur en plein travail → race condition pouvant bloquer le plan. Corrigé : reset du timer (`resetIdleTimer`) à `thinking_delta` (branches visible + masquée), `toolcall_start`, `toolcall_delta`, `tool_execution_start`, `tool_execution_end`. Le timer ne se déclenche plus que si **vraiment** rien ne se passe pendant 120 s.
+
+### 12.3e ReferenceError: filesChanged is not defined — blocage après tâche réussie (Bug 9 — 2026-07-13)
+Avant : dans le bloc `validation.ok` (succès de tâche), l'appel à `logTaskAttempt` utilisait le shorthand `filesChanged,` qui référençait une variable inexistante (la variable s'appelle `changedFiles`). À chaque tâche réussie (DONE + blocs `SEARCH/REPLACE`/`CREATE`), l'exception `ReferenceError: filesChanged is not defined` était levée dans `handleOrchestrationAgentEnd` → le traitement s'interrompait avant `appendSystemMessage("✅ Tâche ...")` et avant `executeNextTask` → la tâche n'était pas visuellement rayée et le plan ne continuait pas. C'est le bug introduit par l'observabilité (E0) qui causait le symptôme « la première tâche est faite (3 phases, DONE) puis plus rien n'avance ». Corrigé : `filesChanged: changedFiles` (propriété explicite).
+
 ### 12.4 Re-plan automatique pour plan trop grossier (Bug 5)
 Avant : `validatePlan` ne produisait que des warnings affichés — l'exécution continuait même pour un plan manifestement insuffisant. De plus, `validatePlan` recevait par erreur la **réponse de l'orchestrateur** comme `userPrompt` (le critère « promptLen > 60 » était donc quasi toujours vrai). Corrigé :
 - `validatePlan` retourne maintenant `severity: "reject"` (bloquant) quand `plan.length < 3 && userPrompt.length > 100` (demande substantielle mais plan minuscule). Les autres défauts (description < 40 car., > 3 fichiers, titre > 80 car.) restent des warnings non bloquants.
@@ -867,4 +879,12 @@ travailler ensemble deux IA :
   linting entre chaque étape.
 - Idéal pour les grosses refontes : édition chirurgicale `SEARCH/REPLACE`,
   boucles de révision automatiques, directive globale.
+- **Journal des tentatives** : pour la tâche en cours, un bloc repliable
+  « 📋 Journal des tentatives » affiche chaque tentative du codeur (marqueur,
+  raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
+  une entrée pour voir l'extrait de la réponse et les erreurs de linting.
+- **Nudge après réflexion** : si le codeur local s'arrête après la Phase 1
+  (Réflexion) sans modifier de fichiers, il est relancé automatiquement dans la
+  même session vers la Phase 2 (max 2 relances par tâche), pour éviter une
+  escalade cloud systématique.
 <!-- /HELP:orchestration -->

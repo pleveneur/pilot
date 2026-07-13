@@ -622,6 +622,63 @@ export function detectCoderMarker(text) {
 }
 
 /**
+ * Détecte un arrêt prématuré après la Phase 1 (RÉFLEXION) : le codeur a écrit
+ * un signal de fin de réflexion (REFLEXION_DONE / « réflexion terminée » / etc.)
+ * mais n'a produit AUCUN bloc de modification ni marqueur d'action. Cas typique
+ * des modèles locaux faibles (9B) face à un prompt multi-phases : ils s'arrêtent
+ * après la première phase.
+ *
+ * @param {string} text - réponse brute du codeur
+ * @returns {boolean} true si arrêt prématuré après réflexion détecté
+ */
+export function detectReflectionOnly(text) {
+  if (!text || typeof text !== "string") return false;
+  const hasReflectionSignal = /REFLEXION_DONE|réflexion(?:\s+est)?\s+terminée|phase\s*1\s*(termin|faite|compl[èe]te)/i.test(text);
+  const hasBlocks = /SEARCH\/REPLACE:|CREATE:/i.test(text);
+  const hasModifs = /MODIFS_DONE/i.test(text);
+  // Défense en profondeur : si un marqueur d'action est présent, ce n'est pas un
+  // arrêt prématuré (le flux principal aura déjà traité le marqueur correspondant).
+  const hasActionMarker = /\b(?:DONE|NEED_HELP|SELF_FIX|NO_CHANGE)\s*:/i.test(text);
+  return hasReflectionSignal && !hasBlocks && !hasModifs && !hasActionMarker;
+}
+
+/**
+ * Construit le prompt de relance (nudge) envoyé au codeur dans la MÊME session
+ * quand il s'est arrêté prématurément après la Phase 1 (RÉFLEXION) sans exécuter
+ * la Phase 2. Le codeur garde son contexte et reprend là où il s'est arrêté.
+ *
+ * @param {object} task - tâche normalisée
+ * @param {string} [globalDirective] - directive globale du plan (V2)
+ * @param {number} [nudgesRemaining] - nombre de relances encore possibles
+ * @returns {string} prompt de relance in-session
+ */
+export function buildNudgeAfterReflectionPrompt(task, globalDirective, nudgesRemaining) {
+  const directiveBanner = globalDirective
+    ? `=== OBJECTIF GLOBAL ===\n${globalDirective}\n\n`
+    : "";
+  const remaining = typeof nudgesRemaining === "number" ? nudgesRemaining : 1;
+  return `${directiveBanner}Tu as terminé la PHASE 1 (RÉFLEXION) de la tâche : ${task.title}.
+
+Ta réflexion est bonne, mais tu t'es arrêté AVANT d'exécuter la Phase 2. Tu n'as modifié AUCUN fichier pour l'instant.
+
+MAINTENANT, passe à la PHASE 2 (EXECUTION) sans recommencer la réflexion :
+1. Si tu n'as pas encore lu les fichiers concernés, lis-les avec read_file.
+2. Applique les modifications que tu as prévues en réflexion, avec le format OBLIGATOIRE :
+   SEARCH/REPLACE: <filepath>
+   <<<<<<< SEARCH
+   (ancien code exact tel que lu dans le fichier)
+   =======
+   (nouveau code)
+   >>>>>>> REPLACE
+   Ou pour un nouveau fichier :
+   CREATE: <filepath>
+   (contenu complet du fichier)
+3. Une fois toutes les modifications appliquées, termine par : DONE: <résumé concis de ce qui a été fait>.
+
+Il te reste ${remaining} relance(s) possible(s) si tu t'arrêtes à nouveau prématurément. Commence la Phase 2 MAINTENANT.`;
+}
+
+/**
  * Construit le prompt court renvoyé au codeur après un SELF_FIX (Phase 3 — CONTRÔLER).
  * Ce prompt est envoyé DANS LA MÊME SESSION (sans new_session) : le codeur garde
  * son contexte et peut relire le fichier réel (modifié par applySearchReplaceBlocks
@@ -1785,4 +1842,104 @@ function truncateFile(path, content) {
 function maxId(tasks) {
   if (!Array.isArray(tasks) || tasks.length === 0) return 0;
   return Math.max(...tasks.map((t) => (typeof t.id === "number" ? t.id : 0)));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Observabilité — journal des tentatives du codeur (Évolution 2026-07-13)
+// Voir spec_orchestration_observability.md. Fonctions pures uniquement.
+// ──────────────────────────────────────────────────────────────────────────
+
+/** Longueur max de l'excerpt de réponse stocké dans le journal. */
+const ATTEMPT_EXCERPT_MAX = 500;
+
+/**
+ * Normalise un texte pour la comparaison de bouclage : trim, lowercase,
+ * collapse des espaces, suppression de la ponctuation non significative.
+ * @param {string} s
+ * @returns {string}
+ */
+export function normalizeForLoop(s) {
+  if (!s || typeof s !== "string") return "";
+  return s
+    .toLowerCase()
+    .replace(/```/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Tronque un texte à maxLen caractères en préservant une fin lisible.
+ * @param {string} text
+ * @param {number} [maxLen=ATTEMPT_EXCERPT_MAX]
+ * @returns {string}
+ */
+export function makeExcerpt(text, maxLen = ATTEMPT_EXCERPT_MAX) {
+  if (!text || typeof text !== "string") return "";
+  const t = text.trim();
+  if (t.length <= maxLen) return t;
+  return t.slice(0, maxLen - 1) + "…";
+}
+
+/**
+ * Détecte si une réponse est en boucle avec la précédente : similarité
+ * token-based (Jaccard sur mots significatifs) > 0.80.
+ * @param {string} prevExcerpt - excerpt de la tentative précédente
+ * @param {string} newExcerpt - excerpt de la tentative courante
+ * @returns {boolean}
+ */
+export function detectLoop(prevExcerpt, newExcerpt) {
+  const a = normalizeForLoop(prevExcerpt);
+  const b = normalizeForLoop(newExcerpt);
+  if (!a || !b) return false;
+  if (a.length < 20 || b.length < 20) return false; // trop court = comparaison peu fiable
+  const ta = new Set(a.split(" ").filter((w) => w.length > 2));
+  const tb = new Set(b.split(" ").filter((w) => w.length > 2));
+  if (ta.size === 0 || tb.size === 0) return false;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  const union = ta.size + tb.size - inter;
+  return union > 0 && inter / union > 0.8;
+}
+
+/**
+ * Crée une entrée du journal des tentatives à partir d'un partial.
+ * Champs requis dans partial : marker, reason, action.
+ * Champs optionnels : filesChanged, durationMs, responseExcerpt, lintErrors, cycles, loop.
+ * @param {object} partial
+ * @param {number} attemptNumber - numéro de tentative (1-indexed)
+ * @returns {object}
+ */
+export function createAttemptLog(partial, attemptNumber) {
+  if (!partial || typeof partial !== "object") return null;
+  return {
+    n: attemptNumber,
+    ts: Date.now(),
+    marker: partial.marker || "unknown",
+    reason: partial.reason || "",
+    filesChanged: Array.isArray(partial.filesChanged) ? partial.filesChanged : [],
+    durationMs: typeof partial.durationMs === "number" ? partial.durationMs : null,
+    responseExcerpt: makeExcerpt(partial.responseExcerpt || ""),
+    action: partial.action || "unknown",
+    lintErrors: partial.lintErrors || null,
+    cycles: typeof partial.cycles === "number" ? partial.cycles : 0,
+    loop: !!partial.loop,
+  };
+}
+
+/**
+ * Synthèse lisible du journal d'une tâche pour le message système final.
+ * Ex : « 2 tentatives : syntax_error → fixée, DONE »
+ *      « 3 tentatives : NEED_HELP, bouclage, validation_fail »
+ * @param {Array} logs - entrées du journal pour une tâche
+ * @returns {string}
+ */
+export function summarizeTaskAttempts(logs) {
+  if (!Array.isArray(logs) || logs.length === 0) return "";
+  const parts = logs.map((l) => {
+    const base = l.loop ? `bouclage(${l.marker})` : l.marker;
+    return base;
+  });
+  if (logs.length === 1) return `1 tentative : ${parts[0]}`;
+  return `${logs.length} tentatives : ${parts.join(", ")}`;
 }

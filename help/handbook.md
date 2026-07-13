@@ -157,6 +157,14 @@ travailler ensemble deux IA :
   linting entre chaque étape.
 - Idéal pour les grosses refontes : édition chirurgicale `SEARCH/REPLACE`,
   boucles de révision automatiques, directive globale.
+- **Journal des tentatives** : pour la tâche en cours, un bloc repliable
+  « 📋 Journal des tentatives » affiche chaque tentative du codeur (marqueur,
+  raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
+  une entrée pour voir l'extrait de la réponse et les erreurs de linting.
+- **Nudge après réflexion** : si le codeur local s'arrête après la Phase 1
+  (Réflexion) sans modifier de fichiers, il est relancé automatiquement dans la
+  même session vers la Phase 2 (max 2 relances par tâche), pour éviter une
+  escalade cloud systématique.
 
 ---
 
