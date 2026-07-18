@@ -45,5 +45,15 @@
     "security": {
       "csp": null
     }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "endpoints": [
+        "https://github.com/pleveneur/pilot/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4Mzc1MUFCRjA1MzIwMDUKUldRRklGUHdxMUUzU09HUHlPaW9xTmtIVVNSZXA1MUowbldFOXZtTGhtL0xCVVJwWWpibmdWN2IK"
+    }
   }
 }

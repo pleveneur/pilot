@@ -7,6 +7,7 @@ import { initSettings } from "./settings.js";
 import { initSearchPanel } from "./search-panel.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
+import { initUpdater, checkForUpdate } from "./updater.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -29,6 +30,7 @@ const COMMANDS = [
   { id: "toggle-favorite", label: "Ajouter aux favoris", key: "Ctrl+Shift+B", icon: "⭐" },
   { id: "scratchpad", label: "Ouvrir le brouillon", key: "Ctrl+Shift+N", icon: "📝" },
   { id: "toggle-word-wrap", label: "Renvoi à la ligne automatique", key: "Alt+Z", icon: "↩" },
+  { id: "check-update", label: "Vérifier les mises à jour", key: "", icon: "⬆" },
 ];
 
 let paletteActiveIndex = 0;
@@ -194,6 +196,9 @@ async function executeCommand(id, tabs) {
       toastInfo(newWrap ? "Renvoi à la ligne activé" : "Renvoi à la ligne désactivé");
       break;
     }
+    case "check-update":
+      await checkForUpdate(false);
+      break;
   }
 }
 
@@ -221,6 +226,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3d. Initialiser les toasts
   initToasts();
+
+  // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
+  initUpdater();
 
   // 3e0. Menu contextuel système : supprimer les options natives du clic droit
   // (Reload, Inspect, Save as, etc.) partout sauf dans l'éditeur CodeMirror

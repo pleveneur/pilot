@@ -139,6 +139,20 @@ procédure à reproduire sur chaque poste qui héberge Pilot :
 
 ---
 
+## Mises à jour automatiques
+
+Pilot vérifie automatiquement les mises à jour au démarrage. Si une nouvelle
+version est disponible, elle est **téléchargée et installée** automatiquement,
+puis l'application redémarre. Vous pouvez aussi lancer une vérification
+manuelle via la **palette de commandes** (`Ctrl+Shift+P` → « Vérifier les mises
+à jour »).
+
+Les versions téléchargeables (Windows, macOS, Linux) sont publiées sur la
+[page des releases](). Chaque version est signée numériquement pour garantir
+son authenticité.
+
+---
+
 ## Aide intégrée (❓)
 
 Pilot intègre un **assistant d'aide** : bouton **❓** du panneau d'actions

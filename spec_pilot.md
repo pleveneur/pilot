@@ -101,7 +101,12 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - Config JSON dans `app_data_dir` : thème, commande, projets récents, params RPC.
 
 ### Permissions Tauri
-- `core:default` + `dialog:default`.
+- `core:default` + `dialog:default` + `updater:default` + `process:default`.
+
+### Mises à jour automatiques
+- Plugin `tauri-plugin-updater` : au démarrage, Pilot interroge l'endpoint configuré (`plugins.updater.endpoints` dans `tauri.conf.json`, GitHub Releases par défaut). Si une MAJ est disponible, téléchargement + installation + redémarrage automatique (`updater.js`). Vérification manuelle via la palette de commandes (« Vérifier les mises à jour »).
+- Signature des artefacts via clé asymétrique (clé publique dans `tauri.conf.json`, clé privée en secret GitHub `TAURI_SIGNING_PRIVATE_KEY`).
+- Publication : workflow GitHub Actions `.github/workflows/release.yml` (tag `v*`) → build multi-plateforme (Windows NSIS, macOS DMG x86_64/aarch64, Linux AppImage) + génération de `latest.json` (`scripts/gen-latest-json.js`) uploadé sur la release.
 
 ---
 

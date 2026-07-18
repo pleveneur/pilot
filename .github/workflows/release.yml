@@ -1,0 +1,113 @@
+name: release
+
+# Déclencheur : création d'un tag de version (ex: v0.2.0).
+# Le tag doit correspondre à la version déjà présente dans tauri.conf.json,
+# Cargo.toml et package.json (bump local avant de tagger — voir AGENTS.md).
+# L'updater compare ce numéro à la version courante de l'app installée.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Permissions requises pour créer la GitHub Release et uploader les assets.
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # build — compile l'app sur les 3 plateformes et génère les artefacts
+  # signés (NSIS / DMG / AppImage) via tauri-action. Les fichiers .sig
+  # sont uploadés automatiquement sur la release.
+  # ─────────────────────────────────────────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            rust_target: aarch64-apple-darwin
+          - platform: macos-latest
+            rust_target: x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and sign Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Clé privée de signature de l'updater (générée via
+          # `npm run tauri signer generate`). À stocker dans les secrets
+          # du dépôt GitHub sous le nom TAURI_SIGNING_PRIVATE_KEY
+          # (et TAURI_SIGNING_PRIVATE_KEY_PASSWORD si la clé est protégée).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Pilot ${{ github.ref_name }}"
+          releaseBody: "Téléchargez et installez le binaire correspondant à votre plateforme. La mise à jour automatique est active pour les versions suivantes."
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.rust_target }}
+
+  # ─────────────────────────────────────────────────────────────────────
+  # latest-json — génère le fichier latest.json agrégeant les signatures
+  # de toutes les plateformes et l'upload sur la release. C'est ce fichier
+  # que l'updater télécharge via l'endpoint configuré dans tauri.conf.json
+  # (releases/latest/download/latest.json).
+  # ─────────────────────────────────────────────────────────────────────
+  latest-json:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/gen-latest-json.js "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" latest.json
+
+      - name: Upload latest.json to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Récupère l'URL d'upload de la release, puis uploade latest.json.
+          UPLOAD_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
+            | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.upload_url.replace('{?name,label}',''))")
+          curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "$UPLOAD_URL?name=latest.json"

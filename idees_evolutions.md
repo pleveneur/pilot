@@ -402,3 +402,198 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 2. **Snapshots vs Git** : si C1 (Git) est fait, A1 (snapshots) devient-il redondant (Git = restauration) ou garde-t-on un mécanisme Pilot spécifique sans dépendre d'un repo Git ?
 3. **Diff review (A4) partagé avec Git (C1)** : confirmes-tu un seul composant `diff-view.js` pour les deux usages ?
 4. **Thèmes non couverts** : y a-t-il un axe que j'ai manqué (collaboration temps réel, plugins/extensions Pilot, marketplace de prompts, intégration LSP) ?
+
+---
+
+## 24. Axes différenciants « agent IA natif » (brainstorming complémentaire 18/07)
+
+> Axes nouveaux (H1–H10), orientés « meilleur outil de dev IA basé sur pi/plh ».
+> Ils exploitent le fait que l'agent vit **dans** l'éditeur, en local — positionnement
+> que ni les IDE-cloud ni les chatbots ne tiennent. À combiner avec la revue critique
+> §25 ci-après (plusieurs anciennes idées deviennent obsolètes ou fusionnent ici).
+
+### H1 — Context Engine : moteur de contexte intelligent · 🔴 très haute
+- [ ] Carte du projet (index des symboles, graphe de dépendances, fichiers
+      « importants » détectés) + construction automatique du meilleur contexte
+      par prompt (injection `system`/context avant chaque `agent/prompt`, budget
+      tokens). V1 heuristique (AGENTS.md + specs + fichiers récemment édités +
+      imports du fichier courant), V2 embeddings/RAG local via pi.
+- **Fichiers :** nouveau `src/js/context-engine.js`, `src/js/agent-pi.js`
+  (injection contexte), `src-tauri/src/lib.rs` (commandes d'indexation
+  `index_project`/`symbol_refs`), `spec_rpc.md`.
+- **Valeur :** 🔴 très haute (facteur n°1 de qualité d'un coding-agent) ·
+  **Effort :** moyen (V1) → haut (V2). · **Remplace** A3 (pinning = version
+  pauvre de H1).
+
+### H2 — Multi-codeurs spécialisés (sub-agents) · 🔴 très haute
+- [ ] L'orchestrateur lance **N sessions pi spécialisées en parallèle** (reviewer,
+      test-writer, doc-writer, refactorer), chacune avec un `system` de rôle. La
+      tâche complexe est découpée en rôles, pas en séquence.
+- **Fichiers :** `src/js/orchestration.js` (dispatch multi-rôles),
+  `src-tauri/src/rpc_manager.rs` (N processus `pi --mode rpc --no-session`),
+  `src-tauri/src/lib.rs` (commande `spawn_role_session`), `spec_orchestration.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen-haut. · **Subsume** A5
+  (scratch session = un sub-agent what-if).
+
+### H3 — Mémoire de projet auto-maintenue · 🟠 haute
+- [ ] `PROJECT_MEMORY.md` **tenu par l'agent** : conventions, pièges, décisions
+      d'architecture, dépendances clés, anti-patterns. Enrichi après chaque tâche
+      (extraction 1–3 faits), injecté avant chaque nouvelle tâche.
+- **Fichiers :** `src/js/agent-pi.js` (append après tâche + inject avant),
+  `src/js/orchestration.js`, `src-tauri/src/lib.rs` (commande `append_memory` /
+  `read_memory`), `spec_rpc.md`, `spec_orchestration.md`.
+- **Valeur :** 🟠 haute (mémoire persistante = défaut n°1 des coding-agents) ·
+  **Effort :** faible-moyen.
+
+### H4 — Plan Editor visuel (approbation structurée) · 🟡 haute
+- [ ] Éditeur de plan : cocher/éditer chaque tâche, ajouter contraintes (« ne touche
+      pas à lib.rs », « budget max X tokens »), **estimation de coût par tâche**
+      avant lancement, tâches en « à plus tard ».
+- **Fichiers :** `src/js/orchestration.js` (parsing plan enrichi),
+  `src/js/agent-pi.js` (UI plan editor), `src/css/style.css`, `spec_orchestration.md`.
+- **Valeur :** 🟡 haute (contrôle + transparence financière) · **Effort :** moyen.
+
+### H5 — Code Review assistée (mode Review) · 🟡 haute
+- [ ] L'agent lit le **diff de la session** (ou du dernier commit Git) et produit
+      une revue structurée : sécurité, perfs, style, bugs, cohérence specs. Second
+      reviewer, pas auto-validation.
+- **Fichiers :** nouveau `src/js/review.js`, réutilise `src/js/diff-view.js` (A4)
+  et `src-tauri/src/git.rs` (C1), `src/js/agent-pi.js` (UI onglet review),
+  `spec_rpc.md`.
+- **Valeur :** 🟡 haute (positionnement review assistée, complément de l'écriture) ·
+  **Effort :** moyen. · **Dépend de** A4 + C1.
+
+### H6 — Routing multi-modèle intelligent · 🟠 haute
+- [ ] Routeur auto par sous-tâche : petit modèle local pour lint/format/édition
+      simple, gros cloud pour architecture/refactor, local pour données sensibles.
+      Décision basée sur nature de tâche + coût + sensibilité.
+- **Fichiers :** nouveau `src/js/model-router.js`, `src/js/orchestration.js`,
+  `src/js/agent-pi.js`, `src-tauri/src/lib.rs` (config `routing_rules`), `spec_rpc.md`.
+- **Valeur :** 🟠 haute (coût + confidentialité optimisés sans intervention) ·
+  **Effort :** moyen.
+
+### H7 — Mode « Projet sensible » (local-first garanti) · 🟡 haute
+- [ ] Toggle par projet : **100% local garanti** (pi local + modèle local + zéro
+      cloud). Badge « 🔒 local », refuse tout routing cloud, dictée via fallback
+      local (sinon web remote cloud interdit).
+- **Fichiers :** `src/js/agent-pi.js` (badge + garde), `src/js/model-router.js`
+  (H6), `src-tauri/src/lib.rs` (config `project_local_only`), `spec_web_remote.md`,
+  `spec_voice_input.md`.
+- **Valeur :** 🟡 haute (débloque projets entreprise/sensibles) · **Effort :** faible.
+
+### H8 — Project Bootstrap / Onboarding agent · 🟡 haute
+- [ ] Wizard « Init Pilot Project » : pointage sur un repo inconnu → l'agent
+      analyse et **génère** `AGENTS.md`, `spec_pilot.md`, `README.md`, `plan_dev.md`.
+      Adopter Pilot sur un projet externe en 5 min.
+- **Fichiers :** nouveau `src/js/onboarding.js`, `src/js/agent-pi.js` (wizard),
+  `src-tauri/src/lib.rs` (commande `bootstrap_project_docs`), `spec_pilot.md`.
+- **Valeur :** 🟡 haute (abaisse le coût d'entrée) · **Effort :** moyen.
+
+### H9 — Historique de sessions searchable (mémoire institutionnelle) · 🟠 haute
+- [ ] Index persistant de toutes les sessions agent : full-text search, tags, liens
+      vers fichiers modifiés, coût. « Quand a-t-on décidé X ? » « tâches touchant
+      lib.rs ». Mémoire des *décisions*, complément de H3 (mémoire des *faits*).
+- **Fichiers :** nouveau `src/js/session-history.js`, `src-tauri/src/lib.rs`
+  (index `sessions.jsonl` + commandes `search_sessions`), `src/js/agent-pi.js`
+  (UI onglet 📜), `spec_rpc.md`.
+- **Valeur :** 🟠 haute (transforme « session jetable » en « compagnon long-terme ») ·
+  **Effort :** moyen. · **Remplace** A6 (usage trop court) — A6 devient un widget
+  de H9.
+
+### H10 — MCP / tools extensibles · 🟡 haute
+- [ ] Exposer à pi des **outils supplémentaires** via MCP : recherche web, fetch de
+      doc, query d'API externe, lecture DB. Pilot comme **hôte MCP**.
+- **Fichiers :** nouveau `src-tauri/src/mcp.rs`, `src-tauri/src/rpc_manager.rs`
+  (exposition des tools à pi), `src-tauri/Cargo.toml` (dépendance MCP),
+  `spec_rpc.md`.
+- **Valeur :** 🟡 haute (ouvre l'écosystème, fidélise) · **Effort :** moyen-haut.
+
+### Triangle différenciant recommandé
+
+1. **H1 (Context Engine)** — qualité de l'agent (le vrai moat technique).
+2. **H3 + H9 (mémoire + historique)** — mémoire long-terme ; avantage d'être
+   embarqué (local, sur le projet).
+3. **H2 + H6 (multi-codeurs + routing)** — orchestration experte, au-dessus des
+   agents mono-session.
+
+→ Histoire cohérente : *« l'agent qui connaît ton projet (H1), qui se souvient de
+  tout (H3/H9), et qui travaille comme une petite équipe experte (H2/H6) — en
+  local, dans ton éditeur. »*
+
+---
+
+## 25. Revue critique des anciennes idées non faites (18/07)
+
+> Verdict par idée : **Garde** (utile, à faire) · **Garde faible prio** (banal /
+> cosmétique, plus tard) · **Fusionne** (redondant avec un nouvel axe) ·
+> **Abandonne** (peu de valeur ou doublon) · **Reconsidère** (gros chantier,
+> à trancher). La critique est subjective mais argumentée.
+
+### Éditeur / cosmétique — peu différenciant pour un outil dev IA
+
+| Idée | Verdict | Critique |
+|---|---|---|
+| 16 / B4 — MiniMap | **Abandonne** | Joli mais cosmétique. Les gros fichiers sont rares dans Pilot (specs MD). Le coût de maintenance CodeMirror > la valeur. Reviendra si besoin réel. |
+| 18 / G2 — Raccourcis personnalisables | **Garde faible prio** | Confort utilisateur, mais effort moyen pour peu d'utilisateurs. Le keymap par défaut suffit à 95 %. |
+| 19 / G1 — Thèmes personnalisés | **Garde faible prio** | Plaisir rétinien, facteur d'adoption secondaire. Pas différenciant pour un agent-éditor. Dark/light suffit pour l'instant. |
+| 21.2 — Export DOCX | **Abandonne** | Dépend Pandoc (lourdeur, dep externe). HTML (F1) couvre 95 % du partage. |
+| G4 — Status bar horloge session | **Abandonne** | Cosmétique, bruit visuel. |
+
+### Agent IA — cœur (à prioriser)
+
+| Idée | Verdict | Critique |
+|---|---|---|
+| A1 — Snapshots avant tâche | **Fusionne avec C1 (Git)** | Si Git intégré (C1), A1 = « git stash/commit auto avant tâche ». Garder A1 autonome seulement si on renonce à C1. À trancher : Git d'abord, A1 devient un sous-produit. |
+| A2 — Bibliothèque de prompts | **Garde** | Bonne valeur, faible effort, réutilisation réelle. Prio moyenne. Chevauche H3/H4 sans les remplacer. |
+| A3 — Pinning fichiers contexte | **Abandonne au profit de H1** | Version pauvre du Context Engine (H1). Faire H1 (général) plutôt que A3 (manuel). |
+| A4 — Diff review agent | **Garde (prio haute)** | Composant clé, partagé avec C1 (Git) et H5 (Review). Haute valeur, rentabilise 3 features. |
+| A5 — Scratch session | **Fusionne avec H2** | Lancer un sub-agent what-if = cas particulier de H2. Ne pas dupliquer. |
+| A6 — Usage cumulé | **Abandonne au profit de H9** | Trop court (juste un total). H9 (historique searchable + dashboard) subsume. A6 = un widget dans H9. |
+| E2 — Auto-test post-modification | **Garde (prio haute)** | Différenciant agent (boucle TDD). Suite naturelle de E0/E1. À faire. |
+| E3 — CI multi-plateforme | **Garde (prio moyenne)** | Robustesse Pilot lui-même, pas une feature user. Chantier interne, à faire un jour. |
+| E4 — Health check pi au démarrage | **Garde (prio haute, cheap)** | Cheap win : évite l'onglet agent cassé silencieusement. Effort faible, valeur nette. |
+
+### Éditeur / navigation — banal mais attendu
+
+| Idée | Verdict | Critique |
+|---|---|---|
+| B1 — Multi-curseurs | **Garde (prio basse, cheap)** | Table stakes éditeur. Trivial côté CodeMirror (`multipleSelections`). Faire un jour. |
+| B2 — Lint diagnostics inline | **Garde (prio moyenne)** | Connecte l'éditeur manuel au quality-gate. Réutilise `check_syntax`. Utile. |
+| B3 — Find & Replace | **Garde (prio moyenne)** | Suite naturelle de la recherche existante. Banal mais attendu. |
+| B5 — Snippets/templates fichier | **Garde faible prio** | Faible valeur si H8 (bootstrap) couvre l'amorçage. Confort marginal. |
+| B6 — Drag & drop fichier → lien | **Garde faible prio** | Petite valeur, effort faible. Faire si on touche à `image-paste.js`. |
+| C1 — Git intégré | **Garde (prio haute)** | Haute valeur, réutilise A4. Demande une vraie décisions (Git CLI vs `git2`). |
+| C2 — Workspace multi-projets | **Reconsidère / Abandonne** | Gros chantier (state multi-sessions, RPC partagé) pour peu de valeur agent. Pilot = mono-projet focus. Reporter sine die. |
+| C3 — Tags / labels sur fichiers | **Abandonne** | Les favoris (déjà faits) couvrent le besoin. Tags = bruit. |
+| C4 — Recent files | **Garde (prio basse, cheap)** | Cheap win. Faire avec la persistance d'onglets existante. |
+| G3 — Command palette symboles | **Garde faible prio** | Sympa, cheap, s'appuie sur l'outline existant. |
+
+### Remote / supervision
+
+| Idée | Verdict | Critique |
+|---|---|---|
+| D1 — Notifications desktop | **Garde (prio haute, cheap)** | Cheap, vraie valeur pour l'usage mobile (agent long lancé depuis le téléphone). |
+| D2 — Vue activité web | **Garde (prio basse)** | Dépend de H4 (plan editor). Chevauche. Faire après H4. |
+| D3 — WebAuthn / passkey | **Reconsidère (reporte)** | Effort moyen-haut pour un usage perso. Passphrase + Tailscale suffit. Reviendra si Pilot devient multi-utilisateur. |
+| D4 — Partage read-only (URL temp) | **Garde faible prio** | Chevauche F4 / H9. Confort, pas urgent. |
+
+### Export / partage
+
+| Idée | Verdict | Critique |
+|---|---|---|
+| 21.1 / F1 — Export HTML autonome | **Garde (prio moyenne, cheap)** | Faible effort, bonne valeur de partage. À faire. |
+| F2 — Export conversation agent | **Garde (prio moyenne)** | Lié à H9 (historique). Faire ensemble. |
+| 21.3 / F3 — Copy as HTML | **Garde (prio basse, trivial)** | Trivial, faire avec F1. |
+| F4 — Live share fichier | **Abandonne** | Faible valeur, effort moyen, chevauche D4/H9. |
+| 22 — Conflits fichiers (diff/reload) | **Garde (prio moyenne)** | Vrai souci UX. Mais avec auto-save + watcher, le conflit est rare. Le vrai besoin = un diff (réutilise A4). Faire après A4. |
+
+### Synthèse de la revue
+
+- **À faire en priorité** (haute valeur, agent-éditor) : A4 · E2 · E4 · C1 (avec A1
+  en sous-produit) · D1 · H1 · H3 · H9.
+- **Abandonner** (peu de valeur / doublons) : 16/B4 (minimap) · A3 (→H1) ·
+  A5 (→H2) · A6 (→H9) · C3 (favoris suffisent) · F4 · G4 · DOCX (21.2).
+- **Reporter sans regret** : C2 (workspace) · D3 (WebAuthn) · thèmes/raccourcis
+  custom (19/18).
+- **Nettoyage suggéré** : marquer A3/A5/A6 comme « vu → fusionné dans H1/H2/H9 »
+  pour éviter qu'un contributeur les implémente en doublon.
