@@ -158,6 +158,14 @@ body {
   font-weight: 500;
 }
 
+#status-version {
+  color: var(--text-muted);
+  white-space: nowrap;
+  margin-left: auto;
+  padding-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
 #btn-shortcuts {
   background: none;
   border: none;

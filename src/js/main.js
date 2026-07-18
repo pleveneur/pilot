@@ -11,6 +11,7 @@ import { initUpdater, checkForUpdate } from "./updater.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 
 // --- Palette de commandes ---
 
@@ -229,6 +230,15 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
   initUpdater();
+
+  // 3d-ter. Afficher la version de l'app dans la barre de statut
+  try {
+    const ver = await getVersion();
+    const el = document.getElementById("status-version");
+    if (el) el.textContent = `v${ver}`;
+  } catch (e) {
+    console.warn("Version non disponible:", e);
+  }
 
   // 3e0. Menu contextuel système : supprimer les options natives du clic droit
   // (Reload, Inspect, Save as, etc.) partout sauf dans l'éditeur CodeMirror
