@@ -134,6 +134,8 @@ pilot/
     ├── capabilities/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
+    ├── vendor/                # wry 0.55.1 patché (handler micro WebView2) — dictée vocale desktop
+    │   └── wry/
     └── src/
         ├── main.rs            # Point d'entrée Rust
         ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC

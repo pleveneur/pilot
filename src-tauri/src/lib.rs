@@ -955,8 +955,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
 
     // Construire le répertoire de session avec le sous-dossier projet
     let session_dir_resolved = if session_dir.is_empty() {
-        let home = dirs::home_dir().ok_or("Impossible de trouver le répertoire home")?;
-        home.join(".pi").join("agent").join("sessions")
+        resolve_agent_home(&pi_path)?.join("agent").join("sessions")
             .join(project_to_session_folder(&cwd))
     } else {
         std::path::PathBuf::from(&session_dir)
@@ -1064,12 +1063,31 @@ pub(crate) fn do_get_session_stats(state: &AppState) -> Result<Value, String> {
     rpc_manager::send_command_sync(session, cmd)
 }
 
-#[tauri::command]
-fn model_supports_images(provider: String, model_id: String) -> Result<bool, String> {
+/// Résout le répertoire home du programme RPC (pi, plh, ...) à partir du chemin
+/// de l'exécutable configuré. Convention : ~/.<stem> où <stem> est le nom de
+/// l'exécutable sans extension (plh.exe → ~/.plh, pi → ~/.pi). Si pi_path est
+/// vide, utilise "pi" par défaut. Permet à Pilot de fonctionner avec n'importe
+/// quel programme compatible pi en RPC sans chemin en dur.
+fn resolve_agent_home(pi_path: &str) -> Result<std::path::PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir")?;
-    let models_path = std::path::PathBuf::from(&home).join(".pi").join("agent").join("models.json");
+        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+    let stem = if pi_path.is_empty() {
+        "pi".to_string()
+    } else {
+        std::path::Path::new(pi_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "pi".to_string())
+    };
+    Ok(std::path::PathBuf::from(&home).join(format!(".{}", stem)))
+}
+
+#[tauri::command]
+fn model_supports_images(provider: String, model_id: String, state: State<AppState>) -> Result<bool, String> {
+    let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+    let models_path = resolve_agent_home(&pi_path)?.join("agent").join("models.json");
     let json_str = std::fs::read_to_string(&models_path)
         .map_err(|e| format!("Lecture models.json: {}", e))?;
     let config: Value = serde_json::from_str(&json_str)
@@ -1256,6 +1274,97 @@ fn list_agent_commands(state: State<AppState>) -> Result<Value, String> {
     rpc_manager::send_command_sync(session, cmd)
 }
 
+/// Extrait (host, port) d'une URL http(s)://host[:port]/...
+/// Version légère (pas de dépendance `url`) : suffisante pour les baseUrl LLM.
+fn parse_host_port(url: &str) -> Result<(String, u16), String> {
+    let no_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let authority = no_scheme.split('/').next().unwrap_or("");
+    if authority.is_empty() {
+        return Err(format!("URL sans hôte : {}", url));
+    }
+    // Gérer le cas IPv6 [::1]:port
+    if let Some(rest) = authority.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let host = rest[..end].to_string();
+            let after = &rest[end + 1..];
+            let port = after
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(443);
+            return Ok((host, port));
+        }
+        return Err("IPv6 mal formée".to_string());
+    }
+    match authority.rsplit_once(':') {
+        Some((h, p)) => {
+            let port = p.parse::<u16>().unwrap_or(80);
+            Ok((h.to_string(), port))
+        }
+        None => {
+            let port = if url.starts_with("https://") { 443 } else { 80 };
+            Ok((authority.to_string(), port))
+        }
+    }
+}
+
+/// Teste la reachabilité TCP d'un endpoint de modèle (LLM) avec un timeout court.
+/// Utilisé au démarrage de l'onglet agent pour détecter un serveur local éteint
+/// (ex: llama-cpp sur localhost:4567) avant qu'un prompt n'échoue en silence.
+/// Retourne { reachable, latencyMs?, error? } — n'échoue jamais (erreur → reachable=false).
+#[tauri::command]
+async fn check_model_reachable(url: String) -> Result<Value, String> {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+
+    let (host, port) = match parse_host_port(&url) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "reachable": false,
+                "latencyMs": null,
+                "error": e
+            }));
+        }
+    };
+    // Normaliser localhost et 0.0.0.0 en 127.0.0.1 avant la connexion TCP.
+    // Sur Windows, "localhost" se résout en ::1 (IPv6) en premier ; si le serveur
+    // n'écoute qu'en IPv4 (cas fréquent de llama-cpp/ollama), la connexion IPv6
+    // timeout → faux négatif « serveur injoignable » alors qu'il fonctionne.
+    // 0.0.0.0 n'est pas une adresse de connexion valide → utiliser 127.0.0.1.
+    let connect_host = if host == "localhost" || host == "0.0.0.0" {
+        "127.0.0.1".to_string()
+    } else {
+        host.clone()
+    };
+
+    let start = std::time::Instant::now();
+    let res = timeout(
+        Duration::from_millis(1500),
+        TcpStream::connect((connect_host.as_str(), port)),
+    )
+    .await;
+    match res {
+        Ok(Ok(_stream)) => Ok(serde_json::json!({
+            "reachable": true,
+            "latencyMs": start.elapsed().as_millis() as u64,
+            "error": null
+        })),
+        Ok(Err(e)) => Ok(serde_json::json!({
+            "reachable": false,
+            "latencyMs": start.elapsed().as_millis() as u64,
+            "error": e.to_string()
+        })),
+        Err(_) => Ok(serde_json::json!({
+            "reachable": false,
+            "latencyMs": start.elapsed().as_millis() as u64,
+            "error": "timeout (1.5s)".to_string()
+        })),
+    }
+}
+
 #[tauri::command]
 fn execute_agent_bash(state: State<AppState>, command: String) -> Result<Value, String> {
     let mut rpc = state.rpc_state.lock().unwrap();
@@ -1420,9 +1529,8 @@ fn list_sessions(state: State<AppState>) -> Result<Value, String> {
 
     let config = state.config.lock().unwrap();
     let session_dir = if config.rpc_session_dir.is_empty() {
-        // Répertoire par défaut : ~/.pi/agent/sessions
-        let home = dirs::home_dir().ok_or("Impossible de trouver le répertoire home")?;
-        home.join(".pi").join("agent").join("sessions")
+        // Repertoire par defaut : ~/.{stem}/agent/sessions (pi, plh, ...)
+        resolve_agent_home(&config.rpc_pi_path)?.join("agent").join("sessions")
     } else {
         std::path::PathBuf::from(&config.rpc_session_dir)
     };
@@ -1727,11 +1835,9 @@ fn search_in_files(
 /// Liste tous les modèles disponibles depuis ~/.pi/agent/models.json
 /// Retourne un tableau de chaînes "provider/modelId" trié alphabétiquement.
 #[tauri::command]
-fn get_available_models_list() -> Result<Vec<String>, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir")?;
-    let models_path = std::path::PathBuf::from(&home).join(".pi").join("agent").join("models.json");
+fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, String> {
+    let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+    let models_path = resolve_agent_home(&pi_path)?.join("agent").join("models.json");
     let json_str = std::fs::read_to_string(&models_path)
         .map_err(|e| format!("Lecture models.json: {}", e))?;
     let config: Value = serde_json::from_str(&json_str)
@@ -2150,6 +2256,7 @@ pub fn run() {
             set_agent_model,
             list_agent_models,
             list_agent_commands,
+            check_model_reachable,
             execute_agent_bash,
             compact_agent_context,
             list_sessions,

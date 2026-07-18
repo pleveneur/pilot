@@ -114,6 +114,7 @@ export async function initSettings() {
   const remoteBadge = document.getElementById("remote-badge");
   const remoteBadgeCount = document.getElementById("remote-badge-count");
   let webNetChanged = false; // flag levé si web_enabled/bind/port changent → reload serveur
+  let rpcLaunchChanged = false; // flag levé si rpc_pi_path/no_session/session_dir changent → relance agent
 
   // ── Journal d'audit distant ──
   const auditModal = document.getElementById("audit-modal");
@@ -241,6 +242,7 @@ export async function initSettings() {
     chkWebTailscaleServe.checked = currentConfig.web_tailscale_serve || false;
     webNetChanged = false;
     tailscaleChanged = false;
+    rpcLaunchChanged = false;
     await refreshWebStatus();
     await refreshTailscaleStatus();
     modal.classList.remove("hidden");
@@ -322,6 +324,19 @@ export async function initSettings() {
       refreshShowTools();
       // Notifier le changement d'auto-save
       window.dispatchEvent(new CustomEvent("pilot-config-changed", { detail: config }));
+      // Relancer l'agent a chaud si les parametres de lancement RPC ont change
+      // (chemin pi / no-session / repertoire de session). Si l'onglet agent est
+      // ouvert, agent-pi.js ecoute l'evenement et redemarre le backend ; sinon
+      // rien a faire (le prochain openFile lira la nouvelle config). Sans ca,
+      // l'agent resterait sur l'ancien backend jusqu'a fermeture/ouverture
+      // manuelle de l'onglet.
+      if (rpcLaunchChanged && config.rpc_agent_enabled) {
+        const agentTab = window._pilotTabs && window._pilotTabs.tabs.find((t) => t.mode === "agent");
+        if (agentTab) {
+          window.dispatchEvent(new CustomEvent("pilot-agent-restart-needed"));
+        }
+      }
+      rpcLaunchChanged = false;
       // Recharger à chaud le serveur web si les réglages réseau ont changé.
       if (webNetChanged) {
         try {
@@ -397,6 +412,13 @@ export async function initSettings() {
   // Réseau (enabled/bind/port) → flag pour reload du serveur au save.
   [chkWebEnabled, inputWebBind, inputWebPort].forEach((el) =>
     el.addEventListener("change", () => { webNetChanged = true; })
+  );
+
+  // Lancement de l'agent (chemin/no-session/répertoire de session) → flag
+  // pour relancer l'agent à chaud au save (évite « ça ne répond plus » après
+  // reconfig du backend, ex: plh → pi). Voir agent-pi.js onRestartNeeded.
+  [inputRpcPath, chkRpcNoSession, inputRpcSessionDir].forEach((el) =>
+    el.addEventListener("change", () => { rpcLaunchChanged = true; })
   );
 
   // Définir / changer le mot de passe distant.

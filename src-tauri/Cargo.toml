@@ -15,7 +15,6 @@ notify = "6"
 pulldown-cmark = "0.12"
 open = "5"
 portable-pty = "0.8"
-dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 
@@ -30,3 +29,9 @@ base64 = "0.22"
 sha2 = "0.10"
 include_dir = "0.7"
 qrcode = "0.14"
+
+# ── Patch local de wry (autorise le micro du WebView desktop pour la dictée vocale) ──
+# Voir `vendor/wry/src/webview2/mod.rs` (handler PermissionRequested).
+# À re-appliquer à chaque montée de version de Tauri / wry.
+[patch.crates-io]
+wry = { path = "vendor/wry" }

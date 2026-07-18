@@ -81,10 +81,13 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Paramètre | Type | UI | Description |
 |-----------|------|----|-------------|
 | `rpc_agent_enabled` | bool | Checkbox | Active la gestion RPC (remplace terminal agent) |
-| `rpc_pi_path` | string | Champ texte | Chemin vers l'exécutable pi (vide = "pi" dans PATH) |
+| `rpc_pi_path` | string | Champ texte | Chemin vers l'exécutable pi (vide = "pi" dans PATH). Pilot en déduit aussi le répertoire de configuration du programme : stem de l'exécutable (plh.exe → `~/.plh`, pi → `~/.pi`). Sert pour `models.json`, le répertoire de sessions par défaut, et `model_supports_images`. |
 | `rpc_no_session` | bool | Checkbox | Passe `--no-session` à pi (pas de persistance disque) |
-| `rpc_session_dir` | string | Champ texte | Dossier personnalisé pour les sessions (vide = ~/.pi/agent/sessions) |
+| `rpc_session_dir` | string | Champ texte | Dossier personnalisé pour les sessions (vide = `~/.{stem}/agent/sessions`, dérivé de `rpc_pi_path`) |
 | `show_thinking` | bool | Checkbox | Affiche les pensées (thinking) de l'agent dans le chat |
+
+> **Résolution du config dir (programme compatible pi)** : Pilot ne code plus `~/.pi` en dur. Il déduit le répertoire de configuration du programme depuis `rpc_pi_path` : le stem de l'exécutable (ex. `plh.exe` → `~/.plh`, `pi` → `~/.pi`, vide → `~/.pi`). Cette convention est utilisée pour `models.json` (liste des modèles + support image) et le répertoire de sessions par défaut. Permet de brancher n'importe quel programme 100 % compatible pi en RPC (ex. plh) sans modifier le code. Voir `resolve_agent_home()` dans `lib.rs`.
+> **Fallback hybride pour la liste des modèles** : l'onglet agent et le mode orchestration utilisent `fetchAvailableModels()` qui interroge d'abord le programme actif via RPC (`list_agent_models` → `get_available_models`), puis, si 0 modèle est retourné (programme ne supportant pas la commande ou format non reconnu), retombe sur la lecture du fichier `~/.{stem}/agent/models.json` (`get_available_models_list`). Les chaînes `provider/modelId` du fallback sont converties en objets `{ provider, id, label }` pour homogénéité. Les paramètres et l'aide intégrée utilisent directement la source fichier.
 
 ---
 
@@ -117,7 +120,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 |-----------|------------|
 | `agent_start` | Statut → "En réflexion...", streaming activé |
 | `agent_end` | Statut → "Prêt", mise à jour des stats tokens/coûts |
-| `message_start` / `message_update` / `message_end` | Streaming du texte de l'assistant (Markdown) |
+| `message_start` / `message_update` / `message_end` | Streaming du texte de l'assistant (Markdown) ; `message_end` affiche aussi explicitement les erreurs (`stopReason:"error"` + `errorMessage`, ex: serveur LLM injoignable) au lieu de rester silencieux |
 | `thinking_start` / `thinking_delta` / `thinking_end` | Bloc `<details>` repliable pour la pensée |
 | `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | Bloc outil avec nom, arguments, sortie |
 | `text_start` / `text_delta` / `text_end` | Streaming du texte dans le bloc message |
@@ -152,9 +155,13 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Saisie Entrée=envoyer / Shift+Entrée=nouvelle ligne | ✅ |
 | Barre d'outils (⏹️ abort, ➕ new session, 📦 compact) | ✅ |
 | Sélecteur de modèle (chargé depuis pi) | ✅ |
+| Détection au démarrage d'un modèle par défaut injoignable (TCP probe sur endpoint local) | ✅ |
+| Resync du modèle au moment d'envoyer un prompt (chat standard) | ✅ |
+| Sélecteurs orchestrateur + codeur affichés en mode Orchestration (sélecteur standard masqué) | ✅ |
 | Stats tokens/coûts en temps réel | ✅ |
 | Indicateur de statut (Prêt / En réflexion... / ⚠️ Déconnecté) | ✅ |
 | Reconnexion automatique si crash (bouton 🔄) | ✅ |
+| Redémarrage à chaud de l'agent si reconfig du backend (chemin/session RPC) dans les Paramètres | ✅ |
 | Dialogues d'extension (via prompt/confirm navigateur) | ✅ |
 | Messages système et erreurs | ✅ |
 | Autocomplétion des commandes slash (/) | ✅ |
@@ -173,6 +180,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Fermeture onglet Agent Pi | Unlisten RPC + `stop_agent_session` |
 | Fermeture projet | `stop_agent_session` |
 | Crash processus pi | Événement `process_exit` → UI déconnecté + bouton reconnecter |
+| Reconfig paramètres lancement RPC (chemin pi / no-session / rép. session) | `save_config` → `settings.js` lève flag → dispatche `pilot-agent-restart-needed` → `agent-pi.js` stop+start+`new_session`+reset UI+reload modèles (si onglet ouvert) |
 
 ---
 
@@ -283,10 +291,25 @@ L'onglet **π** intègre l'agent de codage **Pi** (pi.dev) directement dans Pilo
 dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 
 - **Démarrer** : bouton **Agent Pi** du panneau d'actions, ou onglet π. Pilot
-  lance un processus `pi --mode rpc` en arrière-plan.
+  lance un processus `pi --mode rpc` en arrière-plan. Si vous changez le
+  chemin du backend (ex: `plh` → `pi`) ou le répertoire de session dans les
+  **Paramètres**, l'agent est automatiquement redémarré à chaud (si l'onglet
+  est ouvert) — un message « 🔄 Agent redémarré » confirme le basculement.
 - **Poser une question / une tâche** : zone de saisie, `Entrée` pour envoyer
   (`Shift+Entrée` = saut de ligne).
-- **Modèle** : sélecteur en haut de l'onglet (provider + modèle).
+- **Modèle** : sélecteur en haut de l'onglet (provider + modèle). Au
+  démarrage, Pilot teste la reachabilité du modèle actif : s'il s'agit d'un
+  serveur local éteint (ex: llama-cpp/ollama non lancé), un avertissement
+  s'affiche pour éviter qu'un prompt échoue en silence. À l'envoi d'un prompt,
+  Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
+  le resynchronise (avec un message) si nécessaire.
+- **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
+  sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur
+  🧠 + codeur 🔨), inactifs en affichage. À la désactivation, le sélecteur
+  standard réapparaît et le modèle standard est restauré.
+- **Erreurs visibles** : si un prompt échoue (serveur LLM injoignable, erreur
+  API…), le message d'erreur s'affiche dans la conversation au lieu d'une
+  bulle vide sans réponse.
 - **Nouvelle conversation** : bouton ➕ (new session). **Reprendre une session** :
   commande `/resume` liste les sessions enregistrées pour le projet courant.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →

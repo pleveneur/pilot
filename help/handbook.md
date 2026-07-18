@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-13 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf -->
+<!-- PILOT-HELP generated=2026-07-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -126,10 +126,25 @@ L'onglet **π** intègre l'agent de codage **Pi** (pi.dev) directement dans Pilo
 dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 
 - **Démarrer** : bouton **Agent Pi** du panneau d'actions, ou onglet π. Pilot
-  lance un processus `pi --mode rpc` en arrière-plan.
+  lance un processus `pi --mode rpc` en arrière-plan. Si vous changez le
+  chemin du backend (ex: `plh` → `pi`) ou le répertoire de session dans les
+  **Paramètres**, l'agent est automatiquement redémarré à chaud (si l'onglet
+  est ouvert) — un message « 🔄 Agent redémarré » confirme le basculement.
 - **Poser une question / une tâche** : zone de saisie, `Entrée` pour envoyer
   (`Shift+Entrée` = saut de ligne).
-- **Modèle** : sélecteur en haut de l'onglet (provider + modèle).
+- **Modèle** : sélecteur en haut de l'onglet (provider + modèle). Au
+  démarrage, Pilot teste la reachabilité du modèle actif : s'il s'agit d'un
+  serveur local éteint (ex: llama-cpp/ollama non lancé), un avertissement
+  s'affiche pour éviter qu'un prompt échoue en silence. À l'envoi d'un prompt,
+  Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
+  le resynchronise (avec un message) si nécessaire.
+- **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
+  sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur
+  🧠 + codeur 🔨), inactifs en affichage. À la désactivation, le sélecteur
+  standard réapparaît et le modèle standard est restauré.
+- **Erreurs visibles** : si un prompt échoue (serveur LLM injoignable, erreur
+  API…), le message d'erreur s'affiche dans la conversation au lieu d'une
+  bulle vide sans réponse.
 - **Nouvelle conversation** : bouton ➕ (new session). **Reprendre une session** :
   commande `/resume` liste les sessions enregistrées pour le projet courant.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →

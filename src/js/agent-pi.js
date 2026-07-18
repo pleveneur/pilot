@@ -106,6 +106,8 @@ export async function createAgentPi(container) {
     <button class="agent-btn" data-action="orchestration" title="Mode Orchestration : architecte + codeur">🧠</button>
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)">🛡️</button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
+    <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="🧠 Orchestrateur (mode Orchestration)"></select>
+    <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="🔨 Codeur (mode Orchestration)"></select>
     <span class="agent-stats" id="agent-stats" title="Tokens / Coût"></span>
     <span class="agent-status" id="agent-status">Prêt</span>
   `;
@@ -307,7 +309,12 @@ export async function createAgentPi(container) {
       voiceActive = false; voiceRec = null;
       if (micBtn) micBtn.classList.remove("rec");
       if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
-        appendSystemMessage(messagesEl, "🎙️ Le micro n'est pas disponible dans l'app desktop (limite Tauri/wry). Dicte via le web remote (HTTPS) depuis un téléphone ou un autre PC.");
+        // not-allowed = micro absent (NotFound) ou permission refusée. Sur le desktop,
+        // le patch wry (vendor/wry) accorde automatiquement la permission ; un not-allowed
+        // indique donc généralement l'absence de micro (device non exposé à l'app) ou un
+        // build non patché. service-not-allowed = service Web Speech indisponible dans ce
+        // WebView (Edge/WebView2 ne fournit pas le service cloud Web Speech de Chrome).
+        appendSystemMessage(messagesEl, "🎙️ Micro indisponible (" + ev.error + "). Vérifie qu'un micro est branché et autorisé (Réglages Windows → Confidentialité → Micro → applications de bureau). Alternative : web remote (HTTPS) depuis un téléphone ou un autre PC.");
       } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
         appendSystemMessage(messagesEl, "🎙️ Erreur de dictée : " + ev.error);
       }
@@ -640,6 +647,36 @@ export async function createAgentPi(container) {
           return;
         }
       } else {
+        // Chat standard : s'assurer que le modèle actif côté agent correspond
+        // au modèle sélectionné. Resync si désynchronisé (ex: new_session qui
+        // reset le modèle au défaut de pi/plh), avec un message visible (point 1B).
+        // En mode Orchestration, les switchToOrchestrator/Coder gèrent déjà la bascule.
+        if (!state.orchestrationEnabled && !isSlashCommand && state.currentModel) {
+          const expected = state.currentModel;
+          let active = "";
+          try {
+            active = await confirmActiveModel(expected);
+          } catch (e) {
+            console.warn("get_agent_state échoué avant envoi:", e);
+          }
+          if (active && active !== expected) {
+            const [p, ...rest] = expected.split("/");
+            try {
+              await invoke("set_agent_model", { provider: p, modelId: rest.join("/") });
+              const confirmed = await confirmActiveModel(expected);
+              if (confirmed && confirmed !== expected) {
+                appendErrorMessage(messagesEl, "❌ Impossible de resynchroniser le modèle (actif: " + confirmed + ", attendu: " + expected + "). Prompt non envoyé.");
+                inputEl.value = text;
+                return;
+              }
+              appendSystemMessage(messagesEl, "🔄 Modèle resynchronisé : " + active + " → " + expected);
+            } catch (err) {
+              appendErrorMessage(messagesEl, "❌ Échec de resynchronisation du modèle : " + err + ". Prompt non envoyé.");
+              inputEl.value = text;
+              return;
+            }
+          }
+        }
         const payload = { message: text };
         if (images) payload.images = images;
         await invoke("send_agent_prompt", payload);
@@ -965,16 +1002,28 @@ export async function createAgentPi(container) {
             state.orchestrationTimeout = null;
           }
           orchestrationPanel.classList.add("hidden");
-          // Restaurer le modèle par défaut
+          // Réafficher le sélecteur standard et cacher les sélecteurs orch
+          setModelSelectorsOrchestrationMode(false, state);
+          // Restaurer le modèle standard sélectionné (mémorisé à l'activation)
           if (state.defaultModel) {
             const [provider, ...parts] = state.defaultModel.split("/");
             const modelId = parts.join("/");
             try {
               await invoke("set_agent_model", { provider, modelId });
               state.currentModel = state.defaultModel;
-              appendSystemMessage(messagesEl, `🔄 Modèle restauré : ${state.defaultModel}`);
-            } catch (_) {
-              // Silencieux si impossible de restaurer
+              // Vérifier que le modèle est bien actif côté agent (resync)
+              const confirmed = await confirmActiveModel(state.defaultModel);
+              if (confirmed && confirmed !== state.defaultModel) {
+                appendSystemMessage(messagesEl, `⚠️ Modèle restauré demandé ${state.defaultModel}, mais le modèle actif est ${confirmed}. Vérifiez la configuration.`);
+              } else {
+                appendSystemMessage(messagesEl, `🔄 Modèle restauré : ${state.defaultModel}`);
+              }
+              // Resync le sélecteur standard sur le modèle restauré
+              const stdSel = document.getElementById("agent-model-select");
+              if (stdSel) stdSel.value = state.defaultModel;
+              updateStats();
+            } catch (err) {
+              appendErrorMessage(messagesEl, `❌ Impossible de restaurer le modèle standard (${state.defaultModel}) : ${err}`);
             }
           }
           state.defaultModel = "";
@@ -1065,6 +1114,11 @@ export async function createAgentPi(container) {
 
   // ── Charger les modèles disponibles ──
   loadModels(state);
+
+  // ── Vérifier la reachabilité du modèle actif (point 2) ──
+  // Détecte au démarrage un modèle par défaut injoignable (ex: serveur
+  // llama-cpp/ollama éteint) pour prévenir avant le 1er prompt « ça répond pas ».
+  checkDefaultModelReachable(state, messagesEl);
 
   // ── Charger les commandes disponibles ──
   loadCommands();
@@ -1354,6 +1408,10 @@ export async function createAgentPi(container) {
         appendSystemMessage(mEl, msg);
       }
     } catch (_) { /* Pas de plan existant */ }
+
+    // Bascule l'affichage des sélecteurs : cache le sélecteur standard, affiche
+    // les 2 sélecteurs (inactifs) orchestrateur + codeur positionnés sur les modèles choisis.
+    setModelSelectorsOrchestrationMode(true, st);
   }
 
   /**
@@ -1375,16 +1433,13 @@ export async function createAgentPi(container) {
     // Charger la liste des modèles disponibles
     let models = [];
     try {
-      const result = await invoke("list_agent_models");
-      if (result && result.data && Array.isArray(result.data.models)) models = result.data.models;
-      else if (result && Array.isArray(result.data)) models = result.data;
-      else if (result && Array.isArray(result)) models = result;
+      models = await fetchAvailableModels();
     } catch (e) {
       appendErrorMessage(mEl, `❌ Impossible de lister les modèles : ${e}`);
       return;
     }
     if (models.length === 0) {
-      appendErrorMessage(mEl, "❌ Aucun modèle disponible. Configurez vos modèles dans pi d'abord.");
+      appendErrorMessage(mEl, "❌ Aucun modèle disponible. Configurez vos modèles dans pi (ou plh) d'abord, ou vérifiez le chemin dans les paramètres (Gestion RPC).");
       return;
     }
 
@@ -1532,6 +1587,35 @@ export async function createAgentPi(container) {
       document.removeEventListener("keydown", onKey);
       close();
     });
+  }
+
+  /**
+   * Bascule l'affichage des sélecteurs de modèle dans la barre d'outils :
+   *  - mode Orchestration activé : cache le sélecteur standard, affiche les 2
+   *    sélecteurs (inactifs) orchestrateur + codeur positionnés sur les modèles choisis.
+   *  - mode Orchestration désactivé : inverse (réaffiche le sélecteur standard).
+   * Les sélecteurs orch sont `disabled` : affichage seul, pas de modification live
+   * (les modèles sont pilotés automatiquement par switchToOrchestrator/Coder).
+   */
+  function setModelSelectorsOrchestrationMode(orchActive, st) {
+    const stdSel = document.getElementById("agent-model-select");
+    const orchSelEl = document.getElementById("agent-orch-model-select");
+    const coderSelEl = document.getElementById("agent-coder-model-select");
+    if (orchActive) {
+      if (stdSel) stdSel.classList.add("hidden");
+      if (orchSelEl) {
+        if (st && st.orchestratorModel) orchSelEl.value = st.orchestratorModel;
+        orchSelEl.classList.remove("hidden");
+      }
+      if (coderSelEl) {
+        if (st && st.coderModel) coderSelEl.value = st.coderModel;
+        coderSelEl.classList.remove("hidden");
+      }
+    } else {
+      if (orchSelEl) orchSelEl.classList.add("hidden");
+      if (coderSelEl) coderSelEl.classList.add("hidden");
+      if (stdSel) stdSel.classList.remove("hidden");
+    }
   }
 
   // Met à jour le titre du panneau d'orchestration : « 📋 Plan d'orchestration : <début de la demande> ».
@@ -3016,7 +3100,51 @@ export async function createAgentPi(container) {
     if (orchBtn) orchBtn.classList.add("active");
   }
 
-  return { wrapper, unlisten, unlistenDragDrop };
+  // ── Redémarrage à chaud depuis les Paramètres ──
+  // Quand l'utilisateur modifie rpc_pi_path / rpc_no_session / rpc_session_dir
+  // dans les Paramètres (et que l'onglet agent est ouvert), settings.js
+  // dispatche "pilot-agent-restart-needed". On stoppe l'ancien backend, on en
+  // démarre un nouveau avec la config à jour, puis on reset l'UI et recharge
+  // les modèles. Évite le piège « ça ne répond plus » après reconfig : sans
+  // ça, l'agent restait sur l'ancien backend (plh) jusqu'à fermeture/rouverture
+  // manuelle de l'onglet.
+  const onRestartNeeded = async () => {
+    try {
+      await invoke("stop_agent_session").catch(() => {});
+      await invoke("start_agent_session");
+      try { await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) }); } catch (_) {}
+      state.isStreaming = false;
+      state.currentAssistantBlock = null;
+      state.currentTextBlock = null;
+      state.currentThinkingBlock = null;
+      state.currentToolBlocks.clear();
+      state.pendingToolCalls.clear();
+      state.pendingText = "";
+      state.lastAssistantRawText = "";
+      state.pendingImages = [];
+      state.pendingRender = false;
+      messagesEl.innerHTML = "";
+      statusEl.textContent = "Prêt";
+      statusEl.className = "agent-status agent-status-idle";
+      appendSystemMessage(messagesEl, "🔄 Agent redémarré (paramètres RPC modifiés).");
+      await loadModels(state);
+      updateStats();
+      loadCommands();
+    } catch (e) {
+      console.error("Redémarrage agent:", e);
+      appendErrorMessage(messagesEl, "❌ Échec redémarrage agent: " + e);
+    }
+  };
+  window.addEventListener("pilot-agent-restart-needed", onRestartNeeded);
+
+  return {
+    wrapper,
+    unlisten: () => {
+      try { unlisten(); } catch (_) {}
+      window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
+    },
+    unlistenDragDrop,
+  };
 }
 
 // ── Stats tokens/coûts ──
@@ -3224,20 +3352,58 @@ function bytesToBase64(bytes) {
   return btoa(result);
 }
 
+/** Récupère la liste des modèles disponibles.
+ *  Source primaire : RPC (list_agent_models, interroge le programme actif — pi, plh).
+ *  Fallback : lecture du fichier models.json (get_available_models_list) — utile si
+ *  le programme RPC ne supporte pas get_available_models ou retourne un format
+ *  non reconnu. Les chaînes "provider/modelId" du fallback sont converties en
+ *  objets { provider, id, label } pour homogénéité avec le format RPC.
+ *  Voir spec_rpc.md (résolution du config dir).
+ */
+async function fetchAvailableModels() {
+  // 1. Source primaire : RPC (programme actif)
+  try {
+    const result = await invoke("list_agent_models");
+    let models = [];
+    if (result && result.data && Array.isArray(result.data.models)) models = result.data.models;
+    else if (result && Array.isArray(result.data)) models = result.data;
+    else if (result && Array.isArray(result)) models = result;
+    if (models.length > 0) {
+      return models.map(m => {
+        if (typeof m === "string") {
+          const idx = m.indexOf("/");
+          const provider = idx >= 0 ? m.slice(0, idx) : m;
+          const id = idx >= 0 ? m.slice(idx + 1) : "";
+          return { provider, id, label: m };
+        }
+        return m;
+      });
+    }
+  } catch (e) {
+    console.warn("list_agent_models (RPC) échoué, fallback fichier:", e);
+  }
+  // 2. Fallback : lecture fichier (~/{stem}/agent/models.json via Rust)
+  try {
+    const list = await invoke("get_available_models_list");
+    if (Array.isArray(list)) {
+      return list.map(s => {
+        const idx = s.indexOf("/");
+        const provider = idx >= 0 ? s.slice(0, idx) : s;
+        const id = idx >= 0 ? s.slice(idx + 1) : "";
+        return { provider, id, label: s };
+      });
+    }
+  } catch (e) {
+    console.warn("get_available_models_list (fichier) échoué:", e);
+  }
+  return [];
+}
+
 async function loadModels(st) {
   const select = document.getElementById("agent-model-select");
   if (!select) return;
   try {
-    const result = await invoke("list_agent_models");
-    // Le résultat dépend de la réponse de pi, généralement { data: { models: [...] } }
-    let models = [];
-    if (result && result.data && Array.isArray(result.data.models)) {
-      models = result.data.models;
-    } else if (result && Array.isArray(result.data)) {
-      models = result.data;
-    } else if (result && Array.isArray(result)) {
-      models = result;
-    }
+    const models = await fetchAvailableModels();
     if (models.length === 0) {
       select.innerHTML = '<option value="">Aucun modèle</option>';
       return;
@@ -3251,6 +3417,17 @@ async function loadModels(st) {
       html += `<option value="${value}">${label}</option>`;
     }
     select.innerHTML = html;
+    // Remplir aussi les sélecteurs (inactifs) du mode Orchestration avec la même liste.
+    const orchSel2 = document.getElementById("agent-orch-model-select");
+    const coderSel2 = document.getElementById("agent-coder-model-select");
+    if (orchSel2) orchSel2.innerHTML = html;
+    if (coderSel2) coderSel2.innerHTML = html;
+    // En mode Orchestration, repositionner les sélecteurs orch sur les modèles choisis
+    // (loadModels peut être rappelé après un new-session sans repasser par l'activation).
+    if (st && st.orchestrationEnabled) {
+      if (orchSel2 && st.orchestratorModel) orchSel2.value = st.orchestratorModel;
+      if (coderSel2 && st.coderModel) coderSel2.value = st.coderModel;
+    }
     // Sélectionner le modèle actuel
     try {
       const agentState = await invoke("get_agent_state");
@@ -3313,6 +3490,48 @@ async function updateStats() {
     }
   } catch (_) {
     statsEl.textContent = "";
+  }
+}
+
+/**
+ * Vérifie au démarrage que le modèle actif est joignable.
+ * Détecte un modèle par défaut local (llama-cpp/ollama sur localhost) dont le
+ * serveur n'est pas démarré, et avertit l'utilisateur AVANT qu'il ne tape un
+ * prompt qui échouerait en silence (« ça répond pas »).
+ * Le test se limite aux URLs locales (localhost/127.0.0.1/0.0.0.0) pour éviter
+ * les faux négatifs réseau sur les backends distants/cloud.
+ */
+async function checkDefaultModelReachable(st, messagesEl) {
+  if (!messagesEl) return;
+  let baseUrl;
+  let modelLabel;
+  try {
+    const agentState = await invoke("get_agent_state");
+    const model = agentState && agentState.data && agentState.data.model;
+    if (!model) return;
+    baseUrl = model.baseUrl || "";
+    modelLabel = `${model.provider || "?"}/${model.id || model.name || "?"}`;
+    if (!baseUrl) return;
+  } catch (_) {
+    return;
+  }
+  // Ne tester que les endpoints locaux (évite le bruit sur backends cloud).
+  if (!/https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(baseUrl)) {
+    return;
+  }
+  let result;
+  try {
+    result = await invoke("check_model_reachable", { url: baseUrl });
+  } catch (e) {
+    console.warn("check_model_reachable indisponible:", e);
+    return;
+  }
+  if (result && result.reachable === false) {
+    const port = (baseUrl.match(/:(\d+)(?:\/|$)/) || [])[1] || "?";
+    appendSystemMessage(
+      messagesEl,
+      `⚠️ Le modèle actif **${modelLabel}** pointe vers ${baseUrl} mais le serveur ne répond pas (port ${port} injoignable${result.error ? ` : ${result.error}` : ""}). Démarrez le serveur, ou sélectionnez un autre modèle dans la liste déroulante. Sinon les prompts échoueront en silence.`
+    );
   }
 }
 
@@ -3877,6 +4096,40 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         if (!hasVisibleContent) {
           state.currentThinkingBlock.remove();
           state.currentThinkingBlock = null;
+        }
+      }
+      // ── Détection d'erreur/abort dans le flux streamé ──
+      // plh/pi peuvent émettre un message_end avec stopReason:"error" + errorMessage
+      // (ex: serveur LLM injoignable). Sans cette branche, l'erreur était silencieuse :
+      // la bulle vide était retirée à agent_end → l'UI n'affichait rien ("ça répond pas").
+      // Le cas non streamé (event "message") est déjà géré plus haut ; ici on couvre
+      // le chemin streamé (message_start → message_update → message_end).
+      const endMsg = payload.message;
+      if (endMsg && endMsg.stopReason === "error" && endMsg.errorMessage) {
+        const raw = endMsg.errorMessage || "";
+        let friendlyMsg;
+        if (raw === "Connection error.") {
+          friendlyMsg = "Erreur de connexion, vérifiez votre connexion à l'API";
+        } else if (/error sending request|Erreur HTTP|failed to connect|connection refused/i.test(raw)) {
+          // Extraire l'URL si présente pour un message parlant
+          const urlMatch = raw.match(/https?:\/\/[^\s")]+/);
+          friendlyMsg = urlMatch
+            ? `Serveur LLM injoignable (${urlMatch[0]}). Vérifiez que le serveur est démarré, ou sélectionnez un autre modèle.`
+            : `Serveur LLM injoignable. Vérifiez que le serveur est démarré, ou sélectionnez un autre modèle. (${raw})`;
+        } else {
+          friendlyMsg = raw;
+        }
+        if (!state.currentAssistantBlock) {
+          state.currentAssistantBlock = createAssistantBlock(messagesEl);
+        }
+        appendTextSection(state.currentAssistantBlock, `❌ **Erreur** : ${friendlyMsg}`);
+        statusEl.textContent = "Erreur";
+        statusEl.className = "agent-status agent-status-error";
+        state.isStreaming = false;
+        // Mode Orchestration : une erreur de connexion ne doit pas être confondue
+        // avec un échec de tâche normal — on met le plan en pause avec un message.
+        if (state.orchestrationEnabled && state.orchestrationRunning) {
+          orchFns.handleOrchestrationConnectionError(state, messagesEl);
         }
       }
       // Ne pas supprimer la bulle ici — on la garde pour le message suivant du même tour.
