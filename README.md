@@ -275,7 +275,9 @@ sudo apt install -y \
   librsvg2-dev \
   libssl-dev \
   libsoup-3.0-dev \
-  javascriptcoregtk-4.1
+  javascriptcoregtk-4.1 \
+  patchelf \
+  libfuse2
 ```
 
 ### Lancement en développement
