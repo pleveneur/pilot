@@ -11,7 +11,7 @@
 // associés, et produit un JSON au format attendu par tauri-plugin-updater.
 // Nécessite GITHUB_TOKEN dans l'environnement (permissions "contents: read").
 
-const fs = require("fs");
+import fs from "fs";
 
 const TAG = process.argv[2];
 const REPO = process.argv[3];
