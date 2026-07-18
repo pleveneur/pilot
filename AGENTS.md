@@ -159,6 +159,30 @@ pilot/
 
 Toujours indiquer les commandes à taper après une modification de code.
 
+### Publication des versions (workflow de release)
+
+**Règle** : publier une nouvelle version **uniquement sur demande explicite de
+l'utilisateur** (ex: « publie le projet », « fais une release »). Ne jamais publier
+automatiquement après un commit de code — attendre la demande.
+
+Quand l'utilisateur demande la publication :
+
+1. **Bumper la version** dans les 3 fichiers (tauri.conf.json, Cargo.toml, package.json) —
+   même valeur partout (ex: `0.2.3` → `0.2.4`).
+2. **Committer** le bump : `git commit -m "chore: bump version to X.Y.Z"`.
+3. **Pousser** `main` puis **créer et pousser le tag** `vX.Y.Z` :
+   ```bash
+   git push origin main
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+4. Le workflow `.github/workflows/release.yml` build les 4 plateformes, signe les
+   artefacts et génère `latest.json` automatiquement. Les utilisateurs installés
+   reçoivent la mise à jour au prochain démarrage de Pilot.
+
+Ne jamais republier un tag déjà existant (créer un nouveau numéro de version à la place).
+Vérifier que le secret GitHub `TAURI_SIGNING_PRIVATE_KEY` est bien en place (sinon le
+build échoue à la signature).
+
 ```bash
 # Lancer en mode développement
 npm run tauri dev
