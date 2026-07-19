@@ -102,15 +102,7 @@ jobs:
         with:
           node-version: 20
 
-      # Génère le changelog (commits depuis le tag précédent) et met à jour
-      # le body de la release GitHub. gen-latest-json.js lira ensuite ce body
-      # pour remplir le champ `notes` de latest.json, affiché par l'updater.
-      - name: Update release notes with changelog
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/update-release-notes.js "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}"
-
-      - name: Generate latest.json
+      - name: Generate latest.json (changelog + signatures + upload du body)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/gen-latest-json.js "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" latest.json

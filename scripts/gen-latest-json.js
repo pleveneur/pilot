@@ -23,6 +23,7 @@
 // Nécessite GITHUB_TOKEN dans l'environnement (permissions "contents: read").
 
 import fs from "fs";
+import { execSync } from "child_process";
 
 const TAG = process.argv[2];
 const REPO = process.argv[3];
@@ -37,7 +38,58 @@ if (!TAG || !REPO || !TOKEN) {
 
 const VERSION = TAG.replace(/^v/, "");
 
-// Retourne l'objet release GitHub complet (assets + body/changelog).
+const RELEASE_HEADER =
+  "Téléchargez et installez le binaire correspondant à votre plateforme. La mise à jour automatique est active pour les versions suivantes.";
+
+// Retourne le tag de version le plus récent strictement antérieur à TAG
+// (tri par date de création descendant). Chaîne vide s'il n'y en a pas.
+function prevTag(tag) {
+  try {
+    // Liste tous les tags (sans pattern shell pour rester cross-platform :
+    // cmd.exe ne gère pas les simples quotes comme bash). On filtre ceux
+    // qui commencent par 'v' en JS.
+    const tags = execSync("git tag --sort=-creatordate", {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .filter((t) => t.startsWith("v"));
+    const idx = tags.indexOf(tag);
+    if (idx === -1 || idx + 1 >= tags.length) return "";
+    return tags[idx + 1];
+  } catch {
+    return "";
+  }
+}
+
+// Génère le changelog (commits depuis le tag précédent) + le body complet
+// à afficher sur la page GitHub de la release et dans le champ `notes`
+// de latest.json (consommé par l'updater).
+function buildChangelogBody() {
+  const prev = prevTag(TAG);
+  const range = prev ? `${prev}..${TAG}` : TAG;
+  let changelog = "";
+  try {
+    changelog = execSync(
+      `git log --no-merges --pretty=format:%s ${range}`,
+      { encoding: "utf8" }
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((s) => `- ${s}`)
+      .join("\n");
+  } catch (e) {
+    console.warn(`⚠ git log a échoué (${e.message}), changelog vide.`);
+  }
+  const body = prev
+    ? `${RELEASE_HEADER}\n\n## Modifications depuis ${prev}\n\n${changelog || "(aucun)"}`
+    : `${RELEASE_HEADER}\n\n## Modifications\n\n${changelog || "(première release)"}`;
+  return { body, prev };
+}
+
+// Retourne l'objet release GitHub complet (assets + id pour le PATCH).
 async function getRelease() {
   const res = await fetch(
     `https://api.github.com/repos/${REPO}/releases/tags/${encodeURIComponent(TAG)}`,
@@ -45,7 +97,24 @@ async function getRelease() {
   );
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return { assets: data.assets || [], body: data.body || "" };
+  return { assets: data.assets || [], id: data.id };
+}
+
+// Met à jour le body de la release GitHub (visible sur la page release).
+async function patchReleaseBody(releaseId, body) {
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/releases/${releaseId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `token ${TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    }
+  );
+  if (!res.ok) throw new Error(`PATCH release ${res.status}: ${await res.text()}`);
 }
 
 async function fetchSig(url) {
@@ -73,7 +142,14 @@ function platformFromBinaryName(name) {
 }
 
 (async () => {
-  const { assets, body: releaseBody } = await getRelease();
+  // Génère le changelog depuis les commits et met à jour le body de la
+  // release GitHub (visible sur la page release). On utilise ce même
+  // body comme `notes` dans latest.json — pas de re-fetch de l'API, donc
+  // pas de condition de course entre la mise à jour du body et sa lecture.
+  const { body: changelogBody, prev } = buildChangelogBody();
+  const { assets, id: releaseId } = await getRelease();
+  await patchReleaseBody(releaseId, changelogBody);
+  console.log(`✓ Body de la release mis à jour${prev ? ` (depuis ${prev})` : ""} — ${changelogBody.length} car.`);
 
   // Index des assets par nom pour une lookup rapide.
   const byName = new Map(assets.map((a) => [a.name, a]));
@@ -119,10 +195,10 @@ function platformFromBinaryName(name) {
     process.exit(2);
   }
 
-  // Changelog de la release : on injecte le body GitHub (rédigé ou auto-généré
-  // par "generate-release-notes") pour que l'updater puisse l'afficher à
-  // l'utilisateur. Fallback sur un simple titre si le body est vide.
-  const notes = releaseBody.trim() || `Pilot ${VERSION}`;
+  // Changelog de la release : on utilise le body généré depuis les commits
+  // (déjà patché sur la release GitHub ci-dessus). Fallback sur un simple
+  // titre si le body est vide.
+  const notes = changelogBody.trim() || `Pilot ${VERSION}`;
 
   const out = {
     version: VERSION,
