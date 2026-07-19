@@ -37,14 +37,15 @@ if (!TAG || !REPO || !TOKEN) {
 
 const VERSION = TAG.replace(/^v/, "");
 
-async function getReleaseAssets() {
+// Retourne l'objet release GitHub complet (assets + body/changelog).
+async function getRelease() {
   const res = await fetch(
     `https://api.github.com/repos/${REPO}/releases/tags/${encodeURIComponent(TAG)}`,
     { headers: { Authorization: `token ${TOKEN}`, Accept: "application/vnd.github+json" } }
   );
   if (!res.ok) throw new Error(`GitHub API ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return data.assets || [];
+  return { assets: data.assets || [], body: data.body || "" };
 }
 
 async function fetchSig(url) {
@@ -72,7 +73,7 @@ function platformFromBinaryName(name) {
 }
 
 (async () => {
-  const assets = await getReleaseAssets();
+  const { assets, body: releaseBody } = await getRelease();
 
   // Index des assets par nom pour une lookup rapide.
   const byName = new Map(assets.map((a) => [a.name, a]));
@@ -118,15 +119,20 @@ function platformFromBinaryName(name) {
     process.exit(2);
   }
 
+  // Changelog de la release : on injecte le body GitHub (rédigé ou auto-généré
+  // par "generate-release-notes") pour que l'updater puisse l'afficher à
+  // l'utilisateur. Fallback sur un simple titre si le body est vide.
+  const notes = releaseBody.trim() || `Pilot ${VERSION}`;
+
   const out = {
     version: VERSION,
-    notes: `Pilot ${VERSION}`,
+    notes,
     pub_date: new Date().toISOString(),
     platforms,
   };
 
   fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + "\n");
-  console.log(`✓ ${OUT} généré (${nbOk} plateforme(s))`);
+  console.log(`✓ ${OUT} généré (${nbOk} plateforme(s), ${notes.length} car. de notes)`);
 })().catch((e) => {
   console.error(e);
   process.exit(1);

@@ -1167,6 +1167,29 @@ mark.search-highlight {
 
 .modal-content.settings-content { width: 900px; max-width: 95vw; max-height: 88vh; overflow-y: auto; }
 
+/* Modale : mise à jour disponible (updater) */
+.modal-content.update-content { width: 640px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
+.modal-content.update-content .update-notes-wrap { overflow-y: auto; flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+.update-progress { margin-bottom: 12px; }
+.update-progress.hidden { display: none; }
+.update-progress-bar { height: 8px; border-radius: 4px; background: var(--bg-hover); overflow: hidden; }
+.update-progress-bar #update-progress-fill { height: 100%; width: 0%; background: var(--accent, #4a9eff); transition: width 0.2s ease; }
+.update-progress #update-progress-label { margin-top: 6px; font-size: 12px; }
+.modal-content.update-content .modal-actions { gap: 8px; }
+/* Rendu Markdown du changelog dans la modale */
+.update-notes-wrap .markdown-body { font-size: 13px; color: var(--text-primary); }
+.update-notes-wrap .markdown-body h1, .update-notes-wrap .markdown-body h2, .update-notes-wrap .markdown-body h3 { margin: 12px 0 6px; }
+.update-notes-wrap .markdown-body h1 { font-size: 16px; }
+.update-notes-wrap .markdown-body h2 { font-size: 15px; }
+.update-notes-wrap .markdown-body h3 { font-size: 14px; }
+.update-notes-wrap .markdown-body ul, .update-notes-wrap .markdown-body ol { margin: 6px 0 6px 22px; }
+.update-notes-wrap .markdown-body li { margin: 2px 0; }
+.update-notes-wrap .markdown-body a { color: var(--accent, #4a9eff); }
+.update-notes-wrap .markdown-body code { background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.update-notes-wrap .markdown-body pre { background: var(--bg-hover); padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+.update-notes-wrap .markdown-body pre code { background: none; padding: 0; }
+.update-notes-wrap .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
 /* Modale du journal d'audit distant (mode remote) */
 .modal-content.audit-content { width: 820px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
 .modal-content.audit-content h2 { margin-bottom: 12px; }

@@ -406,6 +406,28 @@
     <div class="loading-message"></div>
   </div>
 
+  <!-- Modale : mise à jour disponible (updater) -->
+  <div id="update-modal" class="modal hidden">
+    <div class="modal-content update-content">
+      <div class="modal-header">
+        <h2>⬆️ Mise à jour disponible <span id="update-version" class="muted"></span></h2>
+        <button id="update-close" class="modal-close" title="Plus tard">✕</button>
+      </div>
+      <div id="update-date" class="muted" style="margin-bottom:10px"></div>
+      <div class="update-notes-wrap">
+        <div id="update-notes" class="markdown-body"></div>
+      </div>
+      <div class="update-progress hidden">
+        <div class="update-progress-bar"><div id="update-progress-fill"></div></div>
+        <div id="update-progress-label" class="muted">Téléchargement…</div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-update-install" class="web-btn">📥 Installer maintenant</button>
+        <button id="btn-update-later" class="web-btn">Plus tard</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modale : journal d'audit distant (mode remote) -->
   <div id="audit-modal" class="modal hidden">
     <div class="modal-content audit-content">
