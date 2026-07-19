@@ -79,6 +79,11 @@ jobs:
           releaseBody: "Téléchargez et installez le binaire correspondant à votre plateforme. La mise à jour automatique est active pour les versions suivantes."
           releaseDraft: false
           prerelease: false
+          # On désactive la génération/upload automatique de latest.json par
+          # tauri-action : ce dernier utiliserait le releaseBody fixe (sans
+          # changelog). Le job `latest-json` ci-dessous génère un latest.json
+          # avec le changelog (depuis les commits) et l'upload lui-même.
+          updaterJson: false
           args: --target ${{ matrix.rust_target }}
 
   # ─────────────────────────────────────────────────────────────────────
@@ -102,21 +107,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Generate latest.json (changelog + signatures + upload du body)
+      - name: Generate and upload latest.json (changelog + signatures + body)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/gen-latest-json.js "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" latest.json
-
-      - name: Upload latest.json to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          # Récupère l'URL d'upload de la release, puis uploade latest.json.
-          UPLOAD_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
-            | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.upload_url.replace('{?name}','name=latest.json').replace('{?label}','label=latest.json'))")
-          curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @latest.json \
-            "$UPLOAD_URL"

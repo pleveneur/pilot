@@ -117,6 +117,39 @@ async function patchReleaseBody(releaseId, body) {
   if (!res.ok) throw new Error(`PATCH release ${res.status}: ${await res.text()}`);
 }
 
+// Supprime un asset de release par son id (utilisé pour écraser un
+// latest.json déjà présent, par ex. celui auto-généré par tauri-action
+// avec le releaseBody fixe, sans changelog).
+async function deleteAsset(assetId) {
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/releases/assets/${assetId}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `token ${TOKEN}`, Accept: "application/vnd.github+json" },
+    }
+  );
+  if (!res.ok) throw new Error(`DELETE asset ${res.status}: ${await res.text()}`);
+}
+
+// Upload un fichier comme asset de la release (ici latest.json). Lève une
+// erreur explicite si l'upload échoue (contrairement à `curl` sans -f qui
+// réussit silencieusement sur les erreurs HTTP comme 422 already_exists).
+async function uploadAsset(releaseId, name, content) {
+  const res = await fetch(
+    `https://uploads.github.com/repos/${REPO}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}&label=${encodeURIComponent(name)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `token ${TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "Content-Type": "application/json",
+      },
+      body: content,
+    }
+  );
+  if (!res.ok) throw new Error(`Upload asset ${res.status}: ${await res.text()}`);
+}
+
 async function fetchSig(url) {
   if (!url) return "";
   const res = await fetch(url);
@@ -209,6 +242,18 @@ function platformFromBinaryName(name) {
 
   fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + "\n");
   console.log(`✓ ${OUT} généré (${nbOk} plateforme(s), ${notes.length} car. de notes)`);
+
+  // Upload du latest.json sur la release. On supprime d'abord un éventuel
+  // asset latest.json déjà présent (notamment celui auto-généré par
+  // tauri-action, qui contient le releaseBody fixe sans changelog), puis on
+  // upload le nôtre. Le workflow n'a plus besoin d'étape curl séparée.
+  const existing = assets.find((a) => a.name === "latest.json");
+  if (existing) {
+    await deleteAsset(existing.id);
+    console.log(`✓ Asset latest.json existant supprimé (id ${existing.id}).`);
+  }
+  await uploadAsset(releaseId, "latest.json", fs.readFileSync(OUT));
+  console.log(`✓ latest.json uploadé sur la release ${TAG}.`);
 })().catch((e) => {
   console.error(e);
   process.exit(1);
