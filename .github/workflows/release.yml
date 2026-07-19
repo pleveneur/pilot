@@ -123,8 +123,8 @@ jobs:
           # Récupère l'URL d'upload de la release, puis uploade latest.json.
           UPLOAD_URL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
-            | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.upload_url.replace('{?name,label}',''))")
+            | node -e "const d=JSON.parse(require('fs').readFileSync(0));console.log(d.upload_url.replace('{?name}','name=latest.json').replace('{?label}','label=latest.json'))")
           curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
             --data-binary @latest.json \
-            "$UPLOAD_URL?name=latest.json"
+            "$UPLOAD_URL"
