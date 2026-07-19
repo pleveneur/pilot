@@ -19,7 +19,30 @@ jobs:
   # signés (NSIS / DMG / AppImage) via tauri-action. Les fichiers .sig
   # sont uploadés automatiquement sur la release.
   # ─────────────────────────────────────────────────────────────────────
+  # create-release — crée la GitHub Release (idempotent) AVANT les builds
+  # pour éviter la condition de course "already_exists" : sans cette étape,
+  # chaque tauri-action de la matrice tenterait de créer la release en
+  # parallèle, et seules les premières réussiraient.
+  # ─────────────────────────────────────────────────────────────────────
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Create GitHub Release (idempotent)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/create-release.js "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # build — compile l'app sur les 3 plateformes et génère les artefacts
+  # signés (NSIS / DMG / AppImage) via tauri-action. Les fichiers .sig
+  # ─────────────────────────────────────────────────────────────────────
   build:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:

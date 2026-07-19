@@ -100,7 +100,8 @@ pilot/
 │   └── handbook.md           # GÉNÉRÉ (ne pas éditer) — embarqué via include_str!
 ├── scripts/
 │   ├── build-handbook.js      # Agrège les blocs HELP des specs → help/handbook.md
-│   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git) + met à jour le body de la release
+│   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds
+│   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git) + met à jour le body de la release + upload
 ├── .github/workflows/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)
 ├── package.json               # Dépendances npm
