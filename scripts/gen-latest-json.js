@@ -63,29 +63,115 @@ function prevTag(tag) {
   }
 }
 
+// Catégories pour le fallback automatique (quand aucun résumé humain
+// `release-notes/<tag>.md` n'est fourni). Chaque commit conventional
+// (`type(scope): description`) est rangé dans sa catégorie et affiché sans
+// son préfixe technique. Les `chore: bump version` sont filtrés (aucun
+// intérêt pour l'utilisateur final).
+const CATEGORIES = [
+  { types: ["feat"], label: "✨ Nouveautés" },
+  { types: ["fix"], label: "🐛 Corrections" },
+  { types: ["perf"], label: "⚡ Performances" },
+  { types: ["refactor"], label: "🔧 Améliorations internes" },
+  { types: ["docs"], label: "📖 Documentation" },
+  { types: ["ci", "chore", "build", "style", "test"], label: "🔧 Maintenance interne", filterBump: true },
+];
+
+// Analyse un message de commit conventional ("type(scope): description") et
+// renvoie { type, desc }. Si le message ne suit pas ce format, type=null.
+function parseCommit(msg) {
+  const m = msg.match(/^([a-zA-Z]+)(?:\(([^)]+)\))?:\s*(.+)$/);
+  if (!m) return { type: null, desc: msg.trim() };
+  return { type: m[1].toLowerCase(), desc: m[3].trim() };
+}
+
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Résumé humain optionnel : si le développeur a rédigé
+// `release-notes/<tag>.md` (ou `release-notes/<version>.md`), son contenu
+// est utilisé tel quel comme notes (orienté utilisateur, en français). Le
+// fichier doit être commité avant le tag (il est lu dans le working tree du
+// runner CI). Retourne null si aucun fichier n'existe.
+function loadHumanNotes(tag) {
+  const candidates = [
+    `release-notes/${tag}.md`,
+    `release-notes/${VERSION}.md`,
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
+    } catch {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
 // Génère le changelog (commits depuis le tag précédent) + le body complet
 // à afficher sur la page GitHub de la release et dans le champ `notes`
 // de latest.json (consommé par l'updater).
+//
+// Priorité du contenu :
+//   1. `release-notes/<tag>.md` (résumé humain, orienté utilisateur) s'il
+//      existe — recommandé pour les versions visibles par les utilisateurs.
+//   2. Fallback : catégorisation automatique des commits conventional
+//      (✨ Nouveautés / 🐛 Corrections / ...) avec retrait du préfixe
+//      technique et filtrage des `bump version`.
 function buildChangelogBody() {
   const prev = prevTag(TAG);
   const range = prev ? `${prev}..${TAG}` : TAG;
-  let changelog = "";
+  let commits = [];
   try {
-    changelog = execSync(
-      `git log --no-merges --pretty=format:%s ${range}`,
-      { encoding: "utf8" }
-    )
+    commits = execSync(`git log --no-merges --pretty=format:%s ${range}`, {
+      encoding: "utf8",
+    })
       .trim()
       .split("\n")
-      .filter(Boolean)
-      .map((s) => `- ${s}`)
-      .join("\n");
+      .filter(Boolean);
   } catch (e) {
     console.warn(`⚠ git log a échoué (${e.message}), changelog vide.`);
   }
-  const body = prev
-    ? `${RELEASE_HEADER}\n\n## Modifications depuis ${prev}\n\n${changelog || "(aucun)"}`
-    : `${RELEASE_HEADER}\n\n## Modifications\n\n${changelog || "(première release)"}`;
+
+  const sectionTitle = prev ? `## Modifications depuis ${prev}` : "## Modifications";
+  const human = loadHumanNotes(TAG);
+
+  let sections;
+  if (human) {
+    console.log(`✓ Résumé humain utilisé : release-notes/${TAG}.md`);
+    sections = human;
+  } else if (commits.length === 0) {
+    sections = prev ? "(aucun changement listé)" : "(première release)";
+  } else {
+    // Fallback : catégorisation des commits conventional.
+    const buckets = new Map(); // label -> [desc]
+    const others = [];
+    for (const raw of commits) {
+      const { type, desc } = parseCommit(raw);
+      const cat = CATEGORIES.find((c) => c.types.includes(type));
+      if (cat) {
+        if (cat.filterBump && /^bump version/i.test(desc)) continue; // skip
+        if (!buckets.has(cat.label)) buckets.set(cat.label, []);
+        buckets.get(cat.label).push(capitalize(desc));
+      } else {
+        others.push(capitalize(desc));
+      }
+    }
+    const parts = [];
+    for (const cat of CATEGORIES) {
+      const items = buckets.get(cat.label);
+      if (items && items.length) {
+        parts.push(`### ${cat.label}\n\n${items.map((i) => `- ${i}`).join("\n")}`);
+      }
+    }
+    if (others.length) {
+      parts.push(`### 📝 Autres changements\n\n${others.map((i) => `- ${i}`).join("\n")}`);
+    }
+    sections = parts.join("\n\n");
+  }
+
+  const body = `${RELEASE_HEADER}\n\n${sectionTitle}\n\n${sections}`;
   return { body, prev };
 }
 

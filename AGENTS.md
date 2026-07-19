@@ -101,7 +101,8 @@ pilot/
 ├── scripts/
 │   ├── build-handbook.js      # Agrège les blocs HELP des specs → help/handbook.md
 │   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds
-│   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git) + met à jour le body de la release + upload
+│   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload
+├── release-notes/            # Résumés de mise à jour optionnels orientés utilisateur (vX.Y.Z.md)
 ├── .github/workflows/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)
 ├── package.json               # Dépendances npm
