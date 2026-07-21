@@ -6,6 +6,8 @@ import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { updateFileList } from "./file-list.js";
 import { exportMarkdownToPdf } from "./pdf-export.js";
 import { convertPdfToMd } from "./pdf-to-markdown.js";
+import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
+import { openGitDiffModal } from "./diff-view.js";
 import { restoreTabs, saveTabSession } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { loadModelAliases } from "./agent-pi.js";
@@ -77,6 +79,7 @@ class Sidebar {
     this.ctxDelete = document.getElementById("ctx-delete");
     this.ctxCreateFolder = document.getElementById("ctx-create-folder");
     this.ctxCreateMd = document.getElementById("ctx-create-md");
+    this.ctxGitDiff = document.getElementById("ctx-git-diff");
     this.contextMenuPath = null;
     this.contextMenuIsDir = false;
     this.treeData = null; // FileNode racine
@@ -89,6 +92,10 @@ class Sidebar {
     this._rebuildPending = false; // Un rebuild est-il déjà en cours ?
     this.favoritesSection = document.getElementById("favorites-section");
     this.favorites = [];
+    // ── Git intégré (C1) : statut par fichier + dossiers « dirty » ──
+    this.gitStatus = null; // { is_repo, entries }
+    this.gitByAbs = new Map(); // absPath -> { letter, cls, code }
+    this.gitDirtyDirs = new Set(); // absPath de dossiers contenant un fichier modifié
 
 
     // Filtre de l'arborescence
@@ -175,14 +182,14 @@ class Sidebar {
       const isDir = this.contextMenuIsDir;
       this.hideContextMenu();
       try {
-        await this.tabs.openFile("Agent Pi", "agent");
+        await this.tabs.openFile(agentDisplayLabel(), "agent");
         await new Promise((resolve) => setTimeout(resolve, 500));
         const message = isDir
           ? `Analyse le contenu du dossier \`${targetPath}\` et donne-moi un résumé.`
           : `Regarde le fichier \`${targetPath}\` et dis-moi ce que tu en penses.`;
         await invoke("send_agent_prompt", { message });
       } catch (err) {
-        toastError("Erreur agent Pi : " + err);
+        toastError(`Erreur ${agentDisplayPhrase()} : ` + err);
       }
     });
 
@@ -247,6 +254,27 @@ class Sidebar {
       this.hideContextMenu();
     });
 
+    // Git diff (C1) : ouvre la modale de diff visuel vs version commitée.
+    if (this.ctxGitDiff) {
+      this.ctxGitDiff.addEventListener("click", async () => {
+        const path = this.contextMenuPath;
+        this.hideContextMenu();
+        if (!path) return;
+        try {
+          const res = await invoke("git_diff_file", { path });
+          const name = path.replace(/\\/g, "/").split("/").pop() || path;
+          openGitDiffModal({
+            before: res.before,
+            after: res.after,
+            title: name,
+            subtitle: res.tracked ? "vs HEAD" : "fichier non suivi (nouveau)",
+          });
+        } catch (e) {
+          toastError("Diff Git indisponible : " + e);
+        }
+      });
+    }
+
     document.addEventListener("click", () => this.hideContextMenu());
 
     // Écouter les changements de fichiers
@@ -267,8 +295,13 @@ class Sidebar {
 
     showLoading("Chargement du projet…");
     try {
-      const tree = await invoke("open_project_path", { path: folderPath });
+      const [tree, gitStatus] = await Promise.all([
+        invoke("open_project_path", { path: folderPath }),
+        invoke("git_status").catch(() => null),
+      ]);
       this.treeData = tree;
+      this.gitStatus = gitStatus || { is_repo: false, entries: {} };
+      this._rebuildGitMaps();
       const name = folderPath.replace(/\\/g, "/").split("/").pop() || folderPath;
       this.projectName.textContent = name;
       this._renderTree();
@@ -281,7 +314,7 @@ class Sidebar {
 
       // Rouvrir l'agent si on avait un onglet agent ouvert
       if (hadAgentTab) {
-        await this.tabs.openFile("Agent Pi", "agent");
+        await this.tabs.openFile(agentDisplayLabel(), "agent");
       }
       toastSuccess("Projet ouvert : " + name);
     } catch (e) {
@@ -299,7 +332,13 @@ class Sidebar {
   async resyncProjectFromRemote(path) {
     window._pilotProjectPath = path;
     try {
-      this.treeData = await invoke("refresh_tree");
+      const [tree, gitStatus] = await Promise.all([
+        invoke("refresh_tree"),
+        invoke("git_status").catch(() => null),
+      ]);
+      this.treeData = tree;
+      this.gitStatus = gitStatus || { is_repo: false, entries: {} };
+      this._rebuildGitMaps();
       const name = path.replace(/\\/g, "/").split("/").pop() || path;
       this.projectName.textContent = name;
       this._renderTree();
@@ -320,6 +359,62 @@ class Sidebar {
     } catch (e) {
       console.error("Erreur ouverture projet:", e);
     }
+  }
+
+  // ── Git intégré (C1) ──
+  // Charge le statut Git du projet (CLI `git status --porcelain`). Résultat mis
+  // en cache dans `this.gitStatus` ; les maps `gitByAbs`/`gitDirtyDirs` sont
+  // reconstruites pour le rendu. À appeler après chaque rebuild de l'arbre.
+  async _loadGitStatus() {
+    try {
+      this.gitStatus = await invoke("git_status");
+    } catch (e) {
+      this.gitStatus = { is_repo: false, entries: {} };
+    }
+    this._rebuildGitMaps();
+  }
+
+  // Reconstruit `gitByAbs` (absPath -> badge) et `gitDirtyDirs` (Set absPath
+  // dossier) depuis `this.gitStatus.entries` (chemins relatifs au cwd projet).
+  _rebuildGitMaps() {
+    this.gitByAbs = new Map();
+    this.gitDirtyDirs = new Set();
+    const root = this.treeData ? this.treeData.path : window._pilotProjectPath;
+    if (!this.gitStatus || !this.gitStatus.is_repo || !root) return;
+    const entries = this.gitStatus.entries || {};
+    const normSep = (p) => p.replace(/\\/g, "/");
+    const joinNorm = (base, rel) => {
+      const r = normSep(rel);
+      // Le relPath Git utilise '/'. On reconstitue l'absolu via le root.
+      let abs = normSep(base) + "/" + r;
+      // Nettoyer les doubles slash éventuels.
+      abs = abs.replace(/\/+/g, "/");
+      return abs;
+    };
+    for (const [relPath, code] of Object.entries(entries)) {
+      const abs = joinNorm(root, relPath);
+      this.gitByAbs.set(abs, this._gitBadgeFor(code));
+      // Marquer chaque dossier ancêtre comme « dirty ».
+      const parts = normSep(relPath).split("/");
+      parts.pop(); // retirer le nom de fichier
+      let acc = normSep(root);
+      for (const seg of parts) {
+        acc = acc + "/" + seg;
+        this.gitDirtyDirs.add(acc.replace(/\/+/g, "/"));
+      }
+    }
+  }
+
+  // Déduit le badge (lettre + classe CSS) depuis un code porcelain v1 `XY`.
+  _gitBadgeFor(code) {
+    if (!code || code === "??") return { letter: "?", cls: "git-badge-untracked", code };
+    const x = code[0];
+    const y = code[1];
+    if (x === "D" || y === "D") return { letter: "D", cls: "git-badge-deleted", code };
+    if (x === "A") return { letter: "A", cls: "git-badge-staged", code };
+    if (x === "R" || x === "C") return { letter: x, cls: "git-badge-staged", code };
+    if (x !== " " && x !== "?") return { letter: "M", cls: "git-badge-staged", code };
+    return { letter: "M", cls: "git-badge-modified", code };
   }
 
   _renderTree() {
@@ -374,7 +469,9 @@ class Sidebar {
     if (node.is_dir) {
       const hasChildren = node.children && node.children.length > 0;
       const arrow = hasChildren ? "▶" : "";
-      row.innerHTML = `<span class="arrow">${arrow}</span><span class="icon">📁</span><span class="name">${this._esc(node.name)}</span>`;
+      const dirDirty = this.gitDirtyDirs.has(node.path.replace(/\\/g, "/"));
+      const dirBadge = dirDirty ? ` <span class="git-badge git-badge-dir" title="Contient des modifications Git">•</span>` : "";
+      row.innerHTML = `<span class="arrow">${arrow}</span><span class="icon">📁</span><span class="name">${this._esc(node.name)}</span>${dirBadge}`;
       row.addEventListener("click", (e) => {
         e.stopPropagation();
         if (!hasChildren) return;
@@ -399,7 +496,9 @@ class Sidebar {
       });
     } else {
       const icon = getFileIcon(node.name);
-      row.innerHTML = `<span class="icon">${icon}</span><span class="name">${this._esc(node.name)}</span>`;
+      const gitBadge = this.gitByAbs.get(node.path.replace(/\\/g, "/"));
+      const badgeHtml = gitBadge ? ` <span class="git-badge ${gitBadge.cls}" title="Git ${gitBadge.code}">${gitBadge.letter}</span>` : "";
+      row.innerHTML = `<span class="icon">${icon}</span><span class="name">${this._esc(node.name)}</span>${badgeHtml}`;
 
       row.addEventListener("click", () => {
         this.tabs.openFile(node.path, "edit");
@@ -581,6 +680,7 @@ class Sidebar {
       this.ctxCreateMd.style.display = "none";
       this.ctxFavorite.style.display = "";
       this.ctxFavorite.textContent = this.isFavorite(path) ? "⭐ Retirer des favoris" : "⭐ Ajouter aux favoris";
+      if (this.ctxGitDiff) this.ctxGitDiff.style.display = "none";
     } else if (!path) {
       // Zone vide → "Créer un fichier" + "Créer un dossier"
       this.ctxPreview.style.display = "none";
@@ -595,6 +695,7 @@ class Sidebar {
       this.ctxDelete.style.display = "none";
       this.ctxCreateMd.style.display = "none";
       this.ctxFavorite.style.display = "none";
+      if (this.ctxGitDiff) this.ctxGitDiff.style.display = "none";
     } else {
       // Fichier → "Prévisualiser" (.md/.pdf) + "Prévisualiser le CSV" (.csv) + "PDF" (si .md) + "🌐" (si .html) + "📤 Agent Pi" + "Renommer" + "Supprimer"
       const isMd = path.endsWith(".md");
@@ -611,7 +712,7 @@ class Sidebar {
       this.ctxExportPdf.style.display = isMd ? "" : "none";
       this.ctxOpenBrowser.style.display = isHtml ? "" : "none";
       this.ctxSendAgent.style.display = "";
-      this.ctxSendAgent.textContent = "📤 Envoyer à l'agent Pi";
+      this.ctxSendAgent.textContent = `📤 Envoyer à ${agentDisplayPhrase()}`;
       this.ctxAddPromptBuilder.style.display = "";
       this.ctxCreateFile.style.display = "none";
       this.ctxCreateFolder.style.display = "none";
@@ -620,6 +721,10 @@ class Sidebar {
       this.ctxCreateMd.style.display = isPdf ? "" : "none";
       this.ctxFavorite.style.display = "";
       this.ctxFavorite.textContent = this.isFavorite(path) ? "⭐ Retirer des favoris" : "⭐ Ajouter aux favoris";
+      // Git diff (C1) : visible seulement si le projet est un repo Git et que le
+      // fichier a un statut (modifié/staged/non suivi). Sinon masqué.
+      const gitBadge = this.gitStatus && this.gitStatus.is_repo ? this.gitByAbs.get(path.replace(/\\/g, "/")) : null;
+      if (this.ctxGitDiff) this.ctxGitDiff.style.display = gitBadge ? "" : "none";
     }
 
     this.contextMenu.classList.remove("hidden");
@@ -715,9 +820,14 @@ class Sidebar {
         this._forceExpandPaths.clear();
       }, 3000);
 
-      const tree = await invoke("refresh_tree");
+      const [tree, gitStatus] = await Promise.all([
+        invoke("refresh_tree"),
+        invoke("git_status").catch(() => null),
+      ]);
       if (tree) {
         this.treeData = tree;
+        this.gitStatus = gitStatus || { is_repo: false, entries: {} };
+        this._rebuildGitMaps();
         this._renderTree();
         // Restaurer l'état d'expansion
         this._restoreExpandedState(expanded);
@@ -994,6 +1104,9 @@ class Sidebar {
     this.filterInput.value = "";
     this.filterWrapper.classList.add("hidden");
     this.favorites = [];
+    this.gitStatus = null;
+    this.gitByAbs = new Map();
+    this.gitDirtyDirs = new Set();
     this._renderFavorites();
     this.treeContainer.innerHTML = '<p class="empty-message">Aucun projet ouvert</p>';
     this.projectName.textContent = "";

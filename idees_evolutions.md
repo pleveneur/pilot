@@ -1,8 +1,8 @@
 # Idées d'évolutions — Pilot
 
 ## 1. Git intégré
-- [ ] 1.1 Afficher le statut modifié/indexé dans l'explorateur
-- [ ] 1.2 Diff visuel entre version sauvegardée et version courante
+- [x] 1.1 Afficher le statut modifié/indexé dans l'explorateur (badges `M`/`A`/`D`/`?` colorés par fichier + dossiers « dirty »)
+- [x] 1.2 Diff visuel entre version sauvegardée et version courante (modale plein écran via CLI `git`, réutilise `diff-view.js`)
 
 ## 2. Gestion RPC de pi
 
@@ -221,10 +221,12 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Fichiers :** `src/js/agent-pi.js` (injection contexte + UI pin), `src/js/sidebar.js` (action clic-droit « Épingler au contexte agent »), `src-tauri/src/lib.rs` (config `pinned_context_files`), `spec_rpc.md`.
 - **Valeur :** 🟡 haute · **Effort :** moyen
 
-#### A4 — Mode « diff review » agent (Accepter / Rejeter par hunk)
-- [ ] Après qu'un outil de l'agent a modifié un fichier, afficher le diff inline (avant/après) avec Accepter/Rejeter par hunk. **Composant partagé avec C1 (Git).**
-- **Fichiers :** nouveau `src/js/diff-view.js`, `src/js/agent-pi.js` (interception tool_execution_end + UI), `src-tauri/src/lib.rs` (snapshot avant modif via tool), `src/css/style.css` (styles diff), `spec_rpc.md`.
-- **Valeur :** 🔴 très haute · **Effort :** moyen-haut
+#### A4 — Mode « diff review » agent (porte pré-écriture)
+- [x] **V1 post-hoc** (validé puis remplacé) : diff après écriture + Rejeter = restore. Incohérent (le fichier était déjà modifié).
+- [x] **V2 porte pré-écriture** (implémenté) : extension pi `pilot-edit-gate` bloque `tool_call` avant `write`/`edit`, demande confirmation via `ctx.ui.confirm` (bloque pi en RPC). Pilot affiche un diff **avant** écriture ; **Accepter** → l'outil s'exécute ; **Refuser** → `{block:true}` → fichier **jamais touché**. Paramètre global `confirm_file_edits` (désactivé par défaut) ; extension chargée (via `-e`) uniquement si activé. Auto-approve en Mode Orchestration. Voir [`spec_diff_review.md`](./spec_diff_review.md).
+- [ ] V3 : per-hunk (accepter certains hunks, refuser d'autres) + suivi `bash`.
+- **Fichiers :** `src-tauri/extensions/pilot-edit-gate.ts` (extension pi, `include_str!`), `src-tauri/src/lib.rs` (config `confirm_file_edits` + chargement conditionnel `-e`), `src-tauri/src/rpc_manager.rs` (param `extension_path`), `src/js/diff-view.js` (`computeLineDiff`, `renderEditGateDialog`), `src/js/agent-pi.js` (`handleEditGateConfirm` + interception sentinel), `src/js/settings.js` + `index.html` (checkbox + hot-restart), `src/css/style.css` (`.agent-edit-gate`), `spec_diff_review.md`.
+- **Valeur :** 🔴 très haute · **Effort :** moyen. · **Composant partagé** avec C1 (Git) et H5 (Code Review).
 
 #### A5 — Branche parallèle « scratch session »
 - [ ] Lancer un 2e prompt « what-if » sans polluer la session principale (pi `--no-session` temporaire, comme l'aide).
@@ -271,9 +273,16 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 ### 🅲️ Organisation / navigation projet
 
 #### C1 — Git intégré (déjà noté idée 1) — statut + diff visuel
-- [ ] 1.1 Statut modifié/indexé dans l'arborescence (couleurs + badges).
-- [ ] 1.2 Diff visuel entre version sauvegardée et version courante (réutilise A4 `diff-view.js`).
-- **Fichiers :** `src-tauri/src/lib.rs` (commandes `git_status` / `git_diff` via `git2` ou CLI `git`), nouveau `src-tauri/src/git.rs`, `src/js/sidebar.js` (badges statut), `src/js/diff-view.js` (partagé avec A4), `src/css/style.css`, `spec_pilot.md`.
+- [x] **Implémenté** (validé 2026-07-29) : badges de statut Git dans l'arborescence
+      (fichiers : `M` orange / `A` `M` vert / `D` rouge / `?` gris pour non suivi ;
+      dossiers « dirty » marqués `•`) via `git status --porcelain`. Rafraîchissement
+      automatique sur watcher (en parallèle de `refresh_tree` via `Promise.all`).
+      Item contextuel « 🔖 Voir le diff Git » → modale plein écran read-only
+      réutilisant `renderDiffBlock` (A4), `before` = `git show HEAD:<relpath>`,
+      `after` = contenu disque. Désactivé gracieusement si pas un repo Git (ou
+      `git` absent). **Décision retenue : CLI `git`** (pas `git2`) — zéro dep
+      Cargo, cohérent avec le style Pilot.
+- **Fichiers :** `src-tauri/src/lib.rs` (commandes `git_status`/`git_diff_file` via CLI `git` + `run_captured`), `src/js/sidebar.js` (`_loadGitStatus`/`_rebuildGitMaps`/`_gitBadgeFor` + badges dans `_renderNode` + item `ctx-git-diff`), `src/js/diff-view.js` (`openGitDiffModal`), `src/css/style.css` (`.git-badge-*` + `.git-diff-overlay`), `index.html` (item menu), `spec_pilot.md`, `spec_rpc.md`.
 - **Valeur :** 🔴 très haute · **Effort :** moyen
 
 #### C2 — Workspace multi-projets
@@ -334,9 +343,17 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🟡 haute · **Effort :** moyen
 
 #### E4 — Health check pi au démarrage
-- [ ] `get_available_models` au lancement ; si pi absent, désactiver l'onglet agent gracieusement.
-- **Fichiers :** `src/js/main.js` (check au démarrage), `src/js/agent-pi.js` (UI désactivée), `src-tauri/src/lib.rs` (commande `pi_health_check`).
-- **Valeur :** 🟡 haute · **Effort :** faible
+- [x] **Implémenté** (validé 2026-07-29) : au démarrage, Pilot sonde l'exécutable
+      configuré (`<rpc_pi_path> --version`, ~3s timeout). Si absent/injoignable
+      (`not_executable`) ou sonde échouée, toast d'avertissement + lien vers les
+      ⚙️ Paramètres. La gate d'ouverture de l'onglet agent (`tabs.js _openAgent`)
+      affiche un écran guidé (« π indisponible » + bouton « Ouvrir les
+      paramètres ») au lieu de lancer une session RPC qui planterait. Re-sonde
+      automatiquement sur `pilot-config-changed` (chemin pi corrigé → l'onglet
+      peut être rouvert). Le cas `no_path` (« jamais configuré ») reste silencieux
+      au démarrage (normal) mais est géré par la gate.
+- **Fichiers :** `src-tauri/src/lib.rs` (commande `pi_health_check` + `kind_from_version_output`), `src/js/backend-info.js` (`checkPiHealth`/`getPiHealthSync` + event `pilot-pi-health-changed`), `src/js/main.js` (sonde au démarrage + re-sonde sur config-changed + `warnPiUnavailable`), `src/js/tabs.js` (gate dans `_openAgent`), `src/js/settings.js` (listener `pilot-open-settings`).
+- **Valeur :** 🟡 haute · **Effort :** faible.
 
 ### 🅵️ Export / partage
 
@@ -413,14 +430,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 > §25 ci-après (plusieurs anciennes idées deviennent obsolètes ou fusionnent ici).
 
 ### H1 — Context Engine : moteur de contexte intelligent · 🔴 très haute
-- [ ] Carte du projet (index des symboles, graphe de dépendances, fichiers
-      « importants » détectés) + construction automatique du meilleur contexte
-      par prompt (injection `system`/context avant chaque `agent/prompt`, budget
-      tokens). V1 heuristique (AGENTS.md + specs + fichiers récemment édités +
-      imports du fichier courant), V2 embeddings/RAG local via pi.
-- **Fichiers :** nouveau `src/js/context-engine.js`, `src/js/agent-pi.js`
-  (injection contexte), `src-tauri/src/lib.rs` (commandes d'indexation
-  `index_project`/`symbol_refs`), `spec_rpc.md`.
+- [x] **V1 heuristique** (validé 2026-07-19) : injection auto-contexte projet avant le 1er prompt de chaque session agent (chat standard) — `AGENTS.md`, `.pilot/context.md`, fichier actif, imports (JS/TS/Python/MD), manifestes, specs référencées dans la table de navigation d'AGENTS.md, fichiers récents. Budget tokens configurable, bouton 📑 pour forcer la ré-injection. Voir [`spec_context_engine.md`](./spec_context_engine.md).
+- [ ] V2 embeddings/RAG local via pi (scoring sémantique, graphe de dépendances, budget dynamique selon fenêtre de contexte).
+- **Fichiers :** `src/js/context-engine.js` (nouveau, fonctions pures), `src/js/agent-pi.js` (état `contextInjected` + injection chemin chat standard + resets + bouton toolbar), `src-tauri/src/lib.rs` (4 champs `AppConfig`), `src/js/settings.js`, `index.html`, `spec_context_engine.md`.
 - **Valeur :** 🔴 très haute (facteur n°1 de qualité d'un coding-agent) ·
   **Effort :** moyen (V1) → haut (V2). · **Remplace** A3 (pinning = version
   pauvre de H1).
@@ -436,14 +448,15 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
   (scratch session = un sub-agent what-if).
 
 ### H3 — Mémoire de projet auto-maintenue · 🟠 haute
-- [ ] `PROJECT_MEMORY.md` **tenu par l'agent** : conventions, pièges, décisions
-      d'architecture, dépendances clés, anti-patterns. Enrichi après chaque tâche
-      (extraction 1–3 faits), injecté avant chaque nouvelle tâche.
-- **Fichiers :** `src/js/agent-pi.js` (append après tâche + inject avant),
-  `src/js/orchestration.js`, `src-tauri/src/lib.rs` (commande `append_memory` /
-  `read_memory`), `spec_rpc.md`, `spec_orchestration.md`.
-- **Valeur :** 🟠 haute (mémoire persistante = défaut n°1 des coding-agents) ·
-  **Effort :** faible-moyen.
+- [x] **V1** (validé 2026-07-29) : `PROJECT_MEMORY.md` tenu par l'agent (conventions,
+      pièges, décisions d'architecture, dépendances clés). Injecté avant chaque tâche
+      (orchestration, en tête du prompt) et avant le 1er prompt d'une session (chat).
+      Extraction auto opt-in (1–3 faits après chaque tâche d'orchestration réussie,
+      via un tour LLM dédié). Bouton 📝 (toolbar agent) pour ouvrir/éditer le fichier
+      (créé avec template s'il n'existe pas). Indépendant du Context Engine (H1).
+      Voir [`spec_project_memory.md`](./spec_project_memory.md).
+- [ ] V2 : trim automatique (max ~200 lignes, oldest en premier) + extraction en
+      chat standard (bouton « extraire maintenant ») + scoring sémantique (H1 V2).
 
 ### H4 — Plan Editor visuel (approbation structurée) · 🟡 haute
 - [ ] Éditeur de plan : cocher/éditer chaque tâche, ajouter contraintes (« ne touche
@@ -454,12 +467,21 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🟡 haute (contrôle + transparence financière) · **Effort :** moyen.
 
 ### H5 — Code Review assistée (mode Review) · 🟡 haute
-- [ ] L'agent lit le **diff de la session** (ou du dernier commit Git) et produit
-      une revue structurée : sécurité, perfs, style, bugs, cohérence specs. Second
-      reviewer, pas auto-validation.
-- **Fichiers :** nouveau `src/js/review.js`, réutilise `src/js/diff-view.js` (A4)
-  et `src-tauri/src/git.rs` (C1), `src/js/agent-pi.js` (UI onglet review),
-  `spec_rpc.md`.
+- [x] **Implémenté** (validé 2026-07-29) : onglet **🔍 Review** (bouton 🔍 dans
+      l'action-panel). L'agent lit le **diff Git** de la session et produit une
+      revue structurée (🟢 points positifs · 🔴 bugs · ⚠️ sécurité · ⚡ perfs ·
+      🎨 style · 📐 cohérence specs · 💡 suggestions). **Second reviewer**, pas
+      auto-validation. Portée : « modifs non commitées » (`git diff HEAD`) ou
+      « dernier commit » (`git diff HEAD~1 HEAD`). Process pi temporaire cadré
+      (`ask_pi_caged`, réutilise l'aide intégrée) — **lecture seule**, cwd
+      temporaire isolé du projet (aucune modification possible). Historique
+      réinjecté (pi sans mémoire), questions de suivi supportées. Diff tronqué
+      à 60 k caractères. Voir [`spec_review.md`](./spec_review.md).
+- **Fichiers :** nouveau `src/js/review.js` + `src-tauri/src/review.rs`
+      (`ask_review` + `git_review_diff`, réutilise `help::ask_pi_caged` refactorée
+      en `pub`), `src/js/tabs.js` (mode `review` + `_openReview`), `src/js/main.js`
+      (handler `btn-review`), `index.html` (bouton 🔍), `src/css/style.css`
+      (`.review-*`), `lib.rs` (champ `review_model` + `set_review_model`), `spec_review.md`.
 - **Valeur :** 🟡 haute (positionnement review assistée, complément de l'écriture) ·
   **Effort :** moyen. · **Dépend de** A4 + C1.
 

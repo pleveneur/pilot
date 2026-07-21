@@ -111,6 +111,13 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | `list_sessions` | sync | Liste les sessions enregistrées pour le projet courant |
 | `resume_agent_session` | async | Charge/reprend une session à partir de son fichier JSONL |
 | `send_rpc_command` | async | Envoie une commande JSON brute (debug) |
+| `get_backend_info` | sync | Sondage `--version`+`--help` → genre (`pi`/`plh`/`unknown`) + support `--extension` (mis en cache par `rpc_pi_path`). Sert au libellé dynamique « Agent Pi »/« Agent PLh » et à la porte pré-écriture (voir `spec_diff_review.md` §2.1). |
+| `extension_gate_supported` | sync | Raccourci : `get_backend_info().ext_supported` |
+| `pi_health_check` | sync | Health check démarrage (E4) : `<rpc_pi_path> --version` (timeout 3s) → `{ok, kind, version, error, path}`. `error` : `""`/`no_path`/`not_executable`. Sert à la gate d'ouverture de l'onglet agent (`tabs.js`) + toast d'avertissement. |
+| `git_status` | sync | Git intégré (C1) : `git -C <project> status --porcelain -uall --no-renames` → `{is_repo, entries: {relPath → "XY"}}`. `is_repo=false` si pas un repo Git (ou `git` absent) → l'UI masque les badges gracieusement. |
+| `git_diff_file` | sync | C1 : diff d'un fichier → `{is_repo, tracked, before, after}`. `before` = `git show HEAD:<relpath>` (vide si non tracked / jamais commité), `after` = contenu disque. Sert à la modale diff (`openGitDiffModal`). |
+| `ask_review` | async | Revue de code (H5) : récupère `git diff` (portée `working`/`last`), construit un prompt cadré et lance un process pi temporaire `--no-session` (via `help::ask_pi_caged`, cwd temp isolé du projet) → retourne la revue Markdown. `Err` si pas un repo Git / rien à reviewer / aucun modèle configuré. Historique réinjecté (pi sans mémoire). Voir [`spec_review.md`](spec_review.md). |
+| `set_review_model` | sync | Persiste `config.review_model` (sélecteur de l'onglet Review). Format `provider/modelId`. |
 
 ---
 

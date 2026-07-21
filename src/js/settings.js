@@ -97,6 +97,15 @@ export async function initSettings() {
   const chkWebKeepalive = document.getElementById("setting-web-keepalive");
   // ── Tailscale Serve auto (spec_web_remote.md §14) ──
   const chkWebTailscaleServe = document.getElementById("setting-web-tailscale-serve");
+  // ── Context Engine (H1) ──
+  const chkContextEngine = document.getElementById("setting-context-engine");
+  const inputContextBudget = document.getElementById("setting-context-budget");
+  const chkContextImports = document.getElementById("setting-context-imports");
+  const chkContextSpecs = document.getElementById("setting-context-specs");
+  const chkContextRecents = document.getElementById("setting-context-recents");
+  const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
+  const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
+  const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
   const tsBlock = document.getElementById("tailscale-block");
   const tsBadge = document.getElementById("tailscale-badge");
   const tsUrl = document.getElementById("tailscale-url");
@@ -115,6 +124,7 @@ export async function initSettings() {
   const remoteBadgeCount = document.getElementById("remote-badge-count");
   let webNetChanged = false; // flag levé si web_enabled/bind/port changent → reload serveur
   let rpcLaunchChanged = false; // flag levé si rpc_pi_path/no_session/session_dir changent → relance agent
+  let confirmEditsChanged = false; // flag levé si confirm_file_edits change → relance agent (charger/décharger l'extension pilot-edit-gate)
 
   // ── Journal d'audit distant ──
   const auditModal = document.getElementById("audit-modal");
@@ -192,7 +202,7 @@ export async function initSettings() {
     try {
       currentConfig = await invoke("get_config");
     } catch (_) {
-      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000 };
+      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true };
     }
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
@@ -240,9 +250,22 @@ export async function initSettings() {
     taWebRoots.value = (currentConfig.web_browse_roots || []).join("\n");
     chkWebKeepalive.checked = currentConfig.web_keep_alive || false;
     chkWebTailscaleServe.checked = currentConfig.web_tailscale_serve || false;
+    // ── Context Engine ──
+    chkContextEngine.checked = currentConfig.context_engine_enabled !== false;
+    inputContextBudget.value = currentConfig.context_budget_tokens || 8000;
+    chkContextImports.checked = currentConfig.context_include_imports !== false;
+    chkContextSpecs.checked = currentConfig.context_include_specs !== false;
+    chkContextRecents.checked = currentConfig.context_include_recents !== false;
+  // ── Diff Review (A4 V2) : porte pré-écriture ──
+  if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
+  await refreshConfirmEditsAvailability();
+  // ── Mémoire de projet (H3) ──
+  if (chkProjectMemory) chkProjectMemory.checked = currentConfig.project_memory_enabled !== false;
+  if (chkProjectMemoryAuto) chkProjectMemoryAuto.checked = currentConfig.project_memory_auto_extract === true;
     webNetChanged = false;
     tailscaleChanged = false;
     rpcLaunchChanged = false;
+    confirmEditsChanged = false;
     await refreshWebStatus();
     await refreshTailscaleStatus();
     modal.classList.remove("hidden");
@@ -251,6 +274,13 @@ export async function initSettings() {
   // Fermer
   btnClose.addEventListener("click", () => {
     modal.classList.add("hidden");
+  });
+
+  // Ouvrir depuis l'extérieur (ex: gate E4 dans tabs.js → bouton « Ouvrir les
+  // paramètres » quand l'agent est indisponible). Focus le champ chemin pi.
+  window.addEventListener("pilot-open-settings", () => {
+    modal.classList.remove("hidden");
+    try { inputRpcPath.focus(); inputRpcPath.scrollIntoView({ block: "center" }); } catch (_) {}
   });
 
   // Sauvegarder
@@ -316,6 +346,17 @@ export async function initSettings() {
         web_tailscale_serve: chkWebTailscaleServe.checked,
         web_password_hash: currentConfig?.web_password_hash || "",
         help_model: currentConfig?.help_model || "",
+        // ── Context Engine (H1) ──
+        context_engine_enabled: chkContextEngine.checked,
+        context_budget_tokens: parseInt(inputContextBudget.value, 10) || 8000,
+        context_include_imports: chkContextImports.checked,
+        context_include_specs: chkContextSpecs.checked,
+        context_include_recents: chkContextRecents.checked,
+        // ── Diff Review (A4 V2) : porte pré-écriture ──
+        confirm_file_edits: chkConfirmFileEdits.checked,
+        // ── Mémoire de projet (H3) ──
+        project_memory_enabled: chkProjectMemory ? chkProjectMemory.checked : true,
+        project_memory_auto_extract: chkProjectMemoryAuto ? chkProjectMemoryAuto.checked : false,
       };
     try {
       await invoke("save_config", { config });
@@ -330,13 +371,19 @@ export async function initSettings() {
       // rien a faire (le prochain openFile lira la nouvelle config). Sans ca,
       // l'agent resterait sur l'ancien backend jusqu'a fermeture/ouverture
       // manuelle de l'onglet.
-      if (rpcLaunchChanged && config.rpc_agent_enabled) {
+      // Relance agent à chaud si un paramètre impactant le spawn de pi a changé
+      // (chemin/no-session/session-dir OU toggle porte pré-écriture qui charge/
+      // décharge l'extension pilot-edit-gate). Un SEUL restart même si plusieurs
+      // flags ont changé (évite deux stop+start en conflit : le 2e stop tuerait
+      // le pi fraîchement démarré par le 1er → « pipe closed »).
+      if ((rpcLaunchChanged || confirmEditsChanged) && config.rpc_agent_enabled) {
         const agentTab = window._pilotTabs && window._pilotTabs.tabs.find((t) => t.mode === "agent");
         if (agentTab) {
           window.dispatchEvent(new CustomEvent("pilot-agent-restart-needed"));
         }
       }
       rpcLaunchChanged = false;
+      confirmEditsChanged = false;
       // Recharger à chaud le serveur web si les réglages réseau ont changé.
       if (webNetChanged) {
         try {
@@ -388,6 +435,27 @@ export async function initSettings() {
   });
 
   // ── Accès distant : statut (mot de passe + clients) ──
+  // ── Diff Review (A4 V2) : sonde la capacité du backend à charger l'extension
+  // pilot-edit-gate. Si le backend (ex: plh) ne supporte pas `--extension`, on
+  // désactive la checkbox + affiche une note d'info (option ignorée sans crash).
+  async function refreshConfirmEditsAvailability() {
+    if (!chkConfirmFileEdits) return;
+    let supported = true;
+    try {
+      supported = await invoke("extension_gate_supported");
+    } catch (_) { supported = true; }
+    const note = document.getElementById("confirm-edits-note");
+    if (supported) {
+      chkConfirmFileEdits.disabled = false;
+      if (note) note.style.display = "none";
+    } else {
+      chkConfirmFileEdits.checked = false;
+      chkConfirmFileEdits.disabled = true;
+      if (note) note.style.display = "block";
+      confirmEditsChanged = false; // ne pas relancer pour une option désactivée
+    }
+  }
+
   async function refreshWebStatus() {
     try {
       const st = await invoke("web_status");
@@ -420,6 +488,12 @@ export async function initSettings() {
   [inputRpcPath, chkRpcNoSession, inputRpcSessionDir].forEach((el) =>
     el.addEventListener("change", () => { rpcLaunchChanged = true; })
   );
+
+  // Diff Review (A4 V2) : toggle de la porte pré-écriture → relance agent à chaud
+  // pour charger/décharger l'extension pi pilot-edit-gate.
+  if (chkConfirmFileEdits) {
+    chkConfirmFileEdits.addEventListener("change", () => { confirmEditsChanged = true; });
+  }
 
   // Définir / changer le mot de passe distant.
   btnWebSetPw.addEventListener("click", async () => {

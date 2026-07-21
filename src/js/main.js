@@ -8,6 +8,7 @@ import { initSearchPanel } from "./search-panel.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
+import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -205,6 +206,17 @@ async function executeCommand(id, tabs) {
 
 // --- App initialization ---
 
+/** Avertit l'utilisateur que l'agent (pi/plh) est indisponible au démarrage.
+ *  Silencieux pour `no_path` (cas « pas encore configuré » normal — la gate
+ *  d'ouverture de l'onglet agent gère ce cas gracieusement avec un écran guidé). */
+function warnPiUnavailable(h) {
+  if (!h || h.ok || h.error === "no_path") return;
+  const reason = h.error === "not_executable" ? `exécutable introuvable ou injoignable : « ${h.path} »`
+    : h.error === "probe_failed" ? "sonde du backend échouée"
+    : h.error || "raison inconnue";
+  toastWarning(`Agent indisponible — ${reason}. Ouvre les ⚙️ Paramètres pour corriger le chemin.`);
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   console.log("🚀 Pilot: DOMContentLoaded");
 
@@ -230,6 +242,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
   initUpdater();
+
+  // 3d-quater. Sondage du backend (pi vs plh) pour l'affichage dynamique du nom
+  // de l'agent. Async : met à jour le cache puis émet `pilot-backend-changed`
+  // pour renommer les onglets/labels déjà affichés. Re-sondé sur changement de
+  // chemin pi (event `pilot-config-changed`).
+  refreshBackendInfo();
+  window.addEventListener("pilot-config-changed", () => {
+    refreshBackendInfo();
+    // Re-sonde aussi la santé de l'agent (chemin pi peut avoir changé).
+    checkPiHealth().then((h) => { if (h && !h.ok) warnPiUnavailable(h); });
+  });
+
+  // 3d-quinquies. Health check de l'agent au démarrage (E4) : si l'exécutable
+  // configuré (pi/plh) est absent ou ne répond pas à `--version`, avertir
+  // l'utilisateur via un toast. La gate d'ouverture de l'onglet agent
+  // (tabs.js _openAgent) affiche alors un écran guidé au lieu de planter.
+  checkPiHealth().then((h) => { if (h && !h.ok) warnPiUnavailable(h); });
 
   // 3d-ter. Afficher la version de l'app dans la barre de statut
   try {
@@ -326,11 +355,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Aide", "help");
   });
 
+  // 🔍 Review : onglet de revue de code assistée sur le diff Git — spec_review.md (H5).
+  document.getElementById("btn-review").addEventListener("click", () => {
+    tabs.openFile("Review", "review");
+  });
+
   document.getElementById("btn-terminal-cmd").addEventListener("click", async () => {
     try {
       const config = await invoke("get_config");
       if (config.rpc_agent_enabled) {
-        tabs.openFile("Agent Pi", "agent");
+        tabs.openFile(agentDisplayLabel(), "agent");
       } else if (config.integrated_terminal) {
         tabs.openFile("Agent", "terminal", true);
       } else {
@@ -575,7 +609,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Si RPC activé, ouvrir systématiquement l'onglet Agent Pi
     // (on ignore integrated_terminal et auto_run_command pour l'agent)
     if (config.rpc_agent_enabled && config.auto_load_last_project && config.recent_projects && config.recent_projects.length > 0) {
-      tabs.openFile("Agent Pi", "agent");
+      tabs.openFile(agentDisplayLabel(), "agent");
     } else if (config.auto_load_last_project && config.auto_run_command && config.default_command && config.recent_projects && config.recent_projects.length > 0) {
       // Lancer l'agent automatiquement si les deux options sont activées
       // et qu'un projet a bien été chargé

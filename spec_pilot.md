@@ -86,6 +86,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - Dialogue JSON/JSONL sur stdin/stdout, 15+ commandes Tauri.
 - **Mode Orchestration** (voir [`spec_orchestration.md`](spec_orchestration.md)) : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale.
 - **Quality-gate interne** (voir [`spec_quality_gate.md`](spec_quality_gate.md)) : bouton 🛡️ dans la toolbar de l'agent → active un protocole anti-régression embarqué par Pilot (`--skill`), persistant (`quality_gate_enabled`), relance l'agent au clic.
+- **Health check au démarrage** (E4) : Pilot sonde `<rpc_pi_path> --version` au lancement ; si l'exécutable est absent/injoignable, toast d'avertissement + gate dans l'onglet agent (écran « π indisponible » avec bouton « Ouvrir les paramètres » au lieu d'une session RPC qui planterait). Re-sonde automatique sur changement de chemin pi.
 - Voir [`spec_rpc.md`](spec_rpc.md) pour le détail complet.
 
 ### Accès distant web (mode remote)
@@ -96,6 +97,22 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### Aide intégrée (❓)
 - Onglet « ❓ Aide » : chat LLM sur le **handbook** (doc condensée embarquée, générée à la compilation depuis les blocs `<!-- HELP:* -->` des specs). Voir [`spec_help.md`](spec_help.md).
 - Backend Option A : process pi temporaire `--no-session` cadré (pas d'outils, pas de fichiers). Isolé de l'agent de coding.
+
+### Context Engine (auto-contexte agent)
+- Avant le 1er prompt de chaque session agent (chat standard), Pilot construit et injecte automatiquement un **contexte projet** (AGENTS.md, `.pilot/context.md`, fichier actif, imports, manifestes, specs référencées, fichiers récents) dans un budget de tokens configurable. Bouton 📑 dans la toolbar pour forcer la ré-injection. Voir [`spec_context_engine.md`](spec_context_engine.md). V1 heuristique.
+
+### Diff Review agent (porte pré-écriture)
+- Paramètre **« Porte pré-écriture »** (`confirm_file_edits`, désactivé par défaut). Activé : avant chaque `write`/`edit` de l'agent, un **diff (avant/après)** s'affiche avec **✓ Accepter** (l'outil s'exécute) / **✗ Refuser** (l'outil est bloqué, fichier **intact**). Implémenté via une extension pi (`pilot-edit-gate`) qui bloque `tool_call` + `ctx.ui.confirm` (RPC bloquant). Auto-approve en Mode Orchestration. Voir [`spec_diff_review.md`](spec_diff_review.md).
+
+### Mémoire de projet auto-maintenue
+- `PROJECT_MEMORY.md` à la racine du projet, **tenu par l'agent** (conventions, pièges, décisions d'architecture, dépendances clés). Injecté avant chaque tâche (Mode Orchestration) et avant le 1er prompt d'une session (chat). Extraction automatique opt-in : après chaque tâche d'orchestration réussie, l'agent extrait 1–3 faits appris et les ajoute au fichier. Bouton 📝 (toolbar agent) pour ouvrir/éditer le fichier. Git-committable. Voir [`spec_project_memory.md`](spec_project_memory.md).
+
+### Git intégré (C1)
+- Badges de statut Git dans l'explorateur : `M` (orange = modifié working tree), `M`/`A` (vert = staged/add), `D` (rouge = supprimé), `?` (gris = non suivi) ; dossiers contenant un fichier modifié marqués `•`. Via CLI `git status --porcelain` (zéro dep Cargo). Rafraîchi sur watcher, en parallèle de `refresh_tree`.
+- **Diff visuel** : clic droit → « 🔖 Voir le diff Git » → modale plein écran read-only réutilisant le moteur de diff d'A4 (`diff-view.js`), `before` = `git show HEAD:<path>`, `after` = contenu disque. Désactivé gracieusement si le projet n'est pas un repo Git (ou `git` absent).
+
+### Revue de code assistée (H5)
+- Onglet **🔍 Review** (bouton 🔍) : l'agent joue le rôle de **second reviewer** sur le diff Git. Portée : modifs non commitées (`git diff HEAD`) ou dernier commit (`git diff HEAD~1 HEAD`). Process pi temporaire cadré (`ask_pi_caged`, réutilise l'aide intégrée) — **lecture seule**, aucune modification du projet. Revue structurée (bugs, sécurité, perfs, style, cohérence specs) + questions de suivi. Voir [`spec_review.md`](spec_review.md).
 
 ### Persistance
 - Config JSON dans `app_data_dir` : thème, commande, projets récents, params RPC.

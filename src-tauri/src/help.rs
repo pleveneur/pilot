@@ -81,7 +81,7 @@ pub fn ask_help(
     // charge pas de session projet, et un cwd vide évite tout scan de fichiers.
     let cwd = std::env::temp_dir().to_string_lossy().to_string();
 
-    ask_pi_for_help(&cwd, &pi_path, &prompt, Some(&help_model))
+    ask_pi_caged(&cwd, &pi_path, &prompt, Some(&help_model))
 }
 
 /// Construit le prompt cadré envoyé à pi : consigne « assistant d'aide », le
@@ -288,7 +288,13 @@ fn collect_stream(rx: &mpsc::Receiver<String>, timeout: Duration) -> Result<Stri
 /// commandes en séquence (new_session → set_model → prompt) en **attendant
 /// l'accusé de chacune** avant la suivante, collecte la réponse streamée,
 /// puis tue le process. Le modèle (format "provider/modelId") est obligatoire.
-fn ask_pi_for_help(
+///
+/// **Réutilisé** par l'onglet « ❓ Aide » (`ask_help`) et l'onglet « 🔍 Review »
+/// (`review::ask_review`) : tout usage d'un pi temporaire cadré (pas de session
+/// persistante, pas de pollution de la session de coding principale) passe par
+/// ici. Le `prompt` est entièrement à la charge de l'appelant (consigne + contexte
+/// + question). `cwd` neutre (ex: temp_dir) pour isoler pi du projet.
+pub fn ask_pi_caged(
     cwd: &str,
     pi_path: &str,
     prompt: &str,
@@ -407,18 +413,18 @@ mod tests {
 
     /// Test d'intégration (ignoré par défaut) : nécessite pi dans le PATH et un
     /// modèle local lancé (llama-cpp/ornith). Lancer avec :
-    ///   cargo test --lib -- --ignored integration_ask_pi_for_help
+    ///   cargo test --lib -- --ignored integration_ask_pi_caged
     /// Valide que la séquence synchronisée (new_session → set_model → prompt)
     /// produit bien une réponse streamée.
     #[test]
     #[ignore]
-    fn integration_ask_pi_for_help() {
+    fn integration_ask_pi_caged() {
         let cwd = std::env::temp_dir().to_string_lossy().to_string();
         // pi n'est pas forcément dans le PATH du test : utiliser PI_PATH env ou
         // le chemin npm par défaut (Windows).
         let pi_path = std::env::var("PI_PATH")
             .unwrap_or_else(|_| "C:\\Users\\pldistance\\AppData\\Roaming\\npm\\pi.cmd".to_string());
-        let res = ask_pi_for_help(&cwd, &pi_path, "Réponds uniquement le mot OK", Some("llama-cpp/ornith"));
+        let res = ask_pi_caged(&cwd, &pi_path, "Réponds uniquement le mot OK", Some("llama-cpp/ornith"));
         println!("[help test] résultat = {:?}", res);
         assert!(res.is_ok(), "ask_pi_for_help a échoué : {:?}", res);
         let txt = res.unwrap();

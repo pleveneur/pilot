@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf -->
+<!-- PILOT-HELP generated=2026-07-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -230,3 +230,86 @@ texte à la voix.
   onglet. Modèle utilisé : Paramètres ⚙️ → « Modèle de conversion PDF → MD ».
 - **Export PDF** : dans l'explorateur, **clic-droit sur un fichier `.md`** →
   « 📕 Exporter en PDF ». Génère un PDF rendu de la prévisualisation Markdown.
+
+---
+
+## Context Engine (auto-contexte agent)
+
+Pilot injecte **automatiquement** un contexte projet avant le 1er prompt de chaque
+session agent (chat standard) : `AGENTS.md`, fichier actif, imports, manifestes,
+specs référencées, fichiers récemment édités — dans un budget de tokens configurable.
+
+- **Activation** : Paramètres → section « Context Engine ». Désactivable.
+- **Budget** : par défaut 8000 tokens (réglable 1000–32000).
+- **Bouton 📑 Contexte** (toolbar agent) : force la ré-injection au prochain
+  envoi (utile après avoir changé de fichier actif ou édité `AGENTS.md`).
+- **Une fois par session** : le contexte est réinjecté automatiquement après un
+  nouveau chat (➕), une compaction (📦), une reconnexion (🔄) ou un changement
+  de projet.
+- **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
+  pour ajouter vos propres instructions permanentes (conventions, pièges à
+  éviter) — il est injecté en priorité juste après `AGENTS.md`.
+
+---
+
+## Porte pré-écriture (confirmer les modifications de l'agent)
+
+Par défaut, l'agent Pi modifie les fichiers librement. Activez **Paramètres →
+« Porte pré-écriture : confirmer les modifications de fichiers »** pour qu'avant
+chaque `write`/`edit`, Pilot affiche un **diff (avant/après)** et vous demande :
+
+- **✓ Accepter** : l'outil s'exécute, le fichier est modifié.
+- **✗ Refuser** : l'outil est bloqué, le fichier **n'est pas touché**.
+
+Le diff est calculé avant l'écriture (le fichier est intact pendant la décision).
+En **Mode Orchestration**, la confirmation est automatique (le codeur est
+autonome). Le changement du paramètre relance l'agent à chaud (session préservée).
+
+---
+
+### 📝 Mémoire de projet (H3)
+
+Pilot maintient un fichier `PROJECT_MEMORY.md` à la racine du projet, enrichi
+par l'agent (conventions, pièges, décisions) et injecté automatiquement dans le
+contexte de l'agent.
+
+- **Bouton 📝** (toolbar agent) : ouvre/édite `PROJECT_MEMORY.md` (créé avec un
+  template s'il n'existe pas). Éditable manuellement.
+- **Paramètres → Agent Pi ou PLh** :
+  - *Mémoire de projet* : active l'injection du fichier avant chaque tâche
+    (orchestration) et avant le 1er prompt d'une session (chat).
+  - *Extraction auto* : après chaque tâche d'orchestration réussie, l'agent
+    extrait 1–3 faits appris et les ajoute au fichier (1 tour LLM
+    supplémentaire ; opt-in).
+- Le fichier est git-committable : la mémoire devient partagée entre
+  collaborateurs et machines.
+
+---
+
+## 🔍 Onglet Review (revue de code assistée)
+
+L'onglet **🔍 Review** (bouton 🔍 dans la barre d'action, visible quand un projet
+est ouvert) fait jouer à l'agent le rôle de **second reviewer** sur ton diff Git.
+
+**Démarrage** :
+1. Clique 🔍 → ouvre l'onglet Review.
+2. Choisis la **portée** : « Modifs non commitées (vs HEAD) » ou « Dernier
+   commit (HEAD~1..HEAD) ».
+3. Choisis un **modèle** (comme pour l'aide ; se souvient du choix).
+4. Clique **🔍 Lancer la revue**.
+
+L'agent analyse le diff et produit une revue structurée : 🟢 points positifs,
+🔴 bugs, ⚠️ sécurité, ⚡ perfs, 🎨 style, 📐 cohérence specs, 💡 suggestions.
+
+**Questions de suivi** : tape dans la zone en bas (ex: « approfondis la sécurité
+du fichier `lib.rs` ») + Entrée. L'historique est réinjecté à chaque tour.
+
+**Points clés** :
+- **Lecture seule** : l'agent ne modifie jamais tes fichiers (process pi isolé,
+  n'accède pas au projet).
+- **Diff Git uniquement** : pas de revue sur des fichiers non versionnés.
+- **Repo Git requis** : ouvre un projet versionné, sinon message d'erreur.
+- Si le diff est très grand, il est tronqué à 60 k caractères — passe en « dernier
+  commit » ou committe par morceaux pour une revue complète.
+
+Voir [`spec_review.md`](spec_review.md) pour le détail technique.

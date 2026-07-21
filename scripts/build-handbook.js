@@ -29,6 +29,10 @@ const SOURCES = [
   "spec_web_remote.md",
   "spec_voice_input.md",
   "spec_pdf2md.md",
+  "spec_context_engine.md",
+  "spec_diff_review.md",
+  "spec_project_memory.md",
+  "spec_review.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 

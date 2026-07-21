@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 mod help;
+mod review;
 mod rpc_manager;
 mod tailscale;
 mod web_auth;
@@ -49,6 +50,10 @@ struct AppState {
     /// Signal d'arrêt du serveur web distant : `Some(sender)` tant qu'un serveur tourne.
     /// Permet le rechargement à chaud (panneau Paramètres) sans relancer l'app.
     web_shutdown: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// Cache de la sonde du backend (pi/plh) : `(pi_path, probe)`.
+    /// Re-sondé quand `rpc_pi_path` change. Évite de planter un backend qui ne
+    /// supporte pas `--extension` (ex: plh sans le flag) en ne passant pas `-e`.
+    ext_gate_cache: std::sync::Mutex<Option<(String, BackendProbe)>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,9 +149,42 @@ struct AppConfig {
     // de répondre tant qu'un modèle n'est pas sélectionné dans l'UI d'aide).
     #[serde(default)]
     help_model: String,
+    /// Modèle utilisé pour l'onglet « 🔍 Review » (H5, spec_review.md). Format
+    /// "provider/modelId" (issu de get_available_models_list). Vide = aucun modèle
+    /// (la revue refusera tant qu'un modèle n'est pas sélectionné dans l'UI).
+    #[serde(default)]
+    review_model: String,
+    // ── Context Engine (H1, spec_context_engine.md) ──
+    // Injection automatique d'un contexte projet avant le 1er prompt de chaque
+    // session agent (chat standard). V1 heuristique.
+    #[serde(default = "default_true")]
+    context_engine_enabled: bool,
+    #[serde(default = "default_context_budget")]
+    context_budget_tokens: u32,
+    #[serde(default = "default_true")]
+    context_include_imports: bool,
+    #[serde(default = "default_true")]
+    context_include_specs: bool,
+    #[serde(default = "default_true")]
+    context_include_recents: bool,
+    /// Diff Review (A4 V2) : porte pré-écriture. Si true, l'agent doit confirmer
+    /// auprès de l'utilisateur avant chaque write/edit (extension pi pilot-edit-gate).
+    /// Désactivé par défaut (l'agent écrit librement, comme avant).
+    #[serde(default)]
+    confirm_file_edits: bool,
+    // ── Mémoire de projet (H3, spec_project_memory.md) ──
+    // PROJECT_MEMORY.md tenu par l'agent. Injection dans le contexte (chat +
+    // orchestration) si activé. Indépendant du Context Engine (H1).
+    #[serde(default = "default_true")]
+    project_memory_enabled: bool,
+    // Extraction auto de 1–3 faits après chaque tâche d'orchestration réussie
+    // (coût : 1 tour LLM supplémentaire par tâche). Opt-in.
+    #[serde(default)]
+    project_memory_auto_extract: bool,
 }
 
 fn default_true() -> bool { true }
+fn default_context_budget() -> u32 { 8000 }
 fn default_sidebar_width() -> u32 { 280 }
 fn default_auto_save_delay() -> u32 { 3000 }
 fn default_orchestration_idle_timeout() -> u32 { 120000 }
@@ -222,6 +260,15 @@ impl Default for AppConfig {
             web_keep_alive: false,
             web_tailscale_serve: false,
             help_model: String::new(),
+            review_model: String::new(),
+            context_engine_enabled: true,
+            context_budget_tokens: default_context_budget(),
+            context_include_imports: true,
+            context_include_specs: true,
+            context_include_recents: true,
+            confirm_file_edits: false,
+            project_memory_enabled: true,
+            project_memory_auto_extract: false,
         }
     }
 }
@@ -650,6 +697,174 @@ fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String>
 }
 
 #[tauri::command]
+fn extension_gate_supported(state: State<AppState>) -> Result<bool, String> {
+    let config = state.config.lock().unwrap();
+    let pi_path = config.rpc_pi_path.clone();
+    drop(config);
+    if pi_path.is_empty() {
+        return Ok(false);
+    }
+    Ok(probe_extension_support(state.inner(), &pi_path))
+}
+
+/// Renvoie le genre du backend configuré ("pi", "plh" ou "unknown") + le support
+/// de `--extension`. Sert à afficher "Agent Pi"/"Agent PLh" dans l'UI et à activer/
+/// désactiver la porte pré-écriture.
+#[derive(serde::Serialize)]
+struct BackendInfo {
+    kind: String,
+    ext_supported: bool,
+}
+
+#[tauri::command]
+fn get_backend_info(state: State<AppState>) -> Result<BackendInfo, String> {
+    let config = state.config.lock().unwrap();
+    let pi_path = config.rpc_pi_path.clone();
+    drop(config);
+    if pi_path.is_empty() {
+        return Ok(BackendInfo { kind: "unknown".to_string(), ext_supported: false });
+    }
+    let probe = probe_backend(state.inner(), &pi_path);
+    Ok(BackendInfo { kind: probe.kind, ext_supported: probe.ext_supported })
+}
+
+/// Résultat du health check de l'agent au démarrage (E4).
+/// `ok` = l'exécutable configuré répond à `--version`. `error` vaut :
+///   - ""         si ok
+///   - "no_path"      si `rpc_pi_path` est vide
+///   - "not_executable" si l'exécutable est absent / non lancé / timeout `--version`
+#[derive(serde::Serialize)]
+struct PiHealth {
+    ok: bool,
+    kind: String,
+    version: String,
+    error: String,
+    path: String,
+}
+
+#[tauri::command]
+fn pi_health_check(state: State<AppState>) -> Result<PiHealth, String> {
+    let config = state.config.lock().unwrap();
+    let pi_path = config.rpc_pi_path.clone();
+    drop(config);
+    if pi_path.is_empty() {
+        return Ok(PiHealth {
+            ok: false,
+            kind: "unknown".to_string(),
+            version: String::new(),
+            error: "no_path".to_string(),
+            path: pi_path,
+        });
+    }
+    use std::time::Duration;
+    let out = run_captured(&pi_path, &["--version"], Duration::from_secs(3));
+    if out.trim().is_empty() {
+        return Ok(PiHealth {
+            ok: false,
+            kind: "unknown".to_string(),
+            version: String::new(),
+            error: "not_executable".to_string(),
+            path: pi_path,
+        });
+    }
+    Ok(PiHealth {
+        ok: true,
+        kind: kind_from_version_output(&out),
+        version: out.trim().to_string(),
+        error: String::new(),
+        path: pi_path,
+    })
+}
+
+// ── Git intégré (C1) — badges de statut + diff visuel via CLI `git` ──
+
+/// Résultat de `git_status` : `entries` mappe chaque chemin relatif au cwd du
+/// projet → code porcelain v1 sur 2 caractères (`XY`), ex: ` M`, `M `, `MM`,
+/// `A `, `??`, ` D`. `is_repo` = false si le projet n'est pas dans un work tree
+/// Git (ou si `git` est absent) → l'UI masque les badges gracieusement.
+#[derive(serde::Serialize)]
+struct GitStatus {
+    is_repo: bool,
+    entries: HashMap<String, String>,
+}
+
+#[tauri::command]
+fn git_status(state: State<AppState>) -> Result<GitStatus, String> {
+    use std::time::Duration;
+    let project = state.project_path.lock().unwrap();
+    let cwd = match project.as_ref() {
+        Some(p) => p.clone(),
+        None => return Err("Aucun projet ouvert".to_string()),
+    };
+    drop(project);
+    // Vérifier qu'on est dans un work tree Git.
+    let check = run_captured("git", &["-C", &cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        return Ok(GitStatus { is_repo: false, entries: HashMap::new() });
+    }
+    let out = run_captured(
+        "git",
+        &["-C", &cwd, "status", "--porcelain", "-uall", "--no-renames"],
+        Duration::from_secs(8),
+    );
+    let mut entries = HashMap::new();
+    for line in out.lines() {
+        // Format porcelain v1 : `XY <path>` (path quoté si espaces/unicode).
+        if line.len() < 4 {
+            continue;
+        }
+        let code = line[..2].to_string();
+        let mut path = line[3..].to_string();
+        // Déquote porcelain v1 : entoure de "..." si le path contient des espaces.
+        if path.starts_with('"') && path.ends_with('"') && path.len() >= 2 {
+            path = path[1..path.len() - 1].to_string();
+            // Échappement C-style minimal : \" → " et \\ → \
+            path = path.replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        if !path.is_empty() {
+            entries.insert(path, code);
+        }
+    }
+    Ok(GitStatus { is_repo: true, entries })
+}
+
+/// Résultat de `git_diff_file` : `before` = version commitée (`HEAD:<relpath>`,
+/// vide si non tracked ou jamais commité), `after` = contenu courant sur disque.
+/// Sert au diff visuel (`diff-view.js`) en mode lecture seule.
+#[derive(serde::Serialize)]
+struct GitFileDiff {
+    is_repo: bool,
+    tracked: bool,
+    before: String,
+    after: String,
+}
+
+#[tauri::command]
+fn git_diff_file(state: State<AppState>, path: String) -> Result<GitFileDiff, String> {
+    use std::time::Duration;
+    let project = state.project_path.lock().unwrap();
+    let cwd = match project.as_ref() {
+        Some(p) => p.clone(),
+        None => return Err("Aucun projet ouvert".to_string()),
+    };
+    drop(project);
+    let after = fs::read_to_string(&path).unwrap_or_default();
+    let check = run_captured("git", &["-C", &cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        return Ok(GitFileDiff { is_repo: false, tracked: false, before: String::new(), after });
+    }
+    // Chemin tracked relatif au repo root (vide si fichier non suivi).
+    let rel = run_captured("git", &["-C", &cwd, "ls-files", "--full-name", "--", &path], Duration::from_secs(3));
+    let rel = rel.trim().to_string();
+    if rel.is_empty() {
+        return Ok(GitFileDiff { is_repo: true, tracked: false, before: String::new(), after });
+    }
+    // Version commitée. Échoue (stdout vide) si staged-new jamais commité → before "".
+    let before = run_captured("git", &["-C", &cwd, "show", &format!("HEAD:{}", rel)], Duration::from_secs(5));
+    Ok(GitFileDiff { is_repo: true, tracked: true, before, after })
+}
+
+#[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
     let mut config = state.config.lock().unwrap();
     // Chargement paresseux : si le config est encore le défaut, tenter de charger du disque
@@ -728,6 +943,21 @@ fn set_help_model(
 ) -> Result<(), String> {
     let mut config = state.config.lock().unwrap().clone();
     config.help_model = model;
+    save_config_disk(&app, &config)?;
+    *state.config.lock().unwrap() = config;
+    Ok(())
+}
+
+/// Persiste le modèle sélectionné pour l'onglet « 🔍 Review » (spec_review.md).
+/// Format "provider/modelId" (issu de get_available_models_list).
+#[tauri::command]
+fn set_review_model(
+    state: State<AppState>,
+    app: AppHandle,
+    model: String,
+) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap().clone();
+    config.review_model = model;
     save_config_disk(&app, &config)?;
     *state.config.lock().unwrap() = config;
     Ok(())
@@ -931,6 +1161,107 @@ fn unique_image_name(dir: &PathBuf, original: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 // ── Agent RPC (pi --mode rpc) ──
 
+/// Résultat de la sonde du backend (pi ou plh) : genre détecté + support du
+/// flag `--extension` (gate pré-écriture). Mis en cache par `rpc_pi_path`.
+#[derive(Clone)]
+struct BackendProbe {
+    kind: String,
+    ext_supported: bool,
+}
+
+/// Sondage du backend : exécute `<pi_path> --version` (genre : "pi" / "plh" /
+/// "unknown") et `--help` (présence de `--extension`). Mis en cache dans
+/// `ext_gate_cache` (re-sondé si `pi_path` change). Bloquant mais borné (~3s par
+/// commande). Évite de planter un backend qui ne supporte pas `--extension`
+/// (ex: plh sans le flag → clap rejette l'arg et sort → « pipe closed »).
+fn probe_backend(state: &AppState, pi_path: &str) -> BackendProbe {
+    if pi_path.is_empty() {
+        return BackendProbe { kind: "unknown".to_string(), ext_supported: false };
+    }
+    // Cache : re-sonder seulement si pi_path a changé depuis la dernière sonde.
+    {
+        let cache = state.ext_gate_cache.lock().unwrap();
+        if let Some((cached_path, cached)) = cache.as_ref() {
+            if cached_path == pi_path {
+                return cached.clone();
+            }
+        }
+    }
+    let kind = run_version_probe(pi_path);
+    let ext_supported = run_help_probe(pi_path);
+    let probe = BackendProbe { kind, ext_supported };
+    *state.ext_gate_cache.lock().unwrap() = Some((pi_path.to_string(), probe.clone()));
+    probe
+}
+
+/// Wrapper : support de `--extension` uniquement (gate pré-écriture).
+fn probe_extension_support(state: &AppState, pi_path: &str) -> bool {
+    probe_backend(state, pi_path).ext_supported
+}
+
+/// Exécute `<pi_path> --version`, capture stdout, et déduit le genre.
+/// - "pi"  : sortie commençant par un numéro de version (ex: "0.80.10")
+/// - "plh" : sortie commençant par "plh" (ex: "plh 0.1.0")
+/// - "unknown" sinon. Timeout ~3s.
+fn run_version_probe(pi_path: &str) -> String {
+    use std::time::Duration;
+    let out = run_captured(pi_path, &["--version"], Duration::from_secs(3));
+    kind_from_version_output(&out)
+}
+
+/// Déduplique le parsing du genre depuis la sortie `--version`.
+fn kind_from_version_output(out: &str) -> String {
+    let s = out.trim().to_lowercase();
+    if s.starts_with("plh") {
+        "plh".to_string()
+    } else if s.split_whitespace().next().map(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)).unwrap_or(false) {
+        "pi".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+/// Exécute `<pi_path> --help`, capture stdout, et vérifie si `--extension`
+/// apparaît dans la sortie. Timeout ~3s (kill si dépassé).
+fn run_help_probe(pi_path: &str) -> bool {
+    use std::time::Duration;
+    let out = run_captured(pi_path, &["--help"], Duration::from_secs(3));
+    out.contains("--extension")
+}
+
+/// Lance `<exe> <args...>`, capture stdout, kill si `deadline` dépassé.
+pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Duration) -> String {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut child = match Command::new(exe)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let deadline = Instant::now() + deadline_dur;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return String::new();
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return String::new(),
+        }
+    }
+    match child.wait_with_output() {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Err(_) => String::new(),
+    }
+}
+
 pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
     let project = state.project_path.lock().unwrap();
     let cwd = project
@@ -943,13 +1274,14 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         return Err("Une session agent est déjà active".to_string());
     }
 
-    let (pi_path, no_session, session_dir, qg_enabled) = {
+    let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits) = {
         let config = state.config.lock().unwrap();
         (
             config.rpc_pi_path.clone(),
             config.rpc_no_session,
             config.rpc_session_dir.clone(),
             config.quality_gate_enabled,
+            config.confirm_file_edits,
         )
     };
 
@@ -985,8 +1317,38 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         None
     };
 
+    // Diff Review (A4 V2) : extension pi `pilot-edit-gate` chargée UNIQUEMENT si
+    // `confirm_file_edits` est activé ET si le backend supporte `--extension`.
+    // Quand désactivé (défaut) ou non supporté (ex: plh sans le flag), l'extension
+    // n'est pas chargée → aucun surcharge, aucun blocage, l'agent écrit librement.
+    // L'extension bloque les outils write/edit avant exécution et demande une
+    // confirmation (ctx.ui.confirm → extension_ui_request). Pilot décide côté
+    // client : auto-approve en Mode Orchestration, sinon diff Accepter/Refuser.
+    // Écrite dans le dossier data depuis include_str! (imports type-only, effacés
+    // par jiti — aucune dépendance npm).
+    let ext_supported = confirm_file_edits && probe_extension_support(state, &pi_path);
+    let extension_path: Option<String> = if ext_supported {
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            let ext_file = data_dir.join("extensions").join("pilot-edit-gate.ts");
+            if fs::create_dir_all(ext_file.parent().unwrap_or(&data_dir)).is_ok() {
+                let content: &str = include_str!("../extensions/pilot-edit-gate.ts");
+                if fs::write(&ext_file, content).is_ok() {
+                    Some(ext_file.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), app.clone(), state.event_tx.clone(),
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(),
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -1041,7 +1403,7 @@ pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
         .as_mut()
         .ok_or("Aucune session agent active")?;
     let cmd = serde_json::json!({ "type": "get_state" });
-    rpc_manager::send_command_sync(session, cmd)
+    rpc_manager::send_command_sync_timeout(session, cmd, 8)
 }
 
 #[tauri::command]
@@ -1138,11 +1500,35 @@ fn send_agent_prompt(
     // exclut les commandes slash, non affichées). Le desktop l'affiche déjà
     // localement (appendUserMessage avant l'invoke) et n'écoute pas le canal de
     // broadcast → pas de doublon côté desktop.
+    //
+    // Context Engine (H1) : le message peut contenir un préambule de contexte
+    // projet (=== CONTEXTE PROJET ... === FIN CONTEXTE ===). On le strippe pour
+    // l'affichage distant (l'agent reçoit bien le message complet via pi).
     if !message.is_empty() && !message.starts_with('/') {
-        let ev = serde_json::json!({ "type": "user_message", "text": message, "source": "desktop" });
+        let display_text = strip_context_preamble(&message);
+        let ev = serde_json::json!({ "type": "user_message", "text": display_text, "source": "desktop" });
         let _ = state.event_tx.send(ev);
     }
     do_send_agent_prompt(state.inner(), message, images)
+}
+
+/// Supprime le préambule « === CONTEXTE PROJET ... === FIN CONTEXTE === » injecté
+/// par le Context Engine (H1) pour ne pas polluer l'affichage distant du message
+/// utilisateur. Retourne le texte utilisateur seul.
+fn strip_context_preamble(message: &str) -> String {
+    let start_marker = "=== CONTEXTE PROJET";
+    let end_marker = "=== FIN CONTEXTE ===";
+    if !message.starts_with(start_marker) {
+        return message.to_string();
+    }
+    // Trouver la fin du bloc contexte, puis sauter les lignes vides qui suivent.
+    if let Some(end_idx) = message.find(end_marker) {
+        let after = &message[end_idx + end_marker.len()..];
+        after.trim_start_matches(['\n', '\r', ' ']).to_string()
+    } else {
+        // Bloc mal formé : on renvoie tel quel (sécurité).
+        message.to_string()
+    }
 }
 
 /// Envoie un prompt de complétion inline à l'agent.
@@ -1256,7 +1642,7 @@ pub(crate) fn do_list_agent_models(state: &AppState) -> Result<Value, String> {
         .as_mut()
         .ok_or("Aucune session agent active")?;
     let cmd = serde_json::json!({"type": "get_available_models"});
-    rpc_manager::send_command_sync(session, cmd)
+    rpc_manager::send_command_sync_timeout(session, cmd, 12)
 }
 
 #[tauri::command]
@@ -2213,6 +2599,7 @@ pub fn run() {
                 guard: Arc::new(web_rate::WebGuard::new()),
                 audit: Arc::new(web_audit::WebAudit::new()),
                 web_shutdown: std::sync::Mutex::new(None),
+                ext_gate_cache: std::sync::Mutex::new(None),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -2269,12 +2656,18 @@ pub fn run() {
             search_in_files,
             get_available_models_list,
             set_help_model,
+            set_review_model,
             add_favorite,
             remove_favorite,
             save_plan,
             load_plan,
             delete_plan,
             check_syntax,
+            extension_gate_supported,
+            get_backend_info,
+            pi_health_check,
+            git_status,
+            git_diff_file,
             set_web_password,
             web_kick_remote,
             web_active_count,
@@ -2286,6 +2679,7 @@ pub fn run() {
             reload_web_server,
             help::get_handbook,
             help::ask_help,
+            review::ask_review,
             tailscale::tailscale_status,
             tailscale::tailscale_enable_serve,
             tailscale::tailscale_disable_serve,

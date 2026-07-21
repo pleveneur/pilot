@@ -6,6 +6,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import markdownit from "markdown-it";
 import { isImageFile } from "./image-paste.js";
+import { buildProjectContext } from "./context-engine.js";
+import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
+import { renderEditGateDialog } from "./diff-view.js";
+import { agentDisplayLabel } from "./backend-info.js";
+import { getTabsManager } from "./tabs.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -105,6 +110,8 @@ export async function createAgentPi(container) {
     <button class="agent-btn" data-action="compact" title="Compacter le contexte">📦</button>
     <button class="agent-btn" data-action="orchestration" title="Mode Orchestration : architecte + codeur">🧠</button>
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)">🛡️</button>
+    <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi">📑</button>
+    <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md">📝</button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
     <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="🧠 Orchestrateur (mode Orchestration)"></select>
     <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="🔨 Codeur (mode Orchestration)"></select>
@@ -128,6 +135,24 @@ export async function createAgentPi(container) {
     } catch (_) { /* get_config non disponible */ }
   }
   refreshQualityGate();
+
+  // ── Diff Review (A4 V2) : porte pré-écriture — charger le paramètre global ──
+  // Tient compte de la capacité du backend : si le backend (ex: plh) ne supporte
+  // pas `--extension`, l'option est ignorée (state.confirmFileEdits = false) même
+  // si la config l'active — l'extension n'est pas chargée côté Rust, donc le gate
+  // ne se déclenche jamais. On évite ainsi un « pipe closed » (clap rejette -e).
+  async function refreshConfirmFileEdits() {
+    try {
+      const config = await invoke("get_config");
+      const configWants = config.confirm_file_edits === true;
+      let supported = true;
+      try { supported = await invoke("extension_gate_supported"); } catch (_) {}
+      state.confirmFileEdits = configWants && supported;
+    } catch (_) { state.confirmFileEdits = false; }
+  }
+  refreshConfirmFileEdits();
+  // Recharger quand les paramètres sont sauvegardés (event custom émis par main.js)
+  window.addEventListener("pilot-config-changed", refreshConfirmFileEdits);
 
   // ── Panneau d'orchestration ──
   const orchestrationPanel = document.createElement("div");
@@ -241,10 +266,56 @@ export async function createAgentPi(container) {
     defaultModel: "",           // modèle par défaut (sauvegardé à l'activation du mode orchestration)
     orchestratorModel: "",      // provider/modelId de l'orchestrateur
     coderModel: "",              // provider/modelId du codeur
+    // ── Context Engine (H1, spec_context_engine.md) ──
+    contextInjected: false,         // true après injection du contexte projet (1x par session)
+    contextRefreshRequested: false, // true si l'utilisateur a cliqué 📑 (forcer ré-injection)
+    // ── Mémoire de projet (H3, spec_project_memory.md) ──
+    memoryInjected: false,             // true après injection de PROJECT_MEMORY.md (1x par session chat)
+    projectMemoryEnabled: true,        // reflète config.project_memory_enabled (injection chat + orchestration)
+    projectMemoryAutoExtract: false,   // reflète config.project_memory_auto_extract (extraction post-tâche)
+    orchestrationExtractingMemory: null, // taskId pendant le tour d'extraction mémoire (null sinon)
+    // ── Diff Review (A4 V2, spec_diff_review.md) : porte pré-écriture ──
+    // `confirmFileEdits` reflète la config Rust `confirm_file_edits`. Si false
+    // (défaut) ou en Mode Orchestration, l'auto-approve est envoyé à l'extension
+    // pilot-edit-gate (l'agent écrit librement). Si true, un diff Accepter/
+    // Refuser s'affiche AVANT que l'outil write/edit ne s'exécute (pi bloqué).
+    confirmFileEdits: false,
+    // Flags de cycle de vie pi (restart/reconnect) — évitent d'attendre 30s sur
+    // un pi mort : waitForPiReady poll get_agent_state et baille si piDead.
+    piDead: false,
+    restarting: false,
   };
   window.__agentState = state;
 
   const inputEl = wrapper.querySelector("#agent-input");
+
+  // ── Context Engine (H1) : helpers pour construire le contexte projet ──
+  /** Retourne l'onglet d'édition actif { path, content } pour l'injection de contexte. */
+  function getActiveEditTab() {
+    try {
+      const tm = getTabsManager();
+      if (!tm || !tm.tabs) return null;
+      const tab = tm.getActiveTab();
+      if (!tab || !tab.path) return null;
+      // Uniquement les onglets de fichier (édition/preview/split) — pas agent/terminal/scratchpad
+      if (["agent", "terminal", "prompt-builder", "help"].includes(tab.mode)) return null;
+      if (tab.isScratchpad) return null;
+      // content peut ne pas être à jour ; le Context Engine relira le fichier si content == null
+      return { path: tab.path, content: tab.content || null };
+    } catch (_) { return null; }
+  }
+
+  /** Retourne les chemins des fichiers récemment ouverts/édités (onglets ouverts). */
+  function getRecentEditedPaths() {
+    try {
+      const tm = getTabsManager();
+      if (!tm || !tm.tabs) return [];
+      return tm.tabs
+        .filter((t) => t.path && !["agent", "terminal", "prompt-builder", "help"].includes(t.mode) && !t.isScratchpad)
+        .map((t) => t.path)
+        .slice(0, 8);
+    } catch (_) { return []; }
+  }
 
   // ── Dictée vocale (Web Speech API) — Évolution 8 ──
   // Transcription navigateur. Sur WebView2 (Windows), l'audio passe par le cloud
@@ -677,7 +748,52 @@ export async function createAgentPi(container) {
             }
           }
         }
-        const payload = { message: text };
+        // ── Context Engine (H1) : injecter le contexte projet une fois par session ──
+        let finalMessage = text;
+        const wantContext = !state.contextInjected || state.contextRefreshRequested;
+        if (wantContext && !isSlashCommand) {
+          try {
+            const config = await invoke("get_config");
+            if (config && config.context_engine_enabled !== false) {
+              const ctxOpts = {
+                enabled: true,
+                budgetTokens: config.context_budget_tokens || 8000,
+                includeImports: config.context_include_imports !== false,
+                includeSpecs: config.context_include_specs !== false,
+                includeRecents: config.context_include_recents !== false,
+              };
+              const activeTab = getActiveEditTab();
+              const recents = getRecentEditedPaths();
+              const ctxBlock = await buildProjectContext(window._pilotProjectPath, activeTab, recents, ctxOpts);
+              if (ctxBlock) {
+                finalMessage = ctxBlock + text;
+                state.contextInjected = true;
+                state.contextRefreshRequested = false;
+                const ctxBtn = wrapper.querySelector("#agent-ctx-btn");
+                if (ctxBtn) ctxBtn.classList.remove("active");
+              }
+            }
+          } catch (ctxErr) {
+            console.warn("Context Engine: échec construction contexte:", ctxErr);
+          }
+        }
+        // ── Mémoire de projet (H3) : injecter PROJECT_MEMORY.md une fois par session ──
+        const wantMemory = !state.memoryInjected;
+        if (wantMemory && !isSlashCommand) {
+          try {
+            const config = await invoke("get_config");
+            if (config && config.project_memory_enabled !== false) {
+              const memBlock = await buildMemoryBlock(window._pilotProjectPath);
+              if (memBlock) {
+                finalMessage = memBlock + finalMessage;
+                state.memoryInjected = true;
+              }
+            }
+          } catch (memErr) {
+            console.warn("Mémoire projet: échec injection:", memErr);
+          }
+        }
+        const payload = { message: finalMessage };
         if (images) payload.images = images;
         await invoke("send_agent_prompt", payload);
         state.pendingImages = [];
@@ -890,6 +1006,10 @@ export async function createAgentPi(container) {
           // Recharger les modèles et récupérer le modèle actif après le reset
           await loadModels(state);
           updateStats();
+          // Context Engine : reset (réinjecter au prochain prompt)
+          state.contextInjected = false;
+          state.contextRefreshRequested = false;
+          state.memoryInjected = false;
         } catch (err) {
           console.error("Erreur new session:", err);
           // Même en cas d'erreur, réinitialiser l'état pour débloquer l'UI
@@ -912,6 +1032,9 @@ export async function createAgentPi(container) {
         try {
           await invoke("compact_agent_context");
           appendSystemMessage(messagesEl, "🧹 Compaction du contexte...");
+          // Context Engine : la compaction efface le contexte → réinjecter au prochain prompt
+          state.contextInjected = false;
+          state.memoryInjected = false;
         } catch (err) {
           console.error("Erreur compact:", err);
         }
@@ -946,10 +1069,57 @@ export async function createAgentPi(container) {
         }
         break;
       }
+      case "context": {
+        // Context Engine (H1) : forcer la ré-injection du contexte projet au prochain prompt.
+        state.contextRefreshRequested = true;
+        const ctxBtn = wrapper.querySelector("#agent-ctx-btn");
+        if (ctxBtn) {
+          ctxBtn.classList.add("active");
+          ctxBtn.title = "Context Engine : contexte rafraîchi, sera réinjecté au prochain envoi";
+        }
+        try {
+          const { toastInfo } = await import("./toast.js");
+          toastInfo("📑 Contexte projet rafraîchi — sera injecté au prochain envoi");
+        } catch (_) { /* toast indisponible */ }
+        break;
+      }
+      case "memory": {
+        // Mémoire projet (H3) : ouvrir/éditer PROJECT_MEMORY.md (créé s'il n'existe pas).
+        try {
+          const projectPath = window._pilotProjectPath;
+          if (!projectPath) {
+            const { toastWarning } = await import("./toast.js");
+            toastWarning("📝 Ouvre d'abord un projet pour utiliser la mémoire projet");
+            break;
+          }
+          const abs = await initProjectMemory(projectPath);
+          if (abs && window._pilotTabs) {
+            await window._pilotTabs.openFile(abs, "edit");
+          }
+        } catch (e) {
+          console.error("Ouverture mémoire projet:", e);
+          appendErrorMessage(messagesEl, `❌ Ouverture mémoire projet échouée : ${e}`);
+        }
+        break;
+      }
       case "reconnect":
         try {
+          appendSystemMessage(messagesEl, "🔄 Reconnexion de l'agent en cours…");
+          state.restarting = true;
           await invoke("stop_agent_session").catch(() => {});
+          state.piDead = false;
           await invoke("start_agent_session");
+          // Attendre que pi soit prêt (poll ~10s). Si pi meurt au démarrage,
+          // on le détecte vite au lieu de laisser l'utilisateur sur un
+          // « pipe closed » au prochain changement de modèle.
+          const ready = await waitForPiReady(state, 10);
+          state.restarting = false;
+          if (!ready) {
+            appendErrorMessage(messagesEl, "❌ L'agent n'a pas redémarré (pi ne répond pas). Cliquez à nouveau sur 🔄 pour réessayer.");
+            statusEl.textContent = "⚠️ Échec reconnexion";
+            statusEl.className = "agent-status agent-status-error";
+            return;
+          }
           // Redémarrer une nouvelle session
           try {
             await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) });
@@ -958,6 +1128,10 @@ export async function createAgentPi(container) {
           statusEl.className = "agent-status agent-status-idle";
           messagesEl.innerHTML = "";
           appendSystemMessage(messagesEl, "✅ Agent reconnecté");
+          // Context Engine : nouvelle session → réinjecter le contexte
+          state.contextInjected = false;
+          state.contextRefreshRequested = false;
+          state.memoryInjected = false;
           // Remettre le bouton en mode abort
           btn.textContent = "⏹️";
           btn.title = "Arrêter l'agent";
@@ -975,6 +1149,11 @@ export async function createAgentPi(container) {
         if (state.orchestrationEnabled) {
           // ── Désactivation ──
           state.orchestrationEnabled = false;
+          // Context Engine : l'orchestration a fait un new_agent_session ; à la
+          // désactivation on repasse en chat standard → réinjecter le contexte.
+          state.contextInjected = false;
+          state.contextRefreshRequested = false;
+          state.memoryInjected = false;
           orchBtn.classList.remove("active");
           orchBtn.title = "Mode Orchestration : architecte + codeur";
           state.orchestrationPlan = null;
@@ -1067,6 +1246,7 @@ export async function createAgentPi(container) {
         state.orchestrationRevising = false;
         state.orchestrationSubdividing = false;
         state.orchestrationSubdividingTaskId = null;
+        state.orchestrationExtractingMemory = null;
         state.orchestrationTaskStartTime = null;
         state.orchestrationResponseChars = 0;
         state.orchestrationConnectionError = false;
@@ -2156,6 +2336,9 @@ export async function createAgentPi(container) {
     // Capturer l'état des fichiers avant exécution (pour validation post-tâche, point A)
     st.orchestrationCurrentFileState = await captureFileState(nextTask, invoke, window._pilotProjectPath);
 
+    // ── Mémoire de projet (H3) : injecter PROJECT_MEMORY.md en tête du prompt de tâche ──
+    const memBlock = (st.projectMemoryEnabled !== false) ? (await buildMemoryBlock(window._pilotProjectPath)) : "";
+
     if (st.orchestrationEscalating) {
       // Escalade : l'orchestrateur va faire la tâche
       const switched = await switchToOrchestrator(st);
@@ -2169,7 +2352,7 @@ export async function createAgentPi(container) {
       const escalationPrompt = buildEscalationPrompt(nextTask, progress.task_attempts[nextTask.id], progress.last_error || '', previousSummaries, taskMetrics, st.orchestrationToolCallsInTask || [], st.orchestrationPlan?.global_directive);
       appendSystemMessage(messagesEl, `🧠 Escalade tâche ${nextTask.id}/${tasks.length} : ${nextTask.title} (orchestrateur)`);
       try {
-        await invoke("send_agent_prompt", { message: escalationPrompt });
+        await invoke("send_agent_prompt", { message: memBlock + escalationPrompt });
       } catch (e) {
         console.error("Erreur envoi escalade:", e);
         appendErrorMessage(messagesEl, `❌ Erreur envoi escalade : ${e}`);
@@ -2207,7 +2390,7 @@ export async function createAgentPi(container) {
       const label = attemptNumber > 1 ? `🔨 Tâche ${nextTask.id}/${tasks.length} (tentative ${attemptNumber}) : ${nextTask.title}` : `🔨 Tâche ${nextTask.id}/${tasks.length} : ${nextTask.title}`;
       appendSystemMessage(messagesEl, label);
       try {
-        await invoke("send_agent_prompt", { message: finalTaskPrompt });
+        await invoke("send_agent_prompt", { message: memBlock + finalTaskPrompt });
       } catch (e) {
         console.error("Erreur envoi tâche:", e);
         appendErrorMessage(messagesEl, `❌ Erreur envoi tâche : ${e}`);
@@ -2222,6 +2405,16 @@ export async function createAgentPi(container) {
   async function handleOrchestrationTimeout(st, messagesEl, statusEl) {
     if (!st.orchestrationRunning || st.orchestrationPaused) return;
     st.orchestrationTimeout = null;
+
+    // H3 : timeout pendant un tour d'extraction mémoire → abandonner l'extraction
+    // et reprendre le flux normal (non-bloquant).
+    if (st.orchestrationExtractingMemory) {
+      appendSystemMessage(messagesEl, `⏰ Timeout pendant l'extraction mémoire projet — abandon, reprise du plan.`);
+      try { await invoke("abort_agent"); } catch (_) {}
+      st.orchestrationExtractingMemory = null;
+      await executeNextTask(messagesEl, st, statusEl);
+      return;
+    }
 
     if (st.orchestrationRevising) {
       appendSystemMessage(messagesEl, `⏰ Timeout pendant la révision. On continue avec le plan actuel.`);
@@ -2514,6 +2707,28 @@ export async function createAgentPi(container) {
     const lastBubble = messagesEl.querySelector('.agent-bubble-assistant:last-child');
     const responseText = st.lastAssistantRawText || (lastBubble ? (lastBubble.textContent || '') : '');
 
+    // ── H3 : tour d'extraction mémoire post-tâche (tour dédié) ──
+    // L'agent a répondu au prompt d'extraction : appliquer d'éventuels blocs
+    // SEARCH/REPLACE/CREATE vers PROJECT_MEMORY.md, puis reprendre le flux normal.
+    if (st.orchestrationExtractingMemory) {
+      st.orchestrationExtractingMemory = null;
+      const sr = parseSearchReplaceBlocks(responseText);
+      if (sr.hasBlocks) {
+        const applyResult = await applySearchReplaceBlocks(sr.blocks, invoke, window._pilotProjectPath);
+        if (applyResult.ok && applyResult.changedFiles.length > 0) {
+          appendSystemMessage(messagesEl, `📝 Mémoire projet mise à jour : ${applyResult.changedFiles.join(", ")}`);
+          st.orchestrationCachedTree = null;
+        } else if (!applyResult.ok) {
+          appendSystemMessage(messagesEl, `⚠️ Mémoire projet : échec application — ${applyResult.errors.join("; ")}`);
+        }
+      } else {
+        appendSystemMessage(messagesEl, `📝 Mémoire projet : rien de nouveau à ajouter.`);
+      }
+      // Reprendre le flux normal vers la tâche suivante
+      await executeNextTask(messagesEl, st, statusEl);
+      return;
+    }
+
     // ── Vérification finale (après exécution de toutes les tâches) ──
     if (st.orchestrationFinalReview) {
       st.orchestrationFinalReview = false;
@@ -2606,6 +2821,7 @@ export async function createAgentPi(container) {
         st.orchestrationTasksSinceRevision = 0;
         st.orchestrationTasksInBatch = 0;
         st.orchestrationCachedTree = null;
+        st.orchestrationExtractingMemory = null;
         st.orchestrationFinalReviewCycles = 0;
         appendSystemMessage(messagesEl, `📝 Vérification finale : ${reviewPlan.length} nouvelle(s) tâche(s) détectée(s). Reprise par le codeur...`);
         try { await invoke("save_plan", { planJson: JSON.stringify(st.orchestrationPlan, null, 2) }); } catch (_) {}
@@ -3058,6 +3274,25 @@ export async function createAgentPi(container) {
       return;
     }
 
+    // ── H3 : extraction mémoire projet post-tâche (opt-in) ──
+    // Après une tâche réussie, demander au codeur d'extraire 1–3 faits appris
+    // et de les ajouter à PROJECT_MEMORY.md. Tour dédié : on renvoie un prompt et
+    // on attend l'agent_end suivant (branche early de handleOrchestrationAgentEnd).
+    if (st.projectMemoryAutoExtract && !st.orchestrationExtractingMemory && currentTask) {
+      st.orchestrationExtractingMemory = currentTaskId;
+      const extractPrompt = buildMemoryExtractPrompt(currentTask, responseText);
+      appendSystemMessage(messagesEl, `📝 Extraction mémoire projet (tâche ${currentTaskId})…`);
+      try {
+        await invoke("send_agent_prompt", { message: extractPrompt });
+        resetOrchestrationIdleTimer(st, messagesEl, statusEl);
+        return;
+      } catch (e) {
+        console.error("Erreur envoi extraction mémoire:", e);
+        st.orchestrationExtractingMemory = null;
+        // tomber sur executeNextTask ci-dessous
+      }
+    }
+
     console.log(`[handleOrchestrationAgentEnd] tâche ${progress.current_task} terminée, passage à executeNextTask`);
     await executeNextTask(messagesEl, st, statusEl);
   }
@@ -3066,6 +3301,9 @@ export async function createAgentPi(container) {
   try {
     const config = await invoke("get_config");
     state.orchestrationEnabled = config.orchestration_enabled || false;
+    // Mémoire projet (H3) : flags d'injection + extraction auto
+    state.projectMemoryEnabled = config.project_memory_enabled !== false;
+    state.projectMemoryAutoExtract = config.project_memory_auto_extract === true;
     if (config.orchestrator_provider) {
       state.orchestratorModel = `${config.orchestrator_provider}/${config.orchestrator_model_id}`;
     }
@@ -3110,8 +3348,22 @@ export async function createAgentPi(container) {
   // manuelle de l'onglet.
   const onRestartNeeded = async () => {
     try {
+      state.restarting = true;
+      appendSystemMessage(messagesEl, "🔄 Redémarrage de l'agent en cours…");
       await invoke("stop_agent_session").catch(() => {});
+      state.piDead = false;
       await invoke("start_agent_session");
+      // Attendre que pi soit prêt (poll get_agent_state ~10s max). Si pi meurt
+      // au démarrage, get_agent_state échoue vite (pipe closed) → message clair
+      // au lieu d'attendre 12-30s en silence puis « pipe closed » au model change.
+      const ready = await waitForPiReady(state, 10);
+      state.restarting = false;
+      if (!ready) {
+        appendErrorMessage(messagesEl, "❌ L'agent n'a pas redémarré (pi s'est arrêté ou ne répond pas). Vérifiez la console (process_exit / extension_error). Cliquez sur 🔄 pour réessayer.");
+        statusEl.textContent = "⚠️ Échec redémarrage";
+        statusEl.className = "agent-status agent-status-error";
+        return;
+      }
       try { await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) }); } catch (_) {}
       state.isStreaming = false;
       state.currentAssistantBlock = null;
@@ -3130,7 +3382,12 @@ export async function createAgentPi(container) {
       await loadModels(state);
       updateStats();
       loadCommands();
+      // Context Engine : reset (réinjecter au prochain prompt)
+      state.contextInjected = false;
+      state.contextRefreshRequested = false;
+      state.memoryInjected = false;
     } catch (e) {
+      state.restarting = false;
       console.error("Redémarrage agent:", e);
       appendErrorMessage(messagesEl, "❌ Échec redémarrage agent: " + e);
     }
@@ -3537,6 +3794,14 @@ async function checkDefaultModelReachable(st, messagesEl) {
 
 // ── Gestion des événements RPC ──
 
+// ── Diff Review (A4 V2) : helper module-level ──
+/** Chemin relatif au projet (pour l'affichage). */
+function toRelPath(abs) {
+  const base = (window._pilotProjectPath || "").replace(/[\\/]+$/, "");
+  if (base && abs && abs.startsWith(base)) return abs.slice(base.length).replace(/^[\\/]+/, "");
+  return abs;
+}
+
 async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn, orchFns) {
   const type = payload.type;
 
@@ -3736,6 +4001,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           state.orchestrationRevising = false;
           state.orchestrationSubdividing = false;
           state.orchestrationSubdividingTaskId = null;
+          state.orchestrationExtractingMemory = null;
           state.orchestrationTasksSinceRevision = 0;
           orchFns.renderOrchestrationPlan(messagesEl, state);
           appendSystemMessage(messagesEl, `📋 Plan reçu avec ${plan.length} tâches. Démarrage de l'exécution...`);
@@ -4268,7 +4534,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       break;
 
     case "extension_error":
-      appendErrorMessage(messagesEl, `⚠️ Erreur extension: ${payload.error || ""}`);
+      console.error("[agent-pi] extension_error:", payload);
+      appendErrorMessage(messagesEl, `⚠️ Erreur extension: ${payload.error || payload.message || JSON.stringify(payload)}`);
       break;
 
     case "extension_ui_request":
@@ -4284,7 +4551,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           updateStats();
         }
       }
-      handleExtensionUiRequest(payload, messagesEl);
+      handleExtensionUiRequest(payload, messagesEl, state);
       break;
 
     case "model_change":
@@ -4302,6 +4569,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // Erreur venant de stderr du processus pi (ex: ollama indisponible)
       const errText = (payload.text || "").trim();
       if (!errText) break;
+      console.error("[agent-pi] process_error (stderr):", errText);
       // Injecter dans la bulle assistant si on est en train de streamer,
       // sinon créer un bloc assistant dédié
       if (state.isStreaming && state.currentAssistantBlock) {
@@ -4315,6 +4583,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
 
     case "process_exit":
       state.isStreaming = false;
+      state.piDead = true;
+      console.error("[agent-pi] process_exit:", payload);
+      // Pendant un restart/reconnect, le handler de restart affiche déjà un
+      // message clair (et waitForPiReady baille sur piDead). Ne pas dupliquer.
+      if (state.restarting) break;
       statusEl.textContent = "⚠️ Déconnecté";
       statusEl.className = "agent-status agent-status-error";
       appendSystemMessage(messagesEl, "⚠️ Le processus pi s'est arrêté. Cliquez sur 🔄 pour reconnecter.");
@@ -4862,7 +5135,7 @@ async function applyPromptSelection() {
     if (window._pilotTabs) {
       const agentTab = window._pilotTabs.tabs.find((t) => t.mode === "agent");
       if (!agentTab) {
-        await window._pilotTabs.openFile("Agent Pi", "agent");
+        await window._pilotTabs.openFile(agentDisplayLabel(), "agent");
         await new Promise((r) => setTimeout(r, 500));
       } else {
         window._pilotTabs.switchTab(agentTab.id);
@@ -4904,7 +5177,159 @@ function findTemplatesNode(node) {
 
 // ── Gestion des dialogues d'extension ──
 
-async function handleExtensionUiRequest(payload, container) {
+/**
+ * Attend que pi soit prêt après un (re)démarrage : poll get_agent_state jusqu'à
+ * `maxSecs` secondes. Retourne true si pi répond, false sinon (pi mort/bloqué).
+ * Détecte vite un pi mort (pipe closed → get_agent_state échoue immédiatement)
+ * au lieu d'attendre le timeout complet.
+ */
+async function waitForPiReady(state, maxSecs) {
+  const deadline = Date.now() + maxSecs * 1000;
+  while (Date.now() < deadline) {
+    if (state.piDead) return false; // process_exit reçu pendant l'attente
+    try {
+      await invoke("get_agent_state");
+      return true;
+    } catch (_) {
+      // pi pas encore prêt ou mort → réessayer
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+/**
+ * Dialogues DOM pour les extension_ui_request (confirm/select/input).
+ * window.confirm / window.prompt sont inopérants dans WebView2 (Tauri 2) —
+ * utiliser des modales DOM garantit que la réponse repart toujours vers pi,
+ * sinon pi reste bloqué indéfiniment (→ timeout 30s → pipe closed).
+ */
+function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "agent-ext-dialog-overlay";
+    const box = document.createElement("div");
+    box.className = "agent-ext-dialog";
+    const titleEl = document.createElement("div");
+    titleEl.className = "agent-ext-dialog-title";
+    titleEl.textContent = title || "Pilot";
+    const body = document.createElement("div");
+    body.className = "agent-ext-dialog-body";
+    body.innerHTML = bodyHtml || "";
+    const actions = document.createElement("div");
+    actions.className = "agent-ext-dialog-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "agent-diff-btn agent-diff-btn-reject";
+    cancelBtn.textContent = cancelLabel || "Annuler";
+    const okBtn = document.createElement("button");
+    okBtn.className = "agent-diff-btn agent-diff-btn-accept";
+    okBtn.textContent = okLabel || "OK";
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    box.appendChild(titleEl);
+    box.appendChild(body);
+    box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const done = (val) => { overlay.remove(); resolve(val); };
+    okBtn.addEventListener("click", () => done(okValue === undefined ? true : okValue));
+    cancelBtn.addEventListener("click", () => done(okValue === undefined ? false : null));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(okValue === undefined ? false : null); });
+    // Focus initial
+    const focusable = body.querySelector("input, textarea, select");
+    if (focusable) setTimeout(() => focusable.focus(), 0);
+    else okBtn.focus();
+  });
+}
+
+/** Confirm yes/no → Promise<boolean> */
+function domConfirm(title, message) {
+  return _domDialog({
+    title,
+    bodyHtml: `<p style="margin:0;white-space:pre-wrap;word-break:break-word">${escapeHtmlText(message || "")}</p>`,
+    okLabel: "Oui",
+    cancelLabel: "Non",
+  });
+}
+
+/** Free-form input → Promise<string|null> (null = cancelled) */
+function domPrompt(title, placeholder) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "agent-ext-dialog-overlay";
+    const box = document.createElement("div");
+    box.className = "agent-ext-dialog";
+    const titleEl = document.createElement("div");
+    titleEl.className = "agent-ext-dialog-title";
+    titleEl.textContent = title || "Saisie";
+    const body = document.createElement("div");
+    body.className = "agent-ext-dialog-body";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = placeholder || "";
+    input.style.cssText = "width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-input);color:var(--text-primary);font-size:13px;box-sizing:border-box";
+    body.appendChild(input);
+    const actions = document.createElement("div");
+    actions.className = "agent-ext-dialog-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "agent-diff-btn agent-diff-btn-reject";
+    cancelBtn.textContent = "Annuler";
+    const okBtn = document.createElement("button");
+    okBtn.className = "agent-diff-btn agent-diff-btn-accept";
+    okBtn.textContent = "Valider";
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    box.appendChild(titleEl); box.appendChild(body); box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const done = (val) => { overlay.remove(); resolve(val); };
+    okBtn.addEventListener("click", () => done(input.value));
+    cancelBtn.addEventListener("click", () => done(null));
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") done(input.value); if (e.key === "Escape") done(null); });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(null); });
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
+/** Select from options → Promise<string|null> */
+function domSelect(title, options) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "agent-ext-dialog-overlay";
+    const box = document.createElement("div");
+    box.className = "agent-ext-dialog";
+    const titleEl = document.createElement("div");
+    titleEl.className = "agent-ext-dialog-title";
+    titleEl.textContent = title || "Choix";
+    const body = document.createElement("div");
+    body.className = "agent-ext-dialog-body";
+    const list = document.createElement("div");
+    list.style.cssText = "display:flex;flex-direction:column;gap:4px;max-height:300px;overflow:auto";
+    const done = (val) => { overlay.remove(); resolve(val); };
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.className = "agent-diff-btn";
+      btn.style.cssText = "justify-content:flex-start;text-align:left";
+      btn.textContent = String(opt);
+      btn.addEventListener("click", () => done(String(opt)));
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
+    const actions = document.createElement("div");
+    actions.className = "agent-ext-dialog-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "agent-diff-btn agent-diff-btn-reject";
+    cancelBtn.textContent = "Annuler";
+    cancelBtn.addEventListener("click", () => done(null));
+    actions.appendChild(cancelBtn);
+    box.appendChild(titleEl); box.appendChild(body); box.appendChild(actions);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(null); });
+  });
+}
+
+async function handleExtensionUiRequest(payload, container, state) {
   const { id, method } = payload;
 
   if (method === "notify") {
@@ -4921,7 +5346,17 @@ async function handleExtensionUiRequest(payload, container) {
 
   // Méthodes de dialogue : select, confirm, input, editor
   if (method === "confirm") {
-    const ok = confirm(`${payload.title || "Confirmation"}\n${payload.message || ""}`);
+    // ── Diff Review (A4 V2) : porte pré-écriture pilot-edit-gate ──
+    // L'extension pi envoie un confirm avec un message sentinel + JSON
+    // ({tool, path, before, after}). On intercepte pour afficher un diff riche
+    // AVANT l'écriture (pi est bloqué en attendant la réponse).
+    const SENTINEL = "PILOT_EDIT_GATE::";
+    const rawMsg = payload.message || "";
+    if (rawMsg.startsWith(SENTINEL)) {
+      await handleEditGateConfirm(id, rawMsg.slice(SENTINEL.length), container, state);
+      return;
+    }
+    const ok = await domConfirm(payload.title || "Confirmation", payload.message || "");
     await invoke("send_rpc_command", {
       command: {
         type: "extension_ui_response",
@@ -4932,7 +5367,7 @@ async function handleExtensionUiRequest(payload, container) {
     });
   } else if (method === "select") {
     const options = payload.options || [];
-    const choice = prompt(`${payload.title || "Choix"}\n${options.join("\n")}\n\nTapez votre choix:`);
+    const choice = await domSelect(payload.title || "Choix", options);
     if (choice) {
       await invoke("send_rpc_command", {
         command: { type: "extension_ui_response", id, value: choice },
@@ -4943,8 +5378,8 @@ async function handleExtensionUiRequest(payload, container) {
       });
     }
   } else if (method === "input") {
-    const value = prompt(payload.title || "Entrée", payload.placeholder || "");
-    if (value !== null) {
+    const value = await domPrompt(payload.title || "Entrée", payload.placeholder || "");
+    if (value !== null && value !== undefined) {
       await invoke("send_rpc_command", {
         command: { type: "extension_ui_response", id, value },
       });
@@ -4956,6 +5391,71 @@ async function handleExtensionUiRequest(payload, container) {
   } else if (method === "editor") {
     appendExtensionEditor(container, id, payload);
   }
+}
+
+// ── Diff Review (A4 V2) : porte pré-écriture (pilot-edit-gate) ──
+
+/**
+ * Traite une demande de confirmation de l'extension pilot-edit-gate.
+ * Décide : auto-approve (paramètre désactivé ou Mode Orchestration) OU affiche
+ * un diff Accepter/Refuser avant d'autoriser l'outil write/edit.
+ *
+ * @param {object} payload - extension_ui_request brut
+ * @param {string} id - id de la requête (pour la réponse)
+ * @param {string} jsonStr - payload JSON après le sentinel
+ * @param {HTMLElement} container - zone de chat où attacher le dialogue
+ */
+async function handleEditGateConfirm(id, jsonStr, container, state) {
+  let info;
+  try {
+    info = JSON.parse(jsonStr);
+  } catch (_) {
+    // Payload malformé : ne pas bloquer l'agent (auto-allow)
+    await invoke("send_rpc_command", {
+      command: { type: "extension_ui_response", id, confirmed: true },
+    });
+    return;
+  }
+
+  // Auto-approve si la porte est désactivée OU en Mode Orchestration (autonome).
+  const gateActive = state.confirmFileEdits && !state.orchestrationRunning;
+  if (!gateActive) {
+    await invoke("send_rpc_command", {
+      command: { type: "extension_ui_response", id, confirmed: true },
+    });
+    return;
+  }
+
+  const relPath = toRelPath(info.path || "");
+  const toolName = info.tool || "write";
+
+  // Attacher le dialogue à la bulle assistant courante (ou en créer une).
+  let attachTo = state.currentAssistantBlock;
+  if (!attachTo) {
+    attachTo = createAssistantBlock(container);
+    state.currentAssistantBlock = attachTo;
+  }
+  const target = getBubbleTarget(attachTo) || attachTo;
+
+  const respond = async (accepted) => {
+    try {
+      const { toastInfo } = await import("./toast.js");
+      toastInfo(accepted ? "✓ Modification acceptée : " + relPath : "✗ Modification refusée : " + relPath);
+    } catch (_) {}
+    await invoke("send_rpc_command", {
+      command: { type: "extension_ui_response", id, confirmed: !!accepted, cancelled: !accepted },
+    });
+  };
+
+  const dialog = renderEditGateDialog({
+    relPath,
+    toolName,
+    before: info.before,
+    after: info.after,
+    onDecision: respond,
+  });
+  target.appendChild(dialog);
+  scrollToBottom(container);
 }
 
 /**

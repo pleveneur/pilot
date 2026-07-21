@@ -28,7 +28,7 @@ pub struct RpcSession {
 /// Lance le processus `pi --mode rpc` et démarre le thread de lecture stdout.
 /// `pi_path` : chemin vers l'exécutable pi ("pi" si dans le PATH).
 /// `no_session` : si true, ajoute --no-session (pas de persistance).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>) -> Result<RpcSession, String> {
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -44,6 +44,13 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     if let Some(sp) = skill_path {
         if !sp.is_empty() {
             cmd.args(["--skill", sp]);
+        }
+    }
+    // Diff Review (A4 V2) : extension pilot-edit-gate (porte pré-écriture).
+    // Toujours chargée — l'auto-approve se décide côté Pilot (client RPC).
+    if let Some(ep) = extension_path {
+        if !ep.is_empty() {
+            cmd.args(["--extension", ep]);
         }
     }
     #[cfg(windows)]
@@ -124,9 +131,20 @@ pub fn send_command(session: &mut RpcSession, command: &Value) -> Result<(), Str
 
 /// Envoie une commande et attend la réponse (pour les commandes synchrones).
 /// Utilise un oneshot channel corrélé par l'`id` de la commande.
+/// `timeout_secs` : délai max d'attente (défaut 30s). Des commandes légères
+/// (get_available_models, get_state) utilisent un délai plus court pour ne pas
+/// bloquer l'UI 30s si pi est mort/bloqué juste après un redémarrage.
 pub fn send_command_sync(
     session: &mut RpcSession,
+    command: Value,
+) -> Result<Value, String> {
+    send_command_sync_timeout(session, command, 30)
+}
+
+pub fn send_command_sync_timeout(
+    session: &mut RpcSession,
     mut command: Value,
+    timeout_secs: u64,
 ) -> Result<Value, String> {
     // Générer un id unique si non fourni
     let id = format!("rpc-{}", uuid_simple());
@@ -140,9 +158,8 @@ pub fn send_command_sync(
 
     send_command(session, &command)?;
 
-    // Attendre la réponse (timeout 30s)
-    rx.recv_timeout(std::time::Duration::from_secs(30))
-        .map_err(|_| "Timeout ou canal fermé en attente de réponse".to_string())
+    rx.recv_timeout(std::time::Duration::from_secs(timeout_secs))
+        .map_err(|_| format!("Timeout ({}s) ou canal fermé en attente de réponse", timeout_secs))
 }
 
 /// Arrête proprement le processus pi

@@ -44,6 +44,7 @@
     <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal">🖥️</button>
     <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent">π</button>
     <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder">🧩</button>
+    <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)">🔍</button>
     <button id="btn-help" title="Aide sur Pilot (poser une question)">❓</button>
     <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer">🌐 <b id="remote-badge-count">0</b></span>
   </div>
@@ -152,7 +153,7 @@
       <h2>⚙️ Paramètres</h2>
       <div class="settings-grid">
 
-        <!-- Colonne 1 : Apparence + Éditeur -->
+        <!-- Colonne 1 : Apparence + Éditeur + Démarrage -->
         <div class="settings-column">
 
           <div class="settings-section">
@@ -186,95 +187,35 @@
             </div>
           </div>
 
-          <div class="settings-section" id="settings-remote-section">
-            <h3 class="settings-section-title">🌐 Accès distant (mode remote)</h3>
+          <div class="settings-section">
+            <h3 class="settings-section-title">🚀 Démarrage</h3>
+            <div class="setting-row">
+              <label for="setting-command">Commande pour lancer l'agent :</label>
+              <input type="text" id="setting-command" placeholder="ex: python main.py" />
+            </div>
             <div class="setting-row setting-row-checkbox">
-              <input type="checkbox" id="setting-web-enabled" />
-              <label for="setting-web-enabled">Activer le serveur web distant (supervision navigateur)</label>
+              <input type="checkbox" id="setting-auto-load" />
+              <label for="setting-auto-load">Charger le dernier projet au démarrage</label>
             </div>
-            <div class="setting-row setting-row-indent">
-              <label for="setting-web-bind">Adresse d'écoute :</label>
-              <input type="text" id="setting-web-bind" placeholder="127.0.0.1" />
-              <small>127.0.0.1 = local uniquement · IP Tailscale (100.x) pour accès distant via mesh</small>
-            </div>
-            <div class="setting-row setting-row-indent">
-              <label for="setting-web-port">Port :</label>
-              <input type="number" id="setting-web-port" min="1" max="65535" value="8787" />
-            </div>
-            <div class="setting-row setting-row-indent setting-row-checkbox">
-              <input type="checkbox" id="setting-web-readonly" />
-              <label for="setting-web-readonly">Lecture seule (interdit prompt / changement de projet depuis le web)</label>
-            </div>
-            <div class="setting-row setting-row-indent">
-              <label for="setting-web-ttl">Durée de session (heures) :</label>
-              <input type="number" id="setting-web-ttl" min="1" max="8760" value="168" />
-            </div>
-            <div class="setting-row setting-row-indent">
-              <label for="setting-web-roots">Racines autorisées au parcours (une par ligne ; vide = parents des projets récents) :</label>
-              <textarea id="setting-web-roots" rows="3" placeholder="C:\Users\…\Projets
-/home/user/projets"></textarea>
-            </div>
-            <div class="setting-row setting-row-indent setting-row-checkbox">
-              <input type="checkbox" id="setting-web-keepalive" />
-              <label for="setting-web-keepalive">Garder en tray après fermeture de la fenêtre (serveur web + agent pi restent actifs en arrière-plan)</label>
-            </div>
-            <hr class="settings-sep" />
             <div class="setting-row setting-row-checkbox">
-              <input type="checkbox" id="setting-web-tailscale-serve" />
-              <label for="setting-web-tailscale-serve">Exposer en HTTPS automatique (Tailscale Serve) — plus aucune commande à taper</label>
-              <small class="muted">Configure Tailscale Serve (HTTPS 443 → 127.0.0.1:port) et resync au changement de port. Exige « Adresse d'écoute » = 127.0.0.1.</small>
-            </div>
-            <div class="setting-row setting-row-indent" id="tailscale-block">
-              <div class="setting-row">
-                <span id="tailscale-badge" class="tailscale-badge muted">Tailscale : détection…</span>
-              </div>
-              <div class="setting-row">
-                <label for="tailscale-url">Adresse d'accès distant :</label>
-                <input type="text" id="tailscale-url" readonly placeholder="https://<hostname>.ts.net/" />
-                <button id="btn-tailscale-copy" type="button" class="web-btn">📋 Copier</button>
-              </div>
-              <div class="setting-row tailscale-qr-row">
-                <div id="tailscale-qrcode" class="tailscale-qrcode" title="Scannez avec le téléphone pour ouvrir l'accès distant"></div>
-                <small id="tailscale-serve-status" class="muted">Statut serve : —</small>
-              </div>
-              <div class="setting-row">
-                <button id="btn-tailscale-reconfigure" type="button" class="web-btn">🔄 Reconfigurer maintenant</button>
-              </div>
-            </div>
-            <hr class="settings-sep" />
-            <div class="setting-row">
-              <label>Mot de passe distant :</label>
-              <span id="web-pw-status" class="web-pw-status muted">—</span>
-              <button id="btn-web-set-password" type="button" class="web-btn">Définir / changer</button>
-              <button id="btn-web-clear-password" type="button" class="web-btn web-btn-danger">Effacer</button>
-            </div>
-            <div class="setting-row">
-              <label>Clients connectés :</label>
-              <span id="web-active-count" class="web-pw-status">0</span>
-              <button id="btn-web-kick" type="button" class="web-btn web-btn-danger" disabled>Déconnecter tous</button>
-            </div>
-            <div class="setting-row">
-              <label>Journal d'audit distant :</label>
-              <button id="btn-web-audit" type="button" class="web-btn">📜 Ouvrir le journal</button>
-            </div>
-            <div class="setting-row">
-              <small class="muted">Après un changement d'activation / adresse / port, cliquez « Enregistrer » puis le serveur recharge à chaud automatiquement.</small>
+              <input type="checkbox" id="setting-auto-run" />
+              <label for="setting-auto-run">Lancer la commande de l'agent au démarrage</label>
             </div>
           </div>
 
         </div>
 
-        <!-- Colonne 2 : Agent Pi -->
+        <!-- Colonne 2 : Agent Pi ou PLh -->
         <div class="settings-column">
 
           <div class="settings-section">
-            <h3 class="settings-section-title">🤖 Agent Pi</h3>
+            <h3 class="settings-section-title">🤖 Agent Pi ou PLh</h3>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-rpc-agent" />
-              <label for="setting-rpc-agent">Gestion RPC de l'agent pi</label>
+              <label for="setting-rpc-agent">Gestion RPC de l'agent pi ou plh</label>
             </div>
             <div class="setting-row setting-row-indent">
-              <label for="setting-rpc-path">Chemin de l'exécutable pi :</label>
+              <label for="setting-rpc-path">Chemin de l'exécutable pi ou plh :</label>
               <input type="text" id="setting-rpc-path" placeholder="pi (ou chemin complet)" />
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
@@ -293,17 +234,41 @@
               <input type="checkbox" id="setting-show-tools" />
               <label for="setting-show-tools">Afficher les tools utilisés</label>
             </div>
-            <div class="setting-row">
-              <label for="setting-command">Commande pour lancer l'agent :</label>
-              <input type="text" id="setting-command" placeholder="ex: python main.py" />
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-context-engine" />
+              <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session">📑 Context Engine (auto-contexte agent)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-context-budget" title="Budget de tokens pour le contexte auto-injecté">Budget contexte (tokens) :</label>
+              <input type="number" id="setting-context-budget" min="1000" max="32000" step="500" value="8000" />
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-context-imports" />
+              <label for="setting-context-imports">Inclure les imports du fichier actif</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-context-specs" />
+              <label for="setting-context-specs">Inclure les specs référencées dans AGENTS.md</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-context-recents" />
+              <label for="setting-context-recents">Inclure les fichiers récemment ouverts</label>
             </div>
             <div class="setting-row setting-row-checkbox">
-              <input type="checkbox" id="setting-auto-load" />
-              <label for="setting-auto-load">Charger le dernier projet au démarrage</label>
+              <input type="checkbox" id="setting-confirm-file-edits" />
+              <label for="setting-confirm-file-edits" title="Avant chaque write/edit de l'agent, afficher un diff et demander Accepter/Refuser. Désactivé par défaut (l'agent écrit librement).">Porte pré-écriture : confirmer les modifications de fichiers</label>
+              <div id="confirm-edits-note" style="display:none;font-size:11px;color:var(--danger);margin-top:2px;padding-left:24px;">
+                ⚠️ Non supporté par ce backend (plh n'accepte pas <code>--extension</code>). Option désactivée.
+              </div>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-project-memory-enabled" />
+              <label for="setting-project-memory-enabled" title="Injecter PROJECT_MEMORY.md (conventions, pièges, décisions) dans le contexte de l'agent avant chaque tâche (orchestration) et avant le 1er prompt (chat).">Mémoire de projet : injecter PROJECT_MEMORY.md dans le contexte agent</label>
             </div>
             <div class="setting-row setting-row-checkbox">
-              <input type="checkbox" id="setting-auto-run" />
-              <label for="setting-auto-run">Lancer la commande de l'agent au démarrage</label>
+              <input type="checkbox" id="setting-project-memory-auto-extract" />
+              <label for="setting-project-memory-auto-extract" title="Après chaque tâche d'orchestration réussie, l'agent extrait 1–3 faits appris et les ajoute à PROJECT_MEMORY.md (1 tour LLM supplémentaire par tâche).">Extraction auto après chaque tâche d'orchestration</label>
             </div>
           </div>
 
@@ -375,6 +340,87 @@
 
         </div>
 
+        <!-- Colonne 4 : Accès distant (mode remote) -->
+        <div class="settings-column">
+
+          <div class="settings-section" id="settings-remote-section">
+            <h3 class="settings-section-title">🌐 Accès distant (mode remote)</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-web-enabled" />
+              <label for="setting-web-enabled">Activer le serveur web distant (supervision navigateur)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-bind">Adresse d'écoute :</label>
+              <input type="text" id="setting-web-bind" placeholder="127.0.0.1" />
+              <small>127.0.0.1 = local uniquement · IP Tailscale (100.x) pour accès distant via mesh</small>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-port">Port :</label>
+              <input type="number" id="setting-web-port" min="1" max="65535" value="8787" />
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-web-readonly" />
+              <label for="setting-web-readonly">Lecture seule (interdit prompt / changement de projet depuis le web)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-ttl">Durée de session (heures) :</label>
+              <input type="number" id="setting-web-ttl" min="1" max="8760" value="168" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-web-roots">Racines autorisées au parcours (une par ligne ; vide = parents des projets récents) :</label>
+              <textarea id="setting-web-roots" rows="3" placeholder="C:\Users\…\Projets
+/home/user/projets"></textarea>
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-web-keepalive" />
+              <label for="setting-web-keepalive">Garder en tray après fermeture de la fenêtre (serveur web + agent pi ou plh restent actifs en arrière-plan)</label>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-web-tailscale-serve" />
+              <label for="setting-web-tailscale-serve">Exposer en HTTPS automatique (Tailscale Serve) — plus aucune commande à taper</label>
+              <small class="muted">Configure Tailscale Serve (HTTPS 443 → 127.0.0.1:port) et resync au changement de port. Exige « Adresse d'écoute » = 127.0.0.1.</small>
+            </div>
+            <div class="setting-row setting-row-indent" id="tailscale-block">
+              <div class="setting-row">
+                <span id="tailscale-badge" class="tailscale-badge muted">Tailscale : détection…</span>
+              </div>
+              <div class="setting-row">
+                <label for="tailscale-url">Adresse d'accès distant :</label>
+                <input type="text" id="tailscale-url" readonly placeholder="https://<hostname>.ts.net/" />
+                <button id="btn-tailscale-copy" type="button" class="web-btn">📋 Copier</button>
+              </div>
+              <div class="setting-row tailscale-qr-row">
+                <div id="tailscale-qrcode" class="tailscale-qrcode" title="Scannez avec le téléphone pour ouvrir l'accès distant"></div>
+                <small id="tailscale-serve-status" class="muted">Statut serve : —</small>
+              </div>
+              <div class="setting-row">
+                <button id="btn-tailscale-reconfigure" type="button" class="web-btn">🔄 Reconfigurer maintenant</button>
+              </div>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row">
+              <label>Mot de passe distant :</label>
+              <span id="web-pw-status" class="web-pw-status muted">—</span>
+              <button id="btn-web-set-password" type="button" class="web-btn">Définir / changer</button>
+              <button id="btn-web-clear-password" type="button" class="web-btn web-btn-danger">Effacer</button>
+            </div>
+            <div class="setting-row">
+              <label>Clients connectés :</label>
+              <span id="web-active-count" class="web-pw-status">0</span>
+              <button id="btn-web-kick" type="button" class="web-btn web-btn-danger" disabled>Déconnecter tous</button>
+            </div>
+            <div class="setting-row">
+              <label>Journal d'audit distant :</label>
+              <button id="btn-web-audit" type="button" class="web-btn">📜 Ouvrir le journal</button>
+            </div>
+            <div class="setting-row">
+              <small class="muted">Après un changement d'activation / adresse / port, cliquez « Enregistrer » puis le serveur recharge à chaud automatiquement.</small>
+            </div>
+          </div>
+
+        </div>
+
       </div>
 
       <div class="modal-actions">
@@ -392,6 +438,7 @@
     <button id="ctx-open-browser">🌐 Ouvrir dans le navigateur</button>
     <button id="ctx-send-agent">📤 Envoyer à l'agent Pi</button>
     <button id="ctx-add-prompt-builder">🧩 Ajouter au Prompt Builder</button>
+    <button id="ctx-git-diff">🔖 Voir le diff Git</button>
     <button id="ctx-favorite">⭐ Ajouter aux favoris</button>
     <button id="ctx-create-file">📄 Créer un fichier</button>
     <button id="ctx-create-folder">📁 Créer un dossier</button>

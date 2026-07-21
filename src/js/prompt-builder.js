@@ -311,7 +311,8 @@ export async function createPromptBuilder(container, sidebar) {
 
     try {
       // Ouvrir l'onglet Agent Pi
-      await sidebar.tabs.openFile("Agent Pi", "agent");
+      const { agentDisplayLabel } = await import("./backend-info.js");
+      await sidebar.tabs.openFile(agentDisplayLabel(), "agent");
       // Attendre un peu que l'onglet s'ouvre
       await new Promise((resolve) => setTimeout(resolve, 500));
       // Envoyer le prompt

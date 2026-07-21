@@ -10,7 +10,9 @@ import { createImageViewer } from "./image-viewer.js";
 import { createCsvPreview } from "./csv-preview.js";
 import { createTerminal, killTerminal } from "./terminal.js";
 import { createAgentPi } from "./agent-pi.js";
+import { agentDisplayLabel, getPiHealthSync, checkPiHealth } from "./backend-info.js";
 import { createHelp } from "./help.js";
+import { createReview } from "./review.js";
 import { scheduleOutlineUpdate } from "./outline.js";
 import { toastError } from "./toast.js";
 import { createPromptBuilder } from "./prompt-builder.js";
@@ -100,6 +102,26 @@ class TabsManager {
         this._applyWordWrap();
       }
     });
+
+    // Renommer l'onglet agent (et la barre de statut) quand le backend change
+    // (pi ↔ plh), car la sonde peut terminer après l'ouverture de l'onglet.
+    window.addEventListener("pilot-backend-changed", () => {
+      const agentTab = this.tabs.find((t) => t.mode === "agent");
+      if (!agentTab) return;
+      const newLabel = agentDisplayLabel();
+      if (agentTab.name === newLabel) return;
+      agentTab.name = newLabel;
+      const btn = this.tabBar.querySelector(`[data-tab-id="${agentTab.id}"]`);
+      if (btn) {
+        const nameSpan = btn.querySelector(".tab-name");
+        if (nameSpan) nameSpan.textContent = `π ${newLabel} (RPC)`;
+      }
+      // Mettre à jour la barre de statut si l'onglet agent est actif.
+      const active = this.getActiveTab();
+      if (active && active.mode === "agent") {
+        statusFiletype.textContent = `${newLabel} (RPC)`;
+      }
+    });
   }
 
   /**
@@ -111,13 +133,19 @@ class TabsManager {
   async openFile(path, mode = "edit", runDefault = false) {
     // Onglet Agent Pi (RPC)
     if (mode === "agent") {
-      await this._openAgent(path || "Agent Pi", runDefault);
+      await this._openAgent(path || agentDisplayLabel(), runDefault);
       return;
     }
 
     // Onglet Aide (❓) — spec_help.md : chat LLM sur le handbook.
     if (mode === "help") {
       await this._openHelp(path || "Aide");
+      return;
+    }
+
+    // Onglet Review (🔍) — spec_review.md : revue de code assistée (H5).
+    if (mode === "review") {
+      await this._openReview(path || "Review");
       return;
     }
 
@@ -251,7 +279,7 @@ class TabsManager {
     }
 
     const id = ++tabIdCounter;
-    const tab = new Tab(id, "", label || "Agent Pi", "agent");
+    const tab = new Tab(id, "", label || agentDisplayLabel(), "agent");
 
     tab.wrapper = document.createElement("div");
     tab.wrapper.className = "editor-wrapper";
@@ -262,8 +290,38 @@ class TabsManager {
     this._renderTabButton(tab);
     this.switchTab(id);
 
+    // ── E4 : health check de l'agent avant de tenter start_agent_session ──
+    // Si l'exécutable configuré (pi/plh) est absent ou ne répond pas, on affiche
+    // un écran guidé (bouton « Ouvrir les paramètres ») au lieu de lancer une
+    // session RPC qui planterait silencieusement.
+    let health = getPiHealthSync();
+    if (!health) health = await checkPiHealth();
+    if (health && !health.ok) {
+      const reason = health.error === "no_path"
+        ? "Aucun chemin d'exécutable n'est configuré."
+        : health.error === "not_executable"
+          ? `L'exécutable « ${health.path} » est introuvable ou injoignable.`
+          : health.error === "probe_failed"
+            ? "La sonde du backend a échoué."
+            : "Raison inconnue.";
+      tab.wrapper.style.display = "flex";
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;color:var(--text-color);">
+          <div style="font-size:48px;margin-bottom:16px;opacity:.5;">π</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">${agentDisplayLabel()} indisponible</div>
+          <div style="font-size:13px;max-width:420px;margin-bottom:18px;opacity:.8;">${reason}</div>
+          <button id="pi-health-open-settings" style="padding:8px 16px;border:1px solid var(--border-color);background:var(--bg-color);color:var(--text-color);border-radius:6px;cursor:pointer;">⚙️ Ouvrir les paramètres</button>
+          <div style="font-size:11px;margin-top:14px;opacity:.5;">Une fois le chemin configuré et enregistré, rouvre cet onglet.</div>
+        </div>`;
+      const btn = tab.wrapper.querySelector("#pi-health-open-settings");
+      if (btn) btn.addEventListener("click", () => {
+        window.dispatchEvent(new CustomEvent("pilot-open-settings"));
+      });
+      return;
+    }
+
     // Lancer la session RPC
-    showLoading("Démarrage de l'agent Pi…");
+    showLoading(`Démarrage de ${agentDisplayLabel()}…`);
     try {
       await invoke("start_agent_session");
 
@@ -279,7 +337,7 @@ class TabsManager {
       tab.wrapper.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">π</div>
-          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Agent Pi</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">${agentDisplayLabel()}</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>
       `;
@@ -322,6 +380,44 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">❓</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Aide</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Review (🔍) — revue de code assistée (H5, spec_review.md).
+   * Chat LLM cadré sur le diff Git (process pi temporaire via ask_review).
+   */
+  async _openReview(label = "Review") {
+    const existing = this.tabs.find((t) => t.mode === "review");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "review");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper review-wrapper help-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const result = createReview(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenReview = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Review:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🔍</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Review</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -710,6 +806,11 @@ class TabsManager {
       tab.unlistenHelp();
       tab.unlistenHelp = null;
     }
+    // Nettoyage onglet Review (🔍) — spec_review.md (H5)
+    if (tab.mode === "review" && tab.unlistenReview) {
+      tab.unlistenReview();
+      tab.unlistenReview = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -782,6 +883,11 @@ class TabsManager {
     if (tab.mode === "help" && tab.unlistenHelp) {
       tab.unlistenHelp();
       tab.unlistenHelp = null;
+    }
+    // Nettoyage onglet Review (🔍) — spec_review.md (H5)
+    if (tab.mode === "review" && tab.unlistenReview) {
+      tab.unlistenReview();
+      tab.unlistenReview = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -947,7 +1053,7 @@ class TabsManager {
       // Encodage et EOL
       this._updateFileInfo(tab);
     } else if (tab && tab.mode === "agent") {
-      statusFiletype.textContent = 'Agent Pi (RPC)';
+      statusFiletype.textContent = `${agentDisplayLabel()} (RPC)`;
       statusCursor.textContent = '';
       statusStats.textContent = '';
       statusEncoding.textContent = '';
@@ -1668,7 +1774,7 @@ class TabsManager {
   _startTabRename(btn, tab, nameSpan) {
     // Les onglets sans fichier (agent, aide, terminal, prompt-builder) ne sont
     // pas renommables : pas de path sur disque → rename_file_or_dir échouerait.
-    if (["agent", "help", "terminal", "prompt-builder"].includes(tab.mode)) return;
+    if (["agent", "help", "review", "terminal", "prompt-builder"].includes(tab.mode)) return;
     const oldName = tab.name;
     const oldPath = tab.path;
     const originalHTML = nameSpan.innerHTML;

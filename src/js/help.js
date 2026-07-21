@@ -13,6 +13,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { renderMarkdown } from "./preview.js";
+import { agentDisplayLabel } from "./backend-info.js";
 
 /**
  * Construit l'UI de l'onglet Aide dans `container`.
@@ -52,7 +53,7 @@ export function createHelp(container) {
   };
 
   // Message d'accueil (pas de suggestions / FAQ — choix utilisateur).
-  appendAssistant(messagesEl, "Bonjour 👋 Je suis l'assistant d'aide de **Pilot**. Pose-moi une question sur l'utilisation ou le paramétrage de l'éditeur (raccourcis, agent Pi, accès distant, dictée vocale, PDF, etc.) et je répondrai à partir de la documentation.");
+  appendAssistant(messagesEl, `Bonjour 👋 Je suis l'assistant d'aide de **Pilot**. Pose-moi une question sur l'utilisation ou le paramétrage de l'éditeur (raccourcis, ${agentDisplayLabel()}, accès distant, dictée vocale, PDF, etc.) et je répondrai à partir de la documentation.`);
 
   // ── Initialisation du sélecteur de modèle ──
   initModelSelect(modelSelect, state).catch((e) => {
