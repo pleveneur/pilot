@@ -12,7 +12,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### A. Barre Latérale
 
 - **Sélecteur de projet** : bouton "Projets" avec dropdown (📁 Nouveau + 10 récents). Dossier = "Projet de l'Agent IA".
-- **Arborescence** : tree view sans dossier racine, flèches ▶/▼, mise à jour temps réel (notify), drag & drop externe.
+- **Arborescence** : tree view sans dossier racine, flèches ▶/▼, mise à jour temps réel (notify). Les dossiers lourds/non pertinents (`node_modules`, `.git`, `target`, `dist`, `build`, `vendor`, `bundle`, caches IDE/CI…) sont ignorés à la lecture **et** par le watcher (source unique `IGNORED_DIRS` dans `lib.rs`) pour éviter l'explosion mémoire sur les gros projets. Drag & drop externe.
 - **Filtre** : champ texte pour filtrer par nom, `Ctrl+P` pour focus.
 - **Favoris** : section « ⭐ Favoris » en haut de l'arborescence, collapsible. Clic droit → Ajouter/Retirer des favoris. `Ctrl+Shift+B` pour le fichier actif. Persistance dans la config.
 - **Menu contextuel** :

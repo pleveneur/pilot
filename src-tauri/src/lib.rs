@@ -22,6 +22,28 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+/// Dossiers systématiquement ignorés à la lecture de l'arborescence projet et
+/// par le file watcher. Ces dossiers (dépendances, build, VCS, caches) peuvent
+/// contenir des dizaines de milliers de fichiers ; les inclure fait exploser
+/// la mémoire du render WebView (DOM de l'arbre + re-render en boucle via le
+/// watcher). Source unique de vérité partagée par `build_tree`, `start_watching`
+/// et `walk_dir` (recherche globale).
+const IGNORED_DIRS: &[&str] = &[
+    "node_modules", ".git", ".svn", "target", "dist", "build", "__pycache__",
+    ".next", ".nuxt", ".cache", ".vs", "vendor", "bundle",
+];
+
+/// Renvoie `true` si l'un des composants du chemin est un dossier ignoré
+/// (voir `IGNORED_DIRS`). Utilisé pour filtrer les events du watcher.
+fn path_has_ignored_component(p: &std::path::Path) -> bool {
+    p.components().any(|c| match c {
+        std::path::Component::Normal(name) => {
+            IGNORED_DIRS.contains(&name.to_string_lossy().as_ref())
+        }
+        _ => false,
+    })
+}
+
 mod help;
 mod review;
 mod rpc_manager;
@@ -343,6 +365,15 @@ pub(crate) fn build_tree(path: &std::path::Path) -> Result<FileNode, String> {
             let entry = entry.map_err(|e| format!("Erreur entrée: {}", e))?;
             let child_path = entry.path();
             if child_path.is_dir() {
+                // Ignorer les dossiers lourds/non pertinents (node_modules,
+                // .git, target, …) : on ne les affiche pas ET on ne descend
+                // pas dedans — sinon l'arbre sérialisé et le DOM frontal
+                // explosent en mémoire sur les gros projets.
+                if let Some(name) = child_path.file_name() {
+                    if IGNORED_DIRS.contains(&name.to_string_lossy().as_ref()) {
+                        continue;
+                    }
+                }
                 dirs.push(child_path);
             } else {
                 files.push(child_path);
@@ -391,8 +422,15 @@ fn start_watching(app: &AppHandle, path: &str, state: &State<AppState>) -> Resul
         .with_poll_interval(std::time::Duration::from_secs(2));
 
     let mut watcher = notify::PollWatcher::new(
-        move |res| {
+        move |res: Result<notify::Event, _>| {
             if let Ok(event) = res {
+                // Filtrer les events touchant un dossier ignoré (node_modules,
+                // .git, target, …) pour éviter de déclencher en boucle des
+                // rebuilds de l'arbre côté frontend (ces dossiers changent
+                // constamment et contiennent des milliers de fichiers).
+                if event.paths.iter().all(|p| path_has_ignored_component(p)) {
+                    return;
+                }
                 tx.send(event).ok();
             }
         },
@@ -2119,11 +2157,9 @@ fn search_in_files(
             .collect()
     };
 
-    // Dossiers/fichiers à ignorer
-    let ignore_dirs = [
-        "node_modules", ".git", ".svn", "target", "dist", "build", "__pycache__",
-        ".next", ".nuxt", ".cache", ".vs", "vendor", "bundle",
-    ];
+    // Dossiers/fichiers à ignorer (source unique : IGNORED_DIRS, partagée avec
+    // build_tree et le watcher pour rester cohérent).
+    let ignore_dirs: &[&str] = IGNORED_DIRS;
     let ignore_exts = [
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico",
         ".pdf", ".zip", ".tar", ".gz", ".rar", ".7z", ".woff", ".woff2",
