@@ -10,50 +10,146 @@ import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { restoreTabs, saveTabSession } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
+import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
 import { toastError, toastSuccess, toastInfo } from "./toast.js";
 
-// Mapping extension → emoji for file type icons
+// Mapping extension → Lucide icon name (kebab-case) for file type icons.
+// Rendu via <i data-lucide="..."> dans l'arbre (cf. icons.js / refreshIcons).
 const FILE_ICONS = {
-  // Markdown & docs
-  '.md': '📝', '.mdx': '📝', '.markdown': '📝',
-  // Web
-  '.html': '🌐', '.htm': '🌐', '.css': '🎨', '.js': '🟨', '.mjs': '🟨',
-  '.ts': '🔷', '.jsx': '⚛️', '.tsx': '⚛️', '.vue': '💚', '.svelte': '🧡',
-  // Data
-  '.json': '📋', '.yaml': '📋', '.yml': '📋', '.toml': '⚙️', '.xml': '📋',
-  '.csv': '📊', '.tsv': '📊',
-  // Scripts
-  '.py': '🐍', '.rb': '💎', '.php': '🐘', '.sh': '💻', '.bash': '💻',
-  '.ps1': '💻', '.bat': '💻', '.cmd': '💻',
-  // Rust / systems
-  '.rs': '🦀', '.c': '⚙️', '.cpp': '⚙️', '.h': '⚙️', '.hpp': '⚙️',
-  '.go': '🔵', '.java': '☕', '.kt': '🟪', '.swift': '🕊️',
-  // Config
-  '.gitignore': '⚙️', '.env': '🔒', '.dockerignore': '🐳',
+  // Markdown & prose
+  '.md': 'file-text', '.mdx': 'file-text', '.markdown': 'file-text',
+  '.txt': 'file-text', '.rtf': 'file-text',
+  // PDF & office docs
+  '.pdf': 'file-text',
+  '.doc': 'file-text', '.docx': 'file-text', '.odt': 'file-text',
+  '.ppt': 'file-text', '.pptx': 'file-text', '.odp': 'file-text',
+  '.xls': 'file-spreadsheet', '.xlsx': 'file-spreadsheet', '.ods': 'file-spreadsheet',
+  '.csv': 'file-spreadsheet', '.tsv': 'file-spreadsheet',
+  // Web markup
+  '.html': 'globe', '.htm': 'globe', '.xhtml': 'globe',
+  // Styles / design
+  '.css': 'palette', '.scss': 'palette', '.sass': 'palette', '.less': 'palette', '.styl': 'palette', '.pcss': 'palette',
+  // JS / TS family
+  '.js': 'file-code', '.mjs': 'file-code', '.cjs': 'file-code', '.jsx': 'file-code',
+  '.ts': 'file-code-2', '.tsx': 'file-code-2', '.mts': 'file-code-2', '.cts': 'file-code-2',
+  // Web frameworks
+  '.vue': 'file-code', '.svelte': 'file-code', '.astro': 'file-code',
+  // General-purpose programming languages (Lucide has no brand logos)
+  '.py': 'file-code', '.pyw': 'file-code', '.pyi': 'file-code',
+  '.rb': 'file-code', '.php': 'file-code', '.go': 'file-code', '.java': 'file-code',
+  '.kt': 'file-code', '.kts': 'file-code', '.swift': 'file-code',
+  '.c': 'file-code', '.cpp': 'file-code', '.cc': 'file-code', '.cxx': 'file-code',
+  '.h': 'file-code', '.hpp': 'file-code', '.hh': 'file-code', '.rs': 'file-code',
+  '.lua': 'file-code', '.r': 'file-code', '.dart': 'file-code', '.scala': 'file-code', '.clj': 'file-code',
+  // Shell / terminal scripts
+  '.sh': 'file-terminal', '.bash': 'file-terminal', '.zsh': 'file-terminal',
+  '.fish': 'file-terminal', '.ps1': 'file-terminal', '.psm1': 'file-terminal',
+  '.bat': 'file-terminal', '.cmd': 'file-terminal',
+  // Structured data / config
+  '.json': 'file-json', '.jsonc': 'file-json', '.json5': 'file-json',
+  '.yaml': 'braces', '.yml': 'braces',
+  '.toml': 'settings', '.ini': 'settings', '.cfg': 'settings', '.conf': 'settings', '.properties': 'settings',
+  '.xml': 'file-code',
+  // Git / tooling config (dotfiles with a single leading point)
+  '.gitignore': 'file-cog', '.gitattributes': 'file-cog', '.gitmodules': 'file-cog', '.gitconfig': 'settings',
+  '.editorconfig': 'settings',
+  '.npmrc': 'settings', '.prettierrc': 'settings', '.eslintrc': 'settings',
+  '.babelrc': 'settings', '.nvmrc': 'settings', '.rustfmt': 'settings',
+  '.dockerignore': 'box',
+  '.htaccess': 'file-cog',
+  // Secrets / keys / certs
+  '.env': 'file-key',
+  '.pem': 'file-key', '.key': 'file-key', '.secret': 'file-key',
+  '.p12': 'file-key', '.pfx': 'file-key', '.crt': 'file-key', '.cer': 'file-key', '.pub': 'file-key',
   // Images
-  '.png': '🖼️', '.jpg': '🖼️', '.jpeg': '🖼️', '.gif': '🖼️', '.svg': '🖼️',
-  '.webp': '🖼️', '.bmp': '🖼️', '.ico': '🖼️',
-  // PDF & docs
-  '.pdf': '📕', '.doc': '📘', '.docx': '📘', '.xls': '📗', '.xlsx': '📗',
-  '.ppt': '📙', '.pptx': '📙', '.txt': '📄',
+  '.png': 'file-image', '.jpg': 'file-image', '.jpeg': 'file-image', '.gif': 'file-image',
+  '.webp': 'file-image', '.bmp': 'file-image', '.ico': 'file-image',
+  '.tif': 'file-image', '.tiff': 'file-image', '.avif': 'file-image',
+  '.svg': 'file-image',  // vector but rendered as image
+  // Audio
+  '.mp3': 'file-audio', '.wav': 'file-audio', '.ogg': 'file-audio', '.flac': 'file-audio',
+  '.aac': 'file-audio', '.m4a': 'file-audio', '.opus': 'file-audio', '.wma': 'file-audio',
+  // Video
+  '.mp4': 'file-video', '.mkv': 'file-video', '.webm': 'file-video', '.mov': 'file-video',
+  '.avi': 'file-video', '.m4v': 'file-video', '.wmv': 'file-video',
   // Archives
-  '.zip': '📦', '.tar': '📦', '.gz': '📦', '.rar': '📦', '.7z': '📦',
-  // Others
-  '.lock': '🔒', '.log': '📜',
+  '.zip': 'file-archive', '.tar': 'file-archive', '.gz': 'file-archive', '.tgz': 'file-archive',
+  '.rar': 'file-archive', '.7z': 'file-archive', '.bz2': 'file-archive', '.xz': 'file-archive', '.zst': 'file-archive',
+  // Binaries / executables
+  '.exe': 'binary', '.dll': 'binary', '.so': 'binary', '.dylib': 'binary',
+  '.bin': 'binary', '.o': 'binary', '.obj': 'binary', '.class': 'binary', '.wasm': 'binary',
+  // Database
+  '.db': 'database', '.sqlite': 'database', '.sqlite3': 'database', '.sql': 'database', '.db3': 'database',
+  // Logs / diffs / lock
+  '.log': 'file-clock',
+  '.diff': 'file-diff', '.patch': 'file-diff',
+  '.lock': 'file-lock',
+};
+
+// Files matched by full name (no extension, or multi-dot names whose last
+// segment isn't meaningful). Checked BEFORE extension lookup so that e.g.
+// ".env.local" resolves to "file-key" instead of the unknown ".local".
+const FILE_NAMES = {
+  // Build / orchestration
+  'dockerfile': 'box',
+  'makefile': 'wrench', 'gnumakefile': 'wrench',
+  'cmakelists.txt': 'wrench',
+  // Project meta
+  'readme': 'file-text', 'license': 'scroll-text', 'licence': 'scroll-text',
+  'changelog': 'file-text', 'authors': 'file-text', 'contributors': 'file-text',
+  'codeowners': 'settings',
+  // Multi-dot env files (lastIndexOf('.') would match ".local", ".production", etc.)
+  '.env.local': 'file-key', '.env.production': 'file-key', '.env.development': 'file-key',
+  '.env.staging': 'file-key', '.env.test': 'file-key', '.env.example': 'file-key',
+  '.env.default': 'file-key',
 };
 
 /**
- * Returns the emoji icon for a given file name based on its extension.
+ * Returns the Lucide icon name (kebab-case) for a given file name.
+ * Resolution order: full name (FILE_NAMES) → extension (FILE_ICONS) → default "file".
  * @param {string} fileName
- * @returns {string}
+ * @returns {string} kebab-case Lucide icon name; default "file".
  */
 function getFileIcon(fileName) {
   const lower = fileName.toLowerCase();
+  if (FILE_NAMES[lower]) return FILE_NAMES[lower];
   const dotIdx = lower.lastIndexOf('.');
-  if (dotIdx === -1) return '📄';
+  if (dotIdx === -1) return 'file';
   const ext = lower.substring(dotIdx);
-  return FILE_ICONS[ext] || '📄';
+  return FILE_ICONS[ext] || 'file';
+}
+
+// Map icône Lucide -> catégorie sémantique (utilisée pour la coloration CSS).
+// Les icônes non listées tombent dans la catégorie "default" (couleur neutre).
+const ICON_CATEGORY = {
+  'folder': 'folder', 'folder-open': 'folder',
+  'file-text': 'doc',
+  'scroll-text': 'doc',
+  'file-code': 'code', 'file-code-2': 'code',
+  'file-json': 'data', 'braces': 'data', 'file-spreadsheet': 'data',
+  'file-cog': 'config', 'settings': 'config',
+  'file-lock': 'secret', 'file-key': 'secret',
+  'file-image': 'image',
+  'file-audio': 'media', 'file-video': 'media',
+  'file-archive': 'archive',
+  'binary': 'binary',
+  'database': 'database',
+  'file-clock': 'diag', 'file-diff': 'diag',
+  'globe': 'web',
+  'file-terminal': 'terminal',
+  'palette': 'style',
+  'box': 'build', 'wrench': 'build',
+};
+
+/**
+ * Returns the semantic category for a Lucide icon name (kebab-case).
+ * Used to apply a colored class ("icon-cat-<cat>") on the icon wrapper span.
+ * @param {string} iconName
+ * @returns {string} category slug; default "default".
+ */
+function iconCategory(iconName) {
+  return ICON_CATEGORY[iconName] || 'default';
 }
 
 class Sidebar {
@@ -452,6 +548,8 @@ class Sidebar {
       this._showContextMenu(e.clientX, e.clientY, null, false);
     });
 
+    // Rendre les icônes Lucide des fichiers/dossiers nouvellement insérés
+    refreshIcons(this.treeContainer);
     // Mettre à jour la liste des fichiers pour l'auto-complétion
     updateFileList(this.treeData.children || []);
   }
@@ -471,7 +569,7 @@ class Sidebar {
       const arrow = hasChildren ? "▶" : "";
       const dirDirty = this.gitDirtyDirs.has(node.path.replace(/\\/g, "/"));
       const dirBadge = dirDirty ? ` <span class="git-badge git-badge-dir" title="Contient des modifications Git">•</span>` : "";
-      row.innerHTML = `<span class="arrow">${arrow}</span><span class="icon">📁</span><span class="name">${this._esc(node.name)}</span>${dirBadge}`;
+      row.innerHTML = `<span class="arrow">${arrow}</span><span class="icon icon-cat-folder"><i data-lucide="folder" class="icon-sm"></i></span><span class="name">${this._esc(node.name)}</span>${dirBadge}`;
       row.addEventListener("click", (e) => {
         e.stopPropagation();
         if (!hasChildren) return;
@@ -479,9 +577,7 @@ class Sidebar {
         if (children) {
           children.classList.toggle("expanded");
           const icon = row.querySelector(".icon");
-          icon.textContent = children.classList.contains("expanded")
-            ? "📂"
-            : "📁";
+          setIcon(icon, children.classList.contains("expanded") ? "folder-open" : "folder");
           const arrowEl = row.querySelector(".arrow");
           arrowEl.textContent = children.classList.contains("expanded")
             ? "▼"
@@ -498,7 +594,7 @@ class Sidebar {
       const icon = getFileIcon(node.name);
       const gitBadge = this.gitByAbs.get(node.path.replace(/\\/g, "/"));
       const badgeHtml = gitBadge ? ` <span class="git-badge ${gitBadge.cls}" title="Git ${gitBadge.code}">${gitBadge.letter}</span>` : "";
-      row.innerHTML = `<span class="icon">${icon}</span><span class="name">${this._esc(node.name)}</span>${badgeHtml}`;
+      row.innerHTML = `<span class="icon icon-cat-${iconCategory(icon)}"><i data-lucide="${icon}" class="icon-sm"></i></span><span class="name">${this._esc(node.name)}</span>${badgeHtml}`;
 
       row.addEventListener("click", () => {
         this.tabs.openFile(node.path, "edit");
@@ -671,7 +767,7 @@ class Sidebar {
       this.ctxExportPdf.style.display = "none";
       this.ctxOpenBrowser.style.display = "none";
       this.ctxSendAgent.style.display = "";
-      this.ctxSendAgent.textContent = "📤 Analyser ce dossier";
+      setIconText(this.ctxSendAgent, "send", "Analyser ce dossier");
       this.ctxAddPromptBuilder.style.display = "none";
       this.ctxCreateFile.style.display = "";
       this.ctxCreateFolder.style.display = "";
@@ -679,7 +775,7 @@ class Sidebar {
       this.ctxDelete.style.display = "";
       this.ctxCreateMd.style.display = "none";
       this.ctxFavorite.style.display = "";
-      this.ctxFavorite.textContent = this.isFavorite(path) ? "⭐ Retirer des favoris" : "⭐ Ajouter aux favoris";
+      setIconText(this.ctxFavorite, "star", this.isFavorite(path) ? "Retirer des favoris" : "Ajouter aux favoris");
       if (this.ctxGitDiff) this.ctxGitDiff.style.display = "none";
     } else if (!path) {
       // Zone vide → "Créer un fichier" + "Créer un dossier"
@@ -705,14 +801,14 @@ class Sidebar {
       this.ctxPreview.style.display = (isMd || isPdf) ? "" : "none";
       this.ctxPreviewCsv.style.display = isCsv ? "" : "none";
       if (isPdf) {
-        this.ctxPreview.textContent = "📕 Prévisualiser le PDF";
+        setIconText(this.ctxPreview, "file-text", "Prévisualiser le PDF");
       } else {
-        this.ctxPreview.textContent = "👁️ Prévisualiser";
+        setIconText(this.ctxPreview, "eye", "Prévisualiser");
       }
       this.ctxExportPdf.style.display = isMd ? "" : "none";
       this.ctxOpenBrowser.style.display = isHtml ? "" : "none";
       this.ctxSendAgent.style.display = "";
-      this.ctxSendAgent.textContent = `📤 Envoyer à ${agentDisplayPhrase()}`;
+      setIconText(this.ctxSendAgent, "send", `Envoyer à ${agentDisplayPhrase()}`);
       this.ctxAddPromptBuilder.style.display = "";
       this.ctxCreateFile.style.display = "none";
       this.ctxCreateFolder.style.display = "none";
@@ -720,7 +816,7 @@ class Sidebar {
       this.ctxDelete.style.display = "";
       this.ctxCreateMd.style.display = isPdf ? "" : "none";
       this.ctxFavorite.style.display = "";
-      this.ctxFavorite.textContent = this.isFavorite(path) ? "⭐ Retirer des favoris" : "⭐ Ajouter aux favoris";
+      setIconText(this.ctxFavorite, "star", this.isFavorite(path) ? "Retirer des favoris" : "Ajouter aux favoris");
       // Git diff (C1) : visible seulement si le projet est un repo Git et que le
       // fichier a un statut (modifié/staged/non suivi). Sinon masqué.
       const gitBadge = this.gitStatus && this.gitStatus.is_repo ? this.gitByAbs.get(path.replace(/\\/g, "/")) : null;
@@ -759,7 +855,7 @@ class Sidebar {
         if (children) {
           children.classList.add("expanded");
           const icon = row.querySelector(".icon");
-          if (icon) icon.textContent = "📂";
+          if (icon) setIcon(icon, "folder-open");
           const arrowEl = row.querySelector(".arrow");
           if (arrowEl) arrowEl.textContent = "▼";
         }
@@ -885,7 +981,7 @@ class Sidebar {
 
     let html = `<div class="favorites-header" data-expanded="true">
       <span class="favorites-arrow">▼</span>
-      <span class="favorites-icon">⭐</span>
+      <span class="favorites-icon"><i data-lucide="star" class="icon-sm"></i></span>
       <span class="favorites-title">Favoris</span>
       <span class="favorites-count">${projectFavorites.length}</span>
     </div>`;
@@ -896,13 +992,14 @@ class Sidebar {
       const icon = getFileIcon(fileName);
       const relPath = favPath.replace(/\\/g, "/").substring(prefix.length);
       html += `<div class="favorite-row" data-path="${this._esc(favPath)}" title="${this._esc(relPath)}">
-        <span class="icon">${icon}</span>
+        <span class="icon icon-cat-${iconCategory(icon)}"><i data-lucide="${icon}" class="icon-sm"></i></span>
         <span class="name">${this._esc(fileName)}</span>
       </div>`;
     }
 
     html += '</div>';
     section.innerHTML = html;
+    refreshIcons(section);
 
     // Click handlers for favorite rows
     section.querySelectorAll(".favorite-row").forEach(row => {
@@ -1006,12 +1103,13 @@ class Sidebar {
         const name = p.replace(/\\/g, "/").split("/").pop();
         const btn = document.createElement("button");
         btn.className = "dd-recent-item";
-        btn.innerHTML = `<span class="dd-recent-icon">📂</span><span class="dd-recent-name">${this._esc(name)}</span><span class="dd-recent-path">${this._esc(p)}</span>`;
+        btn.innerHTML = `<span class="dd-recent-icon icon-cat-folder"><i data-lucide="folder-open" class="icon-sm"></i></span><span class="dd-recent-name">${this._esc(name)}</span><span class="dd-recent-path">${this._esc(p)}</span>`;
         btn.addEventListener("click", () => {
           this._hideProjectsDropdown();
           this.openProjectByPath(p);
         });
         this.ddRecentList.appendChild(btn);
+        refreshIcons(btn);
       }
     } catch (_) {
       // Ignorer

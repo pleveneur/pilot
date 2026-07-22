@@ -126,8 +126,8 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Événement | Traitement |
 |-----------|------------|
 | `agent_start` | Statut → "En réflexion...", streaming activé |
-| `agent_end` | Statut → "Prêt", mise à jour des stats tokens/coûts |
-| `message_start` / `message_update` / `message_end` | Streaming du texte de l'assistant (Markdown) ; `message_end` affiche aussi explicitement les erreurs (`stopReason:"error"` + `errorMessage`, ex: serveur LLM injoignable) au lieu de rester silencieux |
+| `agent_end` | Statut → "Prêt", mise à jour des stats tokens/coûts. **Chat standard :** si le tour s'est terminé sur `stopReason:"length"` (réponse tronquée par la limite de tokens de sortie — cas typique d'un modèle local écrivant un gros fichier via un tool call `write` coupé en plein milieu), relance automatiquement le modèle (max 2, `state.lengthNudgeAttempts`) pour qu'il reprenne, au lieu de rester silencieux (« l'agent s'est arrêté pour rien »). Le compteur est remis à zéro à chaque envoi utilisateur manuel. Désactivé en mode Orchestration (géré par `detectReflectionOnly`). Cf. session pi `019f85e4` |
+| `message_start` / `message_update` / `message_end` | Streaming du texte de l'assistant (Markdown) ; `message_end` affiche aussi explicitement les erreurs (`stopReason:"error"` + `errorMessage`, ex: serveur LLM injoignable) au lieu de rester silencieux. Mémorise `stopReason` (`state.lastStopReason`) pour la détection de troncation (voir `agent_end`) |
 | `thinking_start` / `thinking_delta` / `thinking_end` | Bloc `<details>` repliable pour la pensée |
 | `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | Bloc outil avec nom, arguments, sortie |
 | `text_start` / `text_delta` / `text_end` | Streaming du texte dans le bloc message |
@@ -158,7 +158,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 |----------------|------|
 | Chat avec streaming Markdown | ✅ |
 | Pensées (thinking) repliables | ✅ |
-| Blocs outils (tool calls) avec sortie | ✅ |
+| Blocs outils (tool calls) avec sortie | ✅ (les résultats d'outil en **erreur** — ex. tool call tronqué par la limite de tokens — s'affichent même si `show_tools` est désactivé) |
 | Saisie Entrée=envoyer / Shift+Entrée=nouvelle ligne | ✅ |
 | Barre d'outils (⏹️ abort, ➕ new session, 📦 compact) | ✅ |
 | Sélecteur de modèle (chargé depuis pi) | ✅ |
@@ -174,6 +174,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Autocomplétion des commandes slash (/) | ✅ |
 | Reprise de session (/resume) avec popup de sélection | ✅ |
 | Affichage conditionnel des pensées (show_thinking) | ✅ |
+| Relance auto après réponse tronquée (`stopReason:"length"`) — chat standard | ✅ |
 | Images dans les prompts (drag & drop, Ctrl+V) | ✅ |
 
 ---
@@ -316,7 +317,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   standard réapparaît et le modèle standard est restauré.
 - **Erreurs visibles** : si un prompt échoue (serveur LLM injoignable, erreur
   API…), le message d'erreur s'affiche dans la conversation au lieu d'une
-  bulle vide sans réponse.
+  bulle vide sans réponse. Les résultats d'outil en erreur (ex. tool call
+  tronqué par la limite de tokens) s'affichent même si les outils sont masqués.
+- **Réponses tronquées** : avec un modèle local qui dépasse la limite de
+  tokens de sortie (`stopReason:"length"`), la réponse est coupée en plein
+  milieu (souvent un `write` de gros fichier). Pilot détecte la troncation et
+  relance automatiquement le modèle pour qu'il reprenne (max 2), au lieu de
+  rester silencieux. Vous voyez « ✂️ Réponse tronquée… Relance automatique… ».
 - **Nouvelle conversation** : bouton ➕ (new session). **Reprendre une session** :
   commande `/resume` liste les sessions enregistrées pour le projet courant.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →

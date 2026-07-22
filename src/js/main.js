@@ -9,6 +9,7 @@ import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
+import { refreshIcons } from "./icons.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -223,6 +224,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
   // 1. Initialiser le thème
   initTheme();
+  // 1b. Remplacer les balises <i data-lucide="..."> du HTML statique par des
+  // icônes SVG Lucide. À rappeler après toute insertion dynamique d'icônes.
+  refreshIcons();
 
   // 2. Initialiser le gestionnaire d'onglets
   const tabs = initTabs();

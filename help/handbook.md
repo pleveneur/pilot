@@ -144,7 +144,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   standard réapparaît et le modèle standard est restauré.
 - **Erreurs visibles** : si un prompt échoue (serveur LLM injoignable, erreur
   API…), le message d'erreur s'affiche dans la conversation au lieu d'une
-  bulle vide sans réponse.
+  bulle vide sans réponse. Les résultats d'outil en erreur (ex. tool call
+  tronqué par la limite de tokens) s'affichent même si les outils sont masqués.
+- **Réponses tronquées** : avec un modèle local qui dépasse la limite de
+  tokens de sortie (`stopReason:"length"`), la réponse est coupée en plein
+  milieu (souvent un `write` de gros fichier). Pilot détecte la troncation et
+  relance automatiquement le modèle pour qu'il reprenne (max 2), au lieu de
+  rester silencieux. Vous voyez « ✂️ Réponse tronquée… Relance automatique… ».
 - **Nouvelle conversation** : bouton ➕ (new session). **Reprendre une session** :
   commande `/resume` liste les sessions enregistrées pour le projet courant.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →

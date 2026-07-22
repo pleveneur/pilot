@@ -13,6 +13,29 @@ body {
 }
 .hidden { display: none !important; }
 
+/* --- Design Tokens (échelles partagées, hors thème) --- */
+:root {
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 20px; --space-6: 24px;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 14px;
+  --transition-fast: 0.12s ease;
+  --transition: 0.18s ease;
+}
+
+/* --- Icônes Lucide (SVG inline) --- */
+/* Taille uniforme la plus proche des emojis originaux (16px). Variantes
+   .icon-sm (14px, menus) et .icon-lg (20px, titres). Couleur = currentColor. */
+.icon, .icon-sm, .icon-lg {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  stroke-width: 2;
+}
+.icon    { width: 16px; height: 16px; }
+.icon-sm { width: 14px; height: 14px; }
+.icon-lg { width: 20px; height: 20px; }
+button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
+
 /* --- Variables Thème Sombre --- */
 .theme-dark {
   --bg-main: #1e1e2e;
@@ -35,6 +58,29 @@ body {
   --scrollbar-track: transparent;
   --tab-preview-bg: #1e2a1e;
   --tab-preview-border: #a6e3a1;
+  /* Ombres (prononcées sur fond sombre) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --ring: 0 0 0 2px rgba(137, 180, 250, 0.35);
+  /* Catégories d'icônes (explorateur) — palette Catppuccin Mocha */
+  --cat-folder: #fab387;
+  --cat-doc: #89b4fa;
+  --cat-web: #eba0ac;
+  --cat-style: #cba6f7;
+  --cat-code: #74c7ec;
+  --cat-terminal: #a6e3a1;
+  --cat-data: #f9e2af;
+  --cat-config: #7f849c;
+  --cat-build: #fab387;
+  --cat-secret: #f38ba8;
+  --cat-image: #94e2d5;
+  --cat-media: #f5c2e7;
+  --cat-archive: #fab387;
+  --cat-binary: #585b70;
+  --cat-database: #89dceb;
+  --cat-diag: #6c7086;
+  --cat-default: var(--text-secondary);
 }
 
 /* --- Variables Thème Clair --- */
@@ -59,6 +105,29 @@ body {
   --scrollbar-track: transparent;
   --tab-preview-bg: #e6f5e6;
   --tab-preview-border: #40a02b;
+  /* Ombres (douces sur fond clair) */
+  --shadow-sm: 0 1px 2px rgba(76, 79, 105, 0.10);
+  --shadow-md: 0 6px 18px rgba(76, 79, 105, 0.16);
+  --shadow-lg: 0 16px 40px rgba(76, 79, 105, 0.22);
+  --ring: 0 0 0 2px rgba(30, 102, 245, 0.30);
+  /* Catégories d'icônes (explorateur) — palette Catppuccin Latte */
+  --cat-folder: #fe640b;
+  --cat-doc: #1e66f5;
+  --cat-web: #e64553;
+  --cat-style: #8839ef;
+  --cat-code: #209fb5;
+  --cat-terminal: #40a02b;
+  --cat-data: #df8e1d;
+  --cat-config: #8c8fa1;
+  --cat-build: #fe640b;
+  --cat-secret: #d20f39;
+  --cat-image: #179299;
+  --cat-media: #ea76cb;
+  --cat-archive: #fe640b;
+  --cat-binary: #acb0be;
+  --cat-database: #04a5e5;
+  --cat-diag: #9ca0b0;
+  --cat-default: var(--text-secondary);
 }
 
 /* --- Scrollbar --- */
@@ -374,6 +443,8 @@ body {
   position: absolute;
   right: 12px;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .dd-empty {
@@ -419,7 +490,31 @@ body {
   text-align: center;
   flex-shrink: 0;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+
+/* Coloration des icônes de l'explorateur par catégorie sémantique.
+   Les SVG Lucide utilisent `currentColor` pour le trait ; poser `color` sur le
+   wrapper span propage la teinte à l'icône. Palette désaturée (Catppuccin). */
+.icon-cat-folder { color: var(--cat-folder); }
+.icon-cat-doc { color: var(--cat-doc); }
+.icon-cat-web { color: var(--cat-web); }
+.icon-cat-style { color: var(--cat-style); }
+.icon-cat-code { color: var(--cat-code); }
+.icon-cat-terminal { color: var(--cat-terminal); }
+.icon-cat-data { color: var(--cat-data); }
+.icon-cat-config { color: var(--cat-config); }
+.icon-cat-build { color: var(--cat-build); }
+.icon-cat-secret { color: var(--cat-secret); }
+.icon-cat-image { color: var(--cat-image); }
+.icon-cat-media { color: var(--cat-media); }
+.icon-cat-archive { color: var(--cat-archive); }
+.icon-cat-binary { color: var(--cat-binary); }
+.icon-cat-database { color: var(--cat-database); }
+.icon-cat-diag { color: var(--cat-diag); }
+.icon-cat-default { color: var(--cat-default); }
 
 .tree-row .arrow {
   width: 14px;
@@ -479,6 +574,10 @@ body {
 .favorites-icon {
   font-size: 14px;
   flex-shrink: 0;
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .favorites-title {
@@ -519,6 +618,9 @@ body {
   text-align: center;
   flex-shrink: 0;
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .favorite-row .name {
@@ -532,18 +634,23 @@ body {
   height: 32px;
   padding: 0;
   background: var(--bg-input);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 14px;
-  transition: background 0.15s;
+  transition: background var(--transition), color var(--transition), border-color var(--transition), transform var(--transition-fast);
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
 }
-#action-panel button:hover { background: var(--bg-hover); }
+#action-panel button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+#action-panel button:active { transform: scale(0.94); }
 
 /* --- Tab Bar --- */
 #tab-bar {
@@ -571,9 +678,9 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
   user-select: none;
-  transition: background 0.1s;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
-.tab:hover { background: var(--bg-hover); }
+.tab:hover { background: var(--bg-hover); color: var(--text-primary); }
 .tab.active {
   background: var(--bg-tab-active);
   color: var(--text-primary);
@@ -1161,11 +1268,11 @@ mark.search-highlight {
 }
 .modal.hidden { display: none; }
 
-.modal-content { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 10px; padding: 24px; width: 420px; max-width: 90vw; color: var(--text-primary); }
+.modal-content { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-6); width: 420px; max-width: 90vw; color: var(--text-primary); box-shadow: var(--shadow-lg); }
 
 .modal-content.shortcuts-content { width: 680px; }
 
-.modal-content.settings-content { width: 1180px; max-width: 96vw; max-height: 88vh; overflow-y: auto; }
+.modal-content.settings-content { width: 920px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Modale : mise à jour disponible (updater) */
 .modal-content.update-content { width: 640px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
@@ -1207,8 +1314,10 @@ mark.search-highlight {
 .audit-badge.bad { background: #5a2a2a; color: #ff9a9a; }
 
 .modal-content h2 {
-  margin-bottom: 18px;
-  font-size: 1.2em;
+  margin-bottom: var(--space-5);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .setting-row {
@@ -1239,6 +1348,7 @@ mark.search-highlight {
 .setting-row select:focus,
 .setting-row input:focus {
   border-color: var(--accent);
+  box-shadow: var(--ring);
 }
 
 .setting-row-checkbox {
@@ -1264,16 +1374,18 @@ mark.search-highlight {
 }
 
 .modal-actions button {
-  padding: 8px 16px;
-  border-radius: 6px;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
   border: 1px solid var(--border);
   color: var(--text-primary);
   background: var(--bg-input);
-  transition: background 0.15s;
+  transition: background var(--transition), border-color var(--transition), transform var(--transition-fast);
 }
 .modal-actions button:hover { background: var(--bg-hover); }
+.modal-actions button:active { transform: scale(0.97); }
 .modal-actions button:first-child {
   background: var(--accent);
   color: #fff;
@@ -1294,36 +1406,84 @@ mark.search-highlight {
 }
 .orch-picker-status:empty { min-height: 0; margin: 0; }
 
-/* --- Sections des paramètres (grille 4 colonnes) --- */
-.settings-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0 24px;
-  align-items: start;
+/* --- Paramètres : layout onglets verticaux (sidebar + panneaux) --- */
+/* La modale settings = flex colonne : titre + layout + actions. Le scroll se
+   fait dans .settings-panels, pas sur la modale entière. */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: var(--space-5);
 }
-.settings-column {
+/* Sidebar d'onglets (verticale) */
+.settings-tabs {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: var(--space-1);
+  width: 184px;
+  flex-shrink: 0;
+  padding: var(--space-1);
+  border-right: 1px solid var(--border);
 }
-.settings-section-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin: 0 0 10px 0;
+.settings-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+.settings-tab:hover {
+  background: var(--bg-hover);
   color: var(--text-primary);
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
 }
-.settings-column:first-child .settings-section-title:first-child {
-  margin-top: 0;
+.settings-tab.active {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border);
+  font-weight: 600;
+}
+/* Zone des panneaux (scrollable verticalement) */
+.settings-panels {
+  flex: 1;
+  overflow-y: auto;
+  min-width: 0;
+  padding-right: var(--space-2);
+}
+.settings-panel { display: none; }
+.settings-panel.active { display: block; }
+
+/* Cartes de section (regroupement visuel pro) */
+.settings-section {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-sm);
 }
 .settings-section + .settings-section {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+  margin-top: var(--space-4);
+}
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 var(--space-3) 0;
+  color: var(--text-primary);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
 }
 .setting-row-indent {
-  padding-left: 20px;
+  padding-left: var(--space-4);
   border-left: 2px solid var(--border);
   margin-left: 4px;
 }
@@ -1334,23 +1494,26 @@ mark.search-highlight {
   z-index: 200;
   background: var(--bg-context);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px;
-  min-width: 160px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1);
+  min-width: 200px;
+  box-shadow: var(--shadow-lg);
 }
 .context-menu.hidden { display: none; }
 .context-menu button {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
   background: none;
   border: none;
   color: var(--text-primary);
-  padding: 8px 12px;
-  border-radius: 5px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 13px;
+  transition: background var(--transition-fast);
 }
 .context-menu button:hover { background: var(--bg-hover); }
 

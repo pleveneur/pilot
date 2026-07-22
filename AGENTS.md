@@ -72,6 +72,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 |---|---|
 | Backend | Rust (Tauri v2) |
 | Frontend | HTML5, CSS3, JavaScript (modules ES), Vite |
+| Icônes | Lucide (SVG inline, package `lucide`) |
 | Éditeur | CodeMirror 6 |
 | Rendu Markdown | markdown-it |
 | File Watching | crate `notify` (PollWatcher) |
@@ -139,6 +140,7 @@ pilot/
 │       ├── help.js           # Onglet « ❓ Aide » : chat LLM sur le handbook
 │       ├── review.js         # Onglet « 🔍 Review » : revue de code assistée (H5, pi temporaire cadré)
 │       ├── context-engine.js  # Context Engine (H1) : injection auto-contexte projet avant 1er prompt
+│       ├── icons.js          # Icônes Lucide (refreshIcons → createIcons, pour HTML statique et dynamique)
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
 │       ├── backend-info.js    # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"

@@ -58,7 +58,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 
 ### C. Panneau d'Actions
 
-- ⚙️ **Paramètres** : thème dark/light, commande défaut, auto-load projet, terminal intégré, params RPC (5 champs), renvoi à la ligne automatique (word wrap).
+- ⚙️ **Paramètres** : modale en onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant). Thème dark/light, commande défaut, auto-load projet, terminal intégré, params RPC (5 champs), renvoi à la ligne automatique (word wrap).
 - 📂 **Explorateur** : ouvre le dossier projet dans l'explorateur OS.
 - 🖥️ **Terminal** : intégré (xterm.js) ou externe selon paramètre.
 - π **Agent Pi** : ouvre l'onglet agent (si RPC activé).
@@ -66,6 +66,11 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### D. Titre de fenêtre
 
 - `Pilot` par défaut, `Pilot <chemin>` si projet ouvert.
+
+### E. Design system & icônes
+
+- **Design tokens CSS** : échelles partagées (`--space-*`, `--radius-*`, `--shadow-*`, `--ring`, `--transition*`) + ombres/anneaux de focus par thème (dark/light). Utilisés par tous les composants (modales, boutons, inputs, onglets, menu contextuel) pour un rendu cohérent et « pro ».
+- **Icônes Lucide** (SVG inline, package `lucide`) : remplacent les emojis des boutons, titres, menu contextuel, arbre explorateur (fichiers/dossiers) et onglet agent (toolbar + mode Orchestration + micro/send). Tailles uniformes `.icon` (16px) / `.icon-sm` (14px) / `.icon-lg` (20px). Couleur = `currentColor` (suit le thème). Helpers dans `src/js/icons.js` : `refreshIcons(root?)` (rend toutes les `<i data-lucide>` d'un sous-arbre, après injection HTML), `setIcon(el, name)` (bouton à état, ex: abort/reconnect, dossier ouvert/fermé), `setIconText(el, name, text)` (item de menu = icône + libellé). **Icônes par type de fichier** (`sidebar.js`) : `FILE_ICONS` (map extension→icône, ex: `.md`→`file-text`, `.html`→`globe`, `.css`→`palette`, `.ts`→`file-code-2`, `.sh`→`file-terminal`, `.json`→`file-json`, `.yaml`→`braces`, `.env`→`file-key`, `.mp3`→`file-audio`, `.mp4`→`file-video`, `.exe`→`binary`, `.db`→`database`, `.log`→`file-clock`, `.diff`→`file-diff`…) + `FILE_NAMES` (noms complets sans extension ou multi-points, ex: `Dockerfile`→`box`, `Makefile`→`wrench`, `LICENSE`→`scroll-text`, `.env.local`→`file-key`). Résolution : nom complet → extension → défaut `file`. Lucide étant monochrome et sans logos de marque, les langages de programmation génériques partagent `file-code` ; seules les **familles fonctionnelles** sont distinguées. **Coloration par catégorie** : `ICON_CATEGORY` (map icône→catégorie) + helper `iconCategory()` posent une classe `icon-cat-<cat>` sur le wrapper `<span class='icon'>` de l'explorateur (dossiers, fichiers, favoris, projets récents uniquement — pas les boutons de l'agent qui restent neutres). CSS : tokens `--cat-*` par thème (palette Catppuccin Mocha/Latte, désaturée) + règles `.icon-cat-* { color: var(--cat-*) }`. Catégories : folder (ambré), doc (bleu), web (orange), style (violet), code (bleu-ciel), terminal (vert), data (jaune), config (gris), build (orange), secret (rouge), image (turquoise), media (rose), archive (orange foncé), binary (gris foncé), database (cyan), diag (gris), default (neutre). Le SVG Lucide utilisant `currentColor` pour son trait, la couleur posée sur le wrapper se propage à l'icône.
 
 ---
 

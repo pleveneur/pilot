@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { applyTheme, getCurrentTheme } from "./theme.js";
 import { refreshShowThinking, refreshShowTools } from "./agent-pi.js";
 import { showToast } from "./toast.js";
+import { refreshIcons } from "./icons.js";
 
 let currentConfig = null;
 // Mémorise si on a déjà averti (toast) que le serveur écoute hors localhost,
@@ -63,6 +64,25 @@ export async function initSettings() {
   const btnSettings = document.getElementById("btn-settings");
   const btnSave = document.getElementById("btn-save-settings");
   const btnClose = document.getElementById("btn-close-settings");
+  // ── Onglets des paramètres (sidebar verticale) ──
+  // Bascule la classe .active entre les .settings-tab et les .settings-panel
+  // correspondants (data-settings-tab / data-settings-panel). Les IDs des
+  // champs (setting-*, btn-*, tailscale-*, web-*, audit-*) sont inchangés →
+  // settings.js continue de fonctionner quel que soit l'onglet actif.
+  const settingsTabs = modal.querySelectorAll(".settings-tab");
+  settingsTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const key = tab.dataset.settingsTab;
+      settingsTabs.forEach((t) => {
+        const isActive = t === tab;
+        t.classList.toggle("active", isActive);
+        t.setAttribute("aria-selected", isActive ? "true" : "false");
+      });
+      modal.querySelectorAll(".settings-panel").forEach((p) => {
+        p.classList.toggle("active", p.dataset.settingsPanel === key);
+      });
+    });
+  });
   const selectTheme = document.getElementById("setting-theme");
   const inputCmd = document.getElementById("setting-command");
   const chkAutoLoad = document.getElementById("setting-auto-load");
@@ -468,7 +488,10 @@ export async function initSettings() {
       // Badge compteur d'audit sur le bouton « Journal ».
       try {
         const n = await invoke("web_audit_count");
-        btnWebAudit.textContent = n > 0 ? `📜 Ouvrir le journal (${n})` : "📜 Ouvrir le journal";
+        btnWebAudit.innerHTML = n > 0
+          ? `<i data-lucide="scroll-text" class="icon-sm"></i> Ouvrir le journal (${n})`
+          : `<i data-lucide="scroll-text" class="icon-sm"></i> Ouvrir le journal`;
+        refreshIcons();
       } catch (_) { /* web désactivé */ }
     } catch (_) {
       webPwStatus.textContent = "?";

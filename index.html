@@ -15,14 +15,14 @@
       <button id="btn-open-project" title="Projets">
         <img id="btn-project-logo" src="icon.png" alt="Logo" />
         <span>Projets</span>
-        <span class="dropdown-arrow">▼</span>
+        <span class="dropdown-arrow"><i data-lucide="chevron-down" class="icon-sm"></i></span>
       </button>
       <div id="projects-dropdown" class="projects-dropdown hidden">
-        <button id="dd-new-project">📁 Nouveau projet</button>
+        <button id="dd-new-project"><i data-lucide="folder-plus" class="icon-sm"></i> Nouveau projet</button>
         <div class="dropdown-separator"></div>
         <div id="dd-recent-list"></div>
         <div class="dropdown-separator" id="dd-close-separator"></div>
-        <button id="dd-close-project" class="hidden">✕ Fermer le projet</button>
+        <button id="dd-close-project" class="hidden"><i data-lucide="x" class="icon-sm"></i> Fermer le projet</button>
       </div>
       <span id="project-name"></span>
     </div>
@@ -38,15 +38,15 @@
 
   <!-- Panneau d'Actions (Bas Gauche) -->
   <div id="action-panel">
-    <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)">📝</button>
-    <button id="btn-settings" title="Paramètres">⚙️</button>
-    <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur">📂</button>
-    <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal">🖥️</button>
-    <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent">π</button>
-    <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder">🧩</button>
-    <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)">🔍</button>
-    <button id="btn-help" title="Aide sur Pilot (poser une question)">❓</button>
-    <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer">🌐 <b id="remote-badge-count">0</b></span>
+    <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)"><i data-lucide="file-text" class="icon"></i></button>
+    <button id="btn-settings" title="Paramètres"><i data-lucide="settings" class="icon"></i></button>
+    <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon"></i></button>
+    <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i></button>
+    <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
+    <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
+    <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
+    <button id="btn-help" title="Aide sur Pilot (poser une question)"><i data-lucide="circle-help" class="icon"></i></button>
+    <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i> <b id="remote-badge-count">0</b></span>
   </div>
 
   <!-- Zone de Travail (Droite) -->
@@ -60,7 +60,7 @@
       <div id="outline-panel" class="hidden">
         <div class="outline-header">
           <span>Table des matières</span>
-          <button id="outline-close-btn" title="Fermer">✕</button>
+          <button id="outline-close-btn" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
         </div>
         <div id="outline-list"></div>
       </div>
@@ -72,7 +72,7 @@
         <input type="search" id="search-input" placeholder="Rechercher dans les fichiers…" autocomplete="off" />
         <label class="search-option"><input type="checkbox" id="search-regex-toggle" /> Regex</label>
         <input type="text" id="search-ext-input" placeholder=".js,.md" class="search-ext-input" />
-        <button id="search-close-btn" title="Fermer">✕</button>
+        <button id="search-close-btn" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
       </div>
       <div id="search-results-count"></div>
       <div id="search-results-list"></div>
@@ -86,14 +86,14 @@
       <span id="status-eol"></span>
       <span id="status-autosave"></span>
       <span id="status-version" title="Version de Pilot"></span>
-      <button id="btn-shortcuts" title="Raccourcis clavier">⌨️</button>
+      <button id="btn-shortcuts" title="Raccourcis clavier"><i data-lucide="keyboard" class="icon-sm"></i></button>
     </div>
   </main>
 
   <!-- Modale Raccourcis clavier -->
   <div id="shortcuts-modal" class="modal hidden">
     <div class="modal-content shortcuts-content">
-      <h2>⌨️ Raccourcis clavier</h2>
+      <h2><i data-lucide="keyboard" class="icon-lg"></i> Raccourcis clavier</h2>
       <div class="shortcuts-grid">
         <div class="shortcuts-section">
           <h3>Fichier</h3>
@@ -150,14 +150,19 @@
   <!-- Modale Paramètres -->
   <div id="settings-modal" class="modal hidden">
     <div class="modal-content settings-content">
-      <h2>⚙️ Paramètres</h2>
-      <div class="settings-grid">
+      <h2><i data-lucide="settings" class="icon-lg"></i> Paramètres</h2>
+      <div class="settings-layout">
+        <nav class="settings-tabs" role="tablist" aria-label="Catégories de paramètres">
+          <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
+          <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
+          <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
+          <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
+        </nav>
+        <div class="settings-panels">
 
-        <!-- Colonne 1 : Apparence + Éditeur + Démarrage -->
-        <div class="settings-column">
-
+          <div class="settings-panel active" data-settings-panel="general" role="tabpanel">
           <div class="settings-section">
-            <h3 class="settings-section-title">🎨 Apparence</h3>
+            <h3 class="settings-section-title"><i data-lucide="palette" class="icon-sm"></i> Apparence</h3>
             <div class="setting-row">
               <label for="setting-theme">Thème :</label>
               <select id="setting-theme">
@@ -168,7 +173,7 @@
           </div>
 
           <div class="settings-section">
-            <h3 class="settings-section-title">📝 Éditeur</h3>
+            <h3 class="settings-section-title"><i data-lucide="pencil" class="icon-sm"></i> Éditeur</h3>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-word-wrap" />
               <label for="setting-word-wrap">Renvoi à la ligne automatique</label>
@@ -188,7 +193,7 @@
           </div>
 
           <div class="settings-section">
-            <h3 class="settings-section-title">🚀 Démarrage</h3>
+            <h3 class="settings-section-title"><i data-lucide="rocket" class="icon-sm"></i> Démarrage</h3>
             <div class="setting-row">
               <label for="setting-command">Commande pour lancer l'agent :</label>
               <input type="text" id="setting-command" placeholder="ex: python main.py" />
@@ -203,13 +208,11 @@
             </div>
           </div>
 
-        </div>
+          </div>
 
-        <!-- Colonne 2 : Agent Pi ou PLh -->
-        <div class="settings-column">
-
+          <div class="settings-panel" data-settings-panel="agent" role="tabpanel">
           <div class="settings-section">
-            <h3 class="settings-section-title">🤖 Agent Pi ou PLh</h3>
+            <h3 class="settings-section-title"><i data-lucide="bot" class="icon-sm"></i> Agent Pi ou PLh</h3>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-rpc-agent" />
               <label for="setting-rpc-agent">Gestion RPC de l'agent pi ou plh</label>
@@ -236,7 +239,7 @@
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-context-engine" />
-              <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session">📑 Context Engine (auto-contexte agent)</label>
+              <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session"><i data-lucide="layers" class="icon-sm"></i> Context Engine (auto-contexte agent)</label>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-context-budget" title="Budget de tokens pour le contexte auto-injecté">Budget contexte (tokens) :</label>
@@ -258,7 +261,7 @@
               <input type="checkbox" id="setting-confirm-file-edits" />
               <label for="setting-confirm-file-edits" title="Avant chaque write/edit de l'agent, afficher un diff et demander Accepter/Refuser. Désactivé par défaut (l'agent écrit librement).">Porte pré-écriture : confirmer les modifications de fichiers</label>
               <div id="confirm-edits-note" style="display:none;font-size:11px;color:var(--danger);margin-top:2px;padding-left:24px;">
-                ⚠️ Non supporté par ce backend (plh n'accepte pas <code>--extension</code>). Option désactivée.
+                <i data-lucide="triangle-alert" class="icon-sm"></i> Non supporté par ce backend (plh n'accepte pas <code>--extension</code>). Option désactivée.
               </div>
             </div>
             <hr class="settings-sep" />
@@ -272,13 +275,11 @@
             </div>
           </div>
 
-        </div>
+          </div>
 
-        <!-- Colonne 3 : Modèles IA -->
-        <div class="settings-column">
-
+          <div class="settings-panel" data-settings-panel="models" role="tabpanel">
           <div class="settings-section">
-            <h3 class="settings-section-title">🧠 Modèles IA</h3>
+            <h3 class="settings-section-title"><i data-lucide="cpu" class="icon-sm"></i> Modèles IA</h3>
             <div class="setting-row">
               <label for="setting-pdf-md-model">Modèle pour PDF → MD :</label>
               <select id="setting-pdf-md-model">
@@ -338,13 +339,11 @@
           </div>
 
 
-        </div>
+          </div>
 
-        <!-- Colonne 4 : Accès distant (mode remote) -->
-        <div class="settings-column">
-
+          <div class="settings-panel" data-settings-panel="remote" role="tabpanel">
           <div class="settings-section" id="settings-remote-section">
-            <h3 class="settings-section-title">🌐 Accès distant (mode remote)</h3>
+            <h3 class="settings-section-title"><i data-lucide="globe" class="icon-sm"></i> Accès distant (mode remote)</h3>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-web-enabled" />
               <label for="setting-web-enabled">Activer le serveur web distant (supervision navigateur)</label>
@@ -388,14 +387,14 @@
               <div class="setting-row">
                 <label for="tailscale-url">Adresse d'accès distant :</label>
                 <input type="text" id="tailscale-url" readonly placeholder="https://<hostname>.ts.net/" />
-                <button id="btn-tailscale-copy" type="button" class="web-btn">📋 Copier</button>
+                <button id="btn-tailscale-copy" type="button" class="web-btn"><i data-lucide="copy" class="icon-sm"></i> Copier</button>
               </div>
               <div class="setting-row tailscale-qr-row">
                 <div id="tailscale-qrcode" class="tailscale-qrcode" title="Scannez avec le téléphone pour ouvrir l'accès distant"></div>
                 <small id="tailscale-serve-status" class="muted">Statut serve : —</small>
               </div>
               <div class="setting-row">
-                <button id="btn-tailscale-reconfigure" type="button" class="web-btn">🔄 Reconfigurer maintenant</button>
+                <button id="btn-tailscale-reconfigure" type="button" class="web-btn"><i data-lucide="rotate-cw" class="icon-sm"></i> Reconfigurer maintenant</button>
               </div>
             </div>
             <hr class="settings-sep" />
@@ -412,16 +411,16 @@
             </div>
             <div class="setting-row">
               <label>Journal d'audit distant :</label>
-              <button id="btn-web-audit" type="button" class="web-btn">📜 Ouvrir le journal</button>
+              <button id="btn-web-audit" type="button" class="web-btn"><i data-lucide="scroll-text" class="icon-sm"></i> Ouvrir le journal</button>
             </div>
             <div class="setting-row">
               <small class="muted">Après un changement d'activation / adresse / port, cliquez « Enregistrer » puis le serveur recharge à chaud automatiquement.</small>
             </div>
           </div>
 
+          </div>
+          </div>
         </div>
-
-      </div>
 
       <div class="modal-actions">
         <button id="btn-save-settings">Enregistrer</button>
@@ -432,19 +431,19 @@
 
   <!-- Menu contextuel -->
   <div id="context-menu" class="context-menu hidden">
-    <button id="ctx-preview-csv">📊 Prévisualiser le CSV</button>
-    <button id="ctx-preview">👁️ Prévisualiser</button>
-    <button id="ctx-export-pdf">📕 Exporter en PDF</button>
-    <button id="ctx-open-browser">🌐 Ouvrir dans le navigateur</button>
-    <button id="ctx-send-agent">📤 Envoyer à l'agent Pi</button>
-    <button id="ctx-add-prompt-builder">🧩 Ajouter au Prompt Builder</button>
-    <button id="ctx-git-diff">🔖 Voir le diff Git</button>
-    <button id="ctx-favorite">⭐ Ajouter aux favoris</button>
-    <button id="ctx-create-file">📄 Créer un fichier</button>
-    <button id="ctx-create-folder">📁 Créer un dossier</button>
-    <button id="ctx-rename">📝 Renommer</button>
-    <button id="ctx-delete">🗑️ Supprimer</button>
-    <button id="ctx-create-md">📝 Créer un fichier Markdown</button>
+    <button id="ctx-preview-csv"><i data-lucide="table" class="icon-sm"></i> Prévisualiser le CSV</button>
+    <button id="ctx-preview"><i data-lucide="eye" class="icon-sm"></i> Prévisualiser</button>
+    <button id="ctx-export-pdf"><i data-lucide="book" class="icon-sm"></i> Exporter en PDF</button>
+    <button id="ctx-open-browser"><i data-lucide="globe" class="icon-sm"></i> Ouvrir dans le navigateur</button>
+    <button id="ctx-send-agent"><i data-lucide="send" class="icon-sm"></i> Envoyer à l'agent Pi</button>
+    <button id="ctx-add-prompt-builder"><i data-lucide="puzzle" class="icon-sm"></i> Ajouter au Prompt Builder</button>
+    <button id="ctx-git-diff"><i data-lucide="git-compare" class="icon-sm"></i> Voir le diff Git</button>
+    <button id="ctx-favorite"><i data-lucide="star" class="icon-sm"></i> Ajouter aux favoris</button>
+    <button id="ctx-create-file"><i data-lucide="file-plus" class="icon-sm"></i> Créer un fichier</button>
+    <button id="ctx-create-folder"><i data-lucide="folder-plus" class="icon-sm"></i> Créer un dossier</button>
+    <button id="ctx-rename"><i data-lucide="pencil" class="icon-sm"></i> Renommer</button>
+    <button id="ctx-delete"><i data-lucide="trash-2" class="icon-sm"></i> Supprimer</button>
+    <button id="ctx-create-md"><i data-lucide="file-text" class="icon-sm"></i> Créer un fichier Markdown</button>
   </div>
 
   <!-- Indicateur de chargement global -->
@@ -457,8 +456,8 @@
   <div id="update-modal" class="modal hidden">
     <div class="modal-content update-content">
       <div class="modal-header">
-        <h2>⬆️ Mise à jour disponible <span id="update-version" class="muted"></span></h2>
-        <button id="update-close" class="modal-close" title="Plus tard">✕</button>
+        <h2><i data-lucide="arrow-up-circle" class="icon-lg"></i> Mise à jour disponible <span id="update-version" class="muted"></span></h2>
+        <button id="update-close" class="modal-close" title="Plus tard"><i data-lucide="x" class="icon-sm"></i></button>
       </div>
       <div id="update-date" class="muted" style="margin-bottom:10px"></div>
       <div class="update-notes-wrap">
@@ -469,7 +468,7 @@
         <div id="update-progress-label" class="muted">Téléchargement…</div>
       </div>
       <div class="modal-actions">
-        <button id="btn-update-install" class="web-btn">📥 Installer maintenant</button>
+        <button id="btn-update-install" class="web-btn"><i data-lucide="download" class="icon-sm"></i> Installer maintenant</button>
         <button id="btn-update-later" class="web-btn">Plus tard</button>
       </div>
     </div>
@@ -479,12 +478,12 @@
   <div id="audit-modal" class="modal hidden">
     <div class="modal-content audit-content">
       <div class="modal-header">
-        <h2>📜 Journal d'audit distant</h2>
-        <button id="audit-close" class="modal-close" title="Fermer">✕</button>
+        <h2><i data-lucide="scroll-text" class="icon-lg"></i> Journal d'audit distant</h2>
+        <button id="audit-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
       </div>
       <div class="modal-actions">
-        <button id="btn-audit-refresh" class="web-btn">🔄 Actualiser</button>
-        <button id="btn-audit-clear" class="web-btn web-btn-danger">🗑 Effacer le journal</button>
+        <button id="btn-audit-refresh" class="web-btn"><i data-lucide="rotate-cw" class="icon-sm"></i> Actualiser</button>
+        <button id="btn-audit-clear" class="web-btn web-btn-danger"><i data-lucide="trash-2" class="icon-sm"></i> Effacer le journal</button>
         <span id="audit-count" class="muted" style="margin-left:auto;align-self:center"></span>
       </div>
       <div class="audit-table-wrap">

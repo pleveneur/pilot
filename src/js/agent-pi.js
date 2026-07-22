@@ -11,6 +11,7 @@ import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAb
 import { renderEditGateDialog } from "./diff-view.js";
 import { agentDisplayLabel } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
+import { refreshIcons, setIcon } from "./icons.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -105,16 +106,16 @@ export async function createAgentPi(container) {
   const toolbar = document.createElement("div");
   toolbar.className = "agent-chat-toolbar";
   toolbar.innerHTML = `
-    <button class="agent-btn" data-action="abort" title="Arrêter l'agent">⏹️</button>
-    <button class="agent-btn" data-action="new-session" title="Nouvelle session">➕</button>
-    <button class="agent-btn" data-action="compact" title="Compacter le contexte">📦</button>
-    <button class="agent-btn" data-action="orchestration" title="Mode Orchestration : architecte + codeur">🧠</button>
-    <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)">🛡️</button>
-    <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi">📑</button>
-    <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md">📝</button>
+    <button class="agent-btn" data-action="abort" title="Arrêter l'agent"><i data-lucide="square" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="new-session" title="Nouvelle session"><i data-lucide="plus" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="compact" title="Compacter le contexte"><i data-lucide="archive" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="orchestration" title="Mode Orchestration : architecte + codeur"><i data-lucide="brain" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)"><i data-lucide="shield-check" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
-    <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="🧠 Orchestrateur (mode Orchestration)"></select>
-    <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="🔨 Codeur (mode Orchestration)"></select>
+    <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="Orchestrateur (mode Orchestration)"></select>
+    <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="Codeur (mode Orchestration)"></select>
     <span class="agent-stats" id="agent-stats" title="Tokens / Coût"></span>
     <span class="agent-status" id="agent-status">Prêt</span>
   `;
@@ -160,11 +161,11 @@ export async function createAgentPi(container) {
   orchestrationPanel.id = "orchestration-panel";
   orchestrationPanel.innerHTML = `
     <div class="orchestration-header">
-      <span class="orchestration-title">📋 Plan d'orchestration</span>
+      <span class="orchestration-title"><i data-lucide="clipboard-list" class="icon-sm"></i> Plan d'orchestration</span>
       <div class="orchestration-actions">
-        <button class="agent-btn" data-action="orch-pause" title="Mettre en pause">⏸️</button>
-        <button class="agent-btn" data-action="orch-resume" title="Reprendre" disabled>▶️</button>
-        <button class="agent-btn" data-action="orch-reset" title="Nouveau plan">🔄</button>
+        <button class="agent-btn" data-action="orch-pause" title="Mettre en pause"><i data-lucide="pause" class="icon-sm"></i></button>
+        <button class="agent-btn" data-action="orch-resume" title="Reprendre" disabled><i data-lucide="play" class="icon-sm"></i></button>
+        <button class="agent-btn" data-action="orch-reset" title="Nouveau plan"><i data-lucide="rotate-cw" class="icon-sm"></i></button>
       </div>
     </div>
     <div class="orchestration-progress">
@@ -173,7 +174,7 @@ export async function createAgentPi(container) {
     </div>
     <div class="orch-metrics" id="orch-metrics"></div>
     <div class="orch-attempts hidden" id="orch-attempts">
-      <div class="orch-attempts-header" id="orch-attempts-header">📋 Journal des tentatives ▶</div>
+      <div class="orch-attempts-header" id="orch-attempts-header"><i data-lucide="clipboard-list" class="icon-sm"></i> Journal des tentatives <span class="orch-chevron">▶</span></div>
       <div class="orch-attempts-body hidden" id="orch-attempts-body"></div>
     </div>
     <div class="orchestration-tasks" id="orch-tasks"></div>
@@ -202,12 +203,13 @@ export async function createAgentPi(container) {
     <div class="agent-prompt-popup" id="agent-prompt-popup"></div>
     <div class="agent-image-previews" id="agent-image-previews"></div>
     <textarea class="agent-input" id="agent-input" rows="1" placeholder="Écrire un message... (Entrée pour envoyer, Shift+Entrée pour nouvelle ligne, / pour les commandes)"></textarea>
-    <button class="agent-btn agent-mic-btn" data-action="voice" title="Dictée vocale (transcription cloud)" aria-label="Dictée vocale">🎙️</button>
-    <button class="agent-btn agent-send-btn" data-action="send">▶️</button>
+    <button class="agent-btn agent-mic-btn" data-action="voice" title="Dictée vocale (transcription cloud)" aria-label="Dictée vocale"><i data-lucide="mic" class="icon-sm"></i></button>
+    <button class="agent-btn agent-send-btn" data-action="send"><i data-lucide="send-horizontal" class="icon-sm"></i></button>
   `;
   wrapper.appendChild(inputBar);
 
   container.appendChild(wrapper);
+  refreshIcons(wrapper);
 
   // ── État interne ──
   const state = {
@@ -222,6 +224,8 @@ export async function createAgentPi(container) {
     thinkingVisible: true,
     pendingImages: [],
     pendingToolCalls: new Map(),  // toolCallId → { name, args } (en attente de tool_execution_start)
+    lengthNudgeAttempts: 0,  // compteur de relances auto après stopReason:"length" (chat standard, max 2)
+    lastStopReason: "",      // dernier stopReason assistant reçu (détection réponse tronquée)
     // Orchestration
     orchestrationEnabled: false,
     orchestrationPlan: null,      // { plan: [...], progress: { current_task, completed, failed, escalated, task_attempts } }
@@ -562,6 +566,9 @@ export async function createAgentPi(container) {
     hideAutocomplete();
     // Réinitialiser le flag d'erreur de connexion (nouvel envoi utilisateur)
     state.orchestrationConnErrorSeen = false;
+    // L'utilisateur reprend la main : remise à zéro du compteur de relances auto
+    // (length) pour la prochaine troncation éventuelle.
+    state.lengthNudgeAttempts = 0;
 
     // Images en attente
     const images = state.pendingImages.length > 0
@@ -1133,7 +1140,7 @@ export async function createAgentPi(container) {
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
           // Remettre le bouton en mode abort
-          btn.textContent = "⏹️";
+          setIcon(btn, "square");
           btn.title = "Arrêter l'agent";
           btn.dataset.action = "abort";
           // Remettre les stats à jour
@@ -1628,22 +1635,23 @@ export async function createAgentPi(container) {
     overlay.className = "modal";
     overlay.innerHTML = `
       <div class="modal-content" style="width:520px;max-width:95vw;">
-        <h2>🧠 Mode Orchestration — sélection des modèles</h2>
+        <h2><i data-lucide="brain" class="icon-sm"></i> Mode Orchestration — sélection des modèles</h2>
         <div class="setting-row">
-          <label>🧠 Orchestrateur (cloud, intelligent)</label>
+          <label><i data-lucide="brain" class="icon-sm"></i> Orchestrateur (cloud, intelligent)</label>
           <select id="orch-pick-orch"></select>
         </div>
         <div class="setting-row">
-          <label>🔨 Codeur (local, économique)</label>
+          <label><i data-lucide="hammer" class="icon-sm"></i> Codeur (local, économique)</label>
           <select id="orch-pick-coder"></select>
         </div>
         <div class="orch-picker-status" id="orch-pick-status"></div>
         <div class="modal-actions">
-          <button id="orch-pick-validate">✅ Valider et tester</button>
+          <button id="orch-pick-validate"><i data-lucide="circle-check" class="icon-sm"></i> Valider et tester</button>
           <button id="orch-pick-cancel">Annuler</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    refreshIcons(overlay);
 
     const orchSel = overlay.querySelector("#orch-pick-orch");
     const coderSel = overlay.querySelector("#orch-pick-coder");
@@ -1804,13 +1812,14 @@ export async function createAgentPi(container) {
     const titleEl = document.querySelector("#orchestration-panel .orchestration-title");
     if (!titleEl) return;
     const req = (st.orchestrationLastUserPrompt || "").trim().replace(/\s+/g, " ");
-    let label = "📋 Plan d'orchestration";
+    let label = "Plan d'orchestration";
     if (req) {
       const max = 70;
       let excerpt = req.length > max ? req.slice(0, max).replace(/\s+\S*$/, "") + "…" : req;
       label += " : " + excerpt;
     }
-    titleEl.textContent = label;
+    titleEl.innerHTML = `<i data-lucide="clipboard-list" class="icon-sm"></i> ${escapeHtml(label)}`;
+    refreshIcons(titleEl);
     titleEl.title = req ? `Demande : ${req}` : "Plan d'orchestration";
   }
 
@@ -1923,7 +1932,8 @@ export async function createAgentPi(container) {
       return;
     }
     panel.classList.remove("hidden");
-    header.textContent = `📋 Journal des tentatives (tâche #${taskId}) ${body.classList.contains("hidden") ? "▶" : "▼"}`;
+    header.innerHTML = `<i data-lucide="clipboard-list" class="icon-sm"></i> Journal des tentatives (tâche #${taskId}) ${body.classList.contains("hidden") ? "▶" : "▼"}`;
+    refreshIcons(header);
     body.innerHTML = logs.map((l) => {
       const loopBadge = l.loop ? `<span class="orch-attempt-badge orch-attempt-loop">🔄 bouclage</span>` : "";
       const dur = (typeof l.durationMs === "number" && l.durationMs > 0) ? ` · ${Math.round(l.durationMs / 1000)}s` : "";
@@ -3897,6 +3907,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
   switch (type) {
     case "agent_start":
       state.isStreaming = true;
+      state.lastStopReason = "";  // réinit pour la détection de troncation (length) à l'agent_end
       // En mode orchestration, préfixer le statut avec le rôle actif (Orchestrateur/Codeur)
       const orchRolePrefix =
         state.orchestrationEnabled && state.orchestrationActiveRole
@@ -4041,6 +4052,33 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           }
         }
       }
+      // ── Chat standard : relance auto après réponse tronquée (stopReason:"length") ──
+      // Les modèles locaux (ex. gemma 12B) qui écrivent de gros fichiers via un
+      // tool call "write" se font couper par la limite de tokens de sortie : le
+      // tool call est tronqué, pi le rejette ("hit the output token limit"), puis
+      // le modèle produit souvent une réponse vide et s'arrête. Sans relance,
+      // l'utilisateur croit que l'agent « s'est arrêté pour rien » et doit taper
+      // « ok » à la main. On reproduit ce nudge automatiquement (max 2), comme en
+      // mode orchestration (detectReflectionOnly). Cf. session pi 019f85e4.
+      if (!state.orchestrationEnabled && state.lastStopReason === "length") {
+        const MAX_LENGTH_NUDGES = 2;
+        state.lengthNudgeAttempts = (state.lengthNudgeAttempts || 0) + 1;
+        if (state.lengthNudgeAttempts <= MAX_LENGTH_NUDGES) {
+          appendSystemMessage(messagesEl,
+            `✂️ Réponse tronquée (limite de tokens de sortie atteinte). Relance automatique (${state.lengthNudgeAttempts}/${MAX_LENGTH_NUDGES})…`);
+          try {
+            await invoke("send_agent_prompt", {
+              message: "Ta réponse précédente a été coupée par la limite de tokens de sortie. Reprends exactement là où tu t'es arrêté."
+            });
+          } catch (e) {
+            console.error("Erreur relance auto (length):", e);
+            appendErrorMessage(messagesEl, `❌ Erreur lors de la relance auto : ${e}`);
+          }
+        } else {
+          appendSystemMessage(messagesEl,
+            "✂️ Réponse toujours tronquée après 2 relances auto. Augmente la limite de tokens de sortie (max_tokens) ou relance manuellement avec « continue ».");
+        }
+      }
       // Réinitialiser le texte brut APRÈS le parsing
       state.lastAssistantRawText = "";
       break;
@@ -4069,6 +4107,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         state.currentTextBlock = null;
         state.currentThinkingBlock = null;
         state.pendingText = "";
+        state.lastStopReason = msg.stopReason || "";
         // Ne PAS réinitialiser lastAssistantRawText ici : il est déjà remis à zéro
         // dans message_start (streamé) ou va être rempli ci-dessous (non streamé).
         // Le garder vide empêche handleOrchestrationAgentEnd de voir la réponse.
@@ -4097,17 +4136,36 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         } else if (Array.isArray(msg.content) && msg.content.length > 0) {
           // Remplir lastAssistantRawText pour le mode orchestration (non streamé)
           let fullText = "";
+          let lastTextSection = null; // tracker pour fermer avant thinking/tool (ordre chronologique)
           for (const part of msg.content) {
             if (part.type === "text" && part.text) {
-              appendTextSection(blk, part.text);
+              // reuse=true : les parts text consécutives fusionnent (continuité de paragraphe)
+              lastTextSection = appendTextSection(blk, part.text);
               fullText += part.text;
-            } else if (part.type === "thinking" && part.thinking) {
-              appendThinkingSection(blk, part.thinking);
-            } else if ((part.type === "toolCall" || part.type === "tool_call") && part.name) {
-              appendToolBlock(blk, part.name, part.arguments || part.args || {});
+            } else {
+              // Fermer la section texte courante avant d'insérer une pensée ou un
+              // outil, pour préserver l'ordre chronologique (sinon le prochain
+              // text serait réinjecté dans la section précédente, au-dessus du
+              // tool/thinking). Cf. spec_rpc § affichage streamé.
+              if (lastTextSection) {
+                closeTextSection(lastTextSection);
+                lastTextSection = null;
+              }
+              if (part.type === "thinking" && part.thinking) {
+                appendThinkingSection(blk, part.thinking);
+              } else if ((part.type === "toolCall" || part.type === "tool_call") && part.name) {
+                appendToolBlock(blk, part.name, part.arguments || part.args || {});
+              }
             }
           }
           if (fullText) state.lastAssistantRawText = fullText;
+          // Fermer la dernière section texte (évite la réutilisation par un
+          // message complet suivant dans la même bulle, qui y réinjecterait son
+          // contenu au-dessus des outils/pensées).
+          if (lastTextSection) {
+            closeTextSection(lastTextSection);
+            lastTextSection = null;
+          }
           // Nettoyer les blocs thinking vides (contenu «{}»  ou vide)
           const thinkingBlocks = blk.querySelectorAll(".agent-thinking");
           for (const tb of thinkingBlocks) {
@@ -4136,8 +4194,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           appendTextSection(blk, msg.content);
           state.lastAssistantRawText = msg.content;
         }
-      } else if (msg.role === "toolResult" && showToolsEnabled) {
-        // Afficher le résultat d'outil dans la bulle assistant en cours
+      } else if (msg.role === "toolResult" && (showToolsEnabled || msg.isError)) {
+        // Afficher le résultat d'outil dans la bulle assistant en cours.
+        // Les résultats en erreur (ex. tool call tronqué par la limite de tokens
+        // de sortie) sont affichés même si les outils sont masqués : sinon
+        // l'utilisateur ne voit pas pourquoi l'agent « s'arrête » sans raison.
         const targetBlk = state.currentAssistantBlock || (() => {
           const blk = createAssistantBlock(messagesEl);
           state.currentAssistantBlock = blk;
@@ -4371,6 +4432,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // Le cas non streamé (event "message") est déjà géré plus haut ; ici on couvre
       // le chemin streamé (message_start → message_update → message_end).
       const endMsg = payload.message;
+      // Mémoriser le stopReason pour la détection de troncation (length) à l'agent_end
+      state.lastStopReason = endMsg ? (endMsg.stopReason || "") : "";
       if (endMsg && endMsg.stopReason === "error" && endMsg.errorMessage) {
         const raw = endMsg.errorMessage || "";
         let friendlyMsg;
@@ -4483,10 +4546,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     case "compaction_end": {
       const label = payload.aborted ? "⚠️ Compaction annulée" : "✅ Compaction terminée";
       appendSystemMessage(messagesEl, label);
-      // Si un résumé est fourni dans compaction_end, l'afficher
+      // Si un résumé est fourni dans compaction_end, l'afficher.
+      // On l'attache à la bulle assistant courante (si un tour est en cours) pour
+      // préserver la continuité visuelle : la réflexion du dessus reste dans la
+      // même bulle, juste au-dessus du résumé repliable, au lieu d'être rejetée
+      // dans une bulle précédente éloignée par le scrollToBottom.
       if (payload.summary && showThinkingEnabled) {
-        const blk = createAssistantBlock(messagesEl);
-        const tokStr = payload.tokensBefore ? `${(payload.tokensBefore / 1000).toFixed(1)}k` : "";
+        const blk = state.currentAssistantBlock || createAssistantBlock(messagesEl);
         appendCompactionSummary(blk, payload.summary);
         scrollToBottom(messagesEl);
       }
@@ -4501,9 +4567,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       const tokStr = tokensBefore ? `${(tokensBefore / 1000).toFixed(1)}k` : "?";
       const hookLabel = fromHook ? " (auto)" : "";
       appendSystemMessage(messagesEl, `🧹 Compaction${hookLabel} : ${tokStr} tokens compactés`);
-      // Afficher le résumé dans un bloc collapsible si showThinkingEnabled
+      // Afficher le résumé dans un bloc collapsible si showThinkingEnabled.
+      // Bulle courante si un tour est en cours (continuité visuelle), sinon bulle neuve.
       if (summary && showThinkingEnabled) {
-        const blk = createAssistantBlock(messagesEl);
+        const blk = state.currentAssistantBlock || createAssistantBlock(messagesEl);
         appendCompactionSummary(blk, summary);
         scrollToBottom(messagesEl);
       }
@@ -4594,7 +4661,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // Remplacer le bouton abort par reconnect
       const abortBtn = document.querySelector('[data-action="abort"]');
       if (abortBtn) {
-        abortBtn.textContent = "🔄";
+        setIcon(abortBtn, "rotate-cw");
         abortBtn.title = "Reconnecter l'agent";
         abortBtn.dataset.action = "reconnect";
       }
@@ -4832,7 +4899,7 @@ function hideResumePopup() {
 
 function renderResumePopup() {
   if (!resumePopupEl) return;
-  let html = '<div class="agent-resume-title">📂 Sessions enregistrées :</div>';
+  let html = '<div class="agent-resume-title"><i data-lucide="folder-open" class="icon-sm"></i> Sessions enregistrées :</div>';
   resumeSessions.forEach((s, i) => {
     const date = s.timestamp ? new Date(s.timestamp).toLocaleString() : "?";
     const size = s.size ? formatFileSize(s.size) : "";
@@ -4848,6 +4915,7 @@ function renderResumePopup() {
       </div>`;
   });
   resumePopupEl.innerHTML = html;
+  refreshIcons(resumePopupEl);
   resumePopupEl.classList.add("visible");
 
   // Attacher les clics
@@ -4911,18 +4979,24 @@ async function applyResumeSelection(messagesEl) {
                   // Fusionner dans le même bloc jusqu'au prochain user
                   if (!currentBlk) { currentBlk = createAssistantBlock(messagesEl); createdBlk = true; }
                   let pendingThinking = "";
+                  let lastTextSection = null; // fermer avant thinking/tool (ordre chronologique)
                   for (const part of msg.content) {
                     if (part.type === "thinking" && part.thinking) {
                       if (showThinkingEnabled) pendingThinking += part.thinking;
                     } else {
+                      // Fermer la section texte courante avant d'insérer une pensée
+                      // ou un outil (sinon le prochain text est réinjecté dans la
+                      // section précédente, au-dessus du tool/thinking).
+                      if (lastTextSection) { closeTextSection(lastTextSection); lastTextSection = null; }
                       if (pendingThinking) { appendThinkingSection(currentBlk, pendingThinking); pendingThinking = ""; }
                       if (part.type === "text" && part.text) {
-                        appendTextSection(currentBlk, part.text);
+                        lastTextSection = appendTextSection(currentBlk, part.text);
                       } else if ((part.type === "toolCall" || part.type === "tool_call") && part.name && currentBlk) {
                         appendToolBlock(currentBlk, part.name, part.arguments || part.args || {});
                       }
                     }
                   }
+                  if (lastTextSection) closeTextSection(lastTextSection);
                   if (pendingThinking) appendThinkingSection(currentBlk, pendingThinking);
                 } else if (typeof msg.content === "string" && msg.content) {
                   if (!currentBlk) { currentBlk = createAssistantBlock(messagesEl); createdBlk = true; }
@@ -5062,7 +5136,7 @@ function hidePromptPopup() {
 
 function renderPromptPopup() {
   if (!promptPopupEl) return;
-  let html = `<div class="agent-prompt-title">🧩 Exécuter un prompt :</div>`;
+  let html = `<div class="agent-prompt-title"><i data-lucide="puzzle" class="icon-sm"></i> Exécuter un prompt :</div>`;
   promptTemplates.forEach((t, i) => {
     const active = i === promptIndex ? " active" : "";
     html += `
@@ -5071,6 +5145,7 @@ function renderPromptPopup() {
       </div>`;
   });
   promptPopupEl.innerHTML = html;
+  refreshIcons(promptPopupEl);
   promptPopupEl.classList.add("visible");
 
   // Attacher les clics
@@ -5470,7 +5545,7 @@ function appendExtensionEditor(container, requestId, payload) {
 
   wrapper.innerHTML = `
     <div class="agent-extension-editor-header">
-      <span>📝 ${escapeHtml(title)}</span>
+      <span><i data-lucide="file-text" class="icon-sm"></i> ${escapeHtml(title)}</span>
       <span class="agent-extension-editor-hint">Ctrl+Enter pour valider</span>
     </div>
     <textarea class="agent-extension-editor-textarea" rows="10" spellcheck="false">${escapeHtml(prefill)}</textarea>
@@ -5515,6 +5590,7 @@ function appendExtensionEditor(container, requestId, payload) {
   });
 
   container.appendChild(wrapper);
+  refreshIcons(wrapper);
   textarea.focus();
   container.scrollTop = container.scrollHeight;
 }
