@@ -13,6 +13,15 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Constante Windows `CREATE_NO_WINDOW` (0x08000000). Appliquée à chaque
+/// `Command::new` silencieux pour éviter qu'une fenêtre console noire
+/// n'apparaisse/disparaisse fugacement à l'écran (ex: `git`, `pi`, `where`).
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 mod help;
 mod review;
 mod rpc_manager;
@@ -1233,12 +1242,13 @@ fn run_help_probe(pi_path: &str) -> bool {
 pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Duration) -> String {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
-    let mut child = match Command::new(exe)
-        .args(args)
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return String::new(),
     };
@@ -2369,7 +2379,12 @@ fn run_python_command(binary: &str, arg1: &str, arg2: &str, file: &str, cwd: &st
 
 fn which(cmd: &str) -> Option<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
-    let out = std::process::Command::new("where").arg(cmd).output().ok()?;
+    let out = {
+        let mut c = std::process::Command::new("where");
+        c.arg(cmd);
+        c.creation_flags(CREATE_NO_WINDOW);
+        c.output().ok()?
+    };
     #[cfg(not(target_os = "windows"))]
     let out = std::process::Command::new("which").arg(cmd).output().ok()?;
     if out.status.success() {
@@ -2383,6 +2398,8 @@ fn which(cmd: &str) -> Option<std::path::PathBuf> {
 fn run_command(cmd: impl AsRef<std::ffi::OsStr>, args: &[impl AsRef<std::ffi::OsStr>], cwd: Option<&str>) -> Option<(bool, String)> {
     let mut command = std::process::Command::new(cmd);
     command.args(args);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
     if let Some(c) = cwd {
         command.current_dir(c);
     }
