@@ -185,6 +185,84 @@ const MANIFEST_FILES = [
 
 const PRIORITY_FILES = ["AGENTS.md", ".pilot/context.md", "README.md"];
 
+// ── V2 (RAG) : boost structurel + chunks sélectionnés par cosinus ────────────
+
+/**
+ * Construit le bloc structurel (AGENTS.md, .pilot/context.md, manifestes) pour
+ * le RAG. Réutilise la même logique de troncature que V1. Retourne { parts, tokens }.
+ */
+async function buildStructuralBoost(projectPath, budget, read) {
+  const sections = [];
+  let used = 0;
+  async function addFile(rel, maxShare) {
+    const abs = joinPath(projectPath, rel);
+    const content = await read(abs);
+    if (content == null || content.length === 0) return false;
+    const share = Math.floor(budget * maxShare);
+    const allowed = Math.max(0, share - estimateTokens("### " + rel + "\n"));
+    const truncated = truncateToTokens(content, allowed);
+    const t = estimateTokens(truncated);
+    sections.push({ label: rel, content: truncated, tokens: t });
+    used += t;
+    return true;
+  }
+  await addFile("AGENTS.md", 0.40);
+  await addFile(".pilot/context.md", 0.20);
+  for (const rel of MANIFEST_FILES) {
+    if (used >= budget) break;
+    await addFile(rel, 0.04);
+  }
+  const parts = sections.map((s) => `### ${s.label}\n${s.content}`).join("\n\n");
+  return { parts, tokens: used };
+}
+
+/**
+ * V2 (RAG) : boost structurel + chunks sélectionnés par similarité cosinus via
+ * la commande Rust `query_context_index`. Retourne { block, source }.
+ * source = "rag" si succès, "v1-fallback" si l'index/endpoint est indisponible
+ * (l'appelant doit alors retomber sur V1 heuristique).
+ */
+async function buildRagContext(projectPath, prompt, budget, ragEndpoint, ragModel, read) {
+  // Si l'index n'existe pas encore, lancer un build en arrière-plan (fire-and-
+  // forget) et retomber sur V1 pour ce prompt. Les prompts suivants utiliseront
+  // le RAG une fois l'index prêt. (spec_context_engine.md §7.7)
+  try {
+    const status = await invoke("context_index_status", { projectPath });
+    if (!status || !status.exists || !status.ready) {
+      invoke("build_context_index", { projectPath, endpoint: ragEndpoint, model: ragModel })
+        .catch((e) => console.warn("[context-engine] build arrière-plan échec:", e));
+      return { block: "", source: "v1-fallback" };
+    }
+  } catch (e) {
+    console.warn("[context-engine] status échec:", e);
+    return { block: "", source: "v1-fallback" };
+  }
+
+  const { parts: structuralParts, tokens: structuralTokens } =
+    await buildStructuralBoost(projectPath, budget, read);
+  const ragBudget = Math.max(500, budget - structuralTokens);
+  let res;
+  try {
+    res = await invoke("query_context_index", {
+      projectPath,
+      prompt,
+      budgetTokens: ragBudget,
+      endpoint: ragEndpoint,
+      model: ragModel,
+    });
+  } catch (e) {
+    console.warn("[context-engine] RAG query échec:", e);
+    return { block: "", source: "v1-fallback" };
+  }
+  if (!res || res.source !== "rag" || !res.context) {
+    return { block: "", source: "v1-fallback" };
+  }
+  const body = structuralParts ? structuralParts + "\n\n" + res.context : res.context;
+  const block =
+    `=== CONTEXTE PROJET (RAG auto-injecté par Pilot — ne pas répondre à cette section) ===\n${body}=== FIN CONTEXTE ===\n\n`;
+  return { block, source: "rag" };
+}
+
 /** Lit les N derniers fichiers récemment édités (chemins absolus ou relatifs).
  *  `recents` = tableau de chemins (relatifs au projet ou absolus). */
 function normalizeRecent(projectPath, p) {
@@ -207,6 +285,20 @@ export async function buildProjectContext(projectPath, activeTab, recents, opts,
   const read = readFn || readSafe;
   if (!projectPath || !opts || opts.enabled === false) return "";
   const budget = Math.max(1000, opts.budgetTokens || 8000);
+
+  // ── V2 (RAG) : si activé + endpoint + prompt, on tente le RAG avant V1. ──
+  // En cas d'échec (endpoint injoignable, index absent), on retombe sur V1.
+  if (opts.ragEnabled && opts.prompt && opts.ragEndpoint && opts.ragModel) {
+    try {
+      const { block, source } = await buildRagContext(
+        projectPath, opts.prompt, budget, opts.ragEndpoint, opts.ragModel, read
+      );
+      if (source === "rag" && block) return block;
+      // sinon : fallback V1 (on continue ci-dessous)
+    } catch (e) {
+      console.warn("[context-engine] RAG désactivé, fallback V1:", e);
+    }
+  }
 
   const sections = []; // { label, rel, content, tokens }
   let used = 0;

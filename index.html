@@ -45,6 +45,8 @@
     <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
     <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
     <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
+    <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
+    <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
     <button id="btn-help" title="Aide sur Pilot (poser une question)"><i data-lucide="circle-help" class="icon"></i></button>
     <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i> <b id="remote-badge-count">0</b></span>
   </div>
@@ -72,7 +74,12 @@
         <input type="search" id="search-input" placeholder="Rechercher dans les fichiers…" autocomplete="off" />
         <label class="search-option"><input type="checkbox" id="search-regex-toggle" /> Regex</label>
         <input type="text" id="search-ext-input" placeholder=".js,.md" class="search-ext-input" />
+        <button id="search-replace-toggle" title="Afficher le remplacement" class="search-replace-toggle"><i data-lucide="arrow-down-to-line" class="icon-sm"></i></button>
         <button id="search-close-btn" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <div id="search-replace-row" class="search-replace-row hidden">
+        <input type="search" id="search-replace-input" placeholder="Remplacer par…" autocomplete="off" />
+        <button id="search-replace-all" title="Tout remplacer"><i data-lucide="replace-all" class="icon-sm"></i> Tout remplacer</button>
       </div>
       <div id="search-results-count"></div>
       <div id="search-results-list"></div>
@@ -112,6 +119,7 @@
           <div class="shortcut-row"><kbd>Ctrl+G</kbd><span>Aller à la ligne</span></div>
           <div class="shortcut-row"><kbd>Ctrl+Tab</kbd><span>Onglet suivant</span></div>
           <div class="shortcut-row"><kbd>Ctrl+Shift+Tab</kbd><span>Onglet précédent</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Alt+R</kbd><span>Fichiers récents</span></div>
           <div class="shortcut-row"><kbd>F11</kbd><span>Mode Zen (plein écran)</span></div>
         </div>
         <div class="shortcuts-section">
@@ -124,8 +132,11 @@
         <div class="shortcuts-section">
           <h3>Éditeur</h3>
           <div class="shortcut-row"><kbd>Ctrl+F</kbd><span>Rechercher</span></div>
-          <div class="shortcut-row"><kbd>Ctrl+H</kbd><span>Remplacer</span></div>
-          <div class="shortcut-row"><kbd>Ctrl+D</kbd><span>Sélection suivante</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+H</kbd><span>Remplacer (dans le fichier)</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+F</kbd><span>Recherche globale</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+Shift+H</kbd><span>Remplacement global</span></div>
+          <div class="shortcut-row"><kbd>Ctrl+D</kbd><span>Sélection suivante (multi-curseur)</span></div>
+          <div class="shortcut-row"><kbd>Alt+clic</kbd><span>Ajouter un curseur</span></div>
           <div class="shortcut-row"><kbd>Ctrl+Z</kbd><span>Annuler</span></div>
           <div class="shortcut-row"><kbd>Ctrl+Shift+Z</kbd><span>Rétablir</span></div>
           <div class="shortcut-row"><kbd>Ctrl+Space</kbd><span>Auto-complétion IA</span></div>
@@ -156,7 +167,9 @@
           <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
           <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
           <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
+          <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
           <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
+          <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
         </nav>
         <div class="settings-panels">
 
@@ -321,6 +334,7 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-orch-granularity">Taille des tâches :</label>
               <select id="setting-orch-granularity">
+                <option value="atomic">Atomique (~10-25 lignes, 1 fichier — modèle local)</option>
                 <option value="fine">Fine (~30-60 lignes, max 2 fichiers)</option>
                 <option value="medium">Moyenne (~60-120 lignes, max 3 fichiers)</option>
                 <option value="large">Large (~100-200 lignes, max 5 fichiers)</option>
@@ -336,9 +350,86 @@
                 <option value="10">Par 10 tâches</option>
               </select>
             </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-orch-test-enabled" />
+              <label for="setting-orch-test-enabled" title="Après chaque tâche du codeur, exécute les tests du projet (npm test / cargo test / pytest / go test) au lieu de ne valider que la syntaxe. Détecte les régressions fonctionnelles et les tests cassés. Opt-in — un test long peut ralentir l'orchestration.">🧪 Auto-test post-modification (exécuter les tests après chaque tâche)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-test-timeout">Timeout des tests (ms) :</label>
+              <input type="number" id="setting-orch-test-timeout" min="5000" max="600000" step="1000" value="60000" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-test-max-corrections">Corrections max (lint + tests cumulés) :</label>
+              <input type="number" id="setting-orch-test-max-corrections" min="1" max="10" step="1" value="3" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-test-scope">Portée des tests :</label>
+              <select id="setting-orch-test-scope">
+                <option value="targeted">Ciblée (fichiers modifiés, recommandé)</option>
+                <option value="full">Complète (tous les tests après chaque tâche)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-test-command" title="Laisser vide pour auto-détection (npm test / cargo test / pytest / go test). Si renseigné, la commande est utilisée telle quelle (portée complète uniquement).">Commande de tests (override, vide = auto) :</label>
+              <input type="text" id="setting-orch-test-command" placeholder="ex: npm run test:unit" />
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-orch-snapshots-enabled" checked />
+              <label for="setting-orch-snapshots-enabled" title="Avant chaque tâche du codeur, capture un snapshot Git des fichiers (git stash create). Permet d'annuler la dernière tâche via le bouton ↩️ du panneau d'orchestration. Défaut activé. Désactivé gracieusement si le projet n'est pas un repo Git.">↩️ Snapshots avant tâche (annulation possible via le bouton ↩️)</label>
+            </div>
+            <div class="setting-row setting-row-indent setting-row-checkbox">
+              <input type="checkbox" id="setting-orch-reviewer-enabled" />
+              <label for="setting-orch-reviewer-enabled" title="Après chaque tâche (ou seulement les fichiers sensibles), un reviewer indépendant (2e session pi, contexte vierge) relit le diff et émet APPROVED ou CHANGES_REQUESTED. Opt-in — coûte un tour cloud par tâche. Modèle reviewer configurable ci-dessous (vide = modèle orchestrateur).">🔍 Reviewer indépendant (relecture externe après chaque tâche)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-reviewer-model">Modèle du reviewer :</label>
+              <select id="setting-orch-reviewer-model">
+                <option value="">Modèle orchestrateur (défaut)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-orch-reviewer-scope">Portée de la review :</label>
+              <select id="setting-orch-reviewer-scope">
+                <option value="all">Chaque tâche</option>
+                <option value="critical">Fichiers sensibles uniquement</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent" id="setting-orch-reviewer-patterns-row" style="display:none">
+              <label for="setting-orch-reviewer-patterns" title="Un glob par ligne. Ex: src-tauri/src/**/*.rs, spec_*.md, AGENTS.md, package.json. En mode « Fichiers sensibles », le reviewer ne se déclenche que si un fichier modifié matche un de ces globs.">Globs critiques (un par ligne) :</label>
+              <textarea id="setting-orch-reviewer-patterns" rows="4" placeholder="src-tauri/src/**/*.rs&#10;spec_*.md&#10;AGENTS.md&#10;package.json"></textarea>
+            </div>
           </div>
 
 
+          </div>
+
+          <div class="settings-panel" data-settings-panel="providers" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="server" class="icon-sm"></i> Fournisseurs &amp; Modèles</h3>
+            <p class="muted">Édition du registre de modèles du backend sélectionné (models.json). Sauvegarde avec backup <code>.bak</code>. Les modifications sont prises en compte au prochain rafraîchissement de l agent.</p>
+            <div class="field-row">
+              <label for="setting-providers-backend">Backend :</label>
+              <select id="setting-providers-backend"></select>
+              <span id="setting-providers-backend-path" class="muted"></span>
+            </div>
+            <div class="field-row">
+              <label for="setting-aliases-default">Modèle par défaut :</label>
+              <select id="setting-aliases-default"><option value="">(aucun)</option></select>
+            </div>
+            <div class="providers-toolbar">
+              <button type="button" id="btn-providers-add" class="pc-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter un fournisseur</button>
+              <button type="button" id="btn-providers-reload" class="pc-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Recharger</button>
+              <span id="providers-status" class="muted"></span>
+            </div>
+            <div id="providers-list" class="providers-list"></div>
+          </div>
+          <div class="settings-section">
+            <p class="muted">Alias : saisissez un alias court au niveau de chaque modèle (champ « alias : »). L agent reconnaît ces alias comme commandes slash.</p>
+          </div>
+          <div class="settings-section providers-actions">
+            <button type="button" id="btn-providers-save" class="pc-btn pc-btn-primary"><i data-lucide="save" class="icon-sm"></i> Sauvegarder</button>
+            <button type="button" id="btn-providers-cancel" class="pc-btn"><i data-lucide="undo-2" class="icon-sm"></i> Annuler</button>
+          </div>
           </div>
 
           <div class="settings-panel" data-settings-panel="remote" role="tabpanel">
@@ -419,6 +510,34 @@
           </div>
 
           </div>
+
+          <div class="settings-panel" data-settings-panel="rag" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="database" class="icon-sm"></i> RAG (Context Engine V2)</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-context-rag" />
+              <label for="setting-context-rag" title="Indexe le projet en vecteurs via Ollama et sélectionne les passages pertinents par similarité sémantique au prompt. Plus précis que l'heuristique V1. Nécessite un serveur Ollama local.">Activer le RAG (recherche sémantique du contexte projet via embeddings)</label>
+            </div>
+            <div id="context-rag-block">
+              <div class="setting-row">
+                <label for="setting-context-rag-endpoint" title="Adresse du serveur Ollama (ex: http://127.0.0.1:11434)">Adresse Ollama :</label>
+                <input type="text" id="setting-context-rag-endpoint" value="http://127.0.0.1:11434" placeholder="http://127.0.0.1:11434" style="width:280px;" />
+              </div>
+              <div class="setting-row">
+                <label for="setting-context-rag-model" title="Nom du modèle d'embeddings (ex: nomic-embed-text)">Modèle d'embedding :</label>
+                <input type="text" id="setting-context-rag-model" value="nomic-embed-text" placeholder="nomic-embed-text" style="width:200px;" />
+                <button id="btn-context-rag-test" type="button" class="settings-btn" style="margin-left:10px;">Tester la connexion</button>
+              </div>
+              <div class="setting-row">
+                <span id="context-rag-test-status" style="font-size:11px;color:var(--text-muted);"></span>
+              </div>
+              <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+                Le bouton <i data-lucide="layers" class="icon-sm"></i> « Contexte » de l'agent force un rebuild complet de l'index. L'index SQLite est stocké dans <code>.pilot/context-index.db</code>.
+              </div>
+            </div>
+          </div>
+          </div>
+
           </div>
         </div>
 
@@ -434,6 +553,7 @@
     <button id="ctx-preview-csv"><i data-lucide="table" class="icon-sm"></i> Prévisualiser le CSV</button>
     <button id="ctx-preview"><i data-lucide="eye" class="icon-sm"></i> Prévisualiser</button>
     <button id="ctx-export-pdf"><i data-lucide="book" class="icon-sm"></i> Exporter en PDF</button>
+    <button id="ctx-export-html"><i data-lucide="file-code" class="icon-sm"></i> Exporter en HTML</button>
     <button id="ctx-open-browser"><i data-lucide="globe" class="icon-sm"></i> Ouvrir dans le navigateur</button>
     <button id="ctx-send-agent"><i data-lucide="send" class="icon-sm"></i> Envoyer à l'agent Pi</button>
     <button id="ctx-add-prompt-builder"><i data-lucide="puzzle" class="icon-sm"></i> Ajouter au Prompt Builder</button>

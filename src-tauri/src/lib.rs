@@ -52,6 +52,7 @@ mod web_auth;
 mod web_audit;
 mod web_rate;
 mod web_server;
+mod context_engine;
 
 // ── État global de l'application ──
 
@@ -68,6 +69,9 @@ struct AppState {
     watch_state: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
     terminals: Mutex<HashMap<String, TerminalState>>,
     rpc_state: Mutex<Option<rpc_manager::RpcSession>>,
+    /// H2 V1 : session reviewer dédiée (pi --no-session, contexte vierge). Lancée
+    /// lazy au 1er besoin de review, recyclée via new_session. Canal séparé.
+    rpc_reviewer: Mutex<Option<rpc_manager::RpcSession>>,
     /// Canal de fan-out des événements RPC vers les WebSockets distants (décision 13.3).
     event_tx: tokio::sync::broadcast::Sender<Value>,
     /// Authentification distante partagée (sessions en mémoire). Permet au desktop
@@ -198,6 +202,15 @@ struct AppConfig {
     context_include_specs: bool,
     #[serde(default = "default_true")]
     context_include_recents: bool,
+    // ── Context Engine V2 (RAG, spec_context_engine.md §7) ──
+    // Embeddings locaux via Ollama. Si activé ET l'endpoint répond, on utilise
+    // le RAG ; sinon on retombe sur V1 heuristique (context_engine_enabled).
+    #[serde(default)]
+    context_rag_enabled: bool,
+    #[serde(default = "default_rag_endpoint")]
+    context_rag_endpoint: String,
+    #[serde(default = "default_rag_model")]
+    context_rag_model: String,
     /// Diff Review (A4 V2) : porte pré-écriture. Si true, l'agent doit confirmer
     /// auprès de l'utilisateur avant chaque write/edit (extension pi pilot-edit-gate).
     /// Désactivé par défaut (l'agent écrit librement, comme avant).
@@ -212,10 +225,53 @@ struct AppConfig {
     // (coût : 1 tour LLM supplémentaire par tâche). Opt-in.
     #[serde(default)]
     project_memory_auto_extract: bool,
+    // ── Auto-test post-modification (E2, spec_orchestration_autotest.md) ──
+    // Extension du linting-in-the-loop (§11.3) : exécute les tests du projet
+    // (npm test / cargo test / pytest / go test) après chaque tâche du codeur,
+    // au lieu de ne valider que la syntaxe. Opt-in (défaut off). Fallback sur
+    // `check_syntax` si aucun runner détecté. Budget de corrections unifié
+    // (lint + test partagent `orchestration_test_max_corrections`).
+    #[serde(default)]
+    orchestration_test_enabled: bool,
+    #[serde(default = "default_test_timeout_ms")]
+    orchestration_test_timeout_ms: u32,
+    #[serde(default = "default_test_max_corrections")]
+    orchestration_test_max_corrections: u32,
+    // Override manuel ("" = auto-détection côté frontend). Si renseigné, la
+    // commande est utilisée telle quelle (scope complet uniquement).
+    #[serde(default)]
+    orchestration_test_command: String,
+    // "targeted" (défaut) = tests ciblés sur fichiers modifiés ; "full" = commande
+    // complète après chaque tâche.
+    #[serde(default = "default_test_scope")]
+    orchestration_test_scope: String,
+    // A1 : snapshots Git avant chaque tâche d'orchestration (undo de tâche).
+    // Défaut activé — garantie de sécurité quasi gratuite. Désactivable.
+    #[serde(default = "default_true")]
+    orchestration_snapshots_enabled: bool,
+    // H2 V1 : reviewer indépendant (2e session pi --no-session, contexte vierge).
+    // Opt-in (défaut off) — coûte un tour cloud par tâche.
+    #[serde(default)]
+    orchestration_reviewer_enabled: bool,
+    // Provider/modèle du reviewer. Vides → fallback sur orchestration_provider/model.
+    #[serde(default)]
+    orchestration_reviewer_provider: String,
+    #[serde(default)]
+    orchestration_reviewer_model: String,
+    // "all" (défaut) = reviewer après chaque tâche ; "critical" = seulement si
+    // un fichier sensible matche un glob de `critical_patterns`.
+    #[serde(default = "default_reviewer_scope")]
+    orchestration_reviewer_scope: String,
+    // Globs éditables (mode "critical" uniquement). Défaut : fichiers critiques
+    // d'un projet Pilot-like (backend Rust, config, specs, AGENTS).
+    #[serde(default = "default_reviewer_critical_patterns")]
+    orchestration_reviewer_critical_patterns: Vec<String>,
 }
 
 fn default_true() -> bool { true }
 fn default_context_budget() -> u32 { 8000 }
+fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
+fn default_rag_model() -> String { "nomic-embed-text".to_string() }
 fn default_sidebar_width() -> u32 { 280 }
 fn default_auto_save_delay() -> u32 { 3000 }
 fn default_orchestration_idle_timeout() -> u32 { 120000 }
@@ -225,6 +281,20 @@ fn default_coder_context_window() -> u32 { 0 }
 fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
 fn default_web_token_ttl() -> u32 { 168 }
+fn default_test_timeout_ms() -> u32 { 60000 }
+fn default_test_max_corrections() -> u32 { 3 }
+fn default_test_scope() -> String { "targeted".to_string() }
+fn default_reviewer_scope() -> String { "all".to_string() }
+fn default_reviewer_critical_patterns() -> Vec<String> {
+    vec![
+        "src-tauri/src/**/*.rs".to_string(),
+        "src-tauri/tauri.conf.json".to_string(),
+        "src-tauri/Cargo.toml".to_string(),
+        "package.json".to_string(),
+        "AGENTS.md".to_string(),
+        "spec_*.md".to_string(),
+    ]
+}
 
 impl AppConfig {
     /// Migre l'ancien format last_project vers recent_projects
@@ -297,9 +367,23 @@ impl Default for AppConfig {
             context_include_imports: true,
             context_include_specs: true,
             context_include_recents: true,
+            context_rag_enabled: false,
+            context_rag_endpoint: default_rag_endpoint(),
+            context_rag_model: default_rag_model(),
             confirm_file_edits: false,
             project_memory_enabled: true,
             project_memory_auto_extract: false,
+            orchestration_test_enabled: false,
+            orchestration_test_timeout_ms: default_test_timeout_ms(),
+            orchestration_test_max_corrections: default_test_max_corrections(),
+            orchestration_test_command: String::new(),
+            orchestration_test_scope: default_test_scope(),
+            orchestration_snapshots_enabled: true,
+            orchestration_reviewer_enabled: false,
+            orchestration_reviewer_provider: String::new(),
+            orchestration_reviewer_model: String::new(),
+            orchestration_reviewer_scope: default_reviewer_scope(),
+            orchestration_reviewer_critical_patterns: default_reviewer_critical_patterns(),
         }
     }
 }
@@ -911,6 +995,119 @@ fn git_diff_file(state: State<AppState>, path: String) -> Result<GitFileDiff, St
     Ok(GitFileDiff { is_repo: true, tracked: true, before, after })
 }
 
+// ── A1 : Snapshots / annulation de tâche d'orchestration (spec_orchestration_snapshots.md) ──
+
+/// Résultat de `git_create_snapshot` :
+/// - `ok: true, sha` = snapshot créé (SHA d'un commit non-référencé via `git stash create -u`,
+///   ou `HEAD` si le working tree était propre).
+/// - `ok: false, reason` = "not_a_repo" | "git_missing" | "error".
+#[derive(serde::Serialize)]
+struct SnapshotResult {
+    ok: bool,
+    sha: String,
+    reason: String,
+}
+
+/// Résultat de `git_restore_snapshot` : fichiers restaurés (modifiés) et
+/// fichiers supprimés (créés par la tâche et absents du snapshot).
+#[derive(serde::Serialize)]
+struct RestoreResult {
+    restored: Vec<String>,
+    deleted: Vec<String>,
+}
+
+/// Crée un snapshot Git avant une tâche d'orchestration. `git stash create -u`
+/// capture tracked + untracked dans un commit non-référencé (le working tree et
+/// l'index ne sont **pas** modifiés). Si le working tree est propre, sha = HEAD.
+/// Voir spec_orchestration_snapshots.md §3.1.
+#[tauri::command]
+fn git_create_snapshot(state: State<AppState>) -> Result<SnapshotResult, String> {
+    use std::time::Duration;
+    let project = state.project_path.lock().unwrap();
+    let cwd = match project.as_ref() {
+        Some(p) => p.clone(),
+        None => return Err("Aucun projet ouvert".to_string()),
+    };
+    drop(project);
+    let check = run_captured("git", &["-C", &cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        // Distinguer « pas un repo » de « git absent » : si rev-parse renvoie
+        // vide (git manquant ou erreur), on l'indique aussi.
+        let probe = run_captured("git", &["--version"], Duration::from_secs(2));
+        let reason = if probe.trim().is_empty() { "git_missing" } else { "not_a_repo" };
+        return Ok(SnapshotResult { ok: false, sha: String::new(), reason: reason.to_string() });
+    }
+    // `git stash create -u` : capture tracked + untracked dans un commit
+    // non-référencé. stdout = SHA, ou vide si rien à stasher (working tree propre).
+    let sha = run_captured("git", &["-C", &cwd, "stash", "create", "-u"], Duration::from_secs(8));
+    let sha_trim = sha.trim().to_string();
+    if !sha_trim.is_empty() {
+        return Ok(SnapshotResult { ok: true, sha: sha_trim, reason: String::new() });
+    }
+    // Working tree propre par rapport à HEAD : snapshot = HEAD.
+    let head = run_captured("git", &["-C", &cwd, "rev-parse", "HEAD"], Duration::from_secs(3));
+    let head_trim = head.trim().to_string();
+    if !head_trim.is_empty() {
+        return Ok(SnapshotResult { ok: true, sha: head_trim, reason: String::new() });
+    }
+    // Cas extrême : pas de commit (repo vide sans HEAD). Pas de snapshot possible.
+    Ok(SnapshotResult { ok: false, sha: String::new(), reason: "no_head".to_string() })
+}
+
+/// Restaure les fichiers modifiés par une tâche à leur état d'avant (snapshot).
+/// Pour chaque fichier : si présent dans l'arbre du snapshot → `git checkout
+/// <sha> -- <file>` (restaure le contenu pré-tâche) ; sinon → suppression du
+/// disque (fichier créé par la tâche). Unstage final pour ne pas polluer l'index.
+/// Voir spec_orchestration_snapshots.md §3.3.
+#[tauri::command]
+fn git_restore_snapshot(state: State<AppState>, sha: String, files: Vec<String>) -> Result<RestoreResult, String> {
+    use std::time::Duration;
+    if sha.trim().is_empty() {
+        return Err("SHA de snapshot vide".to_string());
+    }
+    let project = state.project_path.lock().unwrap();
+    let cwd = match project.as_ref() {
+        Some(p) => p.clone(),
+        None => return Err("Aucun projet ouvert".to_string()),
+    };
+    drop(project);
+    let mut restored = Vec::new();
+    let mut deleted = Vec::new();
+    let mut to_unstage: Vec<String> = Vec::new();
+    for rel in &files {
+        let rel = rel.trim();
+        if rel.is_empty() { continue; }
+        // Le fichier existe-t-il dans l'arbre du snapshot ?
+        let probe = run_captured("git", &["-C", &cwd, "ls-tree", "--full-name", &sha, "--", rel], Duration::from_secs(3));
+        if !probe.trim().is_empty() {
+            // Présent : restaurer le contenu pré-tâche.
+            run_captured("git", &["-C", &cwd, "checkout", &sha, "--", rel], Duration::from_secs(8));
+            restored.push(rel.to_string());
+            to_unstage.push(rel.to_string());
+        } else {
+            // Absent du snapshot : créé par la tâche → supprimer du disque.
+            let abs = std::path::Path::new(&cwd).join(rel);
+            match fs::remove_file(&abs) {
+                Ok(_) => { deleted.push(rel.to_string()); to_unstage.push(rel.to_string()); }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Déjà absent — rien à faire (peut-être supprimé manuellement).
+                    to_unstage.push(rel.to_string());
+                }
+                Err(_) => { /* permission/autre — on ignore, non fatal */ }
+            }
+        }
+    }
+    // Unstage les fichiers restaurés/supprimés pour ne pas polluer l'index
+    // (`git checkout <sha> -- <file>` stage la version restaurée).
+    if !to_unstage.is_empty() {
+        let mut args: Vec<&str> = vec!["-C", &cwd, "reset", "HEAD", "--"];
+        let owned: Vec<String> = to_unstage.iter().map(|s| s.to_string()).collect();
+        for r in &owned { args.push(r); }
+        let _ = run_captured("git", &args, Duration::from_secs(5));
+    }
+    Ok(RestoreResult { restored, deleted })
+}
+
 #[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
     let mut config = state.config.lock().unwrap();
@@ -1396,7 +1593,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
     };
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(),
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(), "rpc-event",
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -1426,6 +1623,11 @@ fn start_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), Str
 pub(crate) fn do_stop_agent_session(state: &AppState) {
     let mut rpc = state.rpc_state.lock().unwrap();
     if let Some(mut session) = rpc.take() {
+        rpc_manager::stop_session(&mut session);
+    }
+    // H2 V1 : arrêter aussi le reviewer (cycle de vie lié à la session principale).
+    let mut rev = state.rpc_reviewer.lock().unwrap();
+    if let Some(mut session) = rev.take() {
         rpc_manager::stop_session(&mut session);
     }
 }
@@ -1706,6 +1908,112 @@ fn list_agent_commands(state: State<AppState>) -> Result<Value, String> {
         .ok_or("Aucune session agent active")?;
     let cmd = serde_json::json!({"type": "get_commands"});
     rpc_manager::send_command_sync(session, cmd)
+}
+
+// ── H2 V1 : session reviewer dédiée (canal rpc-event-reviewer) ──────────────
+// Le reviewer est un second processus pi --mode rpc --no-session (contexte vierge,
+// jetable) lancé lazy au 1er besoin de review. Pas de skill/extension (lecture
+// seule, pas de porte pré-écriture). Émet sur le canal séparé rpc-event-reviewer.
+
+pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
+    let project = state.project_path.lock().unwrap();
+    let cwd = project
+        .as_ref()
+        .ok_or("Aucun projet ouvert")?
+        .clone();
+    drop(project);
+
+    let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    if rpc.is_some() {
+        return Ok(()); // déjà lancé (idempotent)
+    }
+
+    let session = rpc_manager::spawn_and_start(
+        &cwd, &pi_path, true, "", None, None, app.clone(), state.event_tx.clone(), "rpc-event-reviewer",
+    )
+        .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
+    *rpc = Some(session);
+
+    // Démarrer une nouvelle session (contexte vierge)
+    if let Some(sess) = rpc.as_mut() {
+        let cmd = serde_json::json!({"type": "new_session"});
+        rpc_manager::send_command_sync(sess, cmd).ok();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_reviewer_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    do_start_reviewer_session(state.inner(), &app)
+}
+
+#[tauri::command]
+fn stop_reviewer_session(state: State<AppState>) -> Result<(), String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    if let Some(mut session) = rpc.take() {
+        rpc_manager::stop_session(&mut session);
+    }
+    Ok(())
+}
+
+pub(crate) fn do_send_reviewer_prompt(state: &AppState, message: String) -> Result<(), String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session reviewer active")?;
+    let cmd = serde_json::json!({ "type": "prompt", "message": message });
+    rpc_manager::send_command(session, &cmd)
+}
+
+#[tauri::command]
+fn send_reviewer_prompt(state: State<AppState>, message: String) -> Result<(), String> {
+    do_send_reviewer_prompt(state.inner(), message)
+}
+
+#[tauri::command]
+fn new_reviewer_session(state: State<AppState>) -> Result<(), String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session reviewer active")?;
+    let cmd = serde_json::json!({"type": "new_session"});
+    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+}
+
+#[tauri::command]
+fn set_reviewer_model(state: State<AppState>, provider: String, model_id: String) -> Result<(), String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session reviewer active")?;
+    let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
+    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
+        let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_model a échoué").to_string();
+        return Err(format!("pi a refusé set_model (reviewer) : {}", err));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn abort_reviewer(state: State<AppState>) -> Result<(), String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session reviewer active")?;
+    rpc_manager::send_command(session, &serde_json::json!({"type": "abort"}))
+}
+
+#[tauri::command]
+fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
+    let mut rpc = state.rpc_reviewer.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session reviewer active")?;
+    let cmd = serde_json::json!({ "type": "get_state" });
+    rpc_manager::send_command_sync_timeout(session, cmd, 8)
 }
 
 /// Extrait (host, port) d'une URL http(s)://host[:port]/...
@@ -2075,6 +2383,676 @@ fn resume_agent_session(state: State<AppState>, session_file: String) -> Result<
     rpc_manager::send_command_sync(session, cmd).map(|_| ())
 }
 
+// ── H9 : Historique de sessions searchable ──
+// Index local `.pilot/sessions.jsonl` (append-style, un objet JSON par ligne) +
+// tags dans `.pilot/sessions-tags.json`. Rétro-indexation depuis le dossier de
+// sessions pi du projet + capture live par le frontend (record_session_entry).
+// Voir spec_session_history.md.
+
+/// Racine `.pilot/` du projet.
+fn pilot_meta_dir(project_path: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(project_path).join(".pilot")
+}
+
+fn sessions_index_path(project_path: &str) -> std::path::PathBuf {
+    pilot_meta_dir(project_path).join("sessions.jsonl")
+}
+
+fn sessions_tags_path(project_path: &str) -> std::path::PathBuf {
+    pilot_meta_dir(project_path).join("sessions-tags.json")
+}
+
+/// Dossier des sessions pi pour le projet courant (même résolution que
+/// `list_sessions` : `rpc_session_dir` si défini, sinon `~/.{stem}/agent/sessions`).
+fn project_sessions_dir(config: &AppConfig) -> std::path::PathBuf {
+    if config.rpc_session_dir.is_empty() {
+        // safe unwrap : resolve_agent_home ne peut échouer que si USERPROFILE/HOME
+        // absent — auquel cas on retombe sur un chemin vide (gestion plus loin).
+        resolve_agent_home(&config.rpc_pi_path)
+            .map(|h| h.join("agent").join("sessions"))
+            .unwrap_or_default()
+    } else {
+        std::path::PathBuf::from(&config.rpc_session_dir)
+    }
+}
+
+/// Tronque à `max` caractères (pas bytes) pour ne pas casser l'UTF-8.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let t: String = s.chars().take(max).collect();
+    t
+}
+
+/// Convertit un chemin absolu ou relatif en chemin relatif au projet (best-effort).
+fn normalize_rel(p: &str, project_path: &str) -> String {
+    let pb = std::path::Path::new(p);
+    if pb.is_absolute() {
+        if let Ok(rel) = std::path::Path::new(project_path).join(p).strip_prefix(project_path) {
+            return rel.to_string_lossy().replace('\\', "/");
+        }
+        // p absolu sous le projet : tenter strip_prefix direct
+        if let Ok(rel) = pb.strip_prefix(project_path) {
+            return rel.to_string_lossy().replace('\\', "/");
+        }
+        return p.replace('\\', "/");
+    }
+    p.replace('\\', "/")
+}
+
+/// Extrait le texte d'un message pi (`message.content[].text` concaténé).
+fn extract_message_text(msg: &Value) -> String {
+    let mut out = String::new();
+    if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+        for item in arr {
+            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = item.get("text").and_then(|x| x.as_str()) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(t);
+                }
+            }
+        }
+    } else if let Some(t) = msg.get("content").and_then(|c| c.as_str()) {
+        out.push_str(t);
+    }
+    out
+}
+
+/// Extrait un chemin fichier depuis un `input` de tool_use write/edit (clés
+/// possibles : path / file_path / filePath). Insensible aux variations pi.
+fn extract_tool_path(input: &Value) -> Option<String> {
+    for k in ["path", "file_path", "filePath", "filename"] {
+        if let Some(s) = input.get(k).and_then(|x| x.as_str()) {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Date ISO (UTC) « maintenant ».
+fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string()
+}
+
+/// Parse un fichier de session pi (JSONL) → entrée d'index (Value).
+/// Défensif : tolère plusieurs schémas (pi évolue). Renvoie None si fichier
+/// illisible ou sans message utilisateur (session vide).
+fn parse_session_file(path: &std::path::Path, project_path: &str) -> Option<Value> {
+    let content = fs::read_to_string(path).ok()?;
+    let file_name = path.file_stem()?.to_str()?;
+    let parts: Vec<&str> = file_name.splitn(2, '_').collect();
+    let timestamp_raw = parts.first().unwrap_or(&"").to_string();
+    let id = parts.get(1).unwrap_or(&"").to_string();
+
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()
+        .map(|t| {
+            let dt: chrono::DateTime<chrono::Utc> = t.into();
+            dt.format("%Y-%m-%dT%H:%M:%S").to_string()
+        })
+        .unwrap_or(timestamp_raw);
+
+    let mut prompt = String::new();
+    let mut summary = String::new();
+    let mut files: Vec<String> = Vec::new();
+    let mut turns: u64 = 0;
+    let mut model = String::new();
+    let mut tokens: Option<u64> = None;
+    let mut cost: Option<f64> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        match t {
+            "message" => {
+                if let Some(msg) = v.get("message") {
+                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "user" {
+                        turns += 1;
+                        if prompt.is_empty() {
+                            prompt = extract_message_text(msg);
+                        }
+                    } else if role == "assistant" {
+                        if summary.is_empty() {
+                            summary = extract_message_text(msg);
+                        }
+                        // tool_use persistés dans le content assistant
+                        if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+                            for item in arr {
+                                if item.get("type").and_then(|x| x.as_str()) == Some("tool_use") {
+                                    let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                                    if name == "write" || name == "edit" {
+                                        if let Some(input) = item.get("input") {
+                                            if let Some(p) = extract_tool_path(input) {
+                                                let rel = normalize_rel(&p, project_path);
+                                                if !files.contains(&rel) {
+                                                    files.push(rel);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "model_change" => {
+                if let Some(m) = v.get("model") {
+                    let prov = m.get("provider").and_then(|x| x.as_str()).unwrap_or("");
+                    let id2 = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                    if !prov.is_empty() || !id2.is_empty() {
+                        model = format!("{}/{}", prov, id2);
+                    }
+                }
+            }
+            // Events de streaming (peuvent être persistés selon la version de pi) :
+            // capture défensive des tool calls et des stats.
+            "tool_execution_start" | "toolcall_start" => {
+                let name = v
+                    .get("tool")
+                    .and_then(|x| x.get("name"))
+                    .and_then(|x| x.as_str())
+                    .or_else(|| v.get("toolName").and_then(|x| x.as_str()))
+                    .or_else(|| v.get("name").and_then(|x| x.as_str()))
+                    .unwrap_or("");
+                if name == "write" || name == "edit" {
+                    let input = v.get("args").or_else(|| v.get("input")).or_else(|| v.get("tool").and_then(|x| x.get("args")));
+                    if let Some(input) = input {
+                        if let Some(p) = extract_tool_path(input) {
+                            let rel = normalize_rel(&p, project_path);
+                            if !files.contains(&rel) {
+                                files.push(rel);
+                            }
+                        }
+                    }
+                }
+            }
+            "session_stats" | "agent_end" => {
+                let stats = v
+                    .get("stats")
+                    .or_else(|| v.get("data"))
+                    .or_else(|| Some(&v));
+                if let Some(stats) = stats {
+                    if tokens.is_none() {
+                        if let Some(tt) = stats
+                            .get("tokens")
+                            .and_then(|x| x.get("total"))
+                            .and_then(|x| x.as_u64())
+                        {
+                            tokens = Some(tt);
+                        } else if let Some(tt) = stats.get("totalTokens").and_then(|x| x.as_u64()) {
+                            tokens = Some(tt);
+                        }
+                    }
+                    if cost.is_none() {
+                        if let Some(c) = stats.get("cost").and_then(|x| x.as_f64()) {
+                            cost = Some(c);
+                        } else if let Some(c) = stats.get("totalCost").and_then(|x| x.as_f64()) {
+                            cost = Some(c);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    files.sort();
+
+    Some(serde_json::json!({
+        "id": id,
+        "timestamp": modified,
+        "project": project_path,
+        "model": model,
+        "prompt": truncate_chars(&prompt, 500),
+        "summary": truncate_chars(&summary, 300),
+        "files": files,
+        "tags": [],
+        "tokens": tokens,
+        "cost": cost,
+        "turns": turns,
+        "duration_s": null,
+        "origin": null,
+        "kind": "chat",
+        "parent": null,
+        "indexed_at": now_iso()
+    }))
+}
+
+/// Lit l'index `.pilot/sessions.jsonl` → Vec<Value>.
+fn read_session_index(project_path: &str) -> Vec<Value> {
+    let path = sessions_index_path(project_path);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// Écrit l'index (réécriture atomique de tout le fichier).
+fn write_session_index(project_path: &str, entries: &[Value]) -> Result<(), String> {
+    let path = sessions_index_path(project_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Création .pilot: {}", e))?;
+    }
+    let mut out = String::new();
+    for e in entries {
+        out.push_str(&serde_json::to_string(e).map_err(|x| format!("Serde: {}", x))?);
+        out.push('\n');
+    }
+    fs::write(&path, out).map_err(|e| format!("Écriture index sessions: {}", e))?;
+    Ok(())
+}
+
+/// Lit le fichier de tags → HashMap<id, Vec<String>>.
+fn read_session_tags(project_path: &str) -> HashMap<String, Vec<String>> {
+    let path = sessions_tags_path(project_path);
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return HashMap::new(),
+    };
+    let v: Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let mut map = HashMap::new();
+    if let Some(obj) = v.as_object() {
+        for (id, arr) in obj {
+            let tags: Vec<String> = arr
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !tags.is_empty() {
+                map.insert(id.clone(), tags);
+            }
+        }
+    }
+    map
+}
+
+fn write_session_tags(project_path: &str, tags: &HashMap<String, Vec<String>>) -> Result<(), String> {
+    let path = sessions_tags_path(project_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Création .pilot: {}", e))?;
+    }
+    let obj: serde_json::Map<String, Value> = tags
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::Array(v.iter().map(|s| Value::String(s.clone())).collect())))
+        .collect();
+    let s = serde_json::to_string(&Value::Object(obj)).map_err(|e| format!("Serde tags: {}", e))?;
+    fs::write(&path, s).map_err(|e| format!("Écriture tags: {}", e))?;
+    Ok(())
+}
+
+/// (Re)construit l'index depuis le dossier de sessions pi du projet.
+#[tauri::command]
+fn index_sessions(state: State<AppState>) -> Result<usize, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let config = state.config.lock().unwrap();
+    let session_dir = project_sessions_dir(&config);
+    let folder_name = project_to_session_folder(&project_path);
+    let project_dir = session_dir.join(&folder_name);
+    drop(config);
+
+    let mut entries: Vec<Value> = Vec::new();
+    if project_dir.exists() {
+        let entries_iter = fs::read_dir(&project_dir)
+            .map_err(|e| format!("Lecture dossier sessions: {}", e))?;
+        for entry in entries_iter {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Some(e) = parse_session_file(&path, &project_path) {
+                entries.push(e);
+            }
+        }
+    }
+    entries.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    let n = entries.len();
+    write_session_index(&project_path, &entries)?;
+    Ok(n)
+}
+
+#[derive(Deserialize)]
+struct SearchParams {
+    query: Option<String>,
+    tag: Option<String>,
+    file: Option<String>,
+    kind: Option<String>,
+    limit: Option<usize>,
+}
+
+/// Recherche dans l'index. Full-text (substring insensible à la casse, ou
+/// regex si la chaîne commence par `/`), filtres tag/file/kind. Tri décroissant
+/// par timestamp. Tags fusionnés depuis le fichier de tags.
+#[tauri::command]
+fn search_sessions(state: State<AppState>, params: SearchParams) -> Result<Value, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let mut entries = read_session_index(&project_path);
+    let tags_map = read_session_tags(&project_path);
+
+    // Fusion des tags dans chaque entrée (par id).
+    for e in entries.iter_mut() {
+        if let Some(id) = e.get("id").and_then(|x| x.as_str()) {
+            if let Some(tags) = tags_map.get(id) {
+                if let Some(obj) = e.as_object_mut() {
+                    obj.insert(
+                        "tags".to_string(),
+                        Value::Array(tags.iter().map(|s| Value::String(s.clone())).collect()),
+                    );
+                }
+            }
+        }
+    }
+
+    let query = params.query.unwrap_or_default();
+    let tag = params.tag.unwrap_or_default();
+    let file = params.file.unwrap_or_default();
+    let kind = params.kind.unwrap_or_default();
+    let limit = params.limit.unwrap_or(200);
+
+    // Compilation d'une regex optionnelle (si query commence par `/`).
+    let re = if let Some(rest) = query.strip_prefix('/') {
+        regex::Regex::new(rest).ok()
+    } else {
+        None
+    };
+    let q_lc = query.to_lowercase();
+
+    let mut results: Vec<Value> = Vec::new();
+    for e in entries {
+        let id = e.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        // Filtre kind
+        if !kind.is_empty() {
+            let k = e.get("kind").and_then(|x| x.as_str()).unwrap_or("chat");
+            if k != kind {
+                continue;
+            }
+        }
+        // Filtre tag
+        if !tag.is_empty() {
+            let tags = e.get("tags").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            let has = tags.iter().any(|x| x.as_str() == Some(&tag));
+            if !has {
+                continue;
+            }
+        }
+        // Filtre file (chemin relatif contenant)
+        if !file.is_empty() {
+            let files = e.get("files").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            let flc = file.to_lowercase();
+            let has = files
+                .iter()
+                .any(|x| x.as_str().map(|s| s.to_lowercase().contains(&flc)).unwrap_or(false));
+            if !has {
+                continue;
+            }
+        }
+        // Filtre query full-text
+        if !query.is_empty() {
+            let prompt = e.get("prompt").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let summary = e.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let files = e.get("files").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+            let files_str = files
+                .iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let hay = format!("{} {} {}", prompt, summary, files_str);
+            if let Some(re) = &re {
+                if !re.is_match(&hay) {
+                    continue;
+                }
+            } else {
+                if !hay.to_lowercase().contains(&q_lc) {
+                    continue;
+                }
+            }
+        }
+        let _ = id;
+        results.push(e);
+        if results.len() >= limit {
+            break;
+        }
+    }
+    // Tri déjà assuré à l'indexation, mais on re-trie au cas où (live updates).
+    results.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    let indexed = sessions_index_path(&project_path).exists();
+    Ok(serde_json::json!({ "entries": results, "total": results.len(), "indexed": indexed }))
+}
+
+/// Retourne le détail d'une session : entrée indexée + contenu complet du
+/// JSONL pi (messages simplifiés : role + text + tool_use name/path).
+#[tauri::command]
+fn get_session_detail(state: State<AppState>, id: String) -> Result<Value, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let entries = read_session_index(&project_path);
+    let entry = entries
+        .iter()
+        .find(|e| e.get("id").and_then(|x| x.as_str()) == Some(&id))
+        .cloned()
+        .ok_or("Session non trouvée dans l'index")?;
+
+    // Localiser le fichier JSONL pi correspondant.
+    let config = state.config.lock().unwrap();
+    let session_dir = project_sessions_dir(&config);
+    let folder_name = project_to_session_folder(&project_path);
+    let project_dir = session_dir.join(&folder_name);
+    drop(config);
+
+    let mut messages: Vec<Value> = Vec::new();
+    if project_dir.exists() {
+        for entry_it in fs::read_dir(&project_dir).map_err(|e| format!("Lecture sessions: {}", e))? {
+            let entry_it = match entry_it {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry_it.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if !stem.ends_with(&format!("_{}", id)) {
+                continue;
+            }
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("type").and_then(|x| x.as_str()) != Some("message") {
+                    continue;
+                }
+                if let Some(msg) = v.get("message") {
+                    let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let text = extract_message_text(msg);
+                    let mut tools: Vec<Value> = Vec::new();
+                    if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+                        for item in arr {
+                            if item.get("type").and_then(|x| x.as_str()) == Some("tool_use") {
+                                let name = item.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                                let input = item.get("input").cloned().unwrap_or(Value::Null);
+                                let path_str = extract_tool_path(&input).unwrap_or_default();
+                                tools.push(serde_json::json!({
+                                    "name": name,
+                                    "path": path_str
+                                }));
+                            }
+                        }
+                    }
+                    if !text.is_empty() || !tools.is_empty() {
+                        messages.push(serde_json::json!({
+                            "role": role,
+                            "text": text,
+                            "tools": tools
+                        }));
+                    }
+                }
+            }
+            break;
+        }
+    }
+    // Fusion tags
+    let tags_map = read_session_tags(&project_path);
+    let tags = tags_map.get(&id).cloned().unwrap_or_default();
+    let mut entry = entry;
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert(
+            "tags".to_string(),
+            Value::Array(tags.iter().map(|s| Value::String(s.clone())).collect()),
+        );
+    }
+    Ok(serde_json::json!({
+        "entry": entry,
+        "messages": messages
+    }))
+}
+
+/// Persiste les tags d'une session (fichier séparé, ne touche pas l'index).
+#[tauri::command]
+fn set_session_tags(state: State<AppState>, id: String, tags: Vec<String>) -> Result<(), String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let mut map = read_session_tags(&project_path);
+    if tags.is_empty() {
+        map.remove(&id);
+    } else {
+        // dédupliquer + trier
+        let mut t: Vec<String> = tags.into_iter().collect();
+        t.sort();
+        t.dedup();
+        map.insert(id, t);
+    }
+    write_session_tags(&project_path, &map)
+}
+
+/// Liste tous les tags utilisés (pour l'autocomplétion).
+#[tauri::command]
+fn list_session_tags(state: State<AppState>) -> Result<Vec<String>, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let map = read_session_tags(&project_path);
+    let mut all: Vec<String> = Vec::new();
+    for tags in map.values() {
+        for t in tags {
+            if !all.contains(t) {
+                all.push(t.clone());
+            }
+        }
+    }
+    all.sort();
+    Ok(all)
+}
+
+/// Écrit/met à jour une entrée de session dans l'index (capture live, appelé par
+/// le frontend à l'agent_end). Append-style : retire l'entrée existante de même
+/// id puis réécrit. Les tags ne sont jamais écrasés (gérés dans un fichier à part).
+#[tauri::command]
+fn record_session_entry(state: State<AppState>, entry: Value) -> Result<(), String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let id = entry
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    if id.is_empty() {
+        return Err("id de session manquant".into());
+    }
+    let mut entries = read_session_index(&project_path);
+    entries.retain(|e| {
+        e.get("id").and_then(|x| x.as_str()).unwrap_or("") != id
+    });
+    // Forcer tags=[] dans l'index (les tags vivent dans le fichier dédié).
+    let mut entry = entry;
+    if let Some(obj) = entry.as_object_mut() {
+        obj.insert("tags".to_string(), Value::Array(vec![]));
+        // Champ indexed_at horodaté
+        obj.insert("indexed_at".to_string(), Value::String(now_iso()));
+    }
+    entries.push(entry);
+    entries.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    write_session_index(&project_path, &entries)
+}
+
 // ── Persistance des onglets ──
 
 fn session_filename(project_path: &str) -> String {
@@ -2264,6 +3242,187 @@ fn search_in_files(
     Ok(results)
 }
 
+// ── Remplacement global dans les fichiers (B3 — Find & Replace) ──
+
+#[derive(Debug, Serialize)]
+struct ReplaceResult {
+    /// Nombre de fichiers effectivement modifiés.
+    files_modified: usize,
+    /// Nombre total d'occurrences remplacées.
+    occurrences: usize,
+    /// Liste (chemin relatif) des fichiers modifiés, pour rafraîchir l'UI.
+    modified: Vec<String>,
+}
+
+/// Remplace toutes les occurrences de `query` par `replacement` dans tous les
+/// fichiers du projet correspondant au filtre d'extensions. Réutilise la
+/// logique de parcours de `search_in_files` (mêmes dossiers/extensions
+/// ignorés). Si `use_regex` est faux, le pattern et le remplacement sont
+/// traités littéralement (échappés). Écrit seulement les fichiers dont le
+/// contenu a changé. Retourne un compte pour confirmation côté UI.
+#[tauri::command]
+fn replace_in_files(
+    state: State<AppState>,
+    query: String,
+    replacement: String,
+    use_regex: bool,
+    extensions: String,
+) -> Result<ReplaceResult, String> {
+    if query.is_empty() {
+        return Ok(ReplaceResult {
+            files_modified: 0,
+            occurrences: 0,
+            modified: Vec::new(),
+        });
+    }
+
+    let project_path = state.project_path.lock().unwrap();
+    let project = project_path
+        .as_ref()
+        .ok_or("Aucun projet ouvert")?
+        .clone();
+    drop(project_path);
+
+    // Compiler le pattern (regex ou texte littéral)
+    let pattern: regex::Regex = if use_regex {
+        regex::Regex::new(&query).map_err(|e| format!("Regex invalide : {}", e))?
+    } else {
+        regex::Regex::new(&regex::escape(&query)).map_err(|e| format!("Erreur pattern : {}", e))?
+    };
+
+    // Replacer : littéral si pas regex (NoExpand ne traite pas les `$`),
+    // sinon chaîne interprétée (supporte $1, ${name}). Construit localement
+    // dans walk_replace pour éviter les soucis de lifetime de NoExpand.
+
+    // Filtre d'extensions
+    let ext_filter: Vec<String> = if extensions.is_empty() {
+        vec![]
+    } else {
+        extensions
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+
+    let ignore_dirs: &[&str] = IGNORED_DIRS;
+    let ignore_exts = [
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico",
+        ".pdf", ".zip", ".tar", ".gz", ".rar", ".7z", ".woff", ".woff2",
+        ".ttf", ".eot", ".mp3", ".mp4", ".avi", ".mov", ".exe", ".dll",
+        ".so", ".dylib", ".o", ".obj", ".pyc", ".class", ".jar", ".wasm",
+    ];
+
+    let mut files_modified = 0usize;
+    let mut occurrences = 0usize;
+    let mut modified: Vec<String> = Vec::new();
+
+    fn walk_replace(
+        dir: &std::path::Path,
+        project: &std::path::Path,
+        pattern: &regex::Regex,
+        replacement: &str,
+        use_regex: bool,
+        ext_filter: &[String],
+        ignore_dirs: &[&str],
+        ignore_exts: &[&str],
+        files_modified: &mut usize,
+        occurrences: &mut usize,
+        modified: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let entries = fs::read_dir(dir).map_err(|e| format!("Erreur lecture dossier {:?}: {}", dir, e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Erreur entrée : {}", e))?;
+            let path = entry.path();
+
+            let file_name = entry.file_name();
+            let name_str = file_name.to_string_lossy();
+            if name_str.starts_with('.') || ignore_dirs.contains(&name_str.as_ref()) {
+                continue;
+            }
+
+            if path.is_dir() {
+                walk_replace(
+                    &path, project, pattern, replacement, use_regex,
+                    ext_filter, ignore_dirs, ignore_exts,
+                    files_modified, occurrences, modified,
+                )?;
+            } else {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let full_ext = format!(".{}", ext);
+
+                if ignore_exts.contains(&full_ext.as_str()) {
+                    continue;
+                }
+                if !ext_filter.is_empty() && !ext_filter.contains(&ext) {
+                    continue;
+                }
+                if let Ok(meta) = entry.metadata() {
+                    if meta.len() > 2_000_000 {
+                        continue;
+                    }
+                }
+
+                let content = match fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue, // Binaire / illisible
+                };
+
+                let count = pattern.find_iter(&content).count();
+                if count == 0 {
+                    continue;
+                }
+
+                let new_content = if use_regex {
+                    pattern.replace_all(&content, replacement).to_string()
+                } else {
+                    pattern.replace_all(&content, regex::NoExpand(replacement)).to_string()
+                };
+
+                if new_content == content {
+                    continue; // Rien n'a réellement changé
+                }
+
+                fs::write(&path, &new_content)
+                    .map_err(|e| format!("Erreur écriture {:?}: {}", path, e))?;
+                let rel = path
+                    .strip_prefix(project)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                modified.push(rel);
+                *files_modified += 1;
+                *occurrences += count;
+            }
+        }
+        Ok(())
+    }
+
+    walk_replace(
+        std::path::Path::new(&project),
+        std::path::Path::new(&project),
+        &pattern,
+        &replacement,
+        use_regex,
+        &ext_filter,
+        ignore_dirs,
+        &ignore_exts,
+        &mut files_modified,
+        &mut occurrences,
+        &mut modified,
+    )?;
+
+    Ok(ReplaceResult {
+        files_modified,
+        occurrences,
+        modified,
+    })
+}
+
 /// Liste tous les modèles disponibles depuis ~/.pi/agent/models.json
 /// Retourne un tableau de chaînes "provider/modelId" trié alphabétiquement.
 #[tauri::command]
@@ -2289,6 +3448,231 @@ fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, Stri
     }
     result.sort();
     Ok(result)
+}
+
+// ── Gestion des modèles IA (édition UI des models.json / model-switch.json) ──
+//
+// Pilot permet désormais d'éditer le registre des modèles (providers + modèles)
+// et les alias (model-switch.json) directement depuis l'onglet « Fournisseurs »
+// de la modale Paramètres, sans éditer les JSON à la main. Ces commandes
+// travaillent sur le répertoire home du backend ciblé (~/.pi, ~/.plh, ...),
+// résolu par stem explicite (et non par le chemin de l'exécutable configuré).
+// Toutes les écritures font un backup .bak et une validation minimale.
+
+/// Résout `~/.<stem>` (home dir + dossier point-stem). Contrairement à
+/// `resolve_agent_home` qui déduit le stem du chemin de l'exécutable, cette
+/// variante prend un stem explicite (« pi », « plh », ...) pour permettre
+/// d'éditer le registre d'un backend même s'il n'est pas celui actif.
+fn resolve_agent_home_by_stem(stem: &str) -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+    let clean = stem.trim().trim_start_matches('.');
+    if clean.is_empty() {
+        return Err("stem vide".to_string());
+    }
+    Ok(std::path::PathBuf::from(&home).join(format!(".{}", clean)))
+}
+
+/// Liste les backends disponibles : scanne le home dir à la recherche de
+/// dossiers `.{stem}/agent/models.json`. Retourne les stems (ex: ["pi","plh"]),
+/// triés, avec « pi » en tête si présent. Sert à peupler le sélecteur de
+/// backend dans l'onglet Fournisseurs.
+#[tauri::command]
+fn list_agent_backends() -> Result<Vec<String>, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+    let home_dir = std::path::Path::new(&home);
+    let mut stems: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(home_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = match name.to_str() {
+                Some(s) => s,
+                None => continue,
+            };
+            if !name.starts_with('.') {
+                continue;
+            }
+            let stem = name.trim_start_matches('.');
+            if stem.is_empty() {
+                continue;
+            }
+            // Ne garder que les dossiers contenant agent/models.json
+            let models_file = entry.path().join("agent").join("models.json");
+            if models_file.is_file() {
+                stems.push(stem.to_string());
+            }
+        }
+    }
+    stems.sort();
+    // « pi » en tête si présent (backend canonique)
+    if let Some(pos) = stems.iter().position(|s| s == "pi") {
+        let pi = stems.remove(pos);
+        stems.insert(0, pi);
+    }
+    Ok(stems)
+}
+
+/// Lit le `models.json` d'un backend donné (`~/.{stem}/agent/models.json`).
+/// Retourne l'objet JSON tel quel (round-trip) pour préserver les clés non
+/// gérées par l'UI. Si le fichier n'existe pas, retourne un objet vide.
+#[tauri::command]
+fn read_models_config(stem: String) -> Result<Value, String> {
+    let path = resolve_agent_home_by_stem(&stem)?.join("agent").join("models.json");
+    if !path.exists() {
+        return Ok(serde_json::json!({ "providers": {} }));
+    }
+    let json_str = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Lecture models.json: {}", e))?;
+    let config: Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("JSON invalide: {}", e))?;
+    Ok(config)
+}
+
+/// Écrit le `models.json` d'un backend. Backup `models.json.bak` avant écriture,
+/// puis écriture atomique (fichier temp + rename). Validation : `providers`
+/// doit être un objet (ou absent → {});
+#[tauri::command]
+fn write_models_config(stem: String, config: Value) -> Result<(), String> {
+    // Validation minimale
+    let mut cfg = config;
+    if cfg.get("providers").is_none() {
+        cfg = serde_json::json!({ "providers": {} });
+    }
+    if !cfg["providers"].is_object() {
+        return Err("`providers` doit être un objet".to_string());
+    }
+    let agent_dir = resolve_agent_home_by_stem(&stem)?.join("agent");
+    std::fs::create_dir_all(&agent_dir)
+        .map_err(|e| format!("Création du dossier agent: {}", e))?;
+    let target = agent_dir.join("models.json");
+    // Backup
+    if target.exists() {
+        let bak = agent_dir.join("models.json.bak");
+        let _ = std::fs::copy(&target, &bak);
+    }
+    let pretty = serde_json::to_string_pretty(&cfg)
+        .map_err(|e| format!("Sérialisation JSON: {}", e))?;
+    std::fs::write(&target, pretty)
+        .map_err(|e| format!("Écriture models.json: {}", e))?;
+    Ok(())
+}
+
+/// Lit le `model-switch.json` d'un backend (`~/.{stem}/agent/model-switch.json`).
+/// Contient `{ aliases: {...}, defaultModel: "provider/id" }`. Retourne `{}` si
+/// le fichier n'existe pas.
+#[tauri::command]
+fn read_model_aliases(stem: String) -> Result<Value, String> {
+    let path = resolve_agent_home_by_stem(&stem)?.join("agent").join("model-switch.json");
+    if !path.exists() {
+        return Ok(serde_json::json!({ "aliases": {}, "defaultModel": "" }));
+    }
+    let json_str = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Lecture model-switch.json: {}", e))?;
+    let parsed: Value = serde_json::from_str(&json_str)
+        .map_err(|e| format!("JSON invalide: {}", e))?;
+    Ok(parsed)
+}
+
+/// Écrit le `model-switch.json` d'un backend. Backup `.bak` + écriture.
+/// Validation : si `aliases` est présent, ce doit être un objet ; si
+/// `defaultModel` est présent, ce doit être une chaîne.
+#[tauri::command]
+fn write_model_aliases(stem: String, config: Value) -> Result<(), String> {
+    if let Some(a) = config.get("aliases") {
+        if !a.is_null() && !a.is_object() {
+            return Err("`aliases` doit être un objet".to_string());
+        }
+    }
+    if let Some(d) = config.get("defaultModel") {
+        if !d.is_null() && !d.is_string() {
+            return Err("`defaultModel` doit être une chaîne".to_string());
+        }
+    }
+    let agent_dir = resolve_agent_home_by_stem(&stem)?.join("agent");
+    std::fs::create_dir_all(&agent_dir)
+        .map_err(|e| format!("Création du dossier agent: {}", e))?;
+    let target = agent_dir.join("model-switch.json");
+    if target.exists() {
+        let bak = agent_dir.join("model-switch.json.bak");
+        let _ = std::fs::copy(&target, &bak);
+    }
+    let pretty = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Sérialisation JSON: {}", e))?;
+    std::fs::write(&target, pretty)
+        .map_err(|e| format!("Écriture model-switch.json: {}", e))?;
+    Ok(())
+}
+
+/// Teste la disponibilité d'un provider : effectue `GET {baseUrl}/models`
+/// (endpoint OpenAI-compatible, supporté par ollama et llama-cpp server) et
+/// retourne la liste des IDs de modèles disponibles côté serveur. Si l'API key
+/// est renseignée (et != "none"), ajoute l'en-tête Authorization Bearer.
+/// Timeout 4 s. Retourne `{ ok, models: [...], error }`.
+#[tauri::command]
+async fn test_provider_models(base_url: String, api_key: Option<String>) -> Result<Value, String> {
+    use tokio::time::{timeout, Duration};
+    let key = api_key.unwrap_or_default();
+    let key = key.trim();
+    let mut url = base_url.trim().trim_end_matches('/').to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        url = format!("http://{}", url);
+    }
+    let endpoint = format!("{}/models", url);
+    // Client bloquant dans spawn_blocking pour ne pas bloquer le runtime async
+    // de Tauri. reqwest est configuré avec rustls-tls (pas de dépendance système
+    // OpenSSL). Timeout global 5 s (spawn_blocking) + 4 s par requête HTTP.
+    let key_owned = if key.is_empty() || key == "none" {
+        String::new()
+    } else {
+        key.to_string()
+    };
+    let endpoint_owned = endpoint.clone();
+    let res = timeout(
+        Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || -> Result<Value, String> {
+            let b = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(4))
+                .danger_accept_invalid_certs(true);
+            let client = b.build().map_err(|e| e.to_string())?;
+            let mut req = client.get(&endpoint_owned);
+            if !key_owned.is_empty() {
+                req = req.bearer_auth(&key_owned);
+            }
+            let resp = req.send().map_err(|e| e.to_string())?;
+            let status = resp.status();
+            let body = resp.text().map_err(|e| e.to_string())?;
+            if !status.is_success() {
+                return Ok(serde_json::json!({
+                    "ok": false,
+                    "models": [],
+                    "error": format!("HTTP {}", status.as_u16())
+                }));
+            }
+            let parsed: Value = serde_json::from_str(&body)
+                .map_err(|e| format!("Réponse non-JSON: {}", e))?;
+            // Format OpenAI: { data: [ { id: "..." }, ... ] }
+            let mut ids: Vec<String> = Vec::new();
+            if let Some(data) = parsed["data"].as_array() {
+                for m in data {
+                    if let Some(id) = m["id"].as_str() {
+                        ids.push(id.to_string());
+                    }
+                }
+            }
+            ids.sort();
+            Ok(serde_json::json!({ "ok": true, "models": ids, "error": null }))
+        }),
+    )
+    .await;
+    match res {
+        Ok(Ok(Ok(v))) => Ok(v),
+        Ok(Ok(Err(e))) => Ok(serde_json::json!({ "ok": false, "models": [], "error": e })),
+        Ok(Err(_)) => Ok(serde_json::json!({ "ok": false, "models": [], "error": "join error" })),
+        Err(_) => Ok(serde_json::json!({ "ok": false, "models": [], "error": "timeout (5s)" })),
+    }
 }
 
 // ── Vérification syntaxique (Mode Orchestration V2 — linting-in-the-loop) ──
@@ -2453,6 +3837,282 @@ fn run_command(cmd: impl AsRef<std::ffi::OsStr>, args: &[impl AsRef<std::ffi::Os
     Some((ok, combined))
 }
 
+// ── Lint diagnostics inline (B2) — eslint --format json pour JS/TS ──
+
+#[derive(Debug, Serialize)]
+struct LintDiagnostic {
+    /// Ligne de début (1-indexée).
+    from_line: usize,
+    /// Colonne de début (1-indexée).
+    from_col: usize,
+    /// Ligne de fin (1-indexée).
+    to_line: usize,
+    /// Colonne de fin (1-indexée).
+    to_col: usize,
+    /// "error" ou "warning".
+    severity: String,
+    /// Message humain.
+    message: String,
+    /// Identifiant de règle (ex: "no-console") si disponible.
+    source: String,
+}
+
+/// Lance le linter du projet sur un seul fichier et renvoie des diagnostics
+/// structurés (ligne/col/sévérité/message) exploitables par `@codemirror/lint`.
+/// V1 : JS/TS via eslint (`--format json`). Les autres langages renvoient une
+/// liste vide (le lint intégré de l'orchestration reste sur `check_syntax`).
+/// Aucun checker disponible → liste vide (échec silencieux côté éditeur).
+#[tauri::command]
+fn lint_file(
+    state: State<AppState>,
+    path: String,
+) -> Result<Vec<LintDiagnostic>, String> {
+    let project_path = state.project_path.lock().unwrap();
+    let project = project_path
+        .as_ref()
+        .ok_or("Aucun projet ouvert")?
+        .clone();
+    drop(project_path);
+    let project_dir = std::path::Path::new(&project);
+
+    let p = std::path::Path::new(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "vue" => {}
+        _ => return Ok(Vec::new()), // V1 : JS/TS uniquement
+    }
+
+    // Localiser eslint (local node_modules/.bin sinon npx --no-install)
+    let eslint_local = project_dir
+        .join("node_modules")
+        .join(".bin")
+        .join(if cfg!(target_os = "windows") {
+            "eslint.cmd"
+        } else {
+            "eslint"
+        });
+    let (cmd, args): (String, Vec<String>) = if eslint_local.exists() {
+        (eslint_local.to_string_lossy().to_string(), vec!["--format".to_string(), "json".to_string(), path.clone()])
+    } else if which("npx").is_some() {
+        (
+            "npx".to_string(),
+            vec![
+                "--no-install".to_string(),
+                "eslint".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                path.clone(),
+            ],
+        )
+    } else {
+        return Ok(Vec::new()); // Pas de linter disponible → silencieux
+    };
+
+    let out = run_command(&cmd, &args, Some(project.as_str()));
+    let (_, raw) = match out {
+        Some(v) => v,
+        None => return Ok(Vec::new()),
+    };
+
+    // eslint --format json : tableau d'objets { filePath, messages: [...] }
+    // eslint renvoie exit code 1 s'il y a des erreurs, mais stdout contient le JSON.
+    let trimmed = raw.trim();
+    let parsed: Vec<serde_json::Value> = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Ok(Vec::new()), // Sortie non-JSON (eslint absent/cassé) → silencieux
+    };
+
+    let mut diags = Vec::new();
+    for file_obj in parsed {
+        if let Some(messages) = file_obj.get("messages").and_then(|m| m.as_array()) {
+            for msg in messages {
+                let line = msg.get("line").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                let col = msg.get("column").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                let end_line = msg.get("endLine").and_then(|v| v.as_u64()).map(|v| v as usize).unwrap_or(line);
+                let end_col = msg
+                    .get("endColumn")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .unwrap_or(col);
+                let sev = msg.get("severity").and_then(|v| v.as_u64()).unwrap_or(1);
+                let message = msg
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let rule = msg.get("ruleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                diags.push(LintDiagnostic {
+                    from_line: line,
+                    from_col: col,
+                    to_line: end_line,
+                    to_col: end_col,
+                    severity: if sev >= 2 { "error".to_string() } else { "warning".to_string() },
+                    message,
+                    source: rule,
+                });
+            }
+        }
+    }
+
+    Ok(diags)
+}
+
+// ── Auto-test post-modification (E2, spec_orchestration_autotest.md) ──
+
+#[derive(Debug, Serialize)]
+struct TestRunResult {
+    /// Code de sortie du process (`None` si timeout ou crash sans code).
+    exit_code: Option<i32>,
+    /// stdout capturé (tronqué à ~256 Ko).
+    stdout: String,
+    /// stderr capturé (tronqué à ~256 Ko).
+    stderr: String,
+    /// `true` si le process a été tué pour dépassement de timeout.
+    timed_out: bool,
+    /// Durée réelle d'exécution en ms.
+    duration_ms: u32,
+}
+
+/// Exécute une commande de tests du projet avec timeout, capture stdout+stderr
+/// (limités à ~256 Ko chacun), kill si le timeout est dépassé. La commande est
+/// lancée **sans shell** (`Command::new(cmd).args(args)`, pas de `shell=true`)
+/// pour éviter toute injection, et le `cwd` est forcé au projet ouvert par le
+/// frontend. Utilisé par le Mode Orchestration (E2) après chaque tâche du codeur.
+#[tauri::command]
+fn run_project_tests(
+    state: State<AppState>,
+    command: String,
+    args: Vec<String>,
+    timeout_ms: u32,
+) -> Result<TestRunResult, String> {
+    let project = state.project_path.lock().unwrap();
+    let cwd = match project.as_ref() {
+        Some(p) => p.clone(),
+        None => return Err("Aucun projet ouvert".to_string()),
+    };
+    drop(project);
+
+    let (stdout, stderr, exit_code, timed_out, duration_ms) =
+        run_command_timed(&command, &args, &cwd, timeout_ms);
+    Ok(TestRunResult {
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+        duration_ms,
+    })
+}
+
+/// Lance `<cmd> <args...>` dans `cwd`, capture stdout et stderr séparément
+/// (lecteurs parallèles pour éviter le deadlock quand les buffers OS se
+/// remplissent), kill si `timeout_ms` dépassé. Tronque chaque flux à 256 Ko
+/// (les premiers échecs sont les plus pertinents ; un `cargo test` verbeux
+/// peut produire plusieurs Mo). Renvoie `(stdout, stderr, exit_code, timed_out,
+/// duration_ms)`.
+fn run_command_timed(
+    cmd: &str,
+    args: &[String],
+    cwd: &str,
+    timeout_ms: u32,
+) -> (String, String, Option<i32>, bool, u32) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut command = Command::new(cmd);
+    command.args(args).current_dir(cwd);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let start = Instant::now();
+    let mut child = match command.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                String::new(),
+                format!("Impossible de lancer '{}': {}", cmd, e),
+                None,
+                false,
+                0,
+            );
+        }
+    };
+
+    // Détacher les pipes avant la boucle d'attente (take) et les lire dans des
+    // threads dédiés pour éviter le deadlock : si le process produit plus que
+    // la capacité du buffer OS (~64 Ko) sur un flux non drainé, il bloque sur
+    // l'écriture et ne termine jamais → try_wait boucle indéfiniment.
+    let mut stdout_child = child.stdout.take();
+    let mut stderr_child = child.stderr.take();
+
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::with_capacity(8192);
+        if let Some(ref mut s) = stdout_child {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let stderr_handle = std::thread::spawn(move || {
+        let mut buf = Vec::with_capacity(8192);
+        if let Some(ref mut s) = stderr_child {
+            let _ = s.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Duration::from_millis(timeout_ms as u64);
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if start.elapsed() >= deadline {
+                    let _ = child.kill();
+                    timed_out = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Attend la fin effective du child (immédiat après try_wait(Some) ou après
+    // kill pour timeout) pour récupérer le code de sortie.
+    let exit_code = match child.wait() {
+        Ok(status) => {
+            if timed_out {
+                None
+            } else {
+                status.code()
+            }
+        }
+        Err(_) => None,
+    };
+
+    let raw_stdout = stdout_handle.join().unwrap_or_default();
+    let raw_stderr = stderr_handle.join().unwrap_or_default();
+
+    let truncate = |b: Vec<u8>| -> String {
+        const CAP: usize = 256 * 1024;
+        if b.len() > CAP {
+            let head = String::from_utf8_lossy(&b[..CAP]).to_string();
+            format!("{}… (tronqué, {} octets au total)", head, b.len())
+        } else {
+            String::from_utf8_lossy(&b).to_string()
+        }
+    };
+
+    let duration_ms = start.elapsed().as_millis() as u32;
+    (truncate(raw_stdout), truncate(raw_stderr), exit_code, timed_out, duration_ms)
+}
+
 // ── Persistance du plan d'orchestration ──
 
 /// Sauvegarde le plan d'orchestration dans le projet
@@ -2589,6 +4249,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let config = load_config_disk(&handle);
@@ -2647,6 +4308,7 @@ pub fn run() {
                 watch_state: Mutex::new(None),
                 terminals: Mutex::new(HashMap::new()),
                 rpc_state: Mutex::new(None),
+                rpc_reviewer: Mutex::new(None),
                 event_tx,
                 auth: Arc::new(web_auth::WebAuth::new()),
                 guard: Arc::new(web_rate::WebGuard::new()),
@@ -2707,7 +4369,15 @@ pub fn run() {
             save_tab_session,
             load_tab_session,
             search_in_files,
+            lint_file,
+            replace_in_files,
             get_available_models_list,
+            read_models_config,
+            write_models_config,
+            read_model_aliases,
+            write_model_aliases,
+            list_agent_backends,
+            test_provider_models,
             set_help_model,
             set_review_model,
             add_favorite,
@@ -2716,11 +4386,21 @@ pub fn run() {
             load_plan,
             delete_plan,
             check_syntax,
+            run_project_tests,
             extension_gate_supported,
             get_backend_info,
             pi_health_check,
             git_status,
             git_diff_file,
+            git_create_snapshot,
+            git_restore_snapshot,
+            start_reviewer_session,
+            stop_reviewer_session,
+            send_reviewer_prompt,
+            new_reviewer_session,
+            set_reviewer_model,
+            abort_reviewer,
+            get_reviewer_state,
             set_web_password,
             web_kick_remote,
             web_active_count,
@@ -2737,6 +4417,17 @@ pub fn run() {
             tailscale::tailscale_enable_serve,
             tailscale::tailscale_disable_serve,
             tailscale::tailscale_serve_qrcode,
+            context_engine::context_rag_probe,
+            context_engine::context_index_status,
+            context_engine::build_context_index,
+            context_engine::query_context_index,
+            context_engine::context_index_clear,
+            index_sessions,
+            search_sessions,
+            get_session_detail,
+            set_session_tags,
+            list_session_tags,
+            record_session_entry,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

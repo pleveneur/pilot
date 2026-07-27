@@ -293,6 +293,12 @@ export function buildPlanPrompt(userText, existingPlan, projectTree, keyFileCont
 
   // Consignes de découpage selon la granularité
   const sizeGuides = {
+    atomic: {
+      lines: "~10-25 lignes",
+      files: "1 fichier",
+      count: "15 à 40 tâches",
+      desc: "PRINCIPE ABSOLU — une tâche = UNE seule modification atomique. JAMAIS plus d'1 fichier, JAMAIS plus de ~25 lignes. Le codeur est un modèle local peu puissant : chaque tâche doit être TRIVIALE à exécuter, sans aucune interprétation possible. Décris EXACTEMENT quoi faire : chemin précis du fichier, nom de la fonction/variable concernée, localisation (avant/après quelle ligne), contenu attendu avant -> après. Le codeur ne doit faire qu'appliquer scrupuleusement. Si une tâche nécessite plus d'1 fichier ou plus de ~25 lignes, DÉCOUPE-LA en sous-tâches atomiques encore plus petites. Exemple de bonne tâche : « Dans src/js/utils.js, ajouter la fonction isBlank(s) qui retourne s == null || s.trim() === '' juste avant la fonction capitalize. »",
+    },
     fine: {
       lines: "~30-60 lignes",
       files: "2 fichiers",
@@ -431,6 +437,7 @@ export function buildTaskPrompt(task, attemptNumber, previousSummaries, projectT
   const g = granularity || "fine";
 
   const sizeObjectives = {
+    atomic: "~10-25 lignes",
     fine: "~30-60 lignes",
     medium: "~60-120 lignes",
     large: "~100-200 lignes",
@@ -1036,6 +1043,7 @@ export function extractMentionedFiles(text) {
 export async function checkTaskFilesChanged(task, beforeState, invokeFn, responseText = "", projectPath) {
   let created = 0;
   let modified = 0;
+  let deleted = 0;
   let unchanged = 0;
   const listed = (task && Array.isArray(task.files)) ? task.files.filter((p) => typeof p === "string" && p.trim()) : [];
 
@@ -1058,18 +1066,23 @@ export async function checkTaskFilesChanged(task, beforeState, invokeFn, respons
       afterExists = false;
     }
     if (!before.exists && afterExists) return "created";
+    // Suppression reconnue comme un changement valide (tâche de suppression de fichiers).
+    // Avant, before.exists=true + afterExists=false tombait dans "unchanged" → échec
+    // validation injustifié pour les tâches de suppression.
+    if (before.exists && !afterExists) return "deleted";
     if (before.exists && afterExists && before.mtime !== null && afterMtime !== null && before.mtime !== afterMtime) return "modified";
     return "unchanged";
   }));
   for (const r of fileResults) {
     if (r === "created") created++;
     else if (r === "modified") modified++;
+    else if (r === "deleted") deleted++;
     else unchanged++;
   }
-  if (created > 0 || modified > 0) {
+  if (created > 0 || modified > 0 || deleted > 0) {
     return {
       ok: true,
-      reason: `${created} fichier(s) créé(s), ${modified} modifié(s), ${unchanged} inchangé(s)`,
+      reason: `${created} fichier(s) créé(s), ${modified} modifié(s), ${deleted} supprimé(s), ${unchanged} inchangé(s)`,
     };
   }
 
@@ -1209,7 +1222,7 @@ export function mergeRevisedPlan(currentPlan, revisedRemaining) {
  * @returns {string} granularité effective
  */
 export function getAdaptiveGranularity(baseGranularity, progress, windowSize = 5) {
-  const order = { fine: 0, medium: 1, large: 2 };
+  const order = { atomic: 0, fine: 1, medium: 2, large: 3 };
   const attempts = progress?.task_attempts || {};
   const allIds = Object.keys(attempts).map(Number).filter((n) => Number.isFinite(n));
   if (allIds.length === 0) return baseGranularity;
@@ -1217,7 +1230,7 @@ export function getAdaptiveGranularity(baseGranularity, progress, windowSize = 5
   const avgAttempts = recentIds.reduce((sum, id) => sum + (attempts[id] || 0), 0) / recentIds.length;
   let current = order[baseGranularity] ?? 1;
   if (avgAttempts >= 1.5) current = Math.max(0, current - 1);
-  else if (avgAttempts <= 0.2) current = Math.min(2, current + 1);
+  else if (avgAttempts <= 0.2) current = Math.min(3, current + 1);
   return Object.keys(order).find((k) => order[k] === current) || baseGranularity;
 }
 
@@ -1922,6 +1935,9 @@ export function createAttemptLog(partial, attemptNumber) {
     responseExcerpt: makeExcerpt(partial.responseExcerpt || ""),
     action: partial.action || "unknown",
     lintErrors: partial.lintErrors || null,
+    testResult: partial.testResult || null,
+    snapshot: partial.snapshot || null,
+    reviewResult: partial.reviewResult || null,
     cycles: typeof partial.cycles === "number" ? partial.cycles : 0,
     loop: !!partial.loop,
   };
@@ -1942,4 +1958,226 @@ export function summarizeTaskAttempts(logs) {
   });
   if (logs.length === 1) return `1 tentative : ${parts[0]}`;
   return `${logs.length} tentatives : ${parts.join(", ")}`;
+}
+
+// ── Auto-test post-modification (E2, spec_orchestration_autotest.md) ──
+// Fonctions pures : détection du runner, construction de commande, parsing des
+// échecs, prompt de correction. Les IO (lecture manifestes, exécution tests,
+// file_exists) restent côté agent-pi.js.
+
+/**
+ * Détecte le test runner du projet à partir des contenus des manifestes
+ * (déjà lus côté agent-pi.js). Retourne "npm" | "cargo" | "pytest" | "go" |
+ * null si aucun runner reconnu (fallback check_syntax côté agent-pi.js).
+ *
+ * @param {Object} manifests - { packageJson, cargoToml, pyprojectToml, pytestIni, conftestPy, requirementsTxt, goMod }
+ * @returns {string|null}
+ */
+export function detectTestRunner(manifests) {
+  if (!manifests) return null;
+  // 1. npm — package.json avec script "test" non vide
+  if (manifests.packageJson) {
+    try {
+      const pkg = JSON.parse(manifests.packageJson);
+      if (pkg && pkg.scripts && typeof pkg.scripts.test === "string" && pkg.scripts.test.trim()) {
+        return "npm";
+      }
+    } catch (_) { /* JSON invalide → pas npm */ }
+  }
+  // 2. cargo — Cargo.toml présent
+  if (manifests.cargoToml) {
+    return "cargo";
+  }
+  // 3. pytest — pytest.ini, conftest.py, [tool.pytest] dans pyproject.toml,
+  //    ou pytest listé dans requirements.txt
+  if (manifests.pytestIni || manifests.conftestPy) {
+    return "pytest";
+  }
+  if (manifests.pyprojectToml) {
+    if (/^\[tool\.pytest\]/m.test(manifests.pyprojectToml) || /^\s*pytest\b/m.test(manifests.pyprojectToml)) {
+      return "pytest";
+    }
+  }
+  if (manifests.requirementsTxt && /^\s*pytest\b/m.test(manifests.requirementsTxt)) {
+    return "pytest";
+  }
+  // 4. go — go.mod présent
+  if (manifests.goMod) {
+    return "go";
+  }
+  return null;
+}
+
+/**
+ * Construit la commande de tests à lancer. Si `override` est renseigné
+ * (config orchestration_test_command), il est utilisé tel quel (shlex minimal,
+ * scope complet uniquement). Sinon, dérive la commande du runner ; pour pytest
+ * en scope « targeted », filtre les fichiers de test candidats (déjà validés
+ * via file_exists côté agent-pi.js).
+ *
+ * @param {string} runner - "npm" | "cargo" | "pytest" | "go"
+ * @param {string} scope - "targeted" | "full"
+ * @param {string[]} testTargets - chemins absolus des fichiers de test (pytest ciblé)
+ * @param {string} override - commande override ("" = auto)
+ * @returns {{command: string, args: string[]}|null}
+ */
+export function buildTestCommand(runner, scope, testTargets, override) {
+  if (override && override.trim()) {
+    const parts = override.trim().split(/\s+/);
+    return { command: parts[0], args: parts.slice(1) };
+  }
+  if (runner === "npm") return { command: "npm", args: ["test"] };
+  if (runner === "cargo") return { command: "cargo", args: ["test", "--lib"] };
+  if (runner === "go") return { command: "go", args: ["test", "./..."] };
+  if (runner === "pytest") {
+    if (scope === "targeted" && Array.isArray(testTargets) && testTargets.length > 0) {
+      return { command: "pytest", args: testTargets.slice() };
+    }
+    return { command: "pytest", args: [] };
+  }
+  return null;
+}
+
+/**
+ * Heuristique de ciblage pytest : pour chaque fichier source modifié, dérive
+ * les chemins de test candidats (convention `tests/<...>/test_<name>.py` ou
+ * `test_<name>.py` à côté). Retourne des chemins **absolus** (résolus via
+ * resolvePath). La vérification d'existence se fait côté agent-pi.js.
+ *
+ * @param {string[]} changedFiles - chemins (relatifs projet ou absolus)
+ * @param {string} projectPath - racine du projet ouvert
+ * @returns {string[]} candidats absolus
+ */
+export function derivePytestTargets(changedFiles, projectPath) {
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0 || !projectPath) return [];
+  const targets = [];
+  const seen = new Set();
+  for (const f of changedFiles) {
+    const abs = resolvePath(f, projectPath).replace(/\\/g, "/");
+    // Si le fichier est déjà un test, on le garde tel quel.
+    if (/(^|\/)tests?\//.test(abs) || /(^|\/|_)test_[^/]+\.py$/.test(abs)) {
+      if (!seen.has(abs)) { seen.add(abs); targets.push(abs); }
+      continue;
+    }
+    // src/foo/bar.py → tests/foo/test_bar.py
+    const asTests = abs.replace(/\/src\//, "/tests/");
+    const name = asTests.split("/").pop().replace(/\.py$/, "");
+    const dir = asTests.split("/").slice(0, -1).join("/");
+    const cand1 = `${dir}/test_${name}.py`;
+    // à côté du fichier : foo/test_bar.py
+    const cand2 = `${dir}/test_${name}.py`; // même que cand1 (dir = tests/foo)
+    // variante : tests/test_bar.py à la racine tests
+    const cand3 = `${projectPath.replace(/\\/g, "/")}/tests/test_${name}.py`;
+    for (const c of [cand1, cand2, cand3]) {
+      if (!seen.has(c)) { seen.add(c); targets.push(c); }
+    }
+  }
+  return targets;
+}
+
+/**
+ * Parse la sortie d'un run de tests pour extraire les échecs individuels
+ * (nom du test + message). Heuristique par runner. Sert à : (1) comparer à la
+ * baseline pour ignorer les tests hérités, (2) construire un message de
+ * correction utile au codeur (pas 5000 lignes de stdout brut).
+ *
+ * @param {string} runner
+ * @param {string} stdout
+ * @param {string} stderr
+ * @returns {{failures: Array<{name: string, file: string, message: string}>, raw: string}}
+ */
+export function parseTestFailures(runner, stdout, stderr) {
+  const raw = (stdout || "") + (stderr && stderr.trim() ? "\n" + stderr : "");
+  const failures = [];
+  if (!raw) return { failures, raw };
+  if (runner === "pytest") {
+    // FAILED tests/foo/test_bar.py::test_name - AssertionError: ...
+    const re = /^FAILED\s+(\S+?)::(\S+)\s*-\s*(.+)$/gm;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      failures.push({ name: m[2], file: m[1], message: m[3].trim() });
+    }
+  } else if (runner === "cargo") {
+    // test foo::bar::test_name ... FAILED  + panicked at '...', src/lib.rs:42
+    const re = /^test\s+(\S+)\s+\.\.\.\s+FAILED/gm;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      failures.push({ name: m[1], file: "", message: "" });
+    }
+    // panicked at 'msg', src/lib.rs:42:5
+    const panicRe = /panicked\s+at\s+'([^']*)'[^,]*,\s*([^:]+):\d+/g;
+    let pm;
+    while ((pm = panicRe.exec(raw)) !== null) {
+      // Attache au dernier échec si pas déjà renseigné
+      const last = failures[failures.length - 1];
+      if (last && !last.message) { last.message = pm[1]; last.file = pm[2]; }
+    }
+  } else if (runner === "npm") {
+    // Jest/vitest : FAIL tests/foo.test.js + ● nom › sous-cas
+    const failRe = /^FAIL\s+(\S+)/gm;
+    let m;
+    while ((m = failRe.exec(raw)) !== null) {
+      failures.push({ name: m[1], file: m[1], message: "" });
+    }
+    const bulletRe = /^●\s+(.+)$/gm;
+    let bm;
+    while ((bm = bulletRe.exec(raw)) !== null) {
+      const last = failures[failures.length - 1];
+      if (last && !last.message) { last.message = bm[1].trim(); }
+    }
+  } else if (runner === "go") {
+    // --- FAIL: TestFoo (0.00s)
+    const re = /^---\s+FAIL:\s+(\S+)/gm;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      failures.push({ name: m[1], file: "", message: "" });
+    }
+  }
+  return { failures, raw };
+}
+
+/**
+ * Construit le prompt NEED_HELP renvoyé au codeur quand les tests sont en
+ * échec. Tronque l'output à ~4000 caractères (les premiers échecs sont les
+ * plus pertinents). Format symétrique de buildLintFailurePrompt.
+ *
+ * @param {Array} failures - échecs parsés (parseTestFailures)
+ * @param {string[]} baselineFailures - noms de tests déjà rouges avant la tâche (ignorés)
+ * @param {Object} task - tâche courante
+ * @param {string} rawOutput - sortie brute (fallback si failures vide)
+ * @returns {string}
+ */
+export function buildTestFailurePrompt(failures, baselineFailures, task, rawOutput) {
+  const newFailures = (failures || []).filter(
+    (f) => !(baselineFailures || []).includes(f.name)
+  );
+  const title = task.title || `Tâche #${task.id}`;
+  let body;
+  if (newFailures.length > 0) {
+    body = newFailures
+      .slice(0, 10)
+      .map((f) => `- ${f.name}${f.file ? ` (${f.file})` : ""}${f.message ? ` : ${f.message}` : ""}`)
+      .join("\n");
+  } else {
+    // Pas d'échec parsé → sortie brute tronquée
+    body = (rawOutput || "").slice(0, 4000);
+  }
+  return `NEED_HELP: Tests en échec pour la tâche "${title}".
+
+Les tests du projet échouent après tes modifications. Corrige le code pour faire passer les tests, en utilisant le format SEARCH/REPLACE ou CREATE, puis termine par DONE: <résumé>.
+
+Échecs détectés :
+${body}
+
+N'escalade pas. Corrige et relance.`;
+}
+
+/**
+ * Tronque un output de tests pour l'affichage dans le journal d'observabilité
+ * (premiers échecs pertinents + mention de troncature).
+ */
+export function truncateTestOutput(text, maxLen = 4000) {
+  if (!text) return "";
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen) + `\n… (tronqué, ${text.length} caractères au total)`;
 }

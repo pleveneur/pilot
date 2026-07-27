@@ -22,6 +22,9 @@
 ### Édition Markdown
 - **Coloration syntaxique** via CodeMirror 6 (Markdown, thème sombre/clair adaptatif).
 - **Raccourcis clavier** : `Ctrl+B` (**gras**), `Ctrl+I` (*italique*), `Ctrl+K` ([lien](url)).
+- **Multi-curseurs** : `Alt+clic` ajoute un curseur, `Ctrl+D` sélectionne l'occurrence suivante.
+- **Lint intégré** : les diagnostics du linter du projet (eslint JS/TS) s'affichent en direct dans la gouttière de l'éditeur.
+- **Recherche & remplacement** : `Ctrl+Shift+F` (recherche globale), `Ctrl+Shift+H` (remplacement global avec aperçu).
 - **Insertion d'images** : glisser-déposer une image dans l'éditeur, ou `Ctrl+V` depuis le presse-papiers. L'image est copiée dans `images/` et la syntaxe `![]()` est insérée.
 
 ### Prévisualisations
@@ -167,6 +170,19 @@ avec ta version de Pilot).
 - L'historique de la conversation d'aide est conservé tant que l'onglet est ouvert.
 - Voir `spec_help.md` pour le détail.
 
+## Envoyer une remarque ou une idée (💬)
+
+Une remarque, un bug, une idée d'évolution ? Bouton **💬** du panneau d'actions
+(accessible sans projet ouvert). Tu peux :
+
+- **Ouvrir sur GitHub** une issue pré-remplie dans ton navigateur (suivi public
+  du retour, nécessite un compte GitHub) ;
+- **Envoyer par email** (vers l'auteur, sans compte GitHub) ;
+- **Consulter les retours déjà envoyés** pour éviter un doublon.
+
+Le formulaire joint automatiquement ta version de Pilot et ton système
+d'exploitation. Aucune donnée n'est transmise sans ton action.
+
 ## Captures d'écran
 
 ```
@@ -220,7 +236,7 @@ chmod +x pilot_0.1.0_amd64.AppImage
 2. Cliquez sur **🅿️ Projets** → **📁 Nouveau projet** et sélectionnez le dossier de travail.
 3. L'arborescence s'affiche à gauche. Les fichiers `.md` s'ouvrent en édition, tous les fichiers sont prévisualisables.
 4. **Clic gauche** → ouvre en édition. **Double-clic** sur une image → prévisualisation directe.
-5. **Clic droit** sur un `.md` → menu « 👁️ Prévisualiser », « 📕 Exporter en PDF », « 📊 Prévisualiser le CSV » (si `.csv`).
+5. **Clic droit** sur un `.md` → menu « 👁️ Prévisualiser », « 📕 Exporter en PDF », « 📄 Exporter en HTML », « 📊 Prévisualiser le CSV » (si `.csv`).
 6. **Bouton 🖥️** → ouvre un terminal intégré dans le dossier du projet.
 7. **Bouton π** → ouvre l'onglet Agent Pi pour dialoguer avec l'IA.
 8. Les modifications faites par l'agent sont reflétées en temps réel dans l'éditeur.
@@ -229,6 +245,9 @@ chmod +x pilot_0.1.0_amd64.AppImage
 
 | Raccourci | Contexte | Action |
 |---|---|---|
+| `Ctrl+Shift+F` | Global | Recherche globale dans les fichiers |
+| `Ctrl+Shift+H` | Global | Remplacement global (avec aperçu) |
+| `Ctrl+Alt+R` | Global | Fichiers récents (popover) |
 | `Ctrl+S` | Éditeur | Sauvegarder le fichier actif |
 | `Ctrl+W` | Éditeur | Fermer l'onglet actif (sauvegarde auto) |
 | `F11` | Global | Mode Zen (plein écran sans barre latérale) |

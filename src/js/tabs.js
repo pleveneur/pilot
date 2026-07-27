@@ -3,6 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { createEditor, getContent, setContent, destroyEditor, setWordWrap } from "./editor.js";
+import { recordRecentFile } from "./recent-files.js";
 import { getLanguageName } from "./languages.js";
 import { createPreview, updatePreview, bindMermaidFunctions } from "./preview.js";
 import { createPdfPreview } from "./pdf-preview.js";
@@ -13,6 +14,8 @@ import { createAgentPi } from "./agent-pi.js";
 import { agentDisplayLabel, getPiHealthSync, checkPiHealth } from "./backend-info.js";
 import { createHelp } from "./help.js";
 import { createReview } from "./review.js";
+import { createSessionHistory } from "./session-history.js";
+import { createFeedback } from "./feedback.js";
 import { scheduleOutlineUpdate } from "./outline.js";
 import { toastError } from "./toast.js";
 import { createPromptBuilder } from "./prompt-builder.js";
@@ -149,6 +152,18 @@ class TabsManager {
       return;
     }
 
+    // Onglet Historique (📜) — spec_session_history.md : sessions searchable (H9).
+    if (mode === "history") {
+      await this._openHistory(path || "Historique");
+      return;
+    }
+
+    // Onglet Feedback (💬) — spec_feedback.md : remarques/évolutions utilisateurs.
+    if (mode === "feedback") {
+      await this._openFeedback(path || "Feedback");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -170,6 +185,7 @@ class TabsManager {
         return;
       }
       await this._openPdf(path);
+      recordRecentFile(path);
       return;
     }
 
@@ -183,6 +199,7 @@ class TabsManager {
         return;
       }
       await this._openImage(path);
+      recordRecentFile(path);
       return;
     }
 
@@ -194,6 +211,7 @@ class TabsManager {
         return;
       }
       await this._openCsv(path);
+      recordRecentFile(path);
       return;
     }
 
@@ -264,6 +282,7 @@ class TabsManager {
     this.tabs.push(tab);
     this._renderTabButton(tab);
     this.switchTab(id);
+    recordRecentFile(path);
     this._scheduleSave();
   }
 
@@ -418,6 +437,84 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">🔍</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Review</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Historique (📜) — sessions agent searchable (H9,
+   * spec_session_history.md). Index local `.pilot/sessions.jsonl`, ne dépend
+   * pas de pi (consultable hors-ligne).
+   */
+  async _openHistory(label = "Historique") {
+    const existing = this.tabs.find((t) => t.mode === "history");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "history");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper history-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const result = await createSessionHistory(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenHistory = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Historique:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">📜</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Historique</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Feedback (💬) — remarques / évolutions utilisateurs
+   * (spec_feedback.md). Sans backend ni dépendance à pi : envoi GitHub/email
+   * + lecture des issues existantes via l'API publique GitHub.
+   */
+  async _openFeedback(label = "Feedback") {
+    const existing = this.tabs.find((t) => t.mode === "feedback");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "feedback");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper feedback-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const result = createFeedback(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenFeedback = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Feedback:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">💬</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Feedback</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -811,6 +908,16 @@ class TabsManager {
       tab.unlistenReview();
       tab.unlistenReview = null;
     }
+    // Nettoyage onglet Historique (📜) — spec_session_history.md (H9)
+    if (tab.mode === "history" && tab.unlistenHistory) {
+      tab.unlistenHistory();
+      tab.unlistenHistory = null;
+    }
+    // Nettoyage onglet Feedback (💬) — spec_feedback.md
+    if (tab.mode === "feedback" && tab.unlistenFeedback) {
+      tab.unlistenFeedback();
+      tab.unlistenFeedback = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -888,6 +995,16 @@ class TabsManager {
     if (tab.mode === "review" && tab.unlistenReview) {
       tab.unlistenReview();
       tab.unlistenReview = null;
+    }
+    // Nettoyage onglet Historique (📜) — spec_session_history.md (H9)
+    if (tab.mode === "history" && tab.unlistenHistory) {
+      tab.unlistenHistory();
+      tab.unlistenHistory = null;
+    }
+    // Nettoyage onglet Feedback (💬) — spec_feedback.md
+    if (tab.mode === "feedback" && tab.unlistenFeedback) {
+      tab.unlistenFeedback();
+      tab.unlistenFeedback = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -1600,8 +1717,8 @@ class TabsManager {
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}`;
     btn.dataset.tabId = tab.id;
 
-    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : "🖥️ ") : tab.mode === "agent" ? "π " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
-    const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
+    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : "🖥️ ") : tab.mode === "agent" ? "π " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
+    const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "history" ? " (Sessions)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
 
     btn.innerHTML = `
       <span class="tab-name">${icon}${tab.name}${suffix}</span>

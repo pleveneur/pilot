@@ -118,6 +118,18 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | `git_diff_file` | sync | C1 : diff d'un fichier → `{is_repo, tracked, before, after}`. `before` = `git show HEAD:<relpath>` (vide si non tracked / jamais commité), `after` = contenu disque. Sert à la modale diff (`openGitDiffModal`). |
 | `ask_review` | async | Revue de code (H5) : récupère `git diff` (portée `working`/`last`), construit un prompt cadré et lance un process pi temporaire `--no-session` (via `help::ask_pi_caged`, cwd temp isolé du projet) → retourne la revue Markdown. `Err` si pas un repo Git / rien à reviewer / aucun modèle configuré. Historique réinjecté (pi sans mémoire). Voir [`spec_review.md`](spec_review.md). |
 | `set_review_model` | sync | Persiste `config.review_model` (sélecteur de l'onglet Review). Format `provider/modelId`. |
+| `index_sessions` | async | H9 : (Re)construit `.pilot/sessions.jsonl` depuis le dossier de sessions pi du projet (rétro-indexation complète, idempotente). Retourne le nb d'entrées. Préserve les tags (fichier séparé). |
+| `search_sessions` | sync | H9 : recherche dans l'index. Params `{query, tag, file, kind, limit}`. Full-text (substring insensible à la casse, ou regex si `query` commence par `/`) sur prompt+summary+files, filtres tag/file/kind. Retourne `{entries, total, indexed}`. |
+| `get_session_detail` | sync | H9 : détail d'une session (par id) = entrée indexée + contenu du JSONL pi (messages simplifiés role/text/tools). |
+| `set_session_tags` | sync | H9 : persiste les tags d'une session dans `.pilot/sessions-tags.json` (fichier séparé, ne touche pas l'index). |
+| `list_session_tags` | sync | H9 : liste tous les tags utilisés (autocomplétion UI). |
+| `record_session_entry` | async | H9 : écrit/met à jour une entrée de session dans l'index (capture live, appelé par le frontend à l'agent_end). Retire l'entrée de même id puis réécrit. Tags jamais écrasés. |
+| `list_agent_backends` | sync | Liste les stems de backends disponibles (scanne `~/.pi`, `~/.plh`, ... contenant `agent/models.json`). Sert au sélecteur de l'onglet Fournisseurs. |
+| `read_models_config` | sync | Lit `~/.{stem}/agent/models.json` (round-trip JSON). Retourne `{}` si absent. |
+| `write_models_config` | sync | Écrit `~/.{stem}/agent/models.json` (backup `.bak` + validation `providers` est un objet). |
+| `read_model_aliases` | sync | Lit `~/.{stem}/agent/model-switch.json` (`{aliases, defaultModel}`). |
+| `write_model_aliases` | sync | Écrit `~/.{stem}/agent/model-switch.json` (backup `.bak` + validation). |
+| `test_provider_models` | async | Teste un provider : `GET {baseUrl}/models` (OpenAI-compat, ollama/llama-cpp) → `{ok, models:[ids], error}`. Timeout 5s. Bearer auth si apiKey renseignée. |
 
 ---
 
@@ -126,7 +138,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Événement | Traitement |
 |-----------|------------|
 | `agent_start` | Statut → "En réflexion...", streaming activé |
-| `agent_end` | Statut → "Prêt", mise à jour des stats tokens/coûts. **Chat standard :** si le tour s'est terminé sur `stopReason:"length"` (réponse tronquée par la limite de tokens de sortie — cas typique d'un modèle local écrivant un gros fichier via un tool call `write` coupé en plein milieu), relance automatiquement le modèle (max 2, `state.lengthNudgeAttempts`) pour qu'il reprenne, au lieu de rester silencieux (« l'agent s'est arrêté pour rien »). Le compteur est remis à zéro à chaque envoi utilisateur manuel. Désactivé en mode Orchestration (géré par `detectReflectionOnly`). Cf. session pi `019f85e4` |
+| `agent_end` | Statut → "Prêt", mise à jour des stats tokens/coûts. **Chat standard :** si le tour s'est terminé sur `stopReason:"length"` (réponse tronquée par la limite de tokens de sortie — cas typique d'un modèle local écrivant un gros fichier via un tool call `write` coupé en plein milieu), relance automatiquement le modèle (max 2, `state.lengthNudgeAttempts`) pour qu'il reprenne, au lieu de rester silencieux (« l'agent s'est arrêté pour rien »). Le compteur est remis à zéro à chaque envoi utilisateur manuel. Désactivé en mode Orchestration (géré par `detectReflectionOnly`). Cf. session pi `019f85e4`. **Chat standard + rafale de retries :** finalise le bloc « 🔄 nouvelle tentative » (retrait si une réponse est revenue, sinon bouton « Réessayer » — voir `auto_retry_start`). |
 | `message_start` / `message_update` / `message_end` | Streaming du texte de l'assistant (Markdown) ; `message_end` affiche aussi explicitement les erreurs (`stopReason:"error"` + `errorMessage`, ex: serveur LLM injoignable) au lieu de rester silencieux. Mémorise `stopReason` (`state.lastStopReason`) pour la détection de troncation (voir `agent_end`) |
 | `thinking_start` / `thinking_delta` / `thinking_end` | Bloc `<details>` repliable pour la pensée |
 | `tool_execution_start` / `tool_execution_update` / `tool_execution_end` | Bloc outil avec nom, arguments, sortie |
@@ -137,7 +149,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | `model_change` | Met à jour le sélecteur de modèle et les stats |
 | `extension_error` | Message d'erreur dans le chat |
 | `extension_ui_request` | Dialogues navigateur (prompt/confirm) pour select/confirm/input/editor |
-| `auto_retry_start` / `auto_retry_end` | Non traité (log console) |
+| `auto_retry_start` / `auto_retry_end` | **Mode Orchestration :** abort + pause/mensaje « orchestrateur injoignable ». **Chat standard :** dé-duplication des erreurs de connexion — un seul bloc « 🔄 nouvelle tentative (n) » mis à jour (au lieu d'empiler `❌ Erreur` à chaque retry) ; sur `agent_end` sans réponse, transformation en `❌ Modèle injoignable après n tentative(s)` + bouton « Réessayer » (retry 1-clic du dernier prompt via `state.lastUserPrompt` / `lastRetryImages`). Sans cela, l'agent se figeait en silence après épuisement des retries (sessions `019f4b28`, `019f891a`). |
 | `process_exit` | Statut → "⚠️ Déconnecté", bouton abort → reconnect 🔄 |
 
 ---
@@ -292,6 +304,56 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 
 ---
 
+## 14. Édition des modèles IA (providers + alias)
+
+Onglet **« Fournisseurs »** de la modale Paramètres (`src/js/models-config.js`).
+Permet d'éditer le registre des modèles (`models.json`) et les alias
+(`model-switch.json`) d'un backend **sans toucher aux JSON à la main**.
+
+- **Backend cible** : sélecteur en tête d'onglet (pi / plh / ...), détecté via
+  `list_agent_backends` (scanne `~/.{stem}/agent/models.json`). Le backend actif
+  est pré-sélectionné via `get_backend_info`.
+- **Providers** : édition de `baseUrl`, `api`, `apiKey`, et `compat`
+  (`supportsTools`, `supportsDeveloperRole`, `supportsReasoningEffort`).
+  Ajout / suppression / renommage d'un provider. Les clés JSON non gérées par
+  l'UI sont préservées (round-trip `serde_json::Value`).
+- **Modèles** : par provider, édition de `id`, `contextWindow`, `input`
+  (text/image), `systemPrompt` (textarea repliable) et **`alias`** (nom court
+  optionnel). Ajout / suppression.
+- **Alias** (`model-switch.json`) : saisis **au niveau de chaque modèle** (champ
+  « alias : » de la carte modèle), plus de bloc séparé. À la sauvegarde, le dict
+  `aliases: {alias: "provider/modelId"}` est reconstruit depuis les alias saisis.
+  Un `defaultModel` (modèle par défaut du backend) est réglable via un select en
+  tête d'onglet. Les alias sont **globaux à Pilot** (un registre par backend),
+  plus liés à un projet.
+- **Autocomplétion « / »** : `loadModelAliases` (agent-pi.js) lit le registre
+  global `~/.{stem}/agent/model-switch.json` via `read_model_aliases(stem)` (stem
+  = backend actif via `backendKind()`), au lieu de l'ancienne copie projet
+  `<project>/extensions/model-switch.json`. L'agent pi/plh lit le même fichier →
+  source de vérité partagée. Rechargé sur `pilot-models-changed`.
+- **Modèle par défaut au démarrage** : `defaultModel` (registre global) gouverne le
+  modèle sélectionné au **démarrage** et au **redémarrage** de l'agent
+  (`loadModels(state, true)` → `forceDefault`), ainsi qu'au **new-session**. Il
+  écrase le modèle mémorisé de la session précédente (l'agent plh étant un
+  process persistant qui garde son modèle entre les ouvertures de Pilot). Un
+  `set_agent_model` synchronise l'agent sur ce `defaultModel`. En cas de
+  `defaultModel` absent/invalide, on retombe sur le modèle de session actif.
+- **Test de connexion** : bouton par provider → `test_provider_models`
+  (`GET {baseUrl}/models`, endpoint OpenAI-compatible supporté par ollama et
+  llama-cpp server) → liste les modèles disponibles côté serveur. Bouton par
+  modèle → vérifie que l'id est présent dans cette liste.
+- **Sauvegarde** : `write_models_config` + `write_model_aliases` (backup `.bak`
+  automatique + validation minimale : alias uniques, modèles avec id). Le champ
+  temporaire `_alias` (attaché au modèle en mémoire) est retiré avant écriture
+  du `models.json`. Émet l'évènement `pilot-models-changed` → l'onglet agent
+  (`agent-pi.js` → `loadModels` + `loadModelAliases`) et les selects de modèles
+  (`settings.js` : PDF→MD, orchestrateur, codeur, reviewer) se rafraîchissent.
+- **Anti-régression** : `get_available_models_list` (lecture utilisée par
+  l'existant) est inchangé ; aucune commande existante modifiée, seulement des
+  ajouts.
+
+---
+
 <!-- HELP:agent-pi -->
 ## Agent Pi (onglet π)
 
@@ -319,6 +381,12 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   API…), le message d'erreur s'affiche dans la conversation au lieu d'une
   bulle vide sans réponse. Les résultats d'outil en erreur (ex. tool call
   tronqué par la limite de tokens) s'affichent même si les outils sont masqués.
+  **Modèle injoignable / retries** : quand pi ne parvient pas à joindre le
+  modèle (serveur local éteint, API cloud down), il retente automatiquement
+  plusieurs fois. Pilot n'affiche qu'un seul bloc « 🔄 nouvelle tentative (n)… »
+  mis à jour (au lieu d'empiler les erreurs), puis, si toutes les tentatives
+  échouent, un message **❌ Modèle injoignable après n tentative(s)** avec un
+  bouton **🔄 Réessayer** pour relancer votre dernier prompt en un clic.
 - **Réponses tronquées** : avec un modèle local qui dépasse la limite de
   tokens de sortie (`stopReason:"length"`), la réponse est coupée en plein
   milieu (souvent un `write` de gros fichier). Pilot détecte la troncation et

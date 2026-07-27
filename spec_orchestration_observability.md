@@ -166,5 +166,5 @@ Chaque nudge est journalisé dans `task_logs[taskId]` avec :
 
 - Classification automatique des échecs en « récupérable » vs « structurel » pour
   adapter la politique d'escalade (voir `idees_evolutions.md` §23 — harnais LLM local).
-- E2 (auto-test post-modif) comme feedback `SELF_FIX` supplémentaire.
+- E2 (auto-test post-modif) comme feedback `SELF_FIX` supplémentaire — **🟡 spec rédigée** ([`spec_orchestration_autotest.md`](./spec_orchestration_autotest.md)), extension du journal prévue §9 de cette spec.
 - Export du journal (JSON/HTML) pour analyse hors Pilot.

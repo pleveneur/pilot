@@ -4,7 +4,9 @@ import { initTheme } from "./theme.js";
 import { initTabs } from "./tabs.js";
 import { initSidebar } from "./sidebar.js";
 import { initSettings } from "./settings.js";
+import { initModelsConfig } from "./models-config.js";
 import { initSearchPanel } from "./search-panel.js";
+import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
@@ -34,6 +36,8 @@ const COMMANDS = [
   { id: "scratchpad", label: "Ouvrir le brouillon", key: "Ctrl+Shift+N", icon: "📝" },
   { id: "toggle-word-wrap", label: "Renvoi à la ligne automatique", key: "Alt+Z", icon: "↩" },
   { id: "check-update", label: "Vérifier les mises à jour", key: "", icon: "⬆" },
+  { id: "recent-files", label: "Fichiers récents…", key: "Ctrl+Alt+R", icon: "🕘" },
+  { id: "feedback", label: "Envoyer une remarque…", key: "", icon: "💬" },
 ];
 
 let paletteActiveIndex = 0;
@@ -202,6 +206,12 @@ async function executeCommand(id, tabs) {
     case "check-update":
       await checkForUpdate(false);
       break;
+    case "recent-files":
+      openRecentPopover(tabs);
+      break;
+    case "feedback":
+      tabs.openFile("Feedback", "feedback");
+      break;
   }
 }
 
@@ -331,6 +341,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 4. Initialiser les paramètres (charge et applique le thème/config)
   await initSettings();
+  initModelsConfig();
 
   // 5. Boutons du panneau d'actions
   document.getElementById("btn-terminal").addEventListener("click", async () => {
@@ -362,6 +373,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 🔍 Review : onglet de revue de code assistée sur le diff Git — spec_review.md (H5).
   document.getElementById("btn-review").addEventListener("click", () => {
     tabs.openFile("Review", "review");
+  });
+
+  // 📜 Historique : onglet des sessions agent searchable — spec_session_history.md (H9).
+  document.getElementById("btn-history").addEventListener("click", () => {
+    tabs.openFile("Historique", "history");
+  });
+
+  // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
+  document.getElementById("btn-feedback").addEventListener("click", () => {
+    tabs.openFile("Feedback", "feedback");
   });
 
   document.getElementById("btn-terminal-cmd").addEventListener("click", async () => {
@@ -527,6 +548,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "N") {
       e.preventDefault();
       tabs._openScratchpad();
+      return;
+    }
+
+    // Ctrl+Alt+R : Fichiers récents (C4)
+    if ((e.ctrlKey || e.metaKey) && e.altKey && e.key === "r") {
+      e.preventDefault();
+      openRecentPopover(tabs);
       return;
     }
 

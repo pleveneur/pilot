@@ -9,9 +9,11 @@ import { isImageFile } from "./image-paste.js";
 import { buildProjectContext } from "./context-engine.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
 import { renderEditGateDialog } from "./diff-view.js";
-import { agentDisplayLabel } from "./backend-info.js";
+import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
 import { refreshIcons, setIcon } from "./icons.js";
+import { notifyAgentDoneFromRemote } from "./desktop-notify.js";
+import { recordCurrentSession } from "./session-history.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -25,7 +27,13 @@ import {
   buildSelfFixPrompt, detectCoderMarker,
   createAttemptLog, detectLoop, summarizeTaskAttempts,
   detectReflectionOnly, buildNudgeAfterReflectionPrompt,
+  detectTestRunner, buildTestCommand, derivePytestTargets,
+  parseTestFailures, buildTestFailurePrompt, truncateTestOutput,
 } from "./orchestration.js";
+import {
+  matchesGlob, matchesAnyCritical,
+  buildReviewPrompt, parseReviewResult, buildReviewCorrectionPrompt,
+} from "./orchestration-reviewer.js";
 
 // ── État global de l'autocomplétion ──
 let allCommands = [];
@@ -36,6 +44,7 @@ let acPopupEl = null;
 
 // ── Alias de modèles (model-switch.json) ──
 let modelAliases = {};       // { alias: "provider/modelId", ... }
+let globalDefaultModel = ""; // defaultModel du registre global (presélection select agent)
 
 // ── État du popup /prompt ──
 let promptTemplates = [];
@@ -155,6 +164,50 @@ export async function createAgentPi(container) {
   // Recharger quand les paramètres sont sauvegardés (event custom émis par main.js)
   window.addEventListener("pilot-config-changed", refreshConfirmFileEdits);
 
+  // ── Auto-test post-modification (E2) : recharger la config à chaud ──
+  async function refreshOrchestrationTestConfig() {
+    try {
+      const config = await invoke("get_config");
+      state.orchestrationTestEnabled = config.orchestration_test_enabled === true;
+      if (config.orchestration_test_timeout_ms && config.orchestration_test_timeout_ms >= 1000) {
+        state.orchestrationTestTimeoutMs = config.orchestration_test_timeout_ms;
+      }
+      if (config.orchestration_test_max_corrections && config.orchestration_test_max_corrections > 0) {
+        state.orchestrationTestMaxCorrections = config.orchestration_test_max_corrections;
+      }
+      state.orchestrationTestCommand = config.orchestration_test_command || "";
+      if (config.orchestration_test_scope === "full" || config.orchestration_test_scope === "targeted") {
+        state.orchestrationTestScope = config.orchestration_test_scope;
+      }
+      // Si l'auto-test est désactivé pendant un plan, reset la baseline.
+      if (!state.orchestrationTestEnabled) {
+        state.orchestrationTestBaseline = null;
+        state.orchestrationTestBaselineWarned = false;
+      }
+      // ── A1 : snapshots ──
+      state.orchestrationSnapshotsEnabled = config.orchestration_snapshots_enabled !== false;
+      // ── H2 V1 : reviewer ──
+      // Si le mode orchestration est actif, ne pas écraser les overrides session
+      // (l'utilisateur a pu activer/désactiver le reviewer via l'écran d'activation).
+      if (!state.orchestrationEnabled) {
+        state.orchestrationReviewerEnabled = config.orchestration_reviewer_enabled === true;
+        state.orchestrationReviewerScope = (config.orchestration_reviewer_scope === "critical") ? "critical" : "all";
+        state.orchestrationReviewerCriticalPatterns = Array.isArray(config.orchestration_reviewer_critical_patterns)
+          ? config.orchestration_reviewer_critical_patterns.map(String) : [];
+        state.orchestrationReviewerProvider = config.orchestration_reviewer_provider || "";
+        state.orchestrationReviewerModel = config.orchestration_reviewer_model || "";
+      }
+    } catch (_) { /* get_config non disponible */ }
+  }
+  refreshOrchestrationTestConfig();
+  window.addEventListener("pilot-config-changed", refreshOrchestrationTestConfig);
+  // Rafraîchir le sélecteur de modèle quand le registre models.json a été
+  // édité depuis l'onglet Fournisseurs (models-config.js).
+  window.addEventListener("pilot-models-changed", () => {
+    loadModels(state);
+    loadModelAliases();
+  });
+
   // ── Panneau d'orchestration ──
   const orchestrationPanel = document.createElement("div");
   orchestrationPanel.className = "orchestration-panel hidden";
@@ -166,6 +219,7 @@ export async function createAgentPi(container) {
         <button class="agent-btn" data-action="orch-pause" title="Mettre en pause"><i data-lucide="pause" class="icon-sm"></i></button>
         <button class="agent-btn" data-action="orch-resume" title="Reprendre" disabled><i data-lucide="play" class="icon-sm"></i></button>
         <button class="agent-btn" data-action="orch-reset" title="Nouveau plan"><i data-lucide="rotate-cw" class="icon-sm"></i></button>
+        <button class="agent-btn" data-action="orch-undo" title="Annuler la dernière tâche (restaurer les fichiers)" disabled><i data-lucide="undo-2" class="icon-sm"></i></button>
       </div>
     </div>
     <div class="orchestration-progress">
@@ -221,11 +275,24 @@ export async function createAgentPi(container) {
     pendingText: "",              // buffer texte en streaming
     pendingRender: false,          // flag pour throttling du rendu Markdown (requestAnimationFrame)
     lastAssistantRawText: "",      // texte brut complet de la dernière réponse (pour parsing orchestration)
+    isCompacting: false,           // true pendant une compaction (filtre les deltas du résumé)
     thinkingVisible: true,
     pendingImages: [],
     pendingToolCalls: new Map(),  // toolCallId → { name, args } (en attente de tool_execution_start)
     lengthNudgeAttempts: 0,  // compteur de relances auto après stopReason:"length" (chat standard, max 2)
     lastStopReason: "",      // dernier stopReason assistant reçu (détection réponse tronquée)
+    // ── Erreurs de connexion (chat standard) ──
+    // pi émet auto_retry_start puis un message error à chaque retry. Sans
+    // dé-duplication, l'UI empile « ❌ Erreur de connexion » 3-4× d'affilée,
+    // puis se fige sans retour après épuisement des retries. On n'affiche qu'un
+    // seul bloc mis à jour, transformé en message + bouton « Réessayer » sur
+    // agent_end si aucune réponse n'est revenue.
+    lastUserPrompt: "",     // dernier prompt utilisateur (chat standard, pour retry 1-clic)
+    lastRetryImages: [],    // images du dernier prompt (pour retry 1-clic)
+    lastPromptOrigin: null,  // D1 : origine du dernier prompt ("remote" | "desktop" | null) → notification desktop si "remote" à l'agent_end
+    connRetryActive: false, // true pendant une rafale de retries pi (dé-duplication)
+    connRetryBlock: null,   // bloc DOM du message « 🔄 nouvelle tentative » courant
+    connErrorCount: 0,      // nb d'erreurs de connexion consécutives dans la rafale
     // Orchestration
     orchestrationEnabled: false,
     orchestrationPlan: null,      // { plan: [...], progress: { current_task, completed, failed, escalated, task_attempts } }
@@ -260,6 +327,41 @@ export async function createAgentPi(container) {
     orchestrationCurrentFileState: {}, // état des fichiers de la tâche en cours (pour validation post-tâche)
     orchestrationLintAttempts: {}, // compteur de corrections syntaxiques par tâche (V2 linting-in-the-loop)
     orchestrationNudgeAttempts: {}, // compteur de relances (nudge) après arrêt prématuré en réflexion (max 2 par tâche)
+    // ── Auto-test post-modification (E2, spec_orchestration_autotest.md) ──
+    orchestrationTestEnabled: false, // opt-in (défaut off)
+    orchestrationTestTimeoutMs: 60000, // timeout dédié pour les tests (distinct du timeout d'inactivité)
+    orchestrationTestMaxCorrections: 3, // budget commun (lint + test) borné à cette valeur
+    orchestrationTestCommand: "", // override manuel ("" = auto-détection)
+    orchestrationTestScope: "targeted", // "targeted" | "full"
+    orchestrationTestRunner: null, // runner détecté ("npm"|"cargo"|"pytest"|"go"|null)
+    orchestrationTestBaseline: null, // { failures: string[], exitCode, available: bool } — tests déjà rouges au démarrage
+    orchestrationTestBaselineComputing: false, // anti-reentrance calcul baseline
+    orchestrationTestBaselineWarned: false, // warning « tests injoignables » déjà affiché
+    orchestrationTestAttempts: {}, // compteur de corrections de tests par tâche (E2)
+    // ── Snapshots / annulation de tâche (A1, spec_orchestration_snapshots.md) ──
+    orchestrationSnapshotsEnabled: true, // défaut activé (garantie de sécurité)
+    orchestrationSnapshotsAvailable: null, // null = inconnu, bool = repo Git détecté
+    orchestrationSnapshotsWarned: false, // message « indisponible » déjà affiché
+    orchestrationSnapshots: {}, // map taskId → { sha, files: string[], ts }
+    orchestrationCancelledTasks: [], // tâches annulées par l'utilisateur (exclues de « terminé »)
+    // ── Reprise après compaction auto (spec_orchestration.md §11.8) ──
+    // pi peut ne pas reprendre la génération après une compaction auto en mode RPC.
+    // On démarre un timer de reprise sur compaction_end ; si aucun delta/agent_end
+    // n'arrive dans le délai, on relance le flux (abort + executeNextTask).
+    orchestrationCompactionTimer: null, // timer de reprise post-compaction
+    orchestrationCompactionResumePending: false, // true entre compaction_end et la 1re activité post-compaction
+    // ── Reviewer indépendant (H2 V1, spec_orchestration_reviewer.md) ──
+    orchestrationReviewerEnabled: false, // opt-in (défaut off)
+    orchestrationReviewerScope: "all", // "all" = chaque tâche | "critical" = fichiers sensibles
+    orchestrationReviewerCriticalPatterns: [], // globs éditables (mode critical)
+    orchestrationReviewerProvider: "", // "" = fallback sur modèle orchestrateur
+    orchestrationReviewerModel: "", // "" = fallback sur modèle orchestrateur
+    orchestrationReviewAttempts: {}, // compteur de corrections reviewer par tâche
+    isReviewerStreaming: false, // true pendant un tour du reviewer
+    reviewerPendingResolve: null, // resolver de la Promise en attente (runReviewGate)
+    reviewerRawText: "", // texte brut accumulé du reviewer (pour parseReviewResult)
+    reviewerCurrentBlock: null, // bulle DOM du reviewer courant
+    reviewerCompacting: false, // filtre deltas pendant compaction reviewer (§11.8)
     orchestrationCurrentTaskCycles: 0, // V3 : compteur de cycles SELF_FIX (auto-controle codeur) pour la tâche courante (max 3)
     orchestrationReadFilesInTask: new Set(), // fichiers lus par le codeur pendant la tâche courante (point 5.3)
     orchestrationToolCallsInTask: [], // outils utilisés par le codeur pendant la tâche courante (point 5.10)
@@ -569,6 +671,12 @@ export async function createAgentPi(container) {
     // L'utilisateur reprend la main : remise à zéro du compteur de relances auto
     // (length) pour la prochaine troncation éventuelle.
     state.lengthNudgeAttempts = 0;
+    // Réinitialiser l'état d'erreur de connexion chat standard (nouvel envoi).
+    // Le bloc « nouvelle tentative » éventuel est retiré : un nouvel envoi
+    // explicite annule la séquence de retries précédente.
+    state.connRetryActive = false;
+    state.connErrorCount = 0;
+    if (state.connRetryBlock) { state.connRetryBlock.remove(); state.connRetryBlock = null; }
 
     // Images en attente
     const images = state.pendingImages.length > 0
@@ -578,6 +686,15 @@ export async function createAgentPi(container) {
           data: img.base64,
         }))
       : null;
+
+    // Mémoriser le prompt utilisateur (texte + images) pour le retry 1-clic
+    // après une erreur de connexion (bouton « Réessayer »). Uniquement en
+    // chat standard : les slash-commands et le mode Orchestration gèrent leur
+    // propre logique de reprise.
+    if (!isSlashCommand) {
+      state.lastUserPrompt = text;
+      state.lastRetryImages = images ? images.map((img) => ({ ...img })) : [];
+    }
 
     // Vérifier si le modèle supporte les images avant d'envoyer
     if (images && state.currentModel) {
@@ -717,6 +834,10 @@ export async function createAgentPi(container) {
           state._previousPlan = null; // Consommer le contexte
           const payload = { message: planPrompt };
           if (images) payload.images = images;
+          // D1 : prompt envoyé depuis le desktop (planification orchestration) →
+          // origine locale. Évite une fausse notification « agent terminé à distance »
+          // si un prompt remote avait précédé sans agent_end (ex: abort).
+          state.lastPromptOrigin = "desktop";
           await invoke("send_agent_prompt", payload);
           state.pendingImages = [];
           renderImagePreviews();
@@ -768,6 +889,12 @@ export async function createAgentPi(container) {
                 includeImports: config.context_include_imports !== false,
                 includeSpecs: config.context_include_specs !== false,
                 includeRecents: config.context_include_recents !== false,
+                // V2 (RAG) — spec_context_engine.md §7. Si activé + endpoint dispo,
+                // le contexte est sélectionné par similarité cosinus ; sinon fallback V1.
+                ragEnabled: config.context_rag_enabled === true,
+                ragEndpoint: config.context_rag_endpoint || "http://127.0.0.1:11434",
+                ragModel: config.context_rag_model || "nomic-embed-text",
+                prompt: text, // le RAG a besoin du prompt pour la recherche cosinus
               };
               const activeTab = getActiveEditTab();
               const recents = getRecentEditedPaths();
@@ -802,6 +929,10 @@ export async function createAgentPi(container) {
         }
         const payload = { message: finalMessage };
         if (images) payload.images = images;
+        // D1 : prompt envoyé depuis le desktop (chat standard) → origine locale.
+        // Les prompts distants (web) ne passent pas ici (envoyés via /api/agent/prompt
+        // côté backend) ; leur origine est positionnée via l'événement user_message.
+        state.lastPromptOrigin = "desktop";
         await invoke("send_agent_prompt", payload);
         state.pendingImages = [];
         renderImagePreviews();
@@ -810,6 +941,34 @@ export async function createAgentPi(container) {
       console.error("Erreur envoi prompt:", e);
       appendErrorMessage(messagesEl, `Erreur: ${e}`);
     }
+  };
+
+  /**
+   * Retry 1-clic du dernier prompt après une erreur de connexion épuisée
+   * (chat standard). Replace le dernier message + images dans la zone de saisie
+   * et relance l'envoi standard (en repassant par sendPrompt : resync modèle,
+   * context engine, mémoire, etc.).
+   */
+  const retryLastPrompt = () => {
+    if (state.isStreaming || !state.lastUserPrompt) return;
+    // Réutiliser la même logique d'envoi : remettre texte + images puis appeler sendPrompt.
+    inputEl.value = state.lastUserPrompt;
+    autoResizeTextarea();
+    if (state.lastRetryImages && state.lastRetryImages.length) {
+      state.pendingImages = state.lastRetryImages.map((img) => ({
+        // lastRetryImages est au format payload ({type, mimeType, data}) ;
+        // pendingImages attend {name, mimeType, dataUrl, base64}.
+        name: img.name || "image",
+        mimeType: img.mimeType,
+        dataUrl: `data:${img.mimeType};base64,${img.data}`,
+        base64: img.data,
+      }));
+      renderImagePreviews();
+    } else {
+      state.pendingImages = [];
+      renderImagePreviews();
+    }
+    sendPrompt();
   };
 
   // Touche Entrée pour envoyer
@@ -948,6 +1107,9 @@ export async function createAgentPi(container) {
       case "send":
         sendPrompt();
         break;
+      case "retry-last-prompt":
+        retryLastPrompt();
+        break;
       case "voice":
         toggleVoiceInput();
         break;
@@ -981,18 +1143,32 @@ export async function createAgentPi(container) {
         break;
       case "new-session":
         try {
-          // Sauvegarder le modèle actuel avant de réinitialiser la session
-          const savedModel = state.currentModel;
+          // Déterminer le modèle à appliquer après le reset. On privilégie le
+          // defaultModel du registre global (model-switch.json) paramétré dans
+          // l'onglet Fournisseurs ; à défaut on retombe sur le modèle courant.
+          let targetModel = globalDefaultModel;
+          if (!targetModel) {
+            try {
+              const kind = backendKind();
+              const stem = (kind && kind !== "unknown") ? kind : "pi";
+              const acfg = await invoke("read_model_aliases", { stem });
+              if (acfg && typeof acfg.defaultModel === "string") {
+                targetModel = acfg.defaultModel;
+                globalDefaultModel = targetModel;
+              }
+            } catch (_) {}
+          }
+          if (!targetModel) targetModel = state.currentModel;
           await invoke("new_agent_session");
-          // Restaurer le modèle qui était actif (new_session le reset au défaut de pi)
-          if (savedModel) {
-            const [provider, ...modelParts] = savedModel.split("/");
+          // Appliquer le modèle cible (new_session le reset au défaut de pi).
+          if (targetModel) {
+            const [provider, ...modelParts] = targetModel.split("/");
             const modelId = modelParts.join("/");
             if (provider && modelId) {
               try {
                 await invoke("set_agent_model", { provider, modelId });
               } catch (setErr) {
-                console.warn("Impossible de restaurer le modèle après new_session:", setErr);
+                console.warn("Impossible d'appliquer le modèle après new_session:", setErr);
               }
             }
           }
@@ -1085,8 +1261,40 @@ export async function createAgentPi(container) {
           ctxBtn.title = "Context Engine : contexte rafraîchi, sera réinjecté au prochain envoi";
         }
         try {
-          const { toastInfo } = await import("./toast.js");
-          toastInfo("📑 Contexte projet rafraîchi — sera injecté au prochain envoi");
+          const { toastInfo, toastWarning } = await import("./toast.js");
+          // V2 (RAG) : si activé, on lance un rebuild complet de l'index vectoriel.
+          // Sinon, V1 heuristique — simple refresh au prochain prompt.
+          let ragRebuild = false;
+          try {
+            const config = await invoke("get_config");
+            if (config && config.context_rag_enabled === true && window._pilotProjectPath
+                && config.context_rag_endpoint && config.context_rag_model) {
+              ragRebuild = true;
+              toastInfo("📑 Indexation RAG en cours… (peut prendre quelques secondes)");
+              // Écouter la fin du build (une seule fois) — event émis par le backend.
+              const stopListen = await listen("context-index-done", (ev) => {
+                stopListen();
+                const p = ev.payload || {};
+                if (p.ok) {
+                  toastInfo(`📑 Index RAG reconstruit — ${p.stats.chunks} chunks (${p.stats.files} fichiers, ${p.stats.elapsed_ms} ms)`);
+                } else {
+                  toastWarning(`📑 Indexation RAG échouée : ${p.error || "erreur"}`);
+                }
+              });
+              await invoke("context_index_clear", { projectPath: window._pilotProjectPath });
+              await invoke("build_context_index", {
+                projectPath: window._pilotProjectPath,
+                endpoint: config.context_rag_endpoint,
+                model: config.context_rag_model,
+              });
+            }
+          } catch (ragErr) {
+            console.warn("[context] RAG rebuild échec:", ragErr);
+            if (ragRebuild) toastWarning("📑 Indexation RAG échouée : " + ragErr);
+          }
+          if (!ragRebuild) {
+            toastInfo("📑 Contexte projet rafraîchi — sera injecté au prochain envoi");
+          }
         } catch (_) { /* toast indisponible */ }
         break;
       }
@@ -1179,6 +1387,15 @@ export async function createAgentPi(container) {
           state.orchestrationActiveRole = null;
           state.orchestrationLintAttempts = {};
           state.orchestrationNudgeAttempts = {};
+          // E2 : reset auto-test
+          state.orchestrationTestBaseline = null;
+          state.orchestrationTestBaselineComputing = false;
+          state.orchestrationTestBaselineWarned = false;
+          state.orchestrationTestRunner = null;
+          state.orchestrationTestAttempts = {};
+          // H2 V1 : reset reviewer
+          state.orchestrationReviewAttempts = {};
+          try { await invoke("stop_reviewer_session"); } catch (_) {}
           state._previousPlan = null;
           state.orchestrationTasksInBatch = 0;
           state.orchestrationFinalReview = false;
@@ -1245,6 +1462,17 @@ export async function createAgentPi(container) {
         }
         break;
       case "orch-reset": {
+        // A1 : reset snapshots aussi (nouveau plan → snapshots obsolètes)
+        state.orchestrationSnapshots = {};
+        state.orchestrationSnapshotsAvailable = null;
+        state.orchestrationSnapshotsWarned = false;
+        state.orchestrationCancelledTasks = [];
+        // H2 V1 : reset reviewer (nouveau plan / reset)
+        state.orchestrationReviewAttempts = {};
+        try { await invoke("stop_reviewer_session"); } catch (_) {}
+        // Reprise post-compaction : annuler un timer de reprise en cours.
+        if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
+        state.orchestrationCompactionResumePending = false;
         state.orchestrationPlan = null;
         state.orchestrationLastUserPrompt = "";
         state.orchestrationRunning = false;
@@ -1262,6 +1490,14 @@ export async function createAgentPi(container) {
         state.orchestrationCachedTree = null;
         state.orchestrationLintAttempts = {};
         state.orchestrationNudgeAttempts = {};
+        // E2 : reset auto-test (nouveau plan → baseline obsolète)
+        state.orchestrationTestBaseline = null;
+        state.orchestrationTestBaselineComputing = false;
+        state.orchestrationTestBaselineWarned = false;
+        state.orchestrationTestRunner = null;
+        state.orchestrationTestAttempts = {};
+        // H2 V1 : reset reviewer (nouveau plan)
+        state.orchestrationReviewAttempts = {};
         state._previousPlan = null;
         state.orchestrationTasksInBatch = 0;
         state.orchestrationFinalReview = false;
@@ -1273,6 +1509,46 @@ export async function createAgentPi(container) {
         orchestrationPanel.classList.add("hidden");
         try { await invoke("delete_plan"); } catch (_) {}
         appendSystemMessage(messagesEl, "🔄 Plan réinitialisé. Envoyez un message pour créer un nouveau plan.");
+        break;
+      }
+      case "orch-undo": {
+        // A1 : annuler la dernière tâche annulable (restaurer les fichiers).
+        const target = lastUndoableTask(state);
+        if (!target) {
+          appendSystemMessage(messagesEl, "↩️ Aucune tâche annulable (aucun snapshot avec fichiers, ou déjà annulée).");
+          break;
+        }
+        if (state.isStreaming) {
+          appendSystemMessage(messagesEl, "↩️ Impossible d'annuler pendant l'exécution du codeur. Mettez d'abord en pause.");
+          break;
+        }
+        const taskObj = state.orchestrationPlan.plan.find((t) => t.id === target.taskId);
+        const taskTitle = taskObj ? taskObj.title : target.taskId;
+        const ok = await confirm(
+          `Annuler la tâche ${target.taskId} « ${taskTitle} » ?\n\nLes ${target.snapshot.files.length} fichier(s) modifié(s) par cette tâche seront restaurés à leur état d'avant (les fichiers créés seront supprimés).\n\nToute modification manuelle que vous auriez faite sur ces fichiers sera perdue.`,
+          { title: "Pilot — Annulation de tâche", kind: "warning" }
+        );
+        if (!ok) break;
+        try {
+          const res = await invoke("git_restore_snapshot", { sha: target.snapshot.sha, files: target.snapshot.files });
+          // Invalider le cache d'arbre (fichiers restaurés/supprimés).
+          state.orchestrationCachedTree = null;
+          // Marquer la tâche comme annulée.
+          if (!state.orchestrationCancelledTasks) state.orchestrationCancelledTasks = [];
+          state.orchestrationCancelledTasks.push(target.taskId);
+          const progress = state.orchestrationPlan.progress;
+          if (progress.completed) progress.completed = progress.completed.filter((id) => id !== target.taskId);
+          progress.current_task = 0;
+          // Supprimer le snapshot (consommé — pas de double undo sur la même tâche).
+          delete state.orchestrationSnapshots[target.taskId];
+          try { await invoke("save_plan", { planJson: JSON.stringify(state.orchestrationPlan, null, 2) }); } catch (_) {}
+          appendSystemMessage(messagesEl, `↩️ Tâche ${target.taskId} « ${taskTitle} » annulée : ${res.restored.length} fichier(s) restauré(s), ${res.deleted.length} supprimé(s).`);
+          renderOrchestrationPlan(messagesEl, state);
+          updateOrchestrationButtons(state);
+        } catch (e) {
+          console.error("Erreur annulation tâche:", e);
+          appendErrorMessage(messagesEl, `❌ Erreur lors de l'annulation : ${e}`);
+        }
         break;
       }
     }
@@ -1289,6 +1565,16 @@ export async function createAgentPi(container) {
     }
   });
 
+  // ── H2 V1 : écoute des événements du reviewer (canal séparé) ──
+  const unlistenReviewer = await listen("rpc-event-reviewer", (event) => {
+    const payload = event.payload;
+    try {
+      handleReviewerEvent(payload, messagesEl, state, statusEl);
+    } catch (err) {
+      console.error('[rpc-event-reviewer] erreur dans handleReviewerEvent:', err);
+    }
+  });
+
   // ── Démarrer une nouvelle session ──
   try {
     await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) });
@@ -1299,8 +1585,8 @@ export async function createAgentPi(container) {
   // ── Charger les stats initiales ──
   updateStats();
 
-  // ── Charger les modèles disponibles ──
-  loadModels(state);
+  // ── Charger les modèles disponibles (forcer le defaultModel global) ──
+  loadModels(state, true);
 
   // ── Vérifier la reachabilité du modèle actif (point 2) ──
   // Détecte au démarrage un modèle par défaut injoignable (ex: serveur
@@ -1544,12 +1830,28 @@ export async function createAgentPi(container) {
    * plan existant) SANS le pré-chauffage du codeur (désormais superflu car le
    * test a déjà sollicité le codeur).
    */
-  async function activateOrchestrationWith(orchModel, coderModel, savedDefaultModel, orchBtn, mEl, st, sEl) {
+  async function activateOrchestrationWith(orchModel, coderModel, savedDefaultModel, orchBtn, mEl, st, sEl, overrides) {
     st.orchestrationEnabled = true;
     st.orchestratorModel = orchModel;
     st.coderModel = coderModel;
     // Sauvegarder le modèle par défaut pour le restaurer à la désactivation
     st.defaultModel = savedDefaultModel || st.currentModel || "";
+    // Overrides session (non persistés) : granularité + reviewer
+    if (overrides) {
+      if (overrides.granularity) {
+        st.orchestrationGranularity = overrides.granularity;
+        st.orchestrationEffectiveGranularity = overrides.granularity;
+      }
+      st.orchestrationReviewerEnabled = !!overrides.reviewerEnabled;
+      if (overrides.reviewerModel) {
+        const [rp, ...rrest] = overrides.reviewerModel.split("/");
+        st.orchestrationReviewerProvider = rp || "";
+        st.orchestrationReviewerModel = rrest.join("/") || "";
+      } else {
+        st.orchestrationReviewerProvider = "";
+        st.orchestrationReviewerModel = "";
+      }
+    }
 
     // Repartir d'un contexte vierge (effacer le prompt de test "OK")
     try {
@@ -1565,7 +1867,21 @@ export async function createAgentPi(container) {
     }
     orchBtn.classList.add("active");
     orchBtn.title = "Mode Orchestration activé";
-    appendSystemMessage(mEl, `🧠 Mode Orchestration activé — orchestrateur : ${orchModel}, codeur : ${coderModel}.`);
+    {
+      const gLabels = { atomic: "atomique", fine: "fine", medium: "moyenne", large: "large" };
+      const gLabel = gLabels[st.orchestrationGranularity] || st.orchestrationGranularity || "fine";
+      let msg = `🧠 Mode Orchestration activé — orchestrateur : ${orchModel}, codeur : ${coderModel}.`;
+      msg += `\n   📐 Granularité : ${gLabel}.`;
+      if (st.orchestrationReviewerEnabled) {
+        const rModel = st.orchestrationReviewerProvider
+          ? `${st.orchestrationReviewerProvider}/${st.orchestrationReviewerModel}`
+          : "modèle orchestrateur";
+        msg += `\n   🔍 Reviewer activé : ${rModel}.`;
+      } else {
+        msg += `\n   🔍 Reviewer : désactivé.`;
+      }
+      appendSystemMessage(mEl, msg);
+    }
 
     // Charger un plan existant si présent
     try {
@@ -1616,6 +1932,10 @@ export async function createAgentPi(container) {
     }
     const defaultOrch = config.orchestrator_provider ? `${config.orchestrator_provider}/${config.orchestrator_model_id}` : "";
     const defaultCoder = config.coder_provider ? `${config.coder_provider}/${config.coder_model_id}` : "";
+    const defaultGranularity = config.orchestration_granularity || "fine";
+    const defaultReviewerEnabled = config.orchestration_reviewer_enabled === true;
+    const defaultReviewerModel = config.orchestration_reviewer_provider
+      ? `${config.orchestration_reviewer_provider}/${config.orchestration_reviewer_model}` : "";
 
     // Charger la liste des modèles disponibles
     let models = [];
@@ -1644,6 +1964,24 @@ export async function createAgentPi(container) {
           <label><i data-lucide="hammer" class="icon-sm"></i> Codeur (local, économique)</label>
           <select id="orch-pick-coder"></select>
         </div>
+        <div class="setting-row">
+          <label><i data-lucide="git-branch" class="icon-sm"></i> Granularité des tâches</label>
+          <select id="orch-pick-granularity">
+            <option value="atomic">Atomique (~10-25 lignes, 1 fichier — modèle local)</option>
+            <option value="fine">Fine (~30-60 lignes, max 2 fichiers)</option>
+            <option value="medium">Moyenne (~60-120 lignes, max 3 fichiers)</option>
+            <option value="large">Large (~100-200 lignes, max 5 fichiers)</option>
+          </select>
+        </div>
+        <div class="setting-row setting-row-checkbox">
+          <input type="checkbox" id="orch-pick-reviewer" />
+          <label for="orch-pick-reviewer"><i data-lucide="search-check" class="icon-sm"></i> Reviewer indépendant (relecture après chaque tâche)</label>
+        </div>
+        <div class="setting-row" id="orch-pick-reviewer-row">
+          <label>Modèle du reviewer :</label>
+          <select id="orch-pick-reviewer-model"></select>
+          <small>vide = modèle orchestrateur</small>
+        </div>
         <div class="orch-picker-status" id="orch-pick-status"></div>
         <div class="modal-actions">
           <button id="orch-pick-validate"><i data-lucide="circle-check" class="icon-sm"></i> Valider et tester</button>
@@ -1655,6 +1993,10 @@ export async function createAgentPi(container) {
 
     const orchSel = overlay.querySelector("#orch-pick-orch");
     const coderSel = overlay.querySelector("#orch-pick-coder");
+    const granularitySel = overlay.querySelector("#orch-pick-granularity");
+    const reviewerChk = overlay.querySelector("#orch-pick-reviewer");
+    const reviewerSel = overlay.querySelector("#orch-pick-reviewer-model");
+    const reviewerRow = overlay.querySelector("#orch-pick-reviewer-row");
     const statusBox = overlay.querySelector("#orch-pick-status");
     const validateBtn = overlay.querySelector("#orch-pick-validate");
     const cancelBtn = overlay.querySelector("#orch-pick-cancel");
@@ -1673,6 +2015,31 @@ export async function createAgentPi(container) {
     };
     buildOptions(orchSel, defaultOrch);
     buildOptions(coderSel, defaultCoder);
+    // Granularité : positionner la valeur par défaut
+    if (granularitySel) granularitySel.value = defaultGranularity;
+    // Reviewer : peupler le sélecteur de modèle + pré-remplir
+    // On ajoute une option « vide » (modèle orchestrateur) en tête.
+    if (reviewerSel) {
+      let html = `<option value="">Modèle orchestrateur (défaut)</option>`;
+      for (const m of models) {
+        const provider = m.provider || m.providerId || "?";
+        const id = m.id || m.modelId || "?";
+        const label = m.label || `${provider}/${id}`;
+        const value = `${provider}/${id}`;
+        html += `<option value="${value}">${label}</option>`;
+      }
+      reviewerSel.innerHTML = html;
+      if (defaultReviewerModel) reviewerSel.value = defaultReviewerModel;
+    }
+    if (reviewerChk) reviewerChk.checked = defaultReviewerEnabled;
+    // Wire-up : désactive le sélecteur de modèle reviewer si checkbox off
+    const updateReviewerRow = () => {
+      const on = reviewerChk ? reviewerChk.checked : false;
+      if (reviewerSel) reviewerSel.disabled = !on;
+      if (reviewerRow) reviewerRow.style.opacity = on ? "1" : "0.5";
+    };
+    if (reviewerChk) reviewerChk.addEventListener("change", updateReviewerRow);
+    updateReviewerRow();
 
     const close = () => overlay.remove();
 
@@ -1716,6 +2083,9 @@ export async function createAgentPi(container) {
       cancelBtn.disabled = false;
       orchSel.disabled = false;
       coderSel.disabled = false;
+      if (granularitySel) granularitySel.disabled = false;
+      if (reviewerChk) reviewerChk.disabled = false;
+      updateReviewerRow();
     };
 
     const setStatus = (txt, isErr) => {
@@ -1726,6 +2096,9 @@ export async function createAgentPi(container) {
     validateBtn.addEventListener("click", async () => {
       const orchModel = orchSel.value;
       const coderModel = coderSel.value;
+      const chosenGranularity = granularitySel ? granularitySel.value : "fine";
+      const reviewerOn = reviewerChk ? reviewerChk.checked : false;
+      const reviewerModelVal = (reviewerOn && reviewerSel) ? reviewerSel.value : "";
       if (!orchModel || !coderModel) {
         setStatus("❌ Sélectionnez les deux modèles.", true);
         return;
@@ -1738,6 +2111,9 @@ export async function createAgentPi(container) {
       cancelBtn.disabled = true;
       orchSel.disabled = true;
       coderSel.disabled = true;
+      if (granularitySel) granularitySel.disabled = true;
+      if (reviewerChk) reviewerChk.disabled = true;
+      if (reviewerSel) reviewerSel.disabled = true;
       setStatus("");
 
       // Modèle d'origine (non-orchestrateur) à restaurer en cas d'échec
@@ -1771,7 +2147,11 @@ export async function createAgentPi(container) {
 
       // Succès des deux → activer le mode
       setStatus("✅ Les deux modèles répondent. Activation...");
-      await activateOrchestrationWith(orchModel, coderModel, savedModel, orchBtn, mEl, state, sEl);
+      await activateOrchestrationWith(orchModel, coderModel, savedModel, orchBtn, mEl, state, sEl, {
+        granularity: chosenGranularity,
+        reviewerEnabled: reviewerOn,
+        reviewerModel: reviewerModelVal,
+      });
       document.removeEventListener("keydown", onKey);
       close();
     });
@@ -1917,6 +2297,19 @@ export async function createAgentPi(container) {
    * Voir spec_orchestration_observability.md. Bloc repliable ; clic sur une
    * entrée déplie l'excerpt + erreurs de linting.
    */
+  /** Rendu lisible d'un testResult (observabilité E2) pour le journal des tentatives. */
+  function testResultLabel(tr) {
+    if (!tr) return "";
+    const runner = tr.runner || "?";
+    if (tr.timedOut) return `tests timeout (${runner})`;
+    const nf = Array.isArray(tr.newFailures) ? tr.newFailures.length : 0;
+    const inh = Array.isArray(tr.inheritedFailures) ? tr.inheritedFailures.length : 0;
+    const head = `${runner} · exit ${tr.exit === null || tr.exit === undefined ? "?" : tr.exit} · ${nf} nouveau(s) échec(s)`;
+    const tail = inh > 0 ? ` · ${inh} hérité(s)` : "";
+    const out = tr.output_excerpt ? ` : ${String(tr.output_excerpt).split("\n")[0].slice(0, 200)}` : "";
+    return head + tail + out;
+  }
+
   function renderOrchestrationAttempts(st) {
     const panel = document.getElementById("orch-attempts");
     const header = document.getElementById("orch-attempts-header");
@@ -1936,12 +2329,15 @@ export async function createAgentPi(container) {
     refreshIcons(header);
     body.innerHTML = logs.map((l) => {
       const loopBadge = l.loop ? `<span class="orch-attempt-badge orch-attempt-loop">🔄 bouclage</span>` : "";
+      const snapBadge = (l.snapshot && l.snapshot.filesCount > 0) ? `<span class="orch-attempt-badge orch-attempt-snap" title="Snapshot ${escapeHtml(l.snapshot.sha || "")} — ${l.snapshot.filesCount} fichier(s) restaurable(s)">↩️ snapshot (${l.snapshot.filesCount})</span>` : "";
       const dur = (typeof l.durationMs === "number" && l.durationMs > 0) ? ` · ${Math.round(l.durationMs / 1000)}s` : "";
       const markerLabel = escapeHtml(l.marker || "?");
       const actionLabel = escapeHtml(l.action || "?");
       const reason = escapeHtml(l.reason || "");
       const excerpt = escapeHtml(l.responseExcerpt || "");
       const lint = l.lintErrors ? `<div class="orch-attempt-lint">🧹 ${escapeHtml(l.lintErrors)}</div>` : "";
+      const tr = l.testResult ? `<div class="orch-attempt-lint">🧪 ${escapeHtml(testResultLabel(l.testResult))}</div>` : "";
+      const rv = l.reviewResult ? `<div class="orch-attempt-lint">${l.reviewResult.approved ? "🔍 ✅" : "🔍 ⚠️"} ${escapeHtml(l.reviewResult.approved ? (l.reviewResult.summary || "approuvé") : (l.reviewResult.changes || "modifications demandées"))}</div>` : "";
       const files = (Array.isArray(l.filesChanged) && l.filesChanged.length > 0)
         ? `<div class="orch-attempt-files">📝 ${l.filesChanged.map(escapeHtml).join(", ")}</div>` : "";
       return `<div class="orch-attempt" data-attempt-n="${l.n}">
@@ -1950,9 +2346,10 @@ export async function createAgentPi(container) {
           <span class="orch-attempt-marker">${markerLabel}</span>
           <span class="orch-attempt-action">${actionLabel}</span>${dur}
           ${loopBadge}
+          ${snapBadge}
         </div>
         <div class="orch-attempt-reason">${reason}</div>
-        <div class="orch-attempt-detail hidden">${excerpt ? `<div class="orch-attempt-excerpt">${excerpt}</div>` : ""}${lint}${files}</div>
+        <div class="orch-attempt-detail hidden">${excerpt ? `<div class="orch-attempt-excerpt">${excerpt}</div>` : ""}${lint}${tr}${rv}${files}</div>
       </div>`;
     }).join("");
     body.querySelectorAll(".orch-attempt").forEach((el) => {
@@ -1963,12 +2360,33 @@ export async function createAgentPi(container) {
     });
   }
 
+  /** Détermine la dernière tâche annulable (snapshot complet + non déjà annulée). */
+  function lastUndoableTask(st) {
+    if (!st.orchestrationPlan || !st.orchestrationPlan.progress) return null;
+    if (!st.orchestrationSnapshotsEnabled) return null;
+    if (st.orchestrationSnapshotsAvailable === false) return null;
+    const completed = st.orchestrationPlan.progress.completed || [];
+    const cancelled = new Set(st.orchestrationCancelledTasks || []);
+    for (let i = completed.length - 1; i >= 0; i--) {
+      const tid = completed[i];
+      if (cancelled.has(tid)) continue;
+      const snap = st.orchestrationSnapshots[tid];
+      if (snap && Array.isArray(snap.files) && snap.files.length > 0 && snap.sha) {
+        return { taskId: tid, snapshot: snap };
+      }
+    }
+    return null;
+  }
+
   /** Met à jour les boutons du panneau d'orchestration */
   function updateOrchestrationButtons(st) {
     const pauseBtn = orchestrationPanel.querySelector('[data-action="orch-pause"]');
     const resumeBtn = orchestrationPanel.querySelector('[data-action="orch-resume"]');
     if (pauseBtn) pauseBtn.disabled = !st.orchestrationRunning || st.orchestrationPaused;
     if (resumeBtn) resumeBtn.disabled = !st.orchestrationPaused || !st.orchestrationPlan;
+    // A1 : bouton ↩️ actif si une tâche annulable existe et aucun codeur en cours.
+    const undoBtn = orchestrationPanel.querySelector('[data-action="orch-undo"]');
+    if (undoBtn) undoBtn.disabled = !lastUndoableTask(st) || !!st.isStreaming;
   }
 
   /**
@@ -2346,6 +2764,32 @@ export async function createAgentPi(container) {
     // Capturer l'état des fichiers avant exécution (pour validation post-tâche, point A)
     st.orchestrationCurrentFileState = await captureFileState(nextTask, invoke, window._pilotProjectPath);
 
+    // ── A1 : snapshot Git avant tâche (spéc_orchestration_snapshots.md §3.1) ──
+    // Non-bloquant : si pas un repo Git / git absent / échec → A1 désactivé pour le plan.
+    if (st.orchestrationSnapshotsEnabled) {
+      try {
+        const snap = await invoke("git_create_snapshot");
+        if (snap.ok) {
+          st.orchestrationSnapshotsAvailable = true;
+          st.orchestrationSnapshots[nextTask.id] = { sha: snap.sha, files: [], ts: Date.now() };
+        } else if (!st.orchestrationSnapshotsWarned) {
+          st.orchestrationSnapshotsAvailable = false;
+          st.orchestrationSnapshotsWarned = true;
+          const why = snap.reason === "not_a_repo" ? "le projet n'est pas un repo Git"
+            : snap.reason === "git_missing" ? "git n'est pas installé"
+            : snap.reason === "no_head" ? "le repo n'a aucun commit"
+            : "indisponible";
+          appendSystemMessage(messagesEl, `↩️ Snapshots indisponibles (${why}). Annulation de tâche désactivée.`);
+        }
+      } catch (e) {
+        if (!st.orchestrationSnapshotsWarned) {
+          st.orchestrationSnapshotsAvailable = false;
+          st.orchestrationSnapshotsWarned = true;
+          appendSystemMessage(messagesEl, `↩️ Snapshots indisponibles (${e}). Annulation de tâche désactivée.`);
+        }
+      }
+    }
+
     // ── Mémoire de projet (H3) : injecter PROJECT_MEMORY.md en tête du prompt de tâche ──
     const memBlock = (st.projectMemoryEnabled !== false) ? (await buildMemoryBlock(window._pilotProjectPath)) : "";
 
@@ -2674,6 +3118,346 @@ export async function createAgentPi(container) {
     } catch (e) {
       console.error("Erreur envoi correction syntaxique:", e);
       appendErrorMessage(messagesEl, `❌ Erreur envoi correction : ${e}`);
+    }
+  }
+
+  // ── Auto-test post-modification (E2, spec_orchestration_autotest.md) ──
+  // Gate de tests qui étend le linting-in-the-loop (§11.3) : après chaque tâche
+  // du codeur, on exécute les tests du projet (npm/cargo/pytest/go) au lieu de
+  // ne valider que la syntaxe. Les échecs de tests déclenchent une boucle de
+  // correction locale (SELF_FIX) au codeur, dans le même budget que le linting.
+  // Une baseline (tests déjà rouges au démarrage) est calculée paresseusement à
+  // la première gate pour ignorer les échecs hérités et ne signaler que les
+  // régressions introduites par la tâche.
+
+  /** Lit les manifestes projet pour détecter le test runner. */
+  async function loadTestManifests(projectPath) {
+    if (!projectPath) return {};
+    const read = async (rel) => {
+      try {
+        const abs = resolvePath(rel, projectPath);
+        const exists = await invoke("file_exists", { path: abs });
+        if (!exists) return null;
+        return await invoke("read_file_content", { path: abs });
+      } catch (_) { return null; }
+    };
+    const [packageJson, cargoToml, pyprojectToml, pytestIni, conftestPy, requirementsTxt, goMod] = await Promise.all([
+      read("package.json"),
+      read("Cargo.toml"),
+      read("pyproject.toml"),
+      read("pytest.ini"),
+      read("conftest.py"),
+      read("requirements.txt"),
+      read("go.mod"),
+    ]);
+    return { packageJson, cargoToml, pyprojectToml, pytestIni, conftestPy, requirementsTxt, goMod };
+  }
+
+  /**
+   * Calcule la baseline des tests (échecs déjà présents avant toute modif).
+   * Lancé paresseusement à la première gate. Si la commande explose/timeout,
+   * E2 est désactivé pour le plan + warning (retombe sur check_syntax).
+   * Stocké dans st.orchestrationTestBaseline = { failures, exitCode, available }.
+   */
+  async function computeTestBaseline(st, messagesEl) {
+    if (st.orchestrationTestBaseline || st.orchestrationTestBaselineComputing) return;
+    if (!st.orchestrationTestEnabled) return;
+    st.orchestrationTestBaselineComputing = true;
+    const projectPath = window._pilotProjectPath;
+    try {
+      const manifests = await loadTestManifests(projectPath);
+      const runner = detectTestRunner(manifests);
+      st.orchestrationTestRunner = runner;
+      if (!runner) {
+        // Pas de runner → fallback check_syntax (déjà fait par le linting).
+        st.orchestrationTestBaseline = { failures: [], exitCode: 0, available: false };
+        return;
+      }
+      const cmd = buildTestCommand(runner, "full", [], st.orchestrationTestCommand);
+      if (!cmd) {
+        st.orchestrationTestBaseline = { failures: [], exitCode: 0, available: false };
+        return;
+      }
+      appendSystemMessage(messagesEl, `🧪 Calcul de la baseline des tests (${runner}) avant exécution du plan…`);
+      const result = await invoke("run_project_tests", {
+        command: cmd.command, args: cmd.args, timeoutMs: st.orchestrationTestTimeoutMs,
+      });
+      const parsed = parseTestFailures(runner, result.stdout, result.stderr);
+      const failures = parsed.failures.map((f) => f.name);
+      const available = !result.timed_out;
+      st.orchestrationTestBaseline = { failures, exitCode: result.exit_code, available };
+      if (!available && !st.orchestrationTestBaselineWarned) {
+        st.orchestrationTestBaselineWarned = true;
+        appendSystemMessage(messagesEl, `⚠️ Tests du projet injoignables (timeout à la baseline). Auto-test désactivé pour ce plan — fallback sur la vérification syntaxique.`);
+      } else if (failures.length > 0) {
+        appendSystemMessage(messagesEl, `🧪 Baseline : ${failures.length} test(s) déjà en échec avant exécution (ignorés pendant le plan).`);
+      } else {
+        appendSystemMessage(messagesEl, `🧪 Basaseline des tests OK (tous au vert).`);
+      }
+    } catch (e) {
+      console.error("[computeTestBaseline] erreur:", e);
+      st.orchestrationTestBaseline = { failures: [], exitCode: null, available: false };
+      if (!st.orchestrationTestBaselineWarned) {
+        st.orchestrationTestBaselineWarned = true;
+        appendSystemMessage(messagesEl, `⚠️ Tests du projet injoignables (${e}). Auto-test désactivé pour ce plan — fallback sur la vérification syntaxique.`);
+      }
+    } finally {
+      st.orchestrationTestBaselineComputing = false;
+    }
+  }
+
+  /**
+   * Exécute la gate de tests après une tâche du codeur. Retourne :
+   *  - { ran: false } si E2 désactivé, pas de runner, baseline indisponible
+   *  - { ran: true, ok: true, ... } si tests au vert (ou seuls échecs hérités)
+   *  - { ran: true, ok: false, failures, newFailures, output, timedOut } si régression
+   */
+  async function runTestGate(st, task, changedFiles, messagesEl) {
+    if (!st.orchestrationTestEnabled) return { ran: false };
+    const projectPath = window._pilotProjectPath;
+    if (!projectPath) return { ran: false };
+    // Calcul paresseux de la baseline au premier appel.
+    await computeTestBaseline(st, messagesEl);
+    if (!st.orchestrationTestBaseline || !st.orchestrationTestBaseline.available) {
+      return { ran: false };
+    }
+    const runner = st.orchestrationTestRunner;
+    if (!runner) return { ran: false };
+    // Ciblage : pour pytest, dériver les fichiers de test candidats et filtrer
+    // par existence (buildTestCommand ne peut pas vérifier l'existence — pure).
+    let testTargets = [];
+    if (st.orchestrationTestScope === "targeted" && runner === "pytest" && changedFiles.length > 0) {
+      const candidates = derivePytestTargets(changedFiles, projectPath);
+      const checked = await Promise.all(candidates.map(async (p) => {
+        try { return (await invoke("file_exists", { path: p })) ? p : null; }
+        catch (_) { return null; }
+      }));
+      testTargets = checked.filter(Boolean);
+    }
+    const cmd = buildTestCommand(runner, st.orchestrationTestScope, testTargets, st.orchestrationTestCommand);
+    if (!cmd) return { ran: false };
+    let result;
+    try {
+      result = await invoke("run_project_tests", {
+        command: cmd.command, args: cmd.args, timeoutMs: st.orchestrationTestTimeoutMs,
+      });
+    } catch (e) {
+      console.error("[runTestGate] erreur run_project_tests:", e);
+      // Ne pas bloquer la tâche sur une erreur d'exécution — fallback validation.
+      return { ran: false, error: String(e) };
+    }
+    const parsed = parseTestFailures(runner, result.stdout, result.stderr);
+    const baseline = st.orchestrationTestBaseline.failures || [];
+    const newFailures = parsed.failures.filter((f) => !baseline.includes(f.name));
+    const ok = newFailures.length === 0 && !result.timed_out;
+    return {
+      ran: true,
+      ok,
+      timedOut: result.timed_out,
+      exitCode: result.exit_code,
+      failures: parsed.failures,
+      newFailures,
+      output: truncateTestOutput(parsed.raw),
+    };
+  }
+
+  /** Envoie une demande de correction des tests au codeur (boucle SELF_FIX E2). */
+  async function sendTestCorrectionPrompt(st, messagesEl, statusEl, task, testPrompt) {
+    if (st.currentModel !== st.coderModel) {
+      await switchToCoder(st);
+    }
+    appendSystemMessage(messagesEl, `🧪 Correction des tests demandée au codeur pour la tâche ${task.id}.`);
+    try {
+      await invoke("send_agent_prompt", { message: testPrompt });
+      resetOrchestrationIdleTimer(st, messagesEl, statusEl);
+    } catch (e) {
+      console.error("Erreur envoi correction tests:", e);
+      appendErrorMessage(messagesEl, `❌ Erreur envoi correction tests : ${e}`);
+    }
+  }
+
+  // ── H2 V1 : Reviewer indépendant (spec_orchestration_reviewer.md) ──
+
+  /** Résout le provider/model du reviewer (fallback sur modèle orchestrateur). */
+  function resolveReviewerModel(st) {
+    let provider = st.orchestrationReviewerProvider || "";
+    let modelId = st.orchestrationReviewerModel || "";
+    if (!provider || !modelId) {
+      const orch = st.orchestratorModel || "";
+      const [p, ...rest] = orch.split("/");
+      if (!provider) provider = p || "";
+      if (!modelId) modelId = rest.join("/") || "";
+    }
+    return { provider, modelId };
+  }
+
+  /** Démarre le reviewer si nécessaire + contexte vierge + modèle. */
+  async function ensureReviewerSession(st) {
+    try { await invoke("start_reviewer_session"); }
+    catch (e) { throw new Error(`start_reviewer_session : ${e}`); }
+    try { await invoke("new_reviewer_session"); } catch (_) {}
+    const { provider, modelId } = resolveReviewerModel(st);
+    if (provider && modelId) {
+      try { await invoke("set_reviewer_model", { provider, modelId }); } catch (_) {}
+    }
+  }
+
+  /** Porte review : relit le diff de la tâche. */
+  async function runReviewGate(st, task, changedFiles, messagesEl, statusEl) {
+    if (!st.orchestrationReviewerEnabled) return { ran: false };
+    if (!st.orchestrationPlan || !st.orchestrationRunning || st.orchestrationPaused) return { ran: false };
+    // Scope critical : ne déclencher que si un fichier sensible est touché
+    if (st.orchestrationReviewerScope === "critical") {
+      if (!matchesAnyCritical(changedFiles, st.orchestrationReviewerCriticalPatterns || [])) {
+        return { ran: false, skipped: true };
+      }
+    }
+    const taskId = task.id;
+    const maxCorr = st.orchestrationTestMaxCorrections || 3;
+    const attempts = (st.orchestrationReviewAttempts[taskId] || 0)
+      + (st.orchestrationLintAttempts[taskId] || 0)
+      + (st.orchestrationTestAttempts[taskId] || 0);
+    if (attempts >= maxCorr) return { ran: false, budgetExhausted: true };
+    // Lancer le reviewer
+    try { await ensureReviewerSession(st); }
+    catch (e) {
+      appendSystemMessage(messagesEl, "⚠️ Reviewer indisponible, validation sans relecture.");
+      return { ran: false, error: String(e) };
+    }
+    // Lire le contenu des fichiers modifiés (contenu final)
+    const projectPath = window._pilotProjectPath;
+    const fileContents = [];
+    for (const f of changedFiles) {
+      try {
+        const rel = (projectPath && f.startsWith(projectPath)) ? f.slice(projectPath.length).replace(/^[\/\\]+/, "") : f;
+        const content = await invoke("read_file_content", { path: rel });
+        fileContents.push({ path: rel, content });
+      } catch (_) {}
+    }
+    let projectMemory = null;
+    try { projectMemory = await invoke("read_file_content", { path: "PROJECT_MEMORY.md" }); } catch (_) {}
+    const prompt = buildReviewPrompt(task, fileContents, projectMemory, st.orchestrationPlan?.global_directive || null);
+    appendSystemMessage(messagesEl, `🔍 Reviewer indépendant : relecture de la tâche ${taskId}...`);
+    st.reviewerRawText = "";
+    st.isReviewerStreaming = true;
+    const reviewPromise = new Promise((resolve) => { st.reviewerPendingResolve = resolve; });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      if (st.reviewerPendingResolve) {
+        timedOut = true;
+        const r = st.reviewerPendingResolve;
+        st.reviewerPendingResolve = null;
+        r({ timedOut: true });
+      }
+    }, 90000);
+    try { await invoke("send_reviewer_prompt", { message: prompt }); }
+    catch (e) {
+      clearTimeout(timer);
+      st.isReviewerStreaming = false;
+      st.reviewerPendingResolve = null;
+      appendSystemMessage(messagesEl, "⚠️ Reviewer indisponible (envoi échoué), validation sans relecture.");
+      return { ran: false, error: String(e) };
+    }
+    const result = await reviewPromise;
+    clearTimeout(timer);
+    st.isReviewerStreaming = false;
+    st.reviewerPendingResolve = null;
+    if (result && result.timedOut) {
+      try { await invoke("abort_reviewer"); } catch (_) {}
+      appendSystemMessage(messagesEl, "⚠️ Reviewer: timeout (90s), validation sans relecture.");
+      return { ran: true, fallback: true };
+    }
+    if (result && result.crashed) {
+      appendSystemMessage(messagesEl, "⚠️ Reviewer planté, validation sans relecture.");
+      return { ran: true, fallback: true };
+    }
+    const parsed = parseReviewResult(st.reviewerRawText);
+    if (parsed.summary === "" && parsed.changes === null) {
+      appendSystemMessage(messagesEl, "⚠️ Reviewer: réponse sans marqueur, validation sans relecture.");
+      return { ran: true, fallback: true };
+    }
+    st.orchestrationReviewAttempts[taskId] = (st.orchestrationReviewAttempts[taskId] || 0) + 1;
+    return { ran: true, approved: parsed.approved, summary: parsed.summary, changes: parsed.changes };
+  }
+
+  /** Envoie une demande de correction au codeur suite à CHANGES_REQUESTED. */
+  async function sendReviewCorrectionPrompt(st, messagesEl, statusEl, task, changes) {
+    if (st.currentModel !== st.coderModel) await switchToCoder(st);
+    appendSystemMessage(messagesEl, `🔍 Correction demandée par le reviewer pour la tâche ${task.id}.`);
+    const prompt = buildReviewCorrectionPrompt(task, changes, st.orchestrationPlan?.global_directive || null);
+    try {
+      await invoke("send_agent_prompt", { message: prompt });
+      resetOrchestrationIdleTimer(st, messagesEl, statusEl);
+    } catch (e) {
+      console.error("Erreur envoi correction reviewer:", e);
+      appendErrorMessage(messagesEl, `❌ Erreur envoi correction reviewer : ${e}`);
+    }
+  }
+
+  /** Handler des événements du reviewer (canal rpc-event-reviewer). */
+  function handleReviewerEvent(payload, messagesEl, state, statusEl) {
+    const type = payload.type;
+    if (type === "process_exit" || type === "process_error") {
+      if (state.reviewerPendingResolve) {
+        const r = state.reviewerPendingResolve;
+        state.reviewerPendingResolve = null;
+        state.isReviewerStreaming = false;
+        r({ crashed: true });
+      }
+      return;
+    }
+    switch (type) {
+      case "agent_start":
+        state.isReviewerStreaming = true;
+        state.reviewerRawText = "";
+        if (!state.reviewerCurrentBlock || state.reviewerCurrentBlock.dataset.closed) {
+          const blk = createAssistantBlock(messagesEl);
+          blk.classList.add("agent-reviewer-block");
+          blk.dataset.closed = "false";
+          const header = document.createElement("div");
+          header.className = "agent-reviewer-header";
+          header.textContent = "🔍 Reviewer";
+          const flow = blk.querySelector(".agent-stream-flow");
+          if (flow) flow.prepend(header);
+          state.reviewerCurrentBlock = blk;
+        }
+        break;
+      case "message_update": {
+        const delta = payload.assistantMessageEvent;
+        if (!delta) break;
+        if (state.reviewerCompacting) break;
+        if (delta.type === "text_delta") {
+          state.reviewerRawText += delta.delta || "";
+          if (state.reviewerCurrentBlock) {
+            let section = state.reviewerCurrentBlock.querySelector(".agent-text-section:not([data-closed])");
+            if (!section) section = appendTextSection(state.reviewerCurrentBlock, "", false);
+            if (section) {
+              section.innerHTML = md.render(state.reviewerRawText);
+              scrollToBottom(messagesEl);
+            }
+          }
+        }
+        break;
+      }
+      case "compaction_start":
+        state.reviewerCompacting = true;
+        break;
+      case "compaction_end":
+      case "compaction":
+        state.reviewerCompacting = false;
+        state.reviewerRawText = "";
+        break;
+      case "agent_end":
+        state.isReviewerStreaming = false;
+        if (state.reviewerCurrentBlock) state.reviewerCurrentBlock.dataset.closed = "true";
+        if (state.reviewerPendingResolve) {
+          const r = state.reviewerPendingResolve;
+          state.reviewerPendingResolve = null;
+          r({ done: true });
+        }
+        break;
+      default:
+        break;
     }
   }
 
@@ -3143,10 +3927,29 @@ export async function createAgentPi(container) {
         if (changedFiles.length > 0) {
           st.orchestrationCachedTree = null;
         }
+        // ── A1 : associer les fichiers modifiés au snapshot pré-tâche (§3.2) ──
+        if (st.orchestrationSnapshotsEnabled && st.orchestrationSnapshots[currentTaskId]) {
+          st.orchestrationSnapshots[currentTaskId].files = changedFiles.slice();
+        }
       }
 
-      // Linting-in-the-loop sur les fichiers modifiés ou, à défaut, les fichiers listés
-      const filesToLint = changedFiles.length > 0 ? changedFiles : (currentTask.files || []);
+      // Linting-in-the-loop sur les fichiers modifiés ou, à défaut, les fichiers listés.
+      // V3 (fix suppressions) : on exclut les fichiers qui n'existent plus sur disque.
+      // Pour une tâche de suppression, les fichiers listés n'existent plus → le linter
+      // (eslint sur chemin inexistant, ou cargo check sur crate cassé par les
+      // références aux fichiers supprimés) échouait systématiquement et déclenchait
+      // « Trop d'erreurs de syntaxe persistantes après 3 corrections » alors que le
+      // codeur avait correctement fait son travail. On ne linte que les fichiers
+      // encore présents.
+      const filesToLintRaw = changedFiles.length > 0 ? changedFiles : (currentTask.files || []);
+      const filesToLint = [];
+      for (const p of filesToLintRaw) {
+        try {
+          const abs = resolvePath(p, window._pilotProjectPath);
+          const exists = await invoke("file_exists", { path: abs });
+          if (exists) filesToLint.push(p);
+        } catch (_) { /* garder le fichier si la sonde échoue (comportement précédent) */ filesToLint.push(p); }
+      }
       const lint = await runLintCheck(filesToLint, window._pilotProjectPath);
       if (!lint.ok && lint.hadChecker) {
         st.orchestrationLintAttempts[currentTaskId] = (st.orchestrationLintAttempts[currentTaskId] || 0) + 1;
@@ -3171,6 +3974,107 @@ export async function createAgentPi(container) {
           appendSystemMessage(messagesEl, `🧹 Trop d'erreurs de syntaxe persistantes après 3 corrections. Échec de tâche.`);
           await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Linting échoué après 3 corrections : ${lint.output}`);
           return;
+        }
+      }
+
+      // ── Auto-test post-modification (E2) ──
+      // Gate de tests qui étend le linting-in-the-loop : exécute les tests du
+      // projet (npm/cargo/pytest/go) au lieu de ne valider que la syntaxe. La
+      // baseline (tests déjà rouges) est calculée paresseusement à la 1re gate.
+      // Budget de corrections unifié : lint + test bornés à max_corrections.
+      if (st.orchestrationTestEnabled) {
+        const testGate = await runTestGate(st, currentTask, changedFiles, messagesEl);
+        if (testGate.ran && !testGate.ok) {
+          const lintAttempts = st.orchestrationLintAttempts[currentTaskId] || 0;
+          const testAttempts = (st.orchestrationTestAttempts[currentTaskId] || 0) + 1;
+          st.orchestrationTestAttempts[currentTaskId] = testAttempts;
+          const totalCorrections = lintAttempts + testAttempts;
+          const maxCorrections = st.orchestrationTestMaxCorrections || 3;
+          if (totalCorrections <= maxCorrections) {
+            const reason = testGate.timedOut
+              ? `Tests en timeout (${Math.round((st.orchestrationTestTimeoutMs || 60000) / 1000)}s)`
+              : `${testGate.newFailures.length} nouveau(s) échec(s) : ${testGate.newFailures.slice(0, 5).map((f) => f.name).join(", ")}`;
+            appendSystemMessage(messagesEl, `🧪 Tests en échec (correction ${testAttempts}/${maxCorrections} — ${reason}). Envoi au codeur pour correction…`);
+            // Observabilité — journaliser l'échec de tests (correction demandée).
+            logTaskAttempt(st, currentTaskId, {
+              marker: "tests_failed",
+              reason: `Tests en échec (correction ${testAttempts}/${maxCorrections})`,
+              action: "test_correction",
+              filesChanged: changedFiles,
+              responseExcerpt: responseText,
+              testResult: {
+                runner: st.orchestrationTestRunner,
+                exit: testGate.exitCode,
+                newFailures: testGate.newFailures.map((f) => f.name),
+                inheritedFailures: (testGate.failures || [])
+                  .filter((f) => (st.orchestrationTestBaseline.failures || []).includes(f.name))
+                  .map((f) => f.name),
+                timedOut: testGate.timedOut,
+                output_excerpt: truncateTestOutput(testGate.output, 4000),
+              },
+              durationMs: (progress.task_metrics && progress.task_metrics[currentTaskId] && progress.task_metrics[currentTaskId].durationMs) || null,
+              cycles: st.orchestrationCurrentTaskCycles || 0,
+            });
+            const testPrompt = buildTestFailurePrompt(
+              testGate.failures,
+              st.orchestrationTestBaseline.failures || [],
+              currentTask,
+              testGate.output
+            );
+            await sendTestCorrectionPrompt(st, messagesEl, statusEl, currentTask, testPrompt);
+            return;
+          } else {
+            appendSystemMessage(messagesEl, `🧪 Tests en échec persistants après ${maxCorrections} corrections (lint + test). Échec de tâche.`);
+            await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Tests en échec après ${maxCorrections} corrections : ${testGate.output}`);
+            return;
+          }
+        }
+      }
+
+      // ── H2 V1 : Reviewer indépendant (spec_orchestration_reviewer.md) ──
+      // Porte review après les tests E2, avant validation. Le reviewer relit le
+      // diff de la tâche (contexte vierge) et émet APPROVED / CHANGES_REQUESTED.
+      if (st.orchestrationReviewerEnabled && changedFiles.length > 0) {
+        const taskDurationMs = (progress.task_metrics && progress.task_metrics[currentTaskId] && progress.task_metrics[currentTaskId].durationMs) || null;
+        const reviewGate = await runReviewGate(st, currentTask, changedFiles, messagesEl, statusEl);
+        if (reviewGate.ran && !reviewGate.approved && !reviewGate.fallback && reviewGate.changes) {
+          // CHANGES_REQUESTED → retry codeur (budget unifié)
+          const reviewAttempts = (st.orchestrationReviewAttempts[currentTaskId] || 0);
+          const maxCorrections = st.orchestrationTestMaxCorrections || 3;
+          const totalCorrections = (st.orchestrationLintAttempts[currentTaskId] || 0)
+            + (st.orchestrationTestAttempts[currentTaskId] || 0) + reviewAttempts;
+          if (totalCorrections <= maxCorrections) {
+            appendSystemMessage(messagesEl, `🔍 Reviewer : modifications demandées (correction ${reviewAttempts}/${maxCorrections}). Envoi au codeur…`);
+            logTaskAttempt(st, currentTaskId, {
+              marker: "review_changes_requested",
+              reason: `CHANGES_REQUESTED (correction ${reviewAttempts}/${maxCorrections})`,
+              action: "review_correction",
+              filesChanged: changedFiles,
+              responseExcerpt: responseText,
+              reviewResult: { approved: false, changes: reviewGate.changes, summary: reviewGate.summary || "" },
+              durationMs: taskDurationMs,
+              cycles: st.orchestrationCurrentTaskCycles || 0,
+            });
+            await sendReviewCorrectionPrompt(st, messagesEl, statusEl, currentTask, reviewGate.changes);
+            return;
+          } else {
+            appendSystemMessage(messagesEl, `🔍 Reviewer : défauts persistants après ${maxCorrections} corrections. Échec de tâche.`);
+            await handleTaskFailure(st, messagesEl, statusEl, currentTask, `Reviewer : défauts persistants après ${maxCorrections} corrections : ${reviewGate.changes}`);
+            return;
+          }
+        }
+        if (reviewGate.ran && reviewGate.approved) {
+          appendSystemMessage(messagesEl, `🔍 Reviewer : ✅ ${reviewGate.summary}`);
+          logTaskAttempt(st, currentTaskId, {
+            marker: "review_approved",
+            reason: reviewGate.summary || "approuvé",
+            action: "review_approved",
+            filesChanged: changedFiles,
+            responseExcerpt: responseText,
+            reviewResult: { approved: true, summary: reviewGate.summary, changes: null },
+            durationMs: taskDurationMs,
+            cycles: st.orchestrationCurrentTaskCycles || 0,
+          });
         }
       }
 
@@ -3208,6 +4112,7 @@ export async function createAgentPi(container) {
         // Réinitialiser les compteurs de lint pour cette tâche
         delete st.orchestrationLintAttempts[currentTaskId];
         delete st.orchestrationNudgeAttempts[currentTaskId];
+        delete st.orchestrationTestAttempts[currentTaskId]; // E2
         storeTaskSummary(currentTaskId, responseText);
         // Métriques (point N) : marquer la tâche comme réussie
         if (!progress.task_metrics) progress.task_metrics = {};
@@ -3227,6 +4132,10 @@ export async function createAgentPi(container) {
           responseExcerpt: responseText,
           durationMs: durMs,
           cycles: st.orchestrationCurrentTaskCycles || 0,
+          // A1 : badge snapshot dans le journal (§7).
+          snapshot: (st.orchestrationSnapshotsEnabled && st.orchestrationSnapshots[currentTaskId] && st.orchestrationSnapshots[currentTaskId].files.length > 0)
+            ? { sha: st.orchestrationSnapshots[currentTaskId].sha.slice(0, 7), filesCount: st.orchestrationSnapshots[currentTaskId].files.length }
+            : null,
         });
         // Synthèse des tentatives (si > 1 entrée, indique les retries traversés).
         const taskLogs = (progress.task_logs && progress.task_logs[currentTaskId]) || [];
@@ -3234,6 +4143,8 @@ export async function createAgentPi(container) {
         appendSystemMessage(messagesEl, `✅ Tâche ${currentTaskId} ${tag}.${synth} (${validation.reason})`);
         // Incrémenter le compteur de batch
         st.orchestrationTasksInBatch = (st.orchestrationTasksInBatch || 0) + 1;
+        // A1 : rafraîchir le bouton ↩️ (snapshot désormais annulable).
+        updateOrchestrationButtons(st);
       } else {
         // Validation échec : aucun fichier listé n'a été modifié/créé
         const readWarning = buildReadFilesWarning(currentTask, st.orchestrationReadFilesInTask);
@@ -3327,7 +4238,7 @@ export async function createAgentPi(container) {
     if (config.orchestration_revision_interval != null && config.orchestration_revision_interval >= 0) {
       state.orchestrationRevisionInterval = config.orchestration_revision_interval;
     }
-    if (config.orchestration_granularity) {
+    if (config.orchestration_granularity && !state.orchestrationEnabled) {
       state.orchestrationGranularity = config.orchestration_granularity;
       state.orchestrationEffectiveGranularity = config.orchestration_granularity;
     }
@@ -3339,6 +4250,30 @@ export async function createAgentPi(container) {
     }
     if (config.coder_context_window != null && config.coder_context_window >= 0) {
       state.coderContextWindow = config.coder_context_window;
+    }
+    // ── Auto-test post-modification (E2) ──
+    state.orchestrationTestEnabled = config.orchestration_test_enabled === true;
+    if (config.orchestration_test_timeout_ms && config.orchestration_test_timeout_ms >= 1000) {
+      state.orchestrationTestTimeoutMs = config.orchestration_test_timeout_ms;
+    }
+    if (config.orchestration_test_max_corrections && config.orchestration_test_max_corrections > 0) {
+      state.orchestrationTestMaxCorrections = config.orchestration_test_max_corrections;
+    }
+    state.orchestrationTestCommand = config.orchestration_test_command || "";
+    if (config.orchestration_test_scope === "full" || config.orchestration_test_scope === "targeted") {
+      state.orchestrationTestScope = config.orchestration_test_scope;
+    }
+    // ── A1 : snapshots ──
+    state.orchestrationSnapshotsEnabled = config.orchestration_snapshots_enabled !== false;
+    // ── H2 V1 : reviewer ──
+    // Ne pas écraser les overrides session si le mode orchestration est actif.
+    if (!state.orchestrationEnabled) {
+      state.orchestrationReviewerEnabled = config.orchestration_reviewer_enabled === true;
+      state.orchestrationReviewerScope = (config.orchestration_reviewer_scope === "critical") ? "critical" : "all";
+      state.orchestrationReviewerCriticalPatterns = Array.isArray(config.orchestration_reviewer_critical_patterns)
+        ? config.orchestration_reviewer_critical_patterns.map(String) : [];
+      state.orchestrationReviewerProvider = config.orchestration_reviewer_provider || "";
+      state.orchestrationReviewerModel = config.orchestration_reviewer_model || "";
     }
   } catch (_) {}
 
@@ -3389,7 +4324,7 @@ export async function createAgentPi(container) {
       statusEl.textContent = "Prêt";
       statusEl.className = "agent-status agent-status-idle";
       appendSystemMessage(messagesEl, "🔄 Agent redémarré (paramètres RPC modifiés).");
-      await loadModels(state);
+      await loadModels(state, true);
       updateStats();
       loadCommands();
       // Context Engine : reset (réinjecter au prochain prompt)
@@ -3408,6 +4343,7 @@ export async function createAgentPi(container) {
     wrapper,
     unlisten: () => {
       try { unlisten(); } catch (_) {}
+      try { unlistenReviewer(); } catch (_) {}
       window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
     },
     unlistenDragDrop,
@@ -3450,31 +4386,33 @@ async function loadCommands() {
   }
 }
 
-/** Charge les alias de modèles depuis extensions/model-switch.json */
+/** Charge les alias de modèles depuis le registre global du backend actif
+ *  (~/.{stem}/agent/model-switch.json, lu via la commande Rust `read_model_aliases`).
+ *  Les alias sont globaux à Pilot (un registre par backend pi/plh), plus liés à un
+ *  projet. Source de vérité partagée avec l'agent pi/plh, qui lit le même fichier
+ *  pour reconnaître les commandes slash. Édition via l'onglet « Fournisseurs »
+ *  (models-config.js), où l'alias est saisi au niveau de chaque modèle. */
 export async function loadModelAliases() {
   // Nettoyer les anciennes entrées d'alias dans allCommands
   allCommands = allCommands.filter(c => c.category !== "modèle");
   modelAliases = {};
-  const projectPath = window._pilotProjectPath;
-  if (!projectPath) return;
-  const filePath = projectPath.replace(/[/\\]$/, "") + "/extensions/model-switch.json";
   try {
-    const content = await invoke("read_file_content", { path: filePath });
-    const parsed = JSON.parse(content);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      modelAliases = parsed;
-      // Ajouter chaque alias comme une commande dans allCommands
-      for (const [alias, model] of Object.entries(parsed)) {
-        if (!allCommands.find(c => c.name === alias && c.category === "modèle")) {
-          allCommands.push({
-            name: alias,
-            description: `→ ${model}`,
-            category: "modèle",
-          });
-        }
+    const kind = backendKind();
+    const stem = (kind && kind !== "unknown") ? kind : "pi";
+    const parsed = await invoke("read_model_aliases", { stem });
+    const aliases = parsed && parsed.aliases && typeof parsed.aliases === "object" ? parsed.aliases : {};
+    modelAliases = aliases;
+    globalDefaultModel = (parsed && typeof parsed.defaultModel === "string") ? parsed.defaultModel : "";
+    for (const [alias, model] of Object.entries(aliases)) {
+      if (!allCommands.find(c => c.name === alias && c.category === "modèle")) {
+        allCommands.push({
+          name: alias,
+          description: `→ ${model}`,
+          category: "modèle",
+        });
       }
-      console.log("[loadModelAliases] chargés:", Object.keys(modelAliases).length);
     }
+    console.log("[loadModelAliases] chargés:", Object.keys(modelAliases).length);
   } catch (_) {
     // Fichier absent ou invalide → pas d'alias, pas d'erreur
     modelAliases = {};
@@ -3666,7 +4604,7 @@ async function fetchAvailableModels() {
   return [];
 }
 
-async function loadModels(st) {
+async function loadModels(st, forceDefault = false) {
   const select = document.getElementById("agent-model-select");
   if (!select) return;
   try {
@@ -3695,18 +4633,60 @@ async function loadModels(st) {
       if (orchSel2 && st.orchestratorModel) orchSel2.value = st.orchestratorModel;
       if (coderSel2 && st.coderModel) coderSel2.value = st.coderModel;
     }
-    // Sélectionner le modèle actuel
-    try {
-      const agentState = await invoke("get_agent_state");
-      if (agentState && agentState.data && agentState.data.model) {
-        const currentProvider = agentState.data.model.provider || ">";
-        const currentId = agentState.data.model.id || ">";
-        const currentValue = `${currentProvider}/${currentId}`;
-        select.value = currentValue;
-        // Stocker dans le state pour la vérification du support image
-        if (st) st.currentModel = currentValue;
+    // Déterminer le modèle à sélectionner dans le selecteur standard.
+    // Helper : résoudre globalDefaultModel (cache ou lecture à la volée).
+    const resolveDefault = async () => {
+      let d = globalDefaultModel;
+      if (!d) {
+        try {
+          const kind = backendKind();
+          const stem = (kind && kind !== "unknown") ? kind : "pi";
+          const acfg = await invoke("read_model_aliases", { stem });
+          if (acfg && typeof acfg.defaultModel === "string") {
+            d = acfg.defaultModel;
+            globalDefaultModel = d;
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+      return d || "";
+    };
+    const hasOpt = (v) => v && Array.from(select.options).some(o => o.value === v);
+
+    let target = "";
+    let syncAgent = false;
+    // Démarrage / redémarrage : le defaultModel global gouverne (priorité).
+    if (forceDefault) {
+      const d = await resolveDefault();
+      if (hasOpt(d)) { target = d; syncAgent = true; }
+    }
+    // Sinon, modèle de la session active (agent déjà lancé).
+    if (!target) {
+      try {
+        const agentState = await invoke("get_agent_state");
+        if (agentState && agentState.data && agentState.data.model) {
+          const cur = (agentState.data.model.provider || "") + "/" + (agentState.data.model.id || "");
+          if (hasOpt(cur)) target = cur;
+        }
+      } catch (_) {}
+    }
+    // Dernier fallback : defaultModel global.
+    if (!target) {
+      const d = await resolveDefault();
+      if (hasOpt(d)) target = d;
+    }
+    if (target) {
+      select.value = target;
+      if (st) st.currentModel = target;
+      // Synchroniser l'agent si on a forcé le defaultModel (redémarrage).
+      if (syncAgent) {
+        const idx = target.indexOf("/");
+        const provider = idx >= 0 ? target.slice(0, idx) : "";
+        const modelId = idx >= 0 ? target.slice(idx + 1) : "";
+        if (provider && modelId) {
+          try { await invoke("set_agent_model", { provider, modelId }); } catch (_) {}
+        }
+      }
+    }
   } catch (err) {
     console.error("Erreur chargement modèles:", err);
   }
@@ -3757,6 +4737,53 @@ async function updateStats() {
     }
   } catch (_) {
     statsEl.textContent = "";
+  }
+}
+
+/**
+ * H9 (spec_session_history.md) : capture live de la session courante dans
+ * l'index `.pilot/sessions.jsonl`. Appelé à l'agent_end (chat standard).
+ * Récupère l'id de session pi via `list_sessions` (top = la plus récente,
+ * = session courante si --no-session désactivé). En --no-session, aucune
+ * session n'est persistée → pas d'indexation (cohérent).
+ *
+ * @param {object} state - état du chat agent
+ * @param {string[]} filesThisTurn - fichiers touchés ce tour (write/edit, déjà collectés)
+ */
+async function captureSessionHistory(state, filesThisTurn) {
+  try {
+    const sessions = await invoke("list_sessions");
+    if (!sessions || !sessions.length) return; // --no-session ou projet sans session pi
+    const top = sessions[0];
+    const id = top && top.id;
+    if (!id) return;
+
+    // Stats tokens/coût cumulées de la session.
+    let tokens = null;
+    let cost = null;
+    try {
+      const ds = await invoke("get_session_stats");
+      const d = ds && ds.data;
+      if (d) {
+        if (d.tokens && typeof d.tokens.total === "number") tokens = d.tokens.total;
+        if (typeof d.cost === "number") cost = d.cost;
+      }
+    } catch (_) {}
+
+    await recordCurrentSession({
+      id,
+      model: state.currentModel || "",
+      prompt: (state.lastUserPrompt || "").slice(0, 500),
+      summary: (state.lastAssistantRawText || "").slice(0, 300),
+      files: filesThisTurn || [],
+      tokens,
+      cost,
+      turns: 1,
+      origin: state.lastPromptOrigin || null,
+      kind: "chat",
+    });
+  } catch (e) {
+    console.error("captureSessionHistory:", e);
   }
 }
 
@@ -3819,8 +4846,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
   // "user message" en streaming, le backend le signale donc explicitement pour
   // que le desktop affiche le prompt distant dans la conversation (spec remote).
   if (type === "user_message" && typeof payload.text === "string" && payload.text) {
+    // D1 : mémoriser l'origine du prompt (source envoyée par le backend Rust —
+    // "remote" pour un prompt web, "desktop" pour un prompt local). Sert à
+    // déclencher une notification desktop native à l'agent_end si le prompt
+    // venait du téléphone. Reset à null après notification pour ne pas renotifier.
+    state.lastPromptOrigin = payload.source || "desktop";
     const el = appendUserMessage(messagesEl, payload.text);
-    if (el) el.classList.add("agent-message-remote");
+    if (el && payload.source === "remote") el.classList.add("agent-message-remote");
     return;
   }
 
@@ -3848,9 +4880,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     return;
   }
   // En mode orchestration, ignorer les deltas/outils/agent_end si aucun tour n'est
-  // censé être en cours (ni streaming, ni début de message attendu).
+  // censé être en cours (ni streaming, ni début de message attendu). Les événements
+  // de compaction (compaction_start/compaction_end/compaction) sont exemptés : ils
+  // peuvent survenir entre deux tours (avant que pi ne traite le prompt suivant) et
+  // doivent être traités pour la logique de reprise (§11.8).
   const isStartEvent = type === "agent_start" || type === "message_start" || type === "message_update";
-  if (state.orchestrationEnabled && state.orchestrationRunning && !state.isStreaming && !isStartEvent) {
+  const isCompactionEvent = type === "compaction_start" || type === "compaction_end" || type === "compaction";
+  if (state.orchestrationEnabled && state.orchestrationRunning && !state.isStreaming && !isStartEvent && !isCompactionEvent) {
     console.warn(`[orch-event] événement ${type} ignoré : aucun tour actif`);
     return;
   }
@@ -3908,6 +4944,15 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     case "agent_start":
       state.isStreaming = true;
       state.lastStopReason = "";  // réinit pour la détection de troncation (length) à l'agent_end
+      // Sécurité : si une compaction a été interrompue sans compaction_end,
+      // isCompacting pourrait être resté true → reset pour ne pas filtrer les
+      // deltas du nouveau tour.
+      state.isCompacting = false;
+      // Reprise post-compaction : pi a démarré un nouveau tour → annuler la reprise.
+      if (state.orchestrationCompactionResumePending) {
+        state.orchestrationCompactionResumePending = false;
+        if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
+      }
       // En mode orchestration, préfixer le statut avec le rôle actif (Orchestrateur/Codeur)
       const orchRolePrefix =
         state.orchestrationEnabled && state.orchestrationActiveRole
@@ -3923,8 +4968,23 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       break;
 
     case "agent_end":
+      // D1 (spec_web_remote.md) : notification desktop native si le prompt venait
+      // du web (mode remote) — l'utilisateur a lancé une tâche depuis son
+      // téléphone et veut être prévenu sur le desktop quand l'agent a terminé.
+      // Reset immédiat pour ne pas renotifier sur l'agent_end suivant (un prompt
+      // desktop ne doit pas notifier). Le reset évite aussi les fausses notifs
+      // sur un agent_end parasite sans prompt préalable.
+      if (state.lastPromptOrigin === "remote") {
+        notifyAgentDoneFromRemote();
+        state.lastPromptOrigin = null;
+      }
       state.isStreaming = false;
       state.pendingRender = false;
+      // Reprise post-compaction : pi a terminé normalement → annuler la reprise.
+      if (state.orchestrationCompactionResumePending) {
+        state.orchestrationCompactionResumePending = false;
+        if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
+      }
       // Finaliser le bloc assistant en cours
       if (state.currentAssistantBlock) {
         if (state.pendingText) {
@@ -3944,11 +5004,54 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       state.currentAssistantBlock = null;
       state.currentTextBlock = null;
       state.currentThinkingBlock = null;
+      // H9 (spec_session_history.md) : capturer les fichiers touchés ce tour
+      // avant le clear des tool calls (write/edit), pour l'index live de l'historique.
+      const _h9Files = [];
+      state.pendingToolCalls.forEach((tc) => {
+        const name = String(tc && tc.name || "").toLowerCase();
+        if (name === "write" || name === "edit") {
+          const a = (tc && tc.args) || {};
+          const p = a.path || a.file_path || a.filePath || a.filename;
+          if (p) {
+            const rel = String(p).replace(/\\/g, "/");
+            if (!_h9Files.includes(rel)) _h9Files.push(rel);
+          }
+        }
+      });
       state.currentToolBlocks.clear();
       state.pendingToolCalls.clear();
       state.pendingText = "";
       // Mettre à jour les stats
       updateStats();
+
+      // H9 : capture live de la session (chat standard hors orchestration).
+      // Fire-and-forget : ne bloque pas le rendu. En orchestration, la capture
+      // est gérée séparément (les sessions pi d'orchestration sont rétro-indexables).
+      if (!state.orchestrationEnabled) {
+        captureSessionHistory(state, _h9Files).catch((e) =>
+          console.error("captureSessionHistory:", e)
+        );
+      }
+
+      // ── Chat standard : finalisation d'une rafale de retries de connexion ──
+      // Si auto_retry_start a été reçu, soit le retry a réussi (une réponse a
+      // été générée → lastAssistantRawText non vide) et on retire simplement le
+      // bloc « 🔄 nouvelle tentative », soit les retries sont épuisés sans
+      // réponse → on transforme le bloc en message d'erreur + bouton « Réessayer »
+      // (sans cela, l'agent se fige sans retour et l'utilisateur doit re-soumettre
+      // manuellement son prompt).
+      if (!state.orchestrationEnabled && state.connRetryActive) {
+        const hadResponse = !!(state.lastAssistantRawText && state.lastAssistantRawText.trim());
+        const block = state.connRetryBlock;
+        if (hadResponse) {
+          if (block) block.remove();
+        } else {
+          renderConnErrorFinalBlock(state, messagesEl, block);
+        }
+        state.connRetryActive = false;
+        state.connRetryBlock = null;
+        state.connErrorCount = 0;
+      }
 
       // Mode Orchestration : gérer la fin d'une tâche
       if (state.orchestrationEnabled && state.orchestrationRunning) {
@@ -4113,20 +5216,27 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         // Le garder vide empêche handleOrchestrationAgentEnd de voir la réponse.
 
         if (msg.stopReason === "error" && msg.errorMessage) {
-          const friendlyMsg = msg.errorMessage === "Connection error."
-            ? "Erreur de connexion, vérifiez votre connexion à l'API"
-            : msg.errorMessage;
-          appendTextSection(blk, `❌ **Erreur** : ${friendlyMsg}`);
-          statusEl.textContent = "Erreur";
-          statusEl.className = "agent-status agent-status-error";
-          state.isStreaming = false;
-          // ── Détection modèle injoignable en mode Orchestration (option 1) ──
-          // Une erreur de connexion pendant l'exécution du plan (ex: serveur
-          // llama-cpp éteint) ne doit pas être confondue avec un échec de tâche
-          // normal — sinon la validation post-tâche peut marquer la tâche
-          // « effectuée » à tort. On met le plan en pause avec un message clair.
-          if (state.orchestrationEnabled && state.orchestrationRunning) {
-            orchFns.handleOrchestrationConnectionError(state, messagesEl);
+          // Dé-duplication (chat standard) : si pi est en rafale de retries
+          // (auto_retry_start reçu), le bloc « 🔄 nouvelle tentative » suffit —
+          // ne pas empiler un ❌ par retry échoué. On garde juste isStreaming=false.
+          if (!state.orchestrationEnabled && state.connRetryActive) {
+            state.isStreaming = false;
+          } else {
+            const friendlyMsg = msg.errorMessage === "Connection error."
+              ? "Erreur de connexion, vérifiez votre connexion à l'API"
+              : msg.errorMessage;
+            appendTextSection(blk, `❌ **Erreur** : ${friendlyMsg}`);
+            statusEl.textContent = "Erreur";
+            statusEl.className = "agent-status agent-status-error";
+            state.isStreaming = false;
+            // ── Détection modèle injoignable en mode Orchestration (option 1) ──
+            // Une erreur de connexion pendant l'exécution du plan (ex: serveur
+            // llama-cpp éteint) ne doit pas être confondue avec un échec de tâche
+            // normal — sinon la validation post-tâche peut marquer la tâche
+            // « effectuée » à tort. On met le plan en pause avec un message clair.
+            if (state.orchestrationEnabled && state.orchestrationRunning) {
+              orchFns.handleOrchestrationConnectionError(state, messagesEl);
+            }
           }
         } else if (msg.stopReason === "aborted") {
           appendTextSection(blk, "⏹️ Agent arrêté");
@@ -4238,6 +5348,12 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     case "message_update": {
       const delta = payload.assistantMessageEvent;
       if (!delta) break;
+      // Filtre anti-pollution : pendant une compaction, plh stream le résumé en
+      // text_delta. Ce texte n'est PAS la réponse du codeur — il ne doit pas
+      // être accumulé dans lastAssistantRawText (parsing orchestration) ni
+      // affiché comme une réponse. Le résumé est affiché via appendCompactionSummary
+      // sur compaction_end. On ignore donc tous les deltas pendant isCompacting.
+      if (state.isCompacting) break;
 
       switch (delta.type) {
         case "text_start":
@@ -4256,6 +5372,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           // Reset du timer d'inactivité du codeur en mode orchestration (point B)
           if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
             orchFns.resetIdleTimer(state, messagesEl, statusEl);
+          }
+          // Reprise post-compaction : pi génère à nouveau → annuler la reprise.
+          if (state.orchestrationCompactionResumePending) {
+            state.orchestrationCompactionResumePending = false;
+            if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
           }
           if (!state.currentTextBlock || state.currentTextBlock.dataset.closed) {
             state.currentTextBlock = appendTextSection(state.currentAssistantBlock, "", false);
@@ -4448,17 +5569,24 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         } else {
           friendlyMsg = raw;
         }
-        if (!state.currentAssistantBlock) {
-          state.currentAssistantBlock = createAssistantBlock(messagesEl);
-        }
-        appendTextSection(state.currentAssistantBlock, `❌ **Erreur** : ${friendlyMsg}`);
-        statusEl.textContent = "Erreur";
-        statusEl.className = "agent-status agent-status-error";
-        state.isStreaming = false;
-        // Mode Orchestration : une erreur de connexion ne doit pas être confondue
-        // avec un échec de tâche normal — on met le plan en pause avec un message.
-        if (state.orchestrationEnabled && state.orchestrationRunning) {
-          orchFns.handleOrchestrationConnectionError(state, messagesEl);
+        // Dé-duplication (chat standard) : pendant une rafale de retries pi,
+        // le bloc « 🔄 nouvelle tentative » suffit — on n'empile pas un ❌ par
+        // retry. On garde juste isStreaming=false (le bloc retry reste affiché).
+        if (!state.orchestrationEnabled && state.connRetryActive) {
+          state.isStreaming = false;
+        } else {
+          if (!state.currentAssistantBlock) {
+            state.currentAssistantBlock = createAssistantBlock(messagesEl);
+          }
+          appendTextSection(state.currentAssistantBlock, `❌ **Erreur** : ${friendlyMsg}`);
+          statusEl.textContent = "Erreur";
+          statusEl.className = "agent-status agent-status-error";
+          state.isStreaming = false;
+          // Mode Orchestration : une erreur de connexion ne doit pas être confondue
+          // avec un échec de tâche normal — on met le plan en pause avec un message.
+          if (state.orchestrationEnabled && state.orchestrationRunning) {
+            orchFns.handleOrchestrationConnectionError(state, messagesEl);
+          }
         }
       }
       // Ne pas supprimer la bulle ici — on la garde pour le message suivant du même tour.
@@ -4467,6 +5595,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     }
 
     case "tool_execution_start": {
+      // Reprise post-compaction : pi exécute un outil = activité → annuler la reprise.
+      if (state.orchestrationCompactionResumePending) {
+        state.orchestrationCompactionResumePending = false;
+        if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
+      }
       // Reset timer d'inactivite orchestration (un outil s'execute — read_file etc.
       // peut etre long, il ne faut pas timeout pendant l'execution de l'outil).
       if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
@@ -4541,11 +5674,32 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
 
     case "compaction_start":
       appendSystemMessage(messagesEl, `🧹 Compaction en cours... (raison: ${payload.reason || "?"})`);
+      // Activer le filtre des deltas : pendant la compaction, le résumé est
+      // streamé en message_update/text_delta par plh (contrairement à pi qui
+      // ne stream pas le résumé). Il ne faut PAS accumuler ce texte dans
+      // lastAssistantRawText (utilisé pour parser la réponse du codeur en
+      // orchestration) — sinon le parsing de DONE / blocs search/replace
+      // échoue → handleTaskFailure → boucle de retry → arrêt perçu.
+      state.isCompacting = true;
       break;
 
     case "compaction_end": {
       const label = payload.aborted ? "⚠️ Compaction annulée" : "✅ Compaction terminée";
       appendSystemMessage(messagesEl, label);
+      // Désactiver le filtre des deltas : la compaction est terminée, la vraie
+      // réponse du codeur (post-compaction) doit être accumulée normalement.
+      // On reset lastAssistantRawText pour que la réponse post-compaction
+      // commence proprement (le résumé éventuellement accumulé par une fuite
+      // de deltas ne pollue pas le parsing de DONE / blocs search/replace).
+      state.isCompacting = false;
+      state.lastAssistantRawText = "";
+      state.pendingText = "";
+      // Fermer le bloc texte courant pour que la réponse post-compaction
+      // démarre dans une nouvelle section (séparation visuelle résumé/réponse).
+      if (state.currentTextBlock) {
+        state.currentTextBlock.dataset.closed = "true";
+        state.currentTextBlock = null;
+      }
       // Si un résumé est fourni dans compaction_end, l'afficher.
       // On l'attache à la bulle assistant courante (si un tour est en cours) pour
       // préserver la continuité visuelle : la réflexion du dessus reste dans la
@@ -4555,6 +5709,32 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         const blk = state.currentAssistantBlock || createAssistantBlock(messagesEl);
         appendCompactionSummary(blk, payload.summary);
         scrollToBottom(messagesEl);
+      }
+      // ── Reprise après compaction auto (spec_orchestration.md §11.8) ──
+      // pi peut ne pas reprendre la génération après une compaction auto en mode
+      // RPC : le tour en cours est interrompu sans agent_end, ou le prompt en
+      // attente n'est pas retraité. On démarre un timer de reprise : si aucune
+      // activité (delta/agent_end/outil) n'arrive dans le délai, on abort et on
+      // relance la tâche courante via executeNextTask (reprise propre, sans
+      // marquer d'échec). Le flag est clearer par le 1er delta/agent_end/outil.
+      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused && !payload.aborted) {
+        if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
+        state.orchestrationCompactionResumePending = true;
+        // 10s en milieu de tour (laisser à pi le temps de reprendre) ; 2s entre
+        // tours (isStreaming=false : pi a compacté avant de traiter le prompt).
+        const delay = state.isStreaming ? 10000 : 2000;
+        state.orchestrationCompactionTimer = setTimeout(() => {
+          state.orchestrationCompactionTimer = null;
+          if (!state.orchestrationCompactionResumePending) return;
+          state.orchestrationCompactionResumePending = false;
+          if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
+          appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
+          // Couper un éventuel tour zombie, puis relancer la tâche courante.
+          invoke("abort_agent").catch(() => {}).finally(() => {
+            state.isStreaming = false;
+            orchFns.executeNextTask(messagesEl, state, statusEl);
+          });
+        }, delay);
       }
       break;
     }
@@ -4567,12 +5747,41 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       const tokStr = tokensBefore ? `${(tokensBefore / 1000).toFixed(1)}k` : "?";
       const hookLabel = fromHook ? " (auto)" : "";
       appendSystemMessage(messagesEl, `🧹 Compaction${hookLabel} : ${tokStr} tokens compactés`);
+      // Ancien format (événement unique) : la compaction est terminée → reset
+      // du filtre des deltas et de lastAssistantRawText (même logique que
+      // compaction_end).
+      state.isCompacting = false;
+      state.lastAssistantRawText = "";
+      state.pendingText = "";
+      if (state.currentTextBlock) {
+        state.currentTextBlock.dataset.closed = "true";
+        state.currentTextBlock = null;
+      }
       // Afficher le résumé dans un bloc collapsible si showThinkingEnabled.
       // Bulle courante si un tour est en cours (continuité visuelle), sinon bulle neuve.
       if (summary && showThinkingEnabled) {
         const blk = state.currentAssistantBlock || createAssistantBlock(messagesEl);
         appendCompactionSummary(blk, summary);
         scrollToBottom(messagesEl);
+      }
+      // Reprise post-compaction (même logique que compaction_end) — l'événement
+      // `compaction` (auto, fromHook) est l'ancien format ; pi peut ne pas
+      // reprendre ensuite en mode RPC.
+      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused && fromHook) {
+        if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
+        state.orchestrationCompactionResumePending = true;
+        const delay = state.isStreaming ? 10000 : 2000;
+        state.orchestrationCompactionTimer = setTimeout(() => {
+          state.orchestrationCompactionTimer = null;
+          if (!state.orchestrationCompactionResumePending) return;
+          state.orchestrationCompactionResumePending = false;
+          if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
+          appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
+          invoke("abort_agent").catch(() => {}).finally(() => {
+            state.isStreaming = false;
+            orchFns.executeNextTask(messagesEl, state, statusEl);
+          });
+        }, delay);
       }
       break;
     }
@@ -4672,18 +5881,44 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // C'est le signal direct d'un serveur/model injoignable (ex: llama-cpp éteint,
       // ou API cloud down). On l'intercepte pour afficher un message clair au lieu
       // du trompeur « L'orchestrateur n'a pas retourné de plan valide ».
-      if (state.orchestrationEnabled && !state.orchestrationConnErrorSeen) {
-        state.orchestrationConnErrorSeen = true;
-        // Stopper les retries automatiques de pi (sinon ça boucle pendant maxAttempts×)
-        try { await invoke("abort_agent"); } catch (_) {}
-        if (state.orchestrationRunning) {
-          // Exécution d'une tâche → pause (option 1)
-          orchFns.handleOrchestrationConnectionError(state, messagesEl);
-        } else {
-          // Construction du plan → l'orchestrateur est injoignable
-          const model = state.orchestratorModel || '';
-          appendSystemMessage(messagesEl, `🔌 Orchestrateur injoignable${model ? ` (${model})` : ""} — erreur de connexion. Vérifiez que le serveur/model est lancé et accessible, puis réessayez.`);
+      if (state.orchestrationEnabled) {
+        if (!state.orchestrationConnErrorSeen) {
+          state.orchestrationConnErrorSeen = true;
+          // Stopper les retries automatiques de pi (sinon ça boucle pendant maxAttempts×)
+          try { await invoke("abort_agent"); } catch (_) {}
+          if (state.orchestrationRunning) {
+            // Exécution d'une tâche → pause (option 1)
+            orchFns.handleOrchestrationConnectionError(state, messagesEl);
+          } else {
+            // Construction du plan → l'orchestrateur est injoignable
+            const model = state.orchestratorModel || '';
+            appendSystemMessage(messagesEl, `🔌 Orchestrateur injoignable${model ? ` (${model})` : ""} — erreur de connexion. Vérifiez que le serveur/model est lancé et accessible, puis réessayez.`);
+          }
         }
+        break;
+      }
+      // ── Chat standard : dé-dupliquer les erreurs de connexion ──
+      // pi émet auto_retry_start avant chaque nouvelle tentative. Sans cette
+      // branche, l'UI empile « ❌ Erreur de connexion » 3-4× (un par retry) puis
+      // se fige sans retour. On n'affiche qu'un seul bloc (mis à jour) ; il sera
+      // transformé en message + bouton « Réessayer » sur agent_end si aucune
+      // réponse n'est revenue (épuisement des retries).
+      state.connRetryActive = true;
+      state.connErrorCount = (state.connErrorCount || 0) + 1;
+      // Au 1er retry d'une nouvelle rafale, invalider le texte du tour précédent :
+      // sinon hadResponse (agent_end) resterait true sur un texte obsolète et on
+      // retirerait le bloc retry au lieu d'afficher le bouton « Réessayer ».
+      if (state.connErrorCount === 1) {
+        state.lastAssistantRawText = "";
+      }
+      const model = state.currentModel || '';
+      const label = state.connErrorCount <= 1
+        ? `🔌 Modèle injoignable${model ? ` (${model})` : ""} — nouvelle tentative…`
+        : `🔌 Modèle injoignable${model ? ` (${model})` : ""} — nouvelle tentative (${state.connErrorCount})…`;
+      if (state.connRetryBlock) {
+        state.connRetryBlock.textContent = label;
+      } else {
+        state.connRetryBlock = appendSystemMessage(messagesEl, label);
       }
       break;
     }
@@ -4875,6 +6110,26 @@ function appendErrorMessage(container, text) {
   el.className = "agent-message agent-message-error";
   el.textContent = text;
   container.appendChild(el);
+  return el;
+}
+
+/**
+ * Transforme le bloc « 🔄 nouvelle tentative » en message d'erreur final +
+ * bouton « Réessayer » après épuisement des retries de connexion (chat standard).
+ * Sans cela, l'agent se fige en silence et l'utilisateur doit re-soumettre
+ * manuellement son dernier prompt. Le bouton relance l'envoi via retryLastPrompt.
+ */
+function renderConnErrorFinalBlock(state, messagesEl, retryBlock) {
+  if (retryBlock) { retryBlock.remove(); }
+  if (state.connRetryBlock === retryBlock) state.connRetryBlock = null;
+  const model = state.currentModel || '';
+  const n = state.connErrorCount || 1;
+  const el = document.createElement("div");
+  el.className = "agent-message agent-message-error agent-conn-final";
+  el.innerHTML = `❌ Modèle injoignable${model ? ` (${model})` : ""} après ${n} tentative(s) de connexion. Vérifiez que le serveur est démarré, puis réessayez. ` +
+    `<button class="agent-btn agent-retry-btn" data-action="retry-last-prompt" title="Réessayer le dernier message"><i data-lucide="rotate-cw" class="icon-sm"></i> Réessayer</button>`;
+  messagesEl.appendChild(el);
+  refreshIcons(el);
   return el;
 }
 

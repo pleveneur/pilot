@@ -1,0 +1,27 @@
+name: ✨ Évolution
+description: Proposer une nouvelle fonctionnalité ou une amélioration
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description de l'évolution
+      description: Que souhaitez-vous ? Quel problème cela résout-il ?
+      placeholder: "Décrivez l'évolution souhaitée…"
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Cas d'usage
+      description: Décrivez le scénario concret où cette évolution vous aiderait.
+      placeholder: "Quand je… je voudrais pouvoir…"
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version de Pilot utilisée
+      placeholder: "ex: v0.2.14"
+    validations:
+      required: false

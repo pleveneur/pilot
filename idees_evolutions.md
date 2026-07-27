@@ -179,7 +179,7 @@ Intérêt : les thèmes sont un facteur majeur d'adoption pour les éditeurs de 
  
 ## 21. Export vers d'autres formats
 
-- [ ] 21.1 Export HTML autonome (fichier `.html` avec CSS inline)
+- [x] 21.1 Export HTML autonome (fichier `.html` avec CSS inline) — ✅ Implémenté (2026-08-02), voir F1
 - [ ] 21.2 Export DOCX (via Pandoc si disponible, ou `html-docx-js`)
 - [ ] 21.3 Copy as HTML (copier le HTML rendu dans le presse-papiers)
 
@@ -207,8 +207,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 ### 🅰️ Productivité agent IA (cœur de Pilot)
 
 #### A1 — Snapshots / point de restauration avant tâche d'orchestration
-- [ ] Avant chaque tâche d'orchestration, snapshot des fichiers concernés dans `.pilot/snapshots/<taskId>/`. Bouton « ↩️ Annuler la dernière tâche » restore.
-- **Fichiers :** `src/js/orchestration.js` (capture/restore), `src/js/agent-pi.js` (UI bouton + handler), `src-tauri/src/lib.rs` (commandes `snapshot_task` / `restore_snapshot`), `spec_orchestration.md`.
+- [x] Avant chaque tâche d'orchestration, snapshot Git (`git stash create -u`) des fichiers concernés. Bouton « ↩️ Annuler la dernière tâche » restore (`git checkout <sha> -- <files>` + suppression des fichiers créés).
+- **✅ Implémenté** (2026-07-29) — voir [`spec_orchestration_snapshots.md`](./spec_orchestration_snapshots.md). Git-based (réutilise C1), par tâche, portée = `changedFiles`, défaut activé, échec gracieux si non-Git, tâche annulée marquée `cancelled` (pas de re-exécution auto), observabilité (badge ↩️ dans le journal).
+- **Fichiers :** `src-tauri/src/lib.rs` (commandes `git_create_snapshot`/`git_restore_snapshot` + champ `AppConfig.orchestration_snapshots_enabled` + `SnapshotResult`/`RestoreResult`), `src/js/agent-pi.js` (capture dans `executeNextTask` + association `files` dans `handleOrchestrationAgentEnd` + bouton ↩️ + handler `orch-undo` + `updateOrchestrationButtons` + reset), `src/js/orchestration.js` (`createAttemptLog` étendu `snapshot`), `src/js/settings.js` + `index.html` (checkbox), `spec_orchestration.md` §11.7.
 - **Valeur :** 🔴 très haute · **Effort :** moyen
 
 #### A2 — Bibliothèque de prompts favoris / snippets
@@ -241,17 +242,20 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 ### 🅱️ Édition / éditeur
 
 #### B1 — Multi-curseurs / sélection en colonne
-- [ ] Activer les extensions CodeMirror 6 multi-curseurs (`@codemirror/search` cursorAt + `multipleSelections`).
+- [x] Activer les extensions CodeMirror 6 multi-curseurs (`EditorState.allowMultipleSelections.of(true)` + Alt+clic pour ajouter un curseur, `Mod-d` sélection suivante).
+- **✅ Implémenté** (2026-08-02) — `editor.js`.
 - **Fichiers :** `src/js/editor.js` (extensions CodeMirror), `package.json` (dépendance si besoin).
 - **Valeur :** 🟡 haute · **Effort :** faible
 
 #### B2 — Lint diagnostics inline dans l'éditeur
-- [ ] Afficher les erreurs `check_syntax` (déjà appelé par orchestration) via `@codemirror/lint` pour l'édition manuelle aussi.
-- **Fichiers :** `src/js/editor.js` (extension lint), `src-tauri/src/lib.rs` (réutiliser `check_syntax` en commande standalone), `package.json` (`@codemirror/lint`).
+- [x] Afficher les erreurs `check_syntax` (déjà appelé par orchestration) via `@codemirror/lint` pour l'édition manuelle aussi.
+- **✅ Implémenté** (2026-08-02) — V1 : JS/TS via nouvelle commande Rust `lint_file` (eslint `--format json`), extension lint debounce 1.2s, silencieux si eslint absent. Module dédié `src/js/editor-lint.js`.
+- **Fichiers :** `src/js/editor.js` (extension lint), `src/js/editor-lint.js` (nouveau), `src-tauri/src/lib.rs` (commande `lint_file`), `package.json` (`@codemirror/lint`).
 - **Valeur :** 🟡 haute · **Effort :** moyen
 
 #### B3 — Find & Replace dans projet (pas seulement search)
-- [ ] Étendre `search-panel.js` en replace avec preview (remplacement unitaire / tous).
+- [x] Étendre `search-panel.js` en replace avec preview (remplacement unitaire / tous).
+- **✅ Implémenté** (2026-08-02) — « Tout remplacer » global avec aperçu (compte occurrences/fichiers) + confirmation, commande Rust `replace_in_files` (littéral via `NoExpand` ou regex), rechargement des onglets d'édition ouverts concernés. Raccourci `Ctrl+Shift+H` pour ouvrir directement la ligne de remplacement.
 - **Fichiers :** `src/js/search-panel.js` (UI replace + handler), `src-tauri/src/lib.rs` (commande `replace_in_files`), `src/css/style.css`, `index.html`.
 - **Valeur :** 🟡 haute · **Effort :** faible-moyen
 
@@ -296,15 +300,17 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🟠 moyenne · **Effort :** moyen
 
 #### C4 — Recent files popover (`Ctrl+Alt+R`)
-- [ ] Liste des 20 derniers fichiers ouverts dans le projet, fuzzy search.
-- **Fichiers :** `src/js/main.js` (raccourci + popover), `src/js/session-persistence.js` (historique), `index.html`, `src/css/style.css`.
+- [x] Liste des 20 derniers fichiers ouverts dans le projet, fuzzy search.
+- **✅ Implémenté** (2026-08-02) — `src/js/recent-files.js` : historique par projet dans `localStorage` (max 20, dédoublonné), popover fuzzy avec navigation clavier, enregistré à chaque `openFile` (edit/preview/pdf/image/csv). Raccourci `Ctrl+Alt+R` + entrée palette « Fichiers récents… ».
+- **Fichiers :** `src/js/recent-files.js` (nouveau), `src/js/tabs.js` (`recordRecentFile` dans les 4 branches d'ouverture), `src/js/main.js` (raccourci + palette), `index.html`, `src/css/style.css`.
 - **Valeur :** 🟡 haute · **Effort :** faible
 
 ### 🅳️ Mode remote / supervision
 
 #### D1 — Notifications desktop « agent terminé à distance »
-- [ ] Toast desktop quand l'agent termine une tâche longue lancée depuis le téléphone.
-- **Fichiers :** `src-tauri/src/lib.rs` (notification native via `tauri-plugin-notification` à `agent_end` si origine web), `src/js/main.js` (listener), `package.json` + `src-tauri/Cargo.toml` (plugin notification), `spec_web_remote.md`.
+- [x] Toast desktop quand l'agent termine une tâche longue lancée depuis le téléphone.
+- **✅ Implémenté** (2026-07-30) — notification native via `tauri-plugin-notification`, déclenchée côté frontend (`agent-pi.js`) à l'`agent_end` si le dernier prompt venait du web (`state.lastPromptOrigin === "remote"`, positionné via l'événement `user_message` émis par le backend avec `source: "remote"`). Reset après notification pour ne pas renotifier. Module `src/js/desktop-notify.js` (wrapper défensif : permission auto-demandée au 1er appel, échec silencieux si plugin absent/permission refusée). Permission `notification:default` ajoutée aux capabilities.
+- **Fichiers :** `src/js/desktop-notify.js` (nouveau), `src/js/agent-pi.js` (import + `state.lastPromptOrigin` + handler `user_message` + branche dans `case "agent_end"`), `src-tauri/Cargo.toml` (`tauri-plugin-notification = "2"`), `src-tauri/src/lib.rs` (`.plugin(tauri_plugin_notification::init())`), `src-tauri/capabilities/default.json` (`notification:default`), `package.json` (`@tauri-apps/plugin-notification`).
 - **Valeur :** 🟡 haute · **Effort :** faible
 
 #### D2 — Vue « activité » web (dashboard supervision)
@@ -333,8 +339,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - [x] Bouton 🛡️ embarqué, `--skill` Pilot, persistance config. Voir `spec_quality_gate.md` et Évolution 7 dans `Bugs et Evolutions.md` (validé 2026-07-11).
 
 #### E2 — Auto-test post-modification (mode Orchestration)
-- [ ] Après chaque tâche, lancer les tests du projet (`npm test` / `cargo test` / `pytest`) au lieu de juste `check_syntax`.
-- **Fichiers :** `src/js/orchestration.js` (détection test runner + prompt SELF_FIX), `src/js/agent-pi.js` (handler linting loop), `src-tauri/src/lib.rs` (commande `run_project_tests`), `spec_orchestration.md`.
+- [x] Après chaque tâche, lancer les tests du projet (`npm test` / `cargo test` / `pytest` / `go test`) au lieu de juste `check_syntax`.
+- **✅ Implémenté** (2026-07-29) — voir [`spec_orchestration_autotest.md`](./spec_orchestration_autotest.md). Opt-in, portée hybride (ciblé par tâche + complet en vérification finale), baseline paresseuse pour ignorer les tests déjà rouges, budget de corrections unifié (lint + test), override manuel possible, commande `run_project_tests` (Rust, sans shell, timeout impératif), observabilité étendue (bloc 🧪 dans le journal des tentatives).
+- **Fichiers :** `src/js/orchestration.js` (`detectTestRunner`/`buildTestCommand`/`derivePytestTargets`/`parseTestFailures`/`buildTestFailurePrompt`/`truncateTestOutput`), `src/js/agent-pi.js` (`loadTestManifests`/`computeTestBaseline`/`runTestGate`/`sendTestCorrectionPrompt` + gate dans `handleOrchestrationAgentEnd` + `refreshOrchestrationTestConfig` + reset), `src-tauri/src/lib.rs` (commande `run_project_tests` + `run_command_timed` + 5 champs `AppConfig`), `src/js/settings.js` + `index.html` (section Auto-test), `spec_orchestration.md` §11.6, `spec_orchestration_observability.md` (`testResult` dans `createAttemptLog`).
 - **Valeur :** 🔴 très haute · **Effort :** moyen
 
 #### E3 — Tests d'intégration multi-plateforme (déjà noté spec_rpc §12)
@@ -358,8 +365,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 ### 🅵️ Export / partage
 
 #### F1 — Export HTML autonome (déjà noté 21.1)
-- [ ] Un `.html` avec CSS inline, partageable sans Pilot.
-- **Fichiers :** `src/js/pdf-export.js` (généralisation en `exportMarkdownTo`), `src/js/sidebar.js` (menu contextuel), `src/css/style.css` (CSS inline), `spec_pilot.md`.
+- [x] Un `.html` avec CSS inline, partageable sans Pilot.
+- **✅ Implémenté** (2026-08-02) — `src/js/html-export.js` : réutilise `export_pdf` (HTML complet avec styles), résout les images relatives en base64, dialogue de sauvegarde natif (`@tauri-apps/plugin-dialog`). Item « Exporter en HTML » dans le menu contextuel (fichiers .md).
+- **Fichiers :** `src/js/html-export.js` (nouveau), `src/js/sidebar.js` (branchement menu contextuel), `index.html`, `spec_pilot.md`.
 - **Valeur :** 🟡 haute · **Effort :** faible
 
 #### F2 — Export conversation agent (déjà noté spec_rpc §12)
@@ -431,16 +439,23 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 
 ### H1 — Context Engine : moteur de contexte intelligent · 🔴 très haute
 - [x] **V1 heuristique** (validé 2026-07-19) : injection auto-contexte projet avant le 1er prompt de chaque session agent (chat standard) — `AGENTS.md`, `.pilot/context.md`, fichier actif, imports (JS/TS/Python/MD), manifestes, specs référencées dans la table de navigation d'AGENTS.md, fichiers récents. Budget tokens configurable, bouton 📑 pour forcer la ré-injection. Voir [`spec_context_engine.md`](./spec_context_engine.md).
-- [ ] V2 embeddings/RAG local via pi (scoring sémantique, graphe de dépendances, budget dynamique selon fenêtre de contexte).
-- **Fichiers :** `src/js/context-engine.js` (nouveau, fonctions pures), `src/js/agent-pi.js` (état `contextInjected` + injection chemin chat standard + resets + bouton toolbar), `src-tauri/src/lib.rs` (4 champs `AppConfig`), `src/js/settings.js`, `index.html`, `spec_context_engine.md`.
+- [x] **V2 RAG local** (validé 2026-07-30) : embeddings via **Ollama** (`/api/embed` batch, fallback `/api/embeddings`), index **SQLite** `.pilot/context-index.db` (chunks + vecteurs BLOB, mode WAL), recherche **cosinus** sur le prompt, **boost structurel** (AGENTS.md + `.pilot/context.md` + manifestes) en tête + top-K chunks RAG dans le reste du budget. **Build lazy au 1er prompt** (fire-and-forget, ce prompt → V1), **refresh incrémental** à la query (mtime diff, nouveaux/supprimés), bouton 📑 → rebuild complet. Fallback V1 automatique si Ollama injoignable / index absent. UI Paramètres : activation + adresse/port Ollama + modèle + bouton « Tester la connexion ». Voir [`spec_context_engine.md`](./spec_context_engine.md) §7.
+- **Fichiers V2 :** `src-tauri/src/context_engine.rs` (nouveau — chunking, embeddings, SQLite, cosinus, commandes Tauri), `src-tauri/src/lib.rs` (3 champs `AppConfig` + enregistrement commandes), `src-tauri/Cargo.toml` (`rusqlite` bundled + `reqwest` blocking), `src/js/context-engine.js` (`buildRagContext` + boost structurel + fallback), `src/js/agent-pi.js` (config RAG dans `ctxOpts` + bouton 📑 rebuild), `src/js/settings.js` + `index.html` (section RAG).
 - **Valeur :** 🔴 très haute (facteur n°1 de qualité d'un coding-agent) ·
   **Effort :** moyen (V1) → haut (V2). · **Remplace** A3 (pinning = version
   pauvre de H1).
 
 ### H2 — Multi-codeurs spécialisés (sub-agents) · 🔴 très haute
-- [ ] L'orchestrateur lance **N sessions pi spécialisées en parallèle** (reviewer,
-      test-writer, doc-writer, refactorer), chacune avec un `system` de rôle. La
-      tâche complexe est découpée en rôles, pas en séquence.
+- [x] **V1** (validé 2026-07-29) : **reviewer indépendant** séquentiel en
+      post-tâche. 2e session pi `--no-session` (contexte vierge) relit le diff de
+      chaque tâche (ou seulement les fichiers sensibles en mode `critical`),
+      `APPROVED`/`CHANGES_REQUESTED`, opt-in, budget unifié avec lint/tests,
+      fallback gracieux. Pose l'architecture multi-sessions (canal
+      `rpc-event-reviewer` séparé) pour V2. Voir
+      [`spec_orchestration_reviewer.md`](./spec_orchestration_reviewer.md). ✅
+- [ ] **V2** : N sub-agents spécialisés en **parallèle** (test-writer, doc-writer,
+      refactorer), chacun avec un `system` de rôle. La tâche complexe est
+      découpée en rôles, pas en séquence.
 - **Fichiers :** `src/js/orchestration.js` (dispatch multi-rôles),
   `src-tauri/src/rpc_manager.rs` (N processus `pi --mode rpc --no-session`),
   `src-tauri/src/lib.rs` (commande `spawn_role_session`), `spec_orchestration.md`.
@@ -512,12 +527,18 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🟡 haute (abaisse le coût d'entrée) · **Effort :** moyen.
 
 ### H9 — Historique de sessions searchable (mémoire institutionnelle) · 🟠 haute
-- [ ] Index persistant de toutes les sessions agent : full-text search, tags, liens
-      vers fichiers modifiés, coût. « Quand a-t-on décidé X ? » « tâches touchant
-      lib.rs ». Mémoire des *décisions*, complément de H3 (mémoire des *faits*).
-- **Fichiers :** nouveau `src/js/session-history.js`, `src-tauri/src/lib.rs`
-  (index `sessions.jsonl` + commandes `search_sessions`), `src/js/agent-pi.js`
-  (UI onglet 📜), `spec_rpc.md`.
+- [x] **Implémenté** (validé 2026-08-01) : onglet 📜, index local `.pilot/sessions.jsonl`
+      (append-only) + tags `.pilot/sessions-tags.json`, recherche full-text (regex si
+      requête commence par `/`) + filtres tag/file/kind, détail (relecture JSONL pi),
+      tags éditables, rétro-indexation auto à la 1re ouverture (lecture du dossier de
+      sessions pi du projet) + bouton « Réindexer », capture live à l'agent_end (chat
+      standard, hors orchestration). 6 commandes Tauri (`index_sessions`,
+      `search_sessions`, `get_session_detail`, `set_session_tags`, `list_session_tags`,
+      `record_session_entry`). Ne dépend pas de pi (consultable hors-ligne). Index
+      local, jamais envoyé au cloud. Voir [`spec_session_history.md`](./spec_session_history.md).
+- [ ] V2 : scoring sémantique (réutiliser l'index RAG H1 V2) + graphe de coût
+      (dashboard « 📊 Usage ») + indexation des tâches d'orchestration comme entrées
+      distinctes (parent = session principale) + `duration_s`.
 - **Valeur :** 🟠 haute (transforme « session jetable » en « compagnon long-terme ») ·
   **Effort :** moyen. · **Remplace** A6 (usage trop court) — A6 devient un widget
   de H9.

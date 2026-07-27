@@ -52,7 +52,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Spécifications générales | `spec_pilot.md` |
 | Agent Pi / RPC | `spec_rpc.md` |
 | Conversion PDF → MD | `spec_pdf2md.md` |
-| Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` |
+| Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
 | Dictée vocale | `spec_voice_input.md` |
 | Aide intégrée (LLM sur la doc) | `spec_help.md` |
@@ -60,7 +60,10 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
+| Historique de sessions searchable (H9) | `spec_session_history.md` |
+| Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
+| Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -93,6 +96,9 @@ pilot/
 ├── spec_pdf2md.md             # Spécifications conversion PDF → Markdown
 ├── spec_orchestration.md      # Spécifications Mode Orchestration
 ├── spec_orchestration_observability.md  # Observabilité des échecs du codeur (implémenté)
+├── spec_orchestration_autotest.md  # Auto-test post-modification (E2, implémenté)
+├── spec_orchestration_snapshots.md # Snapshots / annulation de tâche (A1, implémenté)
+├── spec_orchestration_reviewer.md # Reviewer indépendant H2 V1 (planifié)
 ├── spec_web_remote.md         # Spécifications accès distant web (planifié)
 ├── spec_voice_input.md        # Spécifications dictée vocale (implémenté)
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)
@@ -100,6 +106,8 @@ pilot/
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
 ├── spec_context_engine.md    # Spécifications Context Engine (H1, auto-contexte agent)
 ├── spec_diff_review.md       # Spécifications Diff Review agent (A4 V2, porte pré-écriture write/edit)
+├── spec_session_history.md   # Spécifications historique de sessions searchable (H9)
+├── spec_feedback.md          # Spécifications feedback utilisateurs (remarques/évolutions)
 ├── plan_dev.md                # Plan de développement (résumé, ce qui reste)
 ├── idees_evolutions.md        # Idées d'évolutions futures
 ├── README.md                  # Documentation utilisateur
@@ -113,6 +121,7 @@ pilot/
 ├── release-notes/            # Résumés de mise à jour optionnels orientés utilisateur (vX.Y.Z.md)
 ├── .github/workflows/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)
+├── .github/ISSUE_TEMPLATE/   # Templates d'issue GitHub (bug/feature/remark + config contact)
 ├── package.json               # Dépendances npm
 ├── vite.config.js             # Configuration Vite
 ├── index.html                 # Point d'entrée HTML
@@ -123,6 +132,7 @@ pilot/
 │       ├── main.js            # Point d'entrée JS, orchestration, raccourcis
 │       ├── agent-pi.js        # Chat agent Pi (RPC), streaming, onglet π
 │       ├── orchestration.js   # Mode Orchestration : prompts, parsing plan, validation (pures)
+│       ├── orchestration-reviewer.js # Reviewer indépendant (H2 V1) : buildReviewPrompt, parseReviewResult, glob matching (pures)
 │       ├── theme.js           # Gestion des thèmes dark/light
 │       ├── sidebar.js         # Barre latérale, explorateur, filtre, menus
 │       ├── tabs.js            # Système d'onglets (édition, prévisualisation)
@@ -142,8 +152,12 @@ pilot/
 │       ├── context-engine.js  # Context Engine (H1) : injection auto-contexte projet avant 1er prompt
 │       ├── icons.js          # Icônes Lucide (refreshIcons → createIcons, pour HTML statique et dynamique)
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
+│       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags
+│       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
-│       ├── backend-info.js    # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
+│       ├── models-config.js  # Onglet « Fournisseurs » : édition UI models.json + model-switch.json (pi/plh)
+│       , backend-info.js    # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
+│       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
 │       └── terminal.js        # Terminal intégré xterm.js
 ├── web/                       # UI web distante (planifié, servie par axum)
 │   ├── index.html
@@ -169,7 +183,8 @@ pilot/
         ├── web_server.rs      # Serveur axum (mode remote) : routes REST + WS
         ├── web_auth.rs        # Auth distante : argon2, token opaque, sessions
         ├── web_rate.rs        # Rate limiting login/prompt/WS (garde-fous distants)
-        └── web_audit.rs       # Journal d'audit distant (ring buffer 500, actions sensibles)
+        , web_audit.rs       # Journal d'audit distant (ring buffer 500, actions sensibles)
+        └── context_engine.rs  # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
 ```
 
 ---

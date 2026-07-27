@@ -23,6 +23,7 @@ import {
   fileNameFromMime,
 } from "./image-paste.js";
 import { inlineCompletionExtension, rejectCompletion as rejectInlineCompletion } from "./inline-complete.js";
+import { lintExtension } from "./editor-lint.js";
 
 // Compartment pour le word wrap (permet de le toggle dynamiquement)
 const wrapCompartment = new Compartment();
@@ -95,6 +96,7 @@ export async function createEditor(parent, initialContent = "", onChange, onCurs
       ...languageExtensions,
       ...foldingExtensions,
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      EditorState.allowMultipleSelections.of(true),
       search({ top: true }),
       highlightSelectionMatches(),
       autoComplete,
@@ -112,6 +114,8 @@ export async function createEditor(parent, initialContent = "", onChange, onCurs
       EditorView.theme({}, { dark: document.body.classList.contains("theme-dark") }),
       // Inline AI completion
       inlineCompletionExtension(filePath),
+      // Lint diagnostics inline (B2) — eslint JS/TS, debounce, silencieux sinon
+      ...lintExtension(filePath),
       // Word wrap (compartment pour toggle dynamique)
       wrapCompartment.of([]),
     ],

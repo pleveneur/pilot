@@ -62,6 +62,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - 📂 **Explorateur** : ouvre le dossier projet dans l'explorateur OS.
 - 🖥️ **Terminal** : intégré (xterm.js) ou externe selon paramètre.
 - π **Agent Pi** : ouvre l'onglet agent (si RPC activé).
+- 💬 **Feedback** : ouvre l'onglet de remarques/évolutions (formulaire GitHub/email + lecture des issues, voir [`spec_feedback.md`](spec_feedback.md)). Accessible sans projet ouvert.
 
 ### D. Titre de fenêtre
 
@@ -118,6 +119,12 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 
 ### Revue de code assistée (H5)
 - Onglet **🔍 Review** (bouton 🔍) : l'agent joue le rôle de **second reviewer** sur le diff Git. Portée : modifs non commitées (`git diff HEAD`) ou dernier commit (`git diff HEAD~1 HEAD`). Process pi temporaire cadré (`ask_pi_caged`, réutilise l'aide intégrée) — **lecture seule**, aucune modification du projet. Revue structurée (bugs, sécurité, perfs, style, cohérence specs) + questions de suivi. Voir [`spec_review.md`](spec_review.md).
+
+### Historique de sessions searchable (H9)
+- Onglet **📜** (bouton 📜) : index local de **toutes les sessions agent** (passées et nouvelles) dans `.pilot/sessions.jsonl` (append-only) + tags dans `.pilot/sessions-tags.json`. Recherche full-text (regex si la requête commence par `/`) + filtres tag / fichier (chemin relatif) / type (chat/orchestration/review). Détail d'une session : relecture du JSONL pi (messages + tool calls, lecture seule). Tags éditables (chips + autocomplétion). **Rétro-indexation automatique** à la 1re ouverture (lecture du dossier de sessions pi du projet) + bouton « Réindexer ». **Capture live** à l'`agent_end` (chat standard, hors orchestration). Ne dépend pas de pi (consultable hors-ligne). Confidentialité : index local au projet, jamais envoyé au cloud ni au web distant. Voir [`spec_session_history.md`](spec_session_history.md).
+
+### Feedback utilisateurs (💬)
+- Onglet **💬** (bouton `message-square-plus`) : permet à l'utilisateur d'envoyer un retour (bug / évolution / remarque) via deux canaux sans backend ni secret embarqué : **Ouvrir sur GitHub** (`issues/new` pré-rempli, navigateur système) ou **Envoyer par email** (`mailto:` vers l'adresse de feedback). Le corps est pré-construit (type, titre, description, version Pilot auto, OS auto, email optionnel). **Lecture des issues existantes** via l'API publique GitHub (dépôt public `pleveneur/pilot`, anonyme, CORS `*`) pour éviter les doublons. Accessible sans projet ouvert. Voir [`spec_feedback.md`](spec_feedback.md).
 
 ### Persistance
 - Config JSON dans `app_data_dir` : thème, commande, projets récents, params RPC.

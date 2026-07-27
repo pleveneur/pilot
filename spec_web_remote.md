@@ -494,4 +494,8 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
 - **Lecture seule** : option « mode lecture seule » (consultation sans
   modification). **Keep-alive (tray)** : garder le serveur + l'agent pi actifs en
   arrière-plan après fermeture de la fenêtre.
+- **Notification de fin de tâche** : quand tu lances une tâche depuis le téléphone,
+  le desktop émet une **notification native** « Agent terminé » à la fin de la
+  réponse (permission demandée au 1er lancement). Pratique pour les tâches longues
+  lancées à distance pendant que tu fais autre chose sur le desktop.
 <!-- /HELP:web-remote -->

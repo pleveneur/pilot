@@ -716,6 +716,111 @@ Optimisation du couple **orchestrateur cloud** + **codeur local** pour réduire 
   - `COMMANDE` → exécute la commande via `execute_agent_bash` puis relance la même tâche par le codeur
   - `EXECUTER` / fallback → marque la tâche comme escaladée et passe à la suite
 
+### 11.6 Auto-test post-modification (E2) — ✅ Implémenté (2026-07-29)
+
+Extension du linting-in-the-loop (§11.3) : après chaque tâche du codeur, au
+lieu de ne valider que la **syntaxe** (`check_syntax`), on exécute les **tests
+du projet** (`npm test` / `cargo test` / `pytest` / `go test`) et on injecte le
+résultat dans la boucle SELF_FIX in-session. Détecte les régressions
+fonctionnelles et les tests cassés — pas seulement « ça compile ».
+
+- **Opt-in** (case à cocher « 🧪 Auto-test » dans les Paramètres → Mode
+  Orchestration), défaut désactivé. Fallback sur `check_syntax` si aucun runner
+  détecté.
+- **Portée hybride** : tests **ciblés** (fichiers modifiés) après chaque tâche,
+  tests **complets** en vérification finale (§4.6b).
+- **Baseline** calculée paresseusement à la première gate : les tests déjà rouges
+  ne bloquent pas le plan (on ne corrige que les **régressions** introduites).
+  Si la baseline est injoignable (timeout), E2 se désactive pour le plan +
+  warning, et on retombe sur `check_syntax`.
+- **Budget de corrections unifié** (lint + test bornés à
+  `orchestration_test_max_corrections`, défaut 3) — pas de double retry.
+- **Override manuel** possible via `orchestration_test_command`.
+- **Commande Tauri** `run_project_tests` (Rust) : exécution sans shell (pas
+  d'injection), `cwd` forcé au projet, timeout impératif, stdout+stderr capturés
+  et tronqués à 256 Ko.
+- **Observabilité** : le journal des tentatives étendu avec `testResult` (runner,
+  exit, nouveaux échecs, échecs hérités, timeout, extrait output) — affiché dans
+  le panneau d'orchestration (bloc 🧪).
+### 11.7 Snapshots / annulation de tâche (A1) — ✅ Implémenté (2026-07-29)
+
+Avant chaque tâche du codeur, Pilot capture l'état des fichiers via
+`git stash create -u` (snapshot Git non-référencé, ne modifie ni le working
+tree ni l'index). Un bouton **« ↩️ Annuler la dernière tâche »** dans le panneau
+d'orchestration restaure les fichiers modifiés par la dernière tâche à leur
+état d'avant (modifications → `git checkout <sha> -- <file>`, fichiers créés →
+suppression). La tâche annulée est marquée `cancelled` (pas de re-exécution
+automatique).
+
+- **Défaut activé** (garantie de sécurité quasi gratuite), désactivable dans les
+  Paramètres → Mode Orchestration.
+- **Échec gracieux si non-Git** : A1 désactivé pour le plan + message, aucune
+  régression. Dépend de C1 (CLI `git`).
+- **Par tâche**, portée = `changedFiles` de la tâche.
+- Spéc complète : [`spec_orchestration_snapshots.md`](./spec_orchestration_snapshots.md).
+
+### 11.8 Reprise après compaction auto — ✅ Implémenté (2026-07-29)
+
+**Bug** : quand pi déclenche une compaction auto (seuil de contexte atteint)
+pendant une tâche d'orchestration, il émet `compaction_start` / `compaction_end`
+puis **ne reprend pas automatiquement** la génération en mode RPC — le tour en
+cours est interrompu sans `agent_end`, ou le prompt en attente n'est pas retraité.
+Résultat : l'agent reste figé après « ✅ Compaction terminée », le plan n'avance
+plus (le seul filet était le timer d'inactivité 120 s, trop long et marquant un
+échec de tâche).
+
+**Fix** : sur `compaction_end` (et l'ancien événement `compaction` auto,
+`fromHook=true`), en mode orchestration actif, on démarre un **timer de
+reprise** :
+- **10 s** si un tour est en cours (`isStreaming=true`, compaction en milieu de
+  tour) — laisse à pi le temps de reprendre spontanément.
+- **2 s** si aucun tour n'est actif (`isStreaming=false`, compaction entre tours).
+
+Si aucune activité (delta / `agent_end` / outil / `agent_start`) n'arrive dans le
+délai, on `abort_agent` (couper un éventuel tour zombie) puis on relance
+`executeNextTask` (reprise propre, **sans marquer d'échec**). Le flag
+`orchestrationCompactionResumePending` est clearer par le 1er événement
+d'activité post-compaction, annulant la reprise si pi a repris tout seul.
+
+Les événements `compaction_start` / `compaction_end` / `compaction` sont
+exemptés du garde-fou anti-événements résiduels (§5.7) pour pouvoir être traités
+entre deux tours (`isStreaming=false`).
+
+**Fix complémentaire — filtre des deltas pendant compaction (plh)** : contrairement
+à pi qui met le résumé dans `compaction_end.summary`, **plh stream le résumé en
+`message_update`/`text_delta`** pendant la compaction. Ces deltas polluaient
+`state.lastAssistantRawText` (utilisée pour parser `DONE` / blocs search/replace en
+orchestration) → échec validation → `handleTaskFailure` → retry → recompaction →
+boucle → arrêt perçu. Fix : un flag `state.isCompacting` (true entre
+`compaction_start` et `compaction_end`/`compaction`) fait que le handler
+`message_update` ignore tous les deltas pendant la compaction. Sur `compaction_end`,
+`lastAssistantRawText` et `pendingText` sont reset et le bloc texte courant est
+fermé pour que la vraie réponse post-compaction commence proprement. Reset de
+sécurité sur `agent_start`. plh lui-même reprend correctement après compaction auto
+(`continue` + `turn_start` dans `plh-cli/src/agent.rs`).
+
+**Fichiers :** `src/js/agent-pi.js` (cas `compaction_end` / `compaction` + clear
+sur `agent_start` / `message_update` delta / `tool_execution_start` / `agent_end`
++ garde-fou étendu + reset sur `orch-reset` + filtre `isCompacting` sur
+`compaction_start`/`compaction_end`/`compaction`/`message_update`/`agent_start`).
+
+### 11.9 Reviewer indépendant (H2 V1) — ✅ Implémenté (2026-07-29)
+
+Un **reviewer indépendant** (2e session pi `--no-session`, contexte vierge) relit
+le diff de chaque tâche du codeur, en complément de l'auto-validation `SELF_FIX`.
+1re brique de H2 (multi-codeurs spécialisés) : pose l'architecture multi-sessions
+(canal `rpc-event-reviewer` séparé) qu'on étendra en V2 (sub-agents parallèles).
+
+- **Porte** insérée dans `handleOrchestrationAgentEnd` après les tests E2, avant
+  validation : `APPROVED` → tâche validée ; `CHANGES_REQUESTED` → retry codeur
+  (budget unifié `maxCorrections`).
+- **Scope** paramétrable : `all` (chaque tâche, défaut) ou `critical`
+  (seulement si un fichier sensible matche un glob configurable).
+- **Opt-in** (défaut off) — coûte un tour cloud par tâche. Modèle reviewer
+  configurable (défaut = modèle orchestrateur). Fallback gracieux (crash/timeout
+  → validation sans review, non-bloquant).
+- Spéc complète : [`spec_orchestration_reviewer.md`](./spec_orchestration_reviewer.md).
+
 ---
 
 ## 12. Mode Orchestration V3 — corrections de bugs (2026-06-29)
@@ -826,8 +931,12 @@ Au clic sur 🧠 (quand le mode est désactivé), une modale s'ouvre (classes `.
 
 - un sélecteur **🧠 Orchestrateur** (cloud, intelligent) ;
 - un sélecteur **🔨 Codeur** (local, économique) ;
-- les deux pré-remplis avec les modèles de la config (`orchestrator_provider/model_id` et `coder_provider/model_id`), et peuplés avec `list_agent_models` ;
+- un sélecteur **📐 Granularité des tâches** (atomic / fine / medium / large), pré-rempli avec la valeur des Paramètres ;
+- une case à cocher **🔍 Reviewer indépendant** + un sélecteur de modèle reviewer (pré-remplis avec les valeurs des Paramètres) ;
+- les deux sélecteurs de modèles pré-remplis avec les modèles de la config (`orchestrator_provider/model_id` et `coder_provider/model_id`), et peuplés avec `list_agent_models` ;
 - un bouton **✅ Valider et tester** et un bouton **Annuler**.
+
+**Overrides session** : les choix faits dans la popup (granularité, reviewer activé/désactivé, modèle reviewer) sont des **overrides pour cette session uniquement** — non persistés dans la config. `activateOrchestrationWith` les applique au `state` ; `refreshOrchestrationTestConfig` et le second chargeur de config ne les écrasent **pas** tant que `state.orchestrationEnabled === true`. À la désactivation, les valeurs repassent aux Paramètres.
 
 La modale se ferme aussi par clic sur l'overlay ou touche **Échap** (sauf pendant un test en cours).
 
@@ -883,8 +992,98 @@ travailler ensemble deux IA :
   « 📋 Journal des tentatives » affiche chaque tentative du codeur (marqueur,
   raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
   une entrée pour voir l'extrait de la réponse et les erreurs de linting.
+- **Auto-test post-modification (E2)** : option « 🧪 Auto-test » dans les
+  Paramètres → Mode Orchestration. Si activée, après chaque tâche du codeur,
+  Pilot exécute les tests du projet (`npm test` / `cargo test` / `pytest` /
+  `go test`) au lieu de ne valider que la syntaxe. Les échecs déclenchent une
+  boucle de correction locale (SELF_FIX). Une baseline mémorise les tests déjà
+  rouges au démarrage pour ne signaler que les régressions introduites. Opt-in,
+  portée ciblée par défaut, override manuel possible.
+- **Annulation de tâche (A1)** : bouton « ↩️ Annuler la dernière tâche » dans le
+  panneau d'orchestration. Pilot capture un snapshot Git avant chaque tâche
+  (`git stash create -u`, sans toucher au working tree). L'annulation restaure
+  les fichiers modifiés à leur état d'avant la tâche (les fichiers créés par la
+  tâche sont supprimés). Défaut activé ; désactivé gracieusement si le projet
+  n'est pas un repo Git.
 - **Nudge après réflexion** : si le codeur local s'arrête après la Phase 1
   (Réflexion) sans modifier de fichiers, il est relancé automatiquement dans la
   même session vers la Phase 2 (max 2 relances par tâche), pour éviter une
   escalade cloud systématique.
+- **Granularité atomique** : 4e niveau de finesse (atomic / fine / medium /
+  large), conçu pour les modèles locaux (7B/8B). Tâches triviales d'une ligne,
+  1 fichier, 1 seul changement — le codeur applique scrupuleusement.
+- **Reviewer à l'activation** : l'écran d'activation permet de choisir la
+  granularité et d'activer/sélectionner le reviewer pour la session (overrides
+  non persistés).
 <!-- /HELP:orchestration -->
+
+---
+
+## 19. Granularité « atomique » + overrides session à l'activation (2026-07-30)
+
+### 19.1 Niveau de granularité « atomic »
+
+Un 4e niveau de granularité (`atomic`) s'ajoute à `fine`, `medium`, `large`. Conçu
+pour les **modèles locaux** (7B/8B), il produit des tâches **atomiques** :
+
+- ~10-25 lignes par tâche, **1 fichier max**, **1 seul changement** par tâche ;
+- 15 à 40 tâches (plus de tâches, mais chacune triviale) ;
+- instructions **ultra-explicites** : chemin précis, nom de fonction/variable,
+  localisation (avant/après quelle ligne), contenu attendu avant → après ;
+- le codeur ne fait qu'**appliquer scrupuleusement**, sans interpréter.
+
+Le prompt `buildPlanPrompt` (via `sizeGuides.atomic`) et `buildTaskPrompt` (via
+`sizeObjectives.atomic`) intègrent ces consignes. La granularité adaptative
+`getAdaptiveGranularity` étend son ordre à `{ atomic:0, fine:1, medium:2, large:3 }` :
+un modèle local en échec reste au plancher `atomic` ; en succès total, il peut
+monter à `fine`.
+
+### 19.2 Overrides session à l'activation
+
+La popup d'activation (§18.1) permet désormais de choisir, en plus des modèles :
+
+- la **granularité** (sélecteur, défaut = config) ;
+- le **reviewer** activé/désactivé (case à cocher, défaut = config) + le **modèle
+  reviewer** (sélecteur, défaut = config).
+
+Ces choix sont des **overrides pour la session en cours** — non persistés dans la
+config. `activateOrchestrationWith` les applique au `state` :
+`orchestrationGranularity`, `orchestrationReviewerEnabled`,
+`orchestrationReviewerProvider/Model`. Tant que le mode est actif
+(`state.orchestrationEnabled === true`), `refreshOrchestrationTestConfig` et le
+second chargeur de config **n'écrasent pas** ces valeurs. Le reviewer n'est **pas
+testé** à l'activation (il a un fallback gracieux — §11.9) ; seuls l'orchestrateur
+et le codeur sont testés.
+
+Le message d'activation affiche les choix : `📐 Granularité : atomique` + `🔍
+Reviewer activé : provider/model` (ou `désactivé`).
+
+## 20. Tâches de suppression de fichiers — correctif (2026-07-30)
+
+**Symptôme** : une tâche dont le but est de **supprimer** des fichiers faisait
+échouer le plan avec « Trop d'erreurs de syntaxe persistantes après 3
+corrections. Échec de tâche. » alors que le codeur avait correctement supprimé
+les fichiers dès la première tentative → escalade injustifiée vers
+l'orchestrateur.
+
+**Deux bugs** :
+
+1. **Gate de linting sur des fichiers supprimés** (`agent-pi.js`) :
+   `filesToLint = currentTask.files` (les fichiers à supprimer, n'existant plus)
+   était passé à `check_syntax`. eslint sur un chemin inexistant → erreur ;
+   `cargo check` sur le crate cassé par les références aux fichiers supprimés →
+   erreur persistante. Le codeur recevait « Correction syntaxique requise » sans
+   pouvoir corriger (fichier absent ou erreurs hors scope) → 3 corrections →
+   échec. **Fix** : `filesToLint` est maintenant filtré via `file_exists` — on
+   ne linte que les fichiers encore présents sur disque. Une suppression pure
+   produit `filesToLint = []` → gate skippée.
+
+2. **Validation post-tâche ne reconnaissait pas la suppression**
+   (`checkTaskFilesChanged` dans `orchestration.js`) : `before.exists=true` +
+   `afterExists=false` tombait dans `"unchanged"` → `ok: false` → échec même
+   sans gate de lint. **Fix** : un fichier listé qui existait avant et n'existe
+   plus est compté comme `"deleted"` → `ok: true` (raison : `… supprimé(s)…`).
+
+Compatibilité inchangée : le mode normal, les tâches de création/modification,
+le linting sur fichiers modifiés, l'auto-test, le reviewer, la subdivision et
+l'escalade restent intacts.

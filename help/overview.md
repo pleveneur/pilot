@@ -61,11 +61,15 @@ externe.
 - `Ctrl+P` — Filtrer les fichiers (barre latérale)
 - `Ctrl+G` — Aller à la ligne…
 - `Ctrl+Shift+F` — Recherche globale (full-text dans tous les fichiers du projet)
+- `Ctrl+Shift+H` — Remplacement global (avec aperçu et confirmation)
+- `Ctrl+Alt+R` — Fichiers récents (popover fuzzy)
 - `Ctrl+Shift+O` — Table des matières Markdown (outline cliquable)
 - `Ctrl+Shift+P` — Palette de commandes
 
 ### Édition Markdown
 - `Ctrl+B` — Gras · `Ctrl+I` — Italique · `Ctrl+K` — Lien
+- `Ctrl+D` — Sélectionner l'occurrence suivante (multi-curseur)
+- `Alt+clic` — Ajouter un curseur à la position cliquée
 
 ### Divers
 - `F11` — Plein écran
@@ -96,15 +100,37 @@ externe.
 <!-- /HELP:terminal -->
 
 <!-- HELP:recherche-outline -->
-## Recherche et outline
+## Recherche, remplacement et outline
 
 - **Recherche globale** (`Ctrl+Shift+F`) : panneau de recherche full-text dans
   tous les fichiers du projet, avec support des expressions régulières et un
   filtre par extension. Cliquer un résultat ouvre le fichier à la ligne.
+- **Remplacement global** (`Ctrl+Shift+H`) : bouton ▸ pour afficher la ligne de
+  remplacement, puis « Tout remplacer » — un aperçu (nombre d'occurrences et de
+  fichiers concernés) précède une confirmation avant écriture. Les onglets
+  d'édition ouverts et non modifiés sont rechargés automatiquement.
 - **Table des matières** (`Ctrl+Shift+O`) : bascule l'outline Markdown (titres
   cliquables, mise à jour en temps réel). Pratique pour naviguer dans un long
   fichier `.md`.
 <!-- /HELP:recherche-outline -->
+
+<!-- HELP:edition-lint -->
+## Édition : multi-curseurs, lint, export HTML, fichiers récents
+
+- **Multi-curseurs** : `Alt+clic` ajoute un curseur à la position cliquée ;
+  `Ctrl+D` sélectionne l'occurrence suivante du mot sous le curseur (répète pour
+  en sélectionner plusieurs). Pratique pour éditer plusieurs endroits à la fois.
+- **Lint intégré** : pour les fichiers JS/TS, les diagnostics du linter du
+  projet (eslint) s'affichent en direct dans la gouttière et sous les mots
+  soulignés (debounce ~1.2 s). Silencieux si eslint n'est pas disponible.
+- **Export HTML autonome** : clic droit sur un fichier `.md` → « Exporter en
+  HTML » génère un fichier `.html` autonome (CSS inline + images en base64)
+  partageable sans Pilot, via un dialogue de sauvegarde natif.
+- **Fichiers récents** (`Ctrl+Alt+R`) : popover listant les 20 derniers
+  fichiers ouverts du projet (filtre fuzzy, navigation clavier, Entrée pour
+  ouvrir). L'historique est stocké localement (par projet), jamais envoyé au
+  cloud.
+<!-- /HELP:edition-lint -->
 <!-- HELP:aide -->
 ## Aide intégrée (❓)
 

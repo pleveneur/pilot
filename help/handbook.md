@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-22 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review -->
+<!-- PILOT-HELP generated=2026-07-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -55,11 +55,15 @@ externe.
 - `Ctrl+P` — Filtrer les fichiers (barre latérale)
 - `Ctrl+G` — Aller à la ligne…
 - `Ctrl+Shift+F` — Recherche globale (full-text dans tous les fichiers du projet)
+- `Ctrl+Shift+H` — Remplacement global (avec aperçu et confirmation)
+- `Ctrl+Alt+R` — Fichiers récents (popover fuzzy)
 - `Ctrl+Shift+O` — Table des matières Markdown (outline cliquable)
 - `Ctrl+Shift+P` — Palette de commandes
 
 ### Édition Markdown
 - `Ctrl+B` — Gras · `Ctrl+I` — Italique · `Ctrl+K` — Lien
+- `Ctrl+D` — Sélectionner l'occurrence suivante (multi-curseur)
+- `Alt+clic` — Ajouter un curseur à la position cliquée
 
 ### Divers
 - `F11` — Plein écran
@@ -90,14 +94,36 @@ externe.
 
 ---
 
-## Recherche et outline
+## Recherche, remplacement et outline
 
 - **Recherche globale** (`Ctrl+Shift+F`) : panneau de recherche full-text dans
   tous les fichiers du projet, avec support des expressions régulières et un
   filtre par extension. Cliquer un résultat ouvre le fichier à la ligne.
+- **Remplacement global** (`Ctrl+Shift+H`) : bouton ▸ pour afficher la ligne de
+  remplacement, puis « Tout remplacer » — un aperçu (nombre d'occurrences et de
+  fichiers concernés) précède une confirmation avant écriture. Les onglets
+  d'édition ouverts et non modifiés sont rechargés automatiquement.
 - **Table des matières** (`Ctrl+Shift+O`) : bascule l'outline Markdown (titres
   cliquables, mise à jour en temps réel). Pratique pour naviguer dans un long
   fichier `.md`.
+
+---
+
+## Édition : multi-curseurs, lint, export HTML, fichiers récents
+
+- **Multi-curseurs** : `Alt+clic` ajoute un curseur à la position cliquée ;
+  `Ctrl+D` sélectionne l'occurrence suivante du mot sous le curseur (répète pour
+  en sélectionner plusieurs). Pratique pour éditer plusieurs endroits à la fois.
+- **Lint intégré** : pour les fichiers JS/TS, les diagnostics du linter du
+  projet (eslint) s'affichent en direct dans la gouttière et sous les mots
+  soulignés (debounce ~1.2 s). Silencieux si eslint n'est pas disponible.
+- **Export HTML autonome** : clic droit sur un fichier `.md` → « Exporter en
+  HTML » génère un fichier `.html` autonome (CSS inline + images en base64)
+  partageable sans Pilot, via un dialogue de sauvegarde natif.
+- **Fichiers récents** (`Ctrl+Alt+R`) : popover listant les 20 derniers
+  fichiers ouverts du projet (filtre fuzzy, navigation clavier, Entrée pour
+  ouvrir). L'historique est stocké localement (par projet), jamais envoyé au
+  cloud.
 
 ---
 
@@ -146,6 +172,12 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   API…), le message d'erreur s'affiche dans la conversation au lieu d'une
   bulle vide sans réponse. Les résultats d'outil en erreur (ex. tool call
   tronqué par la limite de tokens) s'affichent même si les outils sont masqués.
+  **Modèle injoignable / retries** : quand pi ne parvient pas à joindre le
+  modèle (serveur local éteint, API cloud down), il retente automatiquement
+  plusieurs fois. Pilot n'affiche qu'un seul bloc « 🔄 nouvelle tentative (n)… »
+  mis à jour (au lieu d'empiler les erreurs), puis, si toutes les tentatives
+  échouent, un message **❌ Modèle injoignable après n tentative(s)** avec un
+  bouton **🔄 Réessayer** pour relancer votre dernier prompt en un clic.
 - **Réponses tronquées** : avec un modèle local qui dépasse la limite de
   tokens de sortie (`stopReason:"length"`), la réponse est coupée en plein
   milieu (souvent un `write` de gros fichier). Pilot détecte la troncation et
@@ -182,10 +214,29 @@ travailler ensemble deux IA :
   « 📋 Journal des tentatives » affiche chaque tentative du codeur (marqueur,
   raison, durée, fichiers modifiés) et détecte les réponses en boucle. Clic sur
   une entrée pour voir l'extrait de la réponse et les erreurs de linting.
+- **Auto-test post-modification (E2)** : option « 🧪 Auto-test » dans les
+  Paramètres → Mode Orchestration. Si activée, après chaque tâche du codeur,
+  Pilot exécute les tests du projet (`npm test` / `cargo test` / `pytest` /
+  `go test`) au lieu de ne valider que la syntaxe. Les échecs déclenchent une
+  boucle de correction locale (SELF_FIX). Une baseline mémorise les tests déjà
+  rouges au démarrage pour ne signaler que les régressions introduites. Opt-in,
+  portée ciblée par défaut, override manuel possible.
+- **Annulation de tâche (A1)** : bouton « ↩️ Annuler la dernière tâche » dans le
+  panneau d'orchestration. Pilot capture un snapshot Git avant chaque tâche
+  (`git stash create -u`, sans toucher au working tree). L'annulation restaure
+  les fichiers modifiés à leur état d'avant la tâche (les fichiers créés par la
+  tâche sont supprimés). Défaut activé ; désactivé gracieusement si le projet
+  n'est pas un repo Git.
 - **Nudge après réflexion** : si le codeur local s'arrête après la Phase 1
   (Réflexion) sans modifier de fichiers, il est relancé automatiquement dans la
   même session vers la Phase 2 (max 2 relances par tâche), pour éviter une
   escalade cloud systématique.
+- **Granularité atomique** : 4e niveau de finesse (atomic / fine / medium /
+  large), conçu pour les modèles locaux (7B/8B). Tâches triviales d'une ligne,
+  1 fichier, 1 seul changement — le codeur applique scrupuleusement.
+- **Reviewer à l'activation** : l'écran d'activation permet de choisir la
+  granularité et d'activer/sélectionner le reviewer pour la session (overrides
+  non persistés).
 
 ---
 
@@ -209,6 +260,10 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
 - **Lecture seule** : option « mode lecture seule » (consultation sans
   modification). **Keep-alive (tray)** : garder le serveur + l'agent pi actifs en
   arrière-plan après fermeture de la fenêtre.
+- **Notification de fin de tâche** : quand tu lances une tâche depuis le téléphone,
+  le desktop émet une **notification native** « Agent terminé » à la fin de la
+  réponse (permission demandée au 1er lancement). Pratique pour les tâches longues
+  lancées à distance pendant que tu fais autre chose sur le desktop.
 
 ---
 
@@ -255,6 +310,14 @@ specs référencées, fichiers récemment édités — dans un budget de tokens 
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `AGENTS.md`.
+- **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
+  — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
+  le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».
+  Pilot indexe alors le projet en vecteurs et sélectionne les passages les plus
+  pertinents par similarité sémantique au prompt (plus précis que l'heuristique
+  V1). L'index SQLite est stocké dans `.pilot/context-index.db` et se met à jour
+  incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
+  retombe automatiquement sur V1.
 
 ---
 
@@ -319,3 +382,41 @@ du fichier `lib.rs` ») + Entrée. L'historique est réinjecté à chaque tour.
   commit » ou committe par morceaux pour une revue complète.
 
 Voir [`spec_review.md`](spec_review.md) pour le détail technique.
+
+---
+
+### Reviewer indépendant (H2 V1)
+
+- **Opt-in** (Paramètres → Orchestration → Reviewer). Un second agent relit le diff
+  de chaque tâche (ou seulement les fichiers sensibles en mode « critical ») avec
+  un contexte vierge et répond `APPROVED` ou `CHANGES_REQUESTED`.
+- Désactivé par défaut (coûte un tour cloud par tâche). Modèle reviewer configurable
+  (défaut = modèle orchestrateur).
+- Les corrections demandées par le reviewer sont renvoyées au codeur et partagent le
+  même budget que lint/tests (`maxCorrections`).
+- En cas d'indisponibilité du reviewer (crash/timeout), la tâche est validée sans
+  relecture (non-bloquant).
+
+---
+
+## Historique des sessions (onglet 📜)
+
+L'onglet **📜** indexe **toutes** vos sessions agent (passées et nouvelles)
+pour retrouver une décision, un prompt ou les fichiers touchés par une
+session.
+
+- **Ouvrir** : bouton 📜 du panneau d'actions. Au premier ouvrage d'un projet,
+  Pilot réindexe automatiquement vos sessions pi existantes (toast discret).
+- **Rechercher** : tapez dans le champ de recherche (full-text sur le prompt,
+  le résumé et les fichiers touchés). Filtres : tags, fichier (chemin relatif),
+  type (chat / orchestration).
+- **Consulter** : cliquez une entrée pour afficher le détail complet de la
+  session (messages + tool calls, lecture seule).
+- **Tags** : ajoutez des tags à une session (chips + autocomplétion) pour la
+  retrouver plus tard (ex: `architecture`, `bug`, `refactor`).
+- **Réindexer** : bouton 🔄 pour reconstruire l'index depuis le dossier de
+  sessions pi (utile après des sessions hors Pilot, ou si l'index est
+  désynchronisé).
+- **Confidentialité** : l'index est local (`.pilot/sessions.jsonl`), jamais
+  envoyé au cloud ni au web distant. Il contient vos prompts : ajoutez
+  `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.

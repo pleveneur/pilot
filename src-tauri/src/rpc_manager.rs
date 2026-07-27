@@ -28,7 +28,10 @@ pub struct RpcSession {
 /// Lance le processus `pi --mode rpc` et démarre le thread de lecture stdout.
 /// `pi_path` : chemin vers l'exécutable pi ("pi" si dans le PATH).
 /// `no_session` : si true, ajoute --no-session (pas de persistance).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>) -> Result<RpcSession, String> {
+/// `event_channel` : nom du canal Tauri sur lequel émettre les événements
+/// ("rpc-event" pour la session principale, "rpc-event-reviewer" pour le
+/// reviewer H2 V1 — canal séparé pour ne pas polluer handleRpcEvent).
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -89,22 +92,24 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     // Thread de lecture stdout
     let app_exit = app_handle.clone();
     let running_exit = running.clone();
+    let channel_stdout = event_channel.to_string();
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx);
+        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout);
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
         // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
         // pour un changement de projet distant) n'émet rien → le desktop
         // n'affiche pas « Déconnecté » (le pi est redémarré juste après).
         if running_exit.load(Ordering::Relaxed) {
             let exit_event = serde_json::json!({"type": "process_exit", "reason": "stdout_closed"});
-            app_exit.emit("rpc-event", &exit_event).ok();
+            app_exit.emit(&channel_stdout, &exit_event).ok();
         }
     });
 
     // Thread de lecture stderr
     let app_stderr = app_handle.clone();
+    let channel_stderr = event_channel.to_string();
     std::thread::spawn(move || {
-        read_stderr_loop(Box::new(stderr), app_stderr, running_stderr);
+        read_stderr_loop(Box::new(stderr), app_stderr, running_stderr, &channel_stderr);
     });
 
     Ok(RpcSession {
@@ -194,6 +199,7 @@ fn read_jsonl_loop(
     running: Arc<AtomicBool>,
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     event_tx: tokio::sync::broadcast::Sender<Value>,
+    event_channel: &str,
 ) {
     let mut buffer = String::new();
     let mut buf = [0u8; 4096];
@@ -241,11 +247,14 @@ fn read_jsonl_loop(
                             }
 
                             // Émettre l'événement vers le frontend pour tout le reste
-                            app_handle.emit("rpc-event", &value).ok();
+                            app_handle.emit(event_channel, &value).ok();
                             // Fan-out parallèle vers les WebSockets distants (décision 13.3).
                             // Sender::send n'est pas async → appel valide depuis ce thread std.
                             // Une erreur (pas de receiver / lent) est ignorée : le client web
                             // resynchronise son état au reconnect via les fetch REST (§5).
+                            // Note : en V1, le reviewer n'est pas fan-out vers le web (canal
+                            // séparé, pas de session distante dédiée) — le fan-out se fait sur
+                            // le canal principal uniquement via l'event_tx de la session main.
                             let _ = event_tx.send(value.clone());
                         }
                         Err(e) => {
@@ -267,6 +276,7 @@ fn read_stderr_loop(
     mut reader: Box<dyn Read + Send>,
     app_handle: AppHandle,
     running: Arc<AtomicBool>,
+    event_channel: &str,
 ) {
     let mut buf = [0u8; 4096];
     loop {
@@ -284,7 +294,7 @@ fn read_stderr_loop(
                     "type": "process_error",
                     "text": text,
                 });
-                app_handle.emit("rpc-event", &event).ok();
+                app_handle.emit(event_channel, &event).ok();
             }
             Err(_) => break,
         }

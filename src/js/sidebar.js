@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { updateFileList } from "./file-list.js";
 import { exportMarkdownToPdf } from "./pdf-export.js";
+import { exportMarkdownToHtml } from "./html-export.js";
 import { convertPdfToMd } from "./pdf-to-markdown.js";
 import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
 import { openGitDiffModal } from "./diff-view.js";
@@ -167,6 +168,7 @@ class Sidebar {
     this.ctxPreview = document.getElementById("ctx-preview");
     this.ctxPreviewCsv = document.getElementById("ctx-preview-csv");
     this.ctxExportPdf = document.getElementById("ctx-export-pdf");
+    this.ctxExportHtml = document.getElementById("ctx-export-html");
     this.ctxOpenBrowser = document.getElementById("ctx-open-browser");
     this.ctxSendAgent = document.getElementById("ctx-send-agent");
     this.ctxAddPromptBuilder = document.getElementById("ctx-add-prompt-builder");
@@ -260,6 +262,13 @@ class Sidebar {
       const mdPath = this.contextMenuPath;
       this.hideContextMenu();
       await exportMarkdownToPdf(mdPath);
+    });
+
+    this.ctxExportHtml.addEventListener("click", async () => {
+      if (!this.contextMenuPath || this.contextMenuIsDir) return;
+      const mdPath = this.contextMenuPath;
+      this.hideContextMenu();
+      await exportMarkdownToHtml(mdPath);
     });
 
     this.ctxOpenBrowser.addEventListener("click", async () => {
@@ -765,6 +774,7 @@ class Sidebar {
       this.ctxPreview.style.display = "none";
       this.ctxPreviewCsv.style.display = "none";
       this.ctxExportPdf.style.display = "none";
+      this.ctxExportHtml.style.display = "none";
       this.ctxOpenBrowser.style.display = "none";
       this.ctxSendAgent.style.display = "";
       setIconText(this.ctxSendAgent, "send", "Analyser ce dossier");
@@ -782,6 +792,7 @@ class Sidebar {
       this.ctxPreview.style.display = "none";
       this.ctxPreviewCsv.style.display = "none";
       this.ctxExportPdf.style.display = "none";
+      this.ctxExportHtml.style.display = "none";
       this.ctxOpenBrowser.style.display = "none";
       this.ctxSendAgent.style.display = "none";
       this.ctxAddPromptBuilder.style.display = "none";
@@ -806,6 +817,7 @@ class Sidebar {
         setIconText(this.ctxPreview, "eye", "Prévisualiser");
       }
       this.ctxExportPdf.style.display = isMd ? "" : "none";
+      this.ctxExportHtml.style.display = isMd ? "" : "none";
       this.ctxOpenBrowser.style.display = isHtml ? "" : "none";
       this.ctxSendAgent.style.display = "";
       setIconText(this.ctxSendAgent, "send", `Envoyer à ${agentDisplayPhrase()}`);
@@ -824,8 +836,19 @@ class Sidebar {
     }
 
     this.contextMenu.classList.remove("hidden");
-    this.contextMenu.style.left = x + "px";
-    this.contextMenu.style.top = y + "px";
+    // Positionnement avec clamp : si le clic est près du bord droit ou bas de
+    // la fenêtre (ex: fichier en bas de l'arborescence), on décale le menu pour
+    // qu'il ne soit pas coupé. Le menu est position:fixed (enfant du body),
+    // donc on borne par le viewport (issue #1 — menu contextuel coupé).
+    const menu = this.contextMenu;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = x;
+    let top = y;
+    if (left + menu.offsetWidth > vw - 4) left = Math.max(4, vw - menu.offsetWidth - 4);
+    if (top + menu.offsetHeight > vh - 4) top = Math.max(4, vh - menu.offsetHeight - 4);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
   }
 
   /**

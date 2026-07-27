@@ -1,6 +1,8 @@
 // search-panel.js — Recherche globale dans les fichiers (Ctrl+Shift+F)
 
 import { invoke } from "@tauri-apps/api/core";
+import { toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
+import { setContent } from "./editor.js";
 
 let searchPanel = null;
 let searchInput = null;
@@ -11,6 +13,13 @@ let searchResultsCount = null;
 let searchLoading = null;
 let isSearchOpen = false;
 let tabsManager = null;
+
+// Replace (B3)
+let searchReplaceToggle = null;
+let searchReplaceRow = null;
+let searchReplaceInput = null;
+let searchReplaceAllBtn = null;
+let replaceRowVisible = false;
 
 /**
  * Initialise le panneau de recherche globale
@@ -27,6 +36,12 @@ export function initSearchPanel(tabs) {
   searchResultsCount = document.getElementById("search-results-count");
   searchLoading = document.getElementById("search-loading");
 
+  // Replace (B3)
+  searchReplaceToggle = document.getElementById("search-replace-toggle");
+  searchReplaceRow = document.getElementById("search-replace-row");
+  searchReplaceInput = document.getElementById("search-replace-input");
+  searchReplaceAllBtn = document.getElementById("search-replace-all");
+
   if (!searchPanel || !searchInput) return;
 
   // Raccourci Ctrl+Shift+F pour ouvrir/fermer
@@ -35,6 +50,13 @@ export function initSearchPanel(tabs) {
       e.preventDefault();
       e.stopPropagation();
       toggleSearchPanel();
+    }
+    // Ctrl+Shift+H : ouvrir le panneau avec la ligne de remplacement visible
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "H") {
+      e.preventDefault();
+      e.stopPropagation();
+      openSearchPanel();
+      showReplaceRow(true);
     }
     // Escape pour fermer
     if (e.key === "Escape" && isSearchOpen) {
@@ -49,6 +71,28 @@ export function initSearchPanel(tabs) {
       doSearch();
     }
   });
+
+  // Toggle de la ligne de remplacement
+  if (searchReplaceToggle) {
+    searchReplaceToggle.addEventListener("click", () => {
+      showReplaceRow(!replaceRowVisible);
+    });
+  }
+
+  // Tout remplacer
+  if (searchReplaceAllBtn) {
+    searchReplaceAllBtn.addEventListener("click", () => {
+      doReplaceAll();
+    });
+  }
+  if (searchReplaceInput) {
+    searchReplaceInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doReplaceAll();
+      }
+    });
+  }
 }
 
 /** Ouvre ou ferme le panneau de recherche */
@@ -76,6 +120,17 @@ export function closeSearchPanel() {
   searchPanel.classList.add("hidden");
   searchResultsList.innerHTML = "";
   searchResultsCount.textContent = "";
+}
+
+/** Affiche ou masque la ligne de remplacement (B3). */
+function showReplaceRow(show) {
+  replaceRowVisible = show;
+  if (searchReplaceRow) {
+    searchReplaceRow.classList.toggle("hidden", !show);
+  }
+  if (show && searchReplaceInput) {
+    setTimeout(() => searchReplaceInput.focus(), 0);
+  }
 }
 
 /** Lance la recherche globale */
@@ -198,4 +253,95 @@ function highlightMatch(text, query) {
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`(${escaped})`, "gi");
   return text.replace(re, '<mark class="search-highlight">$1</mark>');
+}
+
+// ── Remplacement global (B3 — Find & Replace) ──
+
+/** Remplace toutes les occurrences dans tous les fichiers correspondants. */
+async function doReplaceAll() {
+  const query = searchInput.value;
+  const replacement = searchReplaceInput ? searchReplaceInput.value : "";
+  const useRegex = searchRegexToggle && searchRegexToggle.checked;
+  const extensions = searchExtInput.value.trim();
+
+  if (!query) {
+    toastWarning("Saisir un texte à remplacer");
+    return;
+  }
+
+  // D'abord compter les occurrences via une recherche (aperçu de confirmation)
+  let preview = null;
+  try {
+    preview = await invoke("search_in_files", {
+      query,
+      useRegex,
+      extensions,
+      maxResults: 10000,
+    });
+  } catch (e) {
+    toastError("Erreur aperçu : " + e);
+    return;
+  }
+
+  const totalOccurrences = preview ? preview.length : 0;
+  const totalFiles = new Set(preview ? preview.map((r) => r.path) : []).size;
+
+  if (totalOccurrences === 0) {
+    toastInfo("Aucune occurrence à remplacer");
+    return;
+  }
+
+  const ok = confirm(
+    `Remplacer ${totalOccurrences} occurrence${totalOccurrences > 1 ? "s" : ""} ` +
+    `dans ${totalFiles} fichier${totalFiles > 1 ? "s" : ""} ?\n\n` +
+    `Recherche : ${query}\nRemplacement : ${replacement || "(vide)"}`
+  );
+  if (!ok) return;
+
+  try {
+    const res = await invoke("replace_in_files", {
+      query,
+      replacement,
+      useRegex,
+      extensions,
+    });
+    toastSuccess(
+      `${res.occurrences} occurrence${res.occurrences > 1 ? "s" : ""} remplacée${res.occurrences > 1 ? "s" : ""} ` +
+      `dans ${res.files_modified} fichier${res.files_modified > 1 ? "s" : ""}`
+    );
+    // Recharger les onglets ouverts concernés pour refléter le disque
+    refreshOpenTabs(res.modified || []);
+    // Relancer la recherche pour mettre à jour les résultats
+    doSearch();
+  } catch (e) {
+    toastError("Erreur remplacement : " + e);
+  }
+}
+
+/** Recharge le contenu des onglets d'édition ouverts dont le fichier a été
+ *  modifié par le remplacement global (évite un affichage obsolète). */
+function refreshOpenTabs(modifiedRels) {
+  if (!tabsManager || !modifiedRels.length) return;
+  const project = (window._pilotProjectPath || "").replace(/\\/g, "/").replace(/\/$/, "");
+  const set = new Set(modifiedRels.map((r) => r.replace(/\\/g, "/")));
+  for (const tab of tabsManager.tabs) {
+    if (!tab.path || !tab.view) continue;
+    const normPath = tab.path.replace(/\\/g, "/");
+    let rel = null;
+    if (project && normPath.startsWith(project + "/")) {
+      rel = normPath.slice(project.length + 1);
+    }
+    if (rel && set.has(rel)) {
+      if (!tab.dirty) {
+        invoke("read_file_content", { path: tab.path })
+          .then((content) => {
+            setContent(tab.view, content);
+            tab.savedContent = content;
+          })
+          .catch(() => {});
+      } else {
+        toastWarning(`« ${tab.name} » non rechargé (modifications non sauvegardées)`);
+      }
+    }
+  }
 }

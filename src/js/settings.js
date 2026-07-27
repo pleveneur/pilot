@@ -107,6 +107,20 @@ export async function initSettings() {
   const selectOrchBatchSize = document.getElementById("setting-orch-batch-size");
   const chkOrchConfirmModelSwitch = document.getElementById("setting-orch-confirm-model-switch");
   const inputCoderContextWindow = document.getElementById("setting-coder-context-window");
+  // ── Auto-test post-modification (E2) ──
+  const chkOrchTestEnabled = document.getElementById("setting-orch-test-enabled");
+  const inputOrchTestTimeout = document.getElementById("setting-orch-test-timeout");
+  const inputOrchTestMaxCorrections = document.getElementById("setting-orch-test-max-corrections");
+  const selectOrchTestScope = document.getElementById("setting-orch-test-scope");
+  const inputOrchTestCommand = document.getElementById("setting-orch-test-command");
+  // ── Snapshots / annulation de tâche (A1) ──
+  const chkOrchSnapshotsEnabled = document.getElementById("setting-orch-snapshots-enabled");
+  // ── Reviewer indépendant (H2 V1) ──
+  const chkOrchReviewerEnabled = document.getElementById("setting-orch-reviewer-enabled");
+  const selectOrchReviewerModel = document.getElementById("setting-orch-reviewer-model");
+  const selectOrchReviewerScope = document.getElementById("setting-orch-reviewer-scope");
+  const taOrchReviewerPatterns = document.getElementById("setting-orch-reviewer-patterns");
+  const rowOrchReviewerPatterns = document.getElementById("setting-orch-reviewer-patterns-row");
   // ── Accès distant (mode remote) ──
   const chkWebEnabled = document.getElementById("setting-web-enabled");
   const inputWebBind = document.getElementById("setting-web-bind");
@@ -123,6 +137,13 @@ export async function initSettings() {
   const chkContextImports = document.getElementById("setting-context-imports");
   const chkContextSpecs = document.getElementById("setting-context-specs");
   const chkContextRecents = document.getElementById("setting-context-recents");
+  // ── Context Engine V2 (RAG) — section dédiée ──
+  const chkContextRag = document.getElementById("setting-context-rag");
+  const inputRagEndpoint = document.getElementById("setting-context-rag-endpoint");
+  const inputRagModel = document.getElementById("setting-context-rag-model");
+  const ragBlock = document.getElementById("context-rag-block");
+  const btnRagTest = document.getElementById("btn-context-rag-test");
+  const ragTestStatus = document.getElementById("context-rag-test-status");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -222,7 +243,7 @@ export async function initSettings() {
     try {
       currentConfig = await invoke("get_config");
     } catch (_) {
-      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true };
+      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text" };
     }
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
@@ -242,6 +263,23 @@ export async function initSettings() {
     chkOrchestration.checked = currentConfig.orchestration_enabled || false;
     chkOrchConfirmModelSwitch.checked = currentConfig.orchestration_confirm_model_switch || false;
     inputCoderContextWindow.value = currentConfig.coder_context_window || 0;
+    // ── Auto-test (E2) ──
+    if (chkOrchTestEnabled) chkOrchTestEnabled.checked = currentConfig.orchestration_test_enabled === true;
+    if (inputOrchTestTimeout) inputOrchTestTimeout.value = currentConfig.orchestration_test_timeout_ms || 60000;
+    if (inputOrchTestMaxCorrections) inputOrchTestMaxCorrections.value = currentConfig.orchestration_test_max_corrections || 3;
+    if (selectOrchTestScope) selectOrchTestScope.value = currentConfig.orchestration_test_scope || "targeted";
+    if (inputOrchTestCommand) inputOrchTestCommand.value = currentConfig.orchestration_test_command || "";
+    // ── Snapshots (A1) ──
+    if (chkOrchSnapshotsEnabled) chkOrchSnapshotsEnabled.checked = currentConfig.orchestration_snapshots_enabled !== false;
+    // ── Reviewer (H2 V1) ──
+    if (chkOrchReviewerEnabled) chkOrchReviewerEnabled.checked = currentConfig.orchestration_reviewer_enabled === true;
+    const reviewerModelValue = currentConfig.orchestration_reviewer_provider
+      ? `${currentConfig.orchestration_reviewer_provider}/${currentConfig.orchestration_reviewer_model}`
+      : "";
+    if (selectOrchReviewerScope) selectOrchReviewerScope.value = (currentConfig.orchestration_reviewer_scope === "critical") ? "critical" : "all";
+    if (taOrchReviewerPatterns) taOrchReviewerPatterns.value = Array.isArray(currentConfig.orchestration_reviewer_critical_patterns)
+      ? currentConfig.orchestration_reviewer_critical_patterns.join("\n") : "";
+    if (rowOrchReviewerPatterns) rowOrchReviewerPatterns.style.display = (selectOrchReviewerScope && selectOrchReviewerScope.value === "critical") ? "" : "none";
     inputOrchestratorModel.value = currentConfig.orchestrator_provider
       ? `${currentConfig.orchestrator_provider}/${currentConfig.orchestrator_model_id}`
       : "";
@@ -261,6 +299,8 @@ export async function initSettings() {
     populateModelSelect(inputCoderModel, models, currentConfig.coder_provider
       ? `${currentConfig.coder_provider}/${currentConfig.coder_model_id}`
       : "");
+    // ── Reviewer : peupler le sélecteur de modèle (comme orchestrateur/codeur) ──
+    populateModelSelect(selectOrchReviewerModel, models, reviewerModelValue);
     // ── Champs Accès distant ──
     chkWebEnabled.checked = currentConfig.web_enabled || false;
     inputWebBind.value = currentConfig.web_bind || "127.0.0.1";
@@ -276,6 +316,12 @@ export async function initSettings() {
     chkContextImports.checked = currentConfig.context_include_imports !== false;
     chkContextSpecs.checked = currentConfig.context_include_specs !== false;
     chkContextRecents.checked = currentConfig.context_include_recents !== false;
+    // ── Context Engine V2 (RAG) — section dédiée ──
+    if (chkContextRag) {
+      chkContextRag.checked = currentConfig.context_rag_enabled === true;
+      if (inputRagEndpoint) inputRagEndpoint.value = currentConfig.context_rag_endpoint || "http://127.0.0.1:11434";
+      if (inputRagModel) inputRagModel.value = currentConfig.context_rag_model || "nomic-embed-text";
+    }
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -290,6 +336,37 @@ export async function initSettings() {
     await refreshTailscaleStatus();
     modal.classList.remove("hidden");
   });
+
+  // ── Context Engine V2 (RAG) : toggle d'affichage du block + bouton test ──
+  if (chkContextRag) {
+    chkContextRag.addEventListener("change", () => {
+      // Rien à masquer : le block est toujours visible dans l'onglet dédié RAG.
+      // Le changement d'état est pris en compte à l'enregistrement.
+    });
+  }
+  if (btnRagTest) {
+    btnRagTest.addEventListener("click", async () => {
+      if (!ragTestStatus) return;
+      const endpoint = (inputRagEndpoint.value || "http://127.0.0.1:11434").trim();
+      const model = (inputRagModel.value || "nomic-embed-text").trim();
+      ragTestStatus.textContent = "⏳ Test en cours…";
+      ragTestStatus.style.color = "var(--text-muted)";
+      try {
+        const res = await invoke("context_rag_probe", { endpoint, model });
+        if (res && res.ok) {
+          ragTestStatus.textContent = `✅ Ollama joignable — modèle « ${model} » (dim ${res.dim})`;
+          ragTestStatus.style.color = "var(--success, #4ade80)";
+          showToast(`RAG : Ollama OK (modèle ${model}, dim ${res.dim})`);
+        } else {
+          ragTestStatus.textContent = `❌ ${res && res.error ? res.error : "Ollama injoignable"}`;
+          ragTestStatus.style.color = "var(--danger, #f87171)";
+        }
+      } catch (e) {
+        ragTestStatus.textContent = `❌ ${e}`;
+        ragTestStatus.style.color = "var(--danger, #f87171)";
+      }
+    });
+  }
 
   // Fermer
   btnClose.addEventListener("click", () => {
@@ -308,15 +385,19 @@ export async function initSettings() {
       // Parse orchestrator model: "provider/modelId" or empty
       const orchParts = inputOrchestratorModel.value.trim().split("/", 2);
       const coderParts = inputCoderModel.value.trim().split("/", 2);
+      // Reviewer : même parsing (vide = fallback sur modèle orchestrateur)
+      const reviewerParts = selectOrchReviewerModel ? selectOrchReviewerModel.value.trim().split("/", 2) : ["", ""];
       // Validation : le format doit être "provider/modelId". Si le modelId est
       // vide (pas de "/"), l'utilisateur a probablement mis le nom du modèle
       // dans le champ provider — set_model échouera silencieusement côté pi.
       const orchMissing = inputOrchestratorModel.value.trim() && !(orchParts[1] || "").trim();
       const coderMissing = inputCoderModel.value.trim() && !(coderParts[1] || "").trim();
-      if (orchMissing || coderMissing) {
+      const reviewerMissing = (selectOrchReviewerModel && selectOrchReviewerModel.value.trim()) && !(reviewerParts[1] || "").trim();
+      if (orchMissing || coderMissing || reviewerMissing) {
         const which = [];
         if (orchMissing) which.push("orchestrateur");
         if (coderMissing) which.push("codeur");
+        if (reviewerMissing) which.push("reviewer");
         alert(
           `Format invalide pour le modèle ${which.join(" et ")} : utilisez "provider/modelId"\n` +
           `Exemple : ollama/glm-5.2:cloud — le "provider" (ollama, llama-cpp, deepseek…) ne doit PAS être vide.\n` +
@@ -354,6 +435,21 @@ export async function initSettings() {
         orchestration_batch_size: parseInt(selectOrchBatchSize.value, 10) || 0,
         orchestration_confirm_model_switch: chkOrchConfirmModelSwitch.checked,
         coder_context_window: parseInt(inputCoderContextWindow.value, 10) || 0,
+        // ── Auto-test (E2) ──
+        orchestration_test_enabled: chkOrchTestEnabled ? chkOrchTestEnabled.checked : false,
+        orchestration_test_timeout_ms: parseInt(inputOrchTestTimeout.value, 10) || 60000,
+        orchestration_test_max_corrections: parseInt(inputOrchTestMaxCorrections.value, 10) || 3,
+        orchestration_test_scope: selectOrchTestScope ? selectOrchTestScope.value : "targeted",
+        orchestration_test_command: inputOrchTestCommand ? inputOrchTestCommand.value.trim() : "",
+        // ── Snapshots (A1) ──
+        orchestration_snapshots_enabled: chkOrchSnapshotsEnabled ? chkOrchSnapshotsEnabled.checked : true,
+        // ── Reviewer (H2 V1) ──
+        orchestration_reviewer_enabled: chkOrchReviewerEnabled ? chkOrchReviewerEnabled.checked : false,
+        orchestration_reviewer_provider: (reviewerParts[0] || "").trim(),
+        orchestration_reviewer_model: (reviewerParts[1] || "").trim(),
+        orchestration_reviewer_scope: selectOrchReviewerScope ? selectOrchReviewerScope.value : "all",
+        orchestration_reviewer_critical_patterns: taOrchReviewerPatterns
+          ? taOrchReviewerPatterns.value.split("\n").map((s) => s.trim()).filter(Boolean) : [],
         // ── Accès distant ──
         web_enabled: chkWebEnabled.checked,
         web_bind: inputWebBind.value.trim() || "127.0.0.1",
@@ -372,6 +468,10 @@ export async function initSettings() {
         context_include_imports: chkContextImports.checked,
         context_include_specs: chkContextSpecs.checked,
         context_include_recents: chkContextRecents.checked,
+        // ── Context Engine V2 (RAG) — section dédiée ──
+        context_rag_enabled: chkContextRag ? chkContextRag.checked : false,
+        context_rag_endpoint: (inputRagEndpoint.value || "http://127.0.0.1:11434").trim(),
+        context_rag_model: (inputRagModel.value || "nomic-embed-text").trim(),
         // ── Diff Review (A4 V2) : porte pré-écriture ──
         confirm_file_edits: chkConfirmFileEdits.checked,
         // ── Mémoire de projet (H3) ──
@@ -518,6 +618,13 @@ export async function initSettings() {
     chkConfirmFileEdits.addEventListener("change", () => { confirmEditsChanged = true; });
   }
 
+  // H2 V1 : toggle de la visibilité des globs critiques selon le scope reviewer.
+  if (selectOrchReviewerScope && rowOrchReviewerPatterns) {
+    selectOrchReviewerScope.addEventListener("change", () => {
+      rowOrchReviewerPatterns.style.display = (selectOrchReviewerScope.value === "critical") ? "" : "none";
+    });
+  }
+
   // Définir / changer le mot de passe distant.
   btnWebSetPw.addEventListener("click", async () => {
     const pw = prompt("Définir le mot de passe d'accès distant :\n(vide = désactiver le serveur)");
@@ -659,4 +766,22 @@ export async function initSettings() {
   } catch (_) {
     applyTheme("dark");
   }
+
+  // Rafraîchir les selects de modèles quand le registre a été édité depuis
+  // l'onglet Fournisseurs (models-config.js). On repeuple uniquement si la
+  // modale est ouverte (currentConfig chargé).
+  window.addEventListener("pilot-models-changed", async () => {
+    if (!currentConfig) return;
+    try {
+      const models = await loadModelsList();
+      populateModelSelect(inputPdfMdModel, models, currentConfig.pdf_md_model || "");
+      populateModelSelect(inputOrchestratorModel, models, currentConfig.orchestrator_provider
+        ? `${currentConfig.orchestrator_provider}/${currentConfig.orchestrator_model_id}` : "");
+      populateModelSelect(inputCoderModel, models, currentConfig.coder_provider
+        ? `${currentConfig.coder_provider}/${currentConfig.coder_model_id}` : "");
+      const reviewerModelValue = currentConfig.orchestration_reviewer_provider
+        ? `${currentConfig.orchestration_reviewer_provider}/${currentConfig.orchestration_reviewer_model}` : "";
+      populateModelSelect(selectOrchReviewerModel, models, reviewerModelValue);
+    } catch (_) { /* ignore */ }
+  });
 }

@@ -114,9 +114,127 @@ Aucune nouvelle commande Rust lourde en V1 : on réutilise `read_file_content`,
 ## 6. Limites V1 / V2
 
 - V1 : heuristique, pas de scoring sémantique, pas de RAG.
-- V2 : embeddings locaux via pi, graphe de dépendances, scoring par similarité
+- V2 : embeddings locaux via Ollama, graphe de dépendances, scoring par similarité
   au prompt, budget dynamique selon le modèle (fenêtre de contexte).
 - V1 ne couvre pas Rust/C++ pour les imports (modules/CRATE complexes).
+
+---
+
+## 7. V2 — RAG local (embeddings Ollama)
+
+> Extension optionnelle du Context Engine : au lieu des règles heuristiques V1,
+> on encode le projet en vecteurs via un modèle d'embeddings local (Ollama) et
+> on sélectionne les chunks les plus pertinents par similarité cosinus au prompt.
+
+### 7.1 Principe
+
+1. **Build** : découpe le projet en chunks (≈60 lignes, overlap 10), encode chaque
+   chunk via Ollama (`/api/embeddings`), stocke les vecteurs dans SQLite
+   (`.pilot/context-index.db`).
+2. **Query** (au 1er prompt d'une session) : encode le prompt, recherche cosinus
+   sur l'index, top-K chunks dans le budget dynamique, injecte en préambule.
+3. **Incrémental lazy** : à chaque query, compare les mtime des fichiers indexés
+   vs disque → re-indexe uniquement les fichiers modifiés/supprimés/ajoutés. Pas
+   de watcher dédié (self-healing à la query).
+
+### 7.2 Configuration (AppConfig)
+
+| Champ | Type | Défaut | UI |
+|-------|------|--------|----|
+| `context_rag_enabled` | bool | `false` | checkbox « Activer le RAG (embeddings) » |
+| `context_rag_endpoint` | String | `http://127.0.0.1:11434` | texte « Adresse Ollama » |
+| `context_rag_model` | String | `nomic-embed-text` | texte « Modèle d'embeddings » |
+
+`context_engine_enabled` (V1) reste le master switch. Si `context_rag_enabled`
+est vrai **et** l'endpoint répond, on utilise le RAG ; sinon on retombe sur V1.
+
+### 7.3 Chunking
+
+- **Code** : blocs de 60 lignes, overlap 10 lignes (langage-agnostique).
+- **Markdown** : découpe par section (heading `#`/`##`…), fallback blocs 60 lignes.
+- Filtre : `node_modules/`, `target/`, `.git/`, `dist/`, binaires, images.
+- Extensions indexées : `.js .ts .mjs .jsx .tsx .py .md .rs .json .toml .css .html .go .java .c .cpp .h .yaml .yml .txt`.
+- Chaque chunk stocke : `path` (relatif), `start_line`, `end_line`, `content`, `file_hash` (SHA-256 du fichier), `mtime` (epoch).
+
+### 7.4 Stockage SQLite
+
+Base `.pilot/context-index.db` (un par projet), via `rusqlite` feature `bundled`
+(zéro dépendance système). Schéma :
+
+```sql
+CREATE TABLE chunks (
+  id INTEGER PRIMARY KEY,
+  path TEXT NOT NULL,        -- chemin relatif projet
+  start_line INTEGER NOT NULL,
+  end_line INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  file_hash TEXT NOT NULL,   -- SHA-256 du fichier source
+  mtime INTEGER NOT NULL,    -- mtime du fichier à l'indexation
+  embedding BLOB NOT NULL    -- vecteur f32[] sérialisé little-endian
+);
+CREATE INDEX idx_chunks_path ON chunks(path);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);  -- model, dim, built_at
+```
+
+Recherche : lecture de tous les `embedding` (BLOB → `Vec<f32>`), cosinus contre le
+vecteur du prompt, tri décroissant, top-K. Pour < 50k chunks : < 20ms.
+
+### 7.5 Build / Query (commandes Rust)
+
+```
+context_index_status(projectPath) -> { exists, chunks, model, built_at, ready }
+build_context_index(projectPath) -> { chunks, files, elapsed_ms }   // async, progress via event "context-index-progress"
+query_context_index(projectPath, prompt, budgetTokens) -> { context: string, chunks_used, source: "rag"|"v1-fallback" }
+```
+
+- `build_context_index` : scanne le projet (filtres), chunk + embed (batch
+  Ollama), insère en transaction. Envoie l'événement `context-index-progress`
+  `{ done, total }` pour la barre de progression frontend.
+- `query_context_index` : si index absent → build complet (puis query). Sinon :
+  refresh incrémental (mtime) → query cosinus → formatage préambule.
+- **Fallback** : si Ollama injoignable ou erreur → retourne `source: "v1-fallback"`
+  et le frontend utilise `buildProjectContext` V1.
+
+### 7.6 Budget dynamique
+
+Le frontend calcule le budget passé à `query_context_index` :
+`budget = floor(coderContextWindow * 0.15)` (défaut 8000 si fenêtre inconnue),
+borné [2000, 16000]. Le boost structurel (`AGENTS.md`, manifestes,
+`.pilot/context.md`) reste : ces fichiers sont toujours inclus en tête du
+préambule avant les chunks RAG.
+
+### 7.7 Flux au 1er prompt
+
+```
+1er prompt d'une session (RAG activé + Ollama dispo) :
+  1. invoke query_context_index(projectPath, promptText, budget)
+  2. si index absent → build en arrière-plan ; ce prompt → V1 heuristique
+  3. si index prêt → préambule RAG (boost structurel + top-K chunks)
+  4. injection === CONTEXTE PROJET (RAG) ===
+```
+
+Bouton 📑 « Contexte » : force un **rebuild complet** (supprime l'index puis
+`build_context_index`) si RAG activé ; sinon refresh V1.
+
+### 7.8 Architecture
+
+```
+src-tauri/src/context_engine.rs  (nouveau) :
+  chunk_file(path, content) -> Vec<Chunk>
+  embed_batch(endpoint, model, texts) -> Result<Vec<Vec<f32>>>   // reqwest
+  build_index(projectPath, endpoint, model) -> index SQLite
+  query_index(projectPath, prompt, budget) -> string
+  incremental_refresh(projectPath, endpoint, model) -> mtime diff
+  Tauri commands : context_index_status, build_context_index, query_context_index, context_rag_probe
+
+src-tauri/src/lib.rs            — 3 champs AppConfig + defaults + .manage(AppState) + register commands
+src/js/context-engine.js         — buildProjectContext V2 : si rag activé → invoke query_context_index
+src/js/agent-pi.js               — bouton 📑 → rebuild (RAG) ou refresh (V1)
+src/js/settings.js + index.html  — section « Context Engine V2 (RAG) »
+```
+
+Dépendances Rust ajoutées : `rusqlite = { version = "0.31", features = ["bundled"] }`,
+`reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }`.
 
 <!-- HELP:context-engine -->
 ## Context Engine (auto-contexte agent)
@@ -135,4 +253,12 @@ specs référencées, fichiers récemment édités — dans un budget de tokens 
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `AGENTS.md`.
+- **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
+  — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
+  le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».
+  Pilot indexe alors le projet en vecteurs et sélectionne les passages les plus
+  pertinents par similarité sémantique au prompt (plus précis que l'heuristique
+  V1). L'index SQLite est stocké dans `.pilot/context-index.db` et se met à jour
+  incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
+  retombe automatiquement sur V1.
 <!-- /HELP:context-engine -->

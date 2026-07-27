@@ -1,0 +1,18 @@
+name: 💬 Remarque
+description: Retour général, question, suggestion non structurée
+labels: ["remark"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Votre remarque
+      placeholder: "Écrivez votre remarque…"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version de Pilot utilisée
+      placeholder: "ex: v0.2.14"
+    validations:
+      required: false

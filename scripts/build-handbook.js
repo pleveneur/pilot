@@ -33,6 +33,8 @@ const SOURCES = [
   "spec_diff_review.md",
   "spec_project_memory.md",
   "spec_review.md",
+  "spec_orchestration_reviewer.md",
+  "spec_session_history.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 
