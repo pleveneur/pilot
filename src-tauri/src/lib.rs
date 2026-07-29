@@ -4579,6 +4579,16 @@ fn sync_tray(app: &AppHandle) {
 
 pub fn run() {
     tauri::Builder::default()
+        // Single-instance : si une 2e instance de Pilot est lancée, elle notifie
+        // la 1ʳᵉ (qui se restaure/focus) puis se ferme. Résout le conflit de port
+        // web-remote quand deux instances tournent en parallèle (issue #3).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

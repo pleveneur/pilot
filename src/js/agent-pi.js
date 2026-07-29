@@ -268,6 +268,13 @@ export async function createAgentPi(container) {
   // ── État interne ──
   const state = {
     isStreaming: false,
+    // ── Rafraîchissement des stats (tokens/contexte) pendant le streaming ──
+    // updateStats() n'était appelée qu'à agent_end/text_end → pendant une longue
+    // réflexion (thinking) la jauge de contexte n'était pas rafraîchie et l'user
+    // était surpris par les compactages (issue #2). On throttle le refresh pendant
+    // le streaming (max 1 fois / 3s, sans chevauchement d'appels).
+    statsRefreshPending: false,
+    lastStatsRefresh: 0,
     currentAssistantBlock: null,  // élément DOM du message assistant en cours de streaming
     currentTextBlock: null,       // sous-élément pour le texte
     currentThinkingBlock: null,   // sous-élément pour la pensée
@@ -4692,6 +4699,20 @@ async function loadModels(st, forceDefault = false) {
   }
 }
 
+// Rafraîchit les stats (tokens / contexte / coût) pendant le streaming, au plus
+// une fois toutes les 3 s et sans chevauchement d'appels (issue #2 : la jauge de
+// contexte n'était pas mise à jour pendant une longue réflexion, d'où des
+// compactages surprenants alors que l'affichage montrait un contexte faible).
+function maybeRefreshStats(state) {
+  if (!state.isStreaming) return;
+  if (state.statsRefreshPending) return;
+  const now = Date.now();
+  if (now - (state.lastStatsRefresh || 0) < 3000) return;
+  state.statsRefreshPending = true;
+  state.lastStatsRefresh = now;
+  updateStats().finally(() => { state.statsRefreshPending = false; });
+}
+
 async function updateStats() {
   const statsEl = document.getElementById("agent-stats");
   if (!statsEl) return;
@@ -4944,6 +4965,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     case "agent_start":
       state.isStreaming = true;
       state.lastStopReason = "";  // réinit pour la détection de troncation (length) à l'agent_end
+      // Issue #2 : forcer un rafraîchissement des stats dès le 1er delta du tour.
+      state.lastStatsRefresh = 0;
+      state.statsRefreshPending = false;
       // Sécurité : si une compaction a été interrompue sans compaction_end,
       // isCompacting pourrait être resté true → reset pour ne pas filtrer les
       // deltas du nouveau tour.
@@ -5355,6 +5379,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // sur compaction_end. On ignore donc tous les deltas pendant isCompacting.
       if (state.isCompacting) break;
 
+      // Issue #2 : rafraîchir la jauge de contexte/tokens pendant le streaming
+      // (couvre text_delta ET thinking_delta) pour ne plus être surpris par les
+      // compactages lors d'une longue réflexion.
+      maybeRefreshStats(state);
+
       switch (delta.type) {
         case "text_start":
           state.currentTextBlock = appendTextSection(state.currentAssistantBlock, "");
@@ -5649,6 +5678,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     }
 
     case "tool_execution_end": {
+      // Issue #2 : après un outil, le contexte utilisé a changé → rafraîchir.
+      maybeRefreshStats(state);
       // Reset timer d'inactivite orchestration (un outil vient de finir — le codeur
       // va probablement reprendre, ne pas timeout maintenant).
       if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused) {
