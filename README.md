@@ -239,7 +239,8 @@ chmod +x pilot_0.1.0_amd64.AppImage
 5. **Clic droit** sur un `.md` → menu « 👁️ Prévisualiser », « 📕 Exporter en PDF », « 📄 Exporter en HTML », « 📊 Prévisualiser le CSV » (si `.csv`).
 6. **Bouton 🖥️** → ouvre un terminal intégré dans le dossier du projet.
 7. **Bouton π** → ouvre l'onglet Agent Pi pour dialoguer avec l'IA.
-8. Les modifications faites par l'agent sont reflétées en temps réel dans l'éditeur.
+8. **Bouton 🎭 Agents** → lance une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur) qui collaborent séquentiellement sur une tâche. Chaque agent (y compris le coordinateur) se configure depuis l'onglet 🎭 lui-même (icône, rôle, modèle π/ℓ…).
+9. Les modifications faites par l'agent sont reflétées en temps réel dans l'éditeur.
 
 ### Raccourcis clavier
 
@@ -355,7 +356,7 @@ pilot/
 | Couche | Technologie |
 |---|---|
 | **Runtime** | [Tauri v2](https://v2.tauri.app) (Rust) |
-| **Backend** | Rust — `notify` (file watching), `portable-pty` (terminal), `pulldown-cmark` (Markdown), `serde`/`serde_json` (config) |
+| **Backend** | Rust — poller custom (file watching), `portable-pty` (terminal), `pulldown-cmark` (Markdown), `serde`/`serde_json` (config) |
 | **Frontend** | HTML5, CSS3, JavaScript ES Modules |
 | **Bundler** | [Vite](https://vitejs.dev) |
 | **Éditeur** | [CodeMirror 6](https://codemirror.net) |
@@ -417,9 +418,9 @@ pilot/
 
 | OS | Shell terminal intégré | File watcher |
 |---|---|---|
-| **Windows** | `cmd.exe` (ConPTY) | PollWatcher |
-| **macOS** | `$SHELL` ou `/bin/zsh` | PollWatcher |
-| **Linux** | `$SHELL` ou `/bin/bash` | PollWatcher |
+| **Windows** | `cmd.exe` (ConPTY) | Poll custom (walk filtré) |
+| **macOS** | `$SHELL` ou `/bin/zsh` | Poll custom (walk filtré) |
+| **Linux** | `$SHELL` ou `/bin/bash` | Poll custom (walk filtré) |
 
 ---
 

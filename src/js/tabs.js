@@ -21,6 +21,7 @@ import { toastError } from "./toast.js";
 import { createPromptBuilder } from "./prompt-builder.js";
 import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
+import { createAgents } from "./agents-ui.js";
 import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 
@@ -161,6 +162,12 @@ class TabsManager {
     // Onglet Feedback (💬) — spec_feedback.md : remarques/évolutions utilisateurs.
     if (mode === "feedback") {
       await this._openFeedback(path || "Feedback");
+      return;
+    }
+
+    // Onglet Agents (🎭) — spec_gestion_agents.md : équipe d'agents multi-rôles.
+    if (mode === "agents") {
+      await this._openAgents(path || "Agents");
       return;
     }
 
@@ -515,6 +522,43 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">💬</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Feedback</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Agents (🎭) — gestion d'agents multi-rôles (spec_gestion_agents.md).
+   */
+  async _openAgents(label = "Agents") {
+    const existing = this.tabs.find((t) => t.mode === "agents");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "agents");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper agents-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const result = await createAgents(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenAgents = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Agents:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🎭</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Agents</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -918,6 +962,12 @@ class TabsManager {
       tab.unlistenFeedback();
       tab.unlistenFeedback = null;
     }
+    // Nettoyage onglet Agents (🎭) — spec_gestion_agents.md
+    if (tab.mode === "agents" && tab.unlistenAgents) {
+      tab.unlistenAgents();
+      tab.unlistenAgents = null;
+      invoke("stop_all_agent_processes").catch(() => {});
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -1005,6 +1055,12 @@ class TabsManager {
     if (tab.mode === "feedback" && tab.unlistenFeedback) {
       tab.unlistenFeedback();
       tab.unlistenFeedback = null;
+    }
+    // Nettoyage onglet Agents (🎭) — spec_gestion_agents.md
+    if (tab.mode === "agents" && tab.unlistenAgents) {
+      tab.unlistenAgents();
+      tab.unlistenAgents = null;
+      invoke("stop_all_agent_processes").catch(() => {});
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();

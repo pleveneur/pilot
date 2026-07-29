@@ -12,7 +12,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### A. Barre Latérale
 
 - **Sélecteur de projet** : bouton "Projets" avec dropdown (📁 Nouveau + 10 récents). Dossier = "Projet de l'Agent IA".
-- **Arborescence** : tree view sans dossier racine, flèches ▶/▼, mise à jour temps réel (notify). Les dossiers lourds/non pertinents (`node_modules`, `.git`, `target`, `dist`, `build`, `vendor`, `bundle`, caches IDE/CI…) sont ignorés à la lecture **et** par le watcher (source unique `IGNORED_DIRS` dans `lib.rs`) pour éviter l'explosion mémoire sur les gros projets. Drag & drop externe.
+- **Arborescence** : tree view sans dossier racine, flèches ▶/▼, mise à jour temps réel (poller custom). Les dossiers lourds/non pertinents (`node_modules`, `.git`, `target`, `dist`, `build`, `vendor`, `bundle`, caches IDE/CI…) sont ignorés à la lecture **et** par le watcher (source unique `IGNORED_DIRS` dans `lib.rs`) pour éviter l'explosion mémoire sur les gros projets. Drag & drop externe.
 - **Filtre** : champ texte pour filtrer par nom, `Ctrl+P` pour focus.
 - **Favoris** : section « ⭐ Favoris » en haut de l'arborescence, collapsible. Clic droit → Ajouter/Retirer des favoris. `Ctrl+Shift+B` pour le fichier actif. Persistance dans la config.
 - **Menu contextuel** :
@@ -38,6 +38,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 | Terminal intégré | — | 🖥️ | xterm.js + PTY |
 | Agent Pi | — | π | RPC (voir `spec_rpc.md`) |
 | Prompt Builder | — | 🧩 | Clic-droit → Ajouter + templates + envoi à Agent Pi |
+| Agents multi-rôles | — | 🎭 | Coordinateur + agents spécialisés, protocole `[[CALL:…]]` séquentiel (voir [`spec_gestion_agents.md`](spec_gestion_agents.md)) |
 
 - **Raccourcis Markdown** : `Ctrl+B` gras, `Ctrl+I` italique, `Ctrl+K` lien, `Ctrl+Shift+E` split view.
 - **Recherche globale** : `Ctrl+Shift+F` ouvre un panneau de recherche full-text dans tous les fichiers du projet (regex + filtre par extension).
@@ -62,6 +63,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - 📂 **Explorateur** : ouvre le dossier projet dans l'explorateur OS.
 - 🖥️ **Terminal** : intégré (xterm.js) ou externe selon paramètre.
 - π **Agent Pi** : ouvre l'onglet agent (si RPC activé).
+- 🎭 **Agents** : équipe d'agents multi-rôles (coordinateur, architecte, codeur, reviewer, testeur, documenteur) si le mode est activé dans les paramètres. Voir [`spec_gestion_agents.md`](spec_gestion_agents.md).
 - 💬 **Feedback** : ouvre l'onglet de remarques/évolutions (formulaire GitHub/email + lecture des issues, voir [`spec_feedback.md`](spec_feedback.md)). Accessible sans projet ouvert.
 
 ### D. Titre de fenêtre
@@ -78,7 +80,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ## 2. Spécifications Techniques
 
 ### File Watching
-- Crate `notify` (PollWatcher, polling 2s) → événements Tauri `file-change`.
+- File watcher : poller custom (`std::fs::read_dir` récursif, filtrage `IGNORED_DIRS` pendant le walk, polling 2 s) → événements Tauri `file-change`. Remplace l'ancien `notify::PollWatcher` qui re-scanne récursivement tout le projet (y compris `target/`, `node_modules/`) à chaque poll et figeait l'UI sur les gros projets Rust.
 - Debounce 500ms + déduplication côté backend et frontend.
 
 ### PTY (Terminal intégré)
@@ -144,6 +146,6 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 
 | OS | Shell PTY | Watcher |
 |---|---|---|
-| Windows | `cmd.exe` (ConPTY) | PollWatcher |
-| macOS | `$SHELL` ou `/bin/zsh` | PollWatcher |
-| Linux | `$SHELL` ou `/bin/bash` | PollWatcher |
+| Windows | `cmd.exe` (ConPTY) | Poll custom (walk filtré) |
+| macOS | `$SHELL` ou `/bin/zsh` | Poll custom (walk filtré) |
+| Linux | `$SHELL` ou `/bin/bash` | Poll custom (walk filtré) |

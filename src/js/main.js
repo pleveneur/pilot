@@ -404,6 +404,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Prompt Builder", "prompt-builder");
   });
 
+  // 🎭 Agents : équipe d'agents multi-rôles (spec_gestion_agents.md, H2 V2).
+  document.getElementById("btn-agents").addEventListener("click", () => {
+    tabs.openFile("Agents", "agents");
+  });
+
   document.getElementById("btn-scratchpad").addEventListener("click", () => {
     tabs._openScratchpad();
   });

@@ -64,6 +64,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
+| Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -78,7 +79,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Icônes | Lucide (SVG inline, package `lucide`) |
 | Éditeur | CodeMirror 6 |
 | Rendu Markdown | markdown-it |
-| File Watching | crate `notify` (PollWatcher) |
+| File Watching | Poller custom Rust (`read_dir` filtré, 2 s) |
 | Terminal intégré | `portable-pty` (Rust) + `xterm.js` |
 | Prévisualisation PDF | PDF.js |
 | Dialogue natif | `tauri-plugin-dialog` |

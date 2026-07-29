@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history -->
+<!-- PILOT-HELP generated=2026-07-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -420,3 +420,30 @@ session.
 - **Confidentialité** : l'index est local (`.pilot/sessions.jsonl`), jamais
   envoyé au cloud ni au web distant. Il contient vos prompts : ajoutez
   `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.
+
+---
+
+## Aide utilisateur — Mode Agents
+
+L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur) sur une demande.
+
+### Comment ça marche
+1. Cliquez sur **🎭 Agents** dans le panneau d'actions (bouton visible dès qu'un projet est ouvert).
+2. Saisissez votre demande dans le chat ; le **coordinateur** la reçoit.
+3. Le coordinateur délègue chaque sous-tâche à l'agent adapté via `[[CALL:agent_id]]`.
+4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
+5. Le coordinateur synthétise la réponse finale.
+
+### Gérer les agents
+- Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
+- Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
+- Le bouton **Réinitialiser** recrée les 6 agents par défaut.
+
+### Garde-fous
+- Profondeur max d'appel, budget total et par agent, détection de cycle, timeout d'inactivité, bouton **⏹ Arrêter**.
+- Les agents marqués **lecture seule** ont une consigne stricte dans leur rôle ; ils ne doivent pas modifier de fichiers.
+
+### Conseils
+- Le modèle du coordinateur doit être puissant (cloud) pour bien router les tâches.
+- Le codeur et le testeur peuvent utiliser un modèle local plus léger.
+- Si une run dérape, cliquez sur **Arrêter** : tous les processus agents seront stoppés.

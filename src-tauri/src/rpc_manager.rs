@@ -31,7 +31,9 @@ pub struct RpcSession {
 /// `event_channel` : nom du canal Tauri sur lequel émettre les événements
 /// ("rpc-event" pour la session principale, "rpc-event-reviewer" pour le
 /// reviewer H2 V1 — canal séparé pour ne pas polluer handleRpcEvent).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str) -> Result<RpcSession, String> {
+/// `agent_id` : si Some, chaque événement est enveloppé dans
+/// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -88,13 +90,14 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
         Arc::new(Mutex::new(HashMap::new()));
     let pending_clone = pending.clone();
     let app_clone = app_handle.clone();
+    let agent_id_owned = agent_id.map(|s| s.to_string());
 
     // Thread de lecture stdout
     let app_exit = app_handle.clone();
     let running_exit = running.clone();
     let channel_stdout = event_channel.to_string();
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout);
+        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref());
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
         // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
         // pour un changement de projet distant) n'émet rien → le desktop
@@ -200,6 +203,7 @@ fn read_jsonl_loop(
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     event_tx: tokio::sync::broadcast::Sender<Value>,
     event_channel: &str,
+    agent_id: Option<&str>,
 ) {
     let mut buffer = String::new();
     let mut buf = [0u8; 4096];
@@ -247,7 +251,12 @@ fn read_jsonl_loop(
                             }
 
                             // Émettre l'événement vers le frontend pour tout le reste
-                            app_handle.emit(event_channel, &value).ok();
+                            let emit_value = if let Some(id) = agent_id {
+                                serde_json::json!({"agent_id": id, "event": value})
+                            } else {
+                                value.clone()
+                            };
+                            app_handle.emit(event_channel, &emit_value).ok();
                             // Fan-out parallèle vers les WebSockets distants (décision 13.3).
                             // Sender::send n'est pas async → appel valide depuis ce thread std.
                             // Une erreur (pas de receiver / lent) est ignorée : le client web

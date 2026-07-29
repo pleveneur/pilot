@@ -1,4 +1,3 @@
-use notify::{Config, EventKind, RecursiveMode, Watcher};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use pulldown_cmark::Parser;
 use serde::{Deserialize, Serialize};
@@ -33,17 +32,6 @@ const IGNORED_DIRS: &[&str] = &[
     ".next", ".nuxt", ".cache", ".vs", "vendor", "bundle",
 ];
 
-/// Renvoie `true` si l'un des composants du chemin est un dossier ignoré
-/// (voir `IGNORED_DIRS`). Utilisé pour filtrer les events du watcher.
-fn path_has_ignored_component(p: &std::path::Path) -> bool {
-    p.components().any(|c| match c {
-        std::path::Component::Normal(name) => {
-            IGNORED_DIRS.contains(&name.to_string_lossy().as_ref())
-        }
-        _ => false,
-    })
-}
-
 mod help;
 mod review;
 mod rpc_manager;
@@ -72,6 +60,9 @@ struct AppState {
     /// H2 V1 : session reviewer dédiée (pi --no-session, contexte vierge). Lancée
     /// lazy au 1er besoin de review, recyclée via new_session. Canal séparé.
     rpc_reviewer: Mutex<Option<rpc_manager::RpcSession>>,
+    /// H2 V2 : sessions des agents spécialisés (id -> RpcSession). Généralisation
+    /// du reviewer ; canal commun rpc-event-agents avec enveloppe agent_id.
+    agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>,
     /// Canal de fan-out des événements RPC vers les WebSockets distants (décision 13.3).
     event_tx: tokio::sync::broadcast::Sender<Value>,
     /// Authentification distante partagée (sessions en mémoire). Permet au desktop
@@ -266,6 +257,16 @@ struct AppConfig {
     // d'un projet Pilot-like (backend Rust, config, specs, AGENTS).
     #[serde(default = "default_reviewer_critical_patterns")]
     orchestration_reviewer_critical_patterns: Vec<String>,
+    // ── Gestion d'agents multi-rôles (H2 V2, spec_gestion_agents.md) ──
+    // Garde-fous du bus d'agents.
+    #[serde(default = "default_agent_max_call_depth")]
+    agent_max_call_depth: u32,
+    #[serde(default = "default_agent_max_total_calls")]
+    agent_max_total_calls: u32,
+    #[serde(default = "default_agent_timeout_ms")]
+    agent_timeout_ms: u32,
+    #[serde(default = "default_agent_max_result_tokens")]
+    agent_max_result_tokens: u32,
 }
 
 fn default_true() -> bool { true }
@@ -285,6 +286,10 @@ fn default_test_timeout_ms() -> u32 { 60000 }
 fn default_test_max_corrections() -> u32 { 3 }
 fn default_test_scope() -> String { "targeted".to_string() }
 fn default_reviewer_scope() -> String { "all".to_string() }
+fn default_agent_max_call_depth() -> u32 { 3 }
+fn default_agent_max_total_calls() -> u32 { 30 }
+fn default_agent_timeout_ms() -> u32 { 120000 }
+fn default_agent_max_result_tokens() -> u32 { 4000 }
 fn default_reviewer_critical_patterns() -> Vec<String> {
     vec![
         "src-tauri/src/**/*.rs".to_string(),
@@ -384,6 +389,11 @@ impl Default for AppConfig {
             orchestration_reviewer_model: String::new(),
             orchestration_reviewer_scope: default_reviewer_scope(),
             orchestration_reviewer_critical_patterns: default_reviewer_critical_patterns(),
+            // ── Gestion d'agents multi-rôles (H2 V2) ──
+            agent_max_call_depth: default_agent_max_call_depth(),
+            agent_max_total_calls: default_agent_max_total_calls(),
+            agent_timeout_ms: default_agent_timeout_ms(),
+            agent_max_result_tokens: default_agent_max_result_tokens(),
         }
     }
 }
@@ -499,91 +509,77 @@ fn start_watching(app: &AppHandle, path: &str, state: &State<AppState>) -> Resul
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    // PollWatcher : ne pose pas de verrous OS sur les dossiers → pas de conflit avec rename
-    let poll_config = Config::default()
-        .with_poll_interval(std::time::Duration::from_secs(2));
-
-    let mut watcher = notify::PollWatcher::new(
-        move |res: Result<notify::Event, _>| {
-            if let Ok(event) = res {
-                // Filtrer les events touchant un dossier ignoré (node_modules,
-                // .git, target, …) pour éviter de déclencher en boucle des
-                // rebuilds de l'arbre côté frontend (ces dossiers changent
-                // constamment et contiennent des milliers de fichiers).
-                if event.paths.iter().all(|p| path_has_ignored_component(p)) {
-                    return;
-                }
-                tx.send(event).ok();
-            }
-        },
-        poll_config,
-    )
-    .map_err(|e| format!("Erreur création watcher: {}", e))?;
-
-    watcher
-        .watch(&path_buf, RecursiveMode::Recursive)
-        .map_err(|e| format!("Erreur surveillance: {}", e))?;
-
+    // Poller custom (et non notify::PollWatcher) : le PollWatcher de `notify`
+    // re-scanne récursivement TOUT le projet à chaque poll — y compris les
+    // dossiers ignorés (target/, node_modules/, .git/…) — car son filtrage
+    // IGNORED ne s'applique qu'aux *events*, pas au *scan*. Sur un projet
+    // comportant un gros `target/` (ex: 17 Go de build Rust), ce scan toutes
+    // les 2 s saturait le disque et figeait brièvement l'UI (sablier régulier).
+    // Notre poller walk avec filtrage IGNORED_DIRS *pendant* le parcours → ne
+    // descend jamais dans ces dossiers → coût O(fichiers source) au lieu de
+    // O(total disque). Comportement « poll » conservé : pas de verrou OS, pas
+    // de conflit avec rename.
     let handle = std::thread::spawn(move || {
+        // État précédent : path -> (mtime_ms, size). Inclut fichiers ET
+        // dossiers (la mtime d'un dossier change quand son contenu direct
+        // change). Initialisé sans émettre d'events : sinon l'ouverture du
+        // projet déclencherait un rebuild immédiat de l'arbre côté frontend.
+        let mut prev: HashMap<String, (u64, u64)> = HashMap::new();
+        walk_filtered(&path_buf, &mut prev);
+
         // Buffer pour regrouper les événements (debounce ~500ms)
-        let mut pending: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut pending: HashMap<String, String> = HashMap::new();
         let debounce = std::time::Duration::from_millis(500);
+        let poll_interval = std::time::Duration::from_secs(2);
         let mut last_flush = std::time::Instant::now();
+        let mut last_poll = std::time::Instant::now();
 
         loop {
-            match rx.recv_timeout(std::time::Duration::from_millis(200)) {
-                Ok(event) => {
-                    if !running_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let kind = match event.kind {
-                        EventKind::Create(_) => "create",
-                        EventKind::Modify(_) => "modify",
-                        EventKind::Remove(_) => "remove",
-                        _ => continue,
-                    };
-                    // Priorité : remove > create > modify (pour le même fichier)
-                    for p in event.paths {
-                        let key = p.to_string_lossy().to_string();
-                        let existing = pending.get(&key);
-                        let new_kind = match (existing.map(|s| s.as_str()), kind) {
-                            // Si on reçoit remove après create → supprimer
-                            (Some("create"), "remove") => "remove",
-                            // Garder la première valeur sinon
-                            (Some(_), _) => continue,
-                            _ => kind,
-                        };
-                        pending.insert(key, new_kind.to_string());
-                    }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if !running_clone.load(Ordering::Relaxed) {
+                break;
+            }
+            // Flusher les events en attente si le debounce est écoulé
+            if !pending.is_empty() && last_flush.elapsed() >= debounce {
+                flush_pending(&app, &pending);
+                pending.clear();
+                last_flush = std::time::Instant::now();
+            }
+            // Ne scanner qu'une fois par `poll_interval`
+            if last_poll.elapsed() < poll_interval {
+                continue;
+            }
+            last_poll = std::time::Instant::now();
 
-                    // Flusher si le debounce est écoulé
-                    if last_flush.elapsed() >= debounce {
-                        flush_pending(&app, &pending);
-                        pending.clear();
-                        last_flush = std::time::Instant::now();
-                    }
+            let mut curr: HashMap<String, (u64, u64)> = HashMap::new();
+            walk_filtered(&path_buf, &mut curr);
+
+            // Diff : create / modify / remove (priorité remove > create > modify)
+            for (key, (mtime, size)) in &curr {
+                let kind = match prev.get(key) {
+                    None => "create",
+                    Some((pm, ps)) if pm != mtime || ps != size => "modify",
+                    _ => continue,
+                };
+                insert_pending(&mut pending, key.clone(), kind);
+            }
+            for key in prev.keys() {
+                if !curr.contains_key(key) {
+                    insert_pending(&mut pending, key.clone(), "remove");
                 }
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if !running_clone.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    // Flusher les événements en attente après le timeout
-                    if !pending.is_empty() && last_flush.elapsed() >= debounce {
-                        flush_pending(&app, &pending);
-                        pending.clear();
-                        last_flush = std::time::Instant::now();
-                    }
-                }
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            prev = curr;
+
+            if !pending.is_empty() && last_flush.elapsed() >= debounce {
+                flush_pending(&app, &pending);
+                pending.clear();
+                last_flush = std::time::Instant::now();
             }
         }
         // Flusher ce qui reste avant de quitter
         if !pending.is_empty() {
             flush_pending(&app, &pending);
         }
-        drop(watcher);
     });
 
     *state.watch_state.lock().unwrap() = Some((running, handle));
@@ -591,7 +587,7 @@ fn start_watching(app: &AppHandle, path: &str, state: &State<AppState>) -> Resul
 }
 
 /// Émet les événements en attente vers le frontend
-fn flush_pending(app: &AppHandle, pending: &std::collections::HashMap<String, String>) {
+fn flush_pending(app: &AppHandle, pending: &HashMap<String, String>) {
     for (path, kind) in pending {
         let payload = serde_json::json!({
             "path": path,
@@ -599,6 +595,55 @@ fn flush_pending(app: &AppHandle, pending: &std::collections::HashMap<String, St
         });
         app.emit("file-change", &payload).ok();
     }
+}
+
+/// Walk récursif filtré : ne descend pas dans les dossiers listés dans
+/// `IGNORED_DIRS` (node_modules, target, .git, …). Remplit `out` avec
+/// path -> (mtime_ms, size) pour fichiers ET dossiers.
+fn walk_filtered(dir: &std::path::Path, out: &mut HashMap<String, (u64, u64)>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_dir = path.is_dir();
+        // Ne pas descendre dans les dossiers ignorés
+        if is_dir {
+            if let Some(name) = path.file_name() {
+                if IGNORED_DIRS.contains(&name.to_string_lossy().as_ref()) {
+                    continue;
+                }
+            }
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        out.insert(path.to_string_lossy().to_string(), (mtime, meta.len()));
+        if is_dir {
+            walk_filtered(&path, out);
+        }
+    }
+}
+
+/// Insère un event dans `pending` avec la priorité : remove > create > modify.
+/// (Si on reçoit remove après create → le fichier n'existe plus au final →
+/// « remove » ; sinon on garde la première valeur rencontrée pour le batch.)
+fn insert_pending(pending: &mut HashMap<String, String>, key: String, kind: &str) {
+    let existing = pending.get(&key).map(|s| s.as_str());
+    let new_kind = match (existing, kind) {
+        (Some("create"), "remove") => "remove",
+        (Some(_), _) => return, // garder la première valeur
+        _ => kind,
+    };
+    pending.insert(key, new_kind.to_string());
 }
 
 fn stop_watcher(state: &State<AppState>) {
@@ -888,7 +933,7 @@ fn pi_health_check(state: State<AppState>) -> Result<PiHealth, String> {
         });
     }
     use std::time::Duration;
-    let out = run_captured(&pi_path, &["--version"], Duration::from_secs(3));
+    let out = run_captured(&pi_path, &["--version"], Duration::from_secs(10));
     if out.trim().is_empty() {
         return Ok(PiHealth {
             ok: false,
@@ -1324,6 +1369,8 @@ fn close_project(state: State<AppState>, app: AppHandle) -> Result<(), String> {
             rpc_manager::stop_session(&mut session);
         }
     }
+    // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
+    do_stop_all_agent_processes(&state);
     *state.project_path.lock().unwrap() = None;
     // Réinitialiser le titre de la fenêtre
     if let Some(window) = app.get_webview_window("main") {
@@ -1446,10 +1493,10 @@ fn probe_extension_support(state: &AppState, pi_path: &str) -> bool {
 /// Exécute `<pi_path> --version`, capture stdout, et déduit le genre.
 /// - "pi"  : sortie commençant par un numéro de version (ex: "0.80.10")
 /// - "plh" : sortie commençant par "plh" (ex: "plh 0.1.0")
-/// - "unknown" sinon. Timeout ~3s.
+/// - "unknown" sinon. Timeout ~10s.
 fn run_version_probe(pi_path: &str) -> String {
     use std::time::Duration;
-    let out = run_captured(pi_path, &["--version"], Duration::from_secs(3));
+    let out = run_captured(pi_path, &["--version"], Duration::from_secs(10));
     kind_from_version_output(&out)
 }
 
@@ -1466,10 +1513,10 @@ fn kind_from_version_output(out: &str) -> String {
 }
 
 /// Exécute `<pi_path> --help`, capture stdout, et vérifie si `--extension`
-/// apparaît dans la sortie. Timeout ~3s (kill si dépassé).
+/// apparaît dans la sortie. Timeout ~10s (kill si dépassé).
 fn run_help_probe(pi_path: &str) -> bool {
     use std::time::Duration;
-    let out = run_captured(pi_path, &["--help"], Duration::from_secs(3));
+    let out = run_captured(pi_path, &["--help"], Duration::from_secs(10));
     out.contains("--extension")
 }
 
@@ -1593,7 +1640,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
     };
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(), "rpc-event",
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(), "rpc-event", None,
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -1931,7 +1978,7 @@ pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Re
     }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, None, app.clone(), state.event_tx.clone(), "rpc-event-reviewer",
+        &cwd, &pi_path, true, "", None, None, app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None,
     )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
     *rpc = Some(session);
@@ -2014,6 +2061,292 @@ fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
         .ok_or("Aucune session reviewer active")?;
     let cmd = serde_json::json!({ "type": "get_state" });
     rpc_manager::send_command_sync_timeout(session, cmd, 8)
+}
+
+// ── Gestion d'agents multi-rôles (H2 V2, spec_gestion_agents.md) ─────────────
+// Bus de sessions agents : HashMap<String, RpcSession>. Canal rpc-event-agents
+// avec enveloppe {agent_id, event}. Les sous-agents sont lazy, jetables
+// (new_session avant chaque appel sauf keep_context), et arrêtés proprement.
+
+/// Résout le dossier utilisateur global de Pilot : ~/.pilot (cross-platform).
+fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+    Ok(std::path::PathBuf::from(home).join(".pilot"))
+}
+
+fn agents_registry_path() -> Result<std::path::PathBuf, String> {
+    Ok(pilot_user_dir()?.join("agents.json"))
+}
+
+fn build_default_agent_registry(config: &AppConfig) -> Value {
+    let orch = if !config.orchestrator_provider.is_empty() && !config.orchestrator_model_id.is_empty() {
+        format!("{}/{}", config.orchestrator_provider, config.orchestrator_model_id)
+    } else {
+        String::new()
+    };
+    let coder = if !config.coder_provider.is_empty() && !config.coder_model_id.is_empty() {
+        format!("{}/{}", config.coder_provider, config.coder_model_id)
+    } else {
+        String::new()
+    };
+    let models_orch = serde_json::json!({ "pi": orch, "plh": orch });
+    let models_coder = serde_json::json!({ "pi": coder, "plh": coder });
+    serde_json::json!({
+        "version": 1,
+        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "agents": [
+            {
+                "id": "coordinateur",
+                "name": "Coordinateur",
+                "icon": "🧠",
+                "description": "Pilote l'équipe d'agents, comprend la demande utilisateur et route les tâches.",
+                "role": "Tu es le chef d'orchestre d'une équipe d'agents de codage. Tu ne codes pas toi-même. Tu délègues chaque sous-tâche à l'agent spécialisé adapté via [[CALL:agent_id]] ... Tu synthétises les résultats et réponds à l'utilisateur.",
+                "models": models_orch.clone(),
+                "capabilities": ["delegate", "synthesize"],
+                "readonly": false,
+                "keep_context": true,
+                "max_calls_per_run": 20,
+                "call_depth": 0
+            },
+            {
+                "id": "architecte",
+                "name": "Architecte",
+                "icon": "🏗️",
+                "description": "Conçoit l'architecture et découpe le travail en petites tâches techniques.",
+                "role": "Tu es un architecte logiciel. Tu proposes une architecture concise, des fichiers concernés et un découpage. Tu ne modifies jamais le code. Tu réponds uniquement par DONE: ...",
+                "models": models_orch.clone(),
+                "capabilities": ["design"],
+                "readonly": true,
+                "keep_context": false,
+                "max_calls_per_run": 5,
+                "call_depth": 1
+            },
+            {
+                "id": "codeur",
+                "name": "Codeur",
+                "icon": "🔨",
+                "description": "Écrit et modifie le code du projet.",
+                "role": "Tu es un développeur. Tu exécutes la micro-tâche reçue. Tu lis les fichiers avec les outils à ta disposition. Tu modifies UNIQUEMENT les fichiers nécessaires. Termine par DONE: <résumé>.",
+                "models": models_coder.clone(),
+                "capabilities": ["write", "edit"],
+                "readonly": false,
+                "keep_context": false,
+                "max_calls_per_run": 10,
+                "call_depth": 1
+            },
+            {
+                "id": "reviewer",
+                "name": "Reviewer",
+                "icon": "🔍",
+                "description": "Relit les modifications pour détecter régressions et bugs.",
+                "role": "Tu es un reviewer indépendant. Tu ne modifies rien. Tu relis le code et réponds APPROVED: ... ou CHANGES_REQUESTED: ...",
+                "models": models_orch.clone(),
+                "capabilities": ["review"],
+                "readonly": true,
+                "keep_context": false,
+                "max_calls_per_run": 5,
+                "call_depth": 1
+            },
+            {
+                "id": "testeur",
+                "name": "Testeur",
+                "icon": "🧪",
+                "description": "Écrit et exécute les tests.",
+                "role": "Tu écris des tests couvrant la fonctionnalité demandée. Tu utilises le runner du projet. Tu ne modifies pas le code métier. Termine par DONE: ... ou NEED_HELP: ...",
+                "models": models_coder.clone(),
+                "capabilities": ["test"],
+                "readonly": false,
+                "keep_context": false,
+                "max_calls_per_run": 5,
+                "call_depth": 1
+            },
+            {
+                "id": "documenteur",
+                "name": "Documenteur",
+                "icon": "📝",
+                "description": "Rédige la documentation et les commentaires.",
+                "role": "Tu rédiges la documentation utilisateur ou technique demandée. Tu ne modifies pas le code fonctionnel. Termine par DONE: ...",
+                "models": models_coder.clone(),
+                "capabilities": ["doc"],
+                "readonly": true,
+                "keep_context": false,
+                "max_calls_per_run": 5,
+                "call_depth": 1
+            }
+        ]
+    })
+}
+
+#[tauri::command]
+fn load_agent_registry(state: State<AppState>) -> Result<Value, String> {
+    let path = agents_registry_path()?;
+    if !path.exists() {
+        let config = state.config.lock().unwrap().clone();
+        let default = build_default_agent_registry(&config);
+        let dir = path.parent().ok_or("Chemin agents.json invalide")?;
+        fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
+        let json = serde_json::to_string_pretty(&default)
+            .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
+        fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))?;
+        return Ok(default);
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("Erreur lecture agents.json: {}", e))?;
+    serde_json::from_str(&content).map_err(|e| format!("JSON invalide dans agents.json: {}", e))
+}
+
+#[tauri::command]
+fn save_agent_registry(registry: Value) -> Result<(), String> {
+    let path = agents_registry_path()?;
+    let dir = path.parent().ok_or("Chemin agents.json invalide")?;
+    fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
+    let backup = path.with_extension("json.bak");
+    if path.exists() {
+        let _ = fs::copy(&path, &backup);
+    }
+    let mut with_meta = registry.clone();
+    with_meta["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let json = serde_json::to_string_pretty(&with_meta)
+        .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))
+}
+
+pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    if sessions.contains_key(&agent_id) {
+        return Ok(()); // idempotent
+    }
+    let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
+        cfg_path.with_file_name("agent").join("sessions").join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
+    } else {
+        pilot_user_dir()?.join("agent").join("sessions").join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
+    };
+    let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
+    let session = rpc_manager::spawn_and_start(
+        &cwd, &pi_path, no_session, &session_dir_str, None, None, app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id),
+    ).map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
+    sessions.insert(agent_id, session);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_agent_process(state: State<AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
+    do_start_agent_process(state.inner(), &app, agent_id, cwd, pi_path, no_session)
+}
+
+pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String) {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    if let Some(mut session) = sessions.remove(&agent_id) {
+        rpc_manager::stop_session(&mut session);
+    }
+}
+
+#[tauri::command]
+fn stop_agent_process(state: State<AppState>, agent_id: String) -> Result<(), String> {
+    do_stop_agent_process(state.inner(), agent_id);
+    Ok(())
+}
+
+pub(crate) fn do_stop_all_agent_processes(state: &AppState) {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    for (_, mut session) in sessions.drain() {
+        rpc_manager::stop_session(&mut session);
+    }
+}
+
+#[tauri::command]
+fn stop_all_agent_processes(state: State<AppState>) -> Result<(), String> {
+    do_stop_all_agent_processes(state.inner());
+    Ok(())
+}
+
+pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let cmd = serde_json::json!({ "type": "prompt", "message": message });
+    rpc_manager::send_command(session, &cmd)
+}
+
+#[tauri::command]
+fn send_agent_process_prompt(state: State<AppState>, agent_id: String, message: String) -> Result<(), String> {
+    do_send_agent_process_prompt(state.inner(), agent_id, message)
+}
+
+pub(crate) fn do_new_agent_process_session(state: &AppState, agent_id: String) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let cmd = serde_json::json!({"type": "new_session"});
+    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+}
+
+#[tauri::command]
+fn new_agent_process_session(state: State<AppState>, agent_id: String) -> Result<(), String> {
+    do_new_agent_process_session(state.inner(), agent_id)
+}
+
+pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, provider: String, model_id: String) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
+    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
+        let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_model a échoué").to_string();
+        return Err(format!("pi a refusé set_model (agent {}) : {}", agent_id, err));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_agent_process_model(state: State<AppState>, agent_id: String, provider: String, model_id: String) -> Result<(), String> {
+    do_set_agent_process_model(state.inner(), agent_id, provider, model_id)
+}
+
+pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    rpc_manager::send_command(session, &serde_json::json!({"type": "abort"}))
+}
+
+#[tauri::command]
+fn abort_agent_process(state: State<AppState>, agent_id: String) -> Result<(), String> {
+    do_abort_agent_process(state.inner(), agent_id)
+}
+
+/// Envoie une commande arbitraire (ex: extension_ui_response) au processus pi d'un agent.
+pub(crate) fn do_send_agent_process_command(state: &AppState, agent_id: String, command: Value) -> Result<(), String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    rpc_manager::send_command(session, &command)
+}
+
+#[tauri::command]
+fn send_agent_process_command(state: State<AppState>, agent_id: String, command: Value) -> Result<(), String> {
+    do_send_agent_process_command(state.inner(), agent_id, command)
+}
+
+pub(crate) fn do_get_agent_process_state(state: &AppState, agent_id: String) -> Result<Value, String> {
+    let mut sessions = state.agent_sessions.lock().unwrap();
+    let session = sessions
+        .get_mut(&agent_id)
+        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let cmd = serde_json::json!({ "type": "get_state" });
+    rpc_manager::send_command_sync_timeout(session, cmd, 8)
+}
+
+#[tauri::command]
+fn get_agent_process_state(state: State<AppState>, agent_id: String) -> Result<Value, String> {
+    do_get_agent_process_state(state.inner(), agent_id)
 }
 
 /// Extrait (host, port) d'une URL http(s)://host[:port]/...
@@ -4309,6 +4642,7 @@ pub fn run() {
                 terminals: Mutex::new(HashMap::new()),
                 rpc_state: Mutex::new(None),
                 rpc_reviewer: Mutex::new(None),
+                agent_sessions: Mutex::new(HashMap::new()),
                 event_tx,
                 auth: Arc::new(web_auth::WebAuth::new()),
                 guard: Arc::new(web_rate::WebGuard::new()),
@@ -4401,6 +4735,18 @@ pub fn run() {
             set_reviewer_model,
             abort_reviewer,
             get_reviewer_state,
+            // ── Gestion d'agents multi-rôles (H2 V2) ──
+            load_agent_registry,
+            save_agent_registry,
+            start_agent_process,
+            stop_agent_process,
+            stop_all_agent_processes,
+            send_agent_process_prompt,
+            new_agent_process_session,
+            set_agent_process_model,
+            abort_agent_process,
+            send_agent_process_command,
+            get_agent_process_state,
             set_web_password,
             web_kick_remote,
             web_active_count,
@@ -4438,6 +4784,11 @@ pub fn run() {
             // empêchant la prochaine instance de binder le même port — symptôme
             // typique en mode dev où l'ancienne instance est tuée brutalement).
             if let RunEvent::ExitRequested { .. } = event {
+                // H2 V2 : arrêter proprement tous les processus agents.
+                {
+                    let state = app.state::<AppState>();
+                    do_stop_all_agent_processes(&state);
+                }
                 let tx_opt = {
                     let state = app.state::<AppState>();
                     let mut guard = state.web_shutdown.lock().unwrap();

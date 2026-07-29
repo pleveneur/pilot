@@ -147,6 +147,11 @@ export async function initSettings() {
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
+  // ── Gestion d'agents multi-rôles (H2 V2) ──
+  const inputAgentMaxDepth = document.getElementById("setting-agent-max-depth");
+  const inputAgentMaxTotalCalls = document.getElementById("setting-agent-max-total-calls");
+  const inputAgentTimeoutMs = document.getElementById("setting-agent-timeout-ms");
+  const inputAgentMaxResultTokens = document.getElementById("setting-agent-max-result-tokens");
   const tsBlock = document.getElementById("tailscale-block");
   const tsBadge = document.getElementById("tailscale-badge");
   const tsUrl = document.getElementById("tailscale-url");
@@ -328,6 +333,11 @@ export async function initSettings() {
   // ── Mémoire de projet (H3) ──
   if (chkProjectMemory) chkProjectMemory.checked = currentConfig.project_memory_enabled !== false;
   if (chkProjectMemoryAuto) chkProjectMemoryAuto.checked = currentConfig.project_memory_auto_extract === true;
+  // ── Gestion d'agents multi-rôles (H2 V2) ──
+  if (inputAgentMaxDepth) inputAgentMaxDepth.value = currentConfig.agent_max_call_depth || 3;
+  if (inputAgentMaxTotalCalls) inputAgentMaxTotalCalls.value = currentConfig.agent_max_total_calls || 30;
+  if (inputAgentTimeoutMs) inputAgentTimeoutMs.value = currentConfig.agent_timeout_ms || 120000;
+  if (inputAgentMaxResultTokens) inputAgentMaxResultTokens.value = currentConfig.agent_max_result_tokens || 4000;
     webNetChanged = false;
     tailscaleChanged = false;
     rpcLaunchChanged = false;
@@ -477,6 +487,11 @@ export async function initSettings() {
         // ── Mémoire de projet (H3) ──
         project_memory_enabled: chkProjectMemory ? chkProjectMemory.checked : true,
         project_memory_auto_extract: chkProjectMemoryAuto ? chkProjectMemoryAuto.checked : false,
+        // ── Gestion d'agents multi-rôles (H2 V2) ──
+        agent_max_call_depth: parseInt(inputAgentMaxDepth.value, 10) || 3,
+        agent_max_total_calls: parseInt(inputAgentMaxTotalCalls.value, 10) || 30,
+        agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 120000,
+        agent_max_result_tokens: parseInt(inputAgentMaxResultTokens.value, 10) || 4000,
       };
     try {
       await invoke("save_config", { config });

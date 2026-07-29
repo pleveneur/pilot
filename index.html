@@ -44,6 +44,7 @@
     <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i></button>
     <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
     <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
+    <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
     <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
     <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
     <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
@@ -285,6 +286,24 @@
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-project-memory-auto-extract" />
               <label for="setting-project-memory-auto-extract" title="Après chaque tâche d'orchestration réussie, l'agent extrait 1–3 faits appris et les ajoute à PROJECT_MEMORY.md (1 tour LLM supplémentaire par tâche).">Extraction auto après chaque tâche d'orchestration</label>
+            </div>
+            <hr class="settings-sep" />
+            <div class="settings-section-title"><i data-lucide="users" class="icon-sm"></i> Mode Agents multi-rôles (H2 V2)</div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-agent-max-depth">Profondeur max d'appel :</label>
+              <input type="number" id="setting-agent-max-depth" min="1" max="10" value="3" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-agent-max-total-calls">Budget total d'appels / run :</label>
+              <input type="number" id="setting-agent-max-total-calls" min="1" max="200" value="30" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-agent-timeout-ms">Timeout d'inactivité (ms) :</label>
+              <input type="number" id="setting-agent-timeout-ms" min="10000" max="600000" value="120000" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-agent-max-result-tokens">Taille max d'un résultat renvoyé (tokens) :</label>
+              <input type="number" id="setting-agent-max-result-tokens" min="500" max="32000" value="4000" />
             </div>
           </div>
 

@@ -6,7 +6,7 @@
 
 ## En cours
 
-*Mode remote (accès web distant)* — socle v1+v2 livré (backend axum + auth argon2 + fan-out WS + UI web + panneau Paramètres desktop + reload à chaud + keep-alive tray + redémarrage pi au changement de projet web + resync visuel desktop + rate limiting login/prompt/WS + toast bind élargi + affichage des prompts distants sur le desktop + pagination des messages + audit log formel **persistant** (JSONL append-only, rechargé au démarrage, rotation 2 Mo) + `/api/file/meta` + création de projet web (modale select racine + nom) + édition web v2 `PUT /api/file` + création de nouveaux fichiers `POST /api/file` + **automatisation Tailscale Serve** (opt-in : proxy HTTPS 443 auto, resync au changement de port, URL + QR code dans les Paramètres). Mode remote complet. Voir [`spec_web_remote.md`](spec_web_remote.md) §14.
+*Gestion d'agents multi-rôles (H2 V2)* — onglet **🎭 Agents** : registre global `~/.pilot/agents.json`, coordinateur + agents spécialisés (architecte, codeur, reviewer, testeur, documenteur), protocole séquentiel `[[CALL:agent_id]]`, bus frontend, garde-fous (profondeur, budget, cycle, timeout), sélection automatique du modèle selon le backend (`pi` vs `plh`). Voir [`spec_gestion_agents.md`](spec_gestion_agents.md) et [`plan_gestion_agents.md`](plan_gestion_agents.md).
 
 ## Dernière fonctionnalité livrée
 
@@ -34,13 +34,14 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 
 | # | Feature | Statut | Spec / détail |
 |---|---|---|---|
-| 1 | **D1** — Notifications desktop « agent terminé à distance » | ✅ Implémenté (2026-07-30) | `idees_evolutions.md` §D1 · plugin `tauri-plugin-notification`, déclenché à l'`agent_end` si prompt d'origine web |
-| 2 | **H1 V2** — Context Engine embeddings/RAG local (Ollama + SQLite) | ✅ Implémenté (2026-07-30) | `spec_context_engine.md` §7 · `context_engine.rs` (chunking + cosinus + SQLite WAL), fallback V1 auto, build lazy + refresh incrémental, UI Paramètres (adresse/port/modèle + test) |
+| 1 | **H2 V2** — Gestion d'agents multi-rôles (séquentiel) | 🔄 En cours | `spec_gestion_agents.md` · onglet 🎭 Agents, registre `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]` |
+| 2 | **D1** — Notifications desktop « agent terminé à distance » | ✅ Implémenté (2026-07-30) | `idees_evolutions.md` §D1 · plugin `tauri-plugin-notification`, déclenché à l'`agent_end` si prompt d'origine web |
+| 3 | **H1 V2** — Context Engine embeddings/RAG local (Ollama + SQLite) | ✅ Implémenté (2026-07-30) | `spec_context_engine.md` §7 · `context_engine.rs` (chunking + cosinus + SQLite WAL), fallback V1 auto, build lazy + refresh incrémental, UI Paramètres (adresse/port/modèle + test) |
 | 3 | **H9** — Historique de sessions searchable (mémoire des décisions) | ✅ Implémenté (2026-08-01) | `.pilot/sessions.jsonl` (append) + `.pilot/sessions-tags.json` + full-text/regex search + filtres tag/file/kind + détail (relecture JSONL pi) + tags éditables + rétro-indexation auto (1re ouverture) + capture live (agent_end chat). Voir [`spec_session_history.md`](spec_session_history.md). Complément de H3 (faits) et H1 (contexte) |
-| 4 | **H7** — Mode « Projet sensible » (local-first garanti, badge 🔒) | À faire (effort faible) | refuse tout routing cloud, dictée via fallback local. `idees_evolutions.md` §H7 |
+| 5 | **H7** — Mode « Projet sensible » (local-first garanti, badge 🔒) | À faire (effort faible) | refuse tout routing cloud, dictée via fallback local. `idees_evolutions.md` §H7 |
 | 5 | **H2 V2** — Multi-codeurs spécialisés en **parallèle** | À faire | architecture `rpc-event-reviewer` (confirmée) → N sub-agents (test-writer, doc-writer, refactorer), chacun avec un `system` de rôle. `spec_orchestration.md` |
-| — | **H6** — Routing multi-modèle intelligent | Reporté (sauf si indispensable pour H2 V2) | `idees_evolutions.md` §H6 |
-| — | **H10** — MCP / tools extensibles | Reporté (plus tard) | `idees_evolutions.md` §H10 |
+| 6 | **H6** — Routing multi-modèle intelligent | Reporté (sauf si indispensable pour H2 V2) | `idees_evolutions.md` §H6 |
+| 7 | **H10** — MCP / tools extensibles | Reporté (plus tard) | `idees_evolutions.md` §H10 |
 
 ## Compléments éditeur / robustesse (à faire un jour, en parallèle quand on touche aux fichiers)
 
