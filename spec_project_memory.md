@@ -127,6 +127,11 @@ Dépendances) via un bloc SEARCH/REPLACE (ou CREATE si le fichier n'existe pas).
 Règles :
 - 1 ligne par fait, impérativement concis.
 - N'ajoute QUE du nouveau ; ne répète pas ce qui est déjà dans le fichier.
+- NE DUPLIQUE PAS ce qui est déjà dans AGENTS.md : ce fichier contient les règles
+  stables et prescriptives du projet (déjà dans le contexte système de l'agent via
+  la découverte native pi/plh). PROJECT_MEMORY.md ne doit contenir que des faits
+  APPRIS en exécutant (pièges rencontrés, décisions contextuelles, dépendances
+  découvertes), pas des recopies de règles déjà énoncées dans AGENTS.md.
 - Si rien de nouveau n'a été appris, réponds exactement : NO_NEW_MEMORY.
 - Ne modifie aucun autre fichier.
 

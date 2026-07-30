@@ -183,13 +183,20 @@ const MANIFEST_FILES = [
   "jsconfig.json",
 ];
 
-const PRIORITY_FILES = ["AGENTS.md", ".pilot/context.md", "README.md"];
+// AGENTS.md n'est PAS inclus ici : pi et plh le découvrent et l'injectent
+// nativement dans le system prompt (cf. resource-loader.ts / project_context.rs).
+// Le réinjecter via Pilot créerait un doublon dans le contexte. Le Context Engine
+// utilise seulement la table de navigation d'AGENTS.md pour découvrir les specs
+// à charger (parseAgentsNavTable), sans injecter son contenu.
+const PRIORITY_FILES = [".pilot/context.md", "README.md"];
 
 // ── V2 (RAG) : boost structurel + chunks sélectionnés par cosinus ────────────
 
 /**
- * Construit le bloc structurel (AGENTS.md, .pilot/context.md, manifestes) pour
- * le RAG. Réutilise la même logique de troncature que V1. Retourne { parts, tokens }.
+ * Construit le bloc structurel (.pilot/context.md, manifestes) pour le RAG.
+ * AGENTS.md n'est PAS injecté ici (discovery native par pi/plh — cf. commentaire
+ * PRIORITY_FILES). Réutilise la même logique de troncature que V1.
+ * Retourne { parts, tokens }.
  */
 async function buildStructuralBoost(projectPath, budget, read) {
   const sections = [];
@@ -206,7 +213,7 @@ async function buildStructuralBoost(projectPath, budget, read) {
     used += t;
     return true;
   }
-  await addFile("AGENTS.md", 0.40);
+  // AGENTS.md délibérément absent : discovery native par pi/plh (anti-doublon).
   await addFile(".pilot/context.md", 0.20);
   for (const rel of MANIFEST_FILES) {
     if (used >= budget) break;
@@ -318,7 +325,9 @@ export async function buildProjectContext(projectPath, activeTab, recents, opts,
     return true;
   }
 
-  // 1-3 : fichiers prioritaires (AGENTS.md, .pilot/context.md, fichier actif)
+  // 1-3 : fichiers prioritaires (.pilot/context.md, fichier actif)
+  // AGENTS.md n'est PAS injecté ici (discovery native par pi/plh). Il est
+  // seulement lu plus bas (étape 6) pour parser sa table de navigation.
   for (const rel of PRIORITY_FILES) {
     if (used >= budget) break;
     await addFile(rel, 0.40);
@@ -377,10 +386,13 @@ export async function buildProjectContext(projectPath, activeTab, recents, opts,
   }
 
   // 6 : specs référencées dans AGENTS.md
+  // AGENTS.md n'est pas injecté (discovery native pi/plh) mais on lit son
+  // contenu séparément pour parser la table de navigation et charger les specs
+  // qu'il référence (index de découverte, pas injection du fichier lui-même).
   if (opts.includeSpecs !== false) {
-    const agentsSection = sections.find((s) => s.label === "AGENTS.md");
-    if (agentsSection) {
-      const specFiles = parseAgentsNavTable(agentsSection.content);
+    const agentsContent = await read(joinPath(projectPath, "AGENTS.md"));
+    if (agentsContent) {
+      const specFiles = parseAgentsNavTable(agentsContent);
       const specsBudget = Math.floor(budget * 0.20);
       let specsUsed = 0;
       for (const rel of specFiles) {

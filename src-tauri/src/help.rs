@@ -289,16 +289,36 @@ fn collect_stream(rx: &mpsc::Receiver<String>, timeout: Duration) -> Result<Stri
 /// l'accusé de chacune** avant la suivante, collecte la réponse streamée,
 /// puis tue le process. Le modèle (format "provider/modelId") est obligatoire.
 ///
-/// **Réutilisé** par l'onglet « ❓ Aide » (`ask_help`) et l'onglet « 🔍 Review »
-/// (`review::ask_review`) : tout usage d'un pi temporaire cadré (pas de session
-/// persistante, pas de pollution de la session de coding principale) passe par
-/// ici. Le `prompt` est entièrement à la charge de l'appelant (consigne + contexte
-/// + question). `cwd` neutre (ex: temp_dir) pour isoler pi du projet.
+/// **Réutilisé** par l'onglet « ❓ Aide » (`ask_help`), l'onglet « 🔍 Review »
+/// (`review::ask_review`) et la génération/mise à jour d'`AGENTS.md`
+/// (`agents_md::generate_agents_md`) : tout usage d'un pi temporaire cadré (pas
+/// de session persistante, pas de pollution de la session de coding principale)
+/// passe par ici. Le `prompt` est entièrement à la charge de l'appelant
+/// (consigne + contexte + question). `cwd` à la charge de l'appelant : un cwd
+/// neutre (ex: temp_dir) isole pi du projet (aide/review) ; le cwd du projet lui
+/// donne accès aux outils read/ls/write (génération AGENTS.md).
+///
+/// Timeout par défaut 120 s. Pour une tâche plus longue (analyse + écriture),
+/// utiliser `ask_pi_caged_timed`.
 pub fn ask_pi_caged(
     cwd: &str,
     pi_path: &str,
     prompt: &str,
     model: Option<&str>,
+) -> Result<String, String> {
+    ask_pi_caged_timed(cwd, pi_path, prompt, model, Duration::from_secs(120))
+}
+
+/// Variante paramétrable d'`ask_pi_caged` : permet de régler le timeout de
+/// collecte du stream (utile pour les tâches d'agent qui utilisent des outils :
+/// analyse de projet, écriture de fichier…). Mêmes séquence et garanties
+/// qu'`ask_pi_caged`. Timeout global stricte sur l'ensemble de la collecte.
+pub fn ask_pi_caged_timed(
+    cwd: &str,
+    pi_path: &str,
+    prompt: &str,
+    model: Option<&str>,
+    timeout: Duration,
 ) -> Result<String, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
@@ -379,7 +399,7 @@ pub fn ask_pi_caged(
     send(&serde_json::json!({ "type": "prompt", "message": prompt }))
         .map_err(|e| format!("Erreur envoi prompt : {}", e))?;
 
-    let result = collect_stream(&rx, Duration::from_secs(120));
+    let result = collect_stream(&rx, timeout);
 
     // Nettoyage : tuer pi ferme stdout → le thread de lecture se termine.
     // try_wait (non-bloquant) : sur Windows, pi.cmd lance un enfant node qui

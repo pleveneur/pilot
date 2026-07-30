@@ -36,6 +36,7 @@ const SOURCES = [
   "spec_orchestration_reviewer.md",
   "spec_session_history.md",
   "spec_gestion_agents.md",
+  "spec_agents_md.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 

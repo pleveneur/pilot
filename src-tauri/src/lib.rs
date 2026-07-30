@@ -34,6 +34,7 @@ const IGNORED_DIRS: &[&str] = &[
 
 mod help;
 mod review;
+mod agents_md;
 mod rpc_manager;
 mod tailscale;
 mod web_auth;
@@ -2210,6 +2211,29 @@ fn save_agent_registry(registry: Value) -> Result<(), String> {
     let json = serde_json::to_string_pretty(&with_meta)
         .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))
+}
+
+/// Réinitialise ~/.pilot/agents.json avec les 6 agents par défaut.
+/// Contrairement à save_agent_registry({agents:[]}) qui viderait tout, cette
+/// commande reconstruit le registre par défaut à partir de la config courante
+/// (modèles orchestrateur/codeur) puis l'écrit sur disque. Retourne le registre
+/// généré pour que le frontend puisse rafraîchir l'UI sans relecture disque.
+#[tauri::command]
+fn reset_agent_registry(state: State<AppState>) -> Result<Value, String> {
+    let path = agents_registry_path()?;
+    let dir = path.parent().ok_or("Chemin agents.json invalide")?;
+    fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
+    // Sauvegarde du fichier courant avant écrasement (récupération possible).
+    let backup = path.with_extension("json.bak");
+    if path.exists() {
+        let _ = fs::copy(&path, &backup);
+    }
+    let config = state.config.lock().unwrap().clone();
+    let default = build_default_agent_registry(&config);
+    let json = serde_json::to_string_pretty(&default)
+        .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))?;
+    Ok(default)
 }
 
 pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
@@ -4748,6 +4772,7 @@ pub fn run() {
             // ── Gestion d'agents multi-rôles (H2 V2) ──
             load_agent_registry,
             save_agent_registry,
+            reset_agent_registry,
             start_agent_process,
             stop_agent_process,
             stop_all_agent_processes,
@@ -4769,6 +4794,7 @@ pub fn run() {
             help::get_handbook,
             help::ask_help,
             review::ask_review,
+            agents_md::generate_agents_md,
             tailscale::tailscale_status,
             tailscale::tailscale_enable_serve,
             tailscale::tailscale_disable_serve,

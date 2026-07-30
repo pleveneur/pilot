@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents -->
+<!-- PILOT-HELP generated=2026-07-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -297,8 +297,12 @@ texte à la voix.
 ## Context Engine (auto-contexte agent)
 
 Pilot injecte **automatiquement** un contexte projet avant le 1er prompt de chaque
-session agent (chat standard) : `AGENTS.md`, fichier actif, imports, manifestes,
-specs référencées, fichiers récemment édités — dans un budget de tokens configurable.
+session agent (chat standard) : `.pilot/context.md`, fichier actif, imports, manifestes,
+specs référencées dans AGENTS.md, fichiers récemment édités — dans un budget de tokens configurable.
+
+> `AGENTS.md` lui-même n'est pas réinjecté par Pilot : pi et plh le découvrent
+> nativement. Le Context Engine l'utilise seulement comme index pour charger les
+> specs qu'il référence.
 
 - **Activation** : Paramètres → section « Context Engine ». Désactivable.
 - **Budget** : par défaut 8000 tokens (réglable 1000–32000).
@@ -309,7 +313,7 @@ specs référencées, fichiers récemment édités — dans un budget de tokens 
   de projet.
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
-  éviter) — il est injecté en priorité juste après `AGENTS.md`.
+  éviter) — il est injecté en priorité juste après `.pilot/context.md`.
 - **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
   — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
   le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».
@@ -447,3 +451,20 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 - Le modèle du coordinateur doit être puissant (cloud) pour bien router les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
 - Si une run dérape, cliquez sur **Arrêter** : tous les processus agents seront stoppés.
+
+---
+
+### 📄 Générer / mettre à jour AGENTS.md
+
+Pilot peut générer ou mettre à jour le fichier `AGENTS.md` à la racine du
+projet en utilisant l'IA.
+
+- **Bouton 📄** (toolbar agent, à côté du bouton 📝 mémoire projet) : analyse
+  le projet (structure, manifestes, fichiers source) et crée ou met à jour
+  `AGENTS.md`. Utilise le **modèle actif du chat**.
+- `AGENTS.md` est lu automatiquement par pi et plh au début de chaque session :
+  c'est le fichier d'instructions projet (stack, structure, commandes,
+  conventions, pièges). Pilot ne le réinjecte pas (discovery native).
+- En **mise à jour**, l'agent conserve les sections existantes toujours
+  pertinentes et enrichit/corrige le reste.
+- Après génération, le fichier s'ouvre dans l'éditeur pour vérification.

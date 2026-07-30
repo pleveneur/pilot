@@ -52,13 +52,17 @@ Remplissage dans l'ordre, dans la limite du budget tokens (`context_budget_token
 
 | Rang | Source | Règle | Part max |
 |------|--------|-------|----------|
-| 1 | `AGENTS.md` | toujours si présent | 40 % |
-| 2 | `.pilot/context.md` | contexte curé par l'utilisateur | 20 % |
-| 3 | Fichier actif dans l'éditeur | onglet édition courant (non-vide) | 20 % |
-| 4 | Imports du fichier actif | regex JS/TS/Python/Markdown, résolution relative | 15 % |
-| 5 | Manifestes | `package.json`, `Cargo.toml`, `pyproject.toml`, `requirements.txt`, `tsconfig.json` | 10 % |
-| 6 | Specs référencées dans AGENTS.md | parsing de la table de navigation `\| Tâche \| Fichier(s) à lire \|` | reste |
-| 7 | Fichiers récemment édités | top 5 (historique session-persistence) | 5 % |
+| 1 | `.pilot/context.md` | contexte curé par l'utilisateur | 40 % |
+| 2 | Fichier actif dans l'éditeur | onglet édition courant (non-vide) | 20 % |
+| 3 | Imports du fichier actif | regex JS/TS/Python/Markdown, résolution relative | 15 % |
+| 4 | Manifestes | `package.json`, `Cargo.toml`, `pyproject.toml`, `requirements.txt`, `tsconfig.json` | 10 % |
+| 5 | Specs référencées dans AGENTS.md | parsing de la table de navigation `\| Tâche \| Fichier(s) à lire \|` (AGENTS.md lui-même n'est PAS injecté — discovery native pi/plh) | reste |
+| 6 | Fichiers récemment édités | top 5 (historique session-persistence) | 5 % |
+
+> **Note AGENTS.md** : pi et plh découvrent et injectent nativement `AGENTS.md`
+> dans le system prompt (cf. `resource-loader.ts` / `project_context.rs`). Pilot
+> ne le réinjecte pas (anti-doublon). Le Context Engine lit seulement `AGENTS.md`
+> pour parser sa table de navigation et charger les specs qu'il référence.
 
 Estimation tokens : **~3.5 chars/token** (heuristique conservative).
 
@@ -199,7 +203,7 @@ query_context_index(projectPath, prompt, budgetTokens) -> { context: string, chu
 
 Le frontend calcule le budget passé à `query_context_index` :
 `budget = floor(coderContextWindow * 0.15)` (défaut 8000 si fenêtre inconnue),
-borné [2000, 16000]. Le boost structurel (`AGENTS.md`, manifestes,
+borné [2000, 16000]. Le boost structurel (`.pilot/context.md`, manifestes,
 `.pilot/context.md`) reste : ces fichiers sont toujours inclus en tête du
 préambule avant les chunks RAG.
 
@@ -240,8 +244,12 @@ Dépendances Rust ajoutées : `rusqlite = { version = "0.31", features = ["bundl
 ## Context Engine (auto-contexte agent)
 
 Pilot injecte **automatiquement** un contexte projet avant le 1er prompt de chaque
-session agent (chat standard) : `AGENTS.md`, fichier actif, imports, manifestes,
-specs référencées, fichiers récemment édités — dans un budget de tokens configurable.
+session agent (chat standard) : `.pilot/context.md`, fichier actif, imports, manifestes,
+specs référencées dans AGENTS.md, fichiers récemment édités — dans un budget de tokens configurable.
+
+> `AGENTS.md` lui-même n'est pas réinjecté par Pilot : pi et plh le découvrent
+> nativement. Le Context Engine l'utilise seulement comme index pour charger les
+> specs qu'il référence.
 
 - **Activation** : Paramètres → section « Context Engine ». Désactivable.
 - **Budget** : par défaut 8000 tokens (réglable 1000–32000).
@@ -252,7 +260,7 @@ specs référencées, fichiers récemment édités — dans un budget de tokens 
   de projet.
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
-  éviter) — il est injecté en priorité juste après `AGENTS.md`.
+  éviter) — il est injecté en priorité juste après `.pilot/context.md`.
 - **RAG local (V2, optionnel)** : section **Paramètres → RAG (Context Engine V2)**
   — activez le RAG, saisissez l'**adresse Ollama** (`http://127.0.0.1:11434`) et
   le **modèle d'embedding** (`nomic-embed-text`), puis « Tester la connexion ».

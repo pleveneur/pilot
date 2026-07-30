@@ -30,6 +30,17 @@ const statusFiletype = document.getElementById("status-filetype");
 const statusStats = document.getElementById("status-stats");
 const statusEncoding = document.getElementById("status-encoding");
 const statusEol = document.getElementById("status-eol");
+
+/** Compare deux chemins sans tenir compte des séparateurs (\ vs /).
+ *  Les onglets ouverts via l'explorateur utilisent le séparateur natif de l'OS
+ *  (\ sur Windows), tandis que les appels programmatiques (agents-md.js,
+ *  project-memory.js…) construisent le chemin avec /. Sans cette normalisation,
+ *  openFile ne détectait pas le doublon et ouvrait un second onglet identique. */
+function samePath(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.replace(/\\/g, "/") === b.replace(/\\/g, "/");
+}
 const statusAutosave = document.getElementById("status-autosave");
 
 let tabIdCounter = 0;
@@ -186,7 +197,7 @@ class TabsManager {
     // Fichiers PDF → mode forcé 'pdf'
     if (path.endsWith('.pdf')) {
       // Vérifier si déjà ouvert en mode pdf
-      const existing = this.tabs.find((t) => t.path === path && t.mode === "pdf");
+      const existing = this.tabs.find((t) => samePath(t.path, path) && t.mode === "pdf");
       if (existing) {
         this.switchTab(existing.id);
         return;
@@ -200,7 +211,7 @@ class TabsManager {
     const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'tiff', 'tif', 'avif'];
     const fileExt = path.split('.').pop()?.toLowerCase() || '';
     if (IMAGE_EXTS.includes(fileExt)) {
-      const existing = this.tabs.find((t) => t.path === path && t.mode === "image");
+      const existing = this.tabs.find((t) => samePath(t.path, path) && t.mode === "image");
       if (existing) {
         this.switchTab(existing.id);
         return;
@@ -212,7 +223,7 @@ class TabsManager {
 
     // Fichiers CSV → mode 'csv' (prévisualisation tableau)
     if (mode === "csv") {
-      const existing = this.tabs.find((t) => t.path === path && t.mode === "csv");
+      const existing = this.tabs.find((t) => samePath(t.path, path) && t.mode === "csv");
       if (existing) {
         this.switchTab(existing.id);
         return;
@@ -223,7 +234,7 @@ class TabsManager {
     }
 
     // Vérifier si déjà ouvert dans le même mode (non-PDF seulement, les PDF sont gérés plus haut)
-    const existing = this.tabs.find((t) => t.path === path && t.mode === mode);
+    const existing = this.tabs.find((t) => samePath(t.path, path) && t.mode === mode);
     if (existing) {
       this.switchTab(existing.id);
       return;
@@ -995,7 +1006,7 @@ class TabsManager {
    * Ferme un onglet par chemin, sans sauvegarde (utilisé pour suppression)
    */
   closeTabByPath(path) {
-    const tab = this.tabs.find((t) => t.path === path);
+    const tab = this.tabs.find((t) => samePath(t.path, path));
     if (!tab) return;
     // Nettoyage split mode
     if (tab.splitMode) {

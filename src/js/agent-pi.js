@@ -8,6 +8,7 @@ import markdownit from "markdown-it";
 import { isImageFile } from "./image-paste.js";
 import { buildProjectContext } from "./context-engine.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
+import { generateAgentsMd } from "./agents-md.js";
 import { renderEditGateDialog } from "./diff-view.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
@@ -122,6 +123,7 @@ export async function createAgentPi(container) {
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)"><i data-lucide="shield-check" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="file-text" class="icon-sm"></i></button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
     <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="Orchestrateur (mode Orchestration)"></select>
     <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="Codeur (mode Orchestration)"></select>
@@ -1324,6 +1326,33 @@ export async function createAgentPi(container) {
         }
         break;
       }
+      case "agents-md": {
+        // Issue #5 : générer / mettre à jour AGENTS.md via le modèle du chat.
+        // AGENTS.md est lu nativement par pi/plh (discovery system prompt) ;
+        // on ne l'injecte pas par Pilot. Le bouton lance un pi temporaire cadré
+        // (cwd = projet) qui analyse le projet et écrit le fichier.
+        const { toastError, toastSuccess, toastInfo } = await import("./toast.js");
+        const amdBtn = btn;
+        if (amdBtn) amdBtn.disabled = true;
+        try {
+          appendSystemMessage(messagesEl, "🤖 Génération / mise à jour d'AGENTS.md… (l'agent analyse le projet)");
+          const summary = await generateAgentsMd(state.currentModel, {
+            onInfo: (m) => toastInfo(m),
+            onError: (m) => { toastError(m); appendErrorMessage(messagesEl, `❌ ${m}`); },
+            onSuccess: (m) => { toastSuccess(m); appendSystemMessage(messagesEl, m); },
+          });
+          if (summary) {
+            appendSystemMessage(messagesEl, `📋 AGENTS.md — résumé de l'agent :\n${summary}`);
+          }
+        } catch (e) {
+          console.error("Génération AGENTS.md:", e);
+          toastError(`Échec génération AGENTS.md : ${e}`);
+          appendErrorMessage(messagesEl, `❌ Génération AGENTS.md échouée : ${e}`);
+        } finally {
+          if (amdBtn) amdBtn.disabled = false;
+        }
+        break;
+      }
       case "reconnect":
         try {
           appendSystemMessage(messagesEl, "🔄 Reconnexion de l'agent en cours…");
@@ -1601,10 +1630,14 @@ export async function createAgentPi(container) {
   checkDefaultModelReachable(state, messagesEl);
 
   // ── Charger les commandes disponibles ──
-  loadCommands();
+  await loadCommands();
 
   // ── Charger les alias de modèles ──
-  loadModelAliases();
+  // Important : loadCommands() fait `allCommands = list.map(...)` qui écrase le
+  // tableau. On l'await AVANT loadModelAliases() pour garantir que les alias ne
+  // sont pas perdus par un race condition entre les deux invoke concurrents
+  // (issue #6 : la liste `/` n'affichait plus les alias).
+  await loadModelAliases();
 
   // ── Changement de modèle dans le select ──
   const modelSelect = document.getElementById("agent-model-select");
@@ -4370,6 +4403,10 @@ async function loadCommands() {
     } else if (result && Array.isArray(result)) {
       list = result;
     }
+    // Préserver les alias de modèles déjà chargés par loadModelAliases() (issue #6 :
+    // loadCommands écrase allCommands ; si loadModelAliases a tourné avant — ex. via
+    // l'event pilot-models-changed — on ne doit pas perdre les alias).
+    const savedAliases = allCommands.filter((c) => c.category === "modèle");
     allCommands = list.map((c) => ({
       name: c.name || c.command || "?",
       description: c.description || c.desc || "",
@@ -4384,6 +4421,12 @@ async function loadCommands() {
     for (const bi of builtins) {
       if (!allCommands.find((c) => c.name === bi.name)) {
         allCommands.push(bi);
+      }
+    }
+    // Réinjecter les alias préservés
+    for (const alias of savedAliases) {
+      if (!allCommands.find((c) => c.name === alias.name && c.category === "modèle")) {
+        allCommands.push(alias);
       }
     }
 

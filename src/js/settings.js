@@ -5,6 +5,7 @@ import { applyTheme, getCurrentTheme } from "./theme.js";
 import { refreshShowThinking, refreshShowTools } from "./agent-pi.js";
 import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
+import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 
 let currentConfig = null;
 // Mémorise si on a déjà averti (toast) que le serveur écoute hors localhost,
@@ -378,8 +379,9 @@ export async function initSettings() {
     });
   }
 
-  // Fermer
-  btnClose.addEventListener("click", () => {
+  // Fermer (Annuler) — annule aussi les modifs providers non sauvegardées
+  btnClose.addEventListener("click", async () => {
+    await cancelProvidersIfDirty();
     modal.classList.add("hidden");
   });
 
@@ -392,6 +394,12 @@ export async function initSettings() {
 
   // Sauvegarder
   btnSave.addEventListener("click", async () => {
+      // D'abord le registre de modèles (models.json + aliases) si modifié.
+      // En cas d'échec de validation, on garde la modale ouverte pour corriger.
+      {
+        const ok = await saveProvidersIfDirty();
+        if (!ok) return;
+      }
       // Parse orchestrator model: "provider/modelId" or empty
       const orchParts = inputOrchestratorModel.value.trim().split("/", 2);
       const coderParts = inputCoderModel.value.trim().split("/", 2);
@@ -564,9 +572,12 @@ export async function initSettings() {
     modal.classList.add("hidden");
   });
 
-  // Fermer au clic hors de la modale
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) modal.classList.add("hidden");
+  // Fermer au clic hors de la modale (annule aussi les modifs providers)
+  modal.addEventListener("click", async (e) => {
+    if (e.target === modal) {
+      await cancelProvidersIfDirty();
+      modal.classList.add("hidden");
+    }
   });
 
   // ── Accès distant : statut (mot de passe + clients) ──

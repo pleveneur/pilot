@@ -317,9 +317,10 @@ Permet d'éditer le registre des modèles (`models.json`) et les alias
   (`supportsTools`, `supportsDeveloperRole`, `supportsReasoningEffort`).
   Ajout / suppression / renommage d'un provider. Les clés JSON non gérées par
   l'UI sont préservées (round-trip `serde_json::Value`).
-- **Modèles** : par provider, édition de `id`, `contextWindow`, `input`
-  (text/image), `systemPrompt` (textarea repliable) et **`alias`** (nom court
-  optionnel). Ajout / suppression.
+- **Modèles** : par provider, édition de `id`, `contextWindow`, `maxTokens`
+  (nombre maximum de **tokens de sortie** envoyé au provider ; défaut pi `16384` ;
+  vide = auto), `input` (text/image), `systemPrompt` (textarea repliable) et
+  **`alias`** (nom court optionnel). Ajout / suppression.
 - **Alias** (`model-switch.json`) : saisis **au niveau de chaque modèle** (champ
   « alias : » de la carte modèle), plus de bloc séparé. À la sauvegarde, le dict
   `aliases: {alias: "provider/modelId"}` est reconstruit depuis les alias saisis.

@@ -10,7 +10,7 @@
 // Round-trip JSON : on préserve les clés non gérées par l'UI (on charge l'objet
 // Value tel quel et on ne modifie que les champs exposés : baseUrl, api, apiKey,
 // compat.{supportsTools,supportsDeveloperRole,supportsReasoningEffort}, models[],
-// et par modèle id/contextWindow/input/systemPrompt).
+// et par modèle id/contextWindow/maxTokens/input/systemPrompt).
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
@@ -32,8 +32,7 @@ const state = {
 
 // Références DOM (résolues à l'init)
 let elTab, elBackendSelect, elBackendPath, elProvidersList,
-  elAliasesDefault, elStatus, btnAddProvider, btnReload,
-  btnSave, btnCancel;
+  elAliasesDefault, elStatus, btnAddProvider, btnReload;
 
 /** À appeler au démarrage (main.js). Branche les listeners et le chargement
  *  paresseux (au 1ᵉʳ activation de l'onglet). */
@@ -46,8 +45,10 @@ export function initModelsConfig() {
   elStatus = document.getElementById("providers-status");
   btnAddProvider = document.getElementById("btn-providers-add");
   btnReload = document.getElementById("btn-providers-reload");
-  btnSave = document.getElementById("btn-providers-save");
-  btnCancel = document.getElementById("btn-providers-cancel");
+  // Les boutons de sauvegarde/annulation du panel Fournisseurs ont été
+  // supprimés : la barre d'actions globale « Enregistrer »/« Annuler » en bas
+  // de la modale gère désormais les providers via saveProvidersIfDirty() /
+  // cancelProvidersIfDirty() (branchés dans settings.js).
 
   if (!elTab || !elBackendSelect) return;
 
@@ -83,12 +84,7 @@ export function initModelsConfig() {
     await loadBackend();
     showToast("Modèles rechargés", "info");
   });
-  btnSave.addEventListener("click", saveAll);
-  btnCancel.addEventListener("click", async () => {
-    if (state.dirty && !confirm("Annuler les modifications non sauvegardées ?")) return;
-    state.dirty = false;
-    await loadBackend();
-  });
+  // (btnSave / btnCancel supprimés — gérés par la barre d'actions globale.)
 
   // Recharger quand la config RPC change (le backend actif peut changer).
   window.addEventListener("pilot-config-changed", () => {
@@ -237,6 +233,7 @@ function renderProviderCard(name, prov) {
 function renderModelRow(provName, idx, model) {
   const id = model.id || "";
   const ctx = model.contextWindow != null ? model.contextWindow : "";
+  const maxTok = model.maxTokens != null ? model.maxTokens : "";
   const input = Array.isArray(model.input) ? model.input : [];
   const sp = model.systemPrompt || "";
   const alias = model._alias || "";
@@ -256,6 +253,7 @@ function renderModelRow(provName, idx, model) {
     <div class="model-row-opts">
       <div class="field-row field-row-sm"><label>alias :</label><input type="text" data-prov="${esc(provName)}" data-midx="${idx}" data-field="alias" value="${esc(alias)}" placeholder="(optionnel) ex: mm-gema"/></div>
       <div class="field-row field-row-sm"><label>contextWindow :</label><input type="number" min="0" step="1000" data-prov="${esc(provName)}" data-midx="${idx}" data-field="contextWindow" value="${esc(String(ctx))}" placeholder="auto"/></div>
+      <div class="field-row field-row-sm"><label>maxTokens :</label><input type="number" min="0" step="256" data-prov="${esc(provName)}" data-midx="${idx}" data-field="maxTokens" value="${esc(String(maxTok))}" placeholder="auto (16384)" title="Nombre maximum de tokens de sortie. Défaut pi : 16384."/></div>
       <div class="model-inputs"><span class="compat-label">input :</span> ${inputChecks}</div>
     </div>
     <details class="model-sp ${hasSp}">
@@ -284,7 +282,7 @@ function bindProviderEvents() {
   elProvidersList.querySelectorAll("input[data-input]").forEach((el) => {
     el.addEventListener("change", () => onModelInputChange(el));
   });
-  // champs modèles (id, contextWindow, systemPrompt)
+  // champs modèles (id, contextWindow, maxTokens, systemPrompt)
   elProvidersList.querySelectorAll("input[data-midx][data-field], textarea[data-midx][data-field]").forEach((el) => {
     const ev = el.tagName === "TEXTAREA" ? "input" : "input";
     el.addEventListener(ev, () => onModelFieldChange(el));
@@ -352,6 +350,10 @@ function onModelFieldChange(el) {
     const n = parseInt(raw, 10);
     if (raw === "" || isNaN(n)) delete model.contextWindow;
     else model.contextWindow = n;
+  } else if (field === "maxTokens") {
+    const n = parseInt(raw, 10);
+    if (raw === "" || isNaN(n)) delete model.maxTokens;
+    else model.maxTokens = n;
   } else if (field === "systemPrompt") {
     if (raw.trim() === "") delete model.systemPrompt;
     else model.systemPrompt = raw;
@@ -518,14 +520,14 @@ async function saveAll() {
   const providers = state.providersConfig.providers;
   const usedNames = new Set();
   for (const name of Object.keys(providers)) {
-    if (!name || !name.trim()) { showToast("Un fournisseur n'a pas de nom", "error"); return; }
-    if (usedNames.has(name)) { showToast(`Nom de fournisseur dupliqué: ${name}`, "error"); return; }
+    if (!name || !name.trim()) { showToast("Un fournisseur n'a pas de nom", "error"); return false; }
+    if (usedNames.has(name)) { showToast(`Nom de fournisseur dupliqué: ${name}`, "error"); return false; }
     usedNames.add(name);
     const models = Array.isArray(providers[name].models) ? providers[name].models : [];
     for (let i = 0; i < models.length; i++) {
       if (!models[i].id || !models[i].id.trim()) {
         showToast(`Modèle sans id dans « ${name} » (#${i + 1})`, "error");
-        return;
+        return false;
       }
     }
   }
@@ -542,7 +544,7 @@ async function saveAll() {
       const ref = `${provName}/${m.id}`;
       if (usedAlias.has(alias)) {
         showToast(`Alias dupliqué: « ${alias} »`, "error");
-        return;
+        return false;
       }
       usedAlias.add(alias);
       newAliases[alias] = ref;
@@ -568,7 +570,32 @@ async function saveAll() {
     window.dispatchEvent(new CustomEvent("pilot-models-changed", { detail: { stem: state.stem } }));
   } catch (e) {
     showToast("Erreur sauvegarde: " + e, "error");
+    return false;
   }
+  return true;
+}
+
+// ── Hooks pour la barre d'actions globale de la modale Paramètres ─────────
+// Pilot n'a qu'une seule barre « Enregistrer » / « Annuler » en bas de la
+// modale (commune à tous les onglets). Ces fonctions relient ces boutons à la
+// sauvegarde / annulation du registre de modèles (models.json + aliases) sans
+// bouton dédié dans l'onglet Fournisseurs.
+
+/** Sauvegarde les providers/alias s'ils ont été chargés ET modifiés.
+ *  Retourne true si rien à faire ou si la sauvegarde a réussi ; false si une
+ *  validation a échoué (la modale ne doit alors pas se fermer). */
+export async function saveProvidersIfDirty() {
+  if (!state.loaded || !state.dirty) return true;
+  return await saveAll();
+}
+
+/** Annule les modifications providers en mémoire (recharge depuis le disque)
+ *  s'ils ont été chargés ET modifiés. Pas de confirmation : c'est un bouton
+ *  « Annuler » explicite. */
+export async function cancelProvidersIfDirty() {
+  if (!state.loaded || !state.dirty) return;
+  state.dirty = false;
+  await loadBackend();
 }
 
 // ── Utilitaires ───────────────────────────────────────────────────────────
