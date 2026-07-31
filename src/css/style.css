@@ -4578,6 +4578,9 @@ body.pilot-loading *::after {
 .field-row input:focus,
 .field-row select:focus { border-color: var(--accent); box-shadow: var(--ring); }
 .field-row-sm input[type="number"] { max-width: 160px; }
+.field-row input:disabled { opacity: 0.5; cursor: not-allowed; }
+.pc-toggle-label { min-width: 110px; }
+.pc-toggle-label input[type="checkbox"] { margin-right: 4px; }
 
 /* ── Carte Fournisseur (niveau 1) ── */
 .provider-card {

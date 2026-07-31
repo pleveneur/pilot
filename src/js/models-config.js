@@ -10,7 +10,7 @@
 // Round-trip JSON : on préserve les clés non gérées par l'UI (on charge l'objet
 // Value tel quel et on ne modifie que les champs exposés : baseUrl, api, apiKey,
 // compat.{supportsTools,supportsDeveloperRole,supportsReasoningEffort}, models[],
-// et par modèle id/contextWindow/maxTokens/input/systemPrompt).
+// et par modèle id/contextWindow/maxTokens/maxTokensEnabled/input/systemPrompt).
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
@@ -147,11 +147,20 @@ async function loadBackend() {
   }
   // Attacher l'alias à chaque modèle (champ temporaire _alias, non écrit dans
   // models.json). Suit le modèle lors des ajouts/suppressions/renommages.
+  // Normaliser aussi maxTokensEnabled (bool explicite en mémoire) : absent →
+  // false par défaut, sauf pour les providers Anthropic (api == "anthropic")
+  // où absent → true (max_tokens est obligatoire chez Anthropic). On peuple
+  // aussi m.maxTokens depuis _maxTokensValue (clé ignorée par pi) pour que la
+  // valeur saisie soit immédiatement réactivée quand l'utilisateur coche la
+  // case, sans avoir à la re-saisir.
   for (const [provName, prov] of Object.entries(state.providersConfig.providers)) {
     const models = Array.isArray(prov.models) ? prov.models : [];
+    const isAnthropic = (prov.api || "") === "anthropic";
     for (const m of models) {
       const ref = m.id ? `${provName}/${m.id}` : "";
       m._alias = (ref && state.aliasByModel[ref]) || "";
+      if (typeof m.maxTokensEnabled !== "boolean") m.maxTokensEnabled = isAnthropic;
+      if (m.maxTokens == null && m._maxTokensValue != null) m.maxTokens = m._maxTokensValue;
     }
   }
 
@@ -234,6 +243,13 @@ function renderModelRow(provName, idx, model) {
   const id = model.id || "";
   const ctx = model.contextWindow != null ? model.contextWindow : "";
   const maxTok = model.maxTokens != null ? model.maxTokens : "";
+  // maxTokensEnabled est normalisé (bool) au chargement. Détection Anthropic via
+  // le champ `api` du provider (max_tokens obligatoire chez Anthropic).
+  const prov = state.providersConfig.providers[provName] || {};
+  const isAnthropic = (prov.api || "") === "anthropic";
+  const maxTokEnabled = model.maxTokensEnabled === true;
+  const maxTokTitle = (isAnthropic ? "max_tokens est obligatoire pour l'API Anthropic. " : "")
+    + "Décoché = pi envoie sa valeur par défaut (16384). Cochez pour définir une limite de tokens de sortie personnalisée.";
   const input = Array.isArray(model.input) ? model.input : [];
   const sp = model.systemPrompt || "";
   const alias = model._alias || "";
@@ -253,7 +269,7 @@ function renderModelRow(provName, idx, model) {
     <div class="model-row-opts">
       <div class="field-row field-row-sm"><label>alias :</label><input type="text" data-prov="${esc(provName)}" data-midx="${idx}" data-field="alias" value="${esc(alias)}" placeholder="(optionnel) ex: mm-gema"/></div>
       <div class="field-row field-row-sm"><label>contextWindow :</label><input type="number" min="0" step="1000" data-prov="${esc(provName)}" data-midx="${idx}" data-field="contextWindow" value="${esc(String(ctx))}" placeholder="auto"/></div>
-      <div class="field-row field-row-sm"><label>maxTokens :</label><input type="number" min="0" step="256" data-prov="${esc(provName)}" data-midx="${idx}" data-field="maxTokens" value="${esc(String(maxTok))}" placeholder="auto (16384)" title="Nombre maximum de tokens de sortie. Défaut pi : 16384."/></div>
+      <div class="field-row field-row-sm"><label class="chip pc-toggle-label"><input type="checkbox" data-prov="${esc(provName)}" data-midx="${idx}" data-field="maxTokensEnabled" ${maxTokEnabled ? "checked" : ""} title="Activer max_tokens"/> maxTokens :</label><input type="number" min="0" step="256" data-prov="${esc(provName)}" data-midx="${idx}" data-field="maxTokens" value="${esc(String(maxTok))}" placeholder="auto (16384)" title="${esc(maxTokTitle)}"${maxTokEnabled ? "" : " disabled"}/></div>
       <div class="model-inputs"><span class="compat-label">input :</span> ${inputChecks}</div>
     </div>
     <details class="model-sp ${hasSp}">
@@ -282,9 +298,9 @@ function bindProviderEvents() {
   elProvidersList.querySelectorAll("input[data-input]").forEach((el) => {
     el.addEventListener("change", () => onModelInputChange(el));
   });
-  // champs modèles (id, contextWindow, maxTokens, systemPrompt)
+  // champs modèles (id, contextWindow, maxTokens, systemPrompt, maxTokensEnabled)
   elProvidersList.querySelectorAll("input[data-midx][data-field], textarea[data-midx][data-field]").forEach((el) => {
-    const ev = el.tagName === "TEXTAREA" ? "input" : "input";
+    const ev = el.type === "checkbox" ? "change" : "input";
     el.addEventListener(ev, () => onModelFieldChange(el));
   });
   // boutons (delegation)
@@ -327,6 +343,9 @@ function onProviderFieldChange(el) {
   }
   prov[field] = val;
   markDirty();
+  // Un changement d'`api` (ex: openai → anthropic) modifie le statut « Anthropic »
+  // des modèles (info-bulle maxTokens + grisé) : re-render pour refléter.
+  if (field === "api") renderProviders();
 }
 
 function onCompatChange(el) {
@@ -345,6 +364,14 @@ function onModelFieldChange(el) {
   const field = el.getAttribute("data-field");
   const model = getModel(name, idx);
   if (!model) return;
+  // Case à cocher « maxTokensEnabled » : on bascule l'état puis on re-render
+  // pour griser/dégriser l'input associé.
+  if (field === "maxTokensEnabled") {
+    model.maxTokensEnabled = el.checked;
+    markDirty();
+    renderProviders();
+    return;
+  }
   const raw = el.value;
   if (field === "contextWindow") {
     const n = parseInt(raw, 10);
@@ -426,7 +453,9 @@ function addModel(name) {
   const prov = state.providersConfig.providers[name];
   if (!prov) return;
   if (!Array.isArray(prov.models)) prov.models = [];
-  prov.models.push({ id: "nouveau-modele" });
+  // Par défaut maxTokensEnabled = false, sauf pour l'API Anthropic (obligatoire).
+  const isAnthropic = (prov.api || "") === "anthropic";
+  prov.models.push({ id: "nouveau-modele", maxTokensEnabled: isAnthropic });
   markDirty();
   renderProviders();
 }
@@ -557,7 +586,23 @@ async function saveAll() {
   const cleanConfig = JSON.parse(JSON.stringify(state.providersConfig));
   for (const prov of Object.values(cleanConfig.providers || {})) {
     const models = Array.isArray(prov.models) ? prov.models : [];
-    for (const m of models) { delete m._alias; }
+    for (const m of models) {
+      delete m._alias;
+      // maxTokensEnabled est toujours écrit explicitement (bool). Activé →
+      // maxTokens écrit (si valeur > 0 valide, sinon absent). Désactivé →
+      // maxTokens absent du JSON : pi envoie alors sa valeur par défaut (16384).
+      // La valeur saisie est conservée dans _maxTokensValue (clé additionnelle
+      // ignorée par pi) pour restauration au recochage.
+      const en = m.maxTokensEnabled === true;
+      m.maxTokensEnabled = en;
+      if (en) {
+        delete m._maxTokensValue;
+        if (m.maxTokens == null || !(m.maxTokens > 0)) delete m.maxTokens;
+      } else {
+        if (m.maxTokens != null) m._maxTokensValue = m.maxTokens;
+        delete m.maxTokens;
+      }
+    }
   }
 
   try {

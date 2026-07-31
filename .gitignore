@@ -44,3 +44,10 @@ sessions.md
 rtk_analyse.md
 pi-docs/
 rapport_tmp.md
+
+# GitHub Actions debug artifacts
+jobs.json
+jobs.txt
+logs.txt
+runs.json
+runs.txt

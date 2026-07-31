@@ -321,6 +321,14 @@ Permet d'éditer le registre des modèles (`models.json`) et les alias
   (nombre maximum de **tokens de sortie** envoyé au provider ; défaut pi `16384` ;
   vide = auto), `input` (text/image), `systemPrompt` (textarea repliable) et
   **`alias`** (nom court optionnel). Ajout / suppression.
+  `maxTokens` est piloté par une case à cocher **`maxTokensEnabled`** (clé
+  `maxTokensEnabled` dans `models.json`, `false` par défaut, `true` pour l'API
+  Anthropic où `max_tokens` est obligatoire). Cochée → `maxTokens` écrit et
+  envoyé. Décochée → `maxTokens` absent du JSON : pi envoie alors sa valeur
+  par défaut (`16384`) — comportement identique pour tous les providers, Anthropic
+  inclus (l'obligation du paramètre est déjà gérée nativement par pi). La valeur
+  saisie est conservée dans `_maxTokensValue` (clé additionnelle ignorée par pi)
+  pour restauration au recochage.
 - **Alias** (`model-switch.json`) : saisis **au niveau de chaque modèle** (champ
   « alias : » de la carte modèle), plus de bloc séparé. À la sauvegarde, le dict
   `aliases: {alias: "provider/modelId"}` est reconstruit depuis les alias saisis.
