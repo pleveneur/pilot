@@ -572,13 +572,10 @@ export async function initSettings() {
     modal.classList.add("hidden");
   });
 
-  // Fermer au clic hors de la modale (annule aussi les modifs providers)
-  modal.addEventListener("click", async (e) => {
-    if (e.target === modal) {
-      await cancelProvidersIfDirty();
-      modal.classList.add("hidden");
-    }
-  });
+  // NB: pas de fermeture au clic hors de la modale (issue #7). La modale ne doit
+  // se fermer qu'explicitement (Annuler / Enregistrer). Un clic extérieur se
+  // déclenchait aussi en fin de sélection souris dans un champ de saisie quand
+  // la sélection dépassait la modale, ce qui la fermait sans le vouloir.
 
   // ── Accès distant : statut (mot de passe + clients) ──
   // ── Diff Review (A4 V2) : sonde la capacité du backend à charger l'extension
