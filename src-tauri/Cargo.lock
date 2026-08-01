@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "pilot"
-version = "0.2.21"
+version = "0.2.22"
 dependencies = [
  "argon2",
  "axum",
@@ -3057,7 +3057,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "ppv-lite86"
-version = "0.2.21"
+version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
