@@ -445,6 +445,9 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 - La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
   **profondeur** atteinte sont affichés.
 - Le bilan reste visible après la fin de la run pour relire qui a fait quoi.
+- **Timeout d'inactivité** : si un agent reste silencieux plus de 5 minutes, la run s'arrête
+  et un message le signale clairement (sans le « Run arrêtée par l'utilisateur »). Vous pouvez
+  ajuster la durée dans **Paramètres → Agents → Timeout d'inactivité (ms)**.
 
 ### Gérer les agents
 - Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).

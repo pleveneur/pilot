@@ -289,7 +289,7 @@ fn default_test_scope() -> String { "targeted".to_string() }
 fn default_reviewer_scope() -> String { "all".to_string() }
 fn default_agent_max_call_depth() -> u32 { 3 }
 fn default_agent_max_total_calls() -> u32 { 30 }
-fn default_agent_timeout_ms() -> u32 { 120000 }
+fn default_agent_timeout_ms() -> u32 { 300000 }
 fn default_agent_max_result_tokens() -> u32 { 4000 }
 fn default_reviewer_critical_patterns() -> Vec<String> {
     vec![

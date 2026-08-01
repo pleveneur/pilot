@@ -17,7 +17,7 @@ import {
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
-const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_TIMEOUT_MS = 300000; // 5 min d'inactivité (le codeur fait des outils longs)
 
 let busState = {
   listeners: null,
@@ -59,8 +59,11 @@ function resetTimeout() {
   if (busState.timeoutId) clearTimeout(busState.timeoutId);
   if (busState.runState !== "running") return;
   busState.timeoutId = setTimeout(() => {
-    emit("error", { message: `Timeout d'inactivité pour ${busState.currentAgentId}` });
-    stopAgentsRun();
+    // Timeout d'inactivité : on signale l'erreur puis on arrête la run SANS
+    // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
+    // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
+    emit("error", { message: `Timeout d'inactivité pour ${busState.currentAgentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).` });
+    stopAgentsRun({ silent: true });
   }, busState.timeoutMs);
 }
 
@@ -163,7 +166,7 @@ function handleAgentEvent(ev) {
     if (piTurnCount > MAX_PI_TURNS_PER_AGENT) {
       console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, piTurnCount);
       emit("error", { message: `L'agent ${agentId} a fait ${piTurnCount} tours pi sans terminer (max ${MAX_PI_TURNS_PER_AGENT}). Possible boucle d'outils. Arrêt forcé.` });
-      stopAgentsRun();
+      stopAgentsRun({ silent: true });
       return;
     }
   }
@@ -199,7 +202,7 @@ function handleAgentEvent(ev) {
     console.log("[agents-bus] agent_end turn=" + turnCount, agentId);
     if (turnCount > MAX_TURNS) {
       emit("error", { message: `Boucle détectée : ${turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
-      stopAgentsRun();
+      stopAgentsRun({ silent: true });
       return;
     }
     finishAgentTurn(agentId);
@@ -367,13 +370,18 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
   await runAgentTurn(busState.coordinator, brief, projectContext);
 }
 
-export function stopAgentsRun() {
+export function stopAgentsRun(options = {}) {
   if (busState.runState !== "running") return;
   busState.runState = "stopping";
   if (busState.currentAgentId) {
     invoke("abort_agent_process", { agentId: busState.currentAgentId }).catch(() => {});
   }
-  emit("stop", {});
+  // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
+  // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
+  // l'utilisateur. » ne doit apparaître que pour un arrêt manuel (issue #10).
+  if (!options.silent) {
+    emit("stop", {});
+  }
   resetBusState();
 }
 
