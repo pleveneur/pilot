@@ -33,7 +33,7 @@ pub struct RpcSession {
 /// reviewer H2 V1 — canal séparé pour ne pas polluer handleRpcEvent).
 /// `agent_id` : si Some, chaque événement est enveloppé dans
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extension_path: Option<&str>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>) -> Result<RpcSession, String> {
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -51,12 +51,11 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
             cmd.args(["--skill", sp]);
         }
     }
-    // Diff Review (A4 V2) : extension pilot-edit-gate (porte pré-écriture).
-    // Toujours chargée — l'auto-approve se décide côté Pilot (client RPC).
-    if let Some(ep) = extension_path {
-        if !ep.is_empty() {
-            cmd.args(["--extension", ep]);
-        }
+    // Extensions pi (pilot-edit-gate porte pré-écriture A4 V2, pilot-context
+    // injection contexte/mémoire dans le system prompt). `--extension` accepte
+    // plusieurs valeurs : on ajoute chaque chemin.
+    for ep in extensions.iter().filter(|e| !e.is_empty()) {
+        cmd.args(["--extension", ep]);
     }
     #[cfg(windows)]
     {

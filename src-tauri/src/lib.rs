@@ -764,6 +764,21 @@ fn write_file_content(path: String, content: String) -> Result<(), String> {
     fs::write(&path, &content).map_err(|e| format!("Erreur écriture: {}", e))
 }
 
+/// Écrit le fichier de handoff d'injection de contexte (`.pilot/context-inject.md`)
+/// consommé par l'extension pi `pilot-context` (avant_agent_start → systemPrompt).
+/// Crée le dossier `.pilot` s'il n'existe pas. Le contenu (contexte + mémoire projet)
+/// est injecté dans le system prompt, hors de la discussion stockée (message user).
+#[tauri::command]
+fn write_context_handoff(project_path: String, content: String) -> Result<(), String> {
+    if project_path.trim().is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(&project_path).join(".pilot");
+    fs::create_dir_all(&dir).map_err(|e| format!("Erreur création .pilot: {}", e))?;
+    let file = dir.join("context-inject.md");
+    fs::write(&file, &content).map_err(|e| format!("Erreur écriture handoff: {}", e))
+}
+
 #[tauri::command]
 fn write_file_binary(path: String, data: Vec<u8>) -> Result<(), String> {
     fs::write(&path, &data).map_err(|e| format!("Erreur écriture: {}", e))
@@ -1610,38 +1625,39 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         None
     };
 
-    // Diff Review (A4 V2) : extension pi `pilot-edit-gate` chargée UNIQUEMENT si
-    // `confirm_file_edits` est activé ET si le backend supporte `--extension`.
-    // Quand désactivé (défaut) ou non supporté (ex: plh sans le flag), l'extension
-    // n'est pas chargée → aucun surcharge, aucun blocage, l'agent écrit librement.
-    // L'extension bloque les outils write/edit avant exécution et demande une
-    // confirmation (ctx.ui.confirm → extension_ui_request). Pilot décide côté
-    // client : auto-approve en Mode Orchestration, sinon diff Accepter/Refuser.
-    // Écrite dans le dossier data depuis include_str! (imports type-only, effacés
-    // par jiti — aucune dépendance npm).
-    let ext_supported = confirm_file_edits && probe_extension_support(state, &pi_path);
-    let extension_path: Option<String> = if ext_supported {
+    // Extensions pi : pilot-edit-gate (porte pré-écriture A4 V2) et pilot-context
+    // (injection contexte/mémoire dans le system prompt — spec_context_engine /
+    // spec_project_memory). `--extension` accepte plusieurs valeurs. Écrites dans
+    // le dossier data depuis include_str! (imports type-only, effacés par jiti —
+    // aucune dépendance npm).
+    // - pilot-edit-gate : chargée UNIQUEMENT si `confirm_file_edits` est activé ET
+    //   si le backend supporte `--extension`. Quand désactivé (défaut) ou non
+    //   supporté (ex: plh sans le flag), elle n'est pas chargée → aucun surcharge,
+    //   aucun blocage, l'agent écrit librement.
+    // - pilot-context : chargée dès que `--extension` est supporté (indépendante
+    //   de confirm_file_edits). No-op si Pilot n'écrit pas de fichier de handoff.
+    let ext_supported = probe_extension_support(state, &pi_path);
+    let mut extensions: Vec<String> = Vec::new();
+    if ext_supported {
         if let Ok(data_dir) = app.path().app_data_dir() {
-            let ext_file = data_dir.join("extensions").join("pilot-edit-gate.ts");
-            if fs::create_dir_all(ext_file.parent().unwrap_or(&data_dir)).is_ok() {
-                let content: &str = include_str!("../extensions/pilot-edit-gate.ts");
-                if fs::write(&ext_file, content).is_ok() {
-                    Some(ext_file.to_string_lossy().to_string())
-                } else {
-                    None
+            let dir = data_dir.join("extensions");
+            if fs::create_dir_all(&dir).is_ok() {
+                if confirm_file_edits {
+                    let ext_file = dir.join("pilot-edit-gate.ts");
+                    if fs::write(&ext_file, include_str!("../extensions/pilot-edit-gate.ts")).is_ok() {
+                        extensions.push(ext_file.to_string_lossy().to_string());
+                    }
                 }
-            } else {
-                None
+                let ctx_file = dir.join("pilot-context.ts");
+                if fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
+                    extensions.push(ctx_file.to_string_lossy().to_string());
+                }
             }
-        } else {
-            None
         }
-    } else {
-        None
-    };
+    }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extension_path.as_deref(), app.clone(), state.event_tx.clone(), "rpc-event", None,
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), "rpc-event", None,
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -1979,7 +1995,7 @@ pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Re
     }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, None, app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None,
+        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None,
     )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
     *rpc = Some(session);
@@ -2248,7 +2264,7 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
     };
     let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, None, None, app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id),
+        &cwd, &pi_path, no_session, &session_dir_str, None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id),
     ).map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
     sessions.insert(agent_id, session);
     Ok(())
@@ -4692,6 +4708,7 @@ pub fn run() {
             read_file_binary,
             write_file_content,
             write_file_binary,
+            write_context_handoff,
             file_exists,
             file_mtime,
             open_terminal,

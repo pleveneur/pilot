@@ -71,8 +71,11 @@ peu de sens (l'extraction est donc sous-ensemble de l'activation).
 
 ### 4.1 Chat standard (H1 path)
 
-Avant le 1er prompt d'une session, Pilot construit un bloc mémoire et le prépend
-au message (après le bloc Context Engine H1, avant le texte utilisateur) :
+Avant le 1er prompt d'une session, Pilot construit un bloc mémoire et l'écrit dans
+le fichier de handoff `.pilot/context-inject.md` (avec le bloc Context Engine H1) ;
+l'extension pi `pilot-context` (`before_agent_start`) l'ajoute au **system prompt**
+du tour. La mémoire reste visible du LLM mais **n'est pas préfixée au message
+utilisateur** : `/resume` et l'historique (H9) n'affichent que la vraie saisie.
 
 ```
 === MÉMOIRE DU PROJET (tenue par l'agent — conventions, pièges, décisions) ===
@@ -81,9 +84,9 @@ au message (après le bloc Context Engine H1, avant le texte utilisateur) :
 ```
 
 - Gated by `project_memory_enabled` (indépendant de `context_engine_enabled`).
-- Injecté **une fois par session** (flag `state.memoryInjected`), reset sur
-  new-session / compact / reconnect / changement de projet (parallèle à
-  `state.contextInjected`).
+- Injecté **une fois par session** (flag `state.memoryInjected`), puis persisté
+  dans le system prompt tant que la session dure. Reset sur new-session / compact /
+  reconnect / changement de projet (parallèle à `state.contextInjected`).
 - Si le fichier n'existe pas → pas d'injection (silencieux).
 
 ### 4.2 Mode Orchestration

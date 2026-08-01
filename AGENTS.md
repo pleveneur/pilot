@@ -171,7 +171,8 @@ pilot/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
     ├── extensions/            # Extensions pi embarquées (incluses via include_str!)
-    │   └── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)
+    │   ├── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)
+    │   └── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
     ├── vendor/                # wry 0.55.1 patché (handler micro WebView2) — dictée vocale desktop
     │   └── wry/
     └── src/

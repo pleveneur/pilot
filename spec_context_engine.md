@@ -17,10 +17,19 @@ RAG local via embeddings pi.
 ## 2. Comportement
 
 ### Injection
-- Une seule fois par session agent (flag `state.contextInjected`).
-- Injecté **en préambule** du 1er prompt utilisateur (chat standard uniquement ;
-  le mode Orchestration construit déjà son propre contexte via `buildPlanPrompt`).
-- Format :
+- Une seule fois par session agent (flag `state.contextInjected`), puis **persisté**
+  dans le system prompt tant que la session dure (ré-injecté à chaque tour).
+- **Mécanisme** : le protocole RPC de pi n'envoie que des messages `user` — pas de
+  system prompt par prompt. Pilot écrit donc le bloc dans un fichier de handoff
+  `.pilot/context-inject.md` ; l'extension pi **`pilot-context`** (`before_agent_start`)
+  le lit et l'ajoute au `event.systemPrompt` du tour. Le contexte reste visible du
+  LLM (comme AGENTS.md) mais **n'apparaît pas dans la discussion stockée** :
+  `/resume` et l'historique (H9) n'affichent que la vraie saisie utilisateur.
+- Le fichier de handoff est supprimé aux frontières de session (voir Reset) puis
+  réécrit au prochain prompt. `.pilot/` est git-ignoré.
+- Chat standard uniquement ; le mode Orchestration construit déjà son propre
+  contexte via `buildPlanPrompt`.
+- Format du bloc injecté (dans le system prompt) :
 
 ```
 === CONTEXTE PROJET (auto-injecté par Pilot — ne pas répondre à cette section) ===
@@ -29,8 +38,6 @@ RAG local via embeddings pi.
 ### <chemin relatif>
 <contenu tronqué>
 === FIN CONTEXTE ===
-
-<texte utilisateur>
 ```
 
 ### Reset du flag `contextInjected`

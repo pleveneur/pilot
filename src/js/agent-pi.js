@@ -666,6 +666,17 @@ export async function createAgentPi(container) {
   inputEl.addEventListener("input", autoResizeTextarea);
 
   // ── Gestionnaires d'événements ──
+  // Supprime un éventuel fichier de handoff de contexte restant (`.pilot/context-inject.md`)
+  // quand on démarre une nouvelle session / réinitialise le contexte : évite qu'un
+  // contexte stale soit injecté par l'extension pilot-context sur un prompt suivant.
+  const clearContextHandoff = () => {
+    try {
+      if (!window._pilotProjectPath) return;
+      const abs = window._pilotProjectPath.replace(/[\\/]+$/, "") + "/.pilot/context-inject.md";
+      invoke("delete_file_or_dir", { path: abs }).catch(() => {});
+    } catch (_) {}
+  };
+
   // Envoi du message
   const sendPrompt = async () => {
     const text = inputEl.value.trim();
@@ -885,58 +896,70 @@ export async function createAgentPi(container) {
             }
           }
         }
-        // ── Context Engine (H1) : injecter le contexte projet une fois par session ──
-        let finalMessage = text;
-        const wantContext = !state.contextInjected || state.contextRefreshRequested;
-        if (wantContext && !isSlashCommand) {
+        // ── Contexte (H1) + Mémoire projet (H3) → system prompt via extension ──
+        // Le protocole RPC de pi n'envoie que des messages user ; impossible de
+        // pousser un system prompt par prompt. On écrit donc un fichier de handoff
+        // (.pilot/context-inject.md) que l'extension pi `pilot-context`
+        // (before_agent_start) lit et ajoute au systemPrompt du tour. Le contexte et
+        // la mémoire restent visibles du LLM mais NE polluent PAS la discussion
+        // stockée (message user) : `/resume` et l'historique (H9) n'affichent que la
+        // vraie saisie utilisateur (spec_context_engine / spec_project_memory).
+        let handoffBlocks = "";
+        if (!isSlashCommand) {
           try {
             const config = await invoke("get_config");
-            if (config && config.context_engine_enabled !== false) {
-              const ctxOpts = {
-                enabled: true,
-                budgetTokens: config.context_budget_tokens || 8000,
-                includeImports: config.context_include_imports !== false,
-                includeSpecs: config.context_include_specs !== false,
-                includeRecents: config.context_include_recents !== false,
-                // V2 (RAG) — spec_context_engine.md §7. Si activé + endpoint dispo,
-                // le contexte est sélectionné par similarité cosinus ; sinon fallback V1.
-                ragEnabled: config.context_rag_enabled === true,
-                ragEndpoint: config.context_rag_endpoint || "http://127.0.0.1:11434",
-                ragModel: config.context_rag_model || "nomic-embed-text",
-                prompt: text, // le RAG a besoin du prompt pour la recherche cosinus
-              };
-              const activeTab = getActiveEditTab();
-              const recents = getRecentEditedPaths();
-              const ctxBlock = await buildProjectContext(window._pilotProjectPath, activeTab, recents, ctxOpts);
-              if (ctxBlock) {
-                finalMessage = ctxBlock + text;
-                state.contextInjected = true;
-                state.contextRefreshRequested = false;
-                const ctxBtn = wrapper.querySelector("#agent-ctx-btn");
-                if (ctxBtn) ctxBtn.classList.remove("active");
+            if (config) {
+              // Mémoire de projet (H3) : PROJECT_MEMORY.md, une fois par session.
+              if (config.project_memory_enabled !== false && !state.memoryInjected) {
+                const memBlock = await buildMemoryBlock(window._pilotProjectPath);
+                if (memBlock) {
+                  handoffBlocks += memBlock;
+                  state.memoryInjected = true;
+                }
+              }
+              // Context Engine (H1) : contexte projet, une fois par session (ou refresh).
+              const wantContext = !state.contextInjected || state.contextRefreshRequested;
+              if (config.context_engine_enabled !== false && wantContext) {
+                const ctxOpts = {
+                  enabled: true,
+                  budgetTokens: config.context_budget_tokens || 8000,
+                  includeImports: config.context_include_imports !== false,
+                  includeSpecs: config.context_include_specs !== false,
+                  includeRecents: config.context_include_recents !== false,
+                  // V2 (RAG) — spec_context_engine.md §7. Si activé + endpoint dispo,
+                  // le contexte est sélectionné par similarité cosinus ; sinon fallback V1.
+                  ragEnabled: config.context_rag_enabled === true,
+                  ragEndpoint: config.context_rag_endpoint || "http://127.0.0.1:11434",
+                  ragModel: config.context_rag_model || "nomic-embed-text",
+                  prompt: text, // le RAG a besoin du prompt pour la recherche cosinus
+                };
+                const activeTab = getActiveEditTab();
+                const recents = getRecentEditedPaths();
+                const ctxBlock = await buildProjectContext(window._pilotProjectPath, activeTab, recents, ctxOpts);
+                if (ctxBlock) {
+                  handoffBlocks += ctxBlock;
+                  state.contextInjected = true;
+                  state.contextRefreshRequested = false;
+                  const ctxBtn = wrapper.querySelector("#agent-ctx-btn");
+                  if (ctxBtn) ctxBtn.classList.remove("active");
+                }
               }
             }
-          } catch (ctxErr) {
-            console.warn("Context Engine: échec construction contexte:", ctxErr);
+          } catch (injErr) {
+            console.warn("Contexte/Mémoire: échec construction:", injErr);
           }
         }
-        // ── Mémoire de projet (H3) : injecter PROJECT_MEMORY.md une fois par session ──
-        const wantMemory = !state.memoryInjected;
-        if (wantMemory && !isSlashCommand) {
+        if (handoffBlocks) {
           try {
-            const config = await invoke("get_config");
-            if (config && config.project_memory_enabled !== false) {
-              const memBlock = await buildMemoryBlock(window._pilotProjectPath);
-              if (memBlock) {
-                finalMessage = memBlock + finalMessage;
-                state.memoryInjected = true;
-              }
-            }
-          } catch (memErr) {
-            console.warn("Mémoire projet: échec injection:", memErr);
+            await invoke("write_context_handoff", {
+              projectPath: window._pilotProjectPath || "",
+              content: handoffBlocks,
+            });
+          } catch (wErr) {
+            console.warn("Contexte/Mémoire: échec écriture handoff:", wErr);
           }
         }
-        const payload = { message: finalMessage };
+        const payload = { message: text };
         if (images) payload.images = images;
         // D1 : prompt envoyé depuis le desktop (chat standard) → origine locale.
         // Les prompts distants (web) ne passent pas ici (envoyés via /api/agent/prompt
@@ -1202,6 +1225,7 @@ export async function createAgentPi(container) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          clearContextHandoff();
         } catch (err) {
           console.error("Erreur new session:", err);
           // Même en cas d'erreur, réinitialiser l'état pour débloquer l'UI
@@ -1227,6 +1251,7 @@ export async function createAgentPi(container) {
           // Context Engine : la compaction efface le contexte → réinjecter au prochain prompt
           state.contextInjected = false;
           state.memoryInjected = false;
+          clearContextHandoff();
         } catch (err) {
           console.error("Erreur compact:", err);
         }
@@ -1383,6 +1408,7 @@ export async function createAgentPi(container) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          clearContextHandoff();
           // Remettre le bouton en mode abort
           setIcon(btn, "square");
           btn.title = "Arrêter l'agent";
@@ -1405,6 +1431,7 @@ export async function createAgentPi(container) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          clearContextHandoff();
           orchBtn.classList.remove("active");
           orchBtn.title = "Mode Orchestration : architecte + codeur";
           state.orchestrationPlan = null;
@@ -4371,6 +4398,7 @@ export async function createAgentPi(container) {
       state.contextInjected = false;
       state.contextRefreshRequested = false;
       state.memoryInjected = false;
+      clearContextHandoff();
     } catch (e) {
       state.restarting = false;
       console.error("Redémarrage agent:", e);
