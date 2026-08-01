@@ -61,6 +61,8 @@ export async function createAgents(container) {
   let availableModels = [];
   let isRunning = false;
   let editingId = null;
+  let agentStates = new Map(); // agentId -> { order, status, detail, model }
+  let agentOrder = 0;
 
   let currentEditorModal = null;
 
@@ -93,41 +95,56 @@ export async function createAgents(container) {
       isRunning = true;
       stopBtn.disabled = false;
       sendBtn.disabled = true;
-      activityEl.innerHTML = `<div class="agents-status running">▶ Run démarrée</div>`;
+      agentStates.clear();
+      agentOrder = 0;
+      updateActivity();
     },
     agentStart: ({ agentId, model }) => {
       appendSystemMessage(messagesEl, `${agentIcon(agentId)} ${agentName(agentId)} réfléchit${model ? ` · ${model}` : ""}...`);
+      mark(agentId, "pense", model || "");
       updateActivity();
     },
     delta: ({ agentId, text }) => {
       appendOrUpdateAgentDelta(messagesEl, agentId, text);
+      mark(agentId, "pense", "répond en direct…");
+      updateActivity();
     },
     toolStart: ({ agentId, toolName }) => {
       appendSystemMessage(messagesEl, `🔧 ${agentIcon(agentId)} ${agentName(agentId)} utilise : ${toolName}`);
+      mark(agentId, "outil", toolName || "outil");
       updateActivity();
     },
     notify: ({ agentId, message, notifyType }) => {
       const icon = notifyType === "warning" ? "⚠️" : notifyType === "error" ? "❌" : "ℹ️";
       appendSystemMessage(messagesEl, `${icon} ${agentIcon(agentId)} ${agentName(agentId)}: ${message}`);
+      mark(agentId, notifyType === "error" ? "err" : "note", message);
       updateActivity();
     },
     transition: ({ from, to }) => {
       appendSystemMessage(messagesEl, `➡️ ${agentIcon(from)} ${agentName(from)} appelle ${agentIcon(to)} ${agentName(to)}`);
+      mark(from, "appelle", `→ ${agentName(to)}`);
       updateActivity();
     },
     result: ({ from, to, text }) => {
       appendSystemMessage(messagesEl, `⬅️ ${agentIcon(from)} ${agentName(from)} a répondu à ${agentIcon(to)} ${agentName(to)}`, true);
+      mark(to, "reprend", `← résultat de ${agentName(from)}`);
+      updateActivity();
     },
     done: ({ agentId, text }) => {
       appendAgentMessage(messagesEl, agentId, text, true);
+      mark(agentId, "fait", "réponse finale");
       finishRun();
     },
     stop: () => {
       appendSystemMessage(messagesEl, "⏹ Run arrêtée par l'utilisateur.");
+      const cur = window.__agentBusState?.currentAgentId;
+      if (cur) mark(cur, "stop", "arrêté");
       finishRun();
     },
     error: ({ message }) => {
       appendErrorMessage(messagesEl, message);
+      const cur = window.__agentBusState?.currentAgentId;
+      if (cur) mark(cur, "err", message);
       finishRun();
     },
   };
@@ -138,7 +155,9 @@ export async function createAgents(container) {
     isRunning = false;
     stopBtn.disabled = true;
     sendBtn.disabled = false;
-    activityEl.innerHTML = `<div class="muted">Aucune run en cours.</div>`;
+    // Conserver le tableau d'activité final (issue #9) : on bascule simplement
+    // le statut de la run en « terminée » au lieu de tout effacer.
+    updateActivity();
   }
 
   function agentName(id) {
@@ -150,13 +169,60 @@ export async function createAgents(container) {
     return a ? a.icon || "🤖" : "🤖";
   }
 
+  // Enregistre l'état courant d'un agent dans le panneau « Activité » (issue #9).
+  function mark(agentId, status, detail = "") {
+    if (!agentStates.has(agentId)) {
+      agentStates.set(agentId, { order: agentOrder++, status: "", detail: "", model: "" });
+    }
+    const s = agentStates.get(agentId);
+    s.status = status;
+    s.detail = detail;
+    const a = registry.agents.find((x) => x.id === agentId);
+    s.model = a ? a.models?.pi || a.models?.plh || "" : "";
+  }
+
   function updateActivity() {
-    const stack = window.__agentBusState?.callStack || [];
-    const budget = window.__agentBusState?.budgetTotal ?? "?";
+    const st = window.__agentBusState;
+    const stack = st?.callStack || [];
+    const budget = st?.budgetTotal ?? "?";
+    const depth = st?.maxDepth ?? "?";
+    const chain = stack.length
+      ? stack.map((s) => agentIcon(s.agentId) + " " + agentName(s.agentId)).join(" → ")
+      : "coordinateur";
+
+    const statusLabel = isRunning ? "▶ Run en cours" : "Run terminée";
+    const statusCls = isRunning ? "running" : "";
+
+    const board = Array.from(agentStates.entries())
+      .sort((a, b) => a[1].order - b[1].order)
+      .map(([agentId, s]) => {
+        const a = registry.agents.find((x) => x.id === agentId);
+        const name = a ? a.name : agentId;
+        const icon = a && a.icon ? a.icon : "🤖";
+        const desc = a && a.description ? a.description : "";
+        const chip = s.status || "…";
+        const chipCls = chip === "err" ? "error" : chip === "fait" ? "done" : chip === "outil" ? "tool" : "running";
+        return `
+          <div class="agent-status-card ${chipCls}">
+            <span class="asc-icon">${icon}</span>
+            <div class="asc-info">
+              <div class="asc-name">${escapeHtml(name)}</div>
+              ${desc ? `<div class="asc-desc">${escapeHtml(desc)}</div>` : ""}
+              ${s.detail ? `<div class="asc-detail">${escapeHtml(s.detail)}</div>` : ""}
+            </div>
+            <span class="asc-chip ${chipCls}">${escapeHtml(chip)}</span>
+          </div>
+        `;
+      })
+      .join("");
+
     activityEl.innerHTML = `
-      <div class="agents-status running">▶ Run en cours</div>
+      <div class="agents-status ${statusCls}">${statusLabel}</div>
       <div class="agents-metric">Budget restant : ${budget}</div>
-      <div class="agents-metric">Pile : ${stack.length > 0 ? stack.map((s) => agentIcon(s.agentId) + " " + agentName(s.agentId)).join(" → ") : "coordinateur"}</div>
+      <div class="agents-metric">Profondeur : ${stack.length} / ${depth}</div>
+      <div class="agents-chain">${chain}</div>
+      <div class="agents-board-title">Équipe</div>
+      <div class="agents-board">${board || '<div class="muted">En attente de la première action…</div>'}</div>
     `;
   }
 

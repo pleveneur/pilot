@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-07-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md -->
+<!-- PILOT-HELP generated=2026-08-01 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -437,6 +437,14 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 3. Le coordinateur délègue chaque sous-tâche à l'agent adapté via `[[CALL:agent_id]]`.
 4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
 5. Le coordinateur synthétise la réponse finale.
+
+### Suivre une run
+- Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
+  **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
+  appelle un collègue, a terminé), avec le rappel de son rôle.
+- La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
+  **profondeur** atteinte sont affichés.
+- Le bilan reste visible après la fin de la run pour relire qui a fait quoi.
 
 ### Gérer les agents
 - Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).

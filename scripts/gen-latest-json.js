@@ -64,18 +64,20 @@ function prevTag(tag) {
 }
 
 // Catégories pour le fallback automatique (quand aucun résumé humain
-// `release-notes/<tag>.md` n'est fourni). Chaque commit conventional
-// (`type(scope): description`) est rangé dans sa catégorie et affiché sans
-// son préfixe technique. Les `chore: bump version` sont filtrés (aucun
-// intérêt pour l'utilisateur final).
+// `release-notes/<tag>.md` n'est fourni). Les catégories orientées utilisateur
+// passent en tête ; les changements purement techniques sont regroupés en fin
+// de liste sous une section clairement identifiée (moins parlante pour un
+// utilisateur non technique). Chaque commit conventional (`type(scope): desc`)
+// est rangé dans sa catégorie et affiché sans son préfixe technique. Les
+// `chore: bump version` sont filtrés (aucun intérêt pour l'utilisateur final).
 const CATEGORIES = [
   { types: ["feat"], label: "✨ Nouveautés" },
-  { types: ["fix"], label: "🐛 Corrections" },
+  { types: ["fix"], label: "🐛 Corrections de bugs" },
   { types: ["perf"], label: "⚡ Performances" },
-  { types: ["refactor"], label: "🔧 Améliorations internes" },
   { types: ["docs"], label: "📖 Documentation" },
-  { types: ["ci", "chore", "build", "style", "test"], label: "🔧 Maintenance interne", filterBump: true },
 ];
+const INTERNAL_TYPES = ["refactor", "ci", "chore", "build", "style", "test"];
+const INTERNAL_LABEL = "🔧 Détails techniques (développeurs)";
 
 // Analyse un message de commit conventional ("type(scope): description") et
 // renvoie { type, desc }. Si le message ne suit pas ce format, type=null.
@@ -146,24 +148,39 @@ function buildChangelogBody() {
   } else {
     // Fallback : catégorisation des commits conventional.
     const buckets = new Map(); // label -> [desc]
+    const internal = [];
     const others = [];
     for (const raw of commits) {
       const { type, desc } = parseCommit(raw);
       const cat = CATEGORIES.find((c) => c.types.includes(type));
       if (cat) {
-        if (cat.filterBump && /^bump version/i.test(desc)) continue; // skip
         if (!buckets.has(cat.label)) buckets.set(cat.label, []);
         buckets.get(cat.label).push(capitalize(desc));
+      } else if (INTERNAL_TYPES.includes(type)) {
+        if (/^bump version/i.test(desc)) continue; // skip
+        internal.push(capitalize(desc));
       } else {
         others.push(capitalize(desc));
       }
     }
     const parts = [];
+    // Phrase d'introduction en langage simple, adaptée aux catégories présentes.
+    const present = [];
+    if (buckets.has("✨ Nouveautés")) present.push("de nouvelles fonctionnalités");
+    if (buckets.has("🐛 Corrections de bugs")) present.push("des corrections de bugs");
+    if (buckets.has("⚡ Performances")) present.push("des gains de performance");
+    const intro = present.length
+      ? `Cette mise à jour apporte ${present.join(", ").replace(/, ([^,]*)$/, " et $1")}. Voici l'essentiel :`
+      : "Voici ce qui change dans cette version :";
+    parts.push(intro);
     for (const cat of CATEGORIES) {
       const items = buckets.get(cat.label);
       if (items && items.length) {
         parts.push(`### ${cat.label}\n\n${items.map((i) => `- ${i}`).join("\n")}`);
       }
+    }
+    if (internal.length) {
+      parts.push(`### ${INTERNAL_LABEL}\n\n${internal.map((i) => `- ${i}`).join("\n")}`);
     }
     if (others.length) {
       parts.push(`### 📝 Autres changements\n\n${others.map((i) => `- ${i}`).join("\n")}`);

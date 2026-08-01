@@ -14,6 +14,14 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
 5. Le coordinateur synthétise la réponse finale.
 
+### Suivre une run
+- Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
+  **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
+  appelle un collègue, a terminé), avec le rappel de son rôle.
+- La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
+  **profondeur** atteinte sont affichés.
+- Le bilan reste visible après la fin de la run pour relire qui a fait quoi.
+
 ### Gérer les agents
 - Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
 - Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
