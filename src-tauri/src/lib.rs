@@ -46,6 +46,7 @@ mod models_config;
 mod pdf;
 mod search;
 mod code_check;
+mod plan;
 
 // ── État global de l'application ──
 
@@ -3193,66 +3194,6 @@ fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, Stri
 
 
 
-// ── Persistance du plan d'orchestration ──
-
-/// Sauvegarde le plan d'orchestration dans le projet
-#[tauri::command]
-fn save_plan(state: State<AppState>, plan_json: String) -> Result<(), String> {
-    let project_path = state.project_path.lock().unwrap();
-    let project = project_path
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-    drop(project_path);
-
-    let plan_dir = std::path::PathBuf::from(&project).join(".pilot");
-    fs::create_dir_all(&plan_dir)
-        .map_err(|e| format!("Erreur création dossier .pilot : {}", e))?;
-
-    let plan_path = plan_dir.join("plan.json");
-    fs::write(&plan_path, &plan_json)
-        .map_err(|e| format!("Erreur écriture plan : {}", e))?;
-
-    Ok(())
-}
-
-/// Charge le plan d'orchestration du projet
-#[tauri::command]
-fn load_plan(state: State<AppState>) -> Result<String, String> {
-    let project_path = state.project_path.lock().unwrap();
-    let project = project_path
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-    drop(project_path);
-
-    let plan_path = std::path::PathBuf::from(&project).join(".pilot").join("plan.json");
-    if !plan_path.exists() {
-        return Ok(String::new()); // Pas de plan existant
-    }
-
-    fs::read_to_string(&plan_path)
-        .map_err(|e| format!("Erreur lecture plan : {}", e))
-}
-
-/// Supprime le plan d'orchestration du projet
-#[tauri::command]
-fn delete_plan(state: State<AppState>) -> Result<(), String> {
-    let project_path = state.project_path.lock().unwrap();
-    let project = project_path
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-    drop(project_path);
-
-    let plan_path = std::path::PathBuf::from(&project).join(".pilot").join("plan.json");
-    if plan_path.exists() {
-        fs::remove_file(&plan_path)
-            .map_err(|e| format!("Erreur suppression plan : {}", e))?;
-    }
-
-    Ok(())
-}
 
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::menu::{Menu, MenuItem};
@@ -3474,9 +3415,9 @@ pub fn run() {
             set_review_model,
             add_favorite,
             remove_favorite,
-            save_plan,
-            load_plan,
-            delete_plan,
+            plan::save_plan,
+            plan::load_plan,
+            plan::delete_plan,
             code_check::check_syntax,
             code_check::run_project_tests,
             extension_gate_supported,
