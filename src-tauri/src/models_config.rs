@@ -217,3 +217,34 @@ pub async fn test_provider_models(base_url: String, api_key: Option<String>) -> 
         Err(_) => Ok(serde_json::json!({ "ok": false, "models": [], "error": "timeout (5s)" })),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_agent_home_by_stem;
+
+    #[test]
+    fn stem_pi_resolves_to_dot_pi() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .expect("HOME ou USERPROFILE défini");
+        let p = resolve_agent_home_by_stem("pi").unwrap();
+        assert_eq!(p, std::path::PathBuf::from(&home).join(".pi"));
+    }
+
+    #[test]
+    fn stem_trimmed_and_dot_stripped() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap();
+        // ".pi" → "pi" ; espaces retirés
+        let p = resolve_agent_home_by_stem("  .pi  ").unwrap();
+        assert_eq!(p, std::path::PathBuf::from(&home).join(".pi"));
+    }
+
+    #[test]
+    fn stem_empty_is_error() {
+        assert!(resolve_agent_home_by_stem("").is_err());
+        assert!(resolve_agent_home_by_stem("   ").is_err());
+        assert!(resolve_agent_home_by_stem("...").is_err());
+    }
+}

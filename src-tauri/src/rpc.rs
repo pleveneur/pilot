@@ -628,3 +628,48 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
     let cmd = serde_json::json!({ "type": "get_state" });
     rpc_manager::send_command_sync_timeout(session, cmd, 8)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::kind_from_version_output;
+
+    #[test]
+    fn kind_pi_version() {
+        // Sortie `pi --version` : numéro de version en tête
+        assert_eq!(kind_from_version_output("0.80.10\n"), "pi");
+        assert_eq!(kind_from_version_output("  0.80.10"), "pi");
+        assert_eq!(kind_from_version_output("1.2.3-alpha"), "pi");
+    }
+
+    #[test]
+    fn kind_plh_prefix() {
+        // Sortie `plh --version` : préfixe "plh"
+        assert_eq!(kind_from_version_output("plh 0.1.0"), "plh");
+        assert_eq!(kind_from_version_output("PLH 0.1.0\n"), "plh");
+        assert_eq!(kind_from_version_output("plh"), "plh");
+    }
+
+    #[test]
+    fn kind_plh_wins_over_version() {
+        // Une sortie qui commence par "plh" mais contient un chiffre ne doit
+        // pas être détectée comme "pi" : le préfixe plh est prioritaire.
+        assert_eq!(kind_from_version_output("plh 0.80.10"), "plh");
+    }
+
+    #[test]
+    fn kind_unknown() {
+        // Sorties inattendues / vides → "unknown"
+        assert_eq!(kind_from_version_output(""), "unknown");
+        assert_eq!(kind_from_version_output("   \n\t"), "unknown");
+        assert_eq!(kind_from_version_output("command not found"), "unknown");
+        assert_eq!(kind_from_version_output("hello"), "unknown");
+    }
+
+    #[test]
+    fn kind_leading_word_digit() {
+        // Un mot en tête qui commence par un chiffre est un indice "pi"
+        assert_eq!(kind_from_version_output("0.9.2\n"), "pi");
+        // Un mot en tête qui ne commence pas par un chiffre → unknown
+        assert_eq!(kind_from_version_output("version 0.9.2"), "unknown");
+    }
+}

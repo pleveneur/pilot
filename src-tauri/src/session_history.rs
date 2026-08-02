@@ -805,3 +805,98 @@ pub fn resume_agent_session(state: State<AppState>, session_file: String) -> Res
     });
     rpc_manager::send_command_sync(session, cmd).map(|_| ())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_keeps_short() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_truncates_by_chars() {
+        // Trongue par caractères, pas par octets (caractères multi-octets)
+        assert_eq!(truncate_chars("héllo", 3), "hél");
+        assert_eq!(truncate_chars("abcdef", 3), "abc");
+    }
+
+    #[test]
+    fn normalize_rel_relative_unchanged() {
+        assert_eq!(normalize_rel("src/main.js", "/proj"), "src/main.js");
+    }
+
+    #[test]
+    fn normalize_rel_absolute_in_project() {
+        // Chemin absolu sous le projet → relatif (temp_dir est absolu sur Windows & Unix)
+        let proj = std::env::temp_dir().join("proj_norm_test");
+        let file = proj.join("src/main.js");
+        assert_eq!(
+            normalize_rel(&file.to_string_lossy(), &proj.to_string_lossy()),
+            "src/main.js"
+        );
+        // Séparateurs Windows normalisés
+        let proj_w = proj.to_string_lossy().replace("\\", "/");
+        assert_eq!(
+            normalize_rel(&file.to_string_lossy().replace("\\", "/"), &proj_w),
+            "src/main.js"
+        );
+    }
+
+    #[test]
+    fn normalize_rel_absolute_outside() {
+        // Chemin absolu hors projet → inchangé (backslashes → slash)
+        assert_eq!(normalize_rel("/other/file.js", "/proj"), "/other/file.js");
+    }
+
+    #[test]
+    fn extract_message_text_content_array() {
+        let v = serde_json::json!({"content": [
+            {"type": "text", "text": "premier"},
+            {"type": "text", "text": "second"}
+        ]});
+        assert_eq!(extract_message_text(&v), "premier\nsecond");
+    }
+
+    #[test]
+    fn extract_message_text_skips_non_text() {
+        let v = serde_json::json!({"content": [
+            {"type": "image", "data": "x"},
+            {"type": "text", "text": "seul texte"}
+        ]});
+        assert_eq!(extract_message_text(&v), "seul texte");
+    }
+
+    #[test]
+    fn extract_message_text_content_string() {
+        let v = serde_json::json!({"content": "texte brut"});
+        assert_eq!(extract_message_text(&v), "texte brut");
+    }
+
+    #[test]
+    fn extract_message_text_empty() {
+        let v = serde_json::json!({"content": []});
+        assert_eq!(extract_message_text(&v), "");
+        assert_eq!(extract_message_text(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn extract_tool_path_variants() {
+        for key in ["path", "file_path", "filePath", "filename"] {
+            let v = serde_json::json!({key: "src/x.rs"});
+            assert_eq!(extract_tool_path(&v).as_deref(), Some("src/x.rs"), "clé {key}");
+        }
+    }
+
+    #[test]
+    fn extract_tool_path_priority_and_empty() {
+        // path prioritaire sur file_path
+        let v = serde_json::json!({"path": "a.rs", "file_path": "b.rs"});
+        assert_eq!(extract_tool_path(&v).as_deref(), Some("a.rs"));
+        // vide → None
+        let v = serde_json::json!({"path": "", "file_path": "ok.rs"});
+        assert_eq!(extract_tool_path(&v).as_deref(), Some("ok.rs"));
+        assert_eq!(extract_tool_path(&serde_json::json!({})), None);
+    }
+}
