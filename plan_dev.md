@@ -82,7 +82,7 @@ npm run tauri build  # Production
 |---|---|---|
 | Socle de tests unitaires Rust | ✅ Implémenté (2026-08) | 31 tests sur `web_auth`, `web_rate`, `context_engine`, `tailscale`, `review`, `agents_md` (+ correction d'un test cassé) |
 | Socle de tests JS (Vitest) | ✅ Implémenté (2026-08) | 74 tests sur les fonctions pures `orchestration.js` + `orchestration-reviewer.js` (parsing plan, marqueurs, glob, granularité adaptative) ; CI les exécute. A révélé + corrigé un bug de regex dans `extractMentionedFiles` (backslashes perdus) |
-| Découpage `lib.rs` | 🔄 En cours | `git.rs`, `terminal.rs`, `files.rs`, `pdf.rs`, `models_config.rs` extraits (4806→4410 lignes) ; reste à découper RPC/config/orchestration/search |
+| Découpage `lib.rs` | 🔄 Presque terminé | 15 modules extraits (git, terminal, files, pdf, models_config, search, code_check, plan, session_history, tabs, web_commands, agents, rpc) ; lib.rs **4806→1572 lignes** (−67%) ; reste config/arborescence/watcher (infra couplée) |
 | CI anti-régression | ✅ Implémenté (2026-08) | job `test` (cargo test) exigée avant le build de release |
 | Doc remise à niveau | ✅ Implémenté (2026-08) | README (version d'installeur, liens, structure), arborescence AGENTS.md |
 
