@@ -1,10 +1,8 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use pulldown_cmark::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,21 +41,15 @@ mod web_rate;
 mod web_server;
 mod context_engine;
 mod git;
+mod terminal;
 
 // ── État global de l'application ──
-
-struct TerminalState {
-    running: Arc<AtomicBool>,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-    writer: Option<Box<dyn std::io::Write + Send>>,
-}
 
 struct AppState {
     project_path: Mutex<Option<String>>,
     config: Mutex<AppConfig>,
     watch_state: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
-    terminals: Mutex<HashMap<String, TerminalState>>,
+    terminals: Mutex<HashMap<String, terminal::TerminalState>>,
     rpc_state: Mutex<Option<rpc_manager::RpcSession>>,
     /// H2 V1 : session reviewer dédiée (pi --no-session, contexte vierge). Lancée
     /// lazy au 1er besoin de review, recyclée via new_session. Canal séparé.
@@ -4527,10 +4519,10 @@ pub fn run() {
             export_pdf,
             rename_file_or_dir,
             copy_image_to_project,
-            spawn_terminal,
-            write_to_terminal,
-            resize_terminal,
-            kill_terminal,
+            terminal::spawn_terminal,
+            terminal::write_to_terminal,
+            terminal::resize_terminal,
+            terminal::kill_terminal,
             start_agent_session,
             stop_agent_session,
             send_rpc_command,
@@ -4655,206 +4647,6 @@ pub fn run() {
                 }
             }
         });
-}
-
-// ── Terminal intégré (PTY) ──
-
-#[tauri::command]
-fn spawn_terminal(
-    state: State<AppState>,
-    app: AppHandle,
-    terminal_id: String,
-    run_default: bool,
-) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap();
-    let project_path = project
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-
-    let config = state.config.lock().unwrap();
-
-    // Déterminer le shell et les arguments
-    let (shell, args): (String, Vec<String>) = get_shell_info(&project_path);
-
-    // Commande à exécuter automatiquement
-    let auto_cmd = if run_default && !config.default_command.is_empty() {
-        Some(config.default_command.clone())
-    } else {
-        None
-    };
-
-    // Créer le PTY
-    let pty_system = native_pty_system();
-    let pty_pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("Erreur création PTY: {}", e))?;
-
-    // Construire la commande
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.args(&args);
-    cmd.cwd(&project_path);
-
-    // Si une commande auto est spécifiée, on la passe différemment selon l'OS
-    if let Some(ref auto) = auto_cmd {
-        #[cfg(target_os = "windows")]
-        {
-            cmd.args(&["/k", auto]);
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            // On utilise l'option -c pour bash/zsh
-            let shell_cmd = format!("{}; exec $SHELL", auto);
-            // On remplace les args par -c et la commande
-            cmd.args(&["-c", &shell_cmd]);
-        }
-    }
-
-    let child = pty_pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("Erreur spawn shell: {}", e))?;
-
-    let master = pty_pair.master;
-    let mut reader = master
-        .try_clone_reader()
-        .map_err(|e| format!("Erreur clone reader: {}", e))?;
-    let writer = master
-        .take_writer()
-        .map_err(|e| format!("Erreur take writer: {}", e))?;
-
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-    let app_clone = app.clone();
-    let id_clone = terminal_id.clone();
-
-    // Thread de lecture : streamer la sortie du PTY vers le frontend
-    let handle = std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            if !running_clone.load(Ordering::Relaxed) {
-                break;
-            }
-            match reader.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    let data: Vec<u8> = buf[..n].to_vec();
-                    let payload = serde_json::json!({
-                        "id": id_clone,
-                        "data": data,
-                    });
-                    app_clone.emit("terminal-output", &payload).ok();
-                }
-                Err(_) => break,
-            }
-        }
-    });
-    // Le handle est volontairement détaché : le thread s'arrête
-    // quand le writer est droppé et que le read retourne EOF/erreur.
-    drop(handle);
-
-    let term_state = TerminalState {
-        running,
-        master,
-        child,
-        writer: Some(writer),
-    };
-
-    state.terminals.lock().unwrap().insert(terminal_id, term_state);
-
-    Ok(())
-}
-
-#[tauri::command]
-fn write_to_terminal(
-    state: State<AppState>,
-    terminal_id: String,
-    data: Vec<u8>,
-) -> Result<(), String> {
-    let mut terminals = state.terminals.lock().unwrap();
-    let term = terminals
-        .get_mut(&terminal_id)
-        .ok_or("Terminal introuvable")?;
-
-    use std::io::Write;
-    if let Some(ref mut writer) = term.writer {
-        writer
-            .write_all(&data)
-            .map_err(|e| format!("Erreur écriture terminal: {}", e))?;
-        writer
-            .flush()
-            .map_err(|e| format!("Erreur flush terminal: {}", e))?;
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-fn resize_terminal(
-    state: State<AppState>,
-    terminal_id: String,
-    rows: u16,
-    cols: u16,
-) -> Result<(), String> {
-    let terminals = state.terminals.lock().unwrap();
-    let term = terminals
-        .get(&terminal_id)
-        .ok_or("Terminal introuvable")?;
-
-    term.master
-        .resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("Erreur redimensionnement terminal: {}", e))?;
-
-    Ok(())
-}
-
-#[tauri::command]
-fn kill_terminal(
-    state: State<AppState>,
-    terminal_id: String,
-) -> Result<(), String> {
-    let mut terminals = state.terminals.lock().unwrap();
-    if let Some(mut term) = terminals.remove(&terminal_id) {
-        term.running.store(false, Ordering::Relaxed);
-
-        // Dropper le writer envoie EOF au slave → le read retournera 0/erreur
-        term.writer.take();
-
-        // Tuer le processus enfant (force la fermeture des pipes)
-        term.child.kill().ok();
-
-        // Le thread de lecture se termine naturellement quand le pipe est fermé.
-        // On ne join pas pour éviter un deadlock si le read() est bloquant.
-        // Le JoinHandle est détaché, le thread finira seul.
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn get_shell_info(_project_path: &str) -> (String, Vec<String>) {
-    ("cmd.exe".to_string(), vec![])
-}
-
-#[cfg(target_os = "macos")]
-fn get_shell_info(_project_path: &str) -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    (shell, vec![])
-}
-
-#[cfg(target_os = "linux")]
-fn get_shell_info(_project_path: &str) -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    (shell, vec![])
 }
 
 // ── Export Markdown → HTML (pour impression PDF) ──
