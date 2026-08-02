@@ -74,6 +74,15 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-07-30*
+*Dernière mise à jour : 2026-08*
+
+## Consolidation (qualité / dette technique)
+
+| Élément | Statut | Détail |
+|---|---|---|
+| Socle de tests unitaires Rust | ✅ Implémenté (2026-08) | 31 tests sur `web_auth`, `web_rate`, `context_engine`, `tailscale`, `review`, `agents_md` (+ correction d'un test cassé) |
+| Découpage `lib.rs` | 🔄 En cours | `git.rs` (status/diff/snapshots) et `terminal.rs` (PTY) extraits ; reste à découper files/RPC/config/orchestration |
+| CI anti-régression | ✅ Implémenté (2026-08) | job `test` (cargo test) exigée avant le build de release |
+| Doc remise à niveau | ✅ Implémenté (2026-08) | README (version d'installeur, liens, structure), arborescence AGENTS.md |
 
 | Granularité atomic + overrides session | `spec_orchestration.md` §19 | ✅ Implémenté (2026-07-30) — 4e niveau de finesse `atomic` (~10-25 lignes, 1 fichier, modèle local) ; écran d'activation enrichi : granularité + reviewer sélectionnables (overrides session non persistés) |
