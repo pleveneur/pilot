@@ -177,8 +177,12 @@ pilot/
     │   └── wry/
     └── src/
         ├── main.rs            # Point d'entrée Rust
-        ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC (en cours de découpage)
+        ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC (cœur, en cours de découpage)
         ├── git.rs            # Git intégré (C1) : status, diff visuel, snapshots/annulation (A1)
+        ├── terminal.rs       # Terminal intégré (portable-pty)
+        ├── files.rs          # Opérations fichiers pures (I/O, encodage, mtime)
+        ├── pdf.rs            # Export Markdown → HTML (impression PDF)
+        ├── models_config.rs  # Édition registres modèles (models.json / model-switch.json)
         ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
         ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
         ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)

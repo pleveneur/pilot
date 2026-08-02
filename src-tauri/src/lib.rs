@@ -1,4 +1,3 @@
-use pulldown_cmark::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -42,6 +41,9 @@ mod web_server;
 mod context_engine;
 mod git;
 mod terminal;
+mod files;
+mod models_config;
+mod pdf;
 
 // ── État global de l'application ──
 
@@ -692,110 +694,6 @@ fn open_project_path(app: AppHandle, path: String) -> Result<FileNode, String> {
 }
 
 #[tauri::command]
-fn read_file_binary(path: String) -> Result<Vec<u8>, String> {
-    fs::read(&path).map_err(|e| format!("Erreur lecture: {}", e))
-}
-
-#[tauri::command]
-fn read_file_content(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| format!("Erreur lecture: {}", e))
-}
-
-#[derive(serde::Serialize)]
-struct FileInfo {
-    encoding: String,
-    eol: String,
-}
-
-#[tauri::command]
-fn get_file_info(path: String) -> Result<FileInfo, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("Erreur lecture: {}", e))?;
-
-    // Détection de l'encodage (BOM)
-    let encoding = if bytes.starts_with(b"\xef\xbb\xbf") {
-        "UTF-8 BOM"
-    } else if bytes.starts_with(b"\xff\xfe") {
-        "UTF-16 LE"
-    } else if bytes.starts_with(b"\xfe\xff") {
-        "UTF-16 BE"
-    } else {
-        "UTF-8"
-    };
-
-    // Détection de la fin de ligne
-    let mut crlf_count = 0usize;
-    let mut lf_count = 0usize;
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\r' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-                crlf_count += 1;
-                i += 2;
-                continue;
-            }
-        } else if bytes[i] == b'\n' {
-            lf_count += 1;
-        }
-        i += 1;
-    }
-
-    let eol = if crlf_count == 0 && lf_count == 0 {
-        "—" // Fichier binaire ou vide
-    } else if crlf_count > lf_count {
-        "CRLF"
-    } else if lf_count > 0 {
-        "LF"
-    } else {
-        "—"
-    };
-
-    Ok(FileInfo { encoding: encoding.to_string(), eol: eol.to_string() })
-}
-
-#[tauri::command]
-fn write_file_content(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, &content).map_err(|e| format!("Erreur écriture: {}", e))
-}
-
-/// Écrit le fichier de handoff d'injection de contexte (`.pilot/context-inject.md`)
-/// consommé par l'extension pi `pilot-context` (avant_agent_start → systemPrompt).
-/// Crée le dossier `.pilot` s'il n'existe pas. Le contenu (contexte + mémoire projet)
-/// est injecté dans le system prompt, hors de la discussion stockée (message user).
-#[tauri::command]
-fn write_context_handoff(project_path: String, content: String) -> Result<(), String> {
-    if project_path.trim().is_empty() {
-        return Ok(());
-    }
-    let dir = std::path::Path::new(&project_path).join(".pilot");
-    fs::create_dir_all(&dir).map_err(|e| format!("Erreur création .pilot: {}", e))?;
-    let file = dir.join("context-inject.md");
-    fs::write(&file, &content).map_err(|e| format!("Erreur écriture handoff: {}", e))
-}
-
-#[tauri::command]
-fn write_file_binary(path: String, data: Vec<u8>) -> Result<(), String> {
-    fs::write(&path, &data).map_err(|e| format!("Erreur écriture: {}", e))
-}
-
-#[tauri::command]
-fn file_exists(path: String) -> bool {
-    std::path::Path::new(&path).exists()
-}
-
-/// Renvoie la date de dernière modification d'un fichier (mtime) en millisecondes
-/// depuis l'epoch UNIX. Utilisé par le Mode Orchestration pour détecter qu'un
-/// fichier a été créé/modifié par le codeur après une tâche.
-#[tauri::command]
-fn file_mtime(path: String) -> Result<f64, String> {
-    let meta = fs::metadata(&path).map_err(|e| format!("Erreur metadata: {}", e))?;
-    let mtime = meta.modified().map_err(|e| format!("Erreur mtime: {}", e))?;
-    let dur = mtime
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Erreur epoch: {}", e))?;
-    Ok(dur.as_secs_f64() * 1000.0)
-}
-
-#[tauri::command]
 fn open_terminal(state: State<AppState>, run_default: bool) -> Result<(), String> {
     let project = state.project_path.lock().unwrap();
     let project_path = project
@@ -1073,10 +971,6 @@ fn refresh_tree(state: State<AppState>) -> Result<FileNode, String> {
     build_tree(&PathBuf::from(path))
 }
 
-#[tauri::command]
-fn open_in_browser(path: String) -> Result<(), String> {
-    open::that(&path).map_err(|e| format!("Erreur ouverture navigateur: {}", e))
-}
 
 #[tauri::command]
 fn open_explorer(state: State<AppState>) -> Result<(), String> {
@@ -3624,221 +3518,12 @@ fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, Stri
 // résolu par stem explicite (et non par le chemin de l'exécutable configuré).
 // Toutes les écritures font un backup .bak et une validation minimale.
 
-/// Résout `~/.<stem>` (home dir + dossier point-stem). Contrairement à
-/// `resolve_agent_home` qui déduit le stem du chemin de l'exécutable, cette
-/// variante prend un stem explicite (« pi », « plh », ...) pour permettre
-/// d'éditer le registre d'un backend même s'il n'est pas celui actif.
-fn resolve_agent_home_by_stem(stem: &str) -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
-    let clean = stem.trim().trim_start_matches('.');
-    if clean.is_empty() {
-        return Err("stem vide".to_string());
-    }
-    Ok(std::path::PathBuf::from(&home).join(format!(".{}", clean)))
-}
 
-/// Liste les backends disponibles : scanne le home dir à la recherche de
-/// dossiers `.{stem}/agent/models.json`. Retourne les stems (ex: ["pi","plh"]),
-/// triés, avec « pi » en tête si présent. Sert à peupler le sélecteur de
-/// backend dans l'onglet Fournisseurs.
-#[tauri::command]
-fn list_agent_backends() -> Result<Vec<String>, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
-    let home_dir = std::path::Path::new(&home);
-    let mut stems: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(home_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = match name.to_str() {
-                Some(s) => s,
-                None => continue,
-            };
-            if !name.starts_with('.') {
-                continue;
-            }
-            let stem = name.trim_start_matches('.');
-            if stem.is_empty() {
-                continue;
-            }
-            // Ne garder que les dossiers contenant agent/models.json
-            let models_file = entry.path().join("agent").join("models.json");
-            if models_file.is_file() {
-                stems.push(stem.to_string());
-            }
-        }
-    }
-    stems.sort();
-    // « pi » en tête si présent (backend canonique)
-    if let Some(pos) = stems.iter().position(|s| s == "pi") {
-        let pi = stems.remove(pos);
-        stems.insert(0, pi);
-    }
-    Ok(stems)
-}
 
-/// Lit le `models.json` d'un backend donné (`~/.{stem}/agent/models.json`).
-/// Retourne l'objet JSON tel quel (round-trip) pour préserver les clés non
-/// gérées par l'UI. Si le fichier n'existe pas, retourne un objet vide.
-#[tauri::command]
-fn read_models_config(stem: String) -> Result<Value, String> {
-    let path = resolve_agent_home_by_stem(&stem)?.join("agent").join("models.json");
-    if !path.exists() {
-        return Ok(serde_json::json!({ "providers": {} }));
-    }
-    let json_str = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Lecture models.json: {}", e))?;
-    let config: Value = serde_json::from_str(&json_str)
-        .map_err(|e| format!("JSON invalide: {}", e))?;
-    Ok(config)
-}
 
-/// Écrit le `models.json` d'un backend. Backup `models.json.bak` avant écriture,
-/// puis écriture atomique (fichier temp + rename). Validation : `providers`
-/// doit être un objet (ou absent → {});
-#[tauri::command]
-fn write_models_config(stem: String, config: Value) -> Result<(), String> {
-    // Validation minimale
-    let mut cfg = config;
-    if cfg.get("providers").is_none() {
-        cfg = serde_json::json!({ "providers": {} });
-    }
-    if !cfg["providers"].is_object() {
-        return Err("`providers` doit être un objet".to_string());
-    }
-    let agent_dir = resolve_agent_home_by_stem(&stem)?.join("agent");
-    std::fs::create_dir_all(&agent_dir)
-        .map_err(|e| format!("Création du dossier agent: {}", e))?;
-    let target = agent_dir.join("models.json");
-    // Backup
-    if target.exists() {
-        let bak = agent_dir.join("models.json.bak");
-        let _ = std::fs::copy(&target, &bak);
-    }
-    let pretty = serde_json::to_string_pretty(&cfg)
-        .map_err(|e| format!("Sérialisation JSON: {}", e))?;
-    std::fs::write(&target, pretty)
-        .map_err(|e| format!("Écriture models.json: {}", e))?;
-    Ok(())
-}
 
-/// Lit le `model-switch.json` d'un backend (`~/.{stem}/agent/model-switch.json`).
-/// Contient `{ aliases: {...}, defaultModel: "provider/id" }`. Retourne `{}` si
-/// le fichier n'existe pas.
-#[tauri::command]
-fn read_model_aliases(stem: String) -> Result<Value, String> {
-    let path = resolve_agent_home_by_stem(&stem)?.join("agent").join("model-switch.json");
-    if !path.exists() {
-        return Ok(serde_json::json!({ "aliases": {}, "defaultModel": "" }));
-    }
-    let json_str = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Lecture model-switch.json: {}", e))?;
-    let parsed: Value = serde_json::from_str(&json_str)
-        .map_err(|e| format!("JSON invalide: {}", e))?;
-    Ok(parsed)
-}
 
-/// Écrit le `model-switch.json` d'un backend. Backup `.bak` + écriture.
-/// Validation : si `aliases` est présent, ce doit être un objet ; si
-/// `defaultModel` est présent, ce doit être une chaîne.
-#[tauri::command]
-fn write_model_aliases(stem: String, config: Value) -> Result<(), String> {
-    if let Some(a) = config.get("aliases") {
-        if !a.is_null() && !a.is_object() {
-            return Err("`aliases` doit être un objet".to_string());
-        }
-    }
-    if let Some(d) = config.get("defaultModel") {
-        if !d.is_null() && !d.is_string() {
-            return Err("`defaultModel` doit être une chaîne".to_string());
-        }
-    }
-    let agent_dir = resolve_agent_home_by_stem(&stem)?.join("agent");
-    std::fs::create_dir_all(&agent_dir)
-        .map_err(|e| format!("Création du dossier agent: {}", e))?;
-    let target = agent_dir.join("model-switch.json");
-    if target.exists() {
-        let bak = agent_dir.join("model-switch.json.bak");
-        let _ = std::fs::copy(&target, &bak);
-    }
-    let pretty = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("Sérialisation JSON: {}", e))?;
-    std::fs::write(&target, pretty)
-        .map_err(|e| format!("Écriture model-switch.json: {}", e))?;
-    Ok(())
-}
 
-/// Teste la disponibilité d'un provider : effectue `GET {baseUrl}/models`
-/// (endpoint OpenAI-compatible, supporté par ollama et llama-cpp server) et
-/// retourne la liste des IDs de modèles disponibles côté serveur. Si l'API key
-/// est renseignée (et != "none"), ajoute l'en-tête Authorization Bearer.
-/// Timeout 4 s. Retourne `{ ok, models: [...], error }`.
-#[tauri::command]
-async fn test_provider_models(base_url: String, api_key: Option<String>) -> Result<Value, String> {
-    use tokio::time::{timeout, Duration};
-    let key = api_key.unwrap_or_default();
-    let key = key.trim();
-    let mut url = base_url.trim().trim_end_matches('/').to_string();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        url = format!("http://{}", url);
-    }
-    let endpoint = format!("{}/models", url);
-    // Client bloquant dans spawn_blocking pour ne pas bloquer le runtime async
-    // de Tauri. reqwest est configuré avec rustls-tls (pas de dépendance système
-    // OpenSSL). Timeout global 5 s (spawn_blocking) + 4 s par requête HTTP.
-    let key_owned = if key.is_empty() || key == "none" {
-        String::new()
-    } else {
-        key.to_string()
-    };
-    let endpoint_owned = endpoint.clone();
-    let res = timeout(
-        Duration::from_secs(5),
-        tokio::task::spawn_blocking(move || -> Result<Value, String> {
-            let b = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(4))
-                .danger_accept_invalid_certs(true);
-            let client = b.build().map_err(|e| e.to_string())?;
-            let mut req = client.get(&endpoint_owned);
-            if !key_owned.is_empty() {
-                req = req.bearer_auth(&key_owned);
-            }
-            let resp = req.send().map_err(|e| e.to_string())?;
-            let status = resp.status();
-            let body = resp.text().map_err(|e| e.to_string())?;
-            if !status.is_success() {
-                return Ok(serde_json::json!({
-                    "ok": false,
-                    "models": [],
-                    "error": format!("HTTP {}", status.as_u16())
-                }));
-            }
-            let parsed: Value = serde_json::from_str(&body)
-                .map_err(|e| format!("Réponse non-JSON: {}", e))?;
-            // Format OpenAI: { data: [ { id: "..." }, ... ] }
-            let mut ids: Vec<String> = Vec::new();
-            if let Some(data) = parsed["data"].as_array() {
-                for m in data {
-                    if let Some(id) = m["id"].as_str() {
-                        ids.push(id.to_string());
-                    }
-                }
-            }
-            ids.sort();
-            Ok(serde_json::json!({ "ok": true, "models": ids, "error": null }))
-        }),
-    )
-    .await;
-    match res {
-        Ok(Ok(Ok(v))) => Ok(v),
-        Ok(Ok(Err(e))) => Ok(serde_json::json!({ "ok": false, "models": [], "error": e })),
-        Ok(Err(_)) => Ok(serde_json::json!({ "ok": false, "models": [], "error": "join error" })),
-        Err(_) => Ok(serde_json::json!({ "ok": false, "models": [], "error": "timeout (5s)" })),
-    }
-}
 
 // ── Vérification syntaxique (Mode Orchestration V2 — linting-in-the-loop) ──
 
@@ -4495,14 +4180,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_project_path,
-            read_file_content,
-            get_file_info,
-            read_file_binary,
-            write_file_content,
-            write_file_binary,
-            write_context_handoff,
-            file_exists,
-            file_mtime,
+            files::read_file_content,
+            files::get_file_info,
+            files::read_file_binary,
+            files::write_file_content,
+            files::write_file_binary,
+            files::write_context_handoff,
+            files::file_exists,
+            files::file_mtime,
             open_terminal,
             get_config,
             save_config,
@@ -4515,8 +4200,8 @@ pub fn run() {
             create_folder,
             delete_file_or_dir,
             open_explorer,
-            open_in_browser,
-            export_pdf,
+            files::open_in_browser,
+            pdf::export_pdf,
             rename_file_or_dir,
             copy_image_to_project,
             terminal::spawn_terminal,
@@ -4549,12 +4234,12 @@ pub fn run() {
             lint_file,
             replace_in_files,
             get_available_models_list,
-            read_models_config,
-            write_models_config,
-            read_model_aliases,
-            write_model_aliases,
-            list_agent_backends,
-            test_provider_models,
+            models_config::read_models_config,
+            models_config::write_models_config,
+            models_config::read_model_aliases,
+            models_config::write_model_aliases,
+            models_config::list_agent_backends,
+            models_config::test_provider_models,
             set_help_model,
             set_review_model,
             add_favorite,
@@ -4651,87 +4336,6 @@ pub fn run() {
 
 // ── Export Markdown → HTML (pour impression PDF) ──
 
-#[tauri::command]
-fn export_pdf(source_path: String) -> Result<String, String> {
-    let md = fs::read_to_string(&source_path).map_err(|e| format!("Erreur lecture: {}", e))?;
-
-    // Génération HTML via pulldown-cmark
-    let mut html_output = String::new();
-    pulldown_cmark::html::push_html(&mut html_output, Parser::new_ext(&md, pulldown_cmark::Options::all()));
-
-    // Document HTML complet avec le même CSS que la prévisualisation
-    let full_html = format!(
-        r#"<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 14px;
-    line-height: 1.7;
-    color: #1e1e1e;
-    background: #ffffff;
-    padding: 30px 40px;
-    max-width: 900px;
-    margin: 0 auto;
-  }}
-  h1 {{ font-size: 1.8em; margin: 0.8em 0 0.4em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }}
-  h2 {{ font-size: 1.5em; margin: 0.8em 0 0.4em; }}
-  h3 {{ font-size: 1.3em; margin: 0.7em 0 0.3em; }}
-  h4, h5, h6 {{ font-size: 1.1em; margin: 0.6em 0 0.3em; }}
-  p {{ margin: 0.5em 0; }}
-  a {{ color: #007acc; text-decoration: none; }}
-  ul, ol {{ padding-left: 2em; margin: 0.5em 0; }}
-  li {{ margin: 0.2em 0; }}
-  blockquote {{
-    margin: 0.8em 0;
-    padding: 0.5em 1em;
-    border-left: 4px solid #ccc;
-    background: #f9f9f9;
-  }}
-  code {{
-    font-family: 'Consolas', 'Courier New', monospace;
-    font-size: 0.9em;
-    background: #f5f5f5;
-    padding: 2px 5px;
-    border-radius: 3px;
-  }}
-  pre {{
-    background: #f5f5f5;
-    padding: 12px 16px;
-    border-radius: 6px;
-    overflow-x: auto;
-    margin: 0.8em 0;
-    line-height: 1.5;
-  }}
-  pre code {{ background: none; padding: 0; font-size: 0.85em; }}
-  table {{ border-collapse: collapse; margin: 0.8em 0; width: 100%; }}
-  th, td {{ border: 1px solid #ddd; padding: 6px 12px; text-align: left; }}
-  th {{ background: #f5f5f5; font-weight: bold; }}
-  hr {{ border: none; border-top: 1px solid #ddd; margin: 1em 0; }}
-  img {{
-    max-width: 100%;
-    margin: 1em 0;
-    display: block;
-  }}
-  @media print {{
-    body {{ padding: 20px 30px; }}
-    @page {{ margin: 15mm; }}
-    img {{ page-break-inside: avoid; max-height: 95vh; }}
-    h1, h2, h3, h4 {{ page-break-after: avoid; }}
-    p {{ orphans: 3; widows: 3; }}
-  }}
-</style>
-</head>
-<body>
-{}
-</body>
-</html>"#, html_output);
-
-    Ok(full_html)
-}
 
 // ── Renommer un fichier ou un dossier ──
 
