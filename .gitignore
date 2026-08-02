@@ -51,3 +51,6 @@ jobs.txt
 logs.txt
 runs.json
 runs.txt
+# Release artefacts (jetables, générés par scripts/gen-latest-json.js)
+rel.json
+latest.json

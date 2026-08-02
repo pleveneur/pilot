@@ -640,3 +640,48 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
   custom (19/18).
 - **Nettoyage suggéré** : marquer A3/A5/A6 comme « vu → fusionné dans H1/H2/H9 »
   pour éviter qu'un contributeur les implémente en doublon.
+
+---
+
+## 26. ▶ PROCHAINE MODIFICATION — Écran Agents : agent actif mis en avant + « réflexion » de l'agent courant
+
+> ⏭️ **À faire demain** (prochaine modification). Demande utilisateur du 01/08.
+
+**Objectif visuel** (écran groupe d'agents 🎭) :
+- **À droite** (panneau « Activité » / équipe) : quand un agent est **actif**, le
+  rendre bien plus **visible** — surligné en **vert** (chip, bordure et/ou fond de
+  carte), distinct du reste de l'équipe.
+- **Au centre** (zone de chat) : afficher la **réflexion** et les **informations
+  traitées** de l'agent **en cours** — la « pensée » visible en direct, pas
+  seulement le résultat.
+- Le tout **joli** et **cohérent avec le thème courant** (dark/light, variables
+  CSS existantes).
+
+**Ce qui existe déjà** (à réutiliser) :
+- Le panneau « Activité » (issue #9) rend déjà un tableau de bord d'équipe
+  (`agents-ui.js`, `updateActivity()` / `mark()`) avec chips d'état (`pense` /
+  `outil` / `appelle` / `fait` / `err`) et la chaîne d'appels.
+- Les événements du bus (`agents-bus.js`) : `agentStart`, `delta`
+  (`message_update`/`text_delta`), `toolStart`, `transition`, `result` — la
+  réflexion arrive déjà via les `delta` (streaming), mais n'est pas affichée
+  comme « pensée en direct ».
+
+**Travail proposé :**
+- [ ] **Agent actif mis en avant** : nouvelle classe CSS (ex. `.agent-status-card.active`
+      ou un style `running`) utilisant `--success`/une teinte verte, appliquée à la
+      carte de l'agent dont `currentAgentId === agentId` (état « en cours »).
+- [ ] **Panneau « Réflexion » au centre** : une bulle dédiée par agent courant qui
+      affiche le streaming des `delta` (texte produit) + les derniers outils
+      utilisés (`toolStart`) — la « pensée / informations traitées » en direct,
+      dans le flux du chat.
+- [ ] **Cohérence thème** : utiliser les variables CSS existantes (`--success`,
+      `--accent-soft`, `--bg-hover`, etc.) et s'assurer que le rendu est correct
+      en dark ET light.
+
+**Fichiers concernés :** `src/js/agents-ui.js` (mark actif + bulle réflexion),
+`src/js/agents-bus.js` (exposer `currentAgentId`/état courant si besoin),
+`src/css/style.css` (styles `.active`, bulle réflexion),
+`spec_gestion_agents.md` + bloc `HELP:agents` (doc).
+
+**Valeur :** 🟡 haute (visibilité/suivi en temps réel de l'équipe) ·
+**Effort :** faible-moyen.
