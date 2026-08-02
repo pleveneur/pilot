@@ -16,6 +16,11 @@ import {
   truncateTestOutput,
   buildTreeString,
   extractTaskSummary,
+  normalizeForLoop,
+  makeExcerpt,
+  detectLoop,
+  determineEscalationAction,
+  summarizePlan,
 } from "./orchestration.js";
 
 // ── normalizePlan ──────────────────────────────────────────────────────
@@ -357,5 +362,108 @@ describe("extractTaskSummary", () => {
   it("retourne une valeur même si vide", () => {
     // fonctionnellement : retourne le résumé trouvé ou un fallback
     expect(typeof extractTaskSummary("", 1)).toBe("string");
+  });
+});
+
+// ── normalizeForLoop / makeExcerpt / detectLoop ───────────────────────
+describe("normalizeForLoop", () => {
+  it("minimise le bruit : ponctuation, case, triple backticks", () => {
+    expect(normalizeForLoop("  Bonjour! MONDE.  ")).toBe("bonjour monde");
+    expect(normalizeForLoop("```js\ncode```")).toBe("js code");
+    expect(normalizeForLoop("a, b ; c: d")).toBe("a b c d");
+  });
+
+  it("retourne '' sur entrée invalide", () => {
+    expect(normalizeForLoop(null)).toBe("");
+    expect(normalizeForLoop(undefined)).toBe("");
+    expect(normalizeForLoop(42)).toBe("");
+    expect(normalizeForLoop("")).toBe("");
+  });
+});
+
+describe("makeExcerpt", () => {
+  it("retourne le texte inchangé si sous la limite", () => {
+    expect(makeExcerpt("court texte", 100)).toBe("court texte");
+  });
+
+  it("tronque et signale avec … au-delà de la limite", () => {
+    const r = makeExcerpt("abcdefgh", 4);
+    expect(r).toBe("abc…");
+    expect(r.length).toBeLessThanOrEqual(4);
+  });
+
+  it("retourne '' sur entrée invalide", () => {
+    expect(makeExcerpt(null)).toBe("");
+    expect(makeExcerpt(0)).toBe("");
+    expect(makeExcerpt("   ")).toBe("");
+  });
+});
+
+describe("detectLoop", () => {
+  it("false si identiques mais trop courts", () => {
+    expect(detectLoop("abc", "abc")).toBe(false);
+  });
+
+  it("true si réponses quasi identiques", () => {
+    const longA = "je continue à travailler sur la fonction de parsing des réponses du plan";
+    const longB = "je continue à travailler sur la fonction de parsing des réponses du plan";
+    expect(detectLoop(longA, longB)).toBe(true);
+  });
+
+  it("false si réponses très différentes", () => {
+    const a = "je corrige le parsing des réponses du plan et des erreurs";
+    const b = "j'implémente maintenant la validation des entrées utilisateur et les tests";
+    expect(detectLoop(a, b)).toBe(false);
+  });
+
+  it("false si entrée vide", () => {
+    expect(detectLoop("", "contenu")).toBe(false);
+    expect(detectLoop(null, "x")).toBe(false);
+  });
+});
+
+// ── determineEscalationAction ─────────────────────────────────────────
+describe("determineEscalationAction", () => {
+  it("action unknown si aucun marqueur", () => {
+    expect(determineEscalationAction("rien du tout")).toEqual({ action: "unknown", payload: null });
+    expect(determineEscalationAction("")).toEqual({ action: "unknown", payload: null });
+    expect(determineEscalationAction(null)).toEqual({ action: "unknown", payload: null });
+  });
+
+  it("parse les actions sans payload", () => {
+    expect(determineEscalationAction("[ACTION: REDECOUPER]")).toEqual({ action: "redecouper", payload: null });
+    expect(determineEscalationAction("[ACTION: EXECUTER]")).toEqual({ action: "executer", payload: null });
+    expect(determineEscalationAction("[ACTION: REVISER]")).toEqual({ action: "reviser", payload: null });
+  });
+
+  it("case-insensitive", () => {
+    expect(determineEscalationAction("[action: redecouper]")).toEqual({ action: "redecouper", payload: null });
+  });
+
+  it("action COMMANDE avec payload", () => {
+    expect(determineEscalationAction("[ACTION: COMMANDE]\n[COMMANDE: npm test]")).toEqual({
+      action: "commande",
+      payload: "npm test",
+    });
+    expect(determineEscalationAction("[ACTION: COMMANDE]")).toEqual({ action: "commande", payload: null });
+  });
+});
+
+// ── summarizePlan ─────────────────────────────────────────────────────
+describe("summarizePlan", () => {
+  it("calcule le taux de réussite codeur", () => {
+    const r = summarizePlan(
+      { completed: [1, 2], escalated: [3], task_attempts: { "1": 2, "2": 1 } },
+      4
+    );
+    expect(r).toContain("2/4 tâches réussies");
+    expect(r).toContain("1 escaladée");
+    expect(r).toContain("3 tentative");
+    expect(r).toContain("50%");
+  });
+
+  it("gère total = 0 sans division par zéro", () => {
+    const r = summarizePlan({ completed: [], escalated: [], task_attempts: {} }, 0);
+    expect(r).toContain("0/0");
   });
 });
