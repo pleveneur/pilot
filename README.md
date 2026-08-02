@@ -151,8 +151,8 @@ manuelle via la **palette de commandes** (`Ctrl+Shift+P` → « Vérifier les mi
 à jour »).
 
 Les versions téléchargeables (Windows, macOS, Linux) sont publiées sur la
-[page des releases](). Chaque version est signée numériquement pour garantir
-son authenticité.
+[page des releases GitHub](https://github.com/pleveneur/pilot/releases). Chaque
+version est signée numériquement pour garantir son authenticité.
 
 ---
 
@@ -211,21 +211,24 @@ d'exploitation. Aucune donnée n'est transmise sans ton action.
 
 ### Windows
 
-Téléchargez `Pilot_0.1.0_x64-setup.exe` depuis la [page des releases]() et exécutez-le. L'installeur installe automatiquement WebView2 si nécessaire.
+Téléchargez l'installeur `Pilot_<version>-x64-setup.exe` depuis la [page des
+releases](https://github.com/pleveneur/pilot/releases) et exécutez-le.
+L'installeur installe automatiquement WebView2 si nécessaire.
 
 ### macOS
 
-Téléchargez le `.dmg` depuis la page des releases, ouvrez-le et glissez Pilot dans le dossier Applications.
+Téléchargez le `.dmg` depuis la [page des releases](https://github.com/pleveneur/pilot/releases),
+ouvrez-le et glissez Pilot dans le dossier Applications.
 
 ### Linux
 
 ```bash
-# .deb
-sudo dpkg -i pilot_0.1.0_amd64.deb
+# .deb (remplacez <version> par la version téléchargée)
+sudo dpkg -i pilot_<version>_amd64.deb
 
 # .AppImage
-chmod +x pilot_0.1.0_amd64.AppImage
-./pilot_0.1.0_amd64.AppImage
+chmod +x pilot_<version>_amd64.AppImage
+./pilot_<version>_amd64.AppImage
 ```
 
 ---
@@ -327,25 +330,29 @@ Les installeurs sont générés dans `src-tauri/target/release/bundle/` :
 
 ## Structure du projet
 
+Vue simplifiée — la référence à jour est `AGENTS.md`.
+
 ```
 pilot/
 ├── index.html                # Point d'entrée HTML
 ├── package.json              # Dépendances npm
 ├── vite.config.js            # Configuration Vite
-├── AGENTS.md                 # Instructions assistant
-├── spec_pilot.md             # Spécifications
-├── spec_rpc.md               # Spécifications agent Pi
+├── AGENTS.md                 # Instructions assistant (source de vérité)
+├── spec_*.md                 # Spécifications par feature
 ├── plan_dev.md               # Plan de développement
 ├── README.md                 # Ce fichier
+├── help/                     # Aide intégrée (handbook)
+├── scripts/                  # Build handbook, release, latest.json
 ├── src/                      # Frontend (HTML/CSS/JS)
 │   ├── css/style.css
-│   └── js/ (14 modules)
+│   └── js/ (~45 modules)
 ├── src-tauri/                # Backend (Rust)
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
 │   ├── capabilities/
 │   ├── icons/
-│   └── src/ (main.rs, lib.rs, rpc_manager.rs)
+│   ├── extensions/           # Extensions pi embarquées
+│   └── src/                  # lib.rs + modules par domaine
 └── dist/                     # Build frontend (généré par Vite)
 ```
 
