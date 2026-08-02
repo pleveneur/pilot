@@ -478,6 +478,114 @@ fn estimate_tokens(s: &str) -> usize {
     (s.len() as f32 / 3.5).ceil() as usize
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_by_lines_respects_size_and_overlap() {
+        let lines = vec!["l0", "l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9",
+                         "l10", "l11", "l12", "l13", "l14", "l15", "l16", "l17", "l18", "l19"];
+        let chunks = chunk_by_lines(&lines, 8, 2);
+        // 20 lignes, step = 6 → chunk 0 [0..8], 1 [6..14], 2 [12..20]
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[0].end_line, 8);
+        assert_eq!(chunks[1].start_line, 7); // 6+1 (offset ligne)
+        assert_eq!(chunks[2].end_line, 20);
+        assert!(chunks[0].content.contains("l0"));
+        assert!(chunks[1].content.contains("l6"));
+        assert!(chunks[2].content.contains("l19"));
+    }
+
+    #[test]
+    fn chunk_by_lines_empty() {
+        assert!(chunk_by_lines(&[], 8, 2).is_empty());
+    }
+
+    #[test]
+    fn chunk_markdown_splits_on_headings() {
+        let src = ["# Intro", "a", "b", "## Detail", "c", "### Sous", "d"];
+        let chunks = chunk_markdown(&src);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].start_line, 1); // # Intro … b
+        assert_eq!(chunks[0].end_line, 3);
+        assert_eq!(chunks[1].start_line, 4); // ## Detail … c
+        assert_eq!(chunks[1].end_line, 5);
+        assert_eq!(chunks[2].start_line, 6); // ### Sous … d
+        assert_eq!(chunks[2].end_line, 7);
+        assert!(chunks[0].content.contains("# Intro"));
+        assert!(chunks[1].content.contains("## Detail"));
+    }
+
+    #[test]
+    fn push_md_section_skips_blank_section() {
+        let mut chunks = Vec::new();
+        push_md_section(&mut chunks, &[], 0);
+        push_md_section(&mut chunks, &["", "  "], 0);
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn cosine_identical_is_one_and_orthogonal_zero() {
+        let a = [1.0, 0.0, 2.0];
+        let b = [1.0, 0.0, 2.0];
+        let o = [0.0, 1.0, 0.0];
+        assert!((cosine(&a, &b) - 1.0).abs() < 1e-5);
+        assert!((cosine(&a, &o)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cosine_empty_vectors_is_zero() {
+        assert_eq!(cosine(&[], &[]), 0.0);
+        assert_eq!(cosine(&[0.0, 0.0], &[1.0, 1.0]), 0.0);
+    }
+
+    #[test]
+    fn blob_roundtrip_preserves_floats() {
+        let v = [0.25f32, -1.5, 3.0, 0.0];
+        let blob = vec_to_blob(&v);
+        let back = blob_to_vec(&blob);
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn estimate_tokens_grows_with_length() {
+        assert!(estimate_tokens("x") >= 1);
+        assert!(estimate_tokens(&"a".repeat(350)) > estimate_tokens("a"));
+    }
+
+    #[test]
+    fn is_indexed_and_ignored() {
+        assert!(is_indexed("main.rs"));
+        assert!(is_indexed("README.md"));
+        assert!(!is_indexed("image.png"));
+        assert!(!is_indexed("archive.zip"));
+        assert!(is_ignored_dir("node_modules"));
+        assert!(is_ignored_dir(".git"));
+        assert!(!is_ignored_dir("src"));
+    }
+
+    #[test]
+    fn file_hash_is_stable_and_short() {
+        let h1 = file_hash(b"hello");
+        let h2 = file_hash(b"hello");
+        let h3 = file_hash(b"world");
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+        assert_eq!(h1.len(), 16);
+    }
+
+    #[test]
+    fn chunk_file_picks_markdown_vs_lines() {
+        let md = "# T\na\n## S\nb";
+        assert_eq!(chunk_file("doc.md", md).len(), 2);
+        // Fichier non-markdown → un seul chunk par lignes.
+        let txt = "a\nb\nc";
+        assert_eq!(chunk_file("notes.txt", txt).len(), 1);
+    }
+}
+
 fn query_index_blocking(project_path: &str, prompt: &str, budget_tokens: usize, endpoint: &str, model: &str) -> Result<QueryResult, String> {
     let db_path = index_db_path(project_path);
     if !db_path.exists() {

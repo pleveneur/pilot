@@ -129,7 +129,7 @@ mod tests {
     fn prompt_creation_contains_create() {
         let p = build_agents_md_prompt("/proj", false);
         assert!(p.contains("CRÉE le fichier AGENTS.md"));
-        assert!(p.contains(" OBJECTIF"));
+        assert!(p.contains("OBJECTIF :"));
         assert!(p.contains("write (création)"));
     }
 

@@ -384,3 +384,31 @@ pub fn tailscale_serve_qrcode(url: String) -> Result<String, String> {
     svg.push_str("</svg>");
     Ok(svg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_proxy_port_standard_output() {
+        let out = "\n\tproxy 443 → http://127.0.0.1:8790\n";
+        assert_eq!(parse_proxy_port(out), Some(8790));
+    }
+
+    #[test]
+    fn parse_proxy_port_localhost() {
+        let out = "proxy 443 → http://localhost:8080";
+        assert_eq!(parse_proxy_port(out), Some(8080));
+    }
+
+    #[test]
+    fn parse_proxy_port_ignores_non_proxy_lines() {
+        let out = "some text without proxy\nhealth: ok\n";
+        assert_eq!(parse_proxy_port(out), None);
+    }
+
+    #[test]
+    fn parse_proxy_port_empty_input() {
+        assert_eq!(parse_proxy_port(""), None);
+    }
+}

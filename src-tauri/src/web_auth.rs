@@ -124,3 +124,62 @@ fn encode_token(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn hash_then_verify_roundtrip() {
+        let h = WebAuth::hash_password("secret-123").unwrap();
+        assert!(WebAuth::verify_password("secret-123", &h));
+        assert!(!WebAuth::verify_password("wrong", &h));
+    }
+
+    #[test]
+    fn empty_password_refused() {
+        assert!(WebAuth::hash_password("").is_err());
+    }
+
+    #[test]
+    fn empty_hash_never_verifies() {
+        assert!(!WebAuth::verify_password("anything", ""));
+        assert!(!WebAuth::verify_password("anything", "not-a-valid-phc"));
+    }
+
+    #[test]
+    fn session_create_validate_and_expiry() {
+        let auth = WebAuth::new();
+        let token = auth.create_session(Duration::from_millis(50));
+        assert!(auth.validate(&token));
+        assert!(!auth.validate("bogus-token"));
+        // Expire après la TTL.
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(!auth.validate(&token));
+        assert_eq!(auth.active_count(), 0);
+    }
+
+    #[test]
+    fn revoke_all_invalidates_sessions() {
+        let auth = WebAuth::new();
+        let t1 = auth.create_session(Duration::from_secs(60));
+        let t2 = auth.create_session(Duration::from_secs(60));
+        assert_eq!(auth.active_count(), 2);
+        auth.revoke_all();
+        assert_eq!(auth.active_count(), 0);
+        assert!(!auth.validate(&t1));
+        assert!(!auth.validate(&t2));
+    }
+
+    #[test]
+    fn token_hash_is_not_raw_token() {
+        // Le stock interne ne contient jamais le token brut, seulement son SHA-256.
+        let auth = WebAuth::new();
+        let token = auth.create_session(Duration::from_secs(60));
+        let sessions = auth.sessions.lock().unwrap();
+        let stored = sessions.keys().next().unwrap();
+        assert_ne!(stored, token.as_bytes());
+        assert_eq!(stored, &hash_token(&token));
+    }
+}

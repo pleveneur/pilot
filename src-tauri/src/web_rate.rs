@@ -127,3 +127,80 @@ impl WebGuard {
         // offrir une fenêtre de brute-force au moment d'une révocation.
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_key_is_hex_and_deterministic() {
+        let k1 = token_key("abc");
+        let k2 = token_key("abc");
+        let k3 = token_key("abd");
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
+        assert_eq!(k1.len(), 64);
+        assert!(k1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn login_limit_blocks_after_max() {
+        let g = WebGuard::new();
+        // 5 tentatives autorisées, la 6e bloquée sur la même IP.
+        for _ in 0..LOGIN_MAX {
+            assert!(g.check_login("192.168.1.10"));
+        }
+        assert!(!g.check_login("192.168.1.10"));
+        // Une autre IP reste autorisée.
+        assert!(g.check_login("192.168.1.11"));
+    }
+
+    #[test]
+    fn prompt_limit_is_per_key() {
+        let g = WebGuard::new();
+        let key_a = token_key("token-a");
+        let key_b = token_key("token-b");
+        for _ in 0..PROMPT_MAX {
+            assert!(g.check_prompt(&key_a));
+        }
+        assert!(!g.check_prompt(&key_a));
+        assert!(g.check_prompt(&key_b));
+    }
+
+    #[test]
+    fn ws_acquire_and_release() {
+        let g = WebGuard::new();
+        let key = token_key("tok");
+        for _ in 0..WS_MAX {
+            assert!(g.ws_acquire(&key));
+        }
+        assert!(!g.ws_acquire(&key));
+        g.ws_release(&key);
+        assert!(g.ws_acquire(&key));
+    }
+
+    #[test]
+    fn reset_all_clears_prompt_and_ws() {
+        let g = WebGuard::new();
+        let key = token_key("tok");
+        for _ in 0..PROMPT_MAX {
+            g.check_prompt(&key);
+        }
+        assert!(!g.check_prompt(&key));
+        assert!(g.ws_acquire(&key));
+        g.reset_all();
+        // Prompt et WS remis à zéro.
+        assert!(g.check_prompt(&key));
+        assert!(g.ws_acquire(&key));
+    }
+
+    #[test]
+    fn ws_release_underflows_safely() {
+        let g = WebGuard::new();
+        let key = token_key("tok");
+        // Libérer sans avoir acquis ne doit pas paniquer ni créer d'état négatif.
+        g.ws_release(&key);
+        g.ws_release(&key);
+        assert!(g.ws_acquire(&key));
+    }
+}
