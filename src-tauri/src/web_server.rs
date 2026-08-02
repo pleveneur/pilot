@@ -17,7 +17,7 @@ use crate::web_auth::WebAuth;
 use crate::web_audit::WebAudit;
 use crate::web_rate::{token_key, WebGuard};
 use crate::{
-    build_tree, do_abort_agent, do_compact_agent_context, do_get_agent_messages,
+    agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
     do_send_agent_prompt, do_set_agent_model, do_start_agent_session, do_stop_agent_session,
     open_project_shared, AppConfig, AppState,
