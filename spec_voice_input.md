@@ -1,6 +1,6 @@
 # Spec — Dictée vocale (micro à côté du bouton envoyer)
 
-> Document de spécification — Statut : **planifié, non implémenté**.
+> Document de spécification — Statut : ✅ **Implémenté (2026-07)** — voie web remote (micro Chrome HTTPS via Tailscale Serve) ; bouton 🎙️ desktop présent mais informatif (micro WebView bloqué par wry/Tauri, voir Évolution 8).
 > Décisions validées par l'utilisateur le 10/07/2026.
 > Suivi : voir « Évolution 8 » dans `Bugs et Evolutions.md`.
 
