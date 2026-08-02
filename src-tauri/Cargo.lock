@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "pilot"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "argon2",
  "axum",
