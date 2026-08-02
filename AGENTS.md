@@ -189,6 +189,7 @@ pilot/
         ├── session_history.rs # H9 : historique de sessions searchable
         ├── tabs.rs           # Persistance des onglets d'édition
         ├── web_commands.rs   # Mode remote : commandes desktop de pilotage
+        ├── rpc.rs            # Agent RPC pi : sessions, prompts, reviewer, sonde backend
         ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
         ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
         ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)
