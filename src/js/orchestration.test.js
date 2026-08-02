@@ -295,11 +295,22 @@ describe("resolvePath", () => {
 // ── extractMentionedFiles ─────────────────────────────────────────────
 describe("extractMentionedFiles", () => {
   it("extrait les fichiers avec extension de code (1 niveau de répertoire)", () => {
-    // Le regex gère un niveau de répertoire ; les chemins plus profonds sont
-    // extraits au dernier niveau.
     const files = extractMentionedFiles("modifié src/main.js");
     expect(files).toContain("src/main.js");
-    expect(extractMentionedFiles("src-tauri/src/lib.rs")).toContain("src/lib.rs");
+    expect(extractMentionedFiles("src-tauri/src/lib.rs")).toContain("src-tauri/src/lib.rs");
+  });
+
+  it("ne capture pas le mot précédent (regex \\s correctement échappé)", () => {
+    // Avant correctif : le backslash de \\s était perdu → "fichier main.js" capturé en bloc.
+    expect(extractMentionedFiles("fichier main.js")).toEqual(["main.js"]);
+    expect(extractMentionedFiles("dans src/main.js" )).toContain("src/main.js");
+  });
+
+  it("extrait plusieurs fichiers dans la même phrase", () => {
+    const files = extractMentionedFiles("modifié src/main.js et src-tauri/src/lib.rs");
+    expect(files).toContain("src/main.js");
+    expect(files).toContain("src-tauri/src/lib.rs");
+    expect(files).toHaveLength(2);
   });
 
   it("extrait les marqueurs explicites CREATE: et NO_CHANGE:", () => {

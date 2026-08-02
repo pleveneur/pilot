@@ -1009,7 +1009,7 @@ export function extractMentionedFiles(text) {
     "md|markdown|js|mjs|cjs|ts|tsx|jsx|json|jsonc|css|scss|sass|html|htm|rs|toml|yaml|yml|txt|sh|bash|py|go|java|c|cc|cpp|h|hpp|rb|php|sql|vue|svelte|xml|csv|env|gitignore|lock";
   // Regex plus permissif : accepte espaces/accents dans les chemins, en exigeant un séparateur avant.
   const re = new RegExp(
-    "(?:^|[\s\\\"\'\(\[\{])(?:\./)?(?:[^\s\\\"\'\(\[\{]*?\/)?[^\s\\\"\'\(\[\{]+\.(?:" + ext + ")(?=[\s\\\"\'\)\]\}]|$)",
+    String.raw`(?:^|[\s\"\'\(\[\{])(?:\./)?(?:[^\s\"\'\(\[\{]*?\/)?[^\s\"\'\(\[\{]+\.(?:${ext})(?=[\s\"\'\)\]\}]|$)`,
     "gmi"
   );
   let m;
