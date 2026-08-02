@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -48,6 +47,7 @@ mod search;
 mod code_check;
 mod plan;
 mod session_history;
+mod tabs;
 
 // ── État global de l'application ──
 
@@ -2329,40 +2329,6 @@ fn convert_pdf_to_md_ai(state: State<AppState>, text: String) -> Result<String, 
 
 
 
-// ── Persistance des onglets ──
-
-fn session_filename(project_path: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    project_path.hash(&mut hasher);
-    format!("{:016x}.json", hasher.finish())
-}
-
-#[tauri::command]
-fn save_tab_session(app: AppHandle, project_path: String, data: String) -> Result<(), String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Erreur chemin config: {}", e))?;
-    let sessions_dir = dir.join("sessions");
-    fs::create_dir_all(&sessions_dir)
-        .map_err(|e| format!("Erreur création dossier sessions: {}", e))?;
-    let path = sessions_dir.join(session_filename(&project_path));
-    fs::write(&path, data).map_err(|e| format!("Erreur écriture session: {}", e))?;
-    Ok(())
-}
-
-#[tauri::command]
-fn load_tab_session(app: AppHandle, project_path: String) -> Result<String, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Erreur chemin config: {}", e))?;
-    let path = dir.join("sessions").join(session_filename(&project_path));
-    if !path.exists() {
-        return Ok(String::new());
-    }
-    fs::read_to_string(&path).map_err(|e| format!("Erreur lecture session: {}", e))
-}
 
 
 /// Liste tous les modèles disponibles depuis ~/.pi/agent/models.json
@@ -2613,8 +2579,8 @@ pub fn run() {
             session_history::list_sessions,
             send_inline_prompt,
             convert_pdf_to_md_ai,
-            save_tab_session,
-            load_tab_session,
+            tabs::save_tab_session,
+            tabs::load_tab_session,
             search::search_in_files,
             code_check::lint_file,
             search::replace_in_files,
