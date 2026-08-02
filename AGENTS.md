@@ -157,10 +157,10 @@ pilot/
 │       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
 │       ├── models-config.js  # Onglet « Fournisseurs » : édition UI models.json + model-switch.json (pi/plh)
-│       , backend-info.js    # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
+│       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
 │       └── terminal.js        # Terminal intégré xterm.js
-├── web/                       # UI web distante (planifié, servie par axum)
+├── web/                       # UI web distante (mode remote, servie par axum)
 │   ├── index.html
 │   ├── css/web.css
 │   └── js/ (app, chat, files, projects)
@@ -177,16 +177,18 @@ pilot/
     │   └── wry/
     └── src/
         ├── main.rs            # Point d'entrée Rust
-        ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC
+        ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC (en cours de découpage)
+        ├── git.rs            # Git intégré (C1) : status, diff visuel, snapshots/annulation (A1)
+        ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
         ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
-        ├── review.rs          # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)
-        ├── rpc_manager.rs     # Gestion processus pi --mode rpc
+        ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)
+        ├── rpc_manager.rs    # Gestion processus pi --mode rpc
         ├── tailscale.rs      # Automatisation Tailscale Serve (HTTPS auto, resync port, QR code)
-        ├── web_server.rs      # Serveur axum (mode remote) : routes REST + WS
-        ├── web_auth.rs        # Auth distante : argon2, token opaque, sessions
-        ├── web_rate.rs        # Rate limiting login/prompt/WS (garde-fous distants)
-        , web_audit.rs       # Journal d'audit distant (ring buffer 500, actions sensibles)
-        └── context_engine.rs  # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
+        ├── web_server.rs     # Serveur axum (mode remote) : routes REST + WS
+        ├── web_auth.rs       # Auth distante : argon2, token opaque, sessions
+        ├── web_rate.rs       # Rate limiting login/prompt/WS (garde-fous distants)
+        ├── web_audit.rs      # Journal d'audit distant (ring buffer 500, actions sensibles)
+        └── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
 ```
 
 ---
