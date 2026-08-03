@@ -54,7 +54,7 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 | C4 | Recent files popover | ✅ Implémenté (2026-08-02) | `Ctrl+Alt+R` ou palette — popover fuzzy, `src/js/recent-files.js` (historique par projet dans localStorage, max 20, dédoublonné), enregistré à chaque `openFile` |
 | F2 | Export conversation agent | ✅ Implémenté (2026-08) | boutons 📥 (Markdown .md) toolbar π via `conversation-export.js` |
 | F3 | Copy as HTML | ✅ Implémenté (2026-08) | bouton ⧉ (HTML presse-papiers) toolbar π via `conversation-export.js` |
-| E3 | CI multi-plateforme RPC | À faire | |
+| E3 | CI multi-plateforme RPC | ✅ Implémenté (2026-08) | job `test` en matrice ubuntu/windows/macos — tests Rust+JS sur les 3 OS avant release |
 | 22 | Conflits fichiers (diff/reload) | ✅ Implémenté (2026-08) | `_showConflictTab` — dialogue 3 choix (Recharger/Garder/Diff read-only via `openGitDiffModal`), auto-reload si non modifié ; corrige le bug `_showConflictTab` inexistant |
 
 ## Ce qui reste (specs détaillées)

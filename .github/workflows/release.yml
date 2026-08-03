@@ -16,16 +16,21 @@ permissions:
 jobs:
   # ─────────────────────────────────────────────────────────────────────
   # test — lance les tests unitaires Rust ET JS avant toute release (garde-fou
-  # anti-régression). Tourne sur un seul OS (Linux) : les tests sont
+  # anti-régression). Tourne sur les 3 OS (matrice) : les tests sont
   # cross-plateforme (logique pure : auth, rate-limit, chunking, parsing,
   # orchestration, reviewer). Le build dépend de cette job : une régression
   # testée bloque la release.
   # ─────────────────────────────────────────────────────────────────────
   test:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux dependencies (Tauri)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \

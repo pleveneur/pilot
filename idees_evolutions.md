@@ -347,9 +347,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🔴 très haute · **Effort :** moyen
 
 #### E3 — Tests d'intégration multi-plateforme (déjà noté spec_rpc §12)
-- [ ] CI macOS/Linux pour le RPC (Tauri + pi).
-- **Fichiers :** nouveau `.github/workflows/ci.yml` (ou équivalent), `src-tauri/src/rpc_manager.rs` (tests `#[cfg(test)]`), `spec_rpc.md`.
-- **Valeur :** 🟡 haute · **Effort :** moyen
+- [x] CI macOS/Linux pour le RPC (Tauri + pi).
+- **Fichiers :** `.github/workflows/release.yml` (job `test` en matrice ubuntu/windows/macos), `spec_rpc.md`.
+- **Valeur :** 🟡 haute · **Effort :** moyen · ✅ Implémenté (2026-08)
 
 #### E4 — Health check pi au démarrage
 - [x] **Implémenté** (validé 2026-07-29) : au démarrage, Pilot sonde l'exécutable
