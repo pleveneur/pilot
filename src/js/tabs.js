@@ -22,6 +22,7 @@ import { createPromptBuilder } from "./prompt-builder.js";
 import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
 import { createAgents } from "./agents-ui.js";
+import { openGitDiffModal } from "./diff-view.js";
 import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 
@@ -36,8 +37,16 @@ const statusEol = document.getElementById("status-eol");
  *  (\ sur Windows), tandis que les appels programmatiques (agents-md.js,
  *  project-memory.js…) construisent le chemin avec /. Sans cette normalisation,
  *  openFile ne détectait pas le doublon et ouvrait un second onglet identique. */
+/** Échappe le HTML pour injection sûre dans innerHTML (conflit de fichier). */
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
 function samePath(a, b) {
   if (a === b) return true;
+
   if (!a || !b) return false;
   return a.replace(/\\/g, "/") === b.replace(/\\/g, "/");
 }
@@ -1422,37 +1431,128 @@ class TabsManager {
 
   _markConflictTab(tab) {
     const btn = this.tabBar.querySelector(`[data-tab-id="${tab.id}"]`);
-    if (!btn) return;
-    btn.classList.add("tab-conflict");
-    btn.title = "⚠️ Ce fichier a été modifié extérieurement — cliquez pour résoudre";
-    // Remplacer le handler de clic pour ouvrir le dialogue de conflit
-    const resolveClick = async (e) => {
-      if (e.target.closest(".tab-close")) return; // laisser la croix fermer l'onglet
-      e.stopPropagation();
-      const choice = await confirm(
-        `Le fichier « ${tab.name} » a été modifié extérieurement.\nVoulez-vous recharger la version du disque ?\n\n⚠️ Recharger écrasera vos modifications locales non sauvegardées.`,
-        { title: "Conflit de fichier", kind: "warning", okLabel: "Recharger", cancelLabel: "Garder ma version" }
-      );
-      if (choice) {
-        // Recharger
-        try {
-          const newContent = await invoke("read_file_content", { path: tab.path });
-          setContent(tab.view, newContent);
-          tab.savedContent = newContent;
-          tab.dirty = false;
-          this._updateTabButton(tab);
-          btn.classList.remove("tab-conflict");
-          btn.title = tab.path;
-          btn.removeEventListener("click", resolveClick, true);
-        } catch (_) {}
-      } else {
-        // Garder ma version — enlever l'indicateur mais garder dirty
-        btn.classList.remove("tab-conflict");
-        btn.title = tab.path;
-        btn.removeEventListener("click", resolveClick, true);
+    if (btn) {
+      btn.classList.add("tab-conflict");
+      btn.title = "⚠️ Ce fichier a été modifié extérieurement — cliquez pour résoudre";
+    }
+  }
+
+  _clearConflictTab(tab) {
+    const btn = this.tabBar.querySelector(`[data-tab-id="${tab.id}"]`);
+    if (btn) {
+      btn.classList.remove("tab-conflict");
+      btn.title = tab.path;
+    }
+  }
+
+  /**
+   * Conflit de fichier : un fichier ouvert avec des modifications locales non
+   * sauvegardées (dirty) a été modifié extérieurement. Affiche un dialogue à
+   * 3 choix : Recharger (écrase le local) / Garder ma version (ignore le disque)
+   * / Voir le diff (avant/après, read-only).
+   */
+  _showConflictTab(tab) {
+    const localContent = getContent(tab.view);
+    this._markConflictTab(tab);
+
+    // Nettoyer une éventuelle modale précédente.
+    const prev = document.getElementById("conflict-overlay");
+    if (prev) prev.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "conflict-overlay";
+    overlay.className = "git-diff-overlay";
+
+    const dialog = document.createElement("div");
+    dialog.className = "git-diff-dialog conflict-dialog";
+
+    const bar = document.createElement("div");
+    bar.className = "git-diff-bar";
+    bar.innerHTML =
+      `<span class="git-diff-title">⚠️ Conflit de fichier</span>` +
+      `<span class="git-diff-sub">${esc(tab.name)} a été modifié extérieurement.</span>`;
+    dialog.appendChild(bar);
+
+    const body = document.createElement("div");
+    body.className = "git-diff-body";
+    body.innerHTML =
+      `<p class="conflict-expl">Ce fichier a été modifié sur le disque alors que vous avez des ` +
+      `modifications locales non sauvegardées. Que voulez-vous faire ?</p>` +
+      `<p class="conflict-warn">⚠️ Recharger écrase vos modifications locales non sauvegardées.</p>`;
+    dialog.appendChild(body);
+
+    const actions = document.createElement("div");
+    actions.className = "conflict-actions";
+    const btnReload = document.createElement("button");
+    btnReload.className = "conflict-btn conflict-btn-danger";
+    btnReload.textContent = "🔄 Recharger (disque)";
+    const btnKeep = document.createElement("button");
+    btnKeep.className = "conflict-btn";
+    btnKeep.textContent = "💾 Garder ma version";
+    const btnDiff = document.createElement("button");
+    btnDiff.className = "conflict-btn conflict-btn-primary";
+    btnDiff.textContent = "👁️ Voir le diff";
+    actions.appendChild(btnKeep);
+    actions.appendChild(btnDiff);
+    actions.appendChild(btnReload);
+    dialog.appendChild(actions);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const close = (keepDirty) => {
+      overlay.remove();
+      if (keepDirty) {
+        // Garder ma version : retirer l'indicateur mais garder dirty (modifs locales)
+        this._clearConflictTab(tab);
       }
     };
-    btn.addEventListener("click", resolveClick, true);
+
+    btnKeep.addEventListener("click", () => {
+      close(true);
+    });
+
+    btnDiff.addEventListener("click", async () => {
+      let diskContent;
+      try {
+        diskContent = await invoke("read_file_content", { path: tab.path });
+      } catch (_) {
+        diskContent = "";
+      }
+      // Diff read-only : avant = version locale, après = version disque
+      openGitDiffModal({
+        before: localContent,
+        after: diskContent,
+        title: tab.name,
+        subtitle: "Votre version (avant) ↔ disque (après)",
+      });
+    });
+
+    btnReload.addEventListener("click", async () => {
+      try {
+        const newContent = await invoke("read_file_content", { path: tab.path });
+        setContent(tab.view, newContent);
+        tab.savedContent = newContent;
+        tab.dirty = false;
+        this._clearConflictTab(tab);
+        this._updateTabButton(tab);
+        close(false);
+      } catch (_) {}
+    });
+
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        close(true);
+        document.removeEventListener("keydown", onKey);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        close(true);
+        document.removeEventListener("keydown", onKey);
+      }
+    });
   }
 
   /**

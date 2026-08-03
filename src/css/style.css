@@ -1662,6 +1662,31 @@ mark.search-highlight {
 /* Hérite des styles .agent-diff-review / .agent-diff-* existants (réutilisés). */
 .git-diff-body .agent-diff-review { margin: 0; }
 
+/* --- Conflit de fichier (item 22) : dialogue 3 choix --- */
+.conflict-dialog { width: min(520px, 92vw); height: auto; max-height: 70vh; }
+.conflict-expl { margin: 0 0 8px; font-size: 13px; line-height: 1.5; }
+.conflict-warn { margin: 0 0 4px; font-size: 12px; color: #e67e22; }
+.conflict-actions {
+  display: flex;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-sidebar);
+}
+.conflict-btn {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-color);
+  color: var(--text-color);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.conflict-btn:hover { background: var(--bg-hover); }
+.conflict-btn-primary { background: var(--accent, #4f8cff); border-color: var(--accent, #4f8cff); color: #fff; }
+.conflict-btn-danger { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+
 /* --- Resize Handle for Sidebar --- */
 #sidebar {
   position: relative;
