@@ -34,6 +34,7 @@ let busState = {
   currentAgentId: null,
   pendingPromise: null,
   streamingText: "",
+  isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
   config: null,
   callbacks: {},
 };
@@ -48,6 +49,7 @@ function resetBusState() {
   busState.currentAgentId = null;
   busState.pendingPromise = null;
   busState.streamingText = "";
+  busState.isCompacting = false;
 }
 
 function emit(event, data) {
@@ -179,7 +181,14 @@ function handleAgentEvent(ev) {
   if (type === "message_update") {
     const delta = event.assistantMessageEvent || {};
     console.log("[agents-bus] delta type=" + delta.type, agentId, delta.type === "text_delta" ? ("len=" + (delta.delta||"").length) : "");
-    if (delta.type === "text_delta" && typeof delta.delta === "string") {
+    // Filtre anti-pollution (§3.4) : pendant une compaction, plh stream le
+    // résumé en text_delta. Ce texte n'est PAS la réponse de l'agent — il ne
+    // doit pas être accumulé dans streamingText (utilisé pour parser `[[CALL]]`
+    // via parseCallMarker) ni affiché comme une réponse. On ignore donc tous
+    // les deltas pendant isCompacting (même logique qu'agent-pi.js).
+    if (busState.isCompacting) {
+      // deltas ignorés (résumé de compaction)
+    } else if (delta.type === "text_delta" && typeof delta.delta === "string") {
       busState.streamingText += delta.delta;
       emit("delta", { agentId, text: delta.delta });
     }
@@ -190,6 +199,18 @@ function handleAgentEvent(ev) {
     // doublerait dans streamingText ET dans l'UI (emit delta). Le chat standard
     // (agent-pi.js) n'accumule pas non plus le "message" — on l'ignore donc pour
     // le rendu, à l'instar d'agent-pi.js.
+  } else if (type === "compaction_start") {
+    // Activer le filtre des deltas : pendant la compaction, le résumé est
+    // streamé en text_delta (plh). On le signale à l'UI mais on n'accumule pas.
+    console.log("[agents-bus] compaction_start", agentId, "reason=" + (event.reason || "?"));
+    busState.isCompacting = true;
+  } else if (type === "compaction_end" || type === "compaction") {
+    // Désactiver le filtre et reset streamingText : la compaction est terminée,
+    // la vraie réponse de l'agent (post-compaction) doit repartir proprement.
+    // On n'accumule pas le résumé pour ne pas polluer parseCallMarker.
+    console.log("[agents-bus] compaction_end", agentId);
+    busState.isCompacting = false;
+    busState.streamingText = "";
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
@@ -398,6 +419,7 @@ async function runAgentTurn(agent, brief, projectContext = "") {
 
   busState.currentAgentId = agent.id;
   busState.streamingText = "";
+  busState.isCompacting = false; // par sécurité si une compaction a été interrompue sans compaction_end
 
   const backend = backendKind();
   const prompt = buildAgentPrompt(agent, brief, projectContext, backend, "");

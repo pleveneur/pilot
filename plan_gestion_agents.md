@@ -585,6 +585,7 @@ Nouveau bloc "Agents" dans la modale Paramètres (`settings.js` + `index.html`) 
 - [ ] **3.2** Gérer les événements `rpc-event-agents` : router vers l'agent actif pour streaming et `agent_end`.
 - [ ] **3.3** Gérer les erreurs de connexion d'un agent (même logique que `auto_retry_start` dans `agent-pi.js`).
 - [ ] **3.4** Compaction : filtrer les deltas pendant `compaction_start`/`compaction_end` (réutiliser le fix de `agent-pi.js`).
+  - [x] **Fait (2026-08)** : `agents-bus.js` — `isCompacting` activé sur `compaction_start`, reset + vidage de `streamingText` sur `compaction_end`/`compaction` ; deltas ignorés pendant la compaction (même logique qu'`agent-pi.js`) pour ne pas polluer `parseCallMarker` (`[[CALL]]`). Reset de sécurité `isCompacting` au début de chaque tour (`runAgentTurn`).
 
 ### Phase 4 — Interface de l'onglet Agents
 
