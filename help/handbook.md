@@ -321,7 +321,9 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   pertinents par similarité sémantique au prompt (plus précis que l'heuristique
   V1). L'index SQLite est stocké dans `.pilot/context-index.db` et se met à jour
   incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
-  retombe automatiquement sur V1.
+  retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
+  éteint ou lent : des timeouts bornent l'attente et le prompt part sans
+  contexte au besoin.
 
 ---
 
