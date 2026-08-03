@@ -218,8 +218,20 @@ automatiquement après un commit de code — attendre la demande.
 
 Quand l'utilisateur demande la publication :
 
-1. **Bumper la version** dans les 3 fichiers (tauri.conf.json, Cargo.toml, package.json) —
-   même valeur partout (ex: `0.2.3` → `0.2.4`).
+1. **Bumper la version** dans les **4 fichiers** (tauri.conf.json, Cargo.toml, package.json,
+   Cargo.lock) — même valeur partout (ex: `0.2.3` → `0.2.4`).
+
+   ⚠️ **Cargo.lock — PIÈGE À ÉVITER (incident v0.2.30)** : `Cargo.lock` contient de
+   NOMBREUSES lignes `version = "X.Y.Z"` (une par dépendance). **Ne jamais utiliser de
+   `sed` global ou à ancrage `0,/pattern/`** sur ce fichier : il modifie la PREMIÈRE
+   occurrence rencontrée, qui peut être une dépendance (ex: `filetime`) et pas `pilot` →
+   la dépendance se retrouve verrouillée à une version inexistante sur crates.io et
+   **`cargo test --lib` échoue sur toutes les plateformes** (exit 101 en CI).
+   À la place, **cibler précisément le package `pilot`** : chercher `name = "pilot"`,
+   puis éditer la ligne `version` juste en dessous (via un outil d'édition ciblée, pas
+   un `sed`). Après le bump, VÉRIFIER : `grep 'version = "X.Y.Z"' Cargo.lock` ne doit
+   retourner qu'une seule occurrence, celle de `pilot`, et lancer `cargo test
+   --manifest-path src-tauri/Cargo.toml --lib` avant de committer.
 2. **Committer** le bump : `git commit -m "chore: bump version to X.Y.Z"`.
 3. **Pousser** `main` puis **créer et pousser le tag** `vX.Y.Z` :
    ```bash
@@ -249,8 +261,11 @@ npm run tauri build
 npx tauri signer generate -w ~/.tauri/pilot-updater.key
 
 # Publier une nouvelle version :
-# 1. Bumper la version dans tauri.conf.json, Cargo.toml et package.json.
-# 2. Committer, tagger, pousser.
+# 1. Bumper la version dans tauri.conf.json, Cargo.toml, package.json ET Cargo.lock
+#    (Cargo.lock : cibler le package `pilot` précisément, jamais de sed global —
+#    cf. la précaution ci-dessus).
+# 2. Vérifier cargo test --lib (anti-régression).
+# 3. Committer, tagger, pousser.
 # Le workflow .github/workflows/release.yml build et publie tout seul.
 git tag v0.2.0 && git push origin v0.2.0
 ```
