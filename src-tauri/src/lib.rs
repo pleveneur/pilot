@@ -15,7 +15,7 @@ pub(crate) use rpc::{kind_from_version_output, probe_backend, probe_extension_su
 pub(crate) use rpc::{
     do_abort_agent, do_get_agent_messages, do_get_agent_state, do_get_session_stats,
     do_list_agent_models, do_new_agent_session, do_send_agent_prompt, do_set_agent_model,
-    do_start_agent_session, do_stop_agent_session,
+    do_start_agent_session, do_stop_agent_session, project_event_channel,
 };
 
 
@@ -1209,8 +1209,16 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
         }
     }
 
-    // Retirer le projet de la collection multi-projets.
-    state.projects.lock().unwrap().remove(&target);
+    // Retirer le projet de la collection multi-projets, en tuant proprement sa
+    // session parkée (multi-projets) si elle existe — sinon fuite de processus pi.
+    {
+        let mut projects = state.projects.lock().unwrap();
+        if let Some(ps) = projects.remove(&target) {
+            if let Some(mut session) = ps.rpc {
+                rpc_manager::stop_session(&mut session);
+            }
+        }
+    }
 
     // Multi-projets : retirer le projet fermé de la liste persistée.
     {
@@ -1608,7 +1616,9 @@ pub fn run() {
             terminal::kill_terminal,
             rpc::start_agent_session,
             rpc::stop_agent_session,
+            rpc::park_agent_session,
             rpc::send_rpc_command,
+            rpc::get_agent_event_channel,
             rpc::get_agent_state,
             rpc::get_session_stats,
             rpc::model_supports_images,

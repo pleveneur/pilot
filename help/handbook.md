@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-03 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md -->
+<!-- PILOT-HELP generated=2026-08-03 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -479,3 +479,24 @@ projet en utilisant l'IA.
 - En **mise à jour**, l'agent conserve les sections existantes toujours
   pertinentes et enrichit/corrige le reste.
 - Après génération, le fichier s'ouvre dans l'éditeur pour vérification.
+
+---
+
+## Projets multiples (multi-projets)
+
+Pilot peut ouvrir **plusieurs projets en même temps** dans la même fenêtre et
+basculer entre eux sans fermer l'application. Chaque projet garde **son agent
+(pi/plh) actif en arrière-plan**, ses onglets et sa discussion.
+
+- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets ouverts ».
+  La liste des projets ouverts est **conservée au redémarrage** (rouverte
+automatiquement avec le projet actif).
+- **Basculer** : cliquer sur un projet de la liste → Pilot sauvegarde les onglets
+du projet courant, bascule l'affichage, puis restaure les onglets et **la
+discussion en cours** du projet ciblé.
+- **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
+- **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
+pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
+exactement là où il en était (contexte et historique préservés).
+- **Accès distant** : depuis le mode remote, la liste des projets ouverts est
+visible et on peut basculer de projet (route `/api/project/select`).

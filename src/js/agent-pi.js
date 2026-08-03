@@ -13,6 +13,20 @@ import { exportConversationMarkdown, copyConversationHtml } from "./conversation
 import { renderEditGateDialog } from "./diff-view.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
+
+/**
+ * Multi-projets : retourne le canal d'événements Tauri de la session agent du
+ * projet actif (rpc-event-<hash>). Chaque projet émet sur son propre canal, on
+ * écoute donc celui du projet actif. Retourne "rpc-event" (canal hérité) en
+ * cas d'échec, pour rester compatible si la commande est indisponible.
+ */
+async function getAgentEventChannel() {
+  try {
+    return await invoke("get_agent_event_channel");
+  } catch (_) {
+    return "rpc-event";
+  }
+}
 import { refreshIcons, setIcon } from "./icons.js";
 import { notifyAgentDoneFromRemote } from "./desktop-notify.js";
 import { recordCurrentSession } from "./session-history.js";
@@ -98,7 +112,7 @@ const md = markdownit({
  * @param {HTMLElement} container - Élément conteneur (.editor-wrapper)
  * @returns {Promise<{wrapper: HTMLElement, unlisten: Function}>}
  */
-export async function createAgentPi(container) {
+export async function createAgentPi(container, resumed = false) {
   // Charger la configuration show_thinking
   await refreshShowThinking();
   // Charger la configuration show_tools
@@ -1696,7 +1710,10 @@ export async function createAgentPi(container) {
 
   // ── Écoute des événements RPC ──
   const orchFns = { renderOrchestrationPlan, executeNextTask, handleOrchestrationAgentEnd, handleOrchestrationTimeout, handleTaskFailure, handleOrchestrationConnectionError, switchToOrchestrator, switchToCoder, resetIdleTimer: resetOrchestrationIdleTimer, parsePlanResponse, validatePlan };
-  const unlisten = await listen("rpc-event", (event) => {
+  // Multi-projets : chaque projet émet sur son propre canal (rpc-event-<hash>).
+  // On écoute le canal du projet actif pour ne recevoir que SES événements.
+  const rpcChannel = await getAgentEventChannel();
+  const unlisten = await listen(rpcChannel, (event) => {
     const payload = event.payload;
     try {
       handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanResponse, orchFns);
@@ -1715,11 +1732,15 @@ export async function createAgentPi(container) {
     }
   });
 
-  // ── Démarrer une nouvelle session ──
-  try {
-    await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) });
-  } catch (e) {
-    console.error("Erreur new_session:", e);
+  // ── Démarrer une nouvelle session (uniquement si ce n'est pas une reprise) ──
+  // Multi-projets : si la session a été reprise depuis un « parking » (pi déjà
+  // vivant en arrière-plan), on NE reset PAS l'historique avec new_session.
+  if (!resumed) {
+    try {
+      await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) });
+    } catch (e) {
+      console.error("Erreur new_session:", e);
+    }
   }
 
   // ── Charger les stats initiales ──
@@ -1917,7 +1938,7 @@ export async function createAgentPi(container) {
     // IMPORTANT : agent_end seul NE signifie PAS un succès (pi émet aussi
     // agent_end après un abort/erreur de connexion). On n'accepte le succès
     // que si du texte a réellement été reçu.
-    unlistenTest = await listen("rpc-event", (event) => {
+    unlistenTest = await listen(await getAgentEventChannel(), (event) => {
       const p = event.payload;
       const t = p.type;
       if (t === "message_update") {

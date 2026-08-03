@@ -1163,6 +1163,14 @@ class Sidebar {
       let hadAgentTab = false;
       if (cur && cur !== path) {
         await saveTabSession(this.tabs, cur);
+        // Multi-projets : « parker » la session de l'agent du projet courant
+        // (garder le processus pi vivant en arrière-plan) avant de fermer ses
+        // onglets. La fermeture de l'onglet agent appelle stop_agent_session,
+        // qui devient un no-op car rpc_state est déjà vide après le parking.
+        const hasAgent = this.tabs.tabs.some((t) => t.mode === "agent");
+        if (hasAgent) {
+          await invoke("park_agent_session").catch(() => {});
+        }
         hadAgentTab = this._closeAllTabs();
       }
       // Prélixer le projet cible AVANT l'invoke pour que le listener

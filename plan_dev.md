@@ -132,7 +132,7 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-08* — ⚠️ priorité prochaine session : portage RAG vers PLh (section en tête) · nouvelle vision produit « gestionnaire de projets » (multi-projets + multi-utilisateurs, voir section Vision produit)
+*Dernière mise à jour : 2026-08* — multi-projets V1 implémenté (persistance, bascule, parking de sessions par projet = agents pi vivants en arrière-plan, canaux d'événements par projet, dropdown UI, web-remote select). Prochaine session : portage RAG vers PLh.
 
 ## Consolidation (qualité / dette technique)
 

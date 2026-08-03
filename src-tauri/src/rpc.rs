@@ -11,6 +11,34 @@ use std::fs;
 use tauri::{AppHandle, Manager, State};
 
 use crate::rpc_manager;
+
+/// Multi-projets (spec_multiprojects.md §3) : canal d'événements Tauri dédié à
+/// la session agent d'un projet donné (`rpc-event-<hash>`). Chaque projet émet
+/// sur son propre canal → les événements d'un agent d'un projet inactif (parké
+/// en arrière-plan) ne polluent pas le chat du projet actif. Le frontend écoute
+/// le canal du projet actif via `get_agent_event_channel`.
+pub(crate) fn project_event_channel(path: &str) -> String {
+    // FNV-1a 32 bits (déterministe, cohérent avec le hash JS du frontend).
+    let mut hash: u32 = 0x811c9dc5;
+    for b in path.as_bytes() {
+        hash ^= *b as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("rpc-event-{:08x}", hash)
+}
+
+/// Multi-projets : retourne le canal d'événements de la session du projet actif,
+/// pour que le frontend écoute le bon canal lors de la création de l'onglet agent.
+#[tauri::command]
+pub fn get_agent_event_channel(state: State<AppState>) -> Result<String, String> {
+    let project = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    Ok(project_event_channel(&project))
+}
 use crate::session_history;
 use crate::AppState;
 
@@ -119,12 +147,28 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
     }
 }
 
-pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
+pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Result<bool, String> {
     let project = state.project_path.lock().unwrap();
     let cwd = project
         .as_ref()
         .ok_or("Aucun projet ouvert")?
         .clone();
+
+    // Multi-projets (spec_multiprojects.md §3) : reprendre une session parkée du
+    // projet actif si elle existe (vrai multi-agent) au lieu d'en relancer une.
+    // La session parkée vit dans `ProjectState.rpc` (processus pi toujours vivant) ;
+    // on la remonte dans `rpc_state` pour reprendre exactement là où on en était.
+    let resumed = {
+        let mut projects = state.projects.lock().unwrap();
+        projects
+            .get_mut(&cwd)
+            .and_then(|ps| ps.rpc.take())
+    };
+    if let Some(session) = resumed {
+        *state.rpc_state.lock().unwrap() = Some(session);
+        // Reprendre la session : pas de `new_session` (on garde l'historique).
+        return Ok(true);
+    }
 
     let mut rpc = state.rpc_state.lock().unwrap();
     if rpc.is_some() {
@@ -206,7 +250,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
     }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), "rpc-event", None,
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &project_event_channel(&cwd), None,
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -223,12 +267,41 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         rpc_manager::send_command_sync(sess, cmd).ok();
     }
 
+    Ok(false)
+}
+
+#[tauri::command]
+pub fn start_agent_session(state: State<AppState>, app: AppHandle) -> Result<bool, String> {
+    do_start_agent_session(state.inner(), &app)
+}
+
+/// Multi-projets (spec_multiprojects.md §3) : « parke » la session agent du
+/// projet actif dans `ProjectState.rpc` SANS tuer le processus pi (vrai
+/// multi-agent en arrière-plan). À la bascule, `do_start_agent_session`
+/// reprend la session parkée au lieu d'en relancer une. Idempotent : no-op si
+/// aucune session active ou si le projet actif est inconnu.
+pub(crate) fn do_park_agent_session(state: &AppState) -> Result<(), String> {
+    let active = state.active_project.lock().unwrap().clone();
+    let session = state.rpc_state.lock().unwrap().take();
+    let Some(session) = session else {
+        return Ok(()); // aucune session active
+    };
+    if let Some(ref active_path) = active {
+        let mut projects = state.projects.lock().unwrap();
+        if let Some(ps) = projects.get_mut(active_path) {
+            ps.rpc = Some(session);
+            return Ok(());
+        }
+        // Projet actif inconnu dans la collection → tuer pour éviter une fuite.
+    }
+    let mut session = session;
+    rpc_manager::stop_session(&mut session);
     Ok(())
 }
 
 #[tauri::command]
-pub fn start_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
-    do_start_agent_session(state.inner(), &app)
+pub fn park_agent_session(state: State<AppState>) -> Result<(), String> {
+    do_park_agent_session(state.inner())
 }
 
 /// Arrête l'agent pi en cours (s'il existe) et libère la session. Idempotent : no-op

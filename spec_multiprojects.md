@@ -65,8 +65,8 @@ struct AppState {
 ```rust
 struct ProjectState {
     path: String,                                 // clé = chemin normalisé
-    rpc: Option<rpc_manager::RpcSession>,         // agent de CE projet
-    watcher: Option<(Arc<AtomicBool>, JoinHandle<()>)>, // watcher de CE projet
+    rpc: Option<rpc_manager::RpcSession>,         // agent de CE projet (parké en arrière-plan)
+    watcher: Option<(Arc<AtomicBool>, JoinHandle<()>)>, // watcher de CE projet (réservé, V2)
 }
 
 struct AppState {
@@ -78,54 +78,86 @@ struct AppState {
 ```
 
 - **Clé** = chemin normalisé (même canonicalisation que le code actuel).
-- Les commandes qui lisaient « le projet courant » lisent désormais
-  `active_project` puis `projects[active]`. Helper central `fn active_project(&self)`.
+- `rpc_state`/`watch_state`/`project_path` restent l'état du **projet actif**
+  (adaptateur progressif). `ProjectState.rpc` stocke la session **parkée** d'un
+  projet inactif.
 
 ### Commandes Tauri
 | Commande | Rôle |
 |---|---|
 | `open_project(path)` | Ajoute le projet (s'il n'existe pas) et le rend actif. Compatible avec le flux existant |
-| `close_project(path)` | Arrête proprement l'agent, supprime watcher, retire de la collection |
-| `set_active_project(path)` | Bascule `active_project` |
-| `list_open_projects()` | Projets ouverts + projet actif (pour l'afficheur UI et le web-remote) |
+| `close_project(path?)` | Arrête proprement l'agent (actif + parké de CE projet), supprime watcher, retire de la collection |
+| `set_active_project(path)` | Bascule `active_project` (+ relance le watcher) |
+| `list_open_projects()` | Projets ouverts (pour l'afficheur UI et le web-remote) |
+| `get_active_project()` | Chemin du projet actif |
+| `restore_open_projects()` | Restaure au démarrage les projets ouverts persistés (collection, sans watcher) |
+| `park_agent_session()` | « Parke » la session de l'agent du projet actif (processus pi vivant) dans `ProjectState.rpc` |
+| `get_agent_event_channel()` | Canal d'événements Tauri dédié au projet actif (`rpc-event-<hash>`) |
+
+### Sessions par projet (parking — vrai multi-agent)
+- **Un seul agent « actif » à la fois** (celui du projet affiché, dans `rpc_state`).
+- À la bascule, le frontend **parke** la session courante (`park_agent_session` :
+  le processus pi **reste vivant** en arrière-plan, rangé dans `ProjectState.rpc`)
+  puis bascule. Au retour, `start_agent_session` **reprend** la session parkée
+  (retourne `true`) au lieu d'en relancer une → l'agent reprend exactement là où
+  il en était (contexte, historique, processus).
+- Chaque projet émet sur son **propre canal d'événements** (`rpc-event-<hash>`),
+  calculé par `project_event_channel` (FNV-1a, cohérent avec le hash JS). Le
+  frontend écoute le canal du projet actif → aucun chevauchement entre agents.
+- À la fermeture d'un projet, sa session parkée est **tuée** proprement
+  (`close_project`), sinon fuite de processus pi.
 
 ### Sécurité remote
 - La logique existante (`open_project_shared`, validation canonicalize + starts_with
-  root) est **réutilisée**. Chaque route remote cible un `project` (défaut = actif)
-  et valide son chemin.
+  root) est **réutilisée**. Le remote sélectionne un projet via
+  `POST /api/project/select` (équivalent `set_active_project`, redémarre l'agent).
+  La sélection distante bascule le projet actif partagé.
 
 ## 4. Frontend
 
 ### Fichiers impactés
 | Fichier | Rôle |
 |---|---|
-| `src/js/sidebar.js` | Bandeau afficheur de projets + logique open/close/set-active |
-| `src/js/main.js` | Orchestration : gestion du projet actif, notification aux modules |
-| `src/js/agent-pi.js` | Onglet π lié au projet actif (session RPC propre par projet via pi) |
-| `src/js/tabs.js` | Persistance/restauration des onglets par projet |
+| `src/js/sidebar.js` | Afficheur de projets (dropdown) + logique open/close/set-active/park |
+| `src/js/main.js` | Orchestration : gestion du projet actif, restauration au démarrage |
+| `src/js/agent-pi.js` | Onglet π lié au projet actif (canal d'événements par projet) |
+| `src/js/tabs.js` | Persistance/restauration des onglets par projet, reprise de session |
 | `index.html`, `src/css/style.css` | UI de l'afficheur (dropdown projets ouverts) |
 
+### UI de l'afficheur
+- **Dropdown** (pas un bandeau) dans le sélecteur de projet de la sidebar :
+  section « Projets ouverts », projet actif en surbrillance, bascule au clic,
+  fermeture par bouton ✕. (Divergence assumée vs la 1re esquisse « bandeau
+  horizontal » : le dropdown est intégré au sélecteur existant.)
+
 ### État agent par projet
-- **Session isolée par pi** : `do_start_agent_session` calcule `session_dir` depuis
-  le cwd du projet → chaque projet a **son répertoire de session pi** (résumé,
-  historique). Au basculement, l'onglet agent est fermé (`stop_agent_session`),
-  puis rouvert (`start_agent_session` sur le nouveau cwd) → pi reprend la session
-  du projet ciblé. Les messages/contextes des projets sont donc **isolés** sans
-  dupliquer d'état JS.
+- **Parking de sessions** : au basculement, le frontend **parke** la session du
+  projet sortant (`park_agent_session`, processus pi vivant) puis invoque
+  `set_active_project`. Au retour, `start_agent_session` **reprend** la session
+  parkée (`resumed=true` → `createAgentPi(container, true)` n'envoie pas
+  `new_session`, donc l'historique est préservé). Le chat est re-rendu via
+  `renderMessageHistory`.
+- Chaque projet émet sur son **propre canal** (`rpc-event-<hash>` via
+  `get_agent_event_channel`) → les événements d'un agent inactif ne polluent pas
+  le chat du projet affiché.
 - Au basculement (desktop), `_activateProject` : sauvegarde la session onglets,
-  ferme les onglets, invoque `set_active_project`, restaure les onglets du projet,
-  rouvre l'onglet agent si le projet en avait un.
+  parke l'agent, ferme les onglets, invoque `set_active_project`, restaure les
+  onglets du projet, rouvre l'onglet agent si le projet en avait un.
 
 ## 5. Points de vigilance / décisions
 
 - **Adaptateur progressif (choisi)** : `project_path`/`watch_state`/`rpc_state`
   restent l'état du **projet actif** (les ~15 fonctions RPC et le watcher ne sont
-  pas modifiées). Les `ProjectState` de la collection stockent les autres projets
-  ouverts (seul `path` est rempli pour l'instant). Pas de régression sur le cœur RPC.
-- **Multi-agents** : un seul processus pi actif à la fois (celui du projet actif) ;
-  chaque projet a son répertoire de session pi. Si l'on veut N agents simultanés
-  (en arrière-plan), ce sera une évolution ultérieure.
+  pas modifiées). `ProjectState.rpc` stocke les sessions **parkées** des projets
+  inactifs (processus pi vivant). Pas de régression sur le cœur RPC.
+- **Parking (vrai multi-agent)** : chaque projet ouvert garde son processus pi
+  **vivant** en arrière-plan (parké). Un seul agent est « actif » (affiché) à la
+  fois. Le coût en mémoire/CPU est proportionnel au nombre de projets ouverts.
+  La session d'un projet fermé est tuée proprement.
 - **Watcher** : un seul watcher actif (projet actif), relancé à chaque bascule.
+  `ProjectState.watcher` est réservé (V2) pour N watchers simultanés.
+- **Persistance** : la liste des projets ouverts + le projet actif sont sauvegardés
+  dans la config et restaurés au démarrage (`restore_open_projects`).
 - **Compatibilité** : le cas « 1 seul projet ouvert » se comporte exactement comme
   avant (rétro-compatibilité totale — `close_project` sans arg = fermer l'actif).
 - `agent_sessions` (H2 V2) et `rpc_reviewer` restent globaux.
@@ -134,12 +166,43 @@ struct AppState {
 
 1. **Backend** : `AppState` avec `projects: HashMap<String, ProjectState>` +
    `active_project` ; commandes `set_active_project`/`list_open_projects`/
-   `get_active_project` + `close_project(path?)` ; `open_project_shared` enregistre
-   le projet et le rend actif. Helper `do_set_active_project` (réutilisé par le web).
-2. **Frontend afficheur** : section « Projets ouverts » dans le dropdown de la
+   `get_active_project`/`restore_open_projects`/`park_agent_session`/
+   `get_agent_event_channel` + `close_project(path?)` ; `open_project_shared`
+   enregistre le projet et le rend actif. Helper `do_set_active_project` (réutilisé
+   par le web).
+2. **Persistance** : `open_projects` + `active_open_project` dans `AppConfig`,
+   maintenus à l'ouverture/fermeture/bascule, restaurés au démarrage (`main.js`).
+3. **Parking** : `park_agent_session` (processus pi vivant rangé dans `ProjectState.rpc`),
+   reprise dans `start_agent_session` (sans `new_session`), canaux d'événements par
+   projet (`project_event_channel`/`get_agent_event_channel`).
+4. **Frontend afficheur** : section « Projets ouverts » dans le dropdown de la
    sidebar (bascule au clic, fermeture ✕, projet actif en surbrillance).
-3. **État agent par projet** : via les sessions pi par répertoire projet (pas
-   d'état JS dupliqué) + restauration des onglets par projet.
-4. **Web-remote** : `GET /api/project` expose `open`/`active` ; nouvelle route
+5. **État agent par projet** : parking de sessions (processus pi vivant par projet)
+   + restauration des onglets par projet + re-rendu de l'historique
+   (`renderMessageHistory`).
+6. **Web-remote** : `GET /api/project` expose `open`/`active` ; nouvelle route
    `POST /api/project/select` (bascule le projet actif + redémarre l'agent si actif) ;
    UI web liste les projets ouverts avec sélection.
+
+---
+
+<!-- HELP:multiprojets -->
+## Projets multiples (multi-projets)
+
+Pilot peut ouvrir **plusieurs projets en même temps** dans la même fenêtre et
+basculer entre eux sans fermer l'application. Chaque projet garde **son agent
+(pi/plh) actif en arrière-plan**, ses onglets et sa discussion.
+
+- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets ouverts ».
+  La liste des projets ouverts est **conservée au redémarrage** (rouverte
+automatiquement avec le projet actif).
+- **Basculer** : cliquer sur un projet de la liste → Pilot sauvegarde les onglets
+du projet courant, bascule l'affichage, puis restaure les onglets et **la
+discussion en cours** du projet ciblé.
+- **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
+- **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
+pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
+exactement là où il en était (contexte et historique préservés).
+- **Accès distant** : depuis le mode remote, la liste des projets ouverts est
+visible et on peut basculer de projet (route `/api/project/select`).
+<!-- /HELP:multiprojets -->

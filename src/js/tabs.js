@@ -369,10 +369,12 @@ class TabsManager {
     // Lancer la session RPC
     showLoading(`Démarrage de ${agentDisplayLabel()}…`);
     try {
-      await invoke("start_agent_session");
+      // start_agent_session retourne true si la session a été reprise depuis un
+      // parking multi-projets (pi vivant en arrière-plan), false si nouvelle.
+      const resumed = await invoke("start_agent_session");
 
       // Créer l'interface de chat
-      const result = await createAgentPi(tab.wrapper);
+      const result = await createAgentPi(tab.wrapper, resumed === true);
       tab.view = result.wrapper;
       tab.unlistenRpc = result.unlisten;
       tab.unlistenDragDrop = result.unlistenDragDrop;

@@ -37,6 +37,7 @@ const SOURCES = [
   "spec_session_history.md",
   "spec_gestion_agents.md",
   "spec_agents_md.md",
+  "spec_multiprojects.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 

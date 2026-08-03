@@ -20,7 +20,7 @@ use crate::{
     agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
     do_send_agent_prompt, do_set_active_project, do_set_agent_model, do_start_agent_session,
-    do_stop_agent_session, open_project_shared, AppConfig, AppState,
+    do_stop_agent_session, open_project_shared, project_event_channel, AppConfig, AppState,
 };
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -490,7 +490,18 @@ async fn agent_prompt(
     if !user_text.is_empty() && !user_text.starts_with('/') {
         let ev = json!({ "type": "user_message", "text": user_text, "source": "remote" });
         let _ = ctx.event_tx.send(ev.clone());
-        let _ = ctx.app_handle.emit("rpc-event", ev);
+        // Multi-projets : émettre sur le canal du projet actif (le desktop écoute
+        // le canal de son projet, pas un canal global).
+        let channel = ctx
+            .app_handle
+            .state::<AppState>()
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|p| project_event_channel(&p))
+            .unwrap_or_else(|| "rpc-event".to_string());
+        let _ = ctx.app_handle.emit(&channel, ev);
     }
     let app = ctx.app_handle.clone();
     let message = body.message;
