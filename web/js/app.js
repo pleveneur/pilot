@@ -248,6 +248,17 @@ function applyProject(proj) {
   state.browseRoots = Array.isArray(proj.roots) ? proj.roots.slice() : [];
   const cur = document.getElementById('current-project');
   cur.textContent = proj.current || '(aucun)';
+  // Projets ouverts (multi-projets) : bascule du projet actif.
+  const openEl = document.getElementById('open-projects');
+  openEl.innerHTML = '';
+  const openList = proj.open || [];
+  openList.forEach((p) => {
+    const el = document.createElement('div');
+    el.className = 'proj-item' + (p === (proj.active || proj.current) ? ' active' : '');
+    el.textContent = p;
+    el.onclick = () => selectProject(p);
+    openEl.appendChild(el);
+  });
   // Récents
   const rec = document.getElementById('recent-projects');
   rec.innerHTML = '';
@@ -925,6 +936,16 @@ async function openProject(path) {
     appendSystem('📁 Projet changé : ' + path);
     // Le backend a redémarré pi sur le nouveau cwd (new_session reset le modèle) :
     // on resync agent state + models + projet, puis l'arborescence.
+    resyncAll();
+    loadFiles();
+  } catch (e) { appendSystem('❌ ' + e.message); }
+}
+
+// Multi-projets : bascule le projet actif sur un projet déjà ouvert.
+async function selectProject(path) {
+  try {
+    await apiJson('/api/project/select', { method: 'POST', body: JSON.stringify({ path }) });
+    appendSystem('📁 Projet actif : ' + path);
     resyncAll();
     loadFiles();
   } catch (e) { appendSystem('❌ ' + e.message); }

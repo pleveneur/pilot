@@ -19,8 +19,8 @@ use crate::web_rate::{token_key, WebGuard};
 use crate::{
     agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
-    do_send_agent_prompt, do_set_agent_model, do_start_agent_session, do_stop_agent_session,
-    open_project_shared, AppConfig, AppState,
+    do_send_agent_prompt, do_set_active_project, do_set_agent_model, do_start_agent_session,
+    do_stop_agent_session, open_project_shared, AppConfig, AppState,
 };
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -176,6 +176,7 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/file/meta", get(file_meta))
         .route("/api/project", get(project_info))
         .route("/api/project/open", post(project_open))
+        .route("/api/project/select", post(project_select))
         .route("/api/project/create", post(project_create))
         .route("/api/project/browse", get(project_browse))
         .layer(from_fn_with_state(ctx.clone(), auth_middleware));
@@ -832,9 +833,13 @@ async fn project_info(State(ctx): State<Arc<WebCtx>>) -> Response {
         let state = app.state::<AppState>();
         let cfg = state.config.lock().unwrap().clone();
         let current = state.project_path.lock().unwrap().clone();
+        let open: Vec<String> = state.projects.lock().unwrap().keys().cloned().collect();
+        let active = state.active_project.lock().unwrap().clone();
         let roots = resolve_browse_roots(&cfg);
         Ok(json!({
             "current": current,
+            "open": open,
+            "active": active,
             "recent": cfg.recent_projects,
             "roots": roots,
             "readonly": cfg.web_readonly,
@@ -911,6 +916,51 @@ async fn project_open(
                 Json(json!({"error": e})),
             )
                 .into_response()
+        }
+    }
+}
+
+/// Multi-projets (spec_multiprojects.md) : bascule le projet actif sur le
+/// web-remote. Le projet doit être ouvert (dans la collection). Si une session
+/// agent est active, on la redémarre sur le nouveau cwd (comme project_open).
+#[derive(Deserialize)]
+struct ProjectSelectBody {
+    path: String,
+}
+
+async fn project_select(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectSelectBody>,
+) -> Response {
+    let app = ctx.app_handle.clone();
+    let path = body.path;
+    let path_aud = path.clone();
+    let app2 = app.clone();
+    let path2 = path.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app2.state::<AppState>();
+        do_set_active_project(&state, &app2, &path2)?;
+        // Redémarrer l'agent pi sur le nouveau cwd si une session était active.
+        let was_active = state.rpc_state.lock().unwrap().is_some();
+        if was_active {
+            do_stop_agent_session(&state);
+            if let Err(e) = do_start_agent_session(&state, &app2) {
+                eprintln!("[web] Redémarrage agent après sélection de projet échoué : {}", e);
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string());
+    match res.and_then(|r| r) {
+        Ok(_) => {
+            ctx.audit.record(&authed.ip, &authed.key, "project_select", &path_aud, true);
+            Json(json!({ "ok": true, "path": path })).into_response()
+        }
+        Err(e) => {
+            ctx.audit.record(&authed.ip, &authed.key, "project_select", &path_aud, false);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response()
         }
     }
 }
