@@ -162,6 +162,8 @@ class Sidebar {
     this.dropdown = document.getElementById("projects-dropdown");
     this.ddNewProject = document.getElementById("dd-new-project");
     this.ddRecentList = document.getElementById("dd-recent-list");
+    this.ddOpenSection = document.getElementById("dd-open-section");
+    this.ddOpenList = document.getElementById("dd-open-list");
     this.ddCloseProject = document.getElementById("dd-close-project");
     this.ddCloseSeparator = document.getElementById("dd-close-separator");
     this.contextMenu = document.getElementById("context-menu");
@@ -1104,10 +1106,81 @@ class Sidebar {
 
   async _toggleProjectsDropdown() {
     if (this.dropdown.classList.contains("hidden")) {
-      await this._loadRecentProjects();
+      await Promise.all([this._loadOpenProjects(), this._loadRecentProjects()]);
       this.dropdown.classList.remove("hidden");
     } else {
       this._hideProjectsDropdown();
+    }
+  }
+
+  // Multi-projets (spec_multiprojects.md) : affiche les projets ouverts dans
+  // le dropdown, avec bascule du projet actif (clic) et fermeture (bouton ✕).
+  async _loadOpenProjects() {
+    try {
+      const [open, active] = await Promise.all([
+        invoke("list_open_projects"),
+        invoke("get_active_project"),
+      ]);
+      this.ddOpenList.innerHTML = "";
+      if (!open || open.length === 0) {
+        this.ddOpenSection.classList.add("hidden");
+        return;
+      }
+      this.ddOpenSection.classList.remove("hidden");
+      for (const p of open) {
+        const name = p.replace(/\\/g, "/").split("/").pop();
+        const isActive = p === active;
+        const btn = document.createElement("button");
+        btn.className = "dd-recent-item" + (isActive ? " active" : "");
+        btn.innerHTML = `<span class="dd-recent-icon icon-cat-folder"><i data-lucide="folder" class="icon-sm"></i></span><span class="dd-recent-name">${this._esc(name)}${isActive ? " <em>• actif</em>" : ""}</span><span class="dd-recent-path">${this._esc(p)}</span><span class="dd-open-close" title="Fermer ce projet">✕</span>`;
+        // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
+        btn.addEventListener("click", (e) => {
+          if (e.target.closest(".dd-open-close")) return;
+          this._hideProjectsDropdown();
+          if (!isActive) this._activateProject(p);
+        });
+        // Bouton fermer → ferme ce projet précis
+        const closeBtn = btn.querySelector(".dd-open-close");
+        closeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this._hideProjectsDropdown();
+          this.closeProject(p);
+        });
+        this.ddOpenList.appendChild(btn);
+        refreshIcons(btn);
+      }
+    } catch (_) {
+      this.ddOpenSection.classList.add("hidden");
+    }
+  }
+
+  // Multi-projets : bascule le projet actif côté backend, puis recharge l'UI.
+  async _activateProject(path) {
+    try {
+      showLoading("Bascule du projet…");
+      // Sauvegarder la session du projet courant et fermer ses onglets
+      const cur = window._pilotProjectPath;
+      let hadAgentTab = false;
+      if (cur && cur !== path) {
+        await saveTabSession(this.tabs, cur);
+        hadAgentTab = this._closeAllTabs();
+      }
+      // Prélixer le projet cible AVANT l'invoke pour que le listener
+      // `project_changed` ignore cet event (il ferait une double resync).
+      window._pilotProjectPath = path;
+      await invoke("set_active_project", { path });
+      await this.resyncProjectFromRemote(path);
+      // Restaurer les onglets de CE projet
+      restoreTabs(this.tabs, path);
+      // Rouvrir l'agent de CE projet s'il en avait un
+      if (hadAgentTab) {
+        await this.tabs.openFile(agentDisplayLabel(), "agent");
+      }
+      toastSuccess("Projet actif : " + path.split(/[\\/]/).pop());
+    } catch (e) {
+      toastError("Bascule projet : " + e);
+    } finally {
+      hideLoading();
     }
   }
 
@@ -1212,16 +1285,29 @@ class Sidebar {
     // L'arborescence se rafraîchit automatiquement via le file watcher
   }
 
-  async closeProject() {
+  async closeProject(pathArg) {
+    // Multi-projets : si un chemin précis est donné, on ferme ce projet ; sinon
+    // on ferme le projet actif (rétro-compat).
+    const target = pathArg || window._pilotProjectPath;
+    const closingActive = !pathArg || target === window._pilotProjectPath;
+    if (!target) return;
+
     // Sauvegarder la session avant de fermer
-    const currentPath = window._pilotProjectPath;
+    const currentPath = target;
     if (currentPath) {
       // Forcer une sauvegarde immédiate (annule le debounce)
       await saveTabSession(this.tabs, currentPath);
     }
     try {
-      await invoke("close_project");
+      await invoke("close_project", { path: currentPath });
     } catch (_) {}
+
+    // Si on ne ferme pas le projet actif, on rafraîchit juste le dropdown.
+    if (!closingActive) {
+      toastSuccess("Projet fermé : " + currentPath.split(/[\\/]/).pop());
+      return;
+    }
+
     this.treeData = null;
     this.filterQuery = "";
     this.filterInput.value = "";

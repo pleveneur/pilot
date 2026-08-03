@@ -1196,9 +1196,10 @@ fn set_active_project(state: State<AppState>, app: AppHandle, path: String) -> R
     }
 
     // Arrêter le watcher du projet actif actuel (l'état global reflète le
-    // projet actif). Le frontend relance le watcher / la session RPC sur le
-    // nouveau projet via project_changed.
+    // projet actif), puis relancer un watcher sur le nouveau projet actif
+    // (sinon plus aucun rafraîchissement de l'arbre).
     stop_watcher(&state);
+    start_watching(&app, &path, &state)?;
     *state.project_path.lock().unwrap() = Some(path.clone());
     *state.active_project.lock().unwrap() = Some(path.clone());
 

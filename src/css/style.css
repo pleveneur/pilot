@@ -457,6 +457,47 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   text-align: center;
 }
 
+/* Multi-projets (spec_multiprojects.md) : section « Projets ouverts » du dropdown */
+.dropdown-label {
+  padding: 8px 12px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.dd-recent-item.active {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-hover);
+}
+.dd-recent-item.active .dd-recent-name em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+.dd-open-close {
+  position: absolute;
+  right: 12px;
+  top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  text-align: center;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.dd-open-close:hover { background: var(--bg-hover); color: var(--danger); }
+.dd-recent-item:hover .dd-open-close { opacity: 1; }
+
+/* L'icône folder n'est pas affichée pour les items ouverts (✕ à droite) */
+#dd-open-list .dd-recent-icon { display: none; }
+#dd-open-list .dd-recent-name { padding-right: 18px; }
+
 /* --- File Tree --- */
 #file-tree {
   flex: 1;

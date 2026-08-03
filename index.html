@@ -19,8 +19,15 @@
       </button>
       <div id="projects-dropdown" class="projects-dropdown hidden">
         <button id="dd-new-project"><i data-lucide="folder-plus" class="icon-sm"></i> Nouveau projet</button>
-        <div class="dropdown-separator"></div>
-        <div id="dd-recent-list"></div>
+        <div id="dd-open-section" class="hidden">
+          <div class="dropdown-label">Projets ouverts</div>
+          <div id="dd-open-list"></div>
+          <div class="dropdown-separator"></div>
+        </div>
+        <div id="dd-recent-section">
+          <div class="dropdown-label">Récents</div>
+          <div id="dd-recent-list"></div>
+        </div>
         <div class="dropdown-separator" id="dd-close-separator"></div>
         <button id="dd-close-project" class="hidden"><i data-lucide="x" class="icon-sm"></i> Fermer le projet</button>
       </div>
