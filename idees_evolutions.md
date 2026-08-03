@@ -189,9 +189,11 @@ Intérêt : l'export PDF existe déjà, mais HTML et DOCX sont très demandés p
 
 Actuellement, un fichier modifié extérieurement est juste marqué en flash rouge. Proposer un vrai choix.
 
-- [ ] 22.1 Dialogue modal : "Le fichier a été modifié extérieurement" avec 3 options : Recharger / Garder ma version / Ouvrir un diff
-- [ ] 22.2 Vue diff côte à côte (mon fichier vs fichier sur disque)
-- [ ] 22.3 Auto-rechargement intelligent : si je n'ai pas modifié le fichier, recharger silencieusement
+- [x] 22.1 Dialogue modal : "Le fichier a été modifié extérieurement" avec 3 options : Recharger / Garder ma version / Ouvrir un diff
+- [x] 22.2 Vue diff (avant/après, read-only, via `openGitDiffModal` — inline LCS réutilisé de A4)
+- [x] 22.3 Auto-rechargement intelligent : si je n'ai pas modifié le fichier, recharger silencieusement (déjà via `refreshFile`)
+
+✅ Implémenté (2026-08) — `src/js/tabs.js` (`_showConflictTab`, corrige le bug `_showConflictTab` inexistant qui bloquait le cas dirty+modifié), `src/css/style.css` (`.conflict-*`).
 
 Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. Un vrai dialogue de résolution de conflit est la base du CRUD fichier.
 

@@ -55,7 +55,7 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 | F2 | Export conversation agent | À faire | |
 | F3 | Copy as HTML | À faire | |
 | E3 | CI multi-plateforme RPC | À faire | |
-| 22 | Conflits fichiers (diff/reload) | À faire | réutilise A4 |
+| 22 | Conflits fichiers (diff/reload) | ✅ Implémenté (2026-08) | `_showConflictTab` — dialogue 3 choix (Recharger/Garder/Diff read-only via `openGitDiffModal`), auto-reload si non modifié ; corrige le bug `_showConflictTab` inexistant |
 
 ## Ce qui reste (specs détaillées)
 
