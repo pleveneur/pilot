@@ -5187,6 +5187,16 @@ body.pilot-loading *::after {
 .agent-status-card.done { opacity: 0.75; border-left-color: var(--success); }
 .agent-status-card.error,
 .agent-status-card.stop { border-left-color: var(--danger); }
+/* Agent actif mis en avant (idees_evolutions.md §26) : carte surlignée en vert,
+   distincte du reste de l'équipe, cohérente avec le thème dark/light. */
+.agent-status-card.active {
+  border-color: var(--success);
+  border-left-color: var(--success);
+  background: #a6e3a133;
+  box-shadow: 0 0 0 1px var(--success);
+}
+.agent-status-card.active .asc-name { color: var(--success); }
+.agent-status-card .asc-chip.active { color: var(--success); background: #a6e3a133; }
 .agent-status-card .asc-icon { font-size: 16px; line-height: 1.3; }
 .agent-status-card .asc-info { flex: 1; min-width: 0; }
 .agent-status-card .asc-name { font-size: 12px; font-weight: 600; }
@@ -5212,3 +5222,50 @@ body.pilot-loading *::after {
 .agent-status-card .asc-chip.done { color: var(--success); background: #a6e3a133; }
 .agent-status-card .asc-chip.error,
 .agent-status-card .asc-chip.stop { color: var(--danger); background: #f38ba833; }
+
+/* ── Bulle « réflexion » de l'agent courant (idees_evolutions.md §26) ──
+   Affiche en direct la pensée de l'agent actif : streaming (delta) + outils
+   utilisés, dans le flux du chat. Style distinct (pointillé), thème-aware. */
+.agents-reflection {
+  align-self: flex-start;
+  max-width: 92%;
+  padding: 8px 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--bg-hover);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.agents-reflection .ar-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.agents-reflection .ar-stream {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+.agents-reflection .ar-tools {
+  margin-top: 6px;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.agents-reflection .ar-tools-label { font-size: 10px; color: var(--text-muted); }
+.agents-reflection .ar-tool-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+/* Bulle finalisée (réponse finale) : bordure pleine + succès */
+.agents-reflection.final {
+  border-style: solid;
+  border-color: var(--success);
+  background: var(--bg-input);
+}
+.agents-reflection.final .ar-head { color: var(--success); }

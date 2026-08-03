@@ -444,6 +444,10 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 - Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
   **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
   appelle un collègue, a terminé), avec le rappel de son rôle.
+- **L'agent actif est mis en avant** (carte surlignée en vert) pour savoir
+  qui travaille en ce moment.
+- Au centre, une **bulle « réflexion »** affiche en direct la pensée de l'agent
+  courant (son texte qui se construit) et les outils qu'il utilise.
 - La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
   **profondeur** atteinte sont affichés.
 - Le bilan reste visible après la fin de la run pour relire qui a fait quoi.

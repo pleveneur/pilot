@@ -65,6 +65,64 @@ export async function createAgents(container) {
   let agentOrder = 0;
 
   let currentEditorModal = null;
+  // Bulle « réflexion » de l'agent courant (idees_evolutions.md §26) : affiche le
+  // streaming (delta) + les outils utilisés de l'agent actif, dans le flux du chat.
+  let reflection = null; // { agentId, el } — une seule bulle active à la fois
+
+  // Démarre (ou recrée) la bulle réflexion pour un agent.
+  function startReflection(agentId, model) {
+    const div = document.createElement("div");
+    div.className = "agents-reflection";
+    div.dataset.agentId = agentId;
+    div.innerHTML = `
+      <div class="ar-head">💭 ${agentIcon(agentId)} ${escapeHtml(agentName(agentId))}${model ? " · " + escapeHtml(model) : ""}</div>
+      <div class="ar-stream"></div>
+      <div class="ar-tools" style="display:none"></div>
+    `;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    reflection = { agentId, el: div };
+  }
+
+  // Accumule le streaming du delta de l'agent actif dans sa bulle réflexion.
+  function updateReflection(agentId, delta) {
+    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
+    const stream = reflection.el.querySelector(".ar-stream");
+    stream.textContent += delta;
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // Ajoute un chip outil dans la bulle réflexion de l'agent actif.
+  function addReflectionTool(agentId, toolName) {
+    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
+    const tools = reflection.el.querySelector(".ar-tools");
+    if (!tools.querySelector(".ar-tools-label")) {
+      tools.style.display = "flex";
+      tools.insertAdjacentHTML("afterbegin", '<span class="ar-tools-label">🛠</span>');
+    }
+    const chip = document.createElement("span");
+    chip.className = "ar-tool-chip";
+    chip.textContent = toolName;
+    tools.appendChild(chip);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // Finalise la bulle réflexion en réponse finale (done) : on remplace le contenu
+  // streamé par le texte final complet (source de vérité) et on la met en avant.
+  function finalizeReflection(agentId, text) {
+    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
+    reflection.el.classList.add("final");
+    reflection.el.querySelector(".ar-head").textContent = `${agentIcon(agentId)} ${agentName(agentId)}`;
+    reflection.el.querySelector(".ar-stream").textContent = text || "";
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    reflection = null;
+  }
+
+  // Désactive la bulle réflexion active (l'agent a fini de réfléchir pour
+  // déléguer, renvoyer un résultat, ou la run s'est arrêtée).
+  function closeReflection() {
+    reflection = null;
+  }
 
   // ── Chargement initial ──
   try {
@@ -100,17 +158,20 @@ export async function createAgents(container) {
       updateActivity();
     },
     agentStart: ({ agentId, model }) => {
-      appendSystemMessage(messagesEl, `${agentIcon(agentId)} ${agentName(agentId)} réfléchit${model ? ` · ${model}` : ""}...`);
+      // Bulle réflexion au centre (issue #26) : la « pensée » de l'agent courant
+      // en direct, avec son modèle. Le message système « réfléchit » est intégré
+      // dans la bulle (plus de message système redondant).
+      startReflection(agentId, model);
       mark(agentId, "pense", model || "");
       updateActivity();
     },
     delta: ({ agentId, text }) => {
-      appendOrUpdateAgentDelta(messagesEl, agentId, text);
+      updateReflection(agentId, text);
       mark(agentId, "pense", "répond en direct…");
       updateActivity();
     },
     toolStart: ({ agentId, toolName }) => {
-      appendSystemMessage(messagesEl, `🔧 ${agentIcon(agentId)} ${agentName(agentId)} utilise : ${toolName}`);
+      addReflectionTool(agentId, toolName);
       mark(agentId, "outil", toolName || "outil");
       updateActivity();
     },
@@ -122,16 +183,18 @@ export async function createAgents(container) {
     },
     transition: ({ from, to }) => {
       appendSystemMessage(messagesEl, `➡️ ${agentIcon(from)} ${agentName(from)} appelle ${agentIcon(to)} ${agentName(to)}`);
+      closeReflection();
       mark(from, "appelle", `→ ${agentName(to)}`);
       updateActivity();
     },
     result: ({ from, to, text }) => {
       appendSystemMessage(messagesEl, `⬅️ ${agentIcon(from)} ${agentName(from)} a répondu à ${agentIcon(to)} ${agentName(to)}`, true);
+      closeReflection();
       mark(to, "reprend", `← résultat de ${agentName(from)}`);
       updateActivity();
     },
     done: ({ agentId, text }) => {
-      appendAgentMessage(messagesEl, agentId, text, true);
+      finalizeReflection(agentId, text);
       mark(agentId, "fait", "réponse finale");
       finishRun();
     },
@@ -139,12 +202,14 @@ export async function createAgents(container) {
       appendSystemMessage(messagesEl, "⏹ Run arrêtée par l'utilisateur.");
       const cur = window.__agentBusState?.currentAgentId;
       if (cur) mark(cur, "stop", "arrêté");
+      closeReflection();
       finishRun();
     },
     error: ({ message }) => {
       appendErrorMessage(messagesEl, message);
       const cur = window.__agentBusState?.currentAgentId;
       if (cur) mark(cur, "err", message);
+      closeReflection();
       finishRun();
     },
   };
@@ -202,15 +267,18 @@ export async function createAgents(container) {
         const desc = a && a.description ? a.description : "";
         const chip = s.status || "…";
         const chipCls = chip === "err" ? "error" : chip === "fait" ? "done" : chip === "outil" ? "tool" : "running";
+        // Agent actif mis en avant (idees_evolutions.md §26) : surligné en vert,
+        // distinct du reste de l'équipe. Le currentAgentId vient du bus.
+        const active = isRunning && agentId === st?.currentAgentId;
         return `
-          <div class="agent-status-card ${chipCls}">
+          <div class="agent-status-card ${chipCls}${active ? " active" : ""}">
             <span class="asc-icon">${icon}</span>
             <div class="asc-info">
               <div class="asc-name">${escapeHtml(name)}</div>
               ${desc ? `<div class="asc-desc">${escapeHtml(desc)}</div>` : ""}
               ${s.detail ? `<div class="asc-detail">${escapeHtml(s.detail)}</div>` : ""}
             </div>
-            <span class="asc-chip ${chipCls}">${escapeHtml(chip)}</span>
+            <span class="asc-chip ${chipCls}${active ? " active" : ""}">${escapeHtml(chip)}</span>
           </div>
         `;
       })
@@ -479,24 +547,6 @@ function appendUserMessage(container, text) {
   container.scrollTop = container.scrollHeight;
 }
 
-function appendAgentMessage(container, agentId, text, isFinal = false) {
-  const existing = container.querySelector(`.agents-message-agent[data-agent-id="${escapeCss(agentId)}"]`);
-  if (existing && !isFinal) {
-    existing.querySelector(".agents-bubble").innerHTML += renderMarkdownPlain(text);
-  } else {
-    const div = document.createElement("div");
-    div.className = "agents-message agents-message-agent";
-    div.dataset.agentId = agentId;
-    div.innerHTML = `<div class="agents-bubble">${renderMarkdownPlain(text)}</div>`;
-    container.appendChild(div);
-  }
-  container.scrollTop = container.scrollHeight;
-}
-
-function appendOrUpdateAgentDelta(container, agentId, text) {
-  appendAgentMessage(container, agentId, text, false);
-}
-
 function appendSystemMessage(container, text, collapsed = false) {
   const div = document.createElement("div");
   div.className = "agents-message agents-message-system";
@@ -525,8 +575,4 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function escapeCss(str) {
-  return String(str).replace(/"/g, '\\"');
 }

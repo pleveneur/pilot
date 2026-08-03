@@ -675,14 +675,14 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
   comme « pensée en direct ».
 
 **Travail proposé :**
-- [ ] **Agent actif mis en avant** : nouvelle classe CSS (ex. `.agent-status-card.active`
-      ou un style `running`) utilisant `--success`/une teinte verte, appliquée à la
+- [x] **Agent actif mis en avant** : nouvelle classe CSS (`.agent-status-card.active`)
+      utilisant `--success`/une teinte verte, appliquée à la
       carte de l'agent dont `currentAgentId === agentId` (état « en cours »).
-- [ ] **Panneau « Réflexion » au centre** : une bulle dédiée par agent courant qui
+- [x] **Panneau « Réflexion » au centre** : une bulle dédiée par agent courant qui
       affiche le streaming des `delta` (texte produit) + les derniers outils
       utilisés (`toolStart`) — la « pensée / informations traitées » en direct,
       dans le flux du chat.
-- [ ] **Cohérence thème** : utiliser les variables CSS existantes (`--success`,
+- [x] **Cohérence thème** : utiliser les variables CSS existantes (`--success`,
       `--accent-soft`, `--bg-hover`, etc.) et s'assurer que le rendu est correct
       en dark ET light.
 
