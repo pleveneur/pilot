@@ -31,6 +31,10 @@ const MAX_FILE_BYTES: usize = 512 * 1024;
 const EMBED_BATCH: usize = 64;
 const MAX_QUERY_CHUNKS: usize = 40;
 const MIN_SCORE: f32 = 0.10;
+// Limite du refresh incrémental dans le chemin critique du prompt : on ne
+// re-indexe qu'un petit nombre de fichiers les plus récents pour ne jamais
+// retarder l'envoi du prompt (Ollama lent/indisponible → fallback V1 rapide).
+const MAX_REFRESH_FILES_PER_QUERY: usize = 20;
 
 const INDEXED_EXT: &[&str] = &[
     "js", "ts", "mjs", "jsx", "tsx", "py", "md", "markdown", "rs", "json",
@@ -231,9 +235,24 @@ fn blob_to_vec(b: &[u8]) -> Vec<f32> {
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        // connect_timeout court : un port local fermé (Ollama éteint) répond
+        // vite, on ne veut jamais attendre des dizaines de secondes pour
+        // établir une connexion.
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("http client: {e}"))
+}
+
+/// Client HTTP à timeout encore plus court pour le chemin critique du prompt
+/// (query_context_index). Garantit que la requête de contexte ne gèle jamais
+/// l'envoi du prompt : en cas de timeout, l'appelant retombe sur V1.
+fn http_fast_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("http fast client: {e}"))
 }
 
 /// Appelle Ollama /api/embed (batch) puis fallback /api/embeddings (un par un).
@@ -434,7 +453,7 @@ fn build_index_blocking(app: &AppHandle, project_path: &str, endpoint: &str, mod
 
 // ── Refresh incrémental ──────────────────────────────────────────────────────
 
-fn incremental_refresh(conn: &Connection, client: &reqwest::blocking::Client, project_path: &str, endpoint: &str, model: &str) {
+fn incremental_refresh(conn: &Connection, client: &reqwest::blocking::Client, project_path: &str, endpoint: &str, model: &str, max_files: usize) {
     let root = Path::new(project_path);
     let disk_files = walk_project(root);
     let disk_set: HashSet<&str> = disk_files.iter().map(|(r, _)| r.as_str()).collect();
@@ -445,14 +464,20 @@ fn incremental_refresh(conn: &Connection, client: &reqwest::blocking::Client, pr
             let _ = delete_file_chunks(conn, rel);
         }
     }
-    // 2. Re-indexer les modifiés / nouveaux
-    for (rel, abs) in &disk_files {
-        let disk_mtime = file_mtime(abs);
-        let need = indexed.get(rel).map_or(true, |prev| *prev != disk_mtime);
-        if need {
-            if let Err(e) = index_file(conn, client, rel, abs, endpoint, model) {
-                eprintln!("[context-engine] refresh skip {rel}: {e}");
-            }
+    // 2. Re-indexer les modifiés / nouveaux, en triant par mtime décroissant
+    //    (les plus récents d'abord) et en s'arrêtant à max_files. Borné pour
+    //    ne jamais retarder le prompt dans le chemin critique.
+    let mut to_refresh: Vec<(String, PathBuf, u64)> = disk_files.iter()
+        .filter_map(|(rel, abs)| {
+            let disk_mtime = file_mtime(abs);
+            let need = indexed.get(rel).map_or(true, |prev| *prev != disk_mtime);
+            if need { Some((rel.clone(), abs.clone(), disk_mtime)) } else { None }
+        })
+        .collect();
+    to_refresh.sort_by(|a, b| b.2.cmp(&a.2));
+    for (rel, abs, _) in to_refresh.into_iter().take(max_files) {
+        if let Err(e) = index_file(conn, client, &rel, &abs, endpoint, model) {
+            eprintln!("[context-engine] refresh skip {rel}: {e}");
         }
     }
 }
@@ -584,6 +609,20 @@ mod tests {
         let txt = "a\nb\nc";
         assert_eq!(chunk_file("notes.txt", txt).len(), 1);
     }
+
+    #[test]
+    fn query_source_falls_back_before_any_network_when_db_missing() {
+        // Sans DB, query_index_blocking retourne v1-fallback sans toucher au
+        // réseau : le prompt ne doit jamais dépendre d'Ollama pour partir.
+        let tmp = std::env::temp_dir().join(format!("ctx-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+        let res = query_index_blocking(tmp.to_str().unwrap(), "prompt", 1000, "http://127.0.0.1:9", "m")
+            .unwrap();
+        assert_eq!(res.source, "v1-fallback");
+        assert!(res.context.is_empty());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 fn query_index_blocking(project_path: &str, prompt: &str, budget_tokens: usize, endpoint: &str, model: &str) -> Result<QueryResult, String> {
@@ -595,14 +634,19 @@ fn query_index_blocking(project_path: &str, prompt: &str, budget_tokens: usize, 
     if count_chunks(&conn) == 0 {
         return Ok(QueryResult { context: String::new(), chunks_used: 0, source: "v1-fallback".into() });
     }
-    let client = http_client()?;
-    // Refresh incrémental (mtime diff) — non fatal
-    incremental_refresh(&conn, &client, project_path, endpoint, model);
-    // Embedder le prompt
+    let client = http_fast_client()?;
+    // 1. Embedder le prompt AVANT tout refresh : c'est le seul appel bloquant
+    //    du chemin critique. Timeout court (8s). Si Ollama ne répond pas
+    //    (éteint), on retombe immédiatement sur V1 SANS refresh — le prompt
+    //    n'est jamais retardé par la ré-indexation.
     let q_vec = match embed_one(&client, endpoint, model, prompt) {
         Ok(v) => v,
-        Err(e) => return Ok(QueryResult { context: String::new(), chunks_used: 0, source: format!("v1-fallback:{}", e) }),
+        Err(e) => return Ok(QueryResult { context: String::new(), chunks_used: 0, source: format!("v1-fallback:{e}") }),
     };
+    // 2. Ollama répond → refresh incrémental LIMITÉ (au plus MAX_REFRESH_FILES
+    //    fichiers récents) pour rafraîchir un peu l'index sans retarder le
+    //    prompt. Jamais bloquant : si un fichier échoue, on passe au suivant.
+    incremental_refresh(&conn, &client, project_path, endpoint, model, MAX_REFRESH_FILES_PER_QUERY);
     let chunks = all_chunks(&conn);
     if chunks.is_empty() {
         return Ok(QueryResult { context: String::new(), chunks_used: 0, source: "v1-fallback".into() });

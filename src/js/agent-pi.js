@@ -1018,7 +1018,19 @@ export async function createAgentPi(container, resumed = false) {
                 };
                 const activeTab = getActiveEditTab();
                 const recents = getRecentEditedPaths();
-                const ctxBlock = await buildProjectContext(window._pilotProjectPath, activeTab, recents, ctxOpts);
+                // Ceinture-bretelles anti-gel : le contexte projet est construit
+                // de façon asynchrone, mais on borne l'attente (ex: Ollama lent
+                // ou bloqué). Si le délai est dépassé, on envoie le prompt SANS
+                // contexte (fallback silencieux) plutôt que de figer le chat.
+                const ctxBlock = await Promise.race([
+                  buildProjectContext(window._pilotProjectPath, activeTab, recents, ctxOpts),
+                  new Promise((_, reject) => setTimeout(
+                    () => reject(new Error("context-engine timeout (8s)")), 8000
+                  )),
+                ]).catch((e) => {
+                  console.warn("[agent] contexte projet abandonné (timeout):", e);
+                  return null;
+                });
                 if (ctxBlock) {
                   handoffBlocks += ctxBlock;
                   state.contextInjected = true;

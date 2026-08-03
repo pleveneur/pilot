@@ -201,8 +201,15 @@ query_context_index(projectPath, prompt, budgetTokens) -> { context: string, chu
 - `build_context_index` : scanne le projet (filtres), chunk + embed (batch
   Ollama), insère en transaction. Envoie l'événement `context-index-progress`
   `{ done, total }` pour la barre de progression frontend.
-- `query_context_index` : si index absent → build complet (puis query). Sinon :
-  refresh incrémental (mtime) → query cosinus → formatage préambule.
+- `query_context_index` : si index absent → V1 fallback. Sinon : **embed le
+  prompt d'abord** (timeout court) → si Ollama indisponible → retourne
+  `source: "v1-fallback"` immédiatement SANS refresh. Si Ollama répond →
+  refresh incrémental **limité** (au plus 20 fichiers récents) → query cosinus
+  → formatage préambule.
+- **Anti-gel (timeouts)** : le chemin critique du prompt utilise un client
+  HTTP à `connect_timeout` 2s et `timeout` 8s (`http_fast_client`). Le refresh
+  et le build utilisent `http_client` (connect 3s / 30s). Le 1er prompt ne
+  dépend donc jamais d'Ollama pour partir.
 - **Fallback** : si Ollama injoignable ou erreur → retourne `source: "v1-fallback"`
   et le frontend utilise `buildProjectContext` V1.
 
@@ -226,6 +233,14 @@ préambule avant les chunks RAG.
 
 Bouton 📑 « Contexte » : force un **rebuild complet** (supprime l'index puis
 `build_context_index`) si RAG activé ; sinon refresh V1.
+
+### 7.7bis Ceinture-bretelles frontend (anti-gel)
+
+Dans `agent-pi.js`, l'appel `buildProjectContext(...)` est borné par un
+**`Promise.race` avec un timeout de 8 s**. Si le contexte n'est pas prêt à
+temps (Ollama lent, commande bloquée), le prompt part **sans** contexte
+(fallback silencieux, warning console) plutôt que de figer le chat. Double
+protection avec les timeouts backend du §7.5.
 
 ### 7.8 Architecture
 
@@ -275,5 +290,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   pertinents par similarité sémantique au prompt (plus précis que l'heuristique
   V1). L'index SQLite est stocké dans `.pilot/context-index.db` et se met à jour
   incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
-  retombe automatiquement sur V1.
+  retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
+  éteint ou lent : des timeouts bornent l'attente et le prompt part sans
+  contexte au besoin.
 <!-- /HELP:context-engine -->
