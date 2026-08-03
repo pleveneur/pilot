@@ -9,6 +9,7 @@ import { isImageFile } from "./image-paste.js";
 import { buildProjectContext } from "./context-engine.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
 import { generateAgentsMd } from "./agents-md.js";
+import { exportConversationMarkdown, copyConversationHtml } from "./conversation-export.js";
 import { renderEditGateDialog } from "./diff-view.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
@@ -124,6 +125,8 @@ export async function createAgentPi(container) {
     <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="file-text" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="export-md" title="Exporter la conversation en Markdown"><i data-lucide="download" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="export-html" title="Copier la conversation en HTML dans le presse-papiers"><i data-lucide="copy" class="icon-sm"></i></button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
     <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="Orchestrateur (mode Orchestration)"></select>
     <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="Codeur (mode Orchestration)"></select>
@@ -1144,6 +1147,14 @@ export async function createAgentPi(container) {
         break;
       case "voice":
         toggleVoiceInput();
+        break;
+      case "export-md": {
+        const projectName = window._pilotProjectPath ? window._pilotProjectPath.split(/[\\/]/).pop() : "";
+        await exportConversationMarkdown(messagesEl, projectName);
+        break;
+      }
+      case "export-html":
+        await copyConversationHtml(messagesEl);
         break;
       case "abort":
         try {

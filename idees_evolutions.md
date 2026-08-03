@@ -181,7 +181,7 @@ Intérêt : les thèmes sont un facteur majeur d'adoption pour les éditeurs de 
 
 - [x] 21.1 Export HTML autonome (fichier `.html` avec CSS inline) — ✅ Implémenté (2026-08-02), voir F1
 - [ ] 21.2 Export DOCX (via Pandoc si disponible, ou `html-docx-js`)
-- [ ] 21.3 Copy as HTML (copier le HTML rendu dans le presse-papiers)
+- [x] 21.3 Copy as HTML (copier le HTML rendu dans le presse-papiers) — voir F3 (conversation agent)
 
 Intérêt : l'export PDF existe déjà, mais HTML et DOCX sont très demandés pour le partage de documentation.
 
@@ -373,13 +373,14 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - **Valeur :** 🟡 haute · **Effort :** faible
 
 #### F2 — Export conversation agent (déjà noté spec_rpc §12)
-- [ ] Sauver le chat agent en Markdown/HTML pour archivage.
-- **Fichiers :** `src/js/agent-pi.js` (bouton + export), `src-tauri/src/lib.rs` (commande `export_session` optionnelle), `spec_rpc.md`.
-- **Valeur :** 🟡 haute · **Effort :** faible
+- [x] Sauver le chat agent en Markdown/HTML pour archivage.
+- **Fichiers :** `src/js/conversation-export.js` (collecte DOM + Markdown/HTML), `src/js/agent-pi.js` (boutons 📥/⧉ toolbar).
+- **Valeur :** 🟡 haute · **Effort :** faible · ✅ Implémenté (2026-08)
 
 #### F3 — Copy as HTML (déjà noté 21.3)
-- [ ] Copier le rendu Markdown dans le presse-papiers.
-- **Fichiers :** `src/js/preview.js` (action), `src/js/sidebar.js` (menu contextuel), `index.html`.
+- [x] Copier le rendu Markdown dans le presse-papiers.
+- **Fichiers :** `src/js/conversation-export.js` (`copyConversationHtml`), `src/js/agent-pi.js` (bouton ⧉).
+- ✅ Implémenté (2026-08) — copie le HTML de la conversation agent (bouton ⧉ toolbar π).
 - **Valeur :** 🟠 moyenne · **Effort :** faible
 
 #### F4 — Live share d'un fichier (URL Tailscale temporaire)

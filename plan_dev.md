@@ -52,8 +52,8 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 | B3 | Find & Replace | ✅ Implémenté (2026-08-02) | Ligne de remplacement dans le panneau de recherche (`search-replace-row`), commande Rust `replace_in_files` (remplacement littéral ou regex via `NoExpand`), aperçu+confirmation, rechargement des onglets ouverts concernés |
 | F1 | Export HTML autonome | ✅ Implémenté (2026-08-02) | `src/js/html-export.js` : réutilise `export_pdf` (HTML complet) + résolution images en base64 + dialogue de sauvegarde natif. Item « Exporter en HTML » dans le menu contextuel (fichiers .md) |
 | C4 | Recent files popover | ✅ Implémenté (2026-08-02) | `Ctrl+Alt+R` ou palette — popover fuzzy, `src/js/recent-files.js` (historique par projet dans localStorage, max 20, dédoublonné), enregistré à chaque `openFile` |
-| F2 | Export conversation agent | À faire | |
-| F3 | Copy as HTML | À faire | |
+| F2 | Export conversation agent | ✅ Implémenté (2026-08) | boutons 📥 (Markdown .md) toolbar π via `conversation-export.js` |
+| F3 | Copy as HTML | ✅ Implémenté (2026-08) | bouton ⧉ (HTML presse-papiers) toolbar π via `conversation-export.js` |
 | E3 | CI multi-plateforme RPC | À faire | |
 | 22 | Conflits fichiers (diff/reload) | ✅ Implémenté (2026-08) | `_showConflictTab` — dialogue 3 choix (Recharger/Garder/Diff read-only via `openGitDiffModal`), auto-reload si non modifié ; corrige le bug `_showConflictTab` inexistant |
 
