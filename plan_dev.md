@@ -87,7 +87,7 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 
 | # | Pilier | Statut | Spec / détail |
 |---|---|---|---|
-| V1 | **Gestionnaire de projets multi-projets** — ouvrir plusieurs projets simultanément, un agent pi/plh par projet | 🔲 À lancer | Réactive C2 · [`spec_multiprojects.md`](spec_multiprojects.md) · AppState multi-sessions, RPC séparé par projet, sidebar multi-onglets. Gros chantier |
+| V1 | **Gestionnaire de projets multi-projets** — ouvrir plusieurs projets simultanément, un agent pi/plh par projet | ✅ V1 implémentée | Réactive C2 · [`spec_multiprojects.md`](spec_multiprojects.md) · AppState multi-projets (adaptateur progressif), dropdown « Projets ouverts », bascule/fermeture, session pi par projet, web-remote select. N agents simultanés = évolution future |
 | V2 | **Gestionnaire de source** — dev multi-utilisateurs via git ou gestionnaire intégré | 🔲 À lancer | S'appuie sur le remote existant (`web_server.rs`, `web_auth.rs`). Réactive D3/D4. Chantier d'architecture (conflits, branches, droits) |
 
 | # | Feature | Statut | Spec / détail |
