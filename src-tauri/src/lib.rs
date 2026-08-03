@@ -116,6 +116,13 @@ struct AppConfig {
     default_command: String,
     #[serde(default)]
     recent_projects: Vec<String>,
+    // Multi-projets (spec_multiprojects.md) : liste persistée des projets ouverts
+    // au dernier arrêt, restaurée au démarrage. Chaque entrée est un chemin normalisé.
+    #[serde(default)]
+    open_projects: Vec<String>,
+    // Multi-projets : chemin du projet actif au dernier arrêt (restauré au démarrage).
+    #[serde(default)]
+    active_open_project: Option<String>,
     // Conservé pour rétrocompatibilité (migration auto)
     #[serde(default)]
     last_project: Option<String>,
@@ -353,6 +360,26 @@ impl AppConfig {
         self.recent_projects.insert(0, path.to_string());
         self.recent_projects.truncate(10);
     }
+
+    /// Multi-projets : enregistre un projet comme ouvert (dédoublonné).
+    fn add_open_project(&mut self, path: &str) {
+        if !self.open_projects.contains(&path.to_string()) {
+            self.open_projects.push(path.to_string());
+        }
+    }
+
+    /// Multi-projets : retire un projet fermé de la liste persistée.
+    fn remove_open_project(&mut self, path: &str) {
+        self.open_projects.retain(|p| p != path);
+        if self.active_open_project.as_deref() == Some(path) {
+            self.active_open_project = None;
+        }
+    }
+
+    /// Multi-projets : marque le projet actif (persisté au démarrage).
+    fn set_active_open_project(&mut self, path: &str) {
+        self.active_open_project = Some(path.to_string());
+    }
 }
 
 impl Default for AppConfig {
@@ -361,6 +388,8 @@ impl Default for AppConfig {
             theme: "dark".to_string(),
             default_command: String::new(),
             recent_projects: Vec::new(),
+            open_projects: Vec::new(),
+            active_open_project: None,
             last_project: None,
             auto_load_last_project: false,
             auto_run_command: false,
@@ -731,6 +760,8 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
     {
         let mut config = state.config.lock().unwrap();
         config.add_recent(path);
+        config.add_open_project(path);
+        config.set_active_open_project(path);
         save_config_disk(app, &config)?;
     }
 
@@ -1181,6 +1212,13 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
     // Retirer le projet de la collection multi-projets.
     state.projects.lock().unwrap().remove(&target);
 
+    // Multi-projets : retirer le projet fermé de la liste persistée.
+    {
+        let mut config = state.config.lock().unwrap();
+        config.remove_open_project(&target);
+        save_config_disk(&app, &config)?;
+    }
+
     Ok(())
 }
 
@@ -1214,6 +1252,14 @@ pub(crate) fn do_set_active_project(
     *state.project_path.lock().unwrap() = Some(path.to_string());
     *state.active_project.lock().unwrap() = Some(path.to_string());
 
+    // Multi-projets : persister le projet actif (restauré au démarrage).
+    {
+        let mut config = state.config.lock().unwrap();
+        config.add_open_project(path);
+        config.set_active_open_project(path);
+        save_config_disk(app, &config)?;
+    }
+
     let payload = serde_json::json!({ "path": path });
     app.emit("project_changed", &payload).ok();
 
@@ -1235,6 +1281,49 @@ fn list_open_projects(state: State<AppState>) -> Vec<String> {
 #[tauri::command]
 fn get_active_project(state: State<AppState>) -> Option<String> {
     state.active_project.lock().unwrap().clone()
+}
+
+/// Multi-projets (spec_multiprojects.md) : restaure au démarrage les projets
+/// ouverts au dernier arrêt (persistés dans la config). Enregistre chacun dans
+/// la collection `projects` sans lancer de watcher ni de session RPC (l'actif
+/// sera rouvert via le flux normal d'ouverture). Retourne la liste des projets
+/// ouverts et le projet actif pour que le frontend les (re)charge.
+#[tauri::command]
+fn restore_open_projects(state: State<AppState>) -> (Vec<String>, Option<String>) {
+    let cfg = state.config.lock().unwrap().clone();
+    let mut open: Vec<String> = Vec::new();
+    for p in &cfg.open_projects {
+        if std::path::Path::new(p).exists() {
+            open.push(p.clone());
+        }
+    }
+    // Projet actif : doit appartenir aux projets ouverts existants.
+    let active = cfg
+        .active_open_project
+        .filter(|p| open.contains(p))
+        .or_else(|| open.first().cloned());
+
+    // Enregistrer dans la collection sans watcher/session (l'actif sera rouvert
+    // par le frontend via le flux normal → ceci devient l'état du projet actif).
+    {
+        let mut projects = state.projects.lock().unwrap();
+        for p in &open {
+            projects.entry(p.clone()).or_insert_with(|| ProjectState {
+                path: p.clone(),
+                rpc: None,
+                watcher: None,
+            });
+        }
+    }
+    // Positionner le projet actif dans l'état global (le frontend rouvert
+    // ensuite l'actif réellement via open_project_shared, mais on aligne déjà
+    // la collection pour `set_active_project` / `list_open_projects`).
+    if let Some(ref a) = active {
+        *state.active_project.lock().unwrap() = Some(a.clone());
+        *state.project_path.lock().unwrap() = Some(a.clone());
+    }
+
+    (open, active)
 }
 
 // ── Copie d'image dans le projet (drag & drop / Ctrl+V) ──
@@ -1488,6 +1577,7 @@ pub fn run() {
             set_active_project,
             list_open_projects,
             get_active_project,
+            restore_open_projects,
             files::read_file_content,
             files::get_file_info,
             files::read_file_binary,

@@ -637,11 +637,33 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // 7. Charger le dernier projet automatiquement si l'option est activée
+  // 7. Restaurer les projets ouverts (multi-projets) puis charger le dernier
+  // projet si l'option est activée
   try {
+    // Multi-projets : restaurer la liste persistée des projets ouverts et le
+    // projet actif. Le backend a enregistré chaque projet dans sa collection ;
+    // on rouvre l'actif via le flux normal et on rafraîchit le dropdown.
+    let restoredActive = null;
+    try {
+      const [openRestored, act] = await invoke("restore_open_projects");
+      restoredActive = act || null;
+      if (Array.isArray(openRestored) && openRestored.length > 0) {
+        await sidebar._loadOpenProjects();
+      }
+    } catch (_) {
+      // Commande indisponible (ancienne build) → ignorer
+    }
+
     const config = await invoke("get_config");
-    if (config.auto_load_last_project && config.recent_projects && config.recent_projects.length > 0) {
-      await sidebar.openProjectByPath(config.recent_projects[0]);
+    const autoLoad = config.auto_load_last_project && config.recent_projects && config.recent_projects.length > 0;
+    if (autoLoad) {
+      // On préfère le projet actif restauré (multi-projets) ; sinon le plus récent.
+      const target = restoredActive || config.recent_projects[0];
+      await sidebar.openProjectByPath(target);
+    } else if (restoredActive) {
+      // Multi-projets : il y a des projets ouverts persistés mais l'option
+      // auto-load est désactivée → on ouvre quand même l'actif restauré.
+      await sidebar.openProjectByPath(restoredActive);
     }
     // Si RPC activé, ouvrir systématiquement l'onglet Agent Pi
     // (on ignore integrated_terminal et auto_run_command pour l'agent)

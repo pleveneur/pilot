@@ -295,6 +295,7 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 - [ ] Ouvrir plusieurs projets en onglets de sidebar, chacun avec son agent pi séparé.
 - **Fichiers :** `src-tauri/src/lib.rs` (AppState multi-sessions), `src-tauri/src/rpc_manager.rs` (multi-session), `src/js/sidebar.js`, `src/js/main.js`, `src/js/agent-pi.js`. ⚠️ Gros chantier (pi partagé, state).
 - **Valeur :** 🟠 moyenne · **Effort :** haut
+- **⚠️ RÉACTIVÉ (2026-08)** par la vision produit « Pilot = gestionnaire de projets » — voir section Vision de `plan_dev.md`. Devient un pilier prioritaire (multi-projets simultanés, un agent par projet).
 
 #### C3 — Tags / labels sur fichiers
 - [ ] Au-delà des favoris, tags colorés filtrables (ex: « à revoir », « draft », « spec »).
@@ -613,7 +614,7 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 | B5 — Snippets/templates fichier | **Garde faible prio** | Faible valeur si H8 (bootstrap) couvre l'amorçage. Confort marginal. |
 | B6 — Drag & drop fichier → lien | **Garde faible prio** | Petite valeur, effort faible. Faire si on touche à `image-paste.js`. |
 | C1 — Git intégré | **Garde (prio haute)** | Haute valeur, réutilise A4. Demande une vraie décisions (Git CLI vs `git2`). |
-| C2 — Workspace multi-projets | **Reconsidère / Abandonne** | Gros chantier (state multi-sessions, RPC partagé) pour peu de valeur agent. Pilot = mono-projet focus. Reporter sine die. |
+| C2 — Workspace multi-projets | **Réactivé (prio haute)** | ⚠️ Vision produit « gestionnaire de projets » (2026-08) : multi-projets simultanés + multi-utilisateurs. Gros chantier, devient un pilier stratégique. Voir Vision dans `plan_dev.md`. |
 | C3 — Tags / labels sur fichiers | **Abandonne** | Les favoris (déjà faits) couvrent le besoin. Tags = bruit. |
 | C4 — Recent files | **Garde (prio basse, cheap)** | Cheap win. Faire avec la persistance d'onglets existante. |
 | G3 — Command palette symboles | **Garde faible prio** | Sympa, cheap, s'appuie sur l'outline existant. |
@@ -624,7 +625,7 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 |---|---|---|
 | D1 — Notifications desktop | **Garde (prio haute, cheap)** | Cheap, vraie valeur pour l'usage mobile (agent long lancé depuis le téléphone). |
 | D2 — Vue activité web | **Garde (prio basse)** | Dépend de H4 (plan editor). Chevauche. Faire après H4. |
-| D3 — WebAuthn / passkey | **Reconsidère (reporte)** | Effort moyen-haut pour un usage perso. Passphrase + Tailscale suffit. Reviendra si Pilot devient multi-utilisateur. |
+| D3 — WebAuthn / passkey | **Reconsidère (reporte)** | Effort moyen-haut pour un usage perso. Passphrase + Tailscale suffit. **RÉACTIVÉ (2026-08)** par la vision « gestionnaire de projets multi-utilisateurs » — deviendra pertinent dès le pilier V2 (dev multi-utilisateurs). |
 | D4 — Partage read-only (URL temp) | **Garde faible prio** | Chevauche F4 / H9. Confort, pas urgent. |
 
 ### Export / partage
