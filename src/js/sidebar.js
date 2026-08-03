@@ -394,6 +394,8 @@ class Sidebar {
 
     // Stocker le chemin du projet pour la résolution des images
     window._pilotProjectPath = folderPath;
+    // Notifier le badge 🔒 (H7 : projet sensible) — agent-pi.js écoute cet événement
+    document.dispatchEvent(new CustomEvent("pilot-project-sensitivity", { detail: { path: folderPath } }));
 
     // Recharger les alias de modèles (model-switch.json)
     loadModelAliases();
@@ -1240,6 +1242,8 @@ class Sidebar {
     this._closeAllTabs();
     // Réinitialiser le chemin du projet
     window._pilotProjectPath = null;
+    // Notifier la fermeture du projet (badge 🔒 H7)
+    document.dispatchEvent(new CustomEvent("pilot-project-sensitivity", { detail: { path: "" } }));
     // Vider les alias de modèles (loadModelAliases détecte l'absence de projet)
     loadModelAliases();
   }

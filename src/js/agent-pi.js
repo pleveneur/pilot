@@ -131,6 +131,7 @@ export async function createAgentPi(container) {
     <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="Orchestrateur (mode Orchestration)"></select>
     <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="Codeur (mode Orchestration)"></select>
     <span class="agent-stats" id="agent-stats" title="Tokens / Coût"></span>
+    <span class="agent-lock-badge hidden" id="agent-lock-badge" title="Projet sensible : local-first garanti">🔒</span>
     <span class="agent-status" id="agent-status">Prêt</span>
   `;
   wrapper.appendChild(toolbar);
@@ -446,6 +447,67 @@ export async function createAgentPi(container) {
   let voiceActive = false;
   let voiceRec = null;
 
+  // ── H7 : projet sensible (local-first) ──
+  const lockBadge = wrapper.querySelector("#agent-lock-badge");
+  let isSensitive = false;
+
+  // Met à jour le badge 🔒 et l'état sensible selon le projet courant.
+  async function refreshSensitiveBadge() {
+    const projectPath = window._pilotProjectPath || "";
+    if (!projectPath) {
+      isSensitive = false;
+      if (lockBadge) lockBadge.classList.add("hidden");
+      return;
+    }
+    try {
+      isSensitive = await invoke("is_project_sensitive", { path: projectPath });
+    } catch (_) {
+      isSensitive = false;
+    }
+    if (lockBadge) {
+      // Badge toujours visible quand un projet est ouvert : 🔒 si sensible, 🔓 sinon.
+      lockBadge.classList.remove("hidden");
+      lockBadge.textContent = isSensitive ? "🔒" : "🔓";
+      lockBadge.title = isSensitive
+        ? "Projet sensible : dictée vocale cloud bloquée (cliquez pour désactiver)"
+        : "Projet non sensible (cliquez pour activer le mode local-first)";
+    }
+  }
+  refreshSensitiveBadge();
+
+  // Rafraîchit le badge 🔒 à chaque changement de projet.
+  document.addEventListener("pilot-project-sensitivity", () => {
+    refreshSensitiveBadge();
+  });
+
+  // Toggle du mode sensible : clic sur le badge 🔒.
+  if (lockBadge) {
+    lockBadge.addEventListener("click", async () => {
+      const projectPath = window._pilotProjectPath;
+      if (!projectPath) {
+        appendSystemMessage(messagesEl, "🔒 Ouvrez un projet avant d'activer le mode sensible.");
+        return;
+      }
+      const next = !isSensitive;
+      try {
+        await invoke("set_project_sensitive", { path: projectPath, sensitive: next });
+        isSensitive = next;
+        lockBadge.classList.toggle("hidden", !isSensitive);
+        lockBadge.title = isSensitive
+          ? "Projet sensible : dictée vocale cloud bloquée (cliquez pour désactiver)"
+          : "Projet sensible : local-first garanti (cliquez pour activer)";
+        appendSystemMessage(
+          messagesEl,
+          isSensitive
+            ? "🔒 Mode sensible activé pour ce projet : dictée vocale cloud bloquée (local-first)."
+            : "🔓 Mode sensible désactivé pour ce projet."
+        );
+      } catch (err) {
+        appendSystemMessage(messagesEl, "❌ Erreur toggle mode sensible : " + err);
+      }
+    });
+  }
+
   function stopVoiceInput() {
     // Empêche onresult/onend de réécrire le textarea après l'envoi.
     voiceActive = false;
@@ -456,6 +518,10 @@ export async function createAgentPi(container) {
   function toggleVoiceInput() {
     if (!voiceSupported) return;
     if (state.isStreaming) { appendSystemMessage(messagesEl, "⏳ Agent en cours, patiente la fin pour dicter."); return; }
+    if (isSensitive) {
+      appendSystemMessage(messagesEl, "🔒 Projet sensible : la dictée vocale cloud est bloquée (local-first garanti).");
+      return;
+    }
     if (voiceActive) { stopVoiceInput(); return; }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();

@@ -513,13 +513,17 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
   **Effort :** moyen.
 
 ### H7 — Mode « Projet sensible » (local-first garanti) · 🟡 haute
-- [ ] Toggle par projet : **100% local garanti** (pi local + modèle local + zéro
+- [x] Toggle par projet : **100% local garanti** (pi local + modèle local + zéro
       cloud). Badge « 🔒 local », refuse tout routing cloud, dictée via fallback
       local (sinon web remote cloud interdit).
-- **Fichiers :** `src/js/agent-pi.js` (badge + garde), `src/js/model-router.js`
-  (H6), `src-tauri/src/lib.rs` (config `project_local_only`), `spec_web_remote.md`,
+- **Fichiers :** `src/js/agent-pi.js` (badge + garde), `src-tauri/src/lib.rs` (config `project_local_only`), `spec_web_remote.md`,
   `spec_voice_input.md`.
 - **Valeur :** 🟡 haute (débloque projets entreprise/sensibles) · **Effort :** faible.
+- ✅ Implémenté V1 (2026-08) : badge 🔒/🔓 cliquable dans la toolbar π, config
+  `sensitive_projects` (liste de chemins persistée), dictée vocale cloud bloquée
+  quand le projet est sensible. Le routing cloud (H6) reste reporté (aucun
+  routing implémenté) — le mode bloque déjà la principale fuite de données
+  (transcription vocale cloud).
 
 ### H8 — Project Bootstrap / Onboarding agent · 🟡 haute
 - [ ] Wizard « Init Pilot Project » : pointage sur un repo inconnu → l'agent

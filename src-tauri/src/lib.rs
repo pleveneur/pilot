@@ -218,6 +218,11 @@ struct AppConfig {
     /// Désactivé par défaut (l'agent écrit librement, comme avant).
     #[serde(default)]
     confirm_file_edits: bool,
+    // ── H7 : projets sensibles (local-first garanti, badge 🔒) ──
+    // Liste des chemins de projets en mode « sensible » : dictée vocale cloud
+    // bloquée, badge 🔒 affiché. Pas de routing cloud (H6) pour l'instant.
+    #[serde(default)]
+    sensitive_projects: Vec<String>,
     // ── Mémoire de projet (H3, spec_project_memory.md) ──
     // PROJECT_MEMORY.md tenu par l'agent. Injection dans le contexte (chat +
     // orchestration) si activé. Indépendant du Context Engine (H1).
@@ -387,6 +392,7 @@ impl Default for AppConfig {
             context_rag_endpoint: default_rag_endpoint(),
             context_rag_model: default_rag_model(),
             confirm_file_edits: false,
+            sensitive_projects: Vec::new(),
             project_memory_enabled: true,
             project_memory_auto_extract: false,
             orchestration_test_enabled: false,
@@ -930,6 +936,31 @@ fn remove_favorite(state: State<AppState>, app: AppHandle, path: String) -> Resu
     Ok(())
 }
 
+// ── H7 : projets sensibles (local-first) ──
+
+/// Ajoute/retire un projet de la liste des projets sensibles (badge 🔒 + dictée
+/// cloud bloquée). Retourne le nouvel état (true = sensible).
+#[tauri::command]
+fn set_project_sensitive(state: State<AppState>, app: AppHandle, path: String, sensitive: bool) -> Result<bool, String> {
+    let mut config = state.config.lock().unwrap().clone();
+    if sensitive {
+        if !config.sensitive_projects.contains(&path) {
+            config.sensitive_projects.push(path);
+        }
+    } else {
+        config.sensitive_projects.retain(|p| p != &path);
+    }
+    save_config_disk(&app, &config)?;
+    *state.config.lock().unwrap() = config;
+    Ok(sensitive)
+}
+
+/// Retourne true si le chemin de projet donné est marqué sensible.
+#[tauri::command]
+fn is_project_sensitive(state: State<AppState>, path: String) -> bool {
+    state.config.lock().unwrap().sensitive_projects.contains(&path)
+}
+
 #[tauri::command]
 fn set_sidebar_width(
     state: State<AppState>,
@@ -1406,6 +1437,8 @@ pub fn run() {
             set_review_model,
             add_favorite,
             remove_favorite,
+            set_project_sensitive,
+            is_project_sensitive,
             plan::save_plan,
             plan::load_plan,
             plan::delete_plan,

@@ -2552,6 +2552,16 @@ body.zen-mode #action-panel {
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
 
+.agent-lock-badge {
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  user-select: none;
+  opacity: 0.9;
+}
+.agent-lock-badge:hover { background: var(--bg-hover); }
+
 .agent-status.agent-status-error {
   color: var(--danger);
 }
