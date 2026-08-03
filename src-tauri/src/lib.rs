@@ -62,8 +62,25 @@ mod rpc;
 
 // ── État global de l'application ──
 
+/// État d'un projet ouvert (spec_multiprojects.md). Un par projet ouvert :
+/// son agent RPC dédié + son watcher de fichiers.
+/// NB : à l'étape actuelle (adaptateur progressif) seul `path` est rempli ;
+/// `rpc`/`watcher` accueilleront l'état par projet quand on sortira de
+/// l'adaptateur (les champs globaux reflètent encore le projet actif).
+#[allow(dead_code)]
+struct ProjectState {
+    path: String,
+    rpc: Option<rpc_manager::RpcSession>,
+    watcher: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
+}
+
 struct AppState {
     project_path: Mutex<Option<String>>,
+    /// Multi-projets (spec_multiprojects.md) : projets ouverts, indexés par
+    /// chemin normalisé. Chaque projet a son propre agent RPC + watcher.
+    projects: Mutex<HashMap<String, ProjectState>>,
+    /// Projet actif (affiché) : chemin normalisé présent dans `projects`.
+    active_project: Mutex<Option<String>>,
     config: Mutex<AppConfig>,
     watch_state: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
     terminals: Mutex<HashMap<String, terminal::TerminalState>>,
@@ -685,6 +702,21 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
     let state = app.state::<AppState>();
     let folder = PathBuf::from(path);
 
+    // Multi-projets (spec_multiprojects.md) : enregistrer le projet dans la
+    // collection des projets ouverts (clé = chemin normalisé) s'il n'y est pas,
+    // puis le rendre actif. `project_path`/`watch_state`/`rpc_state` restent
+    // l'état du projet actif (adaptateur progressif).
+    {
+        let mut projects = state.projects.lock().unwrap();
+        projects
+            .entry(path.to_string())
+            .or_insert_with(|| ProjectState {
+                path: path.to_string(),
+                rpc: None,
+                watcher: None,
+            });
+    }
+
     // Arrêter l'ancien watcher proprement
     stop_watcher(&state);
 
@@ -693,6 +725,7 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
 
     // Stocker le chemin du projet (section critique courte)
     *state.project_path.lock().unwrap() = Some(path.to_string());
+    *state.active_project.lock().unwrap() = Some(path.to_string());
 
     // Persister dans les projets récents (section critique courte)
     {
@@ -1108,23 +1141,88 @@ fn get_recent_projects(state: State<AppState>, app: AppHandle) -> Result<Vec<Str
 }
 
 #[tauri::command]
-fn close_project(state: State<AppState>, app: AppHandle) -> Result<(), String> {
-    stop_watcher(&state);
-    // Arrêter la session RPC si active
-    {
-        let mut rpc = state.rpc_state.lock().unwrap();
-        if let Some(mut session) = rpc.take() {
-            rpc_manager::stop_session(&mut session);
+fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -> Result<(), String> {
+    // Multi-projets (spec_multiprojects.md) : le chemin de la fermeture.
+    // None = fermer le projet actif (rétro-compatibilité).
+    let target = path.clone().unwrap_or_else(|| {
+        state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default()
+    });
+
+    // Si on ferme le projet actif : stopper watcher + session RPC + titre.
+    let is_active = {
+        let active = state.active_project.lock().unwrap();
+        active.as_deref() == Some(target.as_str())
+    };
+
+    if is_active || path.is_none() {
+        stop_watcher(&state);
+        // Arrêter la session RPC si active
+        {
+            let mut rpc = state.rpc_state.lock().unwrap();
+            if let Some(mut session) = rpc.take() {
+                rpc_manager::stop_session(&mut session);
+            }
+        }
+        // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
+        agents::do_stop_all_agent_processes(&state);
+        *state.project_path.lock().unwrap() = None;
+        *state.active_project.lock().unwrap() = None;
+        // Réinitialiser le titre de la fenêtre
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_title("Pilot");
         }
     }
-    // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
-    agents::do_stop_all_agent_processes(&state);
-    *state.project_path.lock().unwrap() = None;
-    // Réinitialiser le titre de la fenêtre
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_title("Pilot");
-    }
+
+    // Retirer le projet de la collection multi-projets.
+    state.projects.lock().unwrap().remove(&target);
+
     Ok(())
+}
+
+/// Multi-projets (spec_multiprojects.md) : définit le projet actif (affiché).
+/// Le basculement de la session RPC / du watcher est géré par le frontend via
+/// l'événement `project_changed` (même logique que l'ouverture de projet).
+#[tauri::command]
+fn set_active_project(state: State<AppState>, app: AppHandle, path: String) -> Result<(), String> {
+    // Le projet doit être dans la collection des projets ouverts.
+    let registered = state.projects.lock().unwrap().contains_key(&path);
+    if !registered {
+        return Err("Projet non ouvert".to_string());
+    }
+
+    // Arrêter le watcher du projet actif actuel (l'état global reflète le
+    // projet actif). Le frontend relance le watcher / la session RPC sur le
+    // nouveau projet via project_changed.
+    stop_watcher(&state);
+    *state.project_path.lock().unwrap() = Some(path.clone());
+    *state.active_project.lock().unwrap() = Some(path.clone());
+
+    let payload = serde_json::json!({ "path": path });
+    app.emit("project_changed", &payload).ok();
+
+    Ok(())
+}
+
+/// Multi-projets (spec_multiprojects.md) : liste les projets ouverts + le projet
+/// actif, pour l'afficheur UI et le web-remote.
+#[tauri::command]
+fn list_open_projects(state: State<AppState>) -> Vec<String> {
+    let projects = state.projects.lock().unwrap();
+    let mut list: Vec<String> = projects.keys().cloned().collect();
+    list.sort();
+    list
+}
+
+/// Multi-projets (spec_multiprojects.md) : chemin du projet actif (pour le
+/// web-remote et l'afficheur UI).
+#[tauri::command]
+fn get_active_project(state: State<AppState>) -> Option<String> {
+    state.active_project.lock().unwrap().clone()
 }
 
 // ── Copie d'image dans le projet (drag & drop / Ctrl+V) ──
@@ -1357,6 +1455,8 @@ pub fn run() {
             let (event_tx, _) = tokio::sync::broadcast::channel(256);
             AppState {
                 project_path: Mutex::new(None),
+                projects: Mutex::new(HashMap::new()),
+                active_project: Mutex::new(None),
                 config: Mutex::new(AppConfig::default()),
                 watch_state: Mutex::new(None),
                 terminals: Mutex::new(HashMap::new()),
@@ -1373,6 +1473,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_project_path,
+            set_active_project,
+            list_open_projects,
+            get_active_project,
             files::read_file_content,
             files::get_file_info,
             files::read_file_binary,

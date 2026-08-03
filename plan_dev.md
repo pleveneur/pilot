@@ -1,5 +1,56 @@
 # Plan de Développement — Pilot
 
+## ⚠️ À discuter en priorité à la prochaine session
+
+**Portage du Context Engine RAG vers PLh** (`G:\IA_PL\PLh`).
+
+Pilot a un RAG local opérationnel (embeddings Ollama + SQLite + cosinus, `context_engine.rs` §7).
+PLh (agent alternatif) n'a **pas** encore ce mécanisme. Sujet à aborder en priorité :
+
+1. **Index de contexte** — stockage SQLite des chunks + embeddings (à créer côté PLh).
+2. **Commandes RPC** équivalentes aux Tauri de Pilot : `build_context_index`, `query_context_index`, `context_index_status`.
+3. **Injection au 1er prompt** de session avec fallback heuristique (V1) si index/endpoint indisponible — ne jamais bloquer.
+4. **Config** : `rag_enabled` (défaut off), `rag_endpoint` (défaut `http://127.0.0.1:11434`), `rag_model` (défaut `nomic-embed-text`), budget tokens.
+5. **Bouton « Contexte »** : forcer le rebuild de l'index.
+
+**Référence Pilot** : [`spec_context_engine.md`](spec_context_engine.md) §7 (V2 RAG) + `src/js/context-engine.js` (flux 1er prompt) + `src-tauri/src/context_engine.rs` (chunking + scoring).
+**Prérequis local** : Ollama démarré + `ollama pull nomic-embed-text`.
+**Compatibilité** : le RAG reste 100% local (zero-cloud) → compatible mode « projet sensible » (H7).
+
+---
+
+## 🎯 Vision produit (orientation stratégique)
+
+**Pilot → gestionnaire de projets** basé sur l'usage de **PLh** (ou **Pi**) comme
+moteur d'agent.
+
+Au-delà de l'éditeur de texte mono-projet actuel, Pilot vise à terme deux piliers :
+
+1. **Gestionnaire de projets** — ouvrir **plusieurs projets simultanément**, chacun
+   avec son propre agent (pi/plh), ses onglets, son état et son historique.
+   *Réactive l'ancienne idée C2 (Workspace multi-projets), précédemment jugée
+   « abandonnée » dans une optique mono-projet.*
+2. **Gestionnaire de source** — intégrer la gestion de code source (via **git**
+   ou un gestionnaire intégré) pour permettre le **développement multi-utilisateurs**.
+   *Rejoint les briques déjà posées côté remote (accès web, supervision) — cf.
+   `spec_web_remote.md`.*
+
+### Implications pour la roadmap
+
+- **Multi-projets** : chantier majeur (AppState multi-sessions, RPC séparé par
+  projet, sidebar multi-onglets). Dépend fortement du découpage `lib.rs` déjà
+  bien avancé.
+- **Multi-utilisateurs** : chantier d'architecture (conflits, branches, droits,
+  partage). S'appuie sur le web remote existant (`web_server.rs`, `web_auth.rs`).
+- Ces deux piliers **réactivent des idées reportées** : D3 (WebAuthn), D4
+  (partage read-only), et donnent un sens à H6 (routing) / H10 (MCP).
+
+> **Note de cohérence** : la vision multi-utilisateurs redonne de la priorité à
+> des items auparavant « reportés sine die » (D3, D4, et une partie du remote).
+> La roadmap ci-dessous marque ces changements de priorité.
+
+---
+
 ## Statut global
 
 **Phases 1 à 10 : ✅ Terminées.** Le projet est fonctionnel et complet.
@@ -28,9 +79,16 @@
 | Historique de sessions (H9) | [`spec_session_history.md`](spec_session_history.md) | ✅ Implémenté (2026-08-01) — onglet 📜 : index local `.pilot/sessions.jsonl` (append) + tags `.pilot/sessions-tags.json`, recherche full-text/regex + filtres tag/file/kind, détail (relecture JSONL pi), tags éditables, rétro-indexation auto à la 1re ouverture (lecture du dossier de sessions pi), capture live à l'agent_end (chat standard). 6 commandes Tauri (`index_sessions`, `search_sessions`, `get_session_detail`, `set_session_tags`, `list_session_tags`, `record_session_entry`). Ne dépend pas de pi (consultable hors-ligne). Complément de H3 (faits) et H1 (contexte) |
 | Revue de code assistée (H5) | [`spec_review.md`](spec_review.md) | ✅ Implémenté (2026-07-29) — onglet 🔍 Review : second reviewer sur `git diff` (working tree / dernier commit), pi temporaire cadré lecture seule, revue structurée + questions de suivi |
 
-## Roadmap retenue (décision 2026-07-30)
+## Roadmap retenue (décision 2026-07-30, mise à jour 2026-08)
 
 Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
+
+### Vision — piliers stratégiques (à terme, cf. section « Vision produit » ci-dessus)
+
+| # | Pilier | Statut | Spec / détail |
+|---|---|---|---|
+| V1 | **Gestionnaire de projets multi-projets** — ouvrir plusieurs projets simultanément, un agent pi/plh par projet | 🔲 À lancer | Réactive C2 · [`spec_multiprojects.md`](spec_multiprojects.md) · AppState multi-sessions, RPC séparé par projet, sidebar multi-onglets. Gros chantier |
+| V2 | **Gestionnaire de source** — dev multi-utilisateurs via git ou gestionnaire intégré | 🔲 À lancer | S'appuie sur le remote existant (`web_server.rs`, `web_auth.rs`). Réactive D3/D4. Chantier d'architecture (conflits, branches, droits) |
 
 | # | Feature | Statut | Spec / détail |
 |---|---|---|---|
@@ -74,7 +132,7 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-08*
+*Dernière mise à jour : 2026-08* — ⚠️ priorité prochaine session : portage RAG vers PLh (section en tête) · nouvelle vision produit « gestionnaire de projets » (multi-projets + multi-utilisateurs, voir section Vision produit)
 
 ## Consolidation (qualité / dette technique)
 

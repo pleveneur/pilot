@@ -51,6 +51,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 |---|---|
 | Spécifications générales | `spec_pilot.md` |
 | Agent Pi / RPC | `spec_rpc.md` |
+| Multi-projets (gestionnaire de projets) | `spec_multiprojects.md` |
 | Conversion PDF → MD | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
