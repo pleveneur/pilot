@@ -786,6 +786,19 @@ Les événements `compaction_start` / `compaction_end` / `compaction` sont
 exemptés du garde-fou anti-événements résiduels (§5.7) pour pouvoir être traités
 entre deux tours (`isStreaming=false`).
 
+**Extension — reprise en chat standard (issue #12)** : le fix ci-dessus ne
+couvrait que l'orchestration. En chat standard (mode non-orchestration), une
+compaction auto (`reason="threshold"`, `willRetry=false`) faisait aussi
+s'arrêter pi/plh sans reprendre le tour en cours → l'agent restait figé après
+« ✅ Compaction terminée ». Le même timer de reprise est désormais activé en chat
+standard : si aucune activité n'arrive dans le délai, on `abort_agent` puis on
+re-émet le **dernier prompt utilisateur** (`send_agent_prompt` direct, pas
+`sendPrompt`, pour ne PAS ré-afficher le message ni ré-injecter le contexte déjà
+compacté). Images incluses si présentes. Condition : compaction auto seulement
+(`reason !== "manual"`), jamais pour `/compact` ni une compaction avortée.
+Le flag `orchestrationCompactionResumePending` (clear par le 1er delta/agent_end/outil)
+est réutilisé, donc pi/plh peuvent reprendre spontanément sans double envoi.
+
 **Fix complémentaire — filtre des deltas pendant compaction (plh)** : contrairement
 à pi qui met le résumé dans `compaction_end.summary`, **plh stream le résumé en
 `message_update`/`text_delta`** pendant la compaction. Ces deltas polluaient

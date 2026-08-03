@@ -5927,9 +5927,14 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // RPC : le tour en cours est interrompu sans agent_end, ou le prompt en
       // attente n'est pas retraité. On démarre un timer de reprise : si aucune
       // activité (delta/agent_end/outil) n'arrive dans le délai, on abort et on
-      // relance la tâche courante via executeNextTask (reprise propre, sans
-      // marquer d'échec). Le flag est clearer par le 1er delta/agent_end/outil.
-      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused && !payload.aborted) {
+      // relance (executeNextTask en orchestration ; re-émission du dernier prompt
+      // en chat standard — issue #12). Le flag est clearer par le 1er
+      // delta/agent_end/outil.
+      const isOrchActive = state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused;
+      const isChatStandard = !state.orchestrationEnabled || !state.orchestrationRunning;
+      // Ne relancer que sur compaction automatique (threshold/overflow) ; la
+      // compaction manuelle (/compact, aborted) n'interrompt pas un tour.
+      if (!payload.aborted && payload.reason !== "manual" && (isOrchActive || (isChatStandard && state.lastUserPrompt))) {
         if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
         state.orchestrationCompactionResumePending = true;
         // 10s en milieu de tour (laisser à pi le temps de reprendre) ; 2s entre
@@ -5939,13 +5944,27 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           state.orchestrationCompactionTimer = null;
           if (!state.orchestrationCompactionResumePending) return;
           state.orchestrationCompactionResumePending = false;
-          if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
-          appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
-          // Couper un éventuel tour zombie, puis relancer la tâche courante.
-          invoke("abort_agent").catch(() => {}).finally(() => {
-            state.isStreaming = false;
-            orchFns.executeNextTask(messagesEl, state, statusEl);
-          });
+          if (isOrchActive) {
+            if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
+            appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
+            // Couper un éventuel tour zombie, puis relancer la tâche courante.
+            invoke("abort_agent").catch(() => {}).finally(() => {
+              state.isStreaming = false;
+              orchFns.executeNextTask(messagesEl, state, statusEl);
+            });
+          } else if (!state.orchestrationEnabled && state.lastUserPrompt) {
+            // Chat standard : re-émettre le dernier prompt pour que pi le
+            // retraite avec le contexte compacté. On appelle send_agent_prompt
+            // directement (pas sendPrompt) pour ne PAS ré-afficher le message
+            // utilisateur ni ré-injecter le contexte (déjà compacté côté pi).
+            appendSystemMessage(messagesEl, "🔁 Reprise du chat après compaction (pi n'a pas relancé automatiquement)...");
+            invoke("abort_agent").catch(() => {}).finally(() => {
+              state.isStreaming = false;
+              const resumePayload = { message: state.lastUserPrompt };
+              if (state.lastRetryImages && state.lastRetryImages.length) payload.images = state.lastRetryImages;
+              invoke("send_agent_prompt", payload).catch((e) => console.error("[agent] reprise chat après compaction échouée:", e));
+            });
+          }
         }, delay);
       }
       break;
@@ -5978,8 +5997,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       // Reprise post-compaction (même logique que compaction_end) — l'événement
       // `compaction` (auto, fromHook) est l'ancien format ; pi peut ne pas
-      // reprendre ensuite en mode RPC.
-      if (state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused && fromHook) {
+      // reprendre ensuite en mode RPC. On relance la tâche (orchestration) ou le
+      // dernier prompt (chat standard, issue #12).
+      const isOrchActive = state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused;
+      if (fromHook && (isOrchActive || (!state.orchestrationEnabled && state.lastUserPrompt))) {
         if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
         state.orchestrationCompactionResumePending = true;
         const delay = state.isStreaming ? 10000 : 2000;
@@ -5987,12 +6008,22 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           state.orchestrationCompactionTimer = null;
           if (!state.orchestrationCompactionResumePending) return;
           state.orchestrationCompactionResumePending = false;
-          if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
-          appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
-          invoke("abort_agent").catch(() => {}).finally(() => {
-            state.isStreaming = false;
-            orchFns.executeNextTask(messagesEl, state, statusEl);
-          });
+          if (isOrchActive) {
+            if (!state.orchestrationRunning || state.orchestrationPaused || !state.orchestrationPlan) return;
+            appendSystemMessage(messagesEl, "🔁 Reprise du plan après compaction (pi n'a pas relancé automatiquement)...");
+            invoke("abort_agent").catch(() => {}).finally(() => {
+              state.isStreaming = false;
+              orchFns.executeNextTask(messagesEl, state, statusEl);
+            });
+          } else if (!state.orchestrationEnabled && state.lastUserPrompt) {
+            appendSystemMessage(messagesEl, "🔁 Reprise du chat après compaction (pi n'a pas relancé automatiquement)...");
+            invoke("abort_agent").catch(() => {}).finally(() => {
+              state.isStreaming = false;
+              const resumePayload = { message: state.lastUserPrompt };
+              if (state.lastRetryImages && state.lastRetryImages.length) resumePayload.images = state.lastRetryImages;
+              invoke("send_agent_prompt", resumePayload).catch((e) => console.error("[agent] reprise chat après compaction échouée:", e));
+            });
+          }
         }, delay);
       }
       break;
