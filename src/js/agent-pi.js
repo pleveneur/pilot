@@ -6276,6 +6276,79 @@ function appendToolBlock(parent, toolName, args) {
   return inlineEl;
 }
 
+/**
+ * Re-rend l'historique de la session agent courante dans `container`.
+ * Utilisé au (ré)ouverture de l'onglet agent pour retrouver la discussion en
+ * cours d'un projet (multi-projets, spec_multiprojects.md §4). pi reprend sa
+ * session par répertoire projet (--session-dir calculé depuis le cwd) ; on
+ * rejoue les messages renvoyés par la commande `get_agent_messages` via les
+ * helpers de rendu existants (même chemin visuel que le streaming).
+ * @param {HTMLElement} container - l'élément .agent-chat-messages
+ * @returns {Promise<number>} nombre de messages rendus (0 si vide/erreur)
+ */
+export async function renderMessageHistory(container) {
+  if (!container) return 0;
+  let raw;
+  try {
+    raw = await invoke("get_agent_messages");
+  } catch (_) {
+    return -1; // session pas encore prête (à réessayer) — distinct d'un historique vide
+  }
+  // Formats défensifs : tableau direct, {messages:[...]}, {data:{messages:[...]}}.
+  let arr = raw;
+  if (arr && !Array.isArray(arr)) {
+    arr = (arr.data && arr.data.messages) || arr.messages || [];
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return 0;
+
+  // Vider et re-rendre.
+  container.innerHTML = "";
+  let rendered = 0;
+  for (const msg of arr) {
+    if (!msg || typeof msg !== "object") continue;
+    const role = msg.role || msg.role;
+    if (role === "user") {
+      // content : string OU array de parts {type:'text', text}.
+      let text = "";
+      if (typeof msg.content === "string") text = msg.content;
+      else if (Array.isArray(msg.content)) {
+        text = msg.content
+          .filter((p) => p && (p.type === "text") && typeof p.text === "string")
+          .map((p) => p.text)
+          .join("\n");
+      }
+      if (text.trim()) {
+        appendUserMessage(container, text);
+        rendered++;
+      }
+    } else if (role === "assistant") {
+      const blk = createAssistantBlock(container);
+      let lastTextSection = null;
+      const parts = Array.isArray(msg.content) ? msg.content : [];
+      for (const part of parts) {
+        if (!part || typeof part !== "object") continue;
+        if (part.type === "text" && part.text) {
+          lastTextSection = appendTextSection(blk, part.text);
+        } else {
+          if (lastTextSection) {
+            closeTextSection(lastTextSection);
+            lastTextSection = null;
+          }
+          if (part.type === "thinking" && part.thinking) {
+            appendThinkingSection(blk, part.thinking);
+          } else if ((part.type === "toolCall" || part.type === "tool_call") && part.name) {
+            appendToolBlock(blk, part.name, part.arguments || part.args || {});
+          }
+        }
+      }
+      if (lastTextSection) closeTextSection(lastTextSection);
+      rendered++;
+    }
+  }
+  scrollToBottom(container);
+  return rendered;
+}
+
 function appendSystemMessage(container, text) {
   const el = document.createElement("div");
   el.className = "agent-message agent-message-system";

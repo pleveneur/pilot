@@ -10,7 +10,7 @@ import { createPdfPreview } from "./pdf-preview.js";
 import { createImageViewer } from "./image-viewer.js";
 import { createCsvPreview } from "./csv-preview.js";
 import { createTerminal, killTerminal } from "./terminal.js";
-import { createAgentPi } from "./agent-pi.js";
+import { createAgentPi, renderMessageHistory } from "./agent-pi.js";
 import { agentDisplayLabel, getPiHealthSync, checkPiHealth } from "./backend-info.js";
 import { createHelp } from "./help.js";
 import { createReview } from "./review.js";
@@ -377,6 +377,17 @@ class TabsManager {
       tab.unlistenRpc = result.unlisten;
       tab.unlistenDragDrop = result.unlistenDragDrop;
 
+      // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
+      // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
+      // puis on recharge les messages de la discussion en cours.
+      const msgContainer = result.wrapper.querySelector(".agent-chat-messages");
+      if (msgContainer) {
+        for (let i = 0; i < 10; i++) {
+          const n = await renderMessageHistory(msgContainer);
+          if (n !== -1) break; // -1 = session pas prête → réessayer ; 0+ = fait (vide ou non)
+          if (i < 9) await new Promise((r) => setTimeout(r, 300));
+        }
+      }
 
     } catch (e) {
       console.error("Erreur session agent:", e);
