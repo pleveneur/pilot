@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-03 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets -->
+<!-- PILOT-HELP generated=2026-08-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -89,6 +89,9 @@ externe.
   il s'ouvre dans un onglet 🖥️. Sinon, un terminal externe est lancé.
 - Shell par défaut : `cmd.exe` (Windows), `$SHELL`/`/bin/zsh` (macOS),
   `$SHELL`/`/bin/bash` (Linux).
+- **Windows** : le terminal intégré reconstruit le PATH système + utilisateur
+  depuis la registry, pour que les commandes installées après le lancement de
+  Pilot (ex: `cargo`) soient trouvées.
 - Le terminal reste indépendant de l'éditeur ; on peut l'ouvrir et le fermer
   comme un onglet normal.
 
@@ -494,12 +497,14 @@ Pilot peut ouvrir **plusieurs projets en même temps** dans la même fenêtre et
 basculer entre eux sans fermer l'application. Chaque projet garde **son agent
 (pi/plh) actif en arrière-plan**, ses onglets et sa discussion.
 
-- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets ouverts ».
+- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets en cours ».
   La liste des projets ouverts est **conservée au redémarrage** (rouverte
 automatiquement avec le projet actif).
-- **Basculer** : cliquer sur un projet de la liste → Pilot sauvegarde les onglets
-du projet courant, bascule l'affichage, puis restaure les onglets et **la
-discussion en cours** du projet ciblé.
+- **Voir / basculer** : les projets ouverts sont listés **sous le bouton Projets**
+  (toujours visibles, **projet actif en surbrillance avec une coche ✓**). Cliquer sur
+  un projet → Pilot
+  sauvegarde les onglets du projet courant, bascule l'affichage, puis restaure les
+  onglets et **la discussion en cours** du projet ciblé.
 - **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend

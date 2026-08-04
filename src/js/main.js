@@ -648,7 +648,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const [openRestored, act] = await invoke("restore_open_projects");
       restoredActive = act || null;
       if (Array.isArray(openRestored) && openRestored.length > 0) {
-        await sidebar._loadOpenProjects();
+        await sidebar._renderOpenProjectsBar();
       }
     } catch (_) {
       // Commande indisponible (ancienne build) → ignorer

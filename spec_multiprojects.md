@@ -22,7 +22,8 @@ Cette spec décrit la migration vers un **gestionnaire multi-projets** :
 ### Afficheur de projets (UI desktop)
 - **Bandeau horizontal au-dessus de l'explorateur de fichiers** listant les projets
   ouverts (nom = dernier segment du chemin). Le projet **actif** est mis en
-  surbrillance.
+  surbrillance (fond accent + coche ✓) — c'est l'unique indicateur du projet courant
+  (pas de bandeau titre rouge redondant).
 - Actions : **« + Ouvrir un projet »** (dialogue natif existant), **« ✕ Fermer »**
   sur le projet actif, clic sur un projet → devient **actif**.
 - Au changement de projet actif, l'UI (arborescence, onglets, état agent) se
@@ -125,10 +126,13 @@ struct AppState {
 | `index.html`, `src/css/style.css` | UI de l'afficheur (dropdown projets ouverts) |
 
 ### UI de l'afficheur
-- **Dropdown** (pas un bandeau) dans le sélecteur de projet de la sidebar :
-  section « Projets ouverts », projet actif en surbrillance, bascule au clic,
-  fermeture par bouton ✕. (Divergence assumée vs la 1re esquisse « bandeau
-  horizontal » : le dropdown est intégré au sélecteur existant.)
+- **Barre « Projets en cours »** (toujours visible) sous le bouton Projets de la
+  sidebar : liste des projets ouverts, projet actif en surbrillance, bascule au
+  clic, fermeture par bouton ✕. (Divergence assumée vs la 1re esquisse « bandeau
+  horizontal » : la barre est intégrée au sélecteur existant, sous le bouton.)
+- Le **dropdown** Projets affiche les récents **sans dupliquer** les projets déjà
+  ouverts : les projets en cours sont **exclus** de la liste « Récents » (ils ne
+  sont visibles que dans la barre « Projets en cours »).
 
 ### État agent par projet
 - **Parking de sessions** : au basculement, le frontend **parke** la session du
@@ -175,8 +179,9 @@ struct AppState {
 3. **Parking** : `park_agent_session` (processus pi vivant rangé dans `ProjectState.rpc`),
    reprise dans `start_agent_session` (sans `new_session`), canaux d'événements par
    projet (`project_event_channel`/`get_agent_event_channel`).
-4. **Frontend afficheur** : section « Projets ouverts » dans le dropdown de la
-   sidebar (bascule au clic, fermeture ✕, projet actif en surbrillance).
+4. **Frontend afficheur** : barre « Projets en cours » toujours visible sous le
+   bouton Projets de la sidebar (bascule au clic, fermeture ✕, projet actif en
+   surbrillance) ; le dropdown « Récents » exclut les projets ouverts.
 5. **État agent par projet** : parking de sessions (processus pi vivant par projet)
    + restauration des onglets par projet + re-rendu de l'historique
    (`renderMessageHistory`).
@@ -193,12 +198,14 @@ Pilot peut ouvrir **plusieurs projets en même temps** dans la même fenêtre et
 basculer entre eux sans fermer l'application. Chaque projet garde **son agent
 (pi/plh) actif en arrière-plan**, ses onglets et sa discussion.
 
-- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets ouverts ».
+- **Ouvrir** : sélecteur de projet en haut de la barre latérale → « Projets en cours ».
   La liste des projets ouverts est **conservée au redémarrage** (rouverte
 automatiquement avec le projet actif).
-- **Basculer** : cliquer sur un projet de la liste → Pilot sauvegarde les onglets
-du projet courant, bascule l'affichage, puis restaure les onglets et **la
-discussion en cours** du projet ciblé.
+- **Voir / basculer** : les projets ouverts sont listés **sous le bouton Projets**
+  (toujours visibles, **projet actif en surbrillance avec une coche ✓**). Cliquer sur
+  un projet → Pilot
+  sauvegarde les onglets du projet courant, bascule l'affichage, puis restaure les
+  onglets et **la discussion en cours** du projet ciblé.
 - **Fermer** : bouton ✕ à droite d'un projet → son agent est arrêté proprement.
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend

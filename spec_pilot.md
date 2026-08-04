@@ -86,6 +86,11 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### PTY (Terminal intégré)
 - `portable-pty` : ConPTY (Windows), PTY natif (macOS/Linux).
 - Shell : `cmd.exe` / `$SHELL` ou `zsh` / `$SHELL` ou `bash`.
+- **Windows** : le PATH complet (système + utilisateur) est reconstruit depuis la
+  registry (HKLM + HKCU) et injecté dans le PTY, car le processus Pilot peut ne
+  pas avoir le PATH utilisateur à jour (ex: `.cargo\bin` ajouté après son
+  lancement). Les commandes comme `cargo` sont donc trouvées dans le terminal
+  intégré.
 - Streaming via `terminal-output`, ResizeObserver, thème adaptatif.
 - Copier/Coller contextuel : `Ctrl+C` copie si sélection, sinon SIGINT.
 

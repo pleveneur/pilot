@@ -14,10 +14,13 @@
 - **Persistance de l'expansion** : l'état déplié/replié survit aux rafraîchissements.
 
 ### Projets récents
-- **Bouton "Projets"** avec logo Pilot — menu déroulant listant les 10 derniers projets.
+- **Bouton "Projets"** avec logo Pilot — menu déroulant listant les 10 derniers projets (les projets déjà ouverts n'y sont pas dupliqués : ils sont listés dans la barre « Projets en cours » ci-dessous).
 - **"📁 Nouveau projet"** : sélecteur de dossier natif.
 - **Chargement automatique** du dernier projet au démarrage (paramétrable).
 - **Titre de fenêtre dynamique** : `Pilot` → `Pilot <chemin_du_projet>`.
+- **Projets en cours** : les projets ouverts sont listés sous le bouton Projets
+  (toujours visibles, projet actif en surbrillance). Cliquer sur un projet bascule
+  dessus ; le bouton **✕** à droite le ferme proprement.
 
 ### Édition Markdown
 - **Coloration syntaxique** via CodeMirror 6 (Markdown, thème sombre/clair adaptatif).
@@ -44,6 +47,9 @@
 - Shell natif selon l'OS : `cmd.exe` (Windows), `zsh`/`bash` (macOS/Linux).
 - **Streaming** des sorties PTY vers le frontend via événements Tauri.
 - **Redimensionnement** automatique.
+- **PATH complet (Windows)** : le terminal intégré reconstruit le PATH système +
+  utilisateur depuis la registry, pour que les commandes installées après le
+  lancement de Pilot (ex: `cargo`) soient trouvées.
 - **Copier/Coller contextuel** :
   - `Ctrl+C` : copie la sélection si présente, sinon envoie SIGINT.
   - `Ctrl+V` : colle depuis le presse-papiers.

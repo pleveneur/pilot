@@ -157,13 +157,12 @@ class Sidebar {
   constructor(tabsManager) {
     this.tabs = tabsManager;
     this.treeContainer = document.getElementById("file-tree");
-    this.projectName = document.getElementById("project-name");
+
     this.btnOpen = document.getElementById("btn-open-project");
     this.dropdown = document.getElementById("projects-dropdown");
     this.ddNewProject = document.getElementById("dd-new-project");
     this.ddRecentList = document.getElementById("dd-recent-list");
-    this.ddOpenSection = document.getElementById("dd-open-section");
-    this.ddOpenList = document.getElementById("dd-open-list");
+    this.openProjectsBar = document.getElementById("open-projects-bar");
     this.ddCloseProject = document.getElementById("dd-close-project");
     this.ddCloseSeparator = document.getElementById("dd-close-separator");
     this.contextMenu = document.getElementById("context-menu");
@@ -412,10 +411,10 @@ class Sidebar {
       this.gitStatus = gitStatus || { is_repo: false, entries: {} };
       this._rebuildGitMaps();
       const name = folderPath.replace(/\\/g, "/").split("/").pop() || folderPath;
-      this.projectName.textContent = name;
       this._renderTree();
       this._loadFavorites();
       this._showProjectButtons();
+      this._renderOpenProjectsBar();
       invoke("set_window_title", { title: `Pilot ${folderPath}` }).catch(() => {});
 
       // Restaurer les onglets de la session précédente
@@ -448,11 +447,10 @@ class Sidebar {
       this.treeData = tree;
       this.gitStatus = gitStatus || { is_repo: false, entries: {} };
       this._rebuildGitMaps();
-      const name = path.replace(/\\/g, "/").split("/").pop() || path;
-      this.projectName.textContent = name;
       this._renderTree();
       this._loadFavorites();
       this._showProjectButtons();
+      this._renderOpenProjectsBar();
       loadModelAliases();
       invoke("set_window_title", { title: "Pilot " + path }).catch(() => {});
     } catch (e) {
@@ -1106,51 +1104,58 @@ class Sidebar {
 
   async _toggleProjectsDropdown() {
     if (this.dropdown.classList.contains("hidden")) {
-      await Promise.all([this._loadOpenProjects(), this._loadRecentProjects()]);
+      await this._loadRecentProjects();
+      this._renderOpenProjectsBar();
       this.dropdown.classList.remove("hidden");
     } else {
       this._hideProjectsDropdown();
     }
   }
 
-  // Multi-projets (spec_multiprojects.md) : affiche les projets ouverts dans
-  // le dropdown, avec bascule du projet actif (clic) et fermeture (bouton ✕).
-  async _loadOpenProjects() {
+  // Barre « Projets en cours » sous le bouton Projets : liste toujours visible
+  // des projets ouverts (avec titre), bascule du projet actif (clic) et
+  // fermeture (✕). Le titre est inséré en tête du conteneur à chaque rendu.
+  async _renderOpenProjectsBar() {
     try {
       const [open, active] = await Promise.all([
         invoke("list_open_projects"),
         invoke("get_active_project"),
       ]);
-      this.ddOpenList.innerHTML = "";
+      const bar = this.openProjectsBar;
+      bar.innerHTML = "";
       if (!open || open.length === 0) {
-        this.ddOpenSection.classList.add("hidden");
+        bar.classList.add("hidden");
         return;
       }
-      this.ddOpenSection.classList.remove("hidden");
+      bar.classList.remove("hidden");
+      const label = document.createElement("div");
+      label.className = "open-projects-label";
+      label.textContent = "Projets en cours";
+      bar.appendChild(label);
       for (const p of open) {
         const name = p.replace(/\\/g, "/").split("/").pop();
         const isActive = p === active;
-        const btn = document.createElement("button");
-        btn.className = "dd-recent-item" + (isActive ? " active" : "");
-        btn.innerHTML = `<span class="dd-recent-icon icon-cat-folder"><i data-lucide="folder" class="icon-sm"></i></span><span class="dd-recent-name">${this._esc(name)}${isActive ? " <em>• actif</em>" : ""}</span><span class="dd-recent-path">${this._esc(p)}</span><span class="dd-open-close" title="Fermer ce projet">✕</span>`;
+        const item = document.createElement("div");
+        item.className = "open-project-item" + (isActive ? " active" : "");
+        item.title = p;
+        item.innerHTML =
+          `<span class="open-project-name">${this._esc(name)}</span>` +
+          `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
         // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
-        btn.addEventListener("click", (e) => {
-          if (e.target.closest(".dd-open-close")) return;
-          this._hideProjectsDropdown();
+        item.addEventListener("click", (e) => {
+          if (e.target.closest(".open-project-close")) return;
           if (!isActive) this._activateProject(p);
         });
         // Bouton fermer → ferme ce projet précis
-        const closeBtn = btn.querySelector(".dd-open-close");
+        const closeBtn = item.querySelector(".open-project-close");
         closeBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          this._hideProjectsDropdown();
           this.closeProject(p);
         });
-        this.ddOpenList.appendChild(btn);
-        refreshIcons(btn);
+        bar.appendChild(item);
       }
     } catch (_) {
-      this.ddOpenSection.classList.add("hidden");
+      this.openProjectsBar.classList.add("hidden");
     }
   }
 
@@ -1178,6 +1183,7 @@ class Sidebar {
       window._pilotProjectPath = path;
       await invoke("set_active_project", { path });
       await this.resyncProjectFromRemote(path);
+      this._renderOpenProjectsBar();
       // Restaurer les onglets de CE projet
       restoreTabs(this.tabs, path);
       // Rouvrir l'agent de CE projet s'il en avait un
@@ -1199,13 +1205,25 @@ class Sidebar {
   async _loadRecentProjects() {
     try {
       const projects = await invoke("get_recent_projects");
+      // Multi-projets : exclure de la liste « Récents » du dropdown les projets
+      // déjà affichés dans la barre « Projets en cours » (au-dessus de
+      // l'explorateur) pour éviter le doublon.
+      let open = [];
+      try {
+        open = (await invoke("list_open_projects")) || [];
+      } catch (_) {
+        /* ignore : dropdown sans filtre */
+      }
+      const norm = (p) => p.replace(/\\/g, "/").toLowerCase();
+      const openSet = new Set(open.map(norm));
+      const recents = projects.filter((p) => !openSet.has(norm(p)));
       this.ddRecentList.innerHTML = "";
-      if (projects.length === 0) {
+      if (recents.length === 0) {
         this.ddRecentList.innerHTML =
           '<div class="dd-empty">Aucun projet récent</div>';
         return;
       }
-      for (const p of projects) {
+      for (const p of recents) {
         const name = p.replace(/\\/g, "/").split("/").pop();
         const btn = document.createElement("button");
         btn.className = "dd-recent-item";
@@ -1312,6 +1330,7 @@ class Sidebar {
 
     // Si on ne ferme pas le projet actif, on rafraîchit juste le dropdown.
     if (!closingActive) {
+      this._renderOpenProjectsBar();
       toastSuccess("Projet fermé : " + currentPath.split(/[\\/]/).pop());
       return;
     }
@@ -1326,12 +1345,12 @@ class Sidebar {
     this.gitDirtyDirs = new Set();
     this._renderFavorites();
     this.treeContainer.innerHTML = '<p class="empty-message">Aucun projet ouvert</p>';
-    this.projectName.textContent = "";
     document.querySelectorAll(".project-only").forEach((b) =>
       b.classList.add("hidden")
     );
     this.ddCloseProject.classList.add("hidden");
     this.ddCloseSeparator.classList.add("hidden");
+    this._renderOpenProjectsBar();
     // Fermer tous les onglets ouverts
     this._closeAllTabs();
     // Réinitialiser le chemin du projet

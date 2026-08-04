@@ -21,6 +21,15 @@ portable-pty = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 
+# ── Terminal intégré (Windows) : PATH complet depuis la registry ──
+# Le PTY hérite de l'environnement du processus Pilot, qui peut ne pas avoir
+# le PATH utilisateur complet (ex: .cargo\bin). On le reconstruit depuis la
+# registry (HKLM système + HKCU utilisateur) pour que les commandes comme
+# `cargo` soient trouvées dans le terminal intégré.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_System_Environment"] }
+
 # ── Serveur web distant (mode remote) ──
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }

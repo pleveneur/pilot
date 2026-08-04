@@ -66,6 +66,14 @@ pub fn spawn_terminal(
     cmd.args(&args);
     cmd.cwd(&project_path);
 
+    // Windows : injecter le PATH complet (système + utilisateur) reconstruit
+    // depuis la registry, car le PTY hérite de l'environnement du processus
+    // Pilot qui peut ne pas contenir le PATH utilisateur (ex: .cargo\bin).
+    #[cfg(target_os = "windows")]
+    if let Some(full_path) = get_full_user_path() {
+        cmd.env("PATH", full_path);
+    }
+
     // Si une commande auto est spécifiée, on la passe différemment selon l'OS
     if let Some(ref auto) = auto_cmd {
         #[cfg(target_os = "windows")]
@@ -221,4 +229,70 @@ fn get_shell_info(_project_path: &str) -> (String, Vec<String>) {
 fn get_shell_info(_project_path: &str) -> (String, Vec<String>) {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     (shell, vec![])
+}
+
+/// Reconstruit le PATH complet (système + utilisateur) depuis la registry
+/// Windows. Le PTY hérite de l'environnement du processus Pilot, qui peut ne
+/// pas contenir le PATH utilisateur complet (ex: `.cargo\bin` ajouté après le
+/// lancement de Pilot). On lit donc `Path` dans HKLM (système) et HKCU
+/// (utilisateur), on les concatène, et on développe les variables d'environnement
+/// (ex: `%SystemRoot%`) via `ExpandEnvironmentStringsW`.
+#[cfg(target_os = "windows")]
+fn get_full_user_path() -> Option<String> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let mut parts: Vec<String> = Vec::new();
+
+    // PATH système (HKLM)
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if let Ok(env) = hklm.open_subkey("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment") {
+        if let Ok(p) = env.get_value::<String, _>("Path") {
+            parts.push(p);
+        }
+    }
+
+    // PATH utilisateur (HKCU)
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(env) = hkcu.open_subkey("Environment") {
+        if let Ok(p) = env.get_value::<String, _>("Path") {
+            parts.push(p);
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let joined = parts.join(";");
+
+    // Développer les variables d'environnement (%SystemRoot%, %USERPROFILE%, …)
+    let wide: Vec<u16> = joined.encode_utf16().chain(std::iter::once(0)).collect();
+    // Premier appel pour obtenir la taille nécessaire
+    let size = unsafe {
+        windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size == 0 {
+        return Some(joined);
+    }
+    let mut buf = vec![0u16; size as usize];
+    let written = unsafe {
+        windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW(
+            wide.as_ptr(),
+            buf.as_mut_ptr(),
+            size,
+        )
+    };
+    if written == 0 {
+        return Some(joined);
+    }
+    // Retirer le \0 final
+    while buf.last() == Some(&0) {
+        buf.pop();
+    }
+    Some(String::from_utf16_lossy(&buf))
 }

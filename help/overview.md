@@ -95,6 +95,9 @@ externe.
   il s'ouvre dans un onglet 🖥️. Sinon, un terminal externe est lancé.
 - Shell par défaut : `cmd.exe` (Windows), `$SHELL`/`/bin/zsh` (macOS),
   `$SHELL`/`/bin/bash` (Linux).
+- **Windows** : le terminal intégré reconstruit le PATH système + utilisateur
+  depuis la registry, pour que les commandes installées après le lancement de
+  Pilot (ex: `cargo`) soient trouvées.
 - Le terminal reste indépendant de l'éditeur ; on peut l'ouvrir et le fermer
   comme un onglet normal.
 <!-- /HELP:terminal -->
