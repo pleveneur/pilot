@@ -1,21 +1,36 @@
 # Plan de Développement — Pilot
 
-## ⚠️ À discuter en priorité à la prochaine session
+## ✅ Clarifié (vérifié 2026-08) — RAG & injection de contexte avec PLh : rien à porter
 
-**Portage du Context Engine RAG vers PLh** (`G:\IA_PL\PLh`).
+Le bloc « Portage du Context Engine RAG vers PLh » ci-dessous était une **erreur de
+formulation** (corrigée). Vérification faite sur `G:\IA_PL\PLh` :
 
-Pilot a un RAG local opérationnel (embeddings Ollama + SQLite + cosinus, `context_engine.rs` §7).
-PLh (agent alternatif) n'a **pas** encore ce mécanisme. Sujet à aborder en priorité :
+1. **Le RAG ne vit pas dans l'agent (pi/plh), il vit dans Pilot.** C'est **Pilot**
+   (`context_engine.rs`, embeddings Ollama + SQLite + cosinus) qui calcule le
+   contexte, écrit `.pilot/context-inject.md`, et l'**injecte** via l'extension
+   `pilot-context` (`before_agent_start` → `event.systemPrompt`). pi ne fait pas
+   de RAG ; plh non plus n'en a pas besoin.
+2. **L'injection Pilot fonctionne déjà avec PLh** : PLh supporte `--extension`
+   (`crates/plh-cli/src/args.rs`, flag `-e`/`ext`) et le hook `before_agent_start`
+   (`crates/plh-extensions/src/host.rs` `on_before_agent_start` + `shim.ts`
+   `ctx.cwd`). La sonde `probe_extension_support` de Pilot (test `--help` →
+   `--extension`) retourne donc `true` pour PLh → `pilot-context` est chargée →
+   l'injection H1 (contexte) + H3 (mémoire) s'applique à pi **et** plh.
+3. **PLh a déjà son propre RAG** (fait — `docs/rag.md`, crate `plh-rag`,
+   commandes RPC `context_index_status` / `build_context_index` /
+   `query_context_index`, config `~/.plh/agent/rag.json`, 13 tests, injection au
+   1er prompt dans `loop.rs`). Le « portage » proposé est donc déjà réalisé.
 
-1. **Index de contexte** — stockage SQLite des chunks + embeddings (à créer côté PLh).
-2. **Commandes RPC** équivalentes aux Tauri de Pilot : `build_context_index`, `query_context_index`, `context_index_status`.
-3. **Injection au 1er prompt** de session avec fallback heuristique (V1) si index/endpoint indisponible — ne jamais bloquer.
-4. **Config** : `rag_enabled` (défaut off), `rag_endpoint` (défaut `http://127.0.0.1:11434`), `rag_model` (défaut `nomic-embed-text`), budget tokens.
-5. **Bouton « Contexte »** : forcer le rebuild de l'index.
+**⚠️ Point de conception à surveiller (non bloquant)** : PLh peut injecter son
+propre préambule RAG au niveau de sa boucle agent **ET** Pilot peut injecter le
+sien via `pilot-context`. Si les deux RAG sont activés (Pilot `context_rag_enabled`
++ PLh `rag.enabled`), doublon possible (deux préambules, double coût Ollama).
+Par défaut les deux sont `false` → pas de casse, mais à documenter si on les active
+simultanément.
 
-**Référence Pilot** : [`spec_context_engine.md`](spec_context_engine.md) §7 (V2 RAG) + `src/js/context-engine.js` (flux 1er prompt) + `src-tauri/src/context_engine.rs` (chunking + scoring).
-**Prérequis local** : Ollama démarré + `ollama pull nomic-embed-text`.
-**Compatibilité** : le RAG reste 100% local (zero-cloud) → compatible mode « projet sensible » (H7).
+**Prochaine étape suggérée** : vérifier en pratique l'injection de contexte avec
+PLh (prompt + `--extension pilot-context.ts` → le préambule doit arriver dans le
+`systemPrompt`), puis décider du prochain chantier (voir roadmap ci-dessous).
 
 ---
 
@@ -134,7 +149,7 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-08* — multi-projets V1 implémenté (persistance, bascule, parking de sessions par projet = agents pi vivants en arrière-plan, canaux d'événements par projet, dropdown UI, web-remote select). Prochaine session : portage RAG vers PLh.
+*Dernière mise à jour : 2026-08* — multi-projets V1 implémenté (persistance, bascule, parking de sessions par projet = agents pi vivants en arrière-plan, canaux d'événements par projet, dropdown UI, web-remote select). Prochaine session : vérifier l'injection de contexte avec PLh (RAG déjà porté côté PLh — cf. section « Rien à porter » en tête de ce plan) puis choisir le prochain chantier dans la roadmap.
 
 ## Consolidation (qualité / dette technique)
 

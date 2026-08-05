@@ -541,23 +541,26 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   text-overflow: ellipsis;
 }
 
-/* Issue #13 : pastille d'activité de l'agent du projet (libre / en travail) */
+/* Issue #13/#18 : pastille d'activité de l'agent du projet (libre / en travail).
+   Le mode busy doit être visible même pour un projet non actif (agent parké qui
+   travaille en arrière-plan) : pastille plus grande + halo lumineux + pulsation. */
 .open-project-status {
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--text-muted);
   opacity: 0.4;
 }
 .open-project-status.busy {
   background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
   opacity: 1;
   animation: open-project-pulse 1.2s ease-in-out infinite;
 }
 @keyframes open-project-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 0.45; transform: scale(0.72); }
 }
 
 .open-project-close {
@@ -1454,6 +1457,32 @@ mark.search-highlight {
 .modal-content { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: var(--space-6); width: 420px; max-width: 90vw; color: var(--text-primary); box-shadow: var(--shadow-lg); }
 
 .modal-content.shortcuts-content { width: 680px; }
+
+/* Palette de commandes du projet (#17) */
+.modal-content.commands-content { width: 620px; max-width: 95vw; }
+.modal-content.command-form-content { width: 520px; max-width: 95vw; }
+.modal-content.command-run-content { width: 780px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; }
+.commands-hint { margin: -6px 0 12px; font-size: 12px; color: var(--text-muted); }
+.commands-list { max-height: 55vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; }
+.commands-empty { padding: 18px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.command-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.command-item:last-child { border-bottom: none; }
+.command-item:hover { background: var(--bg-hover); }
+.command-item-main { flex: 1; cursor: pointer; min-width: 0; }
+.command-item-name { font-weight: 600; }
+.command-item-meta { font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-item-meta code { background: var(--bg-hover); padding: 0 4px; border-radius: 3px; font-size: 12px; }
+.command-item-cwd { font-style: italic; }
+.command-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.command-item-actions button { background: none; border: none; cursor: pointer; color: var(--text-muted); border-radius: 4px; padding: 3px; }
+.command-item-actions button:hover { background: var(--bg-hover); color: var(--accent); }
+.command-item-actions .cmd-del:hover { color: var(--danger); }
+.command-form { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 6px; }
+.command-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+.command-form input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-input, var(--bg-hover)); color: var(--text-primary); }
+.command-form input:focus { outline: none; border-color: var(--accent); }
+.command-run-container { flex: 1; min-height: 220px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 12px; }
+.command-run-container .terminal-wrapper { height: 100%; }
 
 .modal-content.settings-content { width: 920px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-05 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -146,6 +146,26 @@ compilation depuis les specs).
   ouvert (réinjecté à chaque question, le process pi étant sans mémoire).
 - Si la réponse est vide ou en erreur, vérifie qu'un **modèle valide** est
   sélectionné dans la liste déroulante.
+
+---
+
+## Commandes du projet (▶)
+
+Lancez vos commandes de compilation / tests / etc. depuis un bouton du panneau
+d'actions (icône **▶ square-terminal**).
+
+- **Ouvrir** : cliquez sur l'icône ▶ → la liste des commandes du **projet courant**
+  s'affiche (vide au début).
+- **Ajouter** : bouton **Ajouter**, renseignez un **nom**, la **commande** (ex:
+  `npm run build`) et éventuellement un **dossier de travail** relatif au projet
+  (ex: `web/`). Laissez vide pour partir de la racine du projet.
+- **Modifier / Supprimer** : boutons ✏️ / 🗑 sur chaque ligne (la suppression est
+  confirmée).
+- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré,
+  et la **sortie (temps réel)** s'affiche dans une modale. Cliquez sur **Fermer**
+  pour arrêter la commande et fermer la modale.
+- Les commandes sont **propres à chaque projet** (fichier `.pilot/commands.json`,
+  versionnable avec le projet).
 
 ---
 

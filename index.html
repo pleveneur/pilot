@@ -45,6 +45,7 @@
     <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon"></i></button>
     <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i></button>
     <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
+    <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon"></i></button>
     <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
     <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
     <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
@@ -149,6 +150,51 @@
       </div>
       <div class="modal-actions">
         <button id="btn-close-shortcuts">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Palette de commandes du projet (#17) : liste des commandes paramétrées
+       (ajout / modification / suppression), stockées dans .pilot/commands.json. -->
+  <div id="commands-modal" class="modal hidden">
+    <div class="modal-content commands-content">
+      <h2><i data-lucide="square-terminal" class="icon-lg"></i> Commandes du projet</h2>
+      <p class="commands-hint">Lancez des commandes (compilation, tests, …) dans un dossier du projet.</p>
+      <div id="commands-list" class="commands-list">
+        <div class="commands-empty">Aucune commande. Cliquez sur « Ajouter ».</div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-add-command" class="primary"><i data-lucide="plus" class="icon-sm"></i> Ajouter</button>
+        <button id="btn-close-commands">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Formulaire d'ajout / édition d'une commande du projet (#17) -->
+  <div id="command-form-modal" class="modal hidden">
+    <div class="modal-content command-form-content">
+      <h2 id="command-form-title"><i data-lucide="settings-2" class="icon-lg"></i> Nouvelle commande</h2>
+      <div class="command-form">
+        <label>Nom <input type="text" id="cmd-name" placeholder="ex: Build"/></label>
+        <label>Commande <input type="text" id="cmd-command" placeholder="ex: npm run build" spellcheck="false"/></label>
+        <label>Dossier de travail (vide = racine du projet)
+          <input type="text" id="cmd-cwd" placeholder="ex: web/ (relatif au projet)" spellcheck="false"/>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-save-command" class="primary">Enregistrer</button>
+        <button id="btn-cancel-command">Annuler</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Résultat d'une commande du projet (#17) : terminal embarqué + bouton Fermer -->
+  <div id="command-run-modal" class="modal hidden">
+    <div class="modal-content command-run-content">
+      <h2 id="command-run-title"><i data-lucide="terminal" class="icon-lg"></i> <span id="command-run-name"></span></h2>
+      <div id="command-run-container" class="command-run-container"></div>
+      <div class="modal-actions">
+        <button id="btn-close-command-run" class="primary">Fermer</button>
       </div>
     </div>
   </div>

@@ -24,6 +24,7 @@ const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, "..");
 const SOURCES = [
   "help/overview.md",
+  "spec_pilot.md",
   "spec_rpc.md",
   "spec_orchestration.md",
   "spec_web_remote.md",

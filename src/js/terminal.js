@@ -14,9 +14,12 @@ let terminalCounter = 0;
  * @param {HTMLElement} container - Élément HTML conteneur
  * @param {string} projectPath - Chemin du projet (cwd)
  * @param {boolean} runDefault - Lancer la commande par défaut ?
+ * @param {{cwd?: string, command?: string}} [runCommand] - Si fourni, lance une
+ *   commande précise dans le dossier `cwd` (palette de commandes du projet, #17)
+ *   au lieu du shell + commande par défaut.
  * @returns {Promise<{wrapper: HTMLElement, terminal: Terminal, terminalId: string, unlisten: Function}>}
  */
-export async function createTerminal(container, projectPath, runDefault = false) {
+export async function createTerminal(container, projectPath, runDefault = false, runCommand = null) {
   const terminalId = `term_${++terminalCounter}`;
 
   // Wrapper
@@ -124,12 +127,20 @@ export async function createTerminal(container, projectPath, runDefault = false)
   // Stocker le resizeObserver pour le nettoyage
   wrapper._resizeObserver = resizeObserver;
 
-  // Lancer le PTY côté Rust
+  // Lancer le PTY côté Rust : soit la commande custom (#17), soit le shell par défaut.
   try {
-    await invoke("spawn_terminal", {
-      terminalId,
-      runDefault,
-    });
+    if (runCommand && runCommand.cwd && runCommand.command) {
+      await invoke("spawn_terminal_command", {
+        terminalId,
+        cwd: runCommand.cwd,
+        command: runCommand.command,
+      });
+    } else {
+      await invoke("spawn_terminal", {
+        terminalId,
+        runDefault,
+      });
+    }
   } catch (e) {
     term.write(`\r\n❌ Erreur: ${e}\r\n`);
     console.error("Erreur spawn_terminal:", e);

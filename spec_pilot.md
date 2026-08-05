@@ -133,6 +133,32 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 ### Feedback utilisateurs (💬)
 - Onglet **💬** (bouton `message-square-plus`) : permet à l'utilisateur d'envoyer un retour (bug / évolution / remarque) via deux canaux sans backend ni secret embarqué : **Ouvrir sur GitHub** (`issues/new` pré-rempli, navigateur système) ou **Envoyer par email** (`mailto:` vers l'adresse de feedback). Le corps est pré-construit (type, titre, description, version Pilot auto, OS auto, email optionnel). **Lecture des issues existantes** via l'API publique GitHub (dépôt public `pleveneur/pilot`, anonyme, CORS `*`) pour éviter les doublons. Accessible sans projet ouvert. Voir [`spec_feedback.md`](spec_feedback.md).
 
+### Palette de commandes du projet (#17)
+- Bouton **▶** (panneau d'actions, `square-terminal`) : modale listant les **commandes paramétrées du projet courant**, stockées **par projet** dans `.pilot/commands.json`. Actions **Ajouter / Modifier / Supprimer** (suppression confirmée).
+- Chaque commande = **nom** + **commande shell** (ex: `npm run build`, `cargo build`) + **dossier de travail** (relatif au projet, vide = racine).
+- **Clic sur une commande** → le système se place dans le dossier configuré puis lance la commande dans un **terminal embarqué** (PTY, sortie temps réel) affiché dans une **modale de résultat** avec un bouton **Fermer** (arrête le PTY et ferme).
+- Backend : `files::read_project_commands` / `files::save_project_commands` (`.pilot/commands.json`), `terminal::spawn_terminal_command` (PTY avec `cwd` + commande explicites). Frontend : `project-commands.js`.
+
+<!-- HELP:commands -->
+## Commandes du projet (▶)
+
+Lancez vos commandes de compilation / tests / etc. depuis un bouton du panneau
+d'actions (icône **▶ square-terminal**).
+
+- **Ouvrir** : cliquez sur l'icône ▶ → la liste des commandes du **projet courant**
+  s'affiche (vide au début).
+- **Ajouter** : bouton **Ajouter**, renseignez un **nom**, la **commande** (ex:
+  `npm run build`) et éventuellement un **dossier de travail** relatif au projet
+  (ex: `web/`). Laissez vide pour partir de la racine du projet.
+- **Modifier / Supprimer** : boutons ✏️ / 🗑 sur chaque ligne (la suppression est
+  confirmée).
+- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré,
+  et la **sortie (temps réel)** s'affiche dans une modale. Cliquez sur **Fermer**
+  pour arrêter la commande et fermer la modale.
+- Les commandes sont **propres à chaque projet** (fichier `.pilot/commands.json`,
+  versionnable avec le projet).
+<!-- /HELP:commands -->
+
 ### Persistance
 - Config JSON dans `app_data_dir` : thème, commande, projets récents, params RPC.
 

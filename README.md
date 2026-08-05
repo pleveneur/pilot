@@ -61,6 +61,12 @@
   - `Ctrl+V` : colle depuis le presse-papiers.
   - `Ctrl+Shift+C`/`Ctrl+Shift+V` en fallback.
 
+### Commandes du projet (▶)
+- Lancez vos commandes de compilation / tests / etc. via le bouton **▶** du panneau d'actions.
+- Liste de commandes **paramétrables par projet** (ajout / modification / suppression), stockée dans `.pilot/commands.json`.
+- Chaque commande : un **nom**, une **commande shell** et un **dossier de travail** optionnel (vide = racine du projet).
+- Un clic lance la commande dans le dossier choisi et affiche la **sortie temps réel dans une modale** (bouton **Fermer** pour arrêter).
+
 ### Paramètres (modale ⚙️)
 - **Thème** : sombre (défaut) ou clair.
 - **Commande par défaut** : exécutée automatiquement via le bouton π (ex : `python main.py`, `pi`).

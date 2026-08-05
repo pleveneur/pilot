@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::AppState;
 
@@ -49,7 +49,51 @@ pub fn spawn_terminal(
     } else {
         None
     };
+    drop(config);
 
+    spawn_pty(app, terminal_id, &project_path, &shell, &args, auto_cmd.as_deref())
+}
+
+/// Spawn d'un terminal dans un dossier précis, exécutant une commande donnée
+/// (#17, palette de commandes du projet). `cwd` est le dossier de travail
+/// absolu (racine du projet ou sous-dossier) et `command` la commande à lancer
+/// (ex: `npm run build`, `cargo build`). Utilise le même mécanisme PTY que le
+/// terminal intégré standard.
+#[tauri::command]
+pub fn spawn_terminal_command(
+    app: AppHandle,
+    terminal_id: String,
+    cwd: String,
+    command: String,
+) -> Result<(), String> {
+    // Le dossier de travail doit exister.
+    if cwd.trim().is_empty() {
+        return Err("dossier de travail vide".into());
+    }
+    if !std::path::Path::new(&cwd).is_dir() {
+        return Err(format!("dossier introuvable : {}", cwd));
+    }
+    let (shell, args) = get_shell_info(&cwd);
+    let auto_cmd = if command.trim().is_empty() {
+        None
+    } else {
+        Some(command.clone())
+    };
+    spawn_pty(app, terminal_id, &cwd, &shell, &args, auto_cmd.as_deref())
+}
+
+/// Factorise la création d'un PTY : ouvre une paire (master/slave), spawn le
+/// shell dans `cwd` avec une commande auto optionnelle, et lance le thread de
+/// lecture qui stream la sortie vers le frontend (`terminal-output`).
+#[allow(clippy::too_many_arguments)]
+fn spawn_pty(
+    app: AppHandle,
+    terminal_id: String,
+    cwd: &str,
+    shell: &str,
+    args: &[String],
+    auto_cmd: Option<&str>,
+) -> Result<(), String> {
     // Créer le PTY
     let pty_system = native_pty_system();
     let pty_pair = pty_system
@@ -62,9 +106,9 @@ pub fn spawn_terminal(
         .map_err(|e| format!("Erreur création PTY: {}", e))?;
 
     // Construire la commande
-    let mut cmd = CommandBuilder::new(&shell);
-    cmd.args(&args);
-    cmd.cwd(&project_path);
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.args(args);
+    cmd.cwd(cwd);
 
     // Windows : injecter le PATH complet (système + utilisateur) reconstruit
     // depuis la registry, car le PTY hérite de l'environnement du processus
@@ -139,7 +183,11 @@ pub fn spawn_terminal(
         writer: Some(writer),
     };
 
-    state.terminals.lock().unwrap().insert(terminal_id, term_state);
+    app.state::<AppState>()
+        .terminals
+        .lock()
+        .unwrap()
+        .insert(terminal_id, term_state);
 
     Ok(())
 }

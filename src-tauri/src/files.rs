@@ -98,6 +98,38 @@ pub fn write_file_binary(path: String, data: Vec<u8>) -> Result<(), String> {
     fs::write(&path, &data).map_err(|e| format!("Erreur écriture: {}", e))
 }
 
+/// Lit la liste des commandes du projet depuis `.pilot/commands.json` (#17).
+/// Retourne un tableau JSON vide si le fichier n'existe pas encore.
+#[tauri::command]
+pub fn read_project_commands(project_path: String) -> Result<serde_json::Value, String> {
+    let file = std::path::Path::new(&project_path)
+        .join(".pilot")
+        .join("commands.json");
+    match std::fs::read_to_string(&file) {
+        Ok(s) => serde_json::from_str(&s)
+            .map_err(|e| format!("commandes projet invalides : {}", e)),
+        Err(_) => Ok(serde_json::json!([])),
+    }
+}
+
+/// Écrit la liste des commandes du projet dans `.pilot/commands.json` (#17),
+/// en créant le dossier `.pilot` si nécessaire.
+#[tauri::command]
+pub fn save_project_commands(
+    project_path: String,
+    commands: serde_json::Value,
+) -> Result<(), String> {
+    if project_path.trim().is_empty() {
+        return Ok(());
+    }
+    let dir = std::path::Path::new(&project_path).join(".pilot");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Erreur création .pilot: {}", e))?;
+    let file = dir.join("commands.json");
+    let s = serde_json::to_string_pretty(&commands)
+        .map_err(|e| format!("sérialisation commandes : {}", e))?;
+    std::fs::write(&file, s).map_err(|e| format!("Erreur écriture commandes : {}", e))
+}
+
 /// Vérifie qu'un fichier existe.
 #[tauri::command]
 pub fn file_exists(path: String) -> bool {

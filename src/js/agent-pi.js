@@ -224,7 +224,9 @@ export async function createAgentPi(container, resumed = false) {
   // Rafraîchir le sélecteur de modèle quand le registre models.json a été
   // édité depuis l'onglet Fournisseurs (models-config.js).
   window.addEventListener("pilot-models-changed", () => {
-    loadModels(state);
+    // Issue #16 : préférer la source fichier (fraîche) pour refléter les modèles
+    // ajoutés/retirés dans l'onglet Fournisseurs, la liste RPC étant en cache.
+    loadModels(state, false, true);
     loadModelAliases();
   });
 
@@ -4752,8 +4754,32 @@ function bytesToBase64(bytes) {
  *  non reconnu. Les chaînes "provider/modelId" du fallback sont converties en
  *  objets { provider, id, label } pour homogénéité avec le format RPC.
  *  Voir spec_rpc.md (résolution du config dir).
+ *
+ *  @param {boolean} preferFile  Si true, on lit d'abord la source FICHIER (fraîche),
+ *  qui reflète immédiatement les modifications de models.json. Nécessaire après
+ *  édition dans l'onglet Fournisseurs (`pilot-models-changed`) : la liste RPC du
+ *  programme actif peut être en cache mémoire (stale) et ne pas contenir les
+ *  modèles fraîchement ajoutés. Voir issue #16. Si la lecture fichier échoue ou
+ *  est vide, on retombe sur la liste RPC.
  */
-async function fetchAvailableModels() {
+async function fetchAvailableModels(preferFile = false) {
+  if (preferFile) {
+    // 1b. Source fichier fraîche (issue #16) — reflète les ajouts/retraits.
+    try {
+      const list = await invoke("get_available_models_list");
+      if (Array.isArray(list) && list.length > 0) {
+        return list.map(s => {
+          const idx = s.indexOf("/");
+          const provider = idx >= 0 ? s.slice(0, idx) : s;
+          const id = idx >= 0 ? s.slice(idx + 1) : "";
+          return { provider, id, label: s };
+        });
+      }
+    } catch (e) {
+      console.warn("get_available_models_list (fichier, refresh) échoué:", e);
+    }
+    // Si la lecture fichier est vide/illisible, on continue vers la source RPC.
+  }
   // 1. Source primaire : RPC (programme actif)
   try {
     const result = await invoke("list_agent_models");
@@ -4792,11 +4818,11 @@ async function fetchAvailableModels() {
   return [];
 }
 
-async function loadModels(st, forceDefault = false) {
+async function loadModels(st, forceDefault = false, preferFile = false) {
   const select = document.getElementById("agent-model-select");
   if (!select) return;
   try {
-    const models = await fetchAvailableModels();
+    const models = await fetchAvailableModels(preferFile);
     if (models.length === 0) {
       select.innerHTML = '<option value="">Aucun modèle</option>';
       return;
