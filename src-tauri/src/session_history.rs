@@ -803,7 +803,26 @@ pub fn resume_agent_session(state: State<AppState>, session_file: String) -> Res
         "type": "switch_session",
         "sessionPath": session_file
     });
-    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    // Vérifier que pi a RÉELLEMENT basculé : le switch peut être annulé par un
+    // handler d'extension `session_before_switch` (champ data.cancelled) ou
+    // échouer. Pilot ne doit pas afficher « Session chargée » ni reconstruire
+    // une conversation fantôme si la reprise n'a pas pris effet côté pi
+    // (sinon la prochaine demande partirait dans une session vide = nouvelle
+    // discussion).
+    if resp.get("success").and_then(|v| v.as_bool()) != Some(true) {
+        return Err("pi a refusé la reprise de session (succès non confirmé)".into());
+    }
+    if let Some(cancelled) = resp
+        .get("data")
+        .and_then(|d| d.get("cancelled"))
+        .and_then(|v| v.as_bool())
+    {
+        if cancelled {
+            return Err("Reprise de session annulée par pi (extension session_before_switch)".into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

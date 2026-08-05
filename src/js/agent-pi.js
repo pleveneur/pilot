@@ -5987,8 +5987,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             invoke("abort_agent").catch(() => {}).finally(() => {
               state.isStreaming = false;
               const resumePayload = { message: state.lastUserPrompt };
-              if (state.lastRetryImages && state.lastRetryImages.length) payload.images = state.lastRetryImages;
-              invoke("send_agent_prompt", payload).catch((e) => console.error("[agent] reprise chat après compaction échouée:", e));
+              if (state.lastRetryImages && state.lastRetryImages.length) resumePayload.images = state.lastRetryImages;
+              invoke("send_agent_prompt", resumePayload).catch((e) => console.error("[agent] reprise chat après compaction échouée:", e));
             });
           }
         }, delay);
@@ -6553,6 +6553,22 @@ async function applyResumeSelection(messagesEl) {
     const fname = file.split("/").pop() || file.split("\\").pop() || file;
     appendSystemMessage(messagesEl, `✅ Session chargée : ${fname}`);
 
+    // Vérifier que pi a réellement basculé sur CETTE session (le switch peut
+    // être annulé/ignoré sans erreur). Si pi est resté sur une session vide,
+    // la prochaine demande partirait dans une nouvelle discussion → alerter.
+    try {
+      const st = await invoke("get_agent_state");
+      const realFile = st && st.data && st.data.sessionFile;
+      if (realFile && normPath(realFile) !== normPath(file)) {
+        appendSystemMessage(
+          messagesEl,
+          `⚠️ pi n'a pas basculé sur la session demandée (réel : ${realFile.split(/[\\/]/).pop()}). La prochaine demande risque de créer une nouvelle discussion.`
+        );
+      }
+    } catch (_) {
+      // Vérification impossible → on laisse passer (au moins le switch a été demandé)
+    }
+
     // Récupérer et afficher tous les messages de la session
     try {
       const raw = await invoke("read_file_content", { path: file });
@@ -6670,6 +6686,11 @@ function extractMessageText(msg) {
   }
   if (typeof msg.content === "string") return msg.content;
   return "";
+}
+
+// Normalise un chemin pour comparaison (séparateurs + casse, insensible sur Windows).
+function normPath(p) {
+  return String(p).replace(/\\/g, "/").replace(/^\\?\\?/, "").toLowerCase();
 }
 
 // ── Popup /prompt : sélection et exécution de prompts ──
