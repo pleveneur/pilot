@@ -25,6 +25,13 @@ pub struct RpcSession {
     pub pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
 }
 
+/// Observateur d'événements RPC — appelé pour chaque événement JSONL parsé (hors
+/// réponses corrélées). Utilisé par l'indicateur d'activité par projet (issue #13)
+/// pour basculer un drapeau `busy` sur `agent_start`/`agent_settled`. `Option`
+/// permet aux sessions sans suivi (reviewer, agents multi-rôles, PDF) de ne pas
+/// payer le coût.
+pub type EventObserver = Arc<dyn Fn(&Value) + Send + Sync>;
+
 /// Lance le processus `pi --mode rpc` et démarre le thread de lecture stdout.
 /// `pi_path` : chemin vers l'exécutable pi ("pi" si dans le PATH).
 /// `no_session` : si true, ajoute --no-session (pas de persistance).
@@ -33,7 +40,8 @@ pub struct RpcSession {
 /// reviewer H2 V1 — canal séparé pour ne pas polluer handleRpcEvent).
 /// `agent_id` : si Some, chaque événement est enveloppé dans
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>) -> Result<RpcSession, String> {
+/// `observer` : observateur d'événements optionnel (indicateur d'activité par projet).
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -90,13 +98,14 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let pending_clone = pending.clone();
     let app_clone = app_handle.clone();
     let agent_id_owned = agent_id.map(|s| s.to_string());
+    let observer_stdout = observer.clone();
 
     // Thread de lecture stdout
     let app_exit = app_handle.clone();
     let running_exit = running.clone();
     let channel_stdout = event_channel.to_string();
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref());
+        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), observer_stdout);
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
         // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
         // pour un changement de projet distant) n'émet rien → le desktop
@@ -203,6 +212,7 @@ fn read_jsonl_loop(
     event_tx: tokio::sync::broadcast::Sender<Value>,
     event_channel: &str,
     agent_id: Option<&str>,
+    observer: Option<EventObserver>,
 ) {
     let mut buffer = String::new();
     let mut buf = [0u8; 4096];
@@ -238,6 +248,11 @@ fn read_jsonl_loop(
                     // Parser JSON
                     match serde_json::from_str::<Value>(&line) {
                         Ok(value) => {
+                            // Observateur d'activité (issue #13) : notifié pour chaque
+                            // événement parsé, y compris les réponses corrélées (inoffensif).
+                            if let Some(obs) = &observer {
+                                obs(&value);
+                            }
                             // Si c'est une réponse avec id → corréler avec la commande en attente
                             if value.get("type").and_then(|v| v.as_str()) == Some("response") {
                                 if let Some(id) = value.get("id").and_then(|v| v.as_str()) {

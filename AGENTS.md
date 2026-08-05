@@ -52,6 +52,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Spécifications générales | `spec_pilot.md` |
 | Agent Pi / RPC | `spec_rpc.md` |
 | Multi-projets (gestionnaire de projets) | `spec_multiprojects.md` |
+| Discussion inter-projets (liens + dépôt de tâche) | `spec_interproject.md` |
 | Conversion PDF → MD | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
@@ -101,6 +102,8 @@ pilot/
 ├── spec_orchestration_autotest.md  # Auto-test post-modification (E2, implémenté)
 ├── spec_orchestration_snapshots.md # Snapshots / annulation de tâche (A1, implémenté)
 ├── spec_orchestration_reviewer.md # Reviewer indépendant H2 V1 (implémenté)
+├── spec_multiprojects.md    # Spécifications multi-projets (implémenté)
+├── spec_interproject.md     # Spécifications discussion inter-projets (implémenté)
 ├── spec_web_remote.md         # Spécifications accès distant web (implémenté)
 ├── spec_voice_input.md        # Spécifications dictée vocale (implémenté)
 ├── spec_quality_gate.md       # Spécifications quality-gate interne (implémenté)

@@ -38,6 +38,7 @@ const SOURCES = [
   "spec_gestion_agents.md",
   "spec_agents_md.md",
   "spec_multiprojects.md",
+  "spec_interproject.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 

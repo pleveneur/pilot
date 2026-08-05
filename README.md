@@ -21,6 +21,12 @@
 - **Projets en cours** : les projets ouverts sont listés sous le bouton Projets
   (toujours visibles, projet actif en surbrillance). Cliquer sur un projet bascule
   dessus ; le bouton **✕** à droite le ferme proprement.
+- **Indicateur d'activité** : une pastille à côté de chaque projet de la barre
+  « Projets en cours » montre si **son agent travaille** (animée) ou **est en
+  attente**, y compris quand un agent d'un projet inactif réfléchit en arrière-plan.
+- **Discussion inter-projets** (bouton 🔗) : liez des projets entre eux pour
+  déposer une analyse/tâche vers un projet lié — son agent est lancé pour la
+  traiter (détails en appuyant sur ❓ → « Discussion inter-projets »).
 
 ### Édition Markdown
 - **Coloration syntaxique** via CodeMirror 6 (Markdown, thème sombre/clair adaptatif).

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets -->
+<!-- PILOT-HELP generated=2026-08-04 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -509,5 +509,29 @@ automatiquement avec le projet actif).
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
 exactement là où il en était (contexte et historique préservés).
+- **Indicateur d'activité** : une pastille à côté de chaque projet de la barre
+« Projets en cours » indique si **son agent travaille** (animée) ou **est en
+attente**. Un projet inactif dont l'agent réfléchit en arrière-plan est donc visible.
 - **Accès distant** : depuis le mode remote, la liste des projets ouverts est
 visible et on peut basculer de projet (route `/api/project/select`).
+
+---
+
+## Discussion inter-projets (lier des projets)
+
+Pilot peut **lier des projets entre eux** pour qu'un projet dépose une **analyse /
+tâche** à un autre projet, dont l'agent est lancé pour la traiter.
+
+- **Ouvrir** : bouton **🔗** de la barre d'actions (visible quand un projet est ouvert).
+- **Lier** : dans la modale, choisis un projet ouvert et clique **Lier**. Le lien est
+  conservé (config). Un projet lié est **exclu** des propositions une fois lié ; tu peux
+  retirer un lien avec ✕.
+- **Envoyer une tâche** : choisis un projet cible lié, décris l'analyse / ce qu'il faut
+  faire, puis **« Déposer la tâche & lancer l'agent cible »**. Pilot :
+  1. écrit un fichier de tâche dans `cible/.pilot/handoffs/` ;
+  2. ouvre le projet cible (s'il ne l'est pas) et le rend actif ;
+  3. lance son agent et lui demande de **lire et traiter le fichier**.
+- Le projet source est indiqué à l'agent cible comme **accessible en lecture seule**
+  (il peut le consulter pour le contexte, sans le modifier).
+- L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
+  agent du projet cible.

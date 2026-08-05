@@ -7,7 +7,9 @@
 // lib.rs pour les autres modules).
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 
 use crate::rpc_manager;
@@ -147,6 +149,57 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
     }
 }
 
+/// Construit l'observateur d'événements RPC qui alimente la map d'activité par
+/// projet (issue #13). Sur `agent_start` → busy=true ; sur `agent_settled` →
+/// busy=false (fin définitive d'une exécution, après retries/compaction).
+fn make_project_activity_observer(
+    map: &Arc<Mutex<HashMap<String, crate::SessionActivity>>>,
+    project_key: &str,
+) -> rpc_manager::EventObserver {
+    let map = map.clone();
+    let key = project_key.to_string();
+    Arc::new(move |value: &Value| {
+        let t = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if t != "agent_start" && t != "agent_settled" {
+            return;
+        }
+        let mut m = map.lock().unwrap();
+        let now = std::time::Instant::now();
+        let entry = m.entry(key.clone()).or_insert(crate::SessionActivity {
+            busy: false,
+            updated: now,
+        });
+        entry.busy = t == "agent_start";
+        entry.updated = now;
+    })
+}
+
+/// Réinitialise le drapeau d'activité d'un projet (arrêt de session / fermeture).
+pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
+    let mut m = state.agent_activity.lock().unwrap();
+    if let Some(e) = m.get_mut(project_key) {
+        e.busy = false;
+    }
+}
+
+/// Issue #13 : état d'activité des agents de TOUS les projets ouverts, sous forme
+/// de map `{ chemin_normalisé: { "busy": bool } }`. Permet à la barre « Projets
+/// en cours » d'afficher une pastille « travaille en arrière-plan » par projet,
+/// même quand son agent est parké (inactif en apparence).
+#[tauri::command]
+pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String> {
+    let projects = state.projects.lock().unwrap();
+    let keys: Vec<String> = projects.keys().cloned().collect();
+    drop(projects);
+    let activity = state.agent_activity.lock().unwrap();
+    let mut map = serde_json::Map::new();
+    for k in keys {
+        let busy = activity.get(&k).map(|a| a.busy).unwrap_or(false);
+        map.insert(k, serde_json::json!({ "busy": busy }));
+    }
+    Ok(Value::Object(map))
+}
+
 pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Result<bool, String> {
     let project = state.project_path.lock().unwrap();
     let cwd = project
@@ -251,6 +304,8 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
 
     let session = rpc_manager::spawn_and_start(
         &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &project_event_channel(&cwd), None,
+        // Issue #13 : observateur d'activité → map par projet (agent_start/settled).
+        Some(make_project_activity_observer(&state.agent_activity, &cwd)),
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -307,6 +362,10 @@ pub fn park_agent_session(state: State<AppState>) -> Result<(), String> {
 /// Arrête l'agent pi en cours (s'il existe) et libère la session. Idempotent : no-op
 /// si aucune session n'est active.
 pub(crate) fn do_stop_agent_session(state: &AppState) {
+    // Issue #13 : remettre le projet actif à « libre » (l'agent est arrêté).
+    if let Some(p) = state.project_path.lock().unwrap().clone() {
+        reset_project_activity(state, &p);
+    }
     let mut rpc = state.rpc_state.lock().unwrap();
     if let Some(mut session) = rpc.take() {
         rpc_manager::stop_session(&mut session);
@@ -322,6 +381,40 @@ pub(crate) fn do_stop_agent_session(state: &AppState) {
 pub fn stop_agent_session(state: State<AppState>) -> Result<(), String> {
     do_stop_agent_session(state.inner());
     Ok(())
+}
+
+/// Arrêt COMPLET de TOUTES les sessions RPC à la fermeture de Pilot.
+/// Corrige l'issue #14 (processus `plh.exe`/`pi` qui restent en mémoire) :
+/// sur Windows un processus enfant ne meurt pas automatiquement quand son
+/// parent meurt, il faut donc tuer explicitement chaque session encore
+/// vivante. Couvre :
+///  - la session principale (`rpc_state`, potentiellement plh),
+///  - la session reviewer (`rpc_reviewer`),
+///  - les sessions « parkées » par projet (`projects[*].rpc`, multi-projets),
+///  - les sessions des agents multi-rôles (`agent_sessions`, H2 V2).
+pub(crate) fn do_shutdown_all_sessions(state: &AppState) {
+    // Session principale + reviewer.
+    {
+        let mut rpc = state.rpc_state.lock().unwrap();
+        if let Some(mut session) = rpc.take() {
+            rpc_manager::stop_session(&mut session);
+        }
+        let mut rev = state.rpc_reviewer.lock().unwrap();
+        if let Some(mut session) = rev.take() {
+            rpc_manager::stop_session(&mut session);
+        }
+    }
+    // Sessions parkées par projet (multi-projets).
+    {
+        let mut projects = state.projects.lock().unwrap();
+        for (_, ps) in projects.iter_mut() {
+            if let Some(mut session) = ps.rpc.take() {
+                rpc_manager::stop_session(&mut session);
+            }
+        }
+    }
+    // Sessions agents multi-rôles (H2 V2).
+    crate::agents::do_stop_all_agent_processes(state);
 }
 
 #[tauri::command]
@@ -617,7 +710,7 @@ pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Re
     }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None,
+        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None, None,
     )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
     *rpc = Some(session);

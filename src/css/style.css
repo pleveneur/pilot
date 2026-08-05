@@ -541,6 +541,25 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   text-overflow: ellipsis;
 }
 
+/* Issue #13 : pastille d'activité de l'agent du projet (libre / en travail) */
+.open-project-status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.4;
+}
+.open-project-status.busy {
+  background: var(--accent);
+  opacity: 1;
+  animation: open-project-pulse 1.2s ease-in-out infinite;
+}
+@keyframes open-project-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
 .open-project-close {
   flex-shrink: 0;
   width: 18px;
@@ -5329,3 +5348,80 @@ body.pilot-loading *::after {
   background: var(--bg-input);
 }
 .agents-reflection.final .ar-head { color: var(--success); }
+
+/* --- Discussion inter-projets (issue #15) --- */
+.interproject-content {
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+}
+.interproject-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#interproject-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.interproject-link-row,
+.interproject-open-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.interproject-link-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.interproject-unlink {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.interproject-unlink:hover { background: var(--bg-hover); color: var(--danger); }
+.interproject-link-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+}
+.interproject-link-btn:hover { filter: brightness(1.1); }
+.interproject-open-list { display: flex; flex-direction: column; gap: 6px; }
+.interproject-target-row select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+#interproject-content {
+  width: 100%;
+  resize: vertical;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 8px;
+}

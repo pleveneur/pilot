@@ -11,6 +11,7 @@ import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
+import { initInterproject } from "./interproject.js";
 import { refreshIcons } from "./icons.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -247,6 +248,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3b. Initialiser le panneau de recherche globale
   initSearchPanel(tabs);
+
+  // 3b-bis. Discussion inter-projets (issue #15)
+  initInterproject();
 
   // 3c. Initialiser le panneau Outline
   initOutline(tabs);

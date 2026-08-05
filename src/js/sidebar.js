@@ -211,6 +211,11 @@ class Sidebar {
         this.filterInput.select();
       }
     });
+
+    // Issue #13 : indicateur d'activité par projet (barre « Projets en cours »).
+    // Poll léger toutes les 2s de `get_project_agent_states` ; ne met à jour les
+    // pastilles que si la barre est visible. Ne touche pas aux agents (lecture seule).
+    setInterval(() => this._pollProjectActivities(), 2000);
   }
 
   async init() {
@@ -1139,6 +1144,7 @@ class Sidebar {
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
         item.innerHTML =
+          `<span class="open-project-status" data-path="${this._esc(p)}" title="Agent en attente"></span>` +
           `<span class="open-project-name">${this._esc(name)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
         // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
@@ -1196,6 +1202,24 @@ class Sidebar {
     } finally {
       hideLoading();
     }
+  }
+
+  // Issue #13 : met à jour les pastilles d'activité des agents des projets ouverts.
+  // Le projet actif peut être « busy » si son agent réfléchit ; les projets inactifs
+  // (sessions parkées) s'animent aussi quand leur agent travaille en arrière-plan.
+  async _pollProjectActivities() {
+    try {
+      const st = await invoke("get_project_agent_states");
+      if (!st) return;
+      const bar = this.openProjectsBar;
+      if (!bar || bar.classList.contains("hidden")) return;
+      bar.querySelectorAll(".open-project-status").forEach((dot) => {
+        const p = dot.dataset.path;
+        const busy = st[p] && st[p].busy;
+        dot.classList.toggle("busy", !!busy);
+        dot.title = busy ? "Agent en cours de travail" : "Agent en attente";
+      });
+    } catch (_) { /* ignore : pas de mise à jour */ }
   }
 
   _hideProjectsDropdown() {

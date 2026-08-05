@@ -59,6 +59,7 @@ mod tabs;
 mod web_commands;
 mod agents;
 mod rpc;
+mod interproject;
 
 // ── État global de l'application ──
 
@@ -72,6 +73,14 @@ struct ProjectState {
     path: String,
     rpc: Option<rpc_manager::RpcSession>,
     watcher: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
+}
+
+/// État d'activité de l'agent d'un projet (issue #13, indicateur par projet).
+/// Mis à jour par l'observateur d'événements RPC : `agent_start` → busy=true,
+/// `agent_settled` → busy=false (fin définitive d'une exécution).
+struct SessionActivity {
+    busy: bool,
+    updated: std::time::Instant,
 }
 
 struct AppState {
@@ -108,6 +117,9 @@ struct AppState {
     /// Re-sondé quand `rpc_pi_path` change. Évite de planter un backend qui ne
     /// supporte pas `--extension` (ex: plh sans le flag) en ne passant pas `-e`.
     ext_gate_cache: std::sync::Mutex<Option<(String, BackendProbe)>>,
+    /// Issue #13 : activité de l'agent par projet (path normalisé → SessionActivity).
+    /// Mise à jour en arrière-plan par l'observateur RPC de chaque session projet.
+    agent_activity: Arc<Mutex<HashMap<String, SessionActivity>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -154,6 +166,10 @@ struct AppConfig {
     auto_save_delay: u32,
     #[serde(default)]
     favorites: Vec<String>,
+    // Issue #15 : liaisons inter-projets — chemin projet → liste de projets liés
+    // (lecture seule du code source + dépôt de tâches/analyse dans l'autre projet).
+    #[serde(default)]
+    project_links: HashMap<String, Vec<String>>,
     #[serde(default)]
     word_wrap: bool,
     // Mode Orchestration
@@ -406,6 +422,7 @@ impl Default for AppConfig {
             auto_save: false,
             auto_save_delay: 3000,
             favorites: Vec::new(),
+            project_links: HashMap::new(),
             word_wrap: false,
             orchestration_enabled: false,
             orchestrator_provider: String::new(),
@@ -495,7 +512,7 @@ fn load_config_disk(app: &AppHandle) -> AppConfig {
     }
 }
 
-fn save_config_disk(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
+pub(crate) fn save_config_disk(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let path = config_path(app)?;
     let json =
         serde_json::to_string_pretty(config).map_err(|e| format!("Erreur sérialisation: {}", e))?;
@@ -730,6 +747,12 @@ fn stop_watcher(state: &State<AppState>) {
 pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNode, String> {
     let state = app.state::<AppState>();
     let folder = PathBuf::from(path);
+
+    // Multi-projets (issue #14) : comme `do_set_active_project`, parker la
+    // session active du projet précédent avant de rendre ce projet actif —
+    // sinon la session resterait orpheline dans `rpc_state` et ne serait jamais
+    // tuée à la fermeture de son projet (fuite de processus pi/plh).
+    park_previous_active_if_switching(&state, path);
 
     // Multi-projets (spec_multiprojects.md) : enregistrer le projet dans la
     // collection des projets ouverts (clé = chemin normalisé) s'il n'y est pas,
@@ -1199,6 +1222,16 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
                 rpc_manager::stop_session(&mut session);
             }
         }
+        // Arrêter aussi la session reviewer (H2 V1) si elle tourne : c'est un
+        // `pi`/`plh.exe` séparé (--no-session) qui ne meurt pas avec la session
+        // principale → sans cet arrêt, il resterait en mémoire à la fermeture
+        // du projet (fuite de processus issue #14).
+        {
+            let mut rev = state.rpc_reviewer.lock().unwrap();
+            if let Some(mut session) = rev.take() {
+                rpc_manager::stop_session(&mut session);
+            }
+        }
         // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
         agents::do_stop_all_agent_processes(&state);
         *state.project_path.lock().unwrap() = None;
@@ -1220,6 +1253,9 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
         }
     }
 
+    // Issue #13 : oublier l'activité de l'agent de CE projet (pas de fuite de map).
+    state.agent_activity.lock().unwrap().remove(&target);
+
     // Multi-projets : retirer le projet fermé de la liste persistée.
     {
         let mut config = state.config.lock().unwrap();
@@ -1238,6 +1274,26 @@ fn set_active_project(state: State<AppState>, app: AppHandle, path: String) -> R
     do_set_active_project(&state, &app, &path)
 }
 
+/// Multi-projets (issue #14) : invariant « aucune session orpheline dans
+/// `rpc_state` ». Si une session agent est active ET que le projet actif diffère
+/// de `new_path`, on la parke dans SON projet (processus pi/plh conservé en
+/// arrière-plan, conforme au multi-projets) avant le changement de projet actif.
+/// No-op si aucune session active ou si on reste sur le même projet. Empêche que
+/// la session d'un projet ne reste vivante hors de tout slot traçable par
+/// `close_project` → fuite de processus.
+fn park_previous_active_if_switching(state: &AppState, new_path: &str) {
+    let has_session = state.rpc_state.lock().unwrap().is_some();
+    if !has_session {
+        return;
+    }
+    let cur = state.active_project.lock().unwrap().clone();
+    if let Some(cur_p) = cur {
+        if cur_p != new_path {
+            let _ = crate::rpc::do_park_agent_session(state);
+        }
+    }
+}
+
 /// Multi-projets (spec_multiprojects.md) : définit le projet actif (affiché).
 /// Le basculement de la session RPC est géré par le frontend (desktop) via
 /// `project_changed` ou par le web (qui redémarre lui-même l'agent).
@@ -1246,6 +1302,13 @@ pub(crate) fn do_set_active_project(
     app: &AppHandle,
     path: &str,
 ) -> Result<(), String> {
+    // Multi-projets (issue #14) : garantir qu'aucune session active du projet
+    // précédent ne reste orpheline dans `rpc_state`. Si le frontend a déjà parké/
+    // stoppé (flux desktop normal), c'est un no-op ; sinon (parking échoué, chemin
+    // web, appel direct), on parke la session dans SON projet avant de basculer —
+    // sans quoi fermer ce projet ne la tuerait jamais (fuite de processus pi/plh).
+    park_previous_active_if_switching(state.inner(), path);
+
     // Le projet doit être dans la collection des projets ouverts.
     let registered = state.projects.lock().unwrap().contains_key(path);
     if !registered {
@@ -1578,6 +1641,7 @@ pub fn run() {
                 audit: Arc::new(web_audit::WebAudit::new()),
                 web_shutdown: std::sync::Mutex::new(None),
                 ext_gate_cache: std::sync::Mutex::new(None),
+                agent_activity: Arc::new(Mutex::new(HashMap::new())),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1620,6 +1684,7 @@ pub fn run() {
             rpc::send_rpc_command,
             rpc::get_agent_event_channel,
             rpc::get_agent_state,
+            rpc::get_project_agent_states,
             rpc::get_session_stats,
             rpc::model_supports_images,
             rpc::send_agent_prompt,
@@ -1642,6 +1707,10 @@ pub fn run() {
             code_check::lint_file,
             search::replace_in_files,
             agents::get_available_models_list,
+            interproject::get_project_links,
+            interproject::set_project_links,
+            interproject::remove_project_link,
+            interproject::interproject_handoff,
             models_config::read_models_config,
             models_config::write_models_config,
             models_config::read_model_aliases,
@@ -1724,10 +1793,13 @@ pub fn run() {
             // empêchant la prochaine instance de binder le même port — symptôme
             // typique en mode dev où l'ancienne instance est tuée brutalement).
             if let RunEvent::ExitRequested { .. } = event {
-                // H2 V2 : arrêter proprement tous les processus agents.
+                // Issue #14 : arrêt COMPLET de toutes les sessions RPC (principale,
+                // reviewer, parkées par projet, agents multi-rôles) pour éviter que
+                // des processus `pi`/`plh.exe` restent en mémoire après la fermeture
+                // (sur Windows un enfant ne meurt pas avec son parent).
                 {
                     let state = app.state::<AppState>();
-                    agents::do_stop_all_agent_processes(&state);
+                    rpc::do_shutdown_all_sessions(&state);
                 }
                 let tx_opt = {
                     let state = app.state::<AppState>();

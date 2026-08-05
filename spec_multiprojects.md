@@ -188,6 +188,27 @@ struct AppState {
 6. **Web-remote** : `GET /api/project` expose `open`/`active` ; nouvelle route
    `POST /api/project/select` (bascule le projet actif + redémarre l'agent si actif) ;
    UI web liste les projets ouverts avec sélection.
+7. **Indicateur d'activité par projet (issue #13)** : chaque session projet est
+   branchée sur un observateur d'événements RPC qui maintient une map d'activité
+   (`AppState.agent_activity`, `agent_start` → occupé, `agent_settled` → libre) dans
+   `rpc_manager.rs` (paramètre `observer` de `spawn_and_start`). La commande
+   `get_project_agent_states()` retourne l'état de chaque projet ouvert ; la barre
+   « Projets en cours » affiche une **pastille animée** par projet (frontend
+   `_pollProjectActivities`, polling léger 2 s). Un agent **parké** (projet inactif)
+   qui travaille en arrière-plan est donc visible. L'activité est remise à zéro à
+   l'arrêt de la session et l'entrée retirée à la fermeture du projet.
+8. **Fuite de processus `plh.exe` à la fermeture de projet (issue #14)** :
+   - `close_project` arrête désormais **aussi** la session reviewer (`rpc_reviewer`,
+     `pi`/`plh.exe` séparé `--no-session`) en plus de la session principale et des
+     sessions parkées — sinon un reviewer lancé en orchestration restait en mémoire.
+   - **Invariant « pas de session orpheline dans `rpc_state` »** : `open_project_shared`
+     et `do_set_active_project` parkent défensivement la session active du projet
+     précédent (helper `park_previous_active_if_switching`) avant de changer le
+     projet actif. Cela couvre le cas où le parking frontend échoue ou où un chemin
+     backend (ex: web-remote) bascule sans parker — sinon la session d'un projet
+     restait vivante hors de tout slot traçable et n'était jamais tuée à la fermeture
+     de son projet. Le web-remote capture `was_active` **avant** la bascule pour
+     conserver son redémarrage d'agent.
 
 ---
 
@@ -210,6 +231,9 @@ automatiquement avec le projet actif).
 - **Agent par projet** : chaque projet a **sa propre session d'agent** (processus
 pi/plh dédié, vivant en arrière-plan). En revenant sur un projet, l'agent reprend
 exactement là où il en était (contexte et historique préservés).
+- **Indicateur d'activité** : une pastille à côté de chaque projet de la barre
+« Projets en cours » indique si **son agent travaille** (animée) ou **est en
+attente**. Un projet inactif dont l'agent réfléchit en arrière-plan est donc visible.
 - **Accès distant** : depuis le mode remote, la liste des projets ouverts est
 visible et on peut basculer de projet (route `/api/project/select`).
 <!-- /HELP:multiprojets -->

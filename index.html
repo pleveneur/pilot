@@ -47,6 +47,7 @@
     <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
     <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
     <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
+    <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
     <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
     <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
     <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
@@ -631,6 +632,42 @@
           <tbody id="audit-body"></tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- Modale : discussion inter-projets (issue #15) -->
+  <div id="interproject-modal" class="modal hidden">
+    <div class="modal-content interproject-content">
+      <div class="modal-header">
+        <h2><i data-lucide="link" class="icon-lg"></i> Discussion inter-projets</h2>
+        <button id="interproject-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <p class="muted" style="font-size:12px">
+        Lier ce projet à d'autres projets pour que l'un puisse déposer une analyse/tâche
+        que l'agent de l'autre devra traiter. Le projet lié est ouvert (si besoin), activé,
+        et son agent est lancé pour traiter le fichier déposé.
+      </p>
+      <div class="interproject-section">
+        <div class="dropdown-label">Projets liés</div>
+        <div id="interproject-links">
+          <div class="muted" style="font-size:12px">Aucun projet lié. Sélectionne des projets ci-dessous pour les lier.</div>
+        </div>
+      </div>
+      <div class="interproject-section">
+        <div class="dropdown-label">Lier un projet ouvert</div>
+        <div id="interproject-open-list" class="interproject-open-list"></div>
+      </div>
+      <div class="interproject-section">
+        <div class="dropdown-label">Envoyer une tâche / analyse</div>
+        <div class="interproject-target-row">
+          <select id="interproject-target"></select>
+        </div>
+        <textarea id="interproject-content" rows="6" placeholder="Décris l'analyse ou ce qu'il faut faire dans le projet cible…"></textarea>
+        <div class="modal-actions">
+          <button id="btn-interproject-send" class="web-btn"><i data-lucide="send-horizontal" class="icon-sm"></i> Déposer la tâche & lancer l'agent cible</button>
+        </div>
+      </div>
+      <div id="interproject-result" class="muted" style="font-size:12px"></div>
     </div>
   </div>
 
