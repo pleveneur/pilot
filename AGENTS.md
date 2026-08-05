@@ -123,7 +123,7 @@ pilot/
 │   ├── build-handbook.js      # Agrège les blocs HELP des specs → help/handbook.md
 │   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds
 │   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload
-├── release-notes/            # Résumés de mise à jour optionnels orientés utilisateur (vX.Y.Z.md)
+├── release-notes/            # Changelog utilisateur (vX.Y.Z.md) rédigé à chaque release (option A)
 ├── .github/workflows/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)
 ├── .github/ISSUE_TEMPLATE/   # Templates d'issue GitHub (bug/feature/remark + config contact)
@@ -221,6 +221,24 @@ automatiquement après un commit de code — attendre la demande.
 
 Quand l'utilisateur demande la publication :
 
+0. **Rédiger le changelog utilisateur** `release-notes/vX.Y.Z.md` en français,
+   orienté utilisateur, SANS demander de validation ni de relecture (décision
+   utilisateur : option A). Trié par catégorie, langage clair pour un utilisateur
+   (pas de jargon technique, pas de noms de fichiers/fonctions) :
+   ```
+   # Pilot vX.Y.Z
+   ## ✨ Nouvelles fonctionnalités
+   - …
+   ## 🐛 Corrections
+   - …
+   ## ⚡ Améliorations
+   - …
+   ```
+   Rédigé à partir des changements **visibles** de la session depuis la dernière
+   release. Ce fichier est committé avec le bump (étape suivante) pour que le
+   workflow le prenne en compte comme `notes` de la release et de la modale de
+   mise à jour. S'il est absent, le workflow retombe sur un `git log` catégorisé.
+
 1. **Bumper la version** dans les **4 fichiers** (tauri.conf.json, Cargo.toml, package.json,
    Cargo.lock) — même valeur partout (ex: `0.2.3` → `0.2.4`).
 
@@ -235,7 +253,7 @@ Quand l'utilisateur demande la publication :
    un `sed`). Après le bump, VÉRIFIER : `grep 'version = "X.Y.Z"' Cargo.lock` ne doit
    retourner qu'une seule occurrence, celle de `pilot`, et lancer `cargo test
    --manifest-path src-tauri/Cargo.toml --lib` avant de committer.
-2. **Committer** le bump : `git commit -m "chore: bump version to X.Y.Z"`.
+2. **Committer** le bump + le `release-notes/vX.Y.Z.md` : `git commit -m "chore: bump version to X.Y.Z"`.
 3. **Pousser** `main` puis **créer et pousser le tag** `vX.Y.Z` :
    ```bash
    git push origin main
