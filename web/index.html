@@ -24,11 +24,12 @@
   <section id="app-screen" class="screen" hidden>
     <!-- Zone fixe en haut : titre + onglets + model-select (tout empilé verticalement) -->
     <header class="top-area">
-      <span class="app-title">🚀 Pilot web-remote</span>
+      <span class="app-title">🚀 Pilot <span id="app-project" class="app-project"></span></span>
 
       <nav id="tabbar" class="top-area-tabbar">
         <button data-view="chat" class="active">💬 Chat</button>
         <button data-view="files">📂 Fichiers</button>
+        <button data-view="prompt">🧩 Prompt</button>
         <button data-view="projects">📁 Projet</button>
         <button data-view="commands">▶️ Commandes</button>
       </nav>
@@ -44,6 +45,7 @@
       <!-- Chat -->
       <div id="view-chat" class="view active">
 
+        <div id="chat-project" class="chat-project" hidden></div>
         <div id="chat-messages"></div>
         <div id="chat-controls">
           <button id="btn-new" class="ctrl">🆕 New</button>
@@ -73,6 +75,56 @@
           </div>
           <pre><code id="file-content"></code></pre>
           <textarea id="file-editor" class="file-editor" hidden spellcheck="false"></textarea>
+        </div>
+      </div>
+
+      <!-- Prompt Builder -->
+      <div id="view-prompt" class="view">
+        <div class="pb-scroll">
+          <div class="pb-card">
+            <label class="pb-label" for="pb-instructions">📝 Instructions</label>
+            <textarea id="pb-instructions" class="pb-instructions" rows="4" placeholder="Ex: Fais une code review de ces fichiers, vérifie les bonnes pratiques..."></textarea>
+
+            <label class="pb-label" for="pb-template-select">📋 Template</label>
+            <div class="pb-template-row">
+              <select id="pb-template-select" class="pb-template-select">
+                <option value="">-- Choisir un template --</option>
+              </select>
+            </div>
+
+            <label class="pb-label" id="pb-files-label">📂 Fichiers sélectionnés (0)</label>
+            <div id="pb-files-list" class="pb-files-list">
+              <div class="pb-files-empty">Ajoutez des fichiers depuis l'onglet 📂 Fichiers (bouton ＋)</div>
+            </div>
+
+            <div class="pb-options-row">
+              <label class="pb-option" title="Inclure l'arborescence globale du projet">
+                <input type="checkbox" id="pb-opt-tree" /> Arborescence
+              </label>
+              <select id="pb-opt-tree-depth" class="pb-opt-depth">
+                <option value="1">1 niveau</option>
+                <option value="2" selected>2 niveaux</option>
+                <option value="3">3 niveaux</option>
+                <option value="0">Complète</option>
+              </select>
+            </div>
+
+            <div class="pb-actions">
+              <button id="pb-btn-assemble" class="ctrl">🔄 Assembler</button>
+              <button id="pb-btn-send" class="ctrl ctrl-primary">▶️ Envoyer à l'agent</button>
+              <button id="pb-btn-save-md" class="ctrl">💾 Sauvegarder .md</button>
+            </div>
+          </div>
+
+          <div class="pb-card">
+            <div class="pb-preview-header">
+              <span>👁️ Aperçu du prompt</span>
+              <span class="muted" id="pb-preview-hint">Cliquez « Assembler » pour générer</span>
+            </div>
+            <div id="pb-preview-content" class="pb-preview-content">
+              <div class="pb-preview-empty">Le prompt assemblé apparaîtra ici</div>
+            </div>
+          </div>
         </div>
       </div>
 

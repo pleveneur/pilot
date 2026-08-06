@@ -42,6 +42,10 @@ const state = {
   // Commandes projet (issue #27) : liste paramétrée + exécutions en cours.
   commands: [],
   commandRuns: {}, // run_id → { btn, statusEl, outEl }
+  // Prompt Builder (web-remote) : fichiers sélectionnés + prompt assemblé.
+  pbSelected: new Set(), // chemins absolus sélectionnés
+  pbAssembled: '',
+  pbUserTemplates: [], // [{name, label}] du dossier templates/ du projet
 };
 
 // ── Helpers HTTP ──
@@ -122,6 +126,7 @@ function enterApp() {
   loadFiles();
   loadProjects();
   loadCommands();
+  initPromptBuilder();
 }
 
 // ── WebSocket ──
@@ -252,6 +257,8 @@ function applyProject(proj) {
   state.browseRoots = Array.isArray(proj.roots) ? proj.roots.slice() : [];
   const cur = document.getElementById('current-project');
   cur.textContent = proj.current || '(aucun)';
+  // Afficher le projet courant dans le titre (haut) et dans un bandeau du chat.
+  updateProjectBadges(proj.current);
   // Projets ouverts (multi-projets) : bascule du projet actif.
   const openEl = document.getElementById('open-projects');
   openEl.innerHTML = '';
@@ -289,6 +296,29 @@ function shortPath(p) {
   if (!p) return '';
   const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts.slice(-2).join('/');
+}
+
+// Affiche le projet courant dans le titre (haut) et dans un bandeau de l'onglet
+// Chat. Le titre montre le nom du dossier (basename) ; le bandeau chat montre le
+// chemin complet (court) pour lever toute ambiguïté.
+function updateProjectBadges(projectPath) {
+  const titleEl = document.getElementById('app-project');
+  if (titleEl) {
+    const name = projectPath && projectPath !== '(aucun)'
+      ? projectPath.replace(/\\/g, '/').split('/').filter(Boolean).pop()
+      : '';
+    titleEl.textContent = name ? '— ' + name : '';
+  }
+  const chatEl = document.getElementById('chat-project');
+  if (chatEl) {
+    if (projectPath && projectPath !== '(aucun)') {
+      chatEl.textContent = '📁 Projet : ' + shortPath(projectPath);
+      chatEl.hidden = false;
+    } else {
+      chatEl.textContent = '';
+      chatEl.hidden = true;
+    }
+  }
 }
 
 // ── Traitement des événements WebSocket (rendu chat) ──
@@ -397,6 +427,7 @@ function handleWsEvent(payload) {
       resyncProject();
       loadFiles();
       loadCommands();
+      loadPromptTemplates();
       apiJson('/api/agent/state').then(applyAgentState).catch(() => {});
       if (payload.path) appendSystem('📁 Projet changé : ' + payload.path);
       break;
@@ -860,11 +891,22 @@ function toggleDir(el, node, forceOpen) {
   for (const c of (node.children || [])) {
     const item = document.createElement('div');
     item.className = 'tree-item' + (c.is_dir ? ' dir' : '');
-    item.textContent = (c.is_dir ? '📁 ' : '📄 ') + c.name;
     if (c.is_dir) {
+      item.textContent = '📁 ' + c.name;
       item.onclick = () => toggleDir(item, c);
     } else {
-      item.onclick = () => openFile(c.path, c.name);
+      // Ligne fichier : nom cliquable (ouvre) + bouton ＋ (ajoute au Prompt Builder).
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'tree-file-name';
+      nameSpan.textContent = '📄 ' + c.name;
+      nameSpan.onclick = () => openFile(c.path, c.name);
+      const addBtn = document.createElement('button');
+      addBtn.className = 'tree-add-btn';
+      addBtn.textContent = '＋';
+      addBtn.title = 'Ajouter au Prompt Builder';
+      addBtn.onclick = (e) => { e.stopPropagation(); addToPromptBuilder(c.path, c.name); };
+      item.appendChild(nameSpan);
+      item.appendChild(addBtn);
     }
     child.appendChild(item);
   }
@@ -1134,6 +1176,306 @@ async function runCommand(cmd, item) {
     btn.disabled = false;
     btn.textContent = '▶ Lancer';
   }
+}
+
+// ── Prompt Builder (web-remote) ──
+// Transposition de l'onglet desktop `prompt-builder.js` : sélection de fichiers,
+// assemblage d'un prompt (instructions + arborescence + contenus), envoi à
+// l'agent ou sauvegarde en .md. Les templates intégrés sont définis ici ; les
+// templates utilisateur viennent du dossier `templates/` du projet (endpoint
+// `GET /api/prompt/templates`).
+
+const PB_BUILTIN_TEMPLATES = {
+  'code-review': {
+    label: '🔍 Code Review',
+    instructions: 'Fais une code review approfondie des fichiers sélectionnés. Analyse :\n- La qualité du code et la lisibilité\n- Les bugs potentiels et erreurs de logique\n- Les vulnérabilités de sécurité\n- Les problèmes de performance\n- Le respect des bonnes pratiques et conventions\n\nPropose des améliorations concrètes avec des exemples de code.'
+  },
+  'refactor': {
+    label: '🔧 Refactorisation',
+    instructions: 'Refactore les fichiers sélectionnés en appliquant :\n- Les principes SOLID et DRY\n- L\'extraction de fonctions/duplication de code\n- L\'amélioration de la lisibilité et de la maintenabilité\n- La simplification de la logique complexe\n\nConserve le comportement existant. Montre les changements proposés avec des diffs.'
+  },
+  'generate-docs': {
+    label: '📖 Générer documentation',
+    instructions: 'Génère une documentation complète pour les fichiers sélectionnés :\n- Commentaire JSDoc/docstring pour chaque fonction publique\n- Documentation des types et paramètres\n- Exemples d\'utilisation\n- Un README si pertinent\n\nUtilise le style de documentation adapté au langage de chaque fichier.'
+  },
+  'add-tests': {
+    label: '🧪 Ajouter des tests',
+    instructions: 'Écris des tests unitaires complets pour les fichiers sélectionnés :\n- Teste chaque fonction publique et ses cas limites\n- Inclue les cas nominaux et les cas d\'erreur\n- Utilise le framework de test du projet (ou suggère-en un)\n- Vise une couverture maximale\n\nMontre le code de test complet, prêt à être exécuté.'
+  },
+  'explain': {
+    label: '💡 Expliquer le code',
+    instructions: 'Explique le code des fichiers sélectionnés de façon claire et pédagogique :\n- L\'architecture et la structure globale\n- Le rôle de chaque fonction/classe importante\n- Le flux de données et les dépendances\n- Les design patterns utilisés\n\nAdapte l\'explication pour un développeur junior qui découvre le projet.'
+  },
+  'find-bugs': {
+    label: '🐛 Trouver les bugs',
+    instructions: 'Analyse les fichiers sélectionnés pour trouver tous les bugs potentiels :\n- Erreurs de logique et conditions de course\n- Fuites mémoire et erreurs de gestion des ressources\n- Gestion défectueuse des erreurs et exceptions\n- Problèmes de validation des entrées\n\nPriorise les bugs par sévérité (critique, majeur, mineur) et propose un correctif pour chacun.'
+  }
+};
+
+// Ajoute un fichier à la sélection du Prompt Builder (bouton ＋ de l'arborescence).
+function addToPromptBuilder(path, name) {
+  if (state.pbSelected.has(path)) {
+    appendSystem('ℹ️ Déjà dans le Prompt Builder : ' + name);
+    return;
+  }
+  state.pbSelected.add(path);
+  renderPromptFiles();
+  appendSystem('➕ Ajouté au Prompt Builder : ' + name);
+}
+
+// Rendu de la liste des fichiers sélectionnés (avec boutons de retrait).
+function renderPromptFiles() {
+  const label = document.getElementById('pb-files-label');
+  const list = document.getElementById('pb-files-list');
+  if (!label || !list) return;
+  const count = state.pbSelected.size;
+  label.textContent = '📂 Fichiers sélectionnés (' + count + ')';
+  if (count === 0) {
+    list.innerHTML = '<div class="pb-files-empty">Ajoutez des fichiers depuis l\'onglet 📂 Fichiers (bouton ＋)</div>';
+    return;
+  }
+  const projectPath = document.getElementById('current-project').textContent;
+  const sep = projectPath.includes('\\') ? '\\' : '/';
+  let html = '';
+  const sorted = [...state.pbSelected].sort();
+  for (const path of sorted) {
+    const relative = projectPath && path.startsWith(projectPath)
+      ? path.slice(projectPath.length).replace(/^[\\/]+/, '')
+      : path;
+    html += '<div class="pb-file-item">' +
+      '<span class="pb-file-name" title="' + escapeHtml(path) + '">' + escapeHtml(relative) + '</span>' +
+      '<button class="pb-file-remove" data-remove="' + escapeHtml(path) + '" title="Retirer">×</button>' +
+      '</div>';
+  }
+  list.innerHTML = html;
+  list.querySelectorAll('.pb-file-remove').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.pbSelected.delete(btn.dataset.remove);
+      renderPromptFiles();
+    });
+  });
+}
+
+// Rendu textuel de l'arborescence (réutilise l'arbre déjà chargé côté web).
+function renderTreeSummary(node, prefix, maxDepth, depth) {
+  if (!node || !node.children) return '';
+  let result = '';
+  for (const child of node.children) {
+    if (child.name.startsWith('.') && child.name !== '.gitignore') continue;
+    if (child.name === 'node_modules' && child.is_dir) continue;
+    if (child.is_dir) {
+      result += prefix + '📁 ' + child.name + '/\n';
+      if (child.children && depth < maxDepth) {
+        result += renderTreeSummary(child, prefix + '  ', maxDepth, depth + 1);
+      }
+    } else {
+      result += prefix + '📄 ' + child.name + '\n';
+    }
+  }
+  return result;
+}
+
+// Assemble le prompt (instructions + arborescence + contenus des fichiers).
+async function assemblePrompt() {
+  const instructions = document.getElementById('pb-instructions').value.trim();
+  const count = state.pbSelected.size;
+  const preview = document.getElementById('pb-preview-content');
+  const hint = document.getElementById('pb-preview-hint');
+  if (count === 0 && !instructions) {
+    preview.innerHTML = '<div class="pb-preview-empty">⚠️ Sélectionnez au moins un fichier ou entrez des instructions</div>';
+    return '';
+  }
+  preview.innerHTML = '<div class="pb-preview-empty">⏳ Assemblage en cours...</div>';
+
+  const projectPath = document.getElementById('current-project').textContent;
+  const projectName = (projectPath && projectPath !== '(aucun)')
+    ? projectPath.replace(/\\/g, '/').split('/').pop()
+    : '';
+  const sep = projectPath.includes('\\') ? '\\' : '/';
+  let prompt = '';
+
+  if (projectName) prompt += '# Projet : ' + projectName + '\n\n';
+  if (instructions) prompt += '## Instructions\n\n' + instructions + '\n\n';
+
+  const optTree = document.getElementById('pb-opt-tree');
+  const optDepth = document.getElementById('pb-opt-tree-depth');
+  const maxDepth = parseInt(optDepth.value, 10);
+  if (optTree.checked && count > 0) {
+    // L'arbre courant est stocké dans le DOM de #file-tree ; on le re-fetch
+    // pour avoir une arborescence fraîche et complète.
+    try {
+      const tree = await apiJson('/api/tree');
+      prompt += '## Arborescence du projet\n\n';
+      prompt += renderTreeSummary(tree, '', maxDepth > 0 ? maxDepth : Infinity, 1);
+      prompt += '\n';
+    } catch (_) { /* arborescence indisponible : on continue sans */ }
+  }
+
+  if (count > 0) {
+    prompt += '## Fichiers sélectionnés\n\n';
+    const sorted = [...state.pbSelected].sort();
+    for (const path of sorted) {
+      const relative = projectPath && path.startsWith(projectPath)
+        ? path.slice(projectPath.length).replace(/^[\\/]+/, '')
+        : path;
+      const ext = path.split('.').pop().toLowerCase() || '';
+      try {
+        const data = await apiJson('/api/file?' + new URLSearchParams({ path }));
+        const content = data.content || '';
+        prompt += '### ' + relative + '\n\n';
+        prompt += '```' + ext + '\n' + content;
+        if (!content.endsWith('\n')) prompt += '\n';
+        prompt += '```\n\n';
+      } catch (err) {
+        prompt += '### ' + relative + '\n\n';
+        prompt += '```\n[Erreur de lecture : ' + err.message + ']\n```\n\n';
+      }
+    }
+  }
+
+  state.pbAssembled = prompt;
+  preview.innerHTML = mdRender(prompt);
+  hint.textContent = count + ' fichier(s) assemblé(s) — ' + prompt.length + ' caractères';
+  return prompt;
+}
+
+// Envoie le prompt assemblé à l'agent (bascule sur l'onglet Chat).
+async function sendPromptToAgent() {
+  let prompt = state.pbAssembled;
+  if (!prompt) prompt = await assemblePrompt();
+  if (!prompt) return;
+  if (state.isStreaming) {
+    appendSystem('⚠️ L\'agent est occupé. Attendez la fin du streaming.');
+    return;
+  }
+  // Bascule sur l'onglet Chat pour voir la réponse.
+  document.querySelectorAll('#tabbar button').forEach((b) => b.classList.remove('active'));
+  document.querySelector('#tabbar button[data-view="chat"]').classList.add('active');
+  document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+  document.getElementById('view-chat').classList.add('active');
+  const modelBar = document.getElementById('chat-model-bar');
+  if (modelBar) modelBar.hidden = false;
+  appendUserMessage(prompt);
+  try {
+    await apiJson('/api/agent/prompt', {
+      method: 'POST',
+      body: JSON.stringify({ message: prompt, images: null }),
+    });
+  } catch (err) {
+    appendSystem('❌ ' + err.message);
+  }
+}
+
+// Sauvegarde le prompt assemblé en fichier .md à la racine du projet.
+async function savePromptAsMd() {
+  let prompt = state.pbAssembled;
+  if (!prompt) prompt = await assemblePrompt();
+  if (!prompt) return;
+  const projectPath = document.getElementById('current-project').textContent;
+  if (!projectPath || projectPath === '(aucun)') {
+    appendSystem('❌ Aucun projet ouvert.');
+    return;
+  }
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const fileName = 'prompt_' + timestamp + '.md';
+  const sep = projectPath.includes('\\') ? '\\' : '/';
+  const filePath = projectPath + sep + fileName;
+  try {
+    await apiJson('/api/file', {
+      method: 'POST',
+      body: JSON.stringify({ path: filePath, content: prompt }),
+    });
+    const hint = document.getElementById('pb-preview-hint');
+    if (hint) hint.textContent = '✅ Sauvegardé : ' + fileName;
+    appendSystem('💾 Prompt sauvegardé : ' + fileName);
+    loadFiles();
+  } catch (err) {
+    appendSystem('❌ ' + err.message);
+  }
+}
+
+// Charge les templates (intégrés + utilisateur) dans le select.
+async function loadPromptTemplates() {
+  const sel = document.getElementById('pb-template-select');
+  if (!sel) return;
+  let html = '<option value="">-- Choisir un template --</option>';
+  html += '<optgroup label="Templates intégrés">';
+  for (const key of Object.keys(PB_BUILTIN_TEMPLATES)) {
+    html += '<option value="builtin:' + key + '">' + escapeHtml(PB_BUILTIN_TEMPLATES[key].label) + '</option>';
+  }
+  html += '</optgroup>';
+  try {
+    const data = await apiJson('/api/prompt/templates');
+    state.pbUserTemplates = Array.isArray(data.templates) ? data.templates : [];
+    if (state.pbUserTemplates.length) {
+      html += '<optgroup label="Templates personnalisés">';
+      for (const t of state.pbUserTemplates) {
+        html += '<option value="user:' + escapeHtml(t.name) + '">' + escapeHtml(t.label) + '</option>';
+      }
+      html += '</optgroup>';
+    }
+  } catch (_) { /* pas de templates utilisateur */ }
+  sel.innerHTML = html;
+}
+
+// Charge un template sélectionné dans le champ instructions.
+async function loadPromptTemplate() {
+  const sel = document.getElementById('pb-template-select');
+  const instr = document.getElementById('pb-instructions');
+  const hint = document.getElementById('pb-preview-hint');
+  const value = sel.value;
+  if (!value) return;
+  if (value.startsWith('builtin:')) {
+    const tmpl = PB_BUILTIN_TEMPLATES[value.slice(8)];
+    if (tmpl) {
+      instr.value = tmpl.instructions;
+      if (hint) hint.textContent = '📋 Template intégré : ' + tmpl.label;
+    }
+    return;
+  }
+  if (value.startsWith('user:')) {
+    const name = value.slice(5);
+    const projectPath = document.getElementById('current-project').textContent;
+    if (!projectPath || projectPath === '(aucun)') return;
+    const sep = projectPath.includes('\\') ? '\\' : '/';
+    const tmplPath = projectPath + sep + 'templates' + sep + name;
+    try {
+      const data = await apiJson('/api/file?' + new URLSearchParams({ path: tmplPath }));
+      const content = data.content || '';
+      // Extraire les instructions (tout ce qui est avant « ## Arborescence » ou « ## Fichiers »).
+      const parts = content.split(/^## (?:Arborescence|Fichiers)/m);
+      const instructions = parts[0]
+        ? parts[0].replace(/^# Projet :.*\n+/m, '').replace(/^## Instructions\n+/m, '').trim()
+        : '';
+      instr.value = instructions;
+      if (hint) hint.textContent = '📋 Template chargé : ' + name;
+    } catch (err) {
+      appendSystem('❌ Erreur chargement template : ' + err.message);
+    }
+  }
+}
+
+// ── Initialisation du Prompt Builder ──
+function initPromptBuilder() {
+  const assembleBtn = document.getElementById('pb-btn-assemble');
+  const sendBtn = document.getElementById('pb-btn-send');
+  const saveBtn = document.getElementById('pb-btn-save-md');
+  const tmplSel = document.getElementById('pb-template-select');
+  const optTree = document.getElementById('pb-opt-tree');
+  const optDepth = document.getElementById('pb-opt-tree-depth');
+  if (!assembleBtn) return;
+  assembleBtn.addEventListener('click', assemblePrompt);
+  sendBtn.addEventListener('click', sendPromptToAgent);
+  saveBtn.addEventListener('click', savePromptAsMd);
+  tmplSel.addEventListener('change', loadPromptTemplate);
+  // Afficher/cacher la profondeur selon la checkbox arborescence.
+  optDepth.style.opacity = '0.4';
+  optDepth.disabled = true;
+  optTree.addEventListener('change', () => {
+    optDepth.disabled = !optTree.checked;
+    optDepth.style.opacity = optTree.checked ? '1' : '0.4';
+  });
+  loadPromptTemplates();
 }
 
 // ── Dictée vocale (Web Speech API) — Évolution 8 ──

@@ -137,6 +137,18 @@ diffusée en temps réel sur `/ws/agent` (événements `command_start` / `comman
 `command_end`) **et** accumulée dans un buffer complet remis dans `command_end.output` pour
 garantir l'état final même si le canal WS saturé droppe des chunks. Refus en mode `web_readonly`.
 
+### Prompt Builder (web-remote)
+| Méthode | Route | Description |
+|---|---|---|
+| `GET` | `/api/prompt/templates` | Liste les templates utilisateur du dossier `templates/` du projet → `{ templates: [{ name, label }] }` (fichiers `.md`) |
+
+Les **templates intégrés** (code-review, refactor, générer docs, tests, expliquer, trouver bugs)
+sont définis côté frontend (`web/js/app.js`). Les **templates personnalisés** sont servis par cet
+endpoint (dossier `templates/` du projet, validé par `validate_within`). L'assemblage du prompt
+(instructions + arborescence + contenus des fichiers) se fait côté client via les endpoints
+existants `GET /api/tree` et `GET /api/file` ; l'envoi à l'agent réutilise `POST /api/agent/prompt`
+et la sauvegarde en `.md` réutilise `POST /api/file` (création).
+
 ---
 
 ## 5. WebSocket `/ws/agent`
@@ -320,6 +332,7 @@ La sécurité se construit **en même temps** que le serveur (chantier 1), pas a
 | Module | État distant | Source réutilisée |
 |---|---|---|
 | Sélecteur de projet (récents + browse racines) | ✅ | `AppConfig.recent_projects` + nouveau browse |
+| Projet courant affiché (titre + bandeau chat) | ✅ | nom du dossier dans le titre (haut) + chemin court dans un bandeau de l'onglet Chat (`updateProjectBadges`) |
 | Arborescence (lecture) | ✅ | logique `list_dir` |
 | Visionneuse Markdown | ✅ | `markdown-it` |
 | Visionneuse code (highlight lecture) | ✅ | Shiki / highlight.js |
@@ -328,6 +341,7 @@ La sécurité se construit **en même temps** que le serveur (chantier 1), pas a
 | Boutons abort / new / compact | ✅ | endpoints existants |
 | Édition légère | ✅ v2 | `PUT /api/file` (édition) + `POST /api/file` (création, chemin relatif/absolu) ; textarea, max 5 Mo, refus binaire/readonly/existant |
 | Dictée vocale (micro 🎙️) | ✅ | bouton `#prompt-mic` dans `#prompt-form`, Web Speech API — voir `spec_voice_input.md` |
+| **Prompt Builder (🧩)** | ✅ | onglet « 🧩 Prompt » : sélection de fichiers (bouton ＋ dans l'arborescence), instructions, templates (intégrés + personnalisés), assemblage (arborescence + contenus), envoi à l'agent, sauvegarde en `.md` — transposition de `prompt-builder.js` |
 
 > 🎙️ **Dictée vocale & secure context** : `SpeechRecognition` exige un *secure context*. En HTTP sur l'IP Tailscale le navigateur **bloque** le micro → accès via **Tailscale Serve (HTTPS)** obligatoire pour la dictée web. Détection `window.isSecureContext` : bouton désactivé + infobulle « requiert HTTPS » si non sécurisé. Détails : [`spec_voice_input.md`](./spec_voice_input.md).
 
@@ -442,6 +456,7 @@ Reste à faire (hors v1 livrée) :
 - **`/api/file/meta`** et **`POST /api/project/create`** : 🟢 implémentés. `file_meta` = { path, name, size, modified, is_dir, is_file, ext }. `project_create` crée un dossier dans une racine autorisée (parent existant, basename sans séparateur, anti path traversal via `parent_canon.join(basename)`) puis l'ouvre. UI web : bouton « ＋ Nouveau projet » dans la vue Projets → **modale** (select racine + input nom, validation inline, Entrée/Échap/clic-overlay) — remplace l'ancien `prompt()` numéroté peu pratique sur mobile.
 - **Édition web** (`PUT /api/file`) : 🟢 implémenté (v2) — handler `file_save` (fichiers existants, `validate_within`, refus binaire/readonly, max 5 Mo, audit `file_save`). UI web : bouton « ✏️ Éditer » dans la visionneuse (textarea monospace + « 💾 Enregistrer » / « Annuler »).
 - **Création de nouveaux fichiers** (`POST /api/file`) : 🟢 implémenté (v2) — handler `file_create` (body `path`, `content` ; `path` absolu dans le projet ou relatif au project root ; `validate_new_within` canonicalise le **parent** + `starts_with(root)` + refuse basename avec séparateur/UNC/existant/binaire/> 5 Mo ; audit `file_create`). UI web : bouton « 📄 Nouveau » dans la visionneuse (prompt chemin relatif, ex `notes.md` ou `sub/notes.md`), éditeur vide, « Enregistrer » fait POST puis bascule en mode édition (PUT ultérieurs), `loadFiles()` rafraîchit l'arborescence.
+- **Prompt Builder (🧩)** : 🟢 implémenté — onglet « 🧩 Prompt » dans la tabbar. Sélection de fichiers via un bouton **＋** dans l'arborescence (onglet Fichiers), liste des fichiers sélectionnés avec retrait, instructions, templates (intégrés définis côté frontend + personnalisés du dossier `templates/` servis par `GET /api/prompt/templates`), option arborescence + profondeur, boutons **Assembler** / **Envoyer à l'agent** (bascule sur l'onglet Chat + `POST /api/agent/prompt`) / **Sauvegarder .md** (`POST /api/file`). L'assemblage lit les contenus via `GET /api/file` et l'arborescence via `GET /api/tree`. Les templates sont rechargés au changement de projet (`project_changed`).
 ---
 
 ## 14. Automatisation Tailscale Serve (exposition HTTPS automatique)
@@ -512,4 +527,9 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   le desktop émet une **notification native** « Agent terminé » à la fin de la
   réponse (permission demandée au 1er lancement). Pratique pour les tâches longues
   lancées à distance pendant que tu fais autre chose sur le desktop.
+- **Prompt Builder (🧩)** : onglet « 🧩 Prompt » pour construire un prompt à partir
+  de fichiers du projet. Ajoute des fichiers via le bouton **＋** dans l'onglet
+  Fichiers, saisis des instructions (ou choisis un template), puis **Assembler**
+  pour prévisualiser, **Envoyer à l'agent** (bascule sur le Chat) ou **Sauvegarder
+  .md** à la racine du projet.
 <!-- /HELP:web-remote -->

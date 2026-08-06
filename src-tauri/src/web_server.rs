@@ -184,6 +184,8 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/commands", get(commands_list))
         .route("/api/commands/run", post(command_run))
         .route("/api/commands/stop", post(command_stop))
+        // Prompt Builder : templates utilisateur du dossier templates/ du projet.
+        .route("/api/prompt/templates", get(prompt_templates))
         .layer(from_fn_with_state(ctx.clone(), auth_middleware));
 
     Router::new()
@@ -1323,6 +1325,64 @@ async fn command_stop(
     match res.and_then(|r| r) {
         Ok(_) => Json(json!({ "ok": true })).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+// ── Prompt Builder (web-remote) ──
+//
+// Liste les templates utilisateur du dossier `templates/` du projet courant
+// (fichiers `.md`). Les templates intégrés (code-review, refactor, …) sont
+// définis côté frontend (web/js/app.js) ; seuls les templates personnalisés
+// sont servis ici. Réutilise la validation de chemin `validate_within`.
+
+/// Liste les templates utilisateur du projet courant (dossier `templates/`).
+/// Retourne `{ templates: [{ name, label }] }` (label = nom sans extension).
+async fn prompt_templates(State(ctx): State<Arc<WebCtx>>) -> Response {
+    let app = ctx.app_handle.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let root = project_root(&app)?;
+        let tmpl_dir = root.join("templates");
+        let mut templates = Vec::new();
+        if tmpl_dir.is_dir() {
+            let entries = std::fs::read_dir(&tmpl_dir)
+                .map_err(|e| format!("Lecture templates: {}", e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Entrée templates: {}", e))?;
+                let path = entry.path();
+                if path.is_file()
+                    && path.extension().map(|e| e == "md").unwrap_or(false)
+                {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let label = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| name.clone());
+                    templates.push(json!({ "name": name, "label": label }));
+                }
+            }
+        }
+        templates.sort_by(|a, b| {
+            a.get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .cmp(
+                    &b.get("label")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_lowercase(),
+                )
+        });
+        Ok(json!({ "templates": templates }))
+    })
+    .await
+    .map_err(|e| e.to_string());
+    match res.and_then(|r| r) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
     }
 }
 

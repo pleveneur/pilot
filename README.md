@@ -96,8 +96,12 @@ téléphone ou un autre poste, via le réseau privé **Tailscale**.
   pour l'accès distant). Aucun port exposé sur Internet — tout passe par le mesh
   Tailscale (WireGuard chiffré).
 - Côté web : arborescence en lecture, visionneuse, chat streaming (pensées/outils),
-  sélecteur de modèle, changement de projet, et **déclenchement des commandes projet**
-  (▶, avec sortie en direct et état en cours/terminé). L'édition lourde reste sur le desktop.
+  sélecteur de modèle, changement de projet, **déclenchement des commandes projet**
+  (▶, avec sortie en direct et état en cours/terminé), et **Prompt Builder** (🧩) :
+  construire un prompt à partir de fichiers du projet (bouton ＋ dans l'arborescence),
+  l'envoyer à l'agent ou le sauvegarder en `.md`. Le **projet courant** est affiché
+  dans le titre en haut et dans un bandeau de l'onglet Chat. L'édition lourde reste
+  sur le desktop.
 - 🎙️ **Dictée vocale** : un bouton micro à côté du bouton envoyer permet de dicter
   l'instruction à l'agent (Web Speech API, langue `fr-FR`). Sur le **web distant**, le
   micro exige un accès **HTTPS** (Tailscale Serve — voir la procédure ci-dessous) ; sur

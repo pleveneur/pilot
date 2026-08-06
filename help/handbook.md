@@ -336,6 +336,11 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   le desktop émet une **notification native** « Agent terminé » à la fin de la
   réponse (permission demandée au 1er lancement). Pratique pour les tâches longues
   lancées à distance pendant que tu fais autre chose sur le desktop.
+- **Prompt Builder (🧩)** : onglet « 🧩 Prompt » pour construire un prompt à partir
+  de fichiers du projet. Ajoute des fichiers via le bouton **＋** dans l'onglet
+  Fichiers, saisis des instructions (ou choisis un template), puis **Assembler**
+  pour prévisualiser, **Envoyer à l'agent** (bascule sur le Chat) ou **Sauvegarder
+  .md** à la racine du projet.
 
 ---
 
