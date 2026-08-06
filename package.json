@@ -1,13 +1,13 @@
 {
   "name": "pilot",
   "private": true,
-  "version": "0.2.35",
+  "version": "0.2.36",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "node scripts/tauri.js",
     "build:handbook": "node scripts/build-handbook.js",
     "test": "vitest run",
     "test:watch": "vitest"

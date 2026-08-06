@@ -14,6 +14,12 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
 5. Le coordinateur synthétise la réponse finale.
 
+### Mode parallèle
+- Cliquez sur le bouton **⚡ Mode parallèle** (icône `layers`) à côté du champ de saisie.
+- Sélectionnez plusieurs agents, puis envoyez votre tâche : elle est lancée **simultanément** sur tous les agents sélectionnés (sans coordinateur).
+- Chaque agent travaille dans sa propre bulle de réflexion ; les résultats sont affichés agrégés à la fin.
+- Le coordinateur peut aussi lancer des sous-tâches indépendantes en parallèle via `[[PARALLEL]]` (blocs `agent:`/`task:` séparés par `---`).
+
 ### Suivre une run
 - Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
   **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
@@ -144,6 +150,40 @@ DONE: Route GET /api/search créée.
 - `status` : `done`, `need_help`, `timeout`, `error`.
 - Contenu tronqué selon le budget configuré.
 
+### Délégation parallèle (H2 V2 parallèle)
+
+Pour des sous-tâches **indépendantes**, un agent (typiquement le coordinateur) peut
+lancer plusieurs agents **simultanément** via un bloc `[[PARALLEL]]` :
+
+```text
+[[PARALLEL]]
+agent: codeur
+task: Implémente la route GET /api/search.
+---
+agent: testeur
+task: Écris les tests de la route GET /api/search.
+---
+agent: documenteur
+task: Documente la nouvelle route dans le README.
+[[/PARALLEL]]
+```
+
+- Chaque bloc `agent:` + `task:` est une sous-tâche confiée à un agent distinct,
+  exécutée **en parallèle** (chacun dans son propre processus pi).
+- Les agents parallèles sont des agents « feuille » : ils exécutent leur brief et
+  retournent leur résultat (pas de délégation `[[CALL]]` imbriquée en V1).
+- Quand tous ont terminé, leurs résultats sont **agrégés** et renvoyés à
+  l'appelant via `[[RESULT from parallel (status: done)]]`.
+- Garde-fous appliqués par agent : budget (`max_calls_per_run`), budget total,
+  timeout d'inactivité. `stopAgentsRun` abort **tous** les agents actifs.
+
+### Mode parallèle piloté par l'utilisateur
+
+Dans l'onglet 🎭 Agents, le bouton **⚡ Mode parallèle** (icône `layers`) permet
+à l'utilisateur de sélectionner plusieurs agents et d'envoyer une même tâche à
+tous **simultanément**, sans coordinateur. Chaque agent stream dans sa propre
+bulle de réflexion ; les résultats sont affichés agrégés à la fin.
+
 ## 5. Backend Rust
 
 ### AppState
@@ -175,9 +215,9 @@ agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>,
 
 | Fichier | Rôle |
 |---|---|
-| `src/js/agents.js` | Fonctions pures : registre, modèles, prompts, parsing, garde-fous. |
-| `src/js/agents-bus.js` | Bus d'exécution : pile, timeouts, envois/réceptions. |
-| `src/js/agents-ui.js` | Rendu de l'onglet Agents. |
+| `src/js/agents.js` | Fonctions pures : registre, modèles, prompts, parsing (`[[CALL]]`, `[[PARALLEL]]`), agrégation, garde-fous. |
+| `src/js/agents-bus.js` | Bus d'exécution : pile, timeouts, envois/réceptions, dispatch parallèle (`dispatchParallel`, `startParallelRun`), buffers par agent. |
+| `src/js/agents-ui.js` | Rendu de l'onglet Agents (bulles de réflexion multiples, mode parallèle). |
 
 ### Résolution du modèle
 

@@ -457,9 +457,11 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
       fallback gracieux. Pose l'architecture multi-sessions (canal
       `rpc-event-reviewer` séparé) pour V2. Voir
       [`spec_orchestration_reviewer.md`](./spec_orchestration_reviewer.md). ✅
-- [ ] **V2** : N sub-agents spécialisés en **parallèle** (test-writer, doc-writer,
-      refactorer), chacun avec un `system` de rôle. La tâche complexe est
-      découpée en rôles, pas en séquence.
+- [x] **V2** (implémenté 2026-08) : N sub-agents spécialisés en **parallèle**
+      (test-writer, doc-writer, refactorer), chacun avec un `system` de rôle. La
+      tâche complexe est découpée en rôles, pas en séquence. Dispatch `[[PARALLEL]]`
+      (coordinateur) + mode utilisateur ⚡ (multi-sélection), buffers par agent,
+      agrégation des résultats. Voir [`spec_gestion_agents.md`](./spec_gestion_agents.md).
 - **Fichiers :** `src/js/orchestration.js` (dispatch multi-rôles),
   `src-tauri/src/rpc_manager.rs` (N processus `pi --mode rpc --no-session`),
   `src-tauri/src/lib.rs` (commande `spawn_role_session`), `spec_orchestration.md`.
@@ -651,9 +653,9 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 
 ---
 
-## 26. ▶ PROCHAINE MODIFICATION — Écran Agents : agent actif mis en avant + « réflexion » de l'agent courant
+## 26. ✅ Écran Agents : agent actif mis en avant + « réflexion » de l'agent courant
 
-> ⏭️ **À faire demain** (prochaine modification). Demande utilisateur du 01/08.
+> ✅ **Implémenté** (2026-08). Demande utilisateur du 01/08.
 
 **Objectif visuel** (écran groupe d'agents 🎭) :
 - **À droite** (panneau « Activité » / équipe) : quand un agent est **actif**, le

@@ -301,6 +301,8 @@ class TabsManager {
       }
     } else {
       tab.view = await createPreview(tab.wrapper, content, window._pilotProjectPath || null);
+      // Issue #22 : chemin source pour résoudre les liens relatifs de la prévisualisation
+      tab.view.dataset.sourcePath = path;
     }
 
     this.container.appendChild(tab.wrapper);
@@ -369,6 +371,11 @@ class TabsManager {
     // Lancer la session RPC
     showLoading(`Démarrage de ${agentDisplayLabel()}…`);
     try {
+      // Issue #26 : vérifier (en arrière-plan) si une mise à jour de Pi est
+      // disponible et proposer de la faire. Ne fait rien si backend non pi,
+      // « Ne plus demander » activé, ou déjà en cours.
+      window._pilotCheckPiUpdate?.();
+
       // start_agent_session retourne true si la session a été reprise depuis un
       // parking multi-projets (pi vivant en arrière-plan), false si nouvelle.
       const resumed = await invoke("start_agent_session");
@@ -1430,7 +1437,14 @@ class TabsManager {
 
     const currentContent = getContent(tab.view);
     if (tab.dirty) {
-      // Conflit : l'utilisateur a des modifications locales non sauvegardées
+      // Issue #20 : si le disque correspond exactement à notre dernière
+      // sauvegarde (savedContent), la modification détectée provient de notre
+      // propre écriture (auto-save ou Ctrl+S) que le poller a remontée comme
+      // événement « modify ». Ce n'est PAS un conflit : l'utilisateur garde ses
+      // modifications locales non sauvegardées par-dessus notre sauvegarde.
+      if (newContent === tab.savedContent) return;
+      // Conflit réel : l'utilisateur a des modifications locales non
+      // sauvegardées ET le disque a été modifié par un processus externe.
       this._showConflictTab(tab);
     } else if (currentContent === newContent) {
       // Contenu identique (ex: après Ctrl+S) → pas besoin de recharger
@@ -1629,6 +1643,8 @@ class TabsManager {
     const content = getContent(tab.view);
     const previewWrapper = await createPreview(previewPane, content, window._pilotProjectPath || null);
     tab.splitPreviewWrapper = previewWrapper;
+    // Issue #22 : chemin source pour résoudre les liens relatifs de la prévisualisation
+    previewWrapper.dataset.sourcePath = tab.path;
     bindMermaidFunctions(previewPane);
 
     // Configurer le drag du séparateur
@@ -1706,9 +1722,17 @@ class TabsManager {
     tab.splitUpdateTimer = setTimeout(async () => {
       if (!tab.splitMode || !tab.splitPreviewWrapper) return;
       try {
+        // Issue #24 : préserver la position de scroll de la prévisualisation
+        // pendant le re-rendu, sinon le panneau saute en haut à chaque frappe
+        // et casse la synchro de scroll.
+        const pane = tab.splitPreviewPane;
+        const prevScrollTop = pane ? pane.scrollTop : 0;
         const content = getContent(tab.view);
         await updatePreview(tab.splitPreviewWrapper, content, window._pilotProjectPath || null);
+    // Issue #22 : chemin source pour résoudre les liens relatifs de la prévisualisation
+    tab.splitPreviewWrapper.dataset.sourcePath = tab.path;
         bindMermaidFunctions(tab.splitPreviewPane);
+        if (pane) pane.scrollTop = prevScrollTop;
       } catch (e) {
         console.error("Erreur mise à jour split preview:", e);
       }

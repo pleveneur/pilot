@@ -29,8 +29,7 @@ if (!TAG || !REPO || !TOKEN) {
   process.exit(1);
 }
 
-const RELEASE_BODY =
-  "Téléchargez et installez le binaire correspondant à votre plateforme. La mise à jour automatique est active pour les versions suivantes.";
+const RELEASE_BODY = "";
 
 (async () => {
   // GET /releases/tags/{tag} : si la release existe déjà, on ne fait rien.

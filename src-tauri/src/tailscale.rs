@@ -322,7 +322,7 @@ pub fn tailscale_enable_serve(app: AppHandle) -> ServeResult {
             )),
         };
     }
-    let port = u16::try_from(cfg.web_port).unwrap_or(8787);
+    let port = crate::effective_web_port(&cfg);
     match configure_serve(port) {
         Ok(url) => {
             let st = detect();

@@ -92,7 +92,7 @@ pub fn web_status(state: State<AppState>) -> WebStatus {
         active_count: state.auth.active_count(),
         running: state.web_shutdown.lock().unwrap().is_some(),
         bind: cfg.web_bind.clone(),
-        port: cfg.web_port,
+        port: crate::effective_web_port(&cfg) as u32,
     }
 }
 

@@ -47,6 +47,11 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --bg-input: #313244;
   --bg-hover: #3a3a52;
   --bg-context: #252536;
+  /* Alias legacy utilisés par les modales (conflit, diff, historique…) */
+  --bg-color: var(--bg-main);
+  --text-color: var(--text-primary);
+  --border-color: var(--border);
+  --input-bg: var(--bg-input);
   --text-primary: #cdd6f4;
   --text-secondary: #a6adc8;
   --text-muted: #6c7086;
@@ -95,6 +100,11 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   --bg-input: #ffffff;
   --bg-hover: #ccd0da;
   --bg-context: #e6e9ef;
+  /* Alias legacy utilisés par les modales (conflit, diff, historique…) */
+  --bg-color: var(--bg-main);
+  --text-color: var(--text-primary);
+  --border-color: var(--border);
+  --input-bg: var(--bg-input);
   --text-primary: #4c4f69;
   --text-secondary: #6c6f85;
   --text-muted: #9ca0b0;
@@ -5172,6 +5182,35 @@ body.pilot-loading *::after {
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 13px;
+}
+
+/* H2 V2 parallèle : sélecteur d'agents à lancer simultanément */
+.agents-parallel-picker {
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+.agents-parallel-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.agents-parallel-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.agents-parallel-option:hover {
+  background: var(--bg-hover);
 }
 
 .agents-message {

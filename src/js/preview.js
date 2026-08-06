@@ -354,6 +354,74 @@ async function resolveImagePaths(container, projectPath) {
 }
 
 /**
+ * Résout un chemin relatif contre un répertoire de base (normalise . et ..).
+ * @param {string} baseDir - répertoire de base (séparateurs / ou \\)
+ * @param {string} rel - chemin relatif
+ * @returns {string} chemin absolu normalisé
+ */
+function resolvePreviewPath(baseDir, rel) {
+  const stack = (baseDir || "").split(/[/\\]/);
+  for (const part of rel.split(/[/\\]/)) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") stack.pop();
+    else stack.push(part);
+  }
+  return stack.join("/");
+}
+
+/**
+ * Attache le handler de clic sur les liens de la prévisualisation (issue #22).
+ * - Ancre (#id) : scroll dans la prévisualisation.
+ * - Lien externe (http/https/mailto…) : ouverture dans le navigateur système.
+ * - Lien interne relatif : ouverture du fichier cible dans un nouvel onglet.
+ * Empêche la navigation WebView (qui « relançait » Pilot et cassait la session agent).
+ * @param {HTMLElement} wrapper - conteneur .preview-wrapper
+ */
+function attachPreviewLinkHandler(wrapper) {
+  wrapper.addEventListener("click", (e) => {
+    // Clic gauche simple uniquement (pas de Ctrl/Cmd/Shift/Alt, pas de clic milieu)
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const link = e.target.closest("a");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (!href) return;
+
+    // Ancre interne (#section) : scroll dans la prévisualisation
+    if (href.startsWith("#")) {
+      e.preventDefault();
+      const id = href.slice(1);
+      const target = wrapper.querySelector("#" + CSS.escape(id));
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    // Lien externe (http, https, mailto, ftp…) : navigateur système
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
+      e.preventDefault();
+      invoke("open_in_browser", { path: href }).catch(() => {});
+      return;
+    }
+
+    // Lien interne relatif : résoudre contre le dossier du fichier source
+    e.preventDefault();
+    const sourcePath = wrapper.dataset.sourcePath || "";
+    const projectPath = window._pilotProjectPath || "";
+    let absPath;
+    if (href.startsWith("/")) {
+      // Chemin absolu depuis la racine du projet
+      absPath = resolvePreviewPath(projectPath, href);
+    } else {
+      const baseDir = sourcePath.replace(/[\\/][^\\/]*$/, "");
+      absPath = resolvePreviewPath(baseDir, href);
+    }
+    const tabs = window._pilotTabs;
+    if (tabs && absPath) {
+      tabs.openFile(absPath).catch(() => {});
+    }
+  });
+}
+
+/**
  * Crée un conteneur de prévisualisation
  * @param {HTMLElement} container
  * @param {string} markdownContent
@@ -367,6 +435,7 @@ export async function createPreview(container, markdownContent, projectPath = nu
   await resolveImagePaths(wrapper, projectPath);
   container.appendChild(wrapper);
   await processMermaidBlocks(wrapper);
+  attachPreviewLinkHandler(wrapper);
   return wrapper;
 }
 

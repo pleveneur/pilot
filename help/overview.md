@@ -35,10 +35,14 @@ externe.
    latérale → « Ouvrir un dossier… » (ou via la palette de commandes
    `Ctrl+Shift+P`).
 2. **Explorer** : l'arborescence s'affiche dans la barre latérale. Filtrer les
-   fichiers avec `Ctrl+P`.
+   fichiers avec `Ctrl+P`. Le **clic droit sur un ascenseur** (scrollbar) n'affiche
+   aucun menu natif.
 3. **Ouvrir un fichier** : double-clic dans l'arborescence → un onglet s'ouvre
    (détection automatique du mode : édition pour le code, prévisualisation pour
-   `.md`, `.pdf`, images, `.csv`).
+   `.md`, `.pdf`, images, `.csv`). Dans la **prévisualisation Markdown**, les
+   liens sont cliquables : un lien interne ouvre le fichier cible dans un onglet,
+   un lien externe (http/https) s'ouvre dans le navigateur, une ancre (`#section`)
+   fait défiler la prévisualisation.
 4. **Sauvegarder** : `Ctrl+S` (sauvegarde auto configurable dans les
    Paramètres). Enregistrer sous : `Ctrl+Shift+S`.
 5. **Fermer un onglet** : `Ctrl+W` ou clic sur la croix de l'onglet. On peut
@@ -53,6 +57,8 @@ externe.
 
 ### Fichiers et onglets
 - `Ctrl+S` — Sauvegarder · `Ctrl+Shift+S` — Enregistrer sous… · `Ctrl+W` — Fermer l'onglet
+- `Ctrl+Tab` / `Ctrl+Shift+Tab` — Onglet suivant / précédent (fonctionne aussi dans le terminal)
+- `Ctrl+1`…`Ctrl+9` — Aller à l'onglet par position (ordre actuel)
 - `Ctrl+Shift+E` — Basculer en mode split (éditeur + prévisualisation)
 - `Ctrl+Shift+B` — Ajouter/retirer le fichier courant des favoris
 - `Ctrl+Shift+N` — Ouvrir le brouillon (scratchpad)
@@ -115,6 +121,12 @@ externe.
 - **Table des matières** (`Ctrl+Shift+O`) : bascule l'outline Markdown (titres
   cliquables, mise à jour en temps réel). Pratique pour naviguer dans un long
   fichier `.md`.
+- **Mode split** (`Ctrl+Shift+E`) : éditeur à gauche, prévisualisation à droite.
+  Le scroll est **synchronisé proportionnellement dans les deux sens** :
+  défilement de l'éditeur → la prévisualisation suit, et inversement. La
+  position de scroll est préservée pendant l'édition (pas de saut en haut à
+  chaque frappe). Cliquer sur un titre (`h1`–`h6`) dans la prévisualisation
+  fait défiler l'éditeur jusqu'à la ligne correspondante.
 <!-- /HELP:recherche-outline -->
 
 <!-- HELP:edition-lint -->
@@ -152,3 +164,40 @@ compilation depuis les specs).
 - Si la réponse est vide ou en erreur, vérifie qu'un **modèle valide** est
   sélectionné dans la liste déroulante.
 <!-- /HELP:aide -->
+
+<!-- HELP:dev-mode -->
+## Développer Pilot avec Pilot (mode dev)
+
+Tu peux **développer Pilot avec Pilot** : lancer une version **dev** en parallèle
+ de la version **installée**, sans conflit.
+
+- **Lancement** : `npm run tauri dev` (le wrapper ajoute automatiquement un
+  identifiant d'application séparé `com.pilot.editor.dev`).
+- **Deux instances indépendantes** : la version dev utilise son propre
+  `app_data_dir` (config, sessions, audit, extensions) et son propre verrou
+  single-instance → elle peut tourner en même temps que la version installée.
+- **Port web distant décalé** : en mode dev, le port réellement utilisé est le
+  port configuré **+ 1** (ex: configuré 8787 → dev écoute sur 8788), pour
+  éviter tout conflit de port avec la version installée.
+- **Projets partagés** : les projets sont ouverts par chemin, donc tu peux
+  ouvrir les mêmes projets dans les deux versions.
+<!-- /HELP:dev-mode -->
+
+<!-- HELP:pi-update -->
+## Mise à jour de l'agent Pi
+
+À l'ouverture de l'onglet agent, Pilot **vérifie automatiquement** si une
+nouvelle version de Pi est disponible (backend `pi` uniquement). Si c'est le
+cas, une modale te propose de la mettre à jour via la commande intégrée de Pi
+(`pi update --self`).
+
+- **Mettre à jour maintenant** : lance la mise à jour puis te confirme le
+  résultat.
+- **Plus tard** : ferme la modale (la vérification se refait à la prochaine
+  ouverture de l'onglet agent).
+- **Ne plus demander** : désactive la vérification automatique (réactivable en
+  remettant `pi_skip_update_check` à `false` dans la config).
+
+La vérification ne concerne que l'agent **Pi** (pas PLh) et n'est proposée que
+si une version plus récente existe réellement.
+<!-- /HELP:pi-update -->

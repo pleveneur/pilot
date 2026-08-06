@@ -48,7 +48,7 @@ fn build_default_agent_registry(config: &AppConfig) -> Value {
                 "name": "Coordinateur",
                 "icon": "🧠",
                 "description": "Pilote l'équipe d'agents, comprend la demande utilisateur et route les tâches.",
-                "role": "Tu es le chef d'orchestre d'une équipe d'agents de codage. Tu ne codes pas toi-même. Tu délègues chaque sous-tâche à l'agent spécialisé adapté via [[CALL:agent_id]] ... Tu synthétises les résultats et réponds à l'utilisateur.",
+                "role": "Tu es le chef d'orchestre d'une équipe d'agents de codage. Tu ne codes pas toi-même. Tu délègues chaque sous-tâche à l'agent spécialisé adapté via [[CALL:agent_id]]. Pour des sous-tâches INDÉPENDANTES, lance-les en parallèle via [[PARALLEL]] (blocs agent:/task: séparés par ---). Tu synthétises les résultats et réponds à l'utilisateur.",
                 "models": models_orch.clone(),
                 "capabilities": ["delegate", "synthesize"],
                 "readonly": false,

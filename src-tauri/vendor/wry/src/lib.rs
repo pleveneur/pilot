@@ -1685,7 +1685,10 @@ impl Default for PlatformSpecificWebViewAttributes {
     Self {
       additional_browser_args: None,
       browser_accelerator_keys: true, // This is WebView2's default behavior
-      default_context_menus: true,    // This is WebView2's default behavior
+      // Désactivé (issue #23) : supprime le menu natif WebView2 qui apparaît au
+      // clic droit sur les ascenseurs (scrollbars). Pilot fournit ses propres
+      // menus contextuels (sidebar, éditeur) côté frontend.
+      default_context_menus: false,
       theme: None,
       use_https: false, // To match macOS & Linux behavior in the context of mixed content.
       scroll_bar_style: ScrollBarStyle::default(),

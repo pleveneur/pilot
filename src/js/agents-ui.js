@@ -14,6 +14,7 @@ import {
   initAgentsBus,
   destroyAgentsBus,
   startAgentsRun,
+  startParallelRun,
   stopAgentsRun,
 } from "./agents-bus.js";
 
@@ -35,8 +36,13 @@ export async function createAgents(container) {
       <div class="agents-chat-messages" id="agents-chat-messages"></div>
       <div class="agents-chat-input-bar">
         <textarea id="agents-input" rows="1" placeholder="Demande au coordinateur..."></textarea>
+        <button class="agent-btn" id="btn-agents-parallel" title="Mode parallèle : envoyer à plusieurs agents simultanément"><i data-lucide="layers" class="icon-sm"></i></button>
         <button class="agent-btn" id="btn-agents-stop" title="Arrêter la run" disabled><i data-lucide="square" class="icon-sm"></i></button>
         <button class="agent-btn" id="btn-agents-send" title="Envoyer"><i data-lucide="send-horizontal" class="icon-sm"></i></button>
+      </div>
+      <div class="agents-parallel-picker" id="agents-parallel-picker" style="display:none">
+        <span class="muted">Agents à lancer en parallèle :</span>
+        <div class="agents-parallel-options" id="agents-parallel-options"></div>
       </div>
     </div>
     <div class="agents-activity">
@@ -56,6 +62,9 @@ export async function createAgents(container) {
   const stopBtn = wrapper.querySelector("#btn-agents-stop");
   const addBtn = wrapper.querySelector("#btn-agents-add");
   const resetBtn = wrapper.querySelector("#btn-agents-reset");
+  const parallelBtn = wrapper.querySelector("#btn-agents-parallel");
+  const parallelPicker = wrapper.querySelector("#agents-parallel-picker");
+  const parallelOptions = wrapper.querySelector("#agents-parallel-options");
 
   let registry = { version: 1, agents: [] };
   let availableModels = [];
@@ -63,13 +72,17 @@ export async function createAgents(container) {
   let editingId = null;
   let agentStates = new Map(); // agentId -> { order, status, detail, model }
   let agentOrder = 0;
+  // H2 V2 parallèle : mode piloté par l'utilisateur (plusieurs agents simultanés).
+  let parallelMode = false;
+  let selectedParallel = new Set();
 
   let currentEditorModal = null;
-  // Bulle « réflexion » de l'agent courant (idees_evolutions.md §26) : affiche le
-  // streaming (delta) + les outils utilisés de l'agent actif, dans le flux du chat.
-  let reflection = null; // { agentId, el } — une seule bulle active à la fois
+  // Bulles « réflexion » des agents actifs (idees_evolutions.md §26) : affichent le
+  // streaming (delta) + les outils utilisés de chaque agent actif, dans le flux du
+  // chat. H2 V2 parallèle : une bulle par agent actif (map agentId → el).
+  let reflections = {}; // { agentId: el }
 
-  // Démarre (ou recrée) la bulle réflexion pour un agent.
+  // Démarre (ou recrée) la bulle réflexion d'un agent.
   function startReflection(agentId, model) {
     const div = document.createElement("div");
     div.className = "agents-reflection";
@@ -81,21 +94,21 @@ export async function createAgents(container) {
     `;
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    reflection = { agentId, el: div };
+    reflections[agentId] = div;
   }
 
-  // Accumule le streaming du delta de l'agent actif dans sa bulle réflexion.
+  // Accumule le streaming du delta d'un agent dans sa bulle réflexion.
   function updateReflection(agentId, delta) {
-    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
-    const stream = reflection.el.querySelector(".ar-stream");
+    if (!reflections[agentId]) startReflection(agentId, "");
+    const stream = reflections[agentId].querySelector(".ar-stream");
     stream.textContent += delta;
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // Ajoute un chip outil dans la bulle réflexion de l'agent actif.
+  // Ajoute un chip outil dans la bulle réflexion d'un agent.
   function addReflectionTool(agentId, toolName) {
-    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
-    const tools = reflection.el.querySelector(".ar-tools");
+    if (!reflections[agentId]) startReflection(agentId, "");
+    const tools = reflections[agentId].querySelector(".ar-tools");
     if (!tools.querySelector(".ar-tools-label")) {
       tools.style.display = "flex";
       tools.insertAdjacentHTML("afterbegin", '<span class="ar-tools-label">🛠</span>');
@@ -107,21 +120,22 @@ export async function createAgents(container) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // Finalise la bulle réflexion en réponse finale (done) : on remplace le contenu
-  // streamé par le texte final complet (source de vérité) et on la met en avant.
+  // Finalise la bulle réflexion d'un agent en réponse finale (done) : on remplace
+  // le contenu streamé par le texte final complet (source de vérité) et on la met
+  // en avant.
   function finalizeReflection(agentId, text) {
-    if (!reflection || reflection.agentId !== agentId) startReflection(agentId, "");
-    reflection.el.classList.add("final");
-    reflection.el.querySelector(".ar-head").textContent = `${agentIcon(agentId)} ${agentName(agentId)}`;
-    reflection.el.querySelector(".ar-stream").textContent = text || "";
+    if (!reflections[agentId]) startReflection(agentId, "");
+    const el = reflections[agentId];
+    el.classList.add("final");
+    el.querySelector(".ar-head").textContent = `${agentIcon(agentId)} ${agentName(agentId)}`;
+    el.querySelector(".ar-stream").textContent = text || "";
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    reflection = null;
+    delete reflections[agentId];
   }
 
-  // Désactive la bulle réflexion active (l'agent a fini de réfléchir pour
-  // déléguer, renvoyer un résultat, ou la run s'est arrêtée).
+  // Désactive toutes les bulles réflexion (fin de run / arrêt).
   function closeReflection() {
-    reflection = null;
+    reflections = {};
   }
 
   // ── Chargement initial ──
@@ -187,6 +201,26 @@ export async function createAgents(container) {
       mark(from, "appelle", `→ ${agentName(to)}`);
       updateActivity();
     },
+    parallelStart: ({ from, assignments }) => {
+      appendSystemMessage(messagesEl, `⚡ Lancement parallèle de ${assignments.length} agents : ${assignments.map((a) => agentIcon(a.agentId) + " " + agentName(a.agentId)).join(", ")}`);
+      for (const a of assignments) {
+        mark(a.agentId, "parallèle", "en cours…");
+      }
+      updateActivity();
+    },
+    parallelDone: ({ results }) => {
+      const lines = Object.entries(results).map(([id, r]) => {
+        const status = r.status === "error" ? "❌" : "✅";
+        return `${status} ${agentIcon(id)} ${agentName(id)} : ${(r.text || "").slice(0, 200)}`;
+      });
+      appendSystemMessage(messagesEl, `⚡ Résultats parallèles :\n${lines.join("\n")}`, true);
+      for (const id of Object.keys(results)) {
+        mark(id, results[id].status === "error" ? "err" : "fait", "résultat reçu");
+        // Finaliser la bulle réflexion de chaque agent avec son résultat final.
+        if (reflections[id]) finalizeReflection(id, results[id].text || "");
+      }
+      updateActivity();
+    },
     result: ({ from, to, text }) => {
       appendSystemMessage(messagesEl, `⬅️ ${agentIcon(from)} ${agentName(from)} a répondu à ${agentIcon(to)} ${agentName(to)}`, true);
       closeReflection();
@@ -194,6 +228,11 @@ export async function createAgents(container) {
       updateActivity();
     },
     done: ({ agentId, text }) => {
+      if (agentId === "parallel") {
+        // Résultat agrégé déjà affiché via parallelDone ; on finalise la run.
+        finishRun();
+        return;
+      }
       finalizeReflection(agentId, text);
       mark(agentId, "fait", "réponse finale");
       finishRun();
@@ -267,9 +306,10 @@ export async function createAgents(container) {
         const desc = a && a.description ? a.description : "";
         const chip = s.status || "…";
         const chipCls = chip === "err" ? "error" : chip === "fait" ? "done" : chip === "outil" ? "tool" : "running";
-        // Agent actif mis en avant (idees_evolutions.md §26) : surligné en vert,
-        // distinct du reste de l'équipe. Le currentAgentId vient du bus.
-        const active = isRunning && agentId === st?.currentAgentId;
+        // Agent(s) actif(s) mis en avant (idees_evolutions.md §26) : surligné(s) en
+        // vert, distinct(s) du reste de l'équipe. En parallèle, tous les agents
+        // actifs (activeAgents) sont surlignés.
+        const active = isRunning && (st?.activeAgents?.has(agentId) || agentId === st?.currentAgentId);
         return `
           <div class="agent-status-card ${chipCls}${active ? " active" : ""}">
             <span class="asc-icon">${icon}</span>
@@ -493,10 +533,44 @@ export async function createAgents(container) {
     }
   });
 
+  // ── Mode parallèle (H2 V2) ──
+  function renderParallelOptions() {
+    parallelOptions.innerHTML = "";
+    for (const raw of registry.agents) {
+      const a = normalizeAgent(raw);
+      if (a.id === "coordinateur") continue; // le coordinateur n'est pas un worker parallèle
+      const label = document.createElement("label");
+      label.className = "agents-parallel-option";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = a.id;
+      cb.checked = selectedParallel.has(a.id);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedParallel.add(a.id);
+        else selectedParallel.delete(a.id);
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(` ${a.icon || "🤖"} ${a.name}`));
+      parallelOptions.appendChild(label);
+    }
+  }
+
+  parallelBtn.addEventListener("click", () => {
+    parallelMode = !parallelMode;
+    parallelBtn.classList.toggle("active", parallelMode);
+    parallelPicker.style.display = parallelMode ? "flex" : "none";
+    if (parallelMode) renderParallelOptions();
+    inputEl.placeholder = parallelMode ? "Tâche à envoyer aux agents sélectionnés..." : "Demande au coordinateur...";
+  });
+
   // ── Chat ──
   async function doSend() {
     const text = inputEl.value.trim();
     if (!text || isRunning) return;
+    if (parallelMode && selectedParallel.size === 0) {
+      toastError("Sélectionnez au moins un agent en mode parallèle.");
+      return;
+    }
     inputEl.value = "";
     resizeInput();
     // Nouvelle run = conversation fraîche : on vide l'ancienne conversation PUIS
@@ -505,9 +579,14 @@ export async function createAgents(container) {
     messagesEl.innerHTML = "";
     appendUserMessage(messagesEl, text);
     try {
-      await startAgentsRun(text);
+      if (parallelMode) {
+        const assignments = Array.from(selectedParallel).map((id) => ({ agentId: id, brief: text }));
+        await startParallelRun(assignments);
+      } else {
+        await startAgentsRun(text);
+      }
     } catch (e) {
-      console.error("[agents-ui] startAgentsRun error", e);
+      console.error("[agents-ui] run error", e);
       toastError("Erreur run agents : " + e);
     }
   }

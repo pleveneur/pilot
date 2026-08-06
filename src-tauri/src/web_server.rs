@@ -63,7 +63,7 @@ pub fn start_if_enabled(app_handle: AppHandle) {
         eprintln!("[web] Serveur désactivé : aucun mot de passe défini");
         return;
     }
-    let port = config.web_port;
+    let port = crate::effective_web_port(&config);
     let bind = config.web_bind.clone();
 
     // Avertissement de sécurité : bind élargi au-delà de 127.0.0.1 (décision 6.1)

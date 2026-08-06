@@ -511,6 +511,7 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-web-port">Port :</label>
               <input type="number" id="setting-web-port" min="1" max="65535" value="8787" />
+              <small>En mode dev, le port réellement utilisé est celui-ci + 1 (pour coexister avec la version installée).</small>
             </div>
             <div class="setting-row setting-row-indent setting-row-checkbox">
               <input type="checkbox" id="setting-web-readonly" />
@@ -630,6 +631,15 @@
     <button id="ctx-create-md"><i data-lucide="file-text" class="icon-sm"></i> Créer un fichier Markdown</button>
   </div>
 
+  <!-- Menu contextuel éditeur / champs de saisie (issue #23) : remplace le menu
+       natif WebView2 désactivé (copier/couper/coller). -->
+  <div id="edit-context-menu" class="context-menu hidden">
+    <button id="ectx-cut"><i data-lucide="scissors" class="icon-sm"></i> Couper</button>
+    <button id="ectx-copy"><i data-lucide="copy" class="icon-sm"></i> Copier</button>
+    <button id="ectx-paste"><i data-lucide="clipboard" class="icon-sm"></i> Coller</button>
+    <button id="ectx-select-all"><i data-lucide="check-square" class="icon-sm"></i> Tout sélectionner</button>
+  </div>
+
   <!-- Indicateur de chargement global -->
   <div id="loading-overlay" class="hidden">
     <div class="loading-spinner"></div>
@@ -654,6 +664,22 @@
       <div class="modal-actions">
         <button id="btn-update-install" class="web-btn"><i data-lucide="download" class="icon-sm"></i> Installer maintenant</button>
         <button id="btn-update-later" class="web-btn">Plus tard</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modale : mise à jour de l'agent Pi (issue #26) -->
+  <div id="pi-update-modal" class="modal hidden">
+    <div class="modal-content update-content">
+      <div class="modal-header">
+        <h2><i data-lucide="arrow-up-circle" class="icon-lg"></i> Mise à jour de Pi disponible <span id="pi-update-version" class="muted"></span></h2>
+        <button id="pi-update-close" class="modal-close" title="Plus tard"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <div id="pi-update-status" class="muted" style="margin-bottom:10px"></div>
+      <div class="modal-actions">
+        <button id="btn-pi-update-install" class="web-btn"><i data-lucide="download" class="icon-sm"></i> Mettre à jour maintenant</button>
+        <button id="btn-pi-update-later" class="web-btn">Plus tard</button>
+        <button id="btn-pi-update-skip" class="web-btn">Ne plus demander</button>
       </div>
     </div>
   </div>

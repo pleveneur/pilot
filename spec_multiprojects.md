@@ -195,8 +195,11 @@ struct AppState {
    `get_project_agent_states()` retourne l'état de chaque projet ouvert ; la barre
    « Projets en cours » affiche une **pastille animée** par projet (frontend
    `_pollProjectActivities`, polling léger 2 s). Un agent **parké** (projet inactif)
-   qui travaille en arrière-plan est donc visible. L'activité est remise à zéro à
-   l'arrêt de la session et l'entrée retirée à la fermeture du projet.
+   qui travaille en arrière-plan est donc visible. L'activité n'est remise à zéro
+   que lorsqu'une session est **réellement arrêtée** (`do_stop_agent_session` ne
+   reset que si `rpc_state` contenait une session) — jamais lors d'un simple
+   **parking** (bascule de projet), sinon la pastille d'un agent qui travaille en
+   arrière-plan s'éteindrait à tort. L'entrée est retirée à la fermeture du projet.
 8. **Fuite de processus `plh.exe` à la fermeture de projet (issue #14)** :
    - `close_project` arrête désormais **aussi** la session reviewer (`rpc_reviewer`,
      `pi`/`plh.exe` séparé `--no-session`) en plus de la session principale et des

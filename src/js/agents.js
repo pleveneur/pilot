@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { estimateTokens } from "./orchestration.js";
 
 const CALL_RE = /\[\[CALL:([a-z0-9_-]+)\]\]([\s\S]*?)\[\[\/CALL\]\]/i;
+const PARALLEL_RE = /\[\[PARALLEL\]\]([\s\S]*?)\[\[\/PARALLEL\]\]/i;
 const DEFAULT_MAX_RESULT_TOKENS = 4000;
 
 /** Charge le registre d'agents global (~/.pilot/agents.json). */
@@ -112,6 +113,55 @@ export function parseCallMarker(text) {
   return last;
 }
 
+/**
+ * Extrait un bloc [[PARALLEL]]...[[/PARALLEL]] d'une réponse (H2 V2 parallèle).
+ * Format attendu :
+ *   [[PARALLEL]]
+ *   agent: codeur
+ *   task: <brief pour le codeur>
+ *   ---
+ *   agent: testeur
+ *   task: <brief pour le testeur>
+ *   [[/PARALLEL]]
+ * Retourne { index, assignments: [{agentId, brief}], before } ou null.
+ */
+export function parseParallelMarker(text) {
+  if (!text || typeof text !== "string") return null;
+  const m = text.match(PARALLEL_RE);
+  if (!m) return null;
+  const inner = m[1].trim();
+  const blocks = inner.split(/\n---\s*\n|\n---\n/);
+  const assignments = [];
+  for (const block of blocks) {
+    const agentMatch = block.match(/^\s*agent:\s*([a-z0-9_-]+)\s*$/im);
+    if (!agentMatch) continue;
+    const agentId = agentMatch[1].trim();
+    const taskMatch = block.match(/^\s*task:\s*([\s\S]*)$/im);
+    const brief = taskMatch ? taskMatch[1].trim() : "";
+    assignments.push({ agentId, brief });
+  }
+  if (assignments.length === 0) return null;
+  return {
+    index: m.index,
+    assignments,
+    before: text.slice(0, m.index).trim(),
+  };
+}
+
+/**
+ * Agrège les résultats d'un groupe parallèle en un texte unique, prêt à être
+ * renvoyé à l'agent appelant (coordinateur) via buildResultPrompt.
+ */
+export function aggregateParallelResults(results) {
+  const parts = [];
+  for (const [agentId, r] of Object.entries(results)) {
+    const status = r && r.status ? r.status : "done";
+    const text = r && r.text ? r.text : "(aucun texte)";
+    parts.push(`=== Résultat de ${agentId} (${status}) ===\n${text}`);
+  }
+  return parts.join("\n\n");
+}
+
 /** Tronque un texte pour tenir dans le contexte du coordinateur. */
 export function truncateForContext(text, maxTokens = DEFAULT_MAX_RESULT_TOKENS) {
   if (!text || typeof text !== "string") return "";
@@ -157,8 +207,21 @@ Ton rôle :
 4. Quand un agent te retourne un résultat, décide de la suite : délègue à un autre agent ou réponds à l'utilisateur.
 5. Quand la demande est entièrement traitée, réponds directement à l'utilisateur avec DONE: <résumé final>.
 
+Délégation PARALLÈLE :
+- Si plusieurs sous-tâches sont INDÉPENDANTES (aucune dépendance entre elles), lance-les en parallèle pour gagner du temps, en terminant ta réponse par EXACTEMENT :
+[[PARALLEL]]
+agent: <agent_id>
+task: <brief pour cet agent>
+---
+agent: <agent_id>
+task: <brief pour cet agent>
+[[/PARALLEL]]
+- Chaque bloc "agent:" + "task:" est une sous-tâche confiée à un agent distinct, exécutée simultanément.
+- Les agents parallèles sont des agents "feuille" : ils exécutent leur brief et retournent leur résultat (pas de délégation imbriquée).
+- Tu reçois ensuite les résultats agrégés de tous les agents et tu synthétises.
+
 Règles :
-- Un seul [[CALL]] par réponse en V1.
+- Un seul [[CALL]] ou [[PARALLEL]] par réponse.
 - Ne fais pas le travail toi-même ; délègue toujours.
 - Sois concis dans tes synthèses.`,
     models,

@@ -22,6 +22,9 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
   - Autre fichier : Supprimer, Envoyer à l'agent Pi
   - Dossier : Créer fichier, Créer dossier, Supprimer, Analyser ce dossier
   - Zone vide : Créer fichier, Créer dossier
+- **Menus natifs WebView2 désactivés** (issue #23) : le clic droit sur un ascenseur
+  (scrollbar) n'affiche plus de menu système. Un menu custom (Copier/Couper/Coller)
+  remplace le menu natif dans l'éditeur CodeMirror et les champs de saisie.
 - Suppression avec confirmation native, fermeture auto des onglets concernés.
 - Persistance de l'expansion des dossiers après rafraîchissement.
 
@@ -30,8 +33,8 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 | Mode | Fichiers | Icône | Technologie |
 |---|---|---|---|
 | Édition | `.md`, `.js`, `.ts`, `.py`, `.rs`, `.json`, `.yaml`, `.html`, `.css`, `.sql`, `.java`, `.cpp`, `.xml`, `.php`… | 📝 | CodeMirror 6 (multi-langages via `languages.js`) |
-| Split (éditeur + prévisualisation) | `.md` | 📝👁️ | CodeMirror 6 + markdown-it, `Ctrl+Shift+E` pour basculer |
-| Prévisualisation Markdown | `.md` | 👁️ | markdown-it + Mermaid.js |
+| Split (éditeur + prévisualisation) | `.md` | 📝👁️ | CodeMirror 6 + markdown-it, `Ctrl+Shift+E` pour basculer — scroll synchronisé proportionnellement dans les deux sens, position préservée pendant l'édition |
+| Prévisualisation Markdown | `.md` | 👁️ | markdown-it + Mermaid.js — liens cliquables (interne → onglet, externe → navigateur, ancre → scroll) |
 | Prévisualisation PDF | `.pdf` | 📕 | PDF.js |
 | Prévisualisation image | `.png`, `.jpg`, `.gif`, `.webp`, `.svg` | 🖼️ | `<img>` + zoom/fit |
 | Prévisualisation CSV | `.csv` | 📊 | Parseur JS + tableau HTML |
@@ -44,7 +47,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - **Recherche globale** : `Ctrl+Shift+F` ouvre un panneau de recherche full-text dans tous les fichiers du projet (regex + filtre par extension).
 - **Outline** : `Ctrl+Shift+O` bascule la table des matières Markdown (headings cliquables, mise à jour en temps réel).
 - **Palette de commandes** : `Ctrl+Shift+P` fuzzy search sur toutes les actions avec navigation clavier.
-- **Navigation** : `Ctrl+G` aller à la ligne, `Ctrl+Tab`/`Ctrl+Shift+Tab` onglet suivant/précédent, `Ctrl+P` filtre fichiers, `Ctrl+Shift+S` enregistrer sous.
+- **Navigation** : `Ctrl+G` aller à la ligne, `Ctrl+Tab`/`Ctrl+Shift+Tab` onglet suivant/précédent (fonctionne aussi dans le terminal), `Ctrl+1`…`Ctrl+9` aller à l'onglet par position, `Ctrl+P` filtre fichiers, `Ctrl+Shift+S` enregistrer sous.
 - **Coloration multi-langages** : 14 langages supportés (JS/TS, Python, Rust, Java, C++, CSS, HTML, JSON, YAML, SQL, XML, PHP) avec chargement lazy et folding du code. Les blocs de code Markdown sont aussi colorés.
 - **Notifications (Toasts)** : retours visuels non-bloquants en bas à droite pour les opérations réussies (sauvegarde, création, suppression) et les erreurs (lecture, écriture, export).
 - **Statistiques barre de statut** : mots / caractères / lignes + temps de lecture estimé (~200 mots/min) pour Markdown ; encodage (UTF-8/UTF-8 BOM/UTF-16) ; fin de ligne (LF/CRLF).
@@ -79,6 +82,16 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 
 ## 2. Spécifications Techniques
 
+### Mode dev vs installé (issue #25)
+
+`npm run tauri dev` (via le wrapper `scripts/tauri.js`) fusionne
+`src-tauri/tauri.dev.conf.json` qui remplace l'identifiant par
+`com.pilot.editor.dev`. Conséquences : verrou single-instance distinct,
+`app_data_dir` distinct (config, sessions, audit, extensions, skills) → la
+version dev tourne en parallèle de la version installée. Le port web distant
+effectif est décalé de +1 en build dev (`effective_web_port` dans `lib.rs`,
+utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
+
 ### File Watching
 - File watcher : poller custom (`std::fs::read_dir` récursif, filtrage `IGNORED_DIRS` pendant le walk, polling 2 s) → événements Tauri `file-change`. Remplace l'ancien `notify::PollWatcher` qui re-scanne récursivement tout le projet (y compris `target/`, `node_modules/`) à chaque poll et figeait l'UI sur les gros projets Rust.
 - Debounce 500ms + déduplication côté backend et frontend.
@@ -100,6 +113,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 - **Mode Orchestration** (voir [`spec_orchestration.md`](spec_orchestration.md)) : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale.
 - **Quality-gate interne** (voir [`spec_quality_gate.md`](spec_quality_gate.md)) : bouton 🛡️ dans la toolbar de l'agent → active un protocole anti-régression embarqué par Pilot (`--skill`), persistant (`quality_gate_enabled`), relance l'agent au clic.
 - **Health check au démarrage** (E4) : Pilot sonde `<rpc_pi_path> --version` au lancement ; si l'exécutable est absent/injoignable, toast d'avertissement + gate dans l'onglet agent (écran « π indisponible » avec bouton « Ouvrir les paramètres » au lieu d'une session RPC qui planterait). Re-sonde automatique sur changement de chemin pi.
+- **Mise à jour de Pi** (issue #26) : à l'ouverture de l'onglet agent, si le backend est `pi` (pas `plh`) et que `pi_skip_update_check` est `false`, `pi_update::check_pi_update` compare la version installée (`pi --version`) à la dernière (`https://pi.dev/api/latest-version`). Si une mise à jour existe, modale [Mettre à jour] [Plus tard] [Ne plus demander] ; « Mettre à jour » lance `pi update --self` (`pi_update::update_pi`). « Ne plus demander » persiste `pi_skip_update_check=true` dans la config.
 - Voir [`spec_rpc.md`](spec_rpc.md) pour le détail complet.
 
 ### Accès distant web (mode remote)

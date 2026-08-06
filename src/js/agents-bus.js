@@ -12,6 +12,8 @@ import {
   buildAgentPrompt,
   buildResultPrompt,
   parseCallMarker,
+  parseParallelMarker,
+  aggregateParallelResults,
   buildDefaultCoordinator,
 } from "./agents.js";
 
@@ -32,8 +34,11 @@ let busState = {
   timeoutMs: DEFAULT_TIMEOUT_MS,
   timeoutId: null,
   currentAgentId: null,
+  // H2 V2 parallèle : ensemble des agents en train de streamer + buffers par agent.
+  activeAgents: new Set(),
+  streamingTextByAgent: {},
+  parallelGroup: null, // { assignments, pending, results, onComplete }
   pendingPromise: null,
-  streamingText: "",
   isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
   config: null,
   callbacks: {},
@@ -47,8 +52,10 @@ function resetBusState() {
   busState.budgetByAgent = {};
   busState.timeoutId = null;
   busState.currentAgentId = null;
+  busState.activeAgents = new Set();
+  busState.streamingTextByAgent = {};
+  busState.parallelGroup = null;
   busState.pendingPromise = null;
-  busState.streamingText = "";
   busState.isCompacting = false;
 }
 
@@ -156,8 +163,9 @@ function handleAgentEvent(ev) {
   const event = payload.event || {};
   if (!agentId) return;
 
-  // Ignorer les événements d'autres agents si un agent est actif
-  if (busState.currentAgentId && agentId !== busState.currentAgentId) return;
+  // Ignorer les événements d'agents qui ne sont pas actifs (séquentiel : un seul
+  // agent actif ; parallèle : plusieurs agents actifs simultanément).
+  if (!busState.activeAgents.has(agentId)) return;
   if (busState.runState !== "running") return;
 
   const type = event.type;
@@ -189,7 +197,7 @@ function handleAgentEvent(ev) {
     if (busState.isCompacting) {
       // deltas ignorés (résumé de compaction)
     } else if (delta.type === "text_delta" && typeof delta.delta === "string") {
-      busState.streamingText += delta.delta;
+      busState.streamingTextByAgent[agentId] = (busState.streamingTextByAgent[agentId] || "") + delta.delta;
       emit("delta", { agentId, text: delta.delta });
     }
   } else if (type === "message") {
@@ -210,7 +218,7 @@ function handleAgentEvent(ev) {
     // On n'accumule pas le résumé pour ne pas polluer parseCallMarker.
     console.log("[agents-bus] compaction_end", agentId);
     busState.isCompacting = false;
-    busState.streamingText = "";
+    busState.streamingTextByAgent[agentId] = "";
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
@@ -297,8 +305,39 @@ async function handleExtensionUiRequest(agentId, event) {
 }
 
 async function finishAgentTurn(agentId) {
-  const text = busState.streamingText;
-  busState.streamingText = "";
+  const text = busState.streamingTextByAgent[agentId] || "";
+  busState.streamingTextByAgent[agentId] = "";
+  busState.activeAgents.delete(agentId);
+
+  // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
+  // enregistre son résultat et on agrège quand tous les agents ont terminé.
+  if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+    busState.parallelGroup.results[agentId] = { status: "done", text };
+    busState.parallelGroup.pending--;
+    if (busState.parallelGroup.pending <= 0) {
+      const group = busState.parallelGroup;
+      busState.parallelGroup = null;
+      await group.onComplete(group.results);
+    }
+    return;
+  }
+
+  // ── H2 V2 parallèle : le coordinateur (ou un agent) délègue à N agents en
+  // parallèle via [[PARALLEL]]. On lance les N agents simultanément, puis on
+  // renvoie le résultat agrégé à l'appelant via onComplete (pas de push sur la
+  // pile : l'appelant est rappelé directement, sinon il se considérerait comme
+  // son propre appelant à la fin → boucle infinie).
+  const parallel = parseParallelMarker(text);
+  if (parallel) {
+    emit("parallelStart", { from: agentId, assignments: parallel.assignments });
+    await dispatchParallel(parallel.assignments, async (results) => {
+      const aggregated = aggregateParallelResults(results);
+      const result = buildResultPrompt("parallel", "done", aggregated, busState.config.agent_max_result_tokens);
+      emit("parallelDone", { results });
+      await runAgentTurn(busState.agents.get(agentId), result);
+    });
+    return;
+  }
 
   const call = parseCallMarker(text);
 
@@ -358,7 +397,20 @@ async function finishAgentTurn(agentId) {
 }
 
 async function failAgentTurn(agentId, reason) {
-  busState.streamingText = "";
+  busState.streamingTextByAgent[agentId] = "";
+  busState.activeAgents.delete(agentId);
+  // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
+  // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
+  if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+    busState.parallelGroup.results[agentId] = { status: "error", text: reason };
+    busState.parallelGroup.pending--;
+    if (busState.parallelGroup.pending <= 0) {
+      const group = busState.parallelGroup;
+      busState.parallelGroup = null;
+      await group.onComplete(group.results);
+    }
+    return;
+  }
   if (busState.callStack.length > 0) {
     const caller = busState.callStack.pop();
     const result = buildResultPrompt(agentId, "error", `Erreur de l'agent ${agentId} : ${reason}`, busState.config.agent_max_result_tokens);
@@ -391,11 +443,39 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
   await runAgentTurn(busState.coordinator, brief, projectContext);
 }
 
+/**
+ * H2 V2 parallèle : lance N agents simultanément sur des briefs distincts
+ * (mode piloté par l'utilisateur, sans coordinateur). Quand tous ont terminé,
+ * émet `parallelDone` puis `done` avec le résultat agrégé.
+ * `assignments` : [{ agentId, brief }].
+ */
+export async function startParallelRun(assignments, projectContext = "") {
+  if (busState.runState === "running") {
+    throw new Error("Une run est déjà en cours.");
+  }
+  if (!busState.coordinator) {
+    await initAgentsBus(busState.callbacks);
+  }
+
+  resetBusState();
+  busState.runState = "running";
+  busState.callStack = [];
+  turnCount = 0;
+
+  emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
+  await dispatchParallel(assignments, async (results) => {
+    const aggregated = aggregateParallelResults(results);
+    emit("parallelDone", { results });
+    emit("done", { agentId: "parallel", text: aggregated });
+  });
+}
+
 export function stopAgentsRun(options = {}) {
   if (busState.runState !== "running") return;
   busState.runState = "stopping";
-  if (busState.currentAgentId) {
-    invoke("abort_agent_process", { agentId: busState.currentAgentId }).catch(() => {});
+  // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
+  for (const agentId of busState.activeAgents) {
+    invoke("abort_agent_process", { agentId }).catch(() => {});
   }
   // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
   // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
@@ -418,7 +498,8 @@ async function runAgentTurn(agent, brief, projectContext = "") {
   }
 
   busState.currentAgentId = agent.id;
-  busState.streamingText = "";
+  busState.activeAgents.add(agent.id);
+  busState.streamingTextByAgent[agent.id] = "";
   busState.isCompacting = false; // par sécurité si une compaction a été interrompue sans compaction_end
 
   const backend = backendKind();
@@ -467,6 +548,45 @@ async function runAgentTurn(agent, brief, projectContext = "") {
 
 async function sendPromptToAgent(agentId, message) {
   await invoke("send_agent_process_prompt", { agentId, message });
+}
+
+/**
+ * H2 V2 parallèle : lance N agents simultanément (chacun dans son propre
+ * processus pi), attend que tous aient terminé, puis appelle `onComplete` avec
+ * les résultats agrégés { agentId: { status, text } }.
+ * Les agents parallèles sont des agents « feuille » : ils exécutent leur brief
+ * et retournent leur résultat (pas de délégation [[CALL]] imbriquée en V1).
+ */
+async function dispatchParallel(assignments, onComplete) {
+  busState.parallelGroup = {
+    assignments,
+    pending: assignments.length,
+    results: {},
+    onComplete,
+  };
+  for (const a of assignments) {
+    const agent = busState.agents.get(a.agentId);
+    if (!agent) {
+      busState.parallelGroup.results[a.agentId] = { status: "error", text: `Agent "${a.agentId}" inconnu.` };
+      busState.parallelGroup.pending--;
+      continue;
+    }
+    const budgetCheck = ensureBudget(a.agentId);
+    if (!budgetCheck.ok) {
+      busState.parallelGroup.results[a.agentId] = { status: "error", text: budgetCheck.message };
+      busState.parallelGroup.pending--;
+      continue;
+    }
+    consumeBudget(a.agentId);
+    await runAgentTurn(agent, a.brief);
+  }
+  // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
+  // immédiatement sans attendre d'agent_end.
+  if (busState.parallelGroup && busState.parallelGroup.pending <= 0) {
+    const group = busState.parallelGroup;
+    busState.parallelGroup = null;
+    await group.onComplete(group.results);
+  }
 }
 
 // Exposition minimale de l'état pour l'UI (lecture seule recommandée).

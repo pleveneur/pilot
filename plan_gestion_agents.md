@@ -1,7 +1,7 @@
 # Plan — Gestion d'agents dans Pilot
 
 > Réflexion d'architecture et plan d'implémentation détaillé.  
-> Statut : planification · non implémenté.  
+> Statut : ✅ **implémenté** (H2 V2 séquentiel **+ parallèle**) — reste la validation (phase 7).  
 > Cible : fournir à un agent de codage un guide complet, tâche par tâche.
 
 ---
@@ -522,107 +522,113 @@ Nouveau bloc "Agents" dans la modale Paramètres (`settings.js` + `index.html`) 
 
 ### Phase 0 — Spécifications et maquette
 
-- [ ] **0.1** Valider ce plan avec l'utilisateur (si applicable).
-- [ ] **0.2** Créer `spec_gestion_agents.md` avec les détails fonctionnels, le protocole `[[CALL]]`, les garde-fous et la compatibilité (source de vérité long terme).
-- [ ] **0.3** Mettre à jour `plan_dev.md` : ajouter "Gestion d'agents (H2 V2)" dans la roadmap.
-- [ ] **0.4** Mettre à jour `AGENTS.md` : ajouter `spec_gestion_agents.md` dans la table de navigation rapide.
-- [ ] **0.5** Ajouter / mettre à jour le bloc `<!-- HELP:agents -->` dans `spec_gestion_agents.md` puis regénérer `help/handbook.md` via `npm run build:handbook`.
+- [x] **0.1** Valider ce plan avec l'utilisateur (si applicable).
+- [x] **0.2** Créer `spec_gestion_agents.md` avec les détails fonctionnels, le protocole `[[CALL]]`, les garde-fous et la compatibilité (source de vérité long terme).
+- [x] **0.3** Mettre à jour `plan_dev.md` : ajouter "Gestion d'agents (H2 V2)" dans la roadmap.
+- [x] **0.4** Mettre à jour `AGENTS.md` : ajouter `spec_gestion_agents.md` dans la table de navigation rapide.
+- [x] **0.5** Ajouter / mettre à jour le bloc `<!-- HELP:agents -->` dans `spec_gestion_agents.md` puis regénérer `help/handbook.md` via `npm run build:handbook`.
 
 ### Phase 1 — Backend : socle multi-sessions
 
-- [ ] **1.1** Modifier `src-tauri/src/lib.rs` :
-  - [ ] Ajouter `agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>` dans `AppState`.
-  - [ ] Conserver `rpc_state` et `rpc_reviewer` intacts.
-  - [ ] Ajouter les champs `AppConfig` nécessaires au mode Agents (coordinateur par défaut, profondeur max, budget, timeout, max result tokens, agents_enabled).
-- [ ] **1.2** Généraliser `rpc_manager.rs` si besoin :
-  - [ ] Vérifier que `spawn_and_start` accepte déjà un canal personnalisé (oui) ; sinon le rendre paramétrable.
-  - [ ] Ajouter un helper `emit_agent_event(agent_id, event)` si on choisit l'enveloppe unique.
-- [ ] **1.3** Implémenter les commandes Tauri :
-  - [ ] `start_agent_process`
-  - [ ] `stop_agent_process`
-  - [ ] `stop_all_agent_processes`
-  - [ ] `send_agent_process_prompt`
-  - [ ] `new_agent_process_session`
-  - [ ] `set_agent_process_model`
-  - [ ] `abort_agent_process`
-  - [ ] `get_agent_process_state`
-- [ ] **1.4** Implémenter les commandes de registre :
-  - [ ] `load_agent_registry`
-  - [ ] `save_agent_registry`
-- [ ] **1.5** Arrêt propre :
-  - [ ] Appeler `stop_all_agent_processes` à la fermeture de l'onglet Agents.
-  - [ ] Appeler `stop_all_agent_processes` au changement/fermeture de projet.
-  - [ ] S'assurer que `stop_all_agent_processes` est aussi appelé à la fermeture de l'application.
-- [ ] **1.6** Enregistrer les nouvelles commandes dans `generate_handler!` de `main.rs` / `lib.rs`.
+- [x] **1.1** Modifier `src-tauri/src/lib.rs` :
+  - [x] Ajouter `agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>` dans `AppState`.
+  - [x] Conserver `rpc_state` et `rpc_reviewer` intacts.
+  - [x] Ajouter les champs `AppConfig` nécessaires au mode Agents (coordinateur par défaut, profondeur max, budget, timeout, max result tokens).
+- [x] **1.2** Généraliser `rpc_manager.rs` si besoin :
+  - [x] Vérifier que `spawn_and_start` accepte déjà un canal personnalisé (oui) ; sinon le rendre paramétrable.
+  - [x] Ajouter un helper `emit_agent_event(agent_id, event)` si on choisit l'enveloppe unique.
+- [x] **1.3** Implémenter les commandes Tauri :
+  - [x] `start_agent_process`
+  - [x] `stop_agent_process`
+  - [x] `stop_all_agent_processes`
+  - [x] `send_agent_process_prompt`
+  - [x] `new_agent_process_session`
+  - [x] `set_agent_process_model`
+  - [x] `abort_agent_process`
+  - [x] `get_agent_process_state`
+- [x] **1.4** Implémenter les commandes de registre :
+  - [x] `load_agent_registry`
+  - [x] `save_agent_registry`
+- [x] **1.5** Arrêt propre :
+  - [x] Appeler `stop_all_agent_processes` à la fermeture de l'onglet Agents.
+  - [x] Appeler `stop_all_agent_processes` au changement/fermeture de projet.
+  - [x] S'assurer que `stop_all_agent_processes` est aussi appelé à la fermeture de l'application.
+- [x] **1.6** Enregistrer les nouvelles commandes dans `generate_handler!` de `main.rs` / `lib.rs`.
 
 ### Phase 2 — Registre d'agents et modèles
 
-- [ ] **2.1** Créer `src/js/agents.js` (fonctions pures) :
-  - [ ] `loadAgentRegistry()` : appelle `load_agent_registry`, valide le JSON, fallback vers agents par défaut. Le chemin global est résolu côté Rust.
-  - [ ] `saveAgentRegistry(registry)`.
-  - [ ] `normalizeAgent(agent)` : valeurs par défaut, notamment `models = { pi: "", plh: "" }` si absent.
-  - [ ] `resolveAgentModel(agent, backendKind, fallbackModel)` : choisit `models.{backend}`, fallback croisé, fallback modèle par défaut.
-  - [ ] `buildCoordinatorManifest(agents)` : liste des agents avec descriptions pour le prompt coordinateur.
-  - [ ] `buildAgentPrompt(agent, taskBrief, projectContext, backendKind)` : préfixe le rôle + injecte le brief.
-  - [ ] `buildResultPrompt(fromAgentId, status, text, maxTokens)` : formate `[[RESULT]]`.
-  - [ ] `parseCallMarker(text)` : extrait le dernier `[[CALL:...]]...[[/CALL]]`.
-  - [ ] `parseResultMarker(text)` : parsing inverse (utile pour debug).
-  - [ ] `getDefaultAgents(orchestratorPiModel, orchestratorPlhModel, coderPiModel, coderPlhModel)` : génère les 6 agents par défaut avec des blocs `models` pour les deux backends.
-  - [ ] `truncateForContext(text, maxTokens)` : réutilise `estimateTokens` de `orchestration.js`.
-- [ ] **2.2** Créer les agents par défaut avec des rôles solides et des exemples d'appels.
-- [ ] **2.3** Charger les alias/modèles disponibles pour **les deux backends** (`pi` et `plh`) afin de peupler les deux selecteurs de modèle dans l'UI. Utiliser `read_model_aliases(stem)` / `list_agent_backends` existants.
-- [ ] **2.4** Valider le format de chaque modèle (`provider/modelId`) à la sauvegarde (même logique que `settings.js`).
+- [x] **2.1** Créer `src/js/agents.js` (fonctions pures) :
+  - [x] `loadAgentRegistry()` : appelle `load_agent_registry`, valide le JSON, fallback vers agents par défaut. Le chemin global est résolu côté Rust.
+  - [x] `saveAgentRegistry(registry)`.
+  - [x] `normalizeAgent(agent)` : valeurs par défaut, notamment `models = { pi: "", plh: "" }` si absent.
+  - [x] `resolveAgentModel(agent, backendKind, fallbackModel)` : choisit `models.{backend}`, fallback croisé, fallback modèle par défaut.
+  - [x] `buildCoordinatorManifest(agents)` : liste des agents avec descriptions pour le prompt coordinateur.
+  - [x] `buildAgentPrompt(agent, taskBrief, projectContext, backendKind)` : préfixe le rôle + injecte le brief.
+  - [x] `buildResultPrompt(fromAgentId, status, text, maxTokens)` : formate `[[RESULT]]`.
+  - [x] `parseCallMarker(text)` : extrait le dernier `[[CALL:...]]...[[/CALL]]`.
+  - [x] `parseResultMarker(text)` : parsing inverse (utile pour debug).
+  - [x] `getDefaultAgents(orchestratorPiModel, orchestratorPlhModel, coderPiModel, coderPlhModel)` : génère les 6 agents par défaut avec des blocs `models` pour les deux backends.
+  - [x] `truncateForContext(text, maxTokens)` : réutilise `estimateTokens` de `orchestration.js`.
+- [x] **2.2** Créer les agents par défaut avec des rôles solides et des exemples d'appels.
+- [x] **2.3** Charger les alias/modèles disponibles pour **les deux backends** (`pi` et `plh`) afin de peupler les deux selecteurs de modèle dans l'UI. Utiliser `read_model_aliases(stem)` / `list_agent_backends` existants.
+- [x] **2.4** Valider le format de chaque modèle (`provider/modelId`) à la sauvegarde (même logique que `settings.js`).
 
 ### Phase 3 — Bus d'exécution inter-agents
 
-- [ ] **3.1** Créer `src/js/agents-bus.js` :
-  - [ ] État de la run : `callStack`, `callBudget`, `timeouts`, `abortController`, `runState`.
-  - [ ] `startRun(userPrompt, coordinatorAgent, registry)` : lance le coordinateur avec le manifeste.
-  - [ ] `dispatchCall(fromAgentId, callPayload)` : démarre/reset l'agent cible, envoie le brief, attend `agent_end`.
-  - [ ] `returnResult(toAgentId, result)` : envoie le résultat à l'appelant.
-  - [ ] Garde-fous intégrés : profondeur, budget, cycle, timeout.
-  - [ ] `stopRun()` : vide la pile, abort tous les tours.
-- [ ] **3.2** Gérer les événements `rpc-event-agents` : router vers l'agent actif pour streaming et `agent_end`.
-- [ ] **3.3** Gérer les erreurs de connexion d'un agent (même logique que `auto_retry_start` dans `agent-pi.js`).
+- [x] **3.1** Créer `src/js/agents-bus.js` :
+  - [x] État de la run : `callStack`, `callBudget`, `timeouts`, `abortController`, `runState`.
+  - [x] `startRun(userPrompt, coordinatorAgent, registry)` : lance le coordinateur avec le manifeste.
+  - [x] `dispatchCall(fromAgentId, callPayload)` : démarre/reset l'agent cible, envoie le brief, attend `agent_end`.
+  - [x] `returnResult(toAgentId, result)` : envoie le résultat à l'appelant.
+  - [x] Garde-fous intégrés : profondeur, budget, cycle, timeout.
+  - [x] `stopRun()` : vide la pile, abort tous les tours.
+- [x] **3.2** Gérer les événements `rpc-event-agents` : router vers l'agent actif pour streaming et `agent_end`.
+- [x] **3.3** Gérer les erreurs de connexion d'un agent (même logique que `auto_retry_start` dans `agent-pi.js`).
 - [ ] **3.4** Compaction : filtrer les deltas pendant `compaction_start`/`compaction_end` (réutiliser le fix de `agent-pi.js`).
   - [x] **Fait (2026-08)** : `agents-bus.js` — `isCompacting` activé sur `compaction_start`, reset + vidage de `streamingText` sur `compaction_end`/`compaction` ; deltas ignorés pendant la compaction (même logique qu'`agent-pi.js`) pour ne pas polluer `parseCallMarker` (`[[CALL]]`). Reset de sécurité `isCompacting` au début de chaque tour (`runAgentTurn`).
 
 ### Phase 4 — Interface de l'onglet Agents
 
-- [ ] **4.1** Ajouter le bouton "🎭 Agents" dans `index.html` (panneau d'actions).
-- [ ] **4.2** Brancher le bouton dans `main.js` : `tabs.openFile("Agents", "agents")`.
-- [ ] **4.3** Étendre `tabs.js` :
-  - [ ] Reconnaître `mode === "agents"`.
-  - [ ] Implémenter `_openAgents(name)` qui charge `agents-ui.js` et gère le cycle de vie (start/stop listener).
-- [ ] **4.4** Créer `src/js/agents-ui.js` :
-  - [ ] `createAgentsContainer(container)` : layout 3 colonnes.
-  - [ ] Rendu de la liste des agents (lecture/édition/ajout/suppression).
-  - [ ] Zone de chat avec streaming et badges par agent.
-  - [ ] Panneau d'activité (pile, budgets, stop).
-  - [ ] Bouton "Relancer".
-- [ ] **4.5** Ajouter les styles CSS dans `src/css/style.css` (badges, couleurs, panneau).
-- [ ] **4.6** Ajouter le bloc de paramètres Agents dans `index.html`.
-- [ ] **4.7** Brancher la lecture/écriture des nouveaux champs dans `settings.js`.
+- [x] **4.1** Ajouter le bouton "🎭 Agents" dans `index.html` (panneau d'actions).
+- [x] **4.2** Brancher le bouton dans `main.js` : `tabs.openFile("Agents", "agents")`.
+- [x] **4.3** Étendre `tabs.js` :
+  - [x] Reconnaître `mode === "agents"`.
+  - [x] Implémenter `_openAgents(name)` qui charge `agents-ui.js` et gère le cycle de vie (start/stop listener).
+- [x] **4.4** Créer `src/js/agents-ui.js` :
+  - [x] `createAgentsContainer(container)` : layout 3 colonnes.
+  - [x] Rendu de la liste des agents (lecture/édition/ajout/suppression).
+  - [x] Zone de chat avec streaming et badges par agent.
+  - [x] Panneau d'activité (pile, budgets, stop).
+  - [x] Bouton "Relancer".
+- [x] **4.5** Ajouter les styles CSS dans `src/css/style.css` (badges, couleurs, panneau).
+- [x] **4.6** Ajouter le bloc de paramètres Agents dans `index.html`.
+- [x] **4.7** Brancher la lecture/écriture des nouveaux champs dans `settings.js`.
 
 ### Phase 5 — Intégration Coordinateur / Sous-agents
 
-- [ ] **5.1** Implémenter l'agent coordinateur par défaut (implicite) avec un rôle robuste.
-- [ ] **5.2** Permettre à l'utilisateur de désigner un agent du registre comme coordinateur.
-- [ ] **5.3** Implémenter la logique "agent appelant reçoit le résultat et continue" : boucle jusqu'à réponse finale à l'utilisateur (pas de `[[CALL]]` dans la réponse).
-- [ ] **5.4** Afficher les transitions dans le chat : "🧠 Coordinateur appelle 🔨 Codeur".
-- [ ] **5.5** Afficher les résultats retournés sous forme de messages système repliables.
+- [x] **5.1** Implémenter l'agent coordinateur par défaut (implicite) avec un rôle robuste.
+- [x] **5.2** Permettre à l'utilisateur de désigner un agent du registre comme coordinateur.
+- [x] **5.3** Implémenter la logique "agent appelant reçoit le résultat et continue" : boucle jusqu'à réponse finale à l'utilisateur (pas de `[[CALL]]` dans la réponse).
+- [x] **5.4** Afficher les transitions dans le chat : "🧠 Coordinateur appelle 🔨 Codeur".
+- [x] **5.5** Afficher les résultats retournés sous forme de messages système repliables.
 
 ### Phase 6 — Garde-fous, robustesse, lifecycle
 
-- [ ] **6.1** Profondeur max : bloquer et afficher un message si dépassée.
-- [ ] **6.2** Budget d'appels : compteurs par run + par agent.
-- [ ] **6.3** Détection de cycle : refuser un appel si l'agent cible est déjà dans la pile.
-- [ ] **6.4** Timeout d'inactivité par agent (reset sur `text_delta`).
-- [ ] **6.5** Bouton "⏹ Arrêter" accessible en permanence.
-- [ ] **6.6** Nettoyage des processus à la fermeture de l'onglet / projet / application.
-- [ ] **6.7** Gestion du crash d'un process agent : fallback message d'erreur + arrêt de la run.
+- [x] **6.1** Profondeur max : bloquer et afficher un message si dépassée.
+- [x] **6.2** Budget d'appels : compteurs par run + par agent.
+- [x] **6.3** Détection de cycle : refuser un appel si l'agent cible est déjà dans la pile.
+- [x] **6.4** Timeout d'inactivité par agent (reset sur `text_delta`).
+- [x] **6.5** Bouton "⏹ Arrêter" accessible en permanence.
+- [x] **6.6** Nettoyage des processus à la fermeture de l'onglet / projet / application.
+- [x] **6.7** Gestion du crash d'un process agent : fallback message d'erreur + arrêt de la run.
 
 ### Phase 7 — Vérifications et documentation
+
+> **H2 V2 parallèle (2026-08)** : ajouté au-dessus du bus séquentiel — dispatch
+> `[[PARALLEL]]` (coordinateur) + mode utilisateur ⚡ (multi-sélection), buffers
+> par agent (`streamingTextByAgent`), ensemble d'agents actifs (`activeAgents`),
+> agrégation des résultats (`aggregateParallelResults`), stop abortant tous les
+> agents actifs. Voir `spec_gestion_agents.md` §4 (protocole parallèle).
 
 - [ ] **7.1** Relire tous les fichiers modifiés en entier (protocole quality-gate).
 - [ ] **7.2** Vérifier les points de connexion : imports, commandes Tauri enregistrées, listeners, boutons, paramètres.

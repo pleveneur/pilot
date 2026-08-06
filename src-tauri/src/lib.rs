@@ -60,6 +60,7 @@ mod web_commands;
 mod agents;
 mod rpc;
 mod interproject;
+mod pi_update;
 
 // ── État global de l'application ──
 
@@ -148,6 +149,11 @@ struct AppConfig {
     rpc_no_session: bool,
     #[serde(default)]
     rpc_session_dir: String,
+    // Issue #26 : si true, ne plus proposer la mise à jour de Pi (choix
+    // « Ne plus demander » dans la modale). La vérification reste possible
+    // manuellement. Détection automatique à l'ouverture de l'onglet agent.
+    #[serde(default)]
+    pi_skip_update_check: bool,
     // Quality-gate interne (Évolution 7) : skill embarqué par Pilot, activable
     // depuis l'onglet agent. Persistance + rechargement au démarrage de Pilot.
     #[serde(default)]
@@ -337,6 +343,18 @@ fn default_orchestration_granularity() -> String { "fine".to_string() }
 fn default_coder_context_window() -> u32 { 0 }
 fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
+
+/// Port web effectif. En build dev (`debug_assertions`), on décale le port
+/// configuré de +1 pour permettre à la version installée et à la version dev
+/// de tourner en parallèle sans conflit de port (issue #25). La valeur stockée
+/// dans la config reste celle saisie par l'utilisateur ; seul le port réellement
+/// utilisé est décalé en dev.
+pub(crate) fn effective_web_port(cfg: &AppConfig) -> u16 {
+    let base = cfg.web_port;
+    #[cfg(debug_assertions)]
+    let base = base.saturating_add(1);
+    u16::try_from(base).unwrap_or(8787)
+}
 fn default_web_token_ttl() -> u32 { 168 }
 fn default_test_timeout_ms() -> u32 { 60000 }
 fn default_test_max_corrections() -> u32 { 3 }
@@ -414,6 +432,7 @@ impl Default for AppConfig {
             rpc_pi_path: String::new(),
             rpc_no_session: false,
             rpc_session_dir: String::new(),
+            pi_skip_update_check: false,
             quality_gate_enabled: false,
             show_thinking: true,
             show_tools: false,
@@ -1734,6 +1753,8 @@ pub fn run() {
             extension_gate_supported,
             get_backend_info,
             pi_health_check,
+            pi_update::check_pi_update,
+            pi_update::update_pi,
             git::git_status,
             git::git_diff_file,
             git::git_create_snapshot,

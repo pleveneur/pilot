@@ -11,6 +11,7 @@ import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
+import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
 import { initProjectCommands } from "./project-commands.js";
 import { refreshIcons } from "./icons.js";
@@ -242,6 +243,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 2. Initialiser le gestionnaire d'onglets
   const tabs = initTabs();
+  // Exposé globalement pour la prévisualisation Markdown (issue #22) :
+  // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
+  window._pilotTabs = tabs;
+  // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
+  // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.
+  window._pilotCheckPiUpdate = checkPiUpdate;
 
   // 3. Initialiser la barre latérale
   const sidebar = initSidebar(tabs);
@@ -297,12 +304,51 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Les menus contextuels propres à Pilot (sidebar, onglets) sont gérés
   // séparément et continuent de fonctionner car ce sont des éléments DOM
   // personnalisés affichés par nos handlers, non le menu natif.
+  //
+  // Issue #23 : le menu natif WebView2 est désactivé côté Rust (wry
+  // default_context_menus=false) pour supprimer le menu qui apparaît au clic
+  // droit sur les ascenseurs (scrollbars). On affiche donc un menu custom
+  // (Copier/Couper/Coller) dans l'éditeur et les champs de saisie pour
+  // préserver la fonctionnalité copier/coller.
+  const editCtxMenu = document.getElementById("edit-context-menu");
+  const hideEditCtxMenu = () => editCtxMenu.classList.add("hidden");
+  const showEditCtxMenu = (x, y) => {
+    editCtxMenu.style.left = x + "px";
+    editCtxMenu.style.top = y + "px";
+    editCtxMenu.classList.remove("hidden");
+  };
   document.addEventListener("contextmenu", (e) => {
     const t = e.target;
     if (!t || !t.closest) return;
-    // Autoriser le menu natif dans l'éditeur CodeMirror et les champs de saisie
-    if (t.closest(".cm-editor, .cm-content, input, textarea")) return;
+    // Éditeur CodeMirror et champs de saisie → menu custom copier/couper/coller
+    if (t.closest(".cm-editor, .cm-content, input, textarea")) {
+      e.preventDefault();
+      showEditCtxMenu(e.clientX, e.clientY);
+      return;
+    }
     e.preventDefault();
+  });
+  // Fermer le menu éditeur au clic ailleurs ou à Échap
+  document.addEventListener("click", hideEditCtxMenu);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideEditCtxMenu();
+  });
+  // Actions du menu éditeur (execCommand fonctionne sur le contenteditable/input)
+  document.getElementById("ectx-cut").addEventListener("click", () => {
+    hideEditCtxMenu();
+    document.execCommand("cut");
+  });
+  document.getElementById("ectx-copy").addEventListener("click", () => {
+    hideEditCtxMenu();
+    document.execCommand("copy");
+  });
+  document.getElementById("ectx-paste").addEventListener("click", () => {
+    hideEditCtxMenu();
+    document.execCommand("paste");
+  });
+  document.getElementById("ectx-select-all").addEventListener("click", () => {
+    hideEditCtxMenu();
+    document.execCommand("selectAll");
   });
 
   // 3e. Event listeners pour la palette de commandes
@@ -422,6 +468,45 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // 6. Raccourcis clavier globaux
+
+  // Navigation d'onglets (Ctrl+Tab / Ctrl+1..9) — interceptée en phase CAPTURE
+  // pour fonctionner aussi quand le focus est dans le terminal intégré (issue
+  // #21) : le terminal ne doit plus « avaler » ces raccourcis. stopImmediatePropagation
+  // empêche le terminal (et le listener bubble ci-dessous) de les traiter.
+  document.addEventListener("keydown", (e) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (!ctrl || e.altKey) return;
+
+    // Ctrl+Tab / Ctrl+Shift+Tab : onglet suivant / précédent
+    if (e.key === "Tab") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const idx = tabs.tabs.findIndex((t) => t.id === tabs.activeTabId);
+      if (idx !== -1) {
+        if (e.shiftKey) {
+          const prev = idx > 0 ? idx - 1 : tabs.tabs.length - 1;
+          tabs.switchTab(tabs.tabs[prev].id);
+        } else {
+          const next = idx < tabs.tabs.length - 1 ? idx + 1 : 0;
+          tabs.switchTab(tabs.tabs[next].id);
+        }
+      }
+      return;
+    }
+
+    // Ctrl+1..Ctrl+9 : aller à l'onglet par position (ordre actuel des onglets).
+    // e.code (Digit/Numpad) est indépendant de la disposition du clavier.
+    const m = e.code.match(/^(?:Digit|Numpad)([1-9])$/);
+    if (m) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const pos = parseInt(m[1], 10) - 1;
+      const tab = tabs.tabs[pos];
+      if (tab) tabs.switchTab(tab.id);
+      return;
+    }
+  }, true);
+
   document.addEventListener("keydown", async (e) => {
     // Ne pas intercepter les raccourcis éditeur quand le focus est dans le terminal
     if (e.target.closest(".terminal-wrapper")) {
@@ -626,23 +711,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Ctrl+Tab / Ctrl+Shift+Tab : onglet suivant / précédent
-    if (e.ctrlKey && e.key === "Tab") {
-      e.preventDefault();
-      const idx = tabs.tabs.findIndex((t) => t.id === tabs.activeTabId);
-      if (idx !== -1) {
-        if (e.shiftKey) {
-          // Onglet précédent
-          const prev = idx > 0 ? idx - 1 : tabs.tabs.length - 1;
-          tabs.switchTab(tabs.tabs[prev].id);
-        } else {
-          // Onglet suivant
-          const next = idx < tabs.tabs.length - 1 ? idx + 1 : 0;
-          tabs.switchTab(tabs.tabs[next].id);
-        }
-      }
-      return;
-    }
   });
 
   // 7. Restaurer les projets ouverts (multi-projets) puis charger le dernier

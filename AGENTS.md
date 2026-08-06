@@ -269,6 +269,8 @@ build échoue à la signature).
 
 ```bash
 # Lancer en mode développement
+# (wrapper scripts/tauri.js : identifiant séparé com.pilot.editor.dev + port
+#  web décalé de +1 → la version dev tourne en parallèle de l'installée, issue #25)
 npm run tauri dev
 
 # Builder pour la production

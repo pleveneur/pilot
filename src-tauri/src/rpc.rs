@@ -362,12 +362,17 @@ pub fn park_agent_session(state: State<AppState>) -> Result<(), String> {
 /// Arrête l'agent pi en cours (s'il existe) et libère la session. Idempotent : no-op
 /// si aucune session n'est active.
 pub(crate) fn do_stop_agent_session(state: &AppState) {
-    // Issue #13 : remettre le projet actif à « libre » (l'agent est arrêté).
-    if let Some(p) = state.project_path.lock().unwrap().clone() {
-        reset_project_activity(state, &p);
-    }
     let mut rpc = state.rpc_state.lock().unwrap();
     if let Some(mut session) = rpc.take() {
+        // Issue #13 : remettre le projet actif à « libre » UNIQUEMENT quand une
+        // session a réellement été arrêtée. Dans le cas d'un parking (multi-
+        // projets, session déjà déplacée dans `ProjectState.rpc`), `rpc_state`
+        // est vide : le processus pi continue de travailler en arrière-plan et on
+        // ne doit PAS éteindre sa pastille d'activité (issue #13 — indicateur sur
+        // un projet non au premier plan).
+        if let Some(p) = state.project_path.lock().unwrap().clone() {
+            reset_project_activity(state, &p);
+        }
         rpc_manager::stop_session(&mut session);
     }
     // H2 V1 : arrêter aussi le reviewer (cycle de vie lié à la session principale).

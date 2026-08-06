@@ -72,12 +72,13 @@ Au-delà de l'éditeur de texte mono-projet actuel, Pilot vise à terme deux pil
 
 ## En cours
 
-*Gestion d'agents multi-rôles (H2 V2)* — onglet **🎭 Agents** : registre global `~/.pilot/agents.json`, coordinateur + agents spécialisés (architecte, codeur, reviewer, testeur, documenteur), protocole séquentiel `[[CALL:agent_id]]`, bus frontend, garde-fous (profondeur, budget, cycle, timeout), sélection automatique du modèle selon le backend (`pi` vs `plh`). Voir [`spec_gestion_agents.md`](spec_gestion_agents.md) et [`plan_gestion_agents.md`](plan_gestion_agents.md).
+*Gestion d'agents multi-rôles (H2 V2)* : ✅ **implémenté** (2026-08) — séquentiel (onglet 🎭 Agents, registre `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]`, bus frontend, garde-fous) **et parallèle** (dispatch `[[PARALLEL]]` + mode utilisateur ⚡, buffers par agent, agrégation des résultats). Voir [`spec_gestion_agents.md`](spec_gestion_agents.md) et [`plan_gestion_agents.md`](plan_gestion_agents.md). Prochaine étape : **H4 (Plan Editor)**.
 
 ## Dernière fonctionnalité livrée
 
 | Domaine | Fichier | Statut |
 |---|---|---|
+| Gestion d'agents multi-rôles (H2 V2, séquentiel) | [`spec_gestion_agents.md`](spec_gestion_agents.md) | ✅ Implémenté (2026-08) — onglet 🎭 Agents, registre global `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]`, bus frontend, garde-fous (profondeur, budget, cycle, timeout), sélection modèle par backend. Voir [`plan_gestion_agents.md`](plan_gestion_agents.md) |
 | Discussion inter-projets (H12/#15) | [`spec_interproject.md`](spec_interproject.md) | ✅ Implémenté (2026-08) — liaison persistée de projets (`project_links`), dépôt d'une tâche/analyse dans `cible/.pilot/handoffs/`, ouverture+activation de la cible, lancement de son agent et prompt de traitement, projet source en lecture seule (consigne). Modale 🔗 (lier/unlier/envoyer). 4 commandes Tauri (`get_project_links`, `set_project_links`, `remove_project_link`, `interproject_handoff`). Bouton 🔗 dans la barre d'actions |
 | Indicateur d'activité par projet (#13) | [`spec_multiprojects.md`](spec_multiprojects.md) §6.7 | ✅ Implémenté (2026-08) — pastille animée dans la barre « Projets en cours » (agent occupé/en attente), y compris pour un agent parké qui travaille en arrière-plan. Observateur RPC `agent_start`/`agent_settled` → map `agent_activity`, commande `get_project_agent_states`, polling 2 s côté frontend |
 | Mode Orchestration V3 | [`spec_orchestration.md`](spec_orchestration.md) | ✅ Implémenté (2026-07-29) — Triptyque Réfléchir/Faire/Contrôler (SELF_FIX in-session), 3 tentatives, vérification finale par le codeur, contrôles utilisateur par tâche, batch désactivé par défaut, métriques temps réel |
@@ -109,12 +110,12 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 
 | # | Feature | Statut | Spec / détail |
 |---|---|---|---|
-| 1 | **H2 V2** — Gestion d'agents multi-rôles (séquentiel) | 🔄 En cours | `spec_gestion_agents.md` · onglet 🎭 Agents, registre `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]` |
+| 1 | **H2 V2** — Gestion d'agents multi-rôles (séquentiel) | ✅ Implémenté (2026-08) | `spec_gestion_agents.md` · onglet 🎭 Agents, registre `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]` |
 | 2 | **D1** — Notifications desktop « agent terminé à distance » | ✅ Implémenté (2026-07-30) | `idees_evolutions.md` §D1 · plugin `tauri-plugin-notification`, déclenché à l'`agent_end` si prompt d'origine web |
 | 3 | **H1 V2** — Context Engine embeddings/RAG local (Ollama + SQLite) | ✅ Implémenté (2026-07-30) | `spec_context_engine.md` §7 · `context_engine.rs` (chunking + cosinus + SQLite WAL), fallback V1 auto, build lazy + refresh incrémental, UI Paramètres (adresse/port/modèle + test) |
 | 3 | **H9** — Historique de sessions searchable (mémoire des décisions) | ✅ Implémenté (2026-08-01) | `.pilot/sessions.jsonl` (append) + `.pilot/sessions-tags.json` + full-text/regex search + filtres tag/file/kind + détail (relecture JSONL pi) + tags éditables + rétro-indexation auto (1re ouverture) + capture live (agent_end chat). Voir [`spec_session_history.md`](spec_session_history.md). Complément de H3 (faits) et H1 (contexte) |
 | 5 | **H7** — Mode « Projet sensible » (local-first garanti, badge 🔒) | ✅ Implémenté V1 (2026-08) | badge 🔒/🔓 cliquable (toolbar π), config `sensitive_projects` persistée, dictée vocale cloud bloquée (local-first). Routing cloud H6 toujours reporté |
-| 5 | **H2 V2** — Multi-codeurs spécialisés en **parallèle** | À faire | architecture `rpc-event-reviewer` (confirmée) → N sub-agents (test-writer, doc-writer, refactorer), chacun avec un `system` de rôle. `spec_orchestration.md` |
+| 5 | **H2 V2** — Multi-codeurs spécialisés en **parallèle** | ✅ Implémenté (2026-08) | dispatch `[[PARALLEL]]` (coordinateur) + mode utilisateur ⚡ (multi-sélection), buffers par agent, agrégation. `spec_gestion_agents.md` |
 | 6 | **H6** — Routing multi-modèle intelligent | Reporté (sauf si indispensable pour H2 V2) | `idees_evolutions.md` §H6 |
 | 7 | **H10** — MCP / tools extensibles | Reporté (plus tard) | `idees_evolutions.md` §H10 |
 
@@ -149,7 +150,7 @@ npm run tauri build  # Production
 
 ---
 
-*Dernière mise à jour : 2026-08* — multi-projets V1 implémenté (persistance, bascule, parking de sessions par projet = agents pi vivants en arrière-plan, canaux d'événements par projet, dropdown UI, web-remote select). Prochaine session : vérifier l'injection de contexte avec PLh (RAG déjà porté côté PLh — cf. section « Rien à porter » en tête de ce plan) puis choisir le prochain chantier dans la roadmap.
+*Dernière mise à jour : 2026-08* — H2 V2 (gestion d'agents multi-rôles, onglet 🎭 Agents) implémenté en séquentiel **et** parallèle. Prochaine étape : **H4 (Plan Editor)**.
 
 ## Consolidation (qualité / dette technique)
 

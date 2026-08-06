@@ -10,6 +10,7 @@
 - **Arborescence en temps réel** — mise à jour automatique dès qu'un fichier est créé, modifié ou supprimé (même par un processus externe).
 - **Flèches ▶/▼** pour déplier/replier les dossiers. Les dossiers vides n'affichent pas de flèche.
 - **Menu contextuel** (clic droit) : créer/supprimer des fichiers et dossiers, renommer, exporter.
+- **Clic droit sur un ascenseur** : aucun menu natif ne s'affiche (le menu système WebView2 est désactivé).
 - **Drag & drop** de fichiers externes dans l'arborescence → copie automatique dans le projet.
 - **Persistance de l'expansion** : l'état déplié/replié survit aux rafraîchissements.
 
@@ -37,14 +38,15 @@
 - **Insertion d'images** : glisser-déposer une image dans l'éditeur, ou `Ctrl+V` depuis le presse-papiers. L'image est copiée dans `images/` et la syntaxe `![]()` est insérée.
 
 ### Prévisualisations
-- **Markdown** — rendu instantané via `markdown-it` (HTML, liens, tableaux, blocs de code) + **diagrammes Mermaid** (flowchart, sequence, class, ER, Gantt…) avec zoom/pan interactif.
+- **Markdown** — rendu instantané via `markdown-it` (HTML, liens, tableaux, blocs de code) + **diagrammes Mermaid** (flowchart, sequence, class, ER, Gantt…) avec zoom/pan interactif. Les **liens** de la prévisualisation sont cliquables : un lien interne ouvre le fichier cible dans un onglet, un lien externe (http/https) s'ouvre dans le navigateur, une ancre (`#section`) fait défiler la prévisualisation.
+- **Mode split** (`Ctrl+Shift+E`) : éditeur à gauche, prévisualisation à droite, avec **scroll synchronisé proportionnellement dans les deux sens** (défilement de l'éditeur → la prévisualisation suit, et inversement). La position de scroll est préservée pendant l'édition ; cliquer un titre dans la prévisualisation fait défiler l'éditeur jusqu'à la ligne correspondante.
 - **PDF** — visualisation intégrée avec PDF.js : navigation par page, zoom, téléchargement.
 - **Images** — affichage plein écran avec zoom et ajustement à la fenêtre.
 - **CSV** — tableau aligné avec en-têtes, numéros de ligne, détection auto du séparateur.
 
 ### Système d'onglets
 - Onglets distincts pour chaque mode : édition 📝, prévisualisation Markdown 👁️, PDF 📕, image 🖼️, CSV 📊, terminal 🖥️.
-- **Onglet agent π** : chat IA intégré avec l'agent Pi (mode RPC), streaming Markdown, pensées, outils, sélecteur de modèle, **dictée vocale** 🎙️. **Mode Orchestration** disponible : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale.
+- **Onglet agent π** : chat IA intégré avec l'agent Pi (mode RPC), streaming Markdown, pensées, outils, sélecteur de modèle, **dictée vocale** 🎙️. **Mode Orchestration** disponible : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale. À l'ouverture de l'onglet, Pilot **vérifie automatiquement** si une nouvelle version de Pi est disponible et propose de la mettre à jour (`pi update --self`).
 - Fermeture automatique des onglets à la fermeture/changement de projet.
 - **Sauvegarde automatique** à la fermeture d'onglet (silencieuse).
 - **Détection de conflits** : si un fichier ouvert est modifié de l'extérieur pendant une édition, l'onglet clignote en rouge.
@@ -272,6 +274,8 @@ chmod +x pilot_<version>_amd64.AppImage
 | `Ctrl+Alt+R` | Global | Fichiers récents (popover) |
 | `Ctrl+S` | Éditeur | Sauvegarder le fichier actif |
 | `Ctrl+W` | Éditeur | Fermer l'onglet actif (sauvegarde auto) |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Global | Onglet suivant / précédent (fonctionne aussi dans le terminal) |
+| `Ctrl+1`…`Ctrl+9` | Global | Aller à l'onglet par position (ordre actuel) |
 | `F11` | Global | Mode Zen (plein écran sans barre latérale) |
 | `Ctrl+P` | Global | Focus sur le filtre de l'arborescence |
 | `Ctrl+B` | Éditeur `.md` | **Gras** |
@@ -329,6 +333,12 @@ cd pilot
 npm install
 npm run tauri dev
 ```
+
+> **Développer Pilot avec Pilot** : `npm run tauri dev` lance une version dev
+> **séparée** de la version installée (identifiant d'application distinct
+> `com.pilot.editor.dev`). Les deux peuvent tourner en parallèle : config,
+> sessions et verrou single-instance sont indépendants, et le port web distant
+> est décalé de +1 (ex: configuré 8787 → dev écoute sur 8788).
 
 ### Build production
 

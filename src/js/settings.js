@@ -536,11 +536,11 @@ export async function initSettings() {
           if (st.enabled && !st.running) {
             alert(
               "Le serveur web distant n'a pas démarré.\n" +
-              "Causes possibles : aucun mot de passe défini, ou port " + config.web_port + " déjà occupé.\n" +
+              "Causes possibles : aucun mot de passe défini, ou port " + st.port + " déjà occupé.\n" +
               "Définissez un mot de passe dans la section « Accès distant » puis ré-enregistrez."
             );
           } else if (st.enabled && st.running) {
-            console.log("[web] Serveur distant démarré sur http://" + config.web_bind + ":" + config.web_port);
+            console.log("[web] Serveur distant démarré sur http://" + st.bind + ":" + st.port);
           }
         } catch (e) { console.warn("reload_web_server:", e); }
         webNetChanged = false;
@@ -711,7 +711,7 @@ export async function initSettings() {
         : "Tailscale : ⚠️ installé mais hors-ligne";
       tsBadge.className = "tailscale-badge " + (st.online ? "ok" : "warn");
       tsUrl.value = st.url || "";
-      const cfgPort = parseInt(inputWebPort.value, 10) || 0;
+      const cfgPort = st.port || 0;
       if (st.serve_configured) {
         const portOk = st.serve_target_port === cfgPort;
         tsServeStatus.textContent = portOk

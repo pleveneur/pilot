@@ -38,9 +38,6 @@ if (!TAG || !REPO || !TOKEN) {
 
 const VERSION = TAG.replace(/^v/, "");
 
-const RELEASE_HEADER =
-  "Téléchargez et installez le binaire correspondant à votre plateforme. La mise à jour automatique est active pour les versions suivantes.";
-
 // Retourne le tag de version le plus récent strictement antérieur à TAG
 // (tri par date de création descendant). Chaîne vide s'il n'y en a pas.
 function prevTag(tag) {
@@ -188,7 +185,7 @@ function buildChangelogBody() {
     sections = parts.join("\n\n");
   }
 
-  const body = `${RELEASE_HEADER}\n\n${sectionTitle}\n\n${sections}`;
+  const body = `${sectionTitle}\n\n${sections}`;
   return { body, prev };
 }
 
