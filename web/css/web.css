@@ -76,6 +76,23 @@ body { background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMac
 
 /* Projects (scroll interne) */
 #view-projects { overflow-y:auto; padding:12px; }
+
+/* Commandes projet (issue #27) */
+#view-commands { overflow-y:auto; padding:12px; }
+.commands-head { padding:2px 0 10px; font-size:13px; }
+.cmd-item { background:var(--card); border:1px solid var(--border); border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.cmd-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 12px; }
+.cmd-name { font-weight:600; }
+.cmd-cmd { color:var(--muted); font-family:Consolas,monospace; font-size:12px; flex:1 1 100%; }
+.cmd-cwd { font-size:11px; color:var(--muted); }
+.cmd-run { flex-shrink:0; }
+.cmd-run:disabled { opacity:0.4; cursor:not-allowed; }
+.cmd-status { font-size:11px; padding:2px 8px; border-radius:10px; background:#444; }
+.cmd-status.running { background:#0a84ff; color:#fff; animation:mic-pulse 1.2s infinite; }
+.cmd-status.ok { background:#2a6e3b; color:#fff; }
+.cmd-status.err { background:#a33; color:#fff; }
+.cmd-output { flex:1 1 100%; white-space:pre-wrap; word-break:break-word; font-family:Consolas,monospace; font-size:12px; padding:8px 12px; border-top:1px solid var(--border); max-height:240px; overflow:auto; }
+.cmd-empty { color:var(--muted); padding:8px 4px; font-size:13px; }
 #view-projects h3 { margin:14px 0 6px; }
 .proj-item { background:var(--card); padding:12px; border-radius:8px; margin-bottom:6px; cursor:pointer; }
 .proj-item.active { border:2px solid var(--accent); }

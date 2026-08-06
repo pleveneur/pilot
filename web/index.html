@@ -30,6 +30,7 @@
         <button data-view="chat" class="active">💬 Chat</button>
         <button data-view="files">📂 Fichiers</button>
         <button data-view="projects">📁 Projet</button>
+        <button data-view="commands">▶️ Commandes</button>
       </nav>
 
       <!-- Sélecteur modèle (visible seulement en onglet Chat) -->
@@ -87,6 +88,14 @@
         <h3>Parcourir</h3>
         <div id="browse-roots"></div>
         <div id="browse-list"></div>
+      </div>
+
+      <!-- Commandes projet (issue #27) -->
+      <div id="view-commands" class="view">
+        <div class="commands-head">
+          <span class="muted">Commandes paramétrées du projet (.pilot/commands.json)</span>
+        </div>
+        <div id="commands-list"></div>
       </div>
     </main>
   </section>

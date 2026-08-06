@@ -33,8 +33,9 @@ use axum::{Json, Router};
 use include_dir::Dir;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -179,6 +180,10 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/project/select", post(project_select))
         .route("/api/project/create", post(project_create))
         .route("/api/project/browse", get(project_browse))
+        // Issue #27 : liste des commandes projet paramétrées + exécution distante.
+        .route("/api/commands", get(commands_list))
+        .route("/api/commands/run", post(command_run))
+        .route("/api/commands/stop", post(command_stop))
         .layer(from_fn_with_state(ctx.clone(), auth_middleware));
 
     Router::new()
@@ -1121,6 +1126,246 @@ async fn project_browse(
     .await
     .map_err(|e| e.to_string());
     json_result(res.and_then(|r| r))
+}
+
+// ── Routes Commandes projet (issue #27) ──
+//
+// Affiche la liste des commandes paramétrées du projet (.pilot/commands.json,
+// #17) et permet de les déclencher depuis le web-remote. L'exécution se fait
+// dans un thread détaché via `std::process::Command` (pas de PTY/xterm, inutile
+// à distance) : la sortie est diffusée sur `event_tx` (WebSocket /ws/agent) et
+// conservée dans un buffer pour garantir l'état final complet.
+//
+// Événements diffusés :
+//   {type:command_start,  run_id, name}
+//   {type:command_output, run_id, stream: out|err, data: [bytes]}
+//   {type:command_end,    run_id, name, code: Option<i32>, output: String}
+
+/// Lit la liste des commandes du projet courant. Réutilise la fonction pure
+/// `files::read_project_commands` (déjà utilisée côté desktop).
+async fn commands_list(State(ctx): State<Arc<WebCtx>>) -> Response {
+    let app = ctx.app_handle.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let project = state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?;
+        crate::files::read_project_commands(project)
+    })
+    .await
+    .map_err(|e| e.to_string());
+    match res.and_then(|r| r) {
+        Ok(list) => Json(json!({ "commands": list })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CommandRunBody {
+    id: String,
+}
+
+/// Lance une commande projet du projet courant. Le `cwd` est résolu (racine si
+/// vide, sinon relatif au root), validé dans le projet, puis la commande est
+/// exécutée via le shell dans un thread détaché qui diffuse la sortie sur
+/// `event_tx`. Le processus est mémorisé dans `AppState.web_runs` (clé run_id)
+/// pour permettre l'arrêt (`command_stop`).
+async fn command_run(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<CommandRunBody>,
+) -> Response {
+    if is_readonly(&ctx.app_handle) {
+        return forbidden();
+    }
+    let app = ctx.app_handle.clone();
+    let id = body.id;
+    let id_aud = id.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let project = state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?;
+        let list = crate::files::read_project_commands(project)?;
+        let arr = list.as_array().ok_or("commandes projet invalides")?;
+        let cmd = arr
+            .iter()
+            .find(|c| c.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .ok_or("Commande introuvable")?;
+        let name = cmd.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let command = cmd.get("command").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let cwd = cmd.get("cwd").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if command.trim().is_empty() {
+            return Err("Commande vide".to_string());
+        }
+
+        // Résoudre le cwd : vide → racine du projet ; relatif → root.join(cwd) ;
+        // puis validation stricte dans le projet (anti path traversal).
+        let root = project_root(&app)?;
+        let run_cwd = if cwd.trim().is_empty() {
+            root.clone()
+        } else {
+            let joined = if Path::new(&cwd).is_absolute() {
+                PathBuf::from(&cwd)
+            } else {
+                root.join(&cwd)
+            };
+            validate_within(&joined.to_string_lossy(), &root)?
+        };
+
+        // Identifiant unique de cette exécution.
+        let run_id = format!(
+            "run_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        );
+
+        // Lancer via le shell (même sémantique que le bouton ▶ desktop).
+        let (prog, mut args) = shell_prog_args();
+        args.push(command.clone());
+        let mut cmd = std::process::Command::new(prog);
+        cmd.args(args).current_dir(&run_cwd);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| format!("Lancement: {}", e))?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        // Mémoriser le processus (pour l'arrêt) avant de lancer le thread.
+        state.web_runs.lock().unwrap().insert(run_id.clone(), child);
+
+        // Thread de lecture : diffuse la sortie en direct ET accumule un buffer
+        // complet remis à la fin (garantit l'état final même si le canal WS est
+        // saturé et droppe des chunks intermédiaires).
+        let event_tx = state.event_tx.clone();
+        let log = Arc::new(Mutex::new(String::new()));
+        let app2 = app.clone();
+        let run_id_t = run_id.clone();
+        let name_t = name.clone();
+        std::thread::spawn(move || {
+            let _ = event_tx.send(json!({
+                "type": "command_start", "run_id": run_id_t.clone(), "name": name_t.clone()
+            }));
+            let out_h = stdout.map(|s| stream_pipe(s, run_id_t.clone(), "out", event_tx.clone(), log.clone()));
+            let err_h = stderr.map(|s| stream_pipe(s, run_id_t.clone(), "err", event_tx.clone(), log.clone()));
+            if let Some(h) = out_h {
+                let _ = h.join();
+            }
+            if let Some(h) = err_h {
+                let _ = h.join();
+            }
+            // Récolter le processus (si pas déjà arrêté par command_stop).
+            let child = app2.state::<AppState>().web_runs.lock().unwrap().remove(&run_id_t);
+            let code = child
+                .and_then(|mut c| c.wait().ok())
+                .and_then(|s| s.code());
+            let output = log.lock().unwrap().clone();
+            let _ = event_tx.send(json!({
+                "type": "command_end", "run_id": run_id_t, "name": name_t,
+                "code": code, "output": output
+            }));
+        });
+
+        Ok(json!({ "run_id": run_id, "name": name, "cwd": run_cwd.to_string_lossy() }))
+    })
+    .await
+    .map_err(|e| e.to_string());
+    let ok = res.is_ok();
+    ctx.audit.record(&authed.ip, &authed.key, "command_run", &id_aud, ok);
+    match res.and_then(|r| r) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct CommandStopBody {
+    run_id: String,
+}
+
+/// Arrête une commande en cours : tue le processus et le retire de la map. Le
+/// thread de lecture voit l'EOF des pipes, envoie `command_end` et se termine.
+async fn command_stop(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<CommandStopBody>,
+) -> Response {
+    if is_readonly(&ctx.app_handle) {
+        return forbidden();
+    }
+    let app = ctx.app_handle.clone();
+    let run_id = body.run_id;
+    let run_id_aud = run_id.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let child = state.web_runs.lock().unwrap().remove(&run_id);
+        match child {
+            Some(mut c) => {
+                let _ = c.kill();
+                let _ = c.wait(); // récolter (éviter le zombie)
+                Ok(())
+            }
+            None => Err("Aucune commande en cours pour ce run".to_string()),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string());
+    let ok = res.is_ok();
+    ctx.audit.record(&authed.ip, &authed.key, "command_stop", &run_id_aud, ok);
+    match res.and_then(|r| r) {
+        Ok(_) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// Programme shell + argument pour exécuter une commande en one-shot :
+/// `cmd /C <cmd>` (Windows) ou `sh -c <cmd>` (macOS/Linux).
+#[cfg(target_os = "windows")]
+fn shell_prog_args() -> (String, Vec<String>) {
+    ("cmd".to_string(), vec!["/C".to_string()])
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_prog_args() -> (String, Vec<String>) {
+    ("/bin/sh".to_string(), vec!["-c".to_string()])
+}
+
+/// Lit un pipe (stdout/stderr) d'une commande et diffuse chaque chunk sur
+/// `event_tx` (event `command_output`) tout en accumulant le texte dans `log`.
+fn stream_pipe<R: Read + Send + 'static>(
+    mut r: R,
+    run_id: String,
+    stream: &'static str,
+    event_tx: tokio::sync::broadcast::Sender<Value>,
+    log: Arc<Mutex<String>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match r.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = buf[..n].to_vec();
+                    if let Ok(s) = std::str::from_utf8(&data) {
+                        log.lock().unwrap().push_str(s);
+                    }
+                    let _ = event_tx.send(json!({
+                        "type": "command_output", "run_id": run_id.clone(),
+                        "stream": stream, "data": data
+                    }));
+                }
+                Err(_) => break,
+            }
+        }
+    })
 }
 
 // ── WebSocket /ws/agent (diffusion des événements RPC en temps réel) ──

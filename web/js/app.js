@@ -39,6 +39,9 @@ const state = {
   currentFileContent: '',
   currentFileIsNew: false, // true pendant la création d'un nouveau fichier (POST au lieu de PUT)
   browseRoots: [], // racines autorisées (pour créer un projet)
+  // Commandes projet (issue #27) : liste paramétrée + exécutions en cours.
+  commands: [],
+  commandRuns: {}, // run_id → { btn, statusEl, outEl }
 };
 
 // ── Helpers HTTP ──
@@ -118,6 +121,7 @@ function enterApp() {
   resyncAll();
   loadFiles();
   loadProjects();
+  loadCommands();
 }
 
 // ── WebSocket ──
@@ -392,9 +396,47 @@ function handleWsEvent(payload) {
     case 'project_changed':
       resyncProject();
       loadFiles();
+      loadCommands();
       apiJson('/api/agent/state').then(applyAgentState).catch(() => {});
       if (payload.path) appendSystem('📁 Projet changé : ' + payload.path);
       break;
+
+    // ── Commandes projet (issue #27) : mise à jour en temps réel ──
+    case 'command_start': {
+      const r = state.commandRuns[payload.run_id];
+      if (r) { r.statusEl.textContent = 'en cours…'; r.statusEl.className = 'cmd-status running'; }
+      break;
+    }
+    case 'command_output': {
+      const r = state.commandRuns[payload.run_id];
+      if (r && Array.isArray(payload.data)) {
+        const txt = new TextDecoder().decode(new Uint8Array(payload.data));
+        r.outEl.textContent += txt;
+        r.outEl.scrollTop = r.outEl.scrollHeight;
+      }
+      break;
+    }
+    case 'command_end': {
+      const r = state.commandRuns[payload.run_id];
+      if (r) {
+        // État final garanti : on remplace le flux par le buffer complet reçu.
+        if (typeof payload.output === 'string' && payload.output) {
+          r.outEl.textContent = payload.output;
+          r.outEl.scrollTop = r.outEl.scrollHeight;
+        }
+        const code = payload.code;
+        let label, cls;
+        if (code === 0) { label = 'terminé ✓'; cls = 'ok'; }
+        else if (code === null || code === undefined) { label = 'arrêté'; cls = 'err'; }
+        else { label = 'terminé (code ' + code + ')'; cls = 'err'; }
+        r.statusEl.textContent = label;
+        r.statusEl.className = 'cmd-status ' + cls;
+        r.btn.disabled = false;
+        r.btn.textContent = '▶ Relancer';
+      }
+      delete state.commandRuns[payload.run_id];
+      break;
+    }
 
     default:
       break;
@@ -1024,6 +1066,74 @@ async function browseRoot(root) {
     });
     if (!(data.dirs || []).length) list.innerHTML = '<div class="muted">Aucun sous-dossier</div>';
   } catch (e) { document.getElementById('browse-list').innerHTML = '❌ ' + escapeHtml(e.message); }
+}
+
+// ── Commandes projet (issue #27) ──
+// Affiche la liste des commandes paramétrées du projet (.pilot/commands.json) et
+// permet de les déclencher depuis le web-remote. La sortie arrive en temps réel
+// via les événements WS command_start / command_output / command_end.
+
+async function loadCommands() {
+  try {
+    const data = await apiJson('/api/commands');
+    state.commands = Array.isArray(data.commands) ? data.commands : [];
+    renderCommands();
+  } catch (e) { /* pas de projet */ }
+}
+
+function renderCommands() {
+  const list = document.getElementById('commands-list');
+  list.innerHTML = '';
+  if (!state.commands.length) {
+    list.innerHTML = '<div class="cmd-empty">Aucune commande paramétrée dans ce projet. ' +
+      'Ajoutez-en via le bouton ▶ du desktop (onglet Commandes).</div>';
+    return;
+  }
+  state.commands.forEach((cmd) => {
+    const item = document.createElement('div');
+    item.className = 'cmd-item';
+    const dir = cmd.cwd ? cmd.cwd : 'racine';
+    item.innerHTML =
+      '<div class="cmd-head">' +
+        '<span class="cmd-name">' + escapeHtml(cmd.name || cmd.command) + '</span>' +
+        '<span class="cmd-cwd">📁 ' + escapeHtml(dir) + '</span>' +
+        '<button class="ctrl cmd-run">▶ Lancer</button>' +
+        '<span class="cmd-status">—</span>' +
+        '<code class="cmd-cmd">' + escapeHtml(cmd.command) + '</code>' +
+        '<pre class="cmd-output" hidden></pre>' +
+      '</div>';
+    list.appendChild(item);
+    item.querySelector('.cmd-run').addEventListener('click', () => runCommand(cmd, item));
+  });
+}
+
+async function runCommand(cmd, item) {
+  const btn = item.querySelector('.cmd-run');
+  const statusEl = item.querySelector('.cmd-status');
+  const outEl = item.querySelector('.cmd-output');
+  if (state.readonly) {
+    statusEl.textContent = 'lecture seule';
+    statusEl.className = 'cmd-status err';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ …';
+  statusEl.textContent = 'démarrage…';
+  statusEl.className = 'cmd-status running';
+  outEl.hidden = false;
+  outEl.textContent = '';
+  try {
+    const data = await apiJson('/api/commands/run', {
+      method: 'POST',
+      body: JSON.stringify({ id: cmd.id }),
+    });
+    state.commandRuns[data.run_id] = { btn, statusEl, outEl };
+  } catch (e) {
+    statusEl.textContent = '❌ ' + e.message;
+    statusEl.className = 'cmd-status err';
+    btn.disabled = false;
+    btn.textContent = '▶ Lancer';
+  }
 }
 
 // ── Dictée vocale (Web Speech API) — Évolution 8 ──

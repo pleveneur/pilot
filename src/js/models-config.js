@@ -224,7 +224,7 @@ function renderProviderCard(name, prov) {
       <div class="field-row"><label>baseUrl :</label><input type="text" data-prov="${esc(name)}" data-field="baseUrl" value="${esc(baseUrl)}" placeholder="http://localhost:11434/v1"/></div>
       <div class="field-row"><label>api :</label>
         <select data-prov="${esc(name)}" data-field="api">
-          ${["openai-completions","openai-responses","anthropic","gemini","bedrock"].map(a=>`<option value="${a}" ${a===api?"selected":""}>${a}</option>`).join("")}
+          ${["openai-completions","openai-responses","anthropic","gemini","google-generative-ai","bedrock"].map(a=>`<option value="${a}" ${a===api?"selected":""}>${a}</option>`).join("")}
         </select>
       </div>
       <div class="field-row"><label>apiKey :</label><input type="password" data-prov="${esc(name)}" data-field="apiKey" value="${esc(apiKey)}" placeholder="none"/></div>

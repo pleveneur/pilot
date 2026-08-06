@@ -124,6 +124,19 @@ Le sélecteur construit `value = "provider/id"` et le modèle courant est
 ### Messages agent — pagination
 `GET /api/agent/messages` limite la réponse aux **200 derniers messages** ; paramètre `?offset=` optionnel pour récupérer l'historique plus ancien par pages. Le client web charge les messages **à la demande** (bouton/scroll), pas automatiquement au démarrage.
 
+### Commandes projet (issue #27)
+| Méthode | Route | Description |
+|---|---|---|
+| `GET` | `/api/commands` | Liste des commandes paramétrées du projet (`.pilot/commands.json`, #17) |
+| `POST` | `/api/commands/run` | Lance une commande (body : `id`) → `{ run_id, name, cwd }` |
+| `POST` | `/api/commands/stop` | Arrête une commande en cours (body : `run_id`) |
+
+L'exécution est one-shot via le shell (`cmd /C <cmd>` / `sh -c <cmd>`, cwd résolu dans le
+projet puis validé par `validate_within`), **sans PTY/xterm** (inutile à distance). La sortie
+diffusée en temps réel sur `/ws/agent` (événements `command_start` / `command_output` /
+`command_end`) **et** accumulée dans un buffer complet remis dans `command_end.output` pour
+garantir l'état final même si le canal WS saturé droppe des chunks. Refus en mode `web_readonly`.
+
 ---
 
 ## 5. WebSocket `/ws/agent`
@@ -132,6 +145,7 @@ Connexion authentifiée (token en query string ou header). Diffuse **en temps r�
 
 - Tous les événements RPC actuels (`message_start/update/end`, `thinking_*`, `tool_execution_*`, `text_*`, `toolcall_*`, `compaction_*`, `model_change`, `agent_start`, `agent_end`, `extension_ui_request`, `process_exit`).
 - Événements projet : `project_changed` (path + récents), `tree_changed` (fichier modifié/ajouté/supprimé, réutilise les événements `file-change` du watcher).
+- Commandes projet (issue #27) : `command_start`, `command_output` (stream `out`/`err` + bytes `data`), `command_end` (code de sortie + buffer `output` complet).
 - Reconnexion auto côté client (backoff exponentiel).
 
 ### Protocole de resynchronisation (mobile)

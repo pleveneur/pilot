@@ -121,6 +121,10 @@ struct AppState {
     /// Issue #13 : activité de l'agent par projet (path normalisé → SessionActivity).
     /// Mise à jour en arrière-plan par l'observateur RPC de chaque session projet.
     agent_activity: Arc<Mutex<HashMap<String, SessionActivity>>>,
+    /// Issue #27 : commandes projet en cours d'exécution via le web-remote.
+    /// Map run_id → processus enfant (permet l'arrêt `command_stop`). Vide si
+    /// aucune commande ne tourne.
+    web_runs: Mutex<HashMap<String, std::process::Child>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1661,6 +1665,7 @@ pub fn run() {
                 web_shutdown: std::sync::Mutex::new(None),
                 ext_gate_cache: std::sync::Mutex::new(None),
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
+                web_runs: Mutex::new(HashMap::new()),
             }
         })
         .invoke_handler(tauri::generate_handler![
