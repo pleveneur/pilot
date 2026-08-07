@@ -50,6 +50,14 @@ function samePath(a, b) {
   if (!a || !b) return false;
   return a.replace(/\\/g, "/") === b.replace(/\\/g, "/");
 }
+
+/** Rejoint un chemin relatif à la racine du projet (séparateur natif). */
+function joinPath(root, rel) {
+  const sep = root.includes("\\") ? "\\" : "/";
+  const clean = String(rel).replace(/^[\\/]+/, "").replace(/[\\/]+$/, "");
+  if (!clean) return root;
+  return root.replace(/[\\/]+$/, "") + sep + clean;
+}
 const statusAutosave = document.getElementById("status-autosave");
 
 let tabIdCounter = 0;
@@ -77,6 +85,8 @@ class Tab {
     this.splitPreviewScrollHandler = null;
     this.splitClickHandler = null;
     this.splitDragHandlers = null;
+    // Commande projet (#29) : identité de la commande (repérage onglet existant)
+    this.projectCommandId = null;
     // Scratchpad : pas de fichier associé
     this.isScratchpad = false;
   }
@@ -674,6 +684,52 @@ class TabsManager {
       setTimeout(() => result.terminal.focus(), 100);
     } catch (e) {
       tab.wrapper.innerHTML = `<div style="padding:2em;color:var(--danger);">❌ Erreur terminal: ${e}</div>`;
+    }
+  }
+
+  /**
+   * Lance une commande projet (#17) dans un onglet terminal dédié (#29).
+   * Titre de l'onglet = nom de la commande. Si la même commande est déjà
+   * ouverte, on bascule dessus (sans relancer le process). Fermer l'onglet tue
+   * le PTY (comportement identique au terminal intégré).
+   * @param {{id: string, name: string, command: string, cwd?: string}} cmd
+   */
+  async openProjectCommand(cmd) {
+    const existing = this.tabs.find(
+      (t) => t.mode === "terminal" && t.projectCommandId === cmd.id
+    );
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const label = cmd.name || cmd.command;
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "terminal");
+    tab.projectCommandId = cmd.id;
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    const projectPath = window._pilotProjectPath || "";
+    try {
+      const result = await createTerminal(tab.wrapper, projectPath, false, {
+        cwd: cmd.cwd ? joinPath(projectPath, cmd.cwd) : projectPath,
+        command: cmd.command,
+      });
+      tab.view = result.wrapper;
+      tab.terminal = result.terminal;
+      tab.terminalId = result.terminalId;
+      tab.unlistenTerminal = result.unlisten;
+      setTimeout(() => result.terminal.focus(), 100);
+    } catch (e) {
+      tab.wrapper.innerHTML = `<div style="padding:2em;color:var(--danger);">❌ Erreur: ${e}</div>`;
     }
   }
 
@@ -1921,7 +1977,7 @@ class TabsManager {
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}`;
     btn.dataset.tabId = tab.id;
 
-    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : "🖥️ ") : tab.mode === "agent" ? "π " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
+    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
     const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "history" ? " (Sessions)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
 
     btn.innerHTML = `

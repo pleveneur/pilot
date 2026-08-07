@@ -1471,7 +1471,6 @@ mark.search-highlight {
 /* Palette de commandes du projet (#17) */
 .modal-content.commands-content { width: 620px; max-width: 95vw; }
 .modal-content.command-form-content { width: 520px; max-width: 95vw; }
-.modal-content.command-run-content { width: 780px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; }
 .commands-hint { margin: -6px 0 12px; font-size: 12px; color: var(--text-muted); }
 .commands-list { max-height: 55vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; }
 .commands-empty { padding: 18px; text-align: center; color: var(--text-muted); font-size: 13px; }
@@ -1491,8 +1490,6 @@ mark.search-highlight {
 .command-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
 .command-form input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-input, var(--bg-hover)); color: var(--text-primary); }
 .command-form input:focus { outline: none; border-color: var(--accent); }
-.command-run-container { flex: 1; min-height: 220px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-bottom: 12px; }
-.command-run-container .terminal-wrapper { height: 100%; }
 
 .modal-content.settings-content { width: 920px; max-width: 96vw; max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
 

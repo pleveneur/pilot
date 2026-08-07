@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-06 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-07 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -210,9 +210,9 @@ d'actions (icône **▶ square-terminal**).
   (ex: `web/`). Laissez vide pour partir de la racine du projet.
 - **Modifier / Supprimer** : boutons ✏️ / 🗑 sur chaque ligne (la suppression est
   confirmée).
-- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré,
-  et la **sortie (temps réel)** s'affiche dans une modale. Cliquez sur **Fermer**
-  pour arrêter la commande et fermer la modale.
+- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré dans un **onglet terminal** (titre = nom de la commande), et la **sortie (temps réel)** s'affiche dans cet onglet. La liste des commandes se ferme. Vous pouvez continuer à travailler pendant l'exécution.
+- **Relancer** : cliquez à nouveau sur la même commande → Pilot **bascule sur l'onglet déjà ouvert** (sans relancer le process).
+- **Fermer** : fermez l'onglet pour **arrêter la commande** (comme un terminal intégré).
 - Les commandes sont **propres à chaque projet** (fichier `.pilot/commands.json`,
   versionnable avec le projet).
 

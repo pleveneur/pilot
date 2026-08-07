@@ -67,7 +67,7 @@
 - Lancez vos commandes de compilation / tests / etc. via le bouton **▶** du panneau d'actions.
 - Liste de commandes **paramétrables par projet** (ajout / modification / suppression), stockée dans `.pilot/commands.json`.
 - Chaque commande : un **nom**, une **commande shell** et un **dossier de travail** optionnel (vide = racine du projet).
-- Un clic lance la commande dans le dossier choisi et affiche la **sortie temps réel dans une modale** (bouton **Fermer** pour arrêter).
+- Un clic lance la commande dans le dossier choisi dans un **onglet terminal** (titre = nom de la commande) ; la liste des commandes se ferme et vous pouvez continuer à travailler. Relancer la même commande bascule sur l'onglet déjà ouvert ; fermer l'onglet arrête le process.
 
 ### Paramètres (modale ⚙️)
 - **Thème** : sombre (défaut) ou clair.

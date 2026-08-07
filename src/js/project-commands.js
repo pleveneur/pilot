@@ -5,26 +5,21 @@
 // peut ajouter / modifier / supprimer des commandes. Chaque commande = un nom +
 // une commande shell + un dossier de travail (vide = racine du projet). Clic sur
 // une commande → le système se place dans le dossier puis lance la commande dans
-// un terminal embarqué (modale de résultat avec un bouton « Fermer »).
+// un onglet terminal dédié (#29), puis ferme la liste des commandes.
 
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { createTerminal, killTerminal } from "./terminal.js";
 import { refreshIcons } from "./icons.js";
 import { toastSuccess, toastError } from "./toast.js";
 
-let commandsModal, commandsList, runModal, runContainer, runName;
+let commandsModal, commandsList;
 let currentProject = "";
 let currentCommands = [];
 let editingId = null;
-let currentRunTerminal = null; // { unlisten, terminalId }
 
 export function initProjectCommands() {
   commandsModal = document.getElementById("commands-modal");
   commandsList = document.getElementById("commands-list");
-  runModal = document.getElementById("command-run-modal");
-  runContainer = document.getElementById("command-run-container");
-  runName = document.getElementById("command-run-name");
 
   document.getElementById("btn-commands").addEventListener("click", openCommandsModal);
   document.getElementById("btn-close-commands").addEventListener("click", () =>
@@ -38,8 +33,6 @@ export function initProjectCommands() {
   document.getElementById("btn-cancel-command").addEventListener("click", () =>
     document.getElementById("command-form-modal").classList.add("hidden")
   );
-
-  document.getElementById("btn-close-command-run").addEventListener("click", closeRunModal);
 
   // Entrée pour soumettre le formulaire.
   document.getElementById("cmd-command").addEventListener("keydown", (e) => {
@@ -165,50 +158,23 @@ async function deleteCommand(cmd) {
   }
 }
 
-// ── Exécution d'une commande (résultat dans une modale) ──
+// ── Exécution d'une commande (#29) : dans un onglet terminal, puis fermer la liste ──
 
 async function runCommand(cmd) {
-  const fullCwd = cmd.cwd ? joinPath(currentProject, cmd.cwd) : currentProject;
-  runName.textContent = cmd.name || cmd.command;
-  runContainer.innerHTML = "";
-  runModal.classList.remove("hidden");
   try {
-    const result = await createTerminal(runContainer, currentProject, false, {
-      cwd: fullCwd,
-      command: cmd.command,
-    });
-    currentRunTerminal = { unlisten: result.unlisten, terminalId: result.terminalId };
-    setTimeout(() => result.terminal.focus(), 100);
+    const { getTabsManager } = await import("./tabs.js");
+    await getTabsManager().openProjectCommand(cmd);
+    // Fermer la liste des commandes : le traitement continue dans l'onglet.
+    commandsModal.classList.add("hidden");
   } catch (e) {
-    runContainer.innerHTML = `<div style="padding:1em;color:var(--danger);">❌ Erreur : ${e}</div>`;
+    toastError("Erreur : " + e);
   }
-}
-
-async function closeRunModal() {
-  runModal.classList.add("hidden");
-  if (currentRunTerminal) {
-    if (currentRunTerminal.unlisten) currentRunTerminal.unlisten();
-    try {
-      await killTerminal(currentRunTerminal.terminalId);
-    } catch (_) {
-      /* ignore */
-    }
-    currentRunTerminal = null;
-  }
-  runContainer.innerHTML = "";
 }
 
 // ── Utilitaires ──
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function joinPath(root, rel) {
-  const sep = root.includes("\\") ? "\\" : "/";
-  const clean = String(rel).replace(/^[\\/]+/, "").replace(/[\\/]+$/, "");
-  if (!clean) return root;
-  return root.replace(/[\\/]+$/, "") + sep + clean;
 }
 
 function esc(s) {

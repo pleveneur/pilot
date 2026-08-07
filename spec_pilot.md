@@ -150,7 +150,7 @@ utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
 ### Palette de commandes du projet (#17)
 - Bouton **▶** (panneau d'actions, `square-terminal`) : modale listant les **commandes paramétrées du projet courant**, stockées **par projet** dans `.pilot/commands.json`. Actions **Ajouter / Modifier / Supprimer** (suppression confirmée).
 - Chaque commande = **nom** + **commande shell** (ex: `npm run build`, `cargo build`) + **dossier de travail** (relatif au projet, vide = racine).
-- **Clic sur une commande** → le système se place dans le dossier configuré puis lance la commande dans un **terminal embarqué** (PTY, sortie temps réel) affiché dans une **modale de résultat** avec un bouton **Fermer** (arrête le PTY et ferme).
+- **Clic sur une commande** → le système se place dans le dossier configuré puis lance la commande dans un **onglet terminal dédié** (#29) : titre = nom de la commande, liste des commandes fermée. Relancer une commande déjà ouverte **bascule** sur son onglet (sans relancer le process). Fermer l'onglet arrête le PTY (comportement identique au terminal intégré).
 - Backend : `files::read_project_commands` / `files::save_project_commands` (`.pilot/commands.json`), `terminal::spawn_terminal_command` (PTY avec `cwd` + commande explicites). Frontend : `project-commands.js`.
 
 <!-- HELP:commands -->
@@ -166,9 +166,9 @@ d'actions (icône **▶ square-terminal**).
   (ex: `web/`). Laissez vide pour partir de la racine du projet.
 - **Modifier / Supprimer** : boutons ✏️ / 🗑 sur chaque ligne (la suppression est
   confirmée).
-- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré,
-  et la **sortie (temps réel)** s'affiche dans une modale. Cliquez sur **Fermer**
-  pour arrêter la commande et fermer la modale.
+- **Lancer** : cliquez sur une commande → elle se lance dans le dossier configuré dans un **onglet terminal** (titre = nom de la commande), et la **sortie (temps réel)** s'affiche dans cet onglet. La liste des commandes se ferme. Vous pouvez continuer à travailler pendant l'exécution.
+- **Relancer** : cliquez à nouveau sur la même commande → Pilot **bascule sur l'onglet déjà ouvert** (sans relancer le process).
+- **Fermer** : fermez l'onglet pour **arrêter la commande** (comme un terminal intégré).
 - Les commandes sont **propres à chaque projet** (fichier `.pilot/commands.json`,
   versionnable avec le projet).
 <!-- /HELP:commands -->
