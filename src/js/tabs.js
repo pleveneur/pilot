@@ -347,6 +347,13 @@ class TabsManager {
     this.tabs.push(tab);
     this._renderTabButton(tab);
     this.switchTab(id);
+    // Persister immédiatement `hadAgent` pour ce projet : sans cela, ouvrir
+    // l'onglet agent ne déclenchait aucune sauvegarde et le flag n'était mis à
+    // jour que si une autre sauvegarde survenait avant de quitter le projet →
+    // un projet quitté après avoir ouvert l'agent perdait son onglet au retour.
+    // (bloqué pendant restoreTabs par `_restoring` ; safe ici car tab déjà
+    // poussé dans this.tabs.)
+    this._scheduleSave();
 
     // ── E4 : health check de l'agent avant de tenter start_agent_session ──
     // Si l'exécutable configuré (pi/plh) est absent ou ne répond pas, on affiche
@@ -1031,7 +1038,14 @@ class TabsManager {
         tab.unlistenDragDrop();
         tab.unlistenDragDrop = null;
       }
-      invoke("stop_agent_session").catch(() => {});
+      // `skipAgentStop` (bascule de projet) : l'agent a déjà été « parké »
+      // (processus pi vivant rangé dans ProjectState.rpc), on ne doit PAS appeler
+      // stop_agent_session — sinon on émettrait une commande qui, traitée après le
+      // start_agent_session du projet suivant, tuerait la session parkée venue
+      // d'être reprise. Dans le cas normal (fermeture d'onglet), on arrête bien.
+      if (!options.skipAgentStop) {
+        invoke("stop_agent_session").catch(() => {});
+      }
     }
     // Nettoyage prompt builder
     if (tab.mode === "prompt-builder" && tab.unlistenPromptBuilder) {
@@ -2118,6 +2132,28 @@ class TabsManager {
    * Réorganise this.tabs et le DOM : déplace sourceId juste avant/après targetId.
    * Déclenche la persistance de la session pour garder l'ordre entre les sessions.
    */
+  /**
+   * Déplace un onglet à un index précis dans `tabs.tabs` + la barre d'onglets
+   * (utilisé par restoreTabs pour rétablir la position persistée de l'onglet
+   * agent). Pas de sauvegarde : pendant la restauration elle est déjà supprimée
+   * par `_pilotSuppressSave`.
+   */
+  _moveTabToIndex(tabId, targetIndex) {
+    const sourceIdx = this.tabs.findIndex((t) => String(t.id) === String(tabId));
+    if (sourceIdx === -1) return;
+    const [movedTab] = this.tabs.splice(sourceIdx, 1);
+    const btn = this.tabBar.querySelector(`[data-tab-id="${tabId}"]`);
+    if (btn) btn.remove();
+    // Après retrait, `this.tabs` et la tabBar ont N-1 éléments en correspondance.
+    const clamped = Math.max(0, Math.min(targetIndex, this.tabs.length));
+    this.tabs.splice(clamped, 0, movedTab);
+    if (btn) {
+      const ref = this.tabBar.children[clamped];
+      if (ref) this.tabBar.insertBefore(btn, ref);
+      else this.tabBar.appendChild(btn);
+    }
+  }
+
   _reorderTab(sourceId, targetId, insertAfter) {
     if (String(sourceId) === String(targetId)) return;
     const sourceIdx = this.tabs.findIndex((t) => String(t.id) === String(sourceId));

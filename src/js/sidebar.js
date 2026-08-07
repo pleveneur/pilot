@@ -9,7 +9,7 @@ import { exportMarkdownToHtml } from "./html-export.js";
 import { convertPdfToMd } from "./pdf-to-markdown.js";
 import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
 import { openGitDiffModal } from "./diff-view.js";
-import { restoreTabs, saveTabSession } from "./session-persistence.js";
+import { restoreTabs, saveTabSession, cancelScheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
@@ -395,8 +395,16 @@ class Sidebar {
   }
 
   async openProjectByPath(folderPath) {
+    // Sauvegarder la session du projet courant AVANT de fermer ses onglets :
+    // contrairement à _activateProject, ce chemin (📁 nouveau dossier / liste des
+    // récents) ne la sauvait pas → un projet quitté ici gardait un flag `hadAgent`
+    // obsolète et son onglet agent n'était pas restauré au retour.
+    const cur = window._pilotProjectPath;
+    if (cur && cur !== folderPath) {
+      await saveTabSession(this.tabs, cur);
+    }
     // Fermer tous les onglets du projet précédent (sans confirmation pour l'agent)
-    const hadAgentTab = this._closeAllTabs();
+    await this._closeAllTabs();
 
     // Stocker le chemin du projet pour la résolution des images
     window._pilotProjectPath = folderPath;
@@ -422,13 +430,9 @@ class Sidebar {
       this._renderOpenProjectsBar();
       invoke("set_window_title", { title: `Pilot ${folderPath}` }).catch(() => {});
 
-      // Restaurer les onglets de la session précédente
+      // Restaurer les onglets de la session précédente (restoreTabs rouvre aussi
+      // l'onglet agent de CE projet si la session persistée en avait un).
       restoreTabs(this.tabs, folderPath);
-
-      // Rouvrir l'agent si on avait un onglet agent ouvert
-      if (hadAgentTab) {
-        await this.tabs.openFile(agentDisplayLabel(), "agent");
-      }
       toastSuccess("Projet ouvert : " + name);
     } catch (e) {
       toastError("Erreur ouverture projet : " + e);
@@ -1198,7 +1202,6 @@ class Sidebar {
       showLoading("Bascule du projet…");
       // Sauvegarder la session du projet courant et fermer ses onglets
       const cur = window._pilotProjectPath;
-      let hadAgentTab = false;
       if (cur && cur !== path) {
         await saveTabSession(this.tabs, cur);
         // Multi-projets : « parker » la session de l'agent du projet courant
@@ -1209,7 +1212,9 @@ class Sidebar {
         if (hasAgent) {
           await invoke("park_agent_session").catch(() => {});
         }
-        hadAgentTab = this._closeAllTabs();
+        // `parked=true` : ne pas émettre stop_agent_session pour l'agent (il est
+        // parké, pas arrêté) — évite toute course avec start_agent_session.
+        await this._closeAllTabs(true);
       }
       // Prélixer le projet cible AVANT l'invoke pour que le listener
       // `project_changed` ignore cet event (il ferait une double resync).
@@ -1217,12 +1222,10 @@ class Sidebar {
       await invoke("set_active_project", { path });
       await this.resyncProjectFromRemote(path);
       this._renderOpenProjectsBar();
-      // Restaurer les onglets de CE projet
+      // Restaurer les onglets de CE projet — restoreTabs rouvre aussi son onglet
+      // agent si la session persistée en avait un (la session parkée est alors
+      // reprise et la conversation réaffichée).
       restoreTabs(this.tabs, path);
-      // Rouvrir l'agent de CE projet s'il en avait un
-      if (hadAgentTab) {
-        await this.tabs.openFile(agentDisplayLabel(), "agent");
-      }
       toastSuccess("Projet actif : " + path.split(/[\\/]/).pop());
     } catch (e) {
       toastError("Bascule projet : " + e);
@@ -1303,12 +1306,37 @@ class Sidebar {
    * Ferme tous les onglets ouverts (utilisé lors du changement/fermeture de projet).
    * Retourne true si un onglet agent était ouvert (pour le rouvrir ensuite).
    */
-  _closeAllTabs() {
-    const hadAgentTab = this.tabs.tabs.some((t) => t.mode === "agent");
-    for (const tab of [...this.tabs.tabs]) {
-      this.tabs.closeTab(tab.id, { skipConfirm: true });
+  async _closeAllTabs(parked = false) {
+    // Suspendre les sauvegardes debounce pendant la fermeture des onglets : le
+    // debounce global (unique) ne doit pas se déclencher dans la fenêtre entre le
+    // changement de projet actif et `restoreTabs`, sinon il réécrirait la session
+    // du projet entrant avec des onglets vides (perte du flag `hadAgent`). Les
+    // sessions sortantes sont déjà sauvées explicitement (`saveTabSession`) avant
+    // `_closeAllTabs` par chaque chemin de bascule/fermeture.
+    window._pilotSuppressSave = true;
+    cancelScheduleSave();
+    try {
+      const hadAgentTab = this.tabs.tabs.some((t) => t.mode === "agent");
+      // ATTEND la fin de la fermeture de CHAQUE onglet : `closeTab` est async et
+      // retarde le retrait de `this.tabs` (await de confirmation/sauvegarde/stop).
+      // Sans `await`, la bascule de projet lançait `restoreTabs` (qui rouvre l'onglet
+      // agent du projet entrant via `_openAgent`) AVANT que l'onglet agent du projet
+      // sortant soit réellement retiré de `this.tabs` → `_openAgent` trouvait cet
+      // onglet résiduel (le projet sortant) et faisait `switchTab` au lieu d'en créer
+      // un neuf → au retour sur un projet, son onglet agent « disparaissait ».
+      // L'`await` garantit aussi que, si `stop_agent_session` est émis (cas non parké),
+      // il l'est AVANT `start_agent_session` du projet entrant. En cas de bascule
+      // (`parked=true`), `skipAgentStop` évite même d'émettre stop_agent_session :
+      // l'agent parké ne doit pas être arrêté.
+      await Promise.all(
+        [...this.tabs.tabs].map((tab) =>
+          this.tabs.closeTab(tab.id, { skipConfirm: true, skipAgentStop: !!parked }).catch(() => {})
+        )
+      );
+      return hadAgentTab;
+    } finally {
+      window._pilotSuppressSave = false;
     }
-    return hadAgentTab;
   }
 
   /**
@@ -1403,7 +1431,7 @@ class Sidebar {
     this.ddCloseSeparator.classList.add("hidden");
     this._renderOpenProjectsBar();
     // Fermer tous les onglets ouverts
-    this._closeAllTabs();
+    await this._closeAllTabs();
     // Réinitialiser le chemin du projet
     window._pilotProjectPath = null;
     // Notifier la fermeture du projet (badge 🔒 H7)

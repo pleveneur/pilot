@@ -147,6 +147,18 @@ struct AppState {
 - Au basculement (desktop), `_activateProject` : sauvegarde la session onglets,
   parke l'agent, ferme les onglets, invoque `set_active_project`, restaure les
   onglets du projet, rouvre l'onglet agent si le projet en avait un.
+- **Réouverture de l'onglet agent par projet (corrigé 2026-08)** : la décision de
+  rouvrir l'onglet agent au retour sur un projet était basée sur les onglets du
+  projet **sortant** (bug `hadAgentTab = _closeAllTabs()`), pas sur le projet
+  **cible** → un chat lancé sur un projet puis quitté n'était plus affiché au
+  retour (le process pi parké continuait en arrière-plan, mais l'UI ne le
+  rouvrait pas, d'où l'impression que l'agent « s'était arrêté »). Correctif :
+  `saveTabSession` persiste désormais un flag `hadAgent` (l'onglet agent n'a pas
+  de path et était exclu de `serializable`), et `restoreTabs` rouvre l'onglet
+  agent de CE projet via `tabs.openFile(agentDisplayLabel(), "agent")` si ce
+  flag est posé → la session parkée est reprise (`start_agent_session` →
+  `resumed=true`) et la conversation réaffichée (`renderMessageHistory`).
+  Corrige aussi la réouverture de l'agent au démarrage (`openProjectByPath`).
 
 ## 5. Points de vigilance / décisions
 
@@ -200,6 +212,14 @@ struct AppState {
    reset que si `rpc_state` contenait une session) — jamais lors d'un simple
    **parking** (bascule de projet), sinon la pastille d'un agent qui travaille en
    arrière-plan s'éteindrait à tort. L'entrée est retirée à la fermeture du projet.
+   - **Fenêtre de grâce anti-flicker** : en orchestration, chaque sous-tâche
+     termine par un `agent_settled` (fin d'exécution) alors que le plan global
+     continue. Pour éviter que la pastille n'oscille en « en attente » entre deux
+     sous-tâches, un projet reste **occupé** tant que `busy` OU qu'une activité RPC
+     récente (fenêtre de `ACTIVITY_GRACE_SECS`=15 s, basée sur `SessionActivity.updated`,
+     rafraîchie par `ACTIVITY_EVENTS`) — voir `make_project_activity_observer` et
+     `get_project_agent_states`. `reset_project_activity` (arrêt/fermeture) recule
+     `updated` dans le passé pour sortir immédiatement de la grâce → « en attente ».
 8. **Fuite de processus `plh.exe` à la fermeture de projet (issue #14)** :
    - `close_project` arrête désormais **aussi** la session reviewer (`rpc_reviewer`,
      `pi`/`plh.exe` séparé `--no-session`) en plus de la session principale et des
@@ -212,6 +232,37 @@ struct AppState {
      restait vivante hors de tout slot traçable et n'était jamais tuée à la fermeture
      de son projet. Le web-remote capture `was_active` **avant** la bascule pour
      conserver son redémarrage d'agent.
+9. **Réouverture de l'onglet agent au retour sur un projet (corrigé 2026-08)** :
+   l'onglet agent est désormais suivi par un flag `hadAgent` dans la session d'onglets
+   persistée par projet (`saveTabSession`), et `restoreTabs` le rouvre automatiquement
+   (`tabs.openFile(agentDisplayLabel(), "agent")`) → la session parkée est reprise et
+   la conversation réaffichée au retour, garantissant un vrai fonctionnement parallèle
+   multi-agents visible côté UI. Trois points étaient à corriger :
+   - **`hadAgent` non persisté** : l'onglet agent n'ayant pas de path, il était exclu
+     de `serializable` → ajout d'un flag `hadAgent` dans la session.
+   - **Retour anticipé de `restoreTabs`** : la garde `if (tabs.length === 0) return`
+     empêchait d'atteindre le bloc de réouverture quand le projet n'avait QUE son
+     onglet agent (aucun onglet d'édition). `restoreTabs` gère désormais `hasTabs` et
+     `hasAgent` indépendamment.
+   - **Debounce global `scheduleSave` (course multi-projets)** : le timeout de
+     sauvegarde capturait le `projectPath` à la planification. Si l'utilisateur ouvrait
+     l'onglet agent de A puis basculait sur B (< 300 ms), le timeout réécrivait la
+     session de A avec les onglets de B (et le `hadAgent` de B) → l'onglet agent de A
+     disparaissait au retour. Le debounce sauvegarde désormais le projet ACTIF au
+     moment du déclenchement (`window._pilotProjectPath`) ; la session d'un projet
+     quitté reste celle écrite par `saveTabSession` lors de la bascule.
+   - **Course async `_closeAllTabs` (cause racine immédiate)** : `closeTab` est async
+     et retire l'onglet de `this.tabs` seulement à la fin de ses `await`. Sans attendre,
+     la bascule lançait `restoreTabs` (qui rouvre l'onglet agent du projet entrant via
+     `_openAgent`) AVANT que l'onglet agent du projet sortant soit réellement retiré →
+     `_openAgent` trouvait cet onglet résiduel (le projet sortant) et faisait `switchTab`
+     au lieu d'en créer un neuf → au retour, l'onglet agent « disparaissait ». `_closeAllTabs`
+     est désormais `async` et attend `Promise.all` des `closeTab` (aux 3 appels :
+     `openProjectByPath`, `_activateProject`, `closeProject`). En cas de bascule parkée,
+     on passe `skipAgentStop` à la fermeture de l'onglet agent : l'agent parké n'est PAS
+     arrêté (plus aucune commande `stop_agent_session` en vol qui pourrait, traitée après
+     le `start_agent_session` du projet suivant, tuer la session parkée venue d'être
+     reprise).
 
 ---
 

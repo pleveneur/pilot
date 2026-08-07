@@ -149,9 +149,36 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
     }
 }
 
+/// Fenêtre (s) pendant laquelle un projet reste « occupé » après sa dernière
+/// activité RPC, même après un `agent_settled`. Évite que la pastille n'oscille
+/// en « en attente » entre deux sous-tâches d'un même plan d'orchestration
+/// (chaque `agent_settled` termine une exécution, mais le plan global continue).
+const ACTIVITY_GRACE_SECS: u64 = 15;
+
+/// Événements RPC considérés comme une activité de l'agent (maintiennent le
+/// projet « occupé »). `agent_start`/`agent_settled` basculent le drapeau busy ;
+/// tous rafraîchissent `updated` pour la fenêtre de grâce anti-flicker.
+const ACTIVITY_EVENTS: &[&str] = &[
+    "agent_start",
+    "agent_end",
+    "agent_settled",
+    "turn_start",
+    "message_start",
+    "message_update",
+    "message_end",
+    "tool_execution_start",
+    "tool_execution_update",
+    "tool_execution_end",
+    "compaction_start",
+    "compaction_end",
+    "auto_retry_start",
+    "auto_retry_end",
+];
+
 /// Construit l'observateur d'événements RPC qui alimente la map d'activité par
 /// projet (issue #13). Sur `agent_start` → busy=true ; sur `agent_settled` →
 /// busy=false (fin définitive d'une exécution, après retries/compaction).
+/// `ACTIVITY_EVENTS` rafraîchit `updated` (base de la fenêtre de grâce anti-flicker).
 fn make_project_activity_observer(
     map: &Arc<Mutex<HashMap<String, crate::SessionActivity>>>,
     project_key: &str,
@@ -160,7 +187,7 @@ fn make_project_activity_observer(
     let key = project_key.to_string();
     Arc::new(move |value: &Value| {
         let t = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if t != "agent_start" && t != "agent_settled" {
+        if !ACTIVITY_EVENTS.contains(&t) {
             return;
         }
         let mut m = map.lock().unwrap();
@@ -169,7 +196,11 @@ fn make_project_activity_observer(
             busy: false,
             updated: now,
         });
-        entry.busy = t == "agent_start";
+        if t == "agent_start" {
+            entry.busy = true;
+        } else if t == "agent_settled" {
+            entry.busy = false;
+        }
         entry.updated = now;
     })
 }
@@ -179,6 +210,10 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
     let mut m = state.agent_activity.lock().unwrap();
     if let Some(e) = m.get_mut(project_key) {
         e.busy = false;
+        // Mettre `updated` dans le passé pour sortir aussi de la fenêtre de grâce :
+        // un agent réellement stoppé/fermé doit passer « en attente » immédiatement.
+        e.updated = std::time::Instant::now()
+            - std::time::Duration::from_secs(ACTIVITY_GRACE_SECS + 1);
     }
 }
 
@@ -192,9 +227,17 @@ pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String>
     let keys: Vec<String> = projects.keys().cloned().collect();
     drop(projects);
     let activity = state.agent_activity.lock().unwrap();
+    let now = std::time::Instant::now();
+    let grace = std::time::Duration::from_secs(ACTIVITY_GRACE_SECS);
     let mut map = serde_json::Map::new();
     for k in keys {
-        let busy = activity.get(&k).map(|a| a.busy).unwrap_or(false);
+        // Un projet reste « occupé » tant que busy OU qu'une activité récente
+        // (fenêtre de grâce) : évite le flicker « prêt » entre deux sous-tâches
+        // d'un plan orchestration encore en cours.
+        let busy = activity
+            .get(&k)
+            .map(|a| a.busy || now.duration_since(a.updated) < grace)
+            .unwrap_or(false);
         map.insert(k, serde_json::json!({ "busy": busy }));
     }
     Ok(Value::Object(map))
