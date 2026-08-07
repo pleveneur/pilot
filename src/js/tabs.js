@@ -2230,14 +2230,7 @@ class TabsManager {
   }
 
   _showEmpty() {
-    let el = this.container.querySelector(".empty-message");
-    if (!el) {
-      el = document.createElement("p");
-      el.className = "empty-message";
-      el.textContent = "Ouvrez un fichier depuis l'explorateur";
-      this.container.appendChild(el);
-    }
-    el.style.display = "";
+    // Message vide supprimé (aucun affichage au centre de l'écran)
   }
 
   _hideEmpty() {

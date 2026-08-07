@@ -882,7 +882,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   console.log("🚀 Pilot prêt.");
 
+  // Masquer l'écran de chargement une fois tout initialisé
+  const bootOverlay = document.getElementById("boot-overlay");
+  if (bootOverlay) bootOverlay.classList.add("hidden");
+
   } catch (err) {
     console.error("💥 Erreur initialisation Pilot:", err);
+    // En cas d'erreur, masquer quand même l'écran de chargement
+    const bootOverlay = document.getElementById("boot-overlay");
+    if (bootOverlay) bootOverlay.classList.add("hidden");
   }
 });
