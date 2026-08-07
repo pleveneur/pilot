@@ -1974,7 +1974,8 @@ class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}`;
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder"].includes(tab.mode);
+    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}`;
     btn.dataset.tabId = tab.id;
 
     const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";

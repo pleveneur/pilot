@@ -26,11 +26,21 @@ export function truncateToTokens(str, budgetTokens) {
   return head + "\n…[tronqué " + Math.round((str.length - head.length) / 3.5) + " tokens]…";
 }
 
-/** Lit un fichier en sécurité (retourne null si absent/illisible). */
+/** Taille max d'un fichier lu par le Context Engine (octets). Au-delà, le
+ *  fichier est ignoré : le lire en entier bloquerait le thread principal
+ *  (read_file_content n'a pas de limite) et gèlerait l'UI sur les gros
+ *  projets (ex: bundle minifié, fichier de données). Aligné sur la limite
+ *  du build RAG Rust (MAX_FILE_BYTES = 512 Ko). 512 Ko ≈ 128k tokens, bien
+ *  au-delà du budget de contexte (8k par défaut) — inutile de le lire. */
+const MAX_CONTEXT_FILE_SIZE = 512 * 1024; // 512 Ko
+
+/** Lit un fichier en sécurité (retourne null si absent/illisible/trop gros). */
 async function readSafe(absPath) {
   try {
     const exists = await invoke("file_exists", { path: absPath });
     if (!exists) return null;
+    const size = await invoke("get_file_size", { path: absPath });
+    if (size > MAX_CONTEXT_FILE_SIZE) return null;
     const text = await invoke("read_file_content", { path: absPath });
     return text == null ? null : text;
   } catch (_) {

@@ -136,6 +136,15 @@ pub fn file_exists(path: String) -> bool {
     std::path::Path::new(&path).exists()
 }
 
+/// Renvoie la taille d'un fichier en octets (0 si absent/illisible).
+/// Utilisé par le Context Engine pour ignorer les gros fichiers (anti-gel).
+#[tauri::command]
+pub fn get_file_size(path: String) -> u64 {
+    fs::metadata(&path)
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
 /// Renvoie la date de dernière modification d'un fichier (mtime) en millisecondes
 /// depuis l'epoch UNIX. Utilisé par le Mode Orchestration pour détecter qu'un
 /// fichier a été créé/modifié par le codeur après une tâche.

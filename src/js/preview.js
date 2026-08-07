@@ -435,8 +435,44 @@ export async function createPreview(container, markdownContent, projectPath = nu
   await resolveImagePaths(wrapper, projectPath);
   container.appendChild(wrapper);
   await processMermaidBlocks(wrapper);
+  attachCopyButtons(wrapper);
   attachPreviewLinkHandler(wrapper);
   return wrapper;
+}
+
+/**
+ * Ajoute un bouton « copier » sur chaque bloc de code (pre) de la prévisualisation.
+ * Les blocs Mermaid sont déjà remplacés par du SVG à ce stade, donc non concernés.
+ * @param {HTMLElement} wrapper
+ */
+function attachCopyButtons(wrapper) {
+  const pres = wrapper.querySelectorAll("pre");
+  pres.forEach((pre) => {
+    if (pre.querySelector(".code-copy-btn")) return;
+    const btn = document.createElement("button");
+    btn.className = "code-copy-btn";
+    btn.type = "button";
+    btn.title = "Copier le code";
+    btn.textContent = "⧉";
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const code = pre.querySelector("code");
+      const text = code ? code.textContent : pre.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = "✓";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = "⧉";
+          btn.classList.remove("copied");
+        }, 1500);
+      } catch (err) {
+        btn.textContent = "✕";
+        setTimeout(() => { btn.textContent = "⧉"; }, 1500);
+      }
+    });
+    pre.appendChild(btn);
+  });
 }
 
 /**
@@ -449,4 +485,5 @@ export async function updatePreview(wrapper, markdownContent, projectPath = null
   wrapper.innerHTML = renderMarkdown(markdownContent);
   await resolveImagePaths(wrapper, projectPath);
   await processMermaidBlocks(wrapper);
+  attachCopyButtons(wrapper);
 }

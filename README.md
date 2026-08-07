@@ -71,6 +71,10 @@
 
 ### Paramètres (modale ⚙️)
 - **Thème** : sombre (défaut) ou clair.
+- **Sous-thème** : 5 palettes par mode (dark : One Dark, Dracula, Nord, Tokyo Night ;
+  light : GitHub Light, One Light, Solarized Light, Tokyo Night Day). **Aperçu en direct** :
+  le style change immédiatement à la sélection, avant enregistrement (annulé si on
+  ferme sans sauvegarder).
 - **Commande par défaut** : exécutée automatiquement via le bouton π (ex : `python main.py`, `pi`).
 - **Charger le dernier projet** au démarrage.
 - **Lancer la commande au démarrage**.

@@ -128,6 +128,13 @@ Aucune nouvelle commande Rust lourde en V1 : on réutilise `read_file_content`,
 - V2 : embeddings locaux via Ollama, graphe de dépendances, scoring par similarité
   au prompt, budget dynamique selon le modèle (fenêtre de contexte).
 - V1 ne couvre pas Rust/C++ pour les imports (modules/CRATE complexes).
+- **Garde de taille (anti-gel)** : les fichiers de plus de **512 Ko** sont ignorés
+  par le Context Engine (V1 et V2). `read_file_content` n'a pas de limite de
+  taille ; sur un gros projet (ex: bundle minifié, fichier de données), lire un
+  tel fichier en entier bloquerait le thread principal et gèlerait l'UI. La garde
+  est appliquée côté JS (`MAX_CONTEXT_FILE_SIZE` dans `context-engine.js`) et côté
+  Rust (`MAX_FILE_BYTES` dans `context_engine.rs`). 512 Ko ≈ 128k tokens, bien
+  au-delà du budget de contexte (8k par défaut) — inutile de les lire.
 
 ---
 

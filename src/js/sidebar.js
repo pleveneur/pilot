@@ -843,6 +843,8 @@ class Sidebar {
     }
 
     this.contextMenu.classList.remove("hidden");
+    // Masquer les séparateurs orphelins (pas de bouton visible de part et d'autre)
+    this._syncMenuSeparators();
     // Positionnement avec clamp : si le clic est près du bord droit ou bas de
     // la fenêtre (ex: fichier en bas de l'arborescence), on décale le menu pour
     // qu'il ne soit pas coupé. Le menu est position:fixed (enfant du body),
@@ -898,6 +900,31 @@ class Sidebar {
   hideContextMenu() {
     this.contextMenu.classList.add("hidden");
     this.contextMenuPath = null;
+  }
+
+  /**
+   * Masque les séparateurs du menu contextuel qui n'ont pas de bouton visible
+   * de part et d'autre (évite les lignes orphelines quand des boutons sont
+   * masqués selon le contexte : dossier, zone vide, type de fichier).
+   */
+  _syncMenuSeparators() {
+    const items = Array.from(this.contextMenu.children);
+    items.forEach((el, i) => {
+      if (!el.classList.contains("menu-separator")) return;
+      let prevVisible = false;
+      for (let j = i - 1; j >= 0; j--) {
+        const sib = items[j];
+        if (sib.classList.contains("menu-separator")) break;
+        if (sib.style.display !== "none") { prevVisible = true; break; }
+      }
+      let nextVisible = false;
+      for (let j = i + 1; j < items.length; j++) {
+        const sib = items[j];
+        if (sib.classList.contains("menu-separator")) break;
+        if (sib.style.display !== "none") { nextVisible = true; break; }
+      }
+      el.style.display = (prevVisible && nextVisible) ? "" : "none";
+    });
   }
 
   _handleFileChange(payload) {

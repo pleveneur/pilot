@@ -130,6 +130,8 @@ struct AppState {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
     theme: String,
+    #[serde(default)]
+    subtheme: String,
     default_command: String,
     #[serde(default)]
     recent_projects: Vec<String>,
@@ -424,6 +426,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
+            subtheme: "default".to_string(),
             default_command: String::new(),
             recent_projects: Vec::new(),
             open_projects: Vec::new(),
@@ -996,6 +999,7 @@ fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, Strin
     // Chargement paresseux : si le config est encore le défaut, tenter de charger du disque
     let default = AppConfig::default();
     if config.theme == default.theme
+        && config.subtheme == default.subtheme
         && config.default_command == default.default_command
         && config.recent_projects.is_empty()
         && config.last_project == default.last_project
@@ -1684,6 +1688,7 @@ pub fn run() {
             files::save_project_commands,
             files::file_exists,
             files::file_mtime,
+            files::get_file_size,
             open_terminal,
             get_config,
             save_config,

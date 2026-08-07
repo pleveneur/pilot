@@ -50,6 +50,76 @@ const state = {
 
 // ── Helpers HTTP ──
 
+// ── Thème / sous-thème web (aperçu en direct, persisté en localStorage) ──
+const WEB_THEME_KEY = 'pilot_web_theme';
+const WEB_SUBTHEME_KEY = 'pilot_web_subtheme';
+const WEB_SUBTHEMES = {
+  dark: [
+    { id: 'default', label: 'Pilot (défaut)' },
+    { id: 'one-dark', label: 'One Dark' },
+    { id: 'dracula', label: 'Dracula' },
+    { id: 'nord', label: 'Nord' },
+    { id: 'tokyo-night', label: 'Tokyo Night' },
+  ],
+  light: [
+    { id: 'default', label: 'Pilot (défaut)' },
+    { id: 'github', label: 'GitHub Light' },
+    { id: 'one-light', label: 'One Light' },
+    { id: 'solarized', label: 'Solarized Light' },
+    { id: 'tokyo-day', label: 'Tokyo Night Day' },
+  ],
+};
+
+function populateWebSubtheme(theme, selected) {
+  const sel = document.getElementById('web-subtheme');
+  if (!sel) return;
+  const list = WEB_SUBTHEMES[theme] || WEB_SUBTHEMES.dark;
+  sel.innerHTML = '';
+  list.forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.label;
+    if (s.id === selected) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+function applyWebTheme(theme, subtheme) {
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+  if (subtheme && subtheme !== 'default') {
+    root.setAttribute('data-subtheme', subtheme);
+  } else {
+    root.removeAttribute('data-subtheme');
+  }
+  localStorage.setItem(WEB_THEME_KEY, theme);
+  localStorage.setItem(WEB_SUBTHEME_KEY, subtheme || 'default');
+}
+
+function initWebTheme() {
+  const theme = localStorage.getItem(WEB_THEME_KEY) || 'dark';
+  const subtheme = localStorage.getItem(WEB_SUBTHEME_KEY) || 'default';
+  const themeSel = document.getElementById('web-theme');
+  if (themeSel) themeSel.value = theme;
+  populateWebSubtheme(theme, subtheme);
+  applyWebTheme(theme, subtheme);
+
+  const themeSel2 = document.getElementById('web-theme');
+  const subSel = document.getElementById('web-subtheme');
+  if (themeSel2) {
+    themeSel2.addEventListener('change', () => {
+      const t = themeSel2.value;
+      populateWebSubtheme(t, 'default');
+      applyWebTheme(t, subSel.value);
+    });
+  }
+  if (subSel) {
+    subSel.addEventListener('change', () => {
+      applyWebTheme(themeSel2.value, subSel.value);
+    });
+  }
+}
+
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
@@ -1597,6 +1667,9 @@ function toggleVoiceInput() {
 })();
 
 // ── Démarrage ──
+
+// Applique le thème/sous-thème persisté (y compris sur l'écran de connexion)
+initWebTheme();
 
 if (state.token) {
   // Vérifier le token en tentant un fetch protégé.

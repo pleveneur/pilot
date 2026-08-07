@@ -47,6 +47,7 @@ Un serveur HTTP/WebSocket tourne **dans le même processus Tauri** que Pilot des
 ### Stack
 - **Backend** : `axum` sur runtime `tokio`, thread dédié (`std::thread::spawn`) dans le processus Tauri. Routes REST + WebSocket.
 - **Frontend web** : page HTML/CSS/JS servie par axum (dossier `web/`), modules ES, **sans Vite/build**. Réutilise le thème dark/light et `markdown-it` (rendu). Highlight lecture : Shiki ou highlight.js.
+- **Thème / sous-thèmes** : sélecteur dans la barre supérieure (🌙 Sombre / ☀️ Clair + sous-thème). Aperçu en direct, persisté en `localStorage` (`pilot_web_theme` / `pilot_web_subtheme`). Mêmes 5 sous-thèmes par mode que le desktop (One Dark, Dracula, Nord, Tokyo Night / GitHub Light, One Light, Solarized Light, Tokyo Night Day).
 - **Transport temps réel** : un WebSocket `/ws/agent` diffusant tous les événements RPC + les événements de projet (`project_changed`, `tree_changed`).
 
 ---

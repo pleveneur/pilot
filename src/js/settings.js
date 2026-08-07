@@ -1,13 +1,35 @@
 // settings.js — Modale de paramètres
 
 import { invoke } from "@tauri-apps/api/core";
-import { applyTheme, getCurrentTheme } from "./theme.js";
+import { applyTheme, getCurrentTheme, getCurrentSubtheme, SUBTHEMES } from "./theme.js";
 import { refreshShowThinking, refreshShowTools } from "./agent-pi.js";
 import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 
 let currentConfig = null;
+
+// Thème/sous-thème sauvegardés (pour revert à la fermeture sans enregistrer)
+let savedTheme = "dark";
+let savedSubtheme = "default";
+
+/**
+ * Peuple le sélecteur de sous-thèmes selon le thème (dark/light).
+ * @param {HTMLSelectElement} select
+ * @param {string} theme
+ * @param {string} selected
+ */
+function populateSubthemeSelect(select, theme, selected) {
+  const list = SUBTHEMES[theme] || SUBTHEMES.dark;
+  select.innerHTML = "";
+  list.forEach((s) => {
+    const opt = document.createElement("option");
+    opt.value = s.id;
+    opt.textContent = s.label;
+    if (s.id === selected) opt.selected = true;
+    select.appendChild(opt);
+  });
+}
 // Mémorise si on a déjà averti (toast) que le serveur écoute hors localhost,
 // pour ne pas spammer au polling de badge toutes les 5 s.
 let warnedRemoteBind = false;
@@ -85,6 +107,7 @@ export async function initSettings() {
     });
   });
   const selectTheme = document.getElementById("setting-theme");
+  const selectSubtheme = document.getElementById("setting-subtheme");
   const inputCmd = document.getElementById("setting-command");
   const chkAutoLoad = document.getElementById("setting-auto-load");
   const chkAutoRun = document.getElementById("setting-auto-run");
@@ -345,6 +368,20 @@ export async function initSettings() {
     confirmEditsChanged = false;
     await refreshWebStatus();
     await refreshTailscaleStatus();
+    // ── Sous-thèmes : peupler + aperçu en direct ──
+    savedTheme = currentConfig.theme || "dark";
+    savedSubtheme = currentConfig.subtheme || "default";
+    populateSubthemeSelect(selectSubtheme, savedTheme, savedSubtheme);
+    // Aperçu en direct : applique immédiatement le thème/sous-thème choisi
+    // (sans enregistrer) ; revert à la fermeture si non sauvegardé.
+    selectTheme.addEventListener("change", () => {
+      const t = selectTheme.value;
+      populateSubthemeSelect(selectSubtheme, t, "default");
+      applyTheme(t, selectSubtheme.value);
+    });
+    selectSubtheme.addEventListener("change", () => {
+      applyTheme(selectTheme.value, selectSubtheme.value);
+    });
     modal.classList.remove("hidden");
   });
 
@@ -382,12 +419,15 @@ export async function initSettings() {
   // Fermer (Annuler) — annule aussi les modifs providers non sauvegardées
   btnClose.addEventListener("click", async () => {
     await cancelProvidersIfDirty();
+    // Revert l'aperçu en direct : on revient au thème/sous-thème sauvegardé
+    applyTheme(savedTheme, savedSubtheme);
     modal.classList.add("hidden");
   });
 
   // Ouvrir depuis l'extérieur (ex: gate E4 dans tabs.js → bouton « Ouvrir les
   // paramètres » quand l'agent est indisponible). Focus le champ chemin pi.
   window.addEventListener("pilot-open-settings", () => {
+    populateSubthemeSelect(selectSubtheme, savedTheme, savedSubtheme);
     modal.classList.remove("hidden");
     try { inputRpcPath.focus(); inputRpcPath.scrollIntoView({ block: "center" }); } catch (_) {}
   });
@@ -425,6 +465,7 @@ export async function initSettings() {
       }
       const config = {
         theme: selectTheme.value,
+        subtheme: selectSubtheme.value,
         default_command: inputCmd.value.trim(),
         recent_projects: currentConfig?.recent_projects || [],
         auto_load_last_project: chkAutoLoad.checked,
@@ -503,7 +544,7 @@ export async function initSettings() {
       };
     try {
       await invoke("save_config", { config });
-      applyTheme(config.theme);
+      applyTheme(config.theme, config.subtheme || "default");
       refreshShowThinking();
       refreshShowTools();
       // Notifier le changement d'auto-save
@@ -785,9 +826,9 @@ export async function initSettings() {
   // Charger et appliquer le thème au démarrage
   try {
     const cfg = await invoke("get_config");
-    applyTheme(cfg.theme || "dark");
+    applyTheme(cfg.theme || "dark", cfg.subtheme || "default");
   } catch (_) {
-    applyTheme("dark");
+    applyTheme("dark", "default");
   }
 
   // Rafraîchir les selects de modèles quand le registre a été édité depuis

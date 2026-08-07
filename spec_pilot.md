@@ -62,7 +62,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 
 ### C. Panneau d'Actions
 
-- ⚙️ **Paramètres** : modale en onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant). Thème dark/light, commande défaut, auto-load projet, terminal intégré, params RPC (5 champs), renvoi à la ligne automatique (word wrap).
+- ⚙️ **Paramètres** : modale en onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant). Thème dark/light + **sous-thèmes** (5 par mode, aperçu en direct avant enregistrement), commande défaut, auto-load projet, terminal intégré, params RPC (5 champs), renvoi à la ligne automatique (word wrap).
 - 📂 **Explorateur** : ouvre le dossier projet dans l'explorateur OS.
 - 🖥️ **Terminal** : intégré (xterm.js) ou externe selon paramètre.
 - π **Agent Pi** : ouvre l'onglet agent (si RPC activé).
