@@ -60,6 +60,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Aide intégrée (LLM sur la doc) | `spec_help.md` |
 | Revue de code assistée (H5) | `spec_review.md` |
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
+| Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
@@ -110,6 +111,7 @@ pilot/
 ├── spec_help.md               # Spécifications aide intégrée (LLM sur la doc)
 ├── spec_review.md             # Spécifications revue de code assistée (H5)
 ├── spec_context_engine.md    # Spécifications Context Engine (H1, auto-contexte agent)
+├── spec_code_graph.md        # Spécifications Code Graph (graphe de connaissances projet)
 ├── spec_diff_review.md       # Spécifications Diff Review agent (A4 V2, porte pré-écriture write/edit)
 ├── spec_session_history.md   # Spécifications historique de sessions searchable (H9)
 ├── spec_feedback.md          # Spécifications feedback utilisateurs (remarques/évolutions)
@@ -155,6 +157,7 @@ pilot/
 │       ├── help.js           # Onglet « ❓ Aide » : chat LLM sur le handbook
 │       ├── review.js         # Onglet « 🔍 Review » : revue de code assistée (H5, pi temporaire cadré)
 │       ├── context-engine.js  # Context Engine (H1) : injection auto-contexte projet avant 1er prompt
+│       ├── code-graph.js      # Code Graph : bloc graphe injecté + wiki + modale d'état/rebuild
 │       ├── icons.js          # Icônes Lucide (refreshIcons → createIcons, pour HTML statique et dynamique)
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
 │       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags
@@ -204,7 +207,8 @@ pilot/
         ├── web_auth.rs       # Auth distante : argon2, token opaque, sessions
         ├── web_rate.rs       # Rate limiting login/prompt/WS (garde-fous distants)
         ├── web_audit.rs      # Journal d'audit distant (ring buffer 500, actions sensibles)
-        └── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
+        ├── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
+        └── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
 ```
 
 ---

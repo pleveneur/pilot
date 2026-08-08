@@ -7,7 +7,7 @@
 ## Fonctionnalités
 
 ### Animations d'ouverture
-- **Modales** : les modales (Paramètres ⚙️, raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale.
+- **Modales** : les modales (Paramètres ⚙️, raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale. Les **modales et dialogues de l'agent** (Code Graph 📊, sélection des modèles d'orchestration 🧠, confirmations/choix/saisies demandés par l'agent) bénéficient de la même animation.
 - **Nouveaux onglets** : l'ouverture d'un **nouvel onglet** (fichier dans l'explorateur, bouton du panneau bas, bascule vers un onglet jamais encore affiché) bénéficie du même **zoom depuis le point cliqué**, appliqué au contenu. La bascule vers un onglet déjà affiché reste instantanée.
 - **Paramètre ⚙️ → Général → Apparence → « Animer l'ouverture des modales »** : force les animations même si la **réduction de mouvement** est active côté système. **Activé par défaut** (y compris après mise à jour d'une ancienne version, pour laquelle le paramètre n'existait pas encore). Le désactiver restore le respect strict de l'accessibilité.
 
@@ -52,6 +52,7 @@
 ### Système d'onglets
 - Onglets distincts pour chaque mode : édition 📝, prévisualisation Markdown 👁️, PDF 📕, image 🖼️, CSV 📊, terminal 🖥️.
 - **Onglet agent π** : chat IA intégré avec l'agent Pi (mode RPC), streaming Markdown, pensées, outils, sélecteur de modèle, **dictée vocale** 🎙️. **Mode Orchestration** disponible : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale. À l'ouverture de l'onglet, Pilot **vérifie automatiquement** si une nouvelle version de Pi est disponible et propose de la mettre à jour (`pi update --self`).
+- **Code Graph (📊)** : Pilot construit localement un **graphe structurel** du projet (fichiers, fonctions, classes, imports, relations `calls`/`references`) **sans LLM ni clé API**, et l'injecte à l'agent pour répondre aux questions d'architecture **sans relire les fichiers** (économie de tokens). Relations honnêtes (`EXTRACTED`/`INFERRED`), wiki interrogeable (`.pilot/graph-wiki/`), mise à jour au fil de l'eau. Moteur d'extraction au choix : **heuristique** (rapide) ou **tree-sitter** (AST précis) — sélectionnable dans ⚙️ → Graphe, bouton 📊 pour (re)construire.
 - Fermeture automatique des onglets à la fermeture/changement de projet.
 - **Sauvegarde automatique** à la fermeture d'onglet (silencieuse).
 - **Détection de conflits** : si un fichier ouvert est modifié de l'extérieur pendant une édition, l'onglet clignote en rouge.

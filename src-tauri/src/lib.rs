@@ -46,6 +46,7 @@ mod web_audit;
 mod web_rate;
 mod web_server;
 mod context_engine;
+mod code_graph;
 mod git;
 mod terminal;
 mod files;
@@ -271,6 +272,26 @@ struct AppConfig {
     context_rag_endpoint: String,
     #[serde(default = "default_rag_model")]
     context_rag_model: String,
+    // ── Code Graph (spec_code_graph.md) ──
+    // Graphe structurel du projet (nœuds/arêtes calls/imports/inherits),
+    // construit localement sans LLM. Injecté à l'agent (mode A sous-graphe
+    // scoré + mode B wiki). Complémentaire du RAG (sémantique).
+    #[serde(default = "default_true")]
+    code_graph_enabled: bool,
+    // Moteur d'extraction : "heuristic" (V1) | "treesitter" (V2).
+    #[serde(default = "default_graph_extraction")]
+    graph_extraction: String,
+    // Mode A : injecter un sous-graphe scoré au 1er prompt.
+    #[serde(default = "default_true")]
+    graph_inject_mode_a: bool,
+    #[serde(default = "default_graph_budget")]
+    graph_budget_tokens: u32,
+    // Mode B : générer le wiki `.pilot/graph-wiki/` + consigne de lecture.
+    #[serde(default = "default_true")]
+    graph_inject_mode_b: bool,
+    // Extraire les arêtes calls (INFERRED).
+    #[serde(default = "default_true")]
+    graph_include_calls: bool,
     /// Diff Review (A4 V2) : porte pré-écriture. Si true, l'agent doit confirmer
     /// auprès de l'utilisateur avant chaque write/edit (extension pi pilot-edit-gate).
     /// Désactivé par défaut (l'agent écrit librement, comme avant).
@@ -347,6 +368,8 @@ fn default_true() -> bool { true }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
 fn default_rag_model() -> String { "nomic-embed-text".to_string() }
+fn default_graph_extraction() -> String { "heuristic".to_string() }
+fn default_graph_budget() -> u32 { 4000 }
 fn default_sidebar_width() -> u32 { 280 }
 fn default_auto_save_delay() -> u32 { 3000 }
 fn default_orchestration_idle_timeout() -> u32 { 120000 }
@@ -487,6 +510,12 @@ impl Default for AppConfig {
             context_rag_enabled: false,
             context_rag_endpoint: default_rag_endpoint(),
             context_rag_model: default_rag_model(),
+            code_graph_enabled: true,
+            graph_extraction: default_graph_extraction(),
+            graph_inject_mode_a: true,
+            graph_budget_tokens: default_graph_budget(),
+            graph_inject_mode_b: true,
+            graph_include_calls: true,
             confirm_file_edits: false,
             sensitive_projects: Vec::new(),
             project_memory_enabled: true,
@@ -647,6 +676,10 @@ fn start_watching(app: &AppHandle, path: &str, state: &State<AppState>) -> Resul
         let mut last_flush = std::time::Instant::now();
         let mut last_poll = std::time::Instant::now();
 
+        // V2.1 Code Graph : refresh différé auto. Ce flag évite de lancer des
+        // refresh concurrents pendant qu'une écriture se stabilise.
+        let graph_refresh_inflight = Arc::new(AtomicBool::new(false));
+
         loop {
             std::thread::sleep(std::time::Duration::from_millis(200));
             if !running_clone.load(Ordering::Relaxed) {
@@ -682,6 +715,22 @@ fn start_watching(app: &AppHandle, path: &str, state: &State<AppState>) -> Resul
                 }
             }
             prev = curr;
+
+            // V2.1 Code Graph : quand un fichier analysé change, relancer
+            // l'indexation incrémentale en arrière-plan (fire-and-forget).
+            // Ne construit pas le graphe s'il est absent (build lazy frontend)
+            // et ne bloque jamais le poller (thread dédié + debounce).
+            let graph_change = pending.keys().any(|k| code_graph::is_graph_file(k));
+            if graph_change && !graph_refresh_inflight.swap(true, Ordering::Relaxed) {
+                let path2 = path_buf.clone();
+                let flag = graph_refresh_inflight.clone();
+                std::thread::spawn(move || {
+                    // Petite latence pour laisser l'écriture se stabiliser.
+                    std::thread::sleep(std::time::Duration::from_millis(1200));
+                    code_graph::refresh_by_watcher(&path2.to_string_lossy(), 400);
+                    flag.store(false, Ordering::Relaxed);
+                });
+            }
 
             if !pending.is_empty() && last_flush.elapsed() >= debounce {
                 flush_pending(&app, &pending);
@@ -1818,6 +1867,13 @@ pub fn run() {
             context_engine::build_context_index,
             context_engine::query_context_index,
             context_engine::context_index_clear,
+            code_graph::graph_status,
+            code_graph::build_code_graph,
+            code_graph::query_code_graph,
+            code_graph::graph_explain,
+            code_graph::graph_affected,
+            code_graph::graph_path,
+            code_graph::build_graph_wiki,
             session_history::index_sessions,
             session_history::search_sessions,
             session_history::get_session_detail,

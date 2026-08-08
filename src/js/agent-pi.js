@@ -7,10 +7,12 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import markdownit from "markdown-it";
 import { isImageFile } from "./image-paste.js";
 import { buildProjectContext } from "./context-engine.js";
+import { buildGraphBlock, graphStatus, rebuildGraph } from "./code-graph.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
 import { generateAgentsMd } from "./agents-md.js";
 import { exportConversationMarkdown, copyConversationHtml } from "./conversation-export.js";
 import { renderEditGateDialog } from "./diff-view.js";
+import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { getTabsManager } from "./tabs.js";
 
@@ -138,6 +140,7 @@ export async function createAgentPi(container, resumed = false) {
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)"><i data-lucide="shield-check" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="code-graph" id="agent-cg-btn" title="Code Graph : état du graphe de connaissances du projet + (re)construction"><i data-lucide="network" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="file-text" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-md" title="Exporter la conversation en Markdown"><i data-lucide="download" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-html" title="Copier la conversation en HTML dans le presse-papiers"><i data-lucide="copy" class="icon-sm"></i></button>
@@ -317,6 +320,7 @@ export async function createAgentPi(container, resumed = false) {
     // seul bloc mis à jour, transformé en message + bouton « Réessayer » sur
     // agent_end si aucune réponse n'est revenue.
     lastUserPrompt: "",     // dernier prompt utilisateur (chat standard, pour retry 1-clic)
+    lastPromptAnswered: false, // true si le dernier prompt a reçu un agent_end (évite de re-émettre après une compaction de fond, issue #31)
     lastRetryImages: [],    // images du dernier prompt (pour retry 1-clic)
     lastPromptOrigin: null,  // D1 : origine du dernier prompt ("remote" | "desktop" | null) → notification desktop si "remote" à l'agent_end
     connRetryActive: false, // true pendant une rafale de retries pi (dé-duplication)
@@ -406,6 +410,8 @@ export async function createAgentPi(container, resumed = false) {
     contextRefreshRequested: false, // true si l'utilisateur a cliqué 📑 (forcer ré-injection)
     // ── Mémoire de projet (H3, spec_project_memory.md) ──
     memoryInjected: false,             // true après injection de PROJECT_MEMORY.md (1x par session chat)
+    // ── Code Graph (spec_code_graph.md) ──
+    graphInjected: false,              // true après injection du graphe (1x par session chat)
     projectMemoryEnabled: true,        // reflète config.project_memory_enabled (injection chat + orchestration)
     projectMemoryAutoExtract: false,   // reflète config.project_memory_auto_extract (extraction post-tâche)
     orchestrationExtractingMemory: null, // taskId pendant le tour d'extraction mémoire (null sinon)
@@ -798,6 +804,7 @@ export async function createAgentPi(container, resumed = false) {
     // propre logique de reprise.
     if (!isSlashCommand) {
       state.lastUserPrompt = text;
+      state.lastPromptAnswered = false; // nouveau prompt en attente de réponse
       state.lastRetryImages = images ? images.map((img) => ({ ...img })) : [];
     }
 
@@ -1040,6 +1047,20 @@ export async function createAgentPi(container, resumed = false) {
                   const ctxBtn = wrapper.querySelector("#agent-ctx-btn");
                   if (ctxBtn) ctxBtn.classList.remove("active");
                 }
+              }
+            }
+            // Code Graph (spec_code_graph.md) : graphe structurel, une fois par session.
+            // Mode A : sous-graphe scoré au prompt. Mode B : wiki interrogeable.
+            if (config.code_graph_enabled !== false && !state.graphInjected) {
+              const graphBlock = await buildGraphBlock(window._pilotProjectPath, text, {
+                enabled: true,
+                injectModeA: config.graph_inject_mode_a !== false,
+                budgetTokens: config.graph_budget_tokens || 4000,
+                injectModeB: config.graph_inject_mode_b !== false,
+              });
+              if (graphBlock) {
+                handoffBlocks += graphBlock;
+                state.graphInjected = true;
               }
             }
           } catch (injErr) {
@@ -1330,6 +1351,7 @@ export async function createAgentPi(container, resumed = false) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          state.graphInjected = false;
           clearContextHandoff();
         } catch (err) {
           console.error("Erreur new session:", err);
@@ -1356,6 +1378,7 @@ export async function createAgentPi(container, resumed = false) {
           // Context Engine : la compaction efface le contexte → réinjecter au prochain prompt
           state.contextInjected = false;
           state.memoryInjected = false;
+          state.graphInjected = false;
           clearContextHandoff();
         } catch (err) {
           console.error("Erreur compact:", err);
@@ -1456,6 +1479,16 @@ export async function createAgentPi(container, resumed = false) {
         }
         break;
       }
+      case "code-graph": {
+        // Code Graph (spec_code_graph.md) : ouvrir la modale d'état + (re)construction.
+        try {
+          await openCodeGraphModal(e.clientX, e.clientY);
+        } catch (e) {
+          console.error("Ouverture code-graph:", e);
+          appendErrorMessage(messagesEl, `❌ Ouverture du graphe échouée : ${e}`);
+        }
+        break;
+      }
       case "agents-md": {
         // Issue #5 : générer / mettre à jour AGENTS.md via le modèle du chat.
         // AGENTS.md est lu nativement par pi/plh (discovery system prompt) ;
@@ -1513,6 +1546,7 @@ export async function createAgentPi(container, resumed = false) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          state.graphInjected = false;
           clearContextHandoff();
           // Remettre le bouton en mode abort
           setIcon(btn, "square");
@@ -1536,6 +1570,7 @@ export async function createAgentPi(container, resumed = false) {
           state.contextInjected = false;
           state.contextRefreshRequested = false;
           state.memoryInjected = false;
+          state.graphInjected = false;
           clearContextHandoff();
           orchBtn.classList.remove("active");
           orchBtn.title = "Mode Orchestration : architecte + codeur";
@@ -1606,7 +1641,7 @@ export async function createAgentPi(container, resumed = false) {
           // La popup teste successivement le codeur puis l'orchestrateur. Si les
           // deux répondent, le mode s'active avec ces modèles ; sinon, message
           // d'erreur et restauration du modèle d'origine, le mode reste off.
-          showOrchestrationModelPicker(state, messagesEl, statusEl, orchBtn);
+          showOrchestrationModelPicker(state, messagesEl, statusEl, orchBtn, e.clientX, e.clientY);
         }
         break;
       }
@@ -2102,7 +2137,7 @@ export async function createAgentPi(container, resumed = false) {
    * l'orchestrateur. Si les deux répondent → active le mode. Sinon → message
    * d'erreur et restauration du modèle d'origine, le mode reste désactivé.
    */
-  async function showOrchestrationModelPicker(st, mEl, sEl, orchBtn) {
+  async function showOrchestrationModelPicker(st, mEl, sEl, orchBtn, originX, originY) {
     // Charger la config pour les valeurs par défaut
     let config;
     try { config = await invoke("get_config"); } catch (e) {
@@ -2168,6 +2203,7 @@ export async function createAgentPi(container, resumed = false) {
         </div>
       </div>`;
     document.body.appendChild(overlay);
+    animateModalOpen(overlay, originX, originY);
     refreshIcons(overlay);
 
     const orchSel = overlay.querySelector("#orch-pick-orch");
@@ -3022,6 +3058,7 @@ export async function createAgentPi(container, resumed = false) {
       }
       const label = attemptNumber > 1 ? `🔨 Tâche ${nextTask.id}/${tasks.length} (tentative ${attemptNumber}) : ${nextTask.title}` : `🔨 Tâche ${nextTask.id}/${tasks.length} : ${nextTask.title}`;
       appendSystemMessage(messagesEl, label);
+      st.lastPromptAnswered = false; // nouvelle tâche en attente de réponse
       try {
         await invoke("send_agent_prompt", { message: memBlock + finalTaskPrompt });
       } catch (e) {
@@ -4510,6 +4547,7 @@ export async function createAgentPi(container, resumed = false) {
       state.contextInjected = false;
       state.contextRefreshRequested = false;
       state.memoryInjected = false;
+      state.graphInjected = false;
       clearContextHandoff();
     } catch (e) {
       state.restarting = false;
@@ -5211,6 +5249,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       state.isStreaming = false;
       state.pendingRender = false;
+      // Le dernier prompt a été répondu (agent_end reçu). Une compaction de fond
+      // survenant ensuite ne doit PAS re-émettre le prompt (issue #31).
+      state.lastPromptAnswered = true;
       // Reprise post-compaction : pi a terminé normalement → annuler la reprise.
       if (state.orchestrationCompactionResumePending) {
         state.orchestrationCompactionResumePending = false;
@@ -5960,7 +6001,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       const isChatStandard = !state.orchestrationEnabled || !state.orchestrationRunning;
       // Ne relancer que sur compaction automatique (threshold/overflow) ; la
       // compaction manuelle (/compact, aborted) n'interrompt pas un tour.
-      if (!payload.aborted && payload.reason !== "manual" && (isOrchActive || (isChatStandard && state.lastUserPrompt))) {
+      if (!payload.aborted && payload.reason !== "manual" && !state.lastPromptAnswered && (isOrchActive || (isChatStandard && state.lastUserPrompt))) {
         if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
         state.orchestrationCompactionResumePending = true;
         // 10s en milieu de tour (laisser à pi le temps de reprendre) ; 2s entre
@@ -6026,7 +6067,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // reprendre ensuite en mode RPC. On relance la tâche (orchestration) ou le
       // dernier prompt (chat standard, issue #12).
       const isOrchActive = state.orchestrationEnabled && state.orchestrationRunning && !state.orchestrationPaused;
-      if (fromHook && (isOrchActive || (!state.orchestrationEnabled && state.lastUserPrompt))) {
+      if (fromHook && !state.lastPromptAnswered && (isOrchActive || (!state.orchestrationEnabled && state.lastUserPrompt))) {
         if (state.orchestrationCompactionTimer) clearTimeout(state.orchestrationCompactionTimer);
         state.orchestrationCompactionResumePending = true;
         const delay = state.isStreaming ? 10000 : 2000;
@@ -6924,6 +6965,7 @@ function _domDialog({ title, bodyHtml, okLabel, cancelLabel, okValue }) {
     box.appendChild(actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    animatePanelOpen(box);
     const done = (val) => { overlay.remove(); resolve(val); };
     okBtn.addEventListener("click", () => done(okValue === undefined ? true : okValue));
     cancelBtn.addEventListener("click", () => done(okValue === undefined ? false : null));
@@ -6975,6 +7017,7 @@ function domPrompt(title, placeholder) {
     box.appendChild(titleEl); box.appendChild(body); box.appendChild(actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    animatePanelOpen(box);
     const done = (val) => { overlay.remove(); resolve(val); };
     okBtn.addEventListener("click", () => done(input.value));
     cancelBtn.addEventListener("click", () => done(null));
@@ -7018,6 +7061,7 @@ function domSelect(title, options) {
     box.appendChild(titleEl); box.appendChild(body); box.appendChild(actions);
     overlay.appendChild(box);
     document.body.appendChild(overlay);
+    animatePanelOpen(box);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) done(null); });
   });
 }
@@ -7352,4 +7396,75 @@ function appendCompactionSummary(parent, summary) {
 
 function scrollToBottom(container) {
   container.scrollTop = container.scrollHeight;
+}
+
+// ── Code Graph : modale d'état + (re)construction ───────────────────────────
+
+/** Ouvre la modale Code Graph et charge l'état du graphe du projet courant. */
+async function openCodeGraphModal(originX, originY) {
+  const modal = document.getElementById("codegraph-modal");
+  if (!modal) return;
+  const statusEl = document.getElementById("codegraph-status");
+  const projectPath = window._pilotProjectPath;
+
+  function renderStatus(s) {
+    if (!statusEl) return;
+    if (!projectPath) {
+      statusEl.innerHTML = '<span class="muted">Ouvrez d\'abord un projet pour construire le graphe.</span>';
+      return;
+    }
+    if (!s || !s.exists) {
+      statusEl.innerHTML =
+        '<span class="muted">Aucun graphe construit pour ce projet.</span><br>' +
+        '<small class="muted">Le graphe est construit automatiquement au 1er prompt (mode A) et mis à jour ' +
+        'au fil de l\'eau. Vous pouvez le reconstruire manuellement après un gros refactor.</small>';
+      return;
+    }
+    statusEl.innerHTML =
+      `<div><b>Graphe construit</b> (${s.ready ? "prêt" : "vide"})</div>` +
+      `<div>Nœuds : <b>${s.nodes}</b> · Arêtes : <b>${s.edges}</b> · Construit le ${s.built_at || "—"}</div>` +
+      '<div><small class="muted">Relations marquées EXTRACTED (lues) ou INFERRED (déduites).</small></div>';
+  }
+
+  // Boutons
+  const btnRebuild = document.getElementById("btn-codegraph-rebuild");
+  const btnRefresh = document.getElementById("btn-codegraph-refresh");
+  const btnClose = document.getElementById("codegraph-close");
+
+  async function load() {
+    const s = await graphStatus(projectPath);
+    renderStatus(s);
+  }
+
+  // Ouvrir
+  modal.classList.remove("hidden");
+  animateModalOpen(modal, originX, originY);
+  await load();
+
+  btnRebuild.onclick = async () => {
+    if (!projectPath) return;
+    btnRebuild.disabled = true;
+    if (statusEl) statusEl.innerHTML = '<span class="muted">⏳ Construction du graphe… (peut prendre quelques secondes)</span>';
+    try {
+      const stats = await rebuildGraph(projectPath);
+      if (statusEl && stats) {
+        statusEl.innerHTML =
+          `<div><b>Graphe reconstruit</b></div>` +
+          `<div>Nœuds : <b>${stats.nodes}</b> · Arêtes : <b>${stats.edges}</b> · ${stats.files} fichiers en ${(stats.elapsed_ms / 1000).toFixed(1)} s</div>`;
+      }
+      const { toastInfo } = await import("./toast.js");
+      toastInfo("📊 Graphe du projet reconstruit");
+    } catch (e) {
+      if (statusEl) statusEl.innerHTML = `<span class="muted">❌ Échec : ${e}</span>`;
+    } finally {
+      btnRebuild.disabled = false;
+    }
+  };
+
+  btnRefresh.onclick = () => { load(); };
+
+  btnClose.onclick = () => { modal.classList.add("hidden"); };
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.classList.add("hidden");
+  });
 }

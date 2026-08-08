@@ -799,6 +799,15 @@ compacté). Images incluses si présentes. Condition : compaction auto seulement
 Le flag `orchestrationCompactionResumePending` (clear par le 1er delta/agent_end/outil)
 est réutilisé, donc pi/plh peuvent reprendre spontanément sans double envoi.
 
+**Fix — pas de re-émission après une compaction de fond (issue #31)** : une
+compaction auto peut aussi survenir **après** la fin du tour (nettoyage de fond,
+une fois `agent_end` reçu). Dans ce cas, la reprise ne doit PAS re-émettre le
+dernier prompt (déjà répondu) ni relancer la tâche. Un flag `state.lastPromptAnswered`
+(true sur `agent_end`, false à chaque envoi de prompt — chat standard et
+`executeNextTask` en orchestration) garde la reprise : on ne relance que si le
+dernier prompt n'a **pas** encore été répondu. Une compaction de fond post-`agent_end`
+n'affiche donc plus « 🔁 Reprise du chat après compaction… » ni ne renvoie le prompt.
+
 **Fix complémentaire — filtre des deltas pendant compaction (plh)** : contrairement
 à pi qui met le résumé dans `compaction_end.summary`, **plh stream le résumé en
 `message_update`/`text_delta`** pendant la compaction. Ces deltas polluaient

@@ -170,6 +170,13 @@ export async function initSettings() {
   const ragBlock = document.getElementById("context-rag-block");
   const btnRagTest = document.getElementById("btn-context-rag-test");
   const ragTestStatus = document.getElementById("context-rag-test-status");
+  // ── Code Graph (spec_code_graph.md) — section dédiée ──
+  const chkCodeGraph = document.getElementById("setting-code-graph-enabled");
+  const selectGraphExtraction = document.getElementById("setting-graph-extraction");
+  const chkGraphInjectA = document.getElementById("setting-graph-inject-mode-a");
+  const inputGraphBudget = document.getElementById("setting-graph-budget-tokens");
+  const chkGraphInjectB = document.getElementById("setting-graph-inject-mode-b");
+const chkGraphIncludeCalls = document.getElementById("setting-graph-include-calls");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -357,6 +364,13 @@ export async function initSettings() {
       if (inputRagEndpoint) inputRagEndpoint.value = currentConfig.context_rag_endpoint || "http://127.0.0.1:11434";
       if (inputRagModel) inputRagModel.value = currentConfig.context_rag_model || "nomic-embed-text";
     }
+    // ── Code Graph — section dédiée ──
+    if (chkCodeGraph) chkCodeGraph.checked = currentConfig.code_graph_enabled !== false;
+    if (selectGraphExtraction) selectGraphExtraction.value = currentConfig.graph_extraction || "heuristic";
+    if (chkGraphInjectA) chkGraphInjectA.checked = currentConfig.graph_inject_mode_a !== false;
+    if (inputGraphBudget) inputGraphBudget.value = currentConfig.graph_budget_tokens || 4000;
+    if (chkGraphInjectB) chkGraphInjectB.checked = currentConfig.graph_inject_mode_b !== false;
+    if (chkGraphIncludeCalls) chkGraphIncludeCalls.checked = currentConfig.graph_include_calls !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -539,6 +553,13 @@ export async function initSettings() {
         context_rag_enabled: chkContextRag ? chkContextRag.checked : false,
         context_rag_endpoint: (inputRagEndpoint.value || "http://127.0.0.1:11434").trim(),
         context_rag_model: (inputRagModel.value || "nomic-embed-text").trim(),
+        // ── Code Graph — section dédiée ──
+        code_graph_enabled: chkCodeGraph ? chkCodeGraph.checked : true,
+        graph_extraction: selectGraphExtraction ? selectGraphExtraction.value : "heuristic",
+        graph_inject_mode_a: chkGraphInjectA ? chkGraphInjectA.checked : true,
+        graph_budget_tokens: parseInt(inputGraphBudget ? inputGraphBudget.value : "4000", 10) || 4000,
+        graph_inject_mode_b: chkGraphInjectB ? chkGraphInjectB.checked : true,
+        graph_include_calls: chkGraphIncludeCalls ? chkGraphIncludeCalls.checked : true,
         // ── Diff Review (A4 V2) : porte pré-écriture ──
         confirm_file_edits: chkConfirmFileEdits.checked,
         // ── Mémoire de projet (H3) ──

@@ -695,3 +695,22 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
 
 **Valeur :** 🟡 haute (visibilité/suivi en temps réel de l'équipe) ·
 **Effort :** faible-moyen.
+
+### Code Graph — Visualisation enrichie (Option C)
+- [ ] **Onglet « Graphe »** dans Pilot : rendu interactif du graphe de connaissances
+      (tables `graph_nodes` / `graph_edges` déjà en base) avec une lib JS légère
+      (**vis-network** ou **cytoscape.js**).
+- [ ] **Pan / zoom** + disposition automatique (force-directed).
+- [ ] **Clic sur un nœud** → ouvre le fichier correspondant dans un onglet d'édition.
+- [ ] **Survol** → surligne les connexions (calls / imports / extends).
+- [ ] **Filtres** (par type de relation, par fichier) + recherche de nœud.
+- [ ] **Sous-graphe contextuel** : à partir d'un fichier/fonction, afficher
+      uniquement son voisinage (ce qu'il appelle / qui l'appelle) — analyse
+      d'impact avant édition.
+- [ ] **Coloration par type** (fonction / classe / import / fichier).
+- [ ] **Synchronisation avec l'éditeur** : le fichier actif est mis en évidence.
+- **Fichiers :** nouveau `src/js/code-graph-view.js`, `src/css/style.css`,
+      `src-tauri/src/code_graph.rs` (commande d'export du graphe complet pour le
+      rendu), `spec_code_graph.md` + bloc `HELP` (doc).
+- **Valeur :** 🟠 haute (analyse d'impact visuelle avant édition, complémentaire
+      du wiki textuel mode B) · **Effort :** moyen.

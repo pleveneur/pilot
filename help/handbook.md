@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -401,6 +401,70 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
   éteint ou lent : des timeouts bornent l'attente et le prompt part sans
   contexte au besoin.
+
+---
+
+` | Ajouté ici + regénérer handbook |
+
+### Points de connexion à ne pas casser (l'existant à préserver)
+- L'injection H1 (Context Engine) et H3 (mémoire) existantes — le graphe s'ajoute
+  **en plus** dans le même `handoffBlocks`, ne remplace rien.
+- La SQLite RAG (`chunks` / `meta`) — on **ajoute** des tables, on ne touche pas
+  aux existantes.
+- `pilot-context.ts` — inchangé (le bloc graphe arrive déjà dans
+  `context-inject.md`).
+- `project-memory.js`, `context-engine.js` — intacts.
+
+---
+
+## 10. Tests (qualité)
+
+- **Rust (cargo test)** : tests unitaires sur les fonctions pures de `code_graph.rs`
+  — extraction V1 (fixtures JS/Python/Rust/Markdown), build/upsert, incremental
+  refresh (mtime/hash), requêtes (`explain`, `affected`, `path`, `query` scoring).
+- **JS (Vitest)** : formateur Markdown du bloc graphe, construction du wiki,
+  logique de config.
+- **Anti-régression** : `cargo test --lib` + `npm test` avant merge.
+
+---
+
+## 11. Roadmap d'implémentation
+
+1. ✅ **V1** : `code_graph.rs` extraction heuristique + SQLite + requêtes + commandes
+   Tauri + config + injection mode A + wiki mode B + bouton/modale + tests.
+2. ✅ **V2** : intégration tree-sitter (dépendances + `extract_v2`) + pass 2
+   call-graph + switch `graph_extraction`.
+3. ✅ **V2.1** : branchement watcher pour refresh différé auto
+   (`refresh_by_watcher` + `is_graph_file` + verrou `GRAPH_DB_LOCK`).
+4. Doc : AGENTS.md, README, bloc HELP, plan_dev.md.
+
+---
+
+<!-- HELP:code-graph -->
+## Code Graph (graphe de connaissances projet)
+
+Pilot construit localement un **graphe structurel** du projet (fichiers, fonctions,
+classes, imports, appels) **sans LLM ni clé API**, et l'injecte à l'agent pour qu'il
+réponde aux questions d'architecture **sans relire les fichiers** (économie de tokens).
+
+- **Bouton 📊 Code Graph** (toolbar agent) : modale d'état du graphe + bouton
+  « (Re)construire le graphe » (après un gros refactor ou un changement de mode).
+- **Paramètres → Code Graph** :
+  - *Activer le graphe* : master switch.
+  - *Moteur d'extraction* : `heuristique` (rapide, sans dépendance) ou
+    `tree-sitter` (plus précis, V2). Un rebuild est requis après changement.
+  - *Inclure les appels de fonctions* : inclut ou non les arêtes `calls`.
+    Désactiver allège le sous-graphe injecté (économie de tokens) ; un rebuild
+    est requis.
+  - *Injection au 1er prompt* (mode A) : un sous-graphe pertinent au prompt est
+    ajouté au contexte (budget configurable).
+  - *Wiki interrogeable* (mode B) : un dossier `.pilot/graph-wiki/` est généré ;
+    l'agent peut le consulter à la demande via ses outils.
+- **Relations honnêtes** : chaque lien est marqué `EXTRACTED` (lu dans le code) ou
+  `INFERRED` (déduit).
+- **Mise à jour au fil de l'eau** : le graphe se re-synchronise automatiquement sur
+  les fichiers modifiés (incrémental à la requête + refresh auto via le watcher de
+  fichiers). Il ne bloque jamais le chat et fonctionne sans Ollama (contrairement au RAG).
 
 ---
 

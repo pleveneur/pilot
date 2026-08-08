@@ -214,6 +214,7 @@
           <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
           <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
           <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
+          <button class="settings-tab" data-settings-tab="codegraph" role="tab" aria-selected="false"><i data-lucide="network" class="icon"></i> Graphe</button>
         </nav>
         <div class="settings-panels">
 
@@ -605,6 +606,42 @@
           </div>
           </div>
 
+          <div class="settings-panel" data-settings-panel="codegraph" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="network" class="icon-sm"></i> Code Graph (graphe de connaissances projet)</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-code-graph-enabled" />
+              <label for="setting-code-graph-enabled" title="Construit un graphe structurel du projet (fichiers, fonctions, classes, imports) sans LLM et l'injecte à l'agent pour répondre aux questions d'architecture sans relire les fichiers.">Activer le graphe de connaissances projet</label>
+            </div>
+            <div class="setting-row">
+              <label for="setting-graph-extraction" title="Heuristique = regex rapide (V1, aucune dépendance). Tree-sitter = plus précis (V2). Un rebuild est requis après changement.">Moteur d'extraction :</label>
+              <select id="setting-graph-extraction" style="width:180px;">
+                <option value="heuristic">Heuristique (V1)</option>
+                <option value="treesitter">Tree-sitter (V2)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-graph-include-calls" />
+              <label for="setting-graph-include-calls" title="Inclut les arêtes 'appel de fonction' (calls) dans le graphe. Désactiver allège le sous-graphe injecté (économie de tokens), au prix d'une analyse d'impact réduite. Un rebuild (bouton 📊) est requis après changement.">Inclure les appels de fonctions (arêtes calls)</label>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-graph-inject-mode-a" />
+              <label for="setting-graph-inject-mode-a" title="Injecte un sous-graphe pertinent au prompt au 1er prompt de session (économie de tokens).">Injecter le sous-graphe pertinent au 1er prompt (mode A)</label>
+            </div>
+            <div class="setting-row">
+              <label for="setting-graph-budget-tokens" title="Budget maximal du sous-graphe injecté (mode A).">Budget sous-graphe (tokens) :</label>
+              <input type="number" id="setting-graph-budget-tokens" min="500" max="16000" step="500" value="4000" style="width:120px;" />
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-graph-inject-mode-b" />
+              <label for="setting-graph-inject-mode-b" title="Génère .pilot/graph-wiki/ (index + god-nodes) que l'agent peut consulter à la demande.">Générer le wiki interrogeable (mode B)</label>
+            </div>
+            <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+              Le graphe est construit automatiquement au 1er prompt et mis à jour au fil de l'eau. Le bouton <i data-lucide="network" class="icon-sm"></i> de l'agent permet de le (re)construire. Index dans <code>.pilot/context-index.db</code> + wiki <code>.pilot/graph-wiki/</code>.
+            </div>
+          </div>
+          </div>
+
           </div>
         </div>
 
@@ -711,6 +748,28 @@
           </thead>
           <tbody id="audit-body"></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modale : Code Graph (graphe de connaissances projet) -->
+  <div id="codegraph-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i data-lucide="network" class="icon-lg"></i> Code Graph</h2>
+        <button id="codegraph-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+      <p class="muted" style="font-size:12px">
+        Graphe structurel du projet (fichiers, fonctions, classes, imports, relations),
+        construit localement sans LLM. Injecté à l'agent au 1er prompt et consultable
+        via le wiki <code>.pilot/graph-wiki/</code>.
+      </p>
+      <div id="codegraph-status" class="codegraph-status" style="margin:12px 0;font-size:13px">
+        <span class="muted">Chargement…</span>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-codegraph-rebuild" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> (Re)construire le graphe</button>
+        <button id="btn-codegraph-refresh" class="web-btn"><i data-lucide="rotate-cw" class="icon-sm"></i> Actualiser</button>
       </div>
     </div>
   </div>
