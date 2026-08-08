@@ -1431,6 +1431,9 @@ export async function createAgentPi(container, resumed = false) {
             if (config && config.context_rag_enabled === true && window._pilotProjectPath
                 && config.context_rag_endpoint && config.context_rag_model) {
               ragRebuild = true;
+              // Sablier centré pendant le rebuild RAG (masqué par le listener
+              // persistant "context-index-done" de createAgentPi).
+              showRagBuilding();
               toastInfo("📑 Indexation RAG en cours… (peut prendre quelques secondes)");
               // Écouter la fin du build (une seule fois) — event émis par le backend.
               const stopListen = await listen("context-index-done", (ev) => {
@@ -4557,12 +4560,29 @@ export async function createAgentPi(container, resumed = false) {
   };
   window.addEventListener("pilot-agent-restart-needed", onRestartNeeded);
 
+  // ── RAG (Context Engine V2) : sablier centré pendant la construction ──
+  // Quand le RAG est généré la 1re fois (build arrière-plan déclenché depuis
+  // context-engine.js → event "pilot:rag-building"), on affiche un sablier au
+  // centre de l'écran avec un texte en dessous. Il est retiré quand le backend
+  // émet "context-index-done".
+  const ragOverlay = document.getElementById("rag-building-overlay");
+  function showRagBuilding() {
+    if (ragOverlay) ragOverlay.classList.remove("hidden");
+  }
+  function clearRagBuilding() {
+    if (ragOverlay) ragOverlay.classList.add("hidden");
+  }
+  window.addEventListener("pilot:rag-building", showRagBuilding);
+  const unlistenRagDone = await listen("context-index-done", () => clearRagBuilding());
+
   return {
     wrapper,
     unlisten: () => {
       try { unlisten(); } catch (_) {}
       try { unlistenReviewer(); } catch (_) {}
+      try { unlistenRagDone(); } catch (_) {}
       window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
+      window.removeEventListener("pilot:rag-building", showRagBuilding);
     },
     unlistenDragDrop,
   };

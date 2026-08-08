@@ -118,6 +118,14 @@ fn is_indexed(name: &str) -> bool {
     INDEXED_EXT.contains(&ext.as_str())
 }
 
+/// Fichiers racine déjà injectés par d'autres canaux → exclus de l'indexation
+/// RAG (anti-doublon) : `AGENTS.md` est découvert/injecté nativement par pi/plh,
+/// `PROJECT_MEMORY.md` est injecté séparément par H3 (`buildMemoryBlock`). Le V1
+/// exclut déjà AGENTS.md ; le RAG doit faire de même pour les deux.
+fn is_excluded_from_rag(name: &str) -> bool {
+    name == "AGENTS.md" || name == "PROJECT_MEMORY.md"
+}
+
 fn is_ignored_dir(name: &str) -> bool {
     IGNORE_DIRS.contains(&name) || name.starts_with('.')
 }
@@ -140,6 +148,7 @@ fn walk_rec(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
             if is_ignored_dir(&name) { continue; }
             walk_rec(root, &path, out);
         } else if path.is_file() {
+            if is_excluded_from_rag(&name) { continue; }
             if !is_indexed(&name) { continue; }
             if let Ok(meta) = fs::metadata(&path) {
                 if meta.len() as usize > MAX_FILE_BYTES { continue; }
@@ -592,6 +601,18 @@ mod tests {
     }
 
     #[test]
+    fn rag_excludes_agents_and_project_memory() {
+        // AGENTS.md et PROJECT_MEMORY.md sont déjà injectés par d'autres canaux
+        // (pi natif / H3) → exclus de l'indexation RAG (anti-doublon).
+        assert!(is_excluded_from_rag("AGENTS.md"));
+        assert!(is_excluded_from_rag("PROJECT_MEMORY.md"));
+        // Les autres fichiers .md restent indexés.
+        assert!(!is_excluded_from_rag("README.md"));
+        assert!(!is_excluded_from_rag("spec_pilot.md"));
+        assert!(!is_excluded_from_rag("main.rs"));
+    }
+
+    #[test]
     fn file_hash_is_stable_and_short() {
         let h1 = file_hash(b"hello");
         let h2 = file_hash(b"hello");
@@ -722,11 +743,23 @@ pub fn context_index_status(project_path: String) -> Result<IndexStatus, String>
 }
 
 /// Build complet. Sync (bloquant) — s'exécute sur le threadpool Tauri, n'fige
-/// pas l'UI. Émet "context-index-progress" pendant le build et retourne les
-/// stats à la fin.
+/// pas l'UI. Émet "context-index-progress" pendant le build, "context-index-done"
+/// à la fin (succès ou échec) et retourne les stats.
 #[tauri::command]
 pub fn build_context_index(app: AppHandle, project_path: String, endpoint: String, model: String) -> Result<BuildStats, String> {
-    build_index_blocking(&app, &project_path, &endpoint, &model)
+    let res = build_index_blocking(&app, &project_path, &endpoint, &model);
+    match &res {
+        Ok(stats) => {
+            let _ = app.emit("context-index-done", serde_json::json!({
+                "ok": true,
+                "stats": { "chunks": stats.chunks, "files": stats.files, "elapsed_ms": stats.elapsed_ms }
+            }));
+        }
+        Err(e) => {
+            let _ = app.emit("context-index-done", serde_json::json!({ "ok": false, "error": e }));
+        }
+    }
+    res
 }
 
 #[tauri::command]

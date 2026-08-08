@@ -4042,6 +4042,60 @@ body.zen-mode #action-panel {
   to { transform: rotate(360deg); }
 }
 
+/* --- Construction de l'index RAG : sablier centré --- */
+#rag-building-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+#rag-building-overlay.hidden {
+  display: none;
+}
+.rag-hourglass {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  animation: rag-hourglass-flip 1.4s ease-in-out infinite;
+}
+.rag-hourglass::before,
+.rag-hourglass::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: var(--accent);
+}
+.rag-hourglass::before {
+  top: 0;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.rag-hourglass::after {
+  bottom: 0;
+  clip-path: polygon(0 100%, 100% 100%, 50% 0);
+}
+@keyframes rag-hourglass-flip {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(180deg); }
+}
+.rag-building-message {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
 /* Curseur sablier quand loading est actif */
 body.pilot-loading,
 body.pilot-loading *,

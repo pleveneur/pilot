@@ -171,6 +171,11 @@ est vrai **et** l'endpoint répond, on utilise le RAG ; sinon on retombe sur V1.
 - **Code** : blocs de 60 lignes, overlap 10 lignes (langage-agnostique).
 - **Markdown** : découpe par section (heading `#`/`##`…), fallback blocs 60 lignes.
 - Filtre : `node_modules/`, `target/`, `.git/`, `dist/`, binaires, images.
+- **Exclusions anti-doublon** : `AGENTS.md` et `PROJECT_MEMORY.md` sont **exclus**
+  de l'indexation RAG (`is_excluded_from_rag` dans `walk_rec`) — ils sont déjà
+  injectés par d'autres canaux (pi natif pour AGENTS.md, H3 pour
+  PROJECT_MEMORY.md). Le V1 excluait déjà AGENTS.md ; le RAG fait de même pour
+  les deux.
 - Extensions indexées : `.js .ts .mjs .jsx .tsx .py .md .rs .json .toml .css .html .go .java .c .cpp .h .yaml .yml .txt`.
 - Chaque chunk stocke : `path` (relatif), `start_line`, `end_line`, `content`, `file_hash` (SHA-256 du fichier), `mtime` (epoch).
 
@@ -228,6 +233,11 @@ borné [2000, 16000]. Le boost structurel (`.pilot/context.md`, manifestes,
 `.pilot/context.md`) reste : ces fichiers sont toujours inclus en tête du
 préambule avant les chunks RAG.
 
+**Anti-doublon boost vs chunks** : après la query, le frontend filtre les chunks
+RAG dont le chemin est déjà présent dans le boost structurel
+(`filterRagChunksByPath` dans `context-engine.js`) — un manifeste déjà injecté
+en boost n'est pas ré-injecté comme chunk RAG.
+
 ### 7.7 Flux au 1er prompt
 
 ```
@@ -240,6 +250,14 @@ préambule avant les chunks RAG.
 
 Bouton 📑 « Contexte » : force un **rebuild complet** (supprime l'index puis
 `build_context_index`) si RAG activé ; sinon refresh V1.
+
+**Indicateur de construction (sablier centré)** : quand un build RAG est
+déclenché — en arrière-plan au 1er prompt (index absent) **ou** via le bouton
+📑 « Contexte » (rebuild complet) — `agent-pi.js` affiche un **sablier animé au
+centre de l'écran** (`#rag-building-overlay`) avec le texte « Construction de
+l'index RAG en cours… » en dessous. Le backend émet `context-index-done`
+(succès ou échec) à la fin du build → l'overlay est masqué. (Cet event
+`context-index-done` est aussi celui attendu par le toast du bouton 📑.)
 
 ### 7.7bis Ceinture-bretelles frontend (anti-gel)
 
@@ -299,5 +317,8 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
   retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
   éteint ou lent : des timeouts bornent l'attente et le prompt part sans
-  contexte au besoin.
+  contexte au besoin. À la **première génération** de l'index **ou** au clic sur
+  le bouton 📑 « Contexte » (rebuild RAG), un **sablier animé au centre de
+  l'écran** s'affiche avec le texte « Construction de l'index RAG en cours… »
+  en dessous, et disparaît quand l'index est prêt.
 <!-- /HELP:context-engine -->

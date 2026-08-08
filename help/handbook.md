@@ -405,7 +405,10 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   incrémentalement. Le bouton 📑 force un rebuild complet. Sans Ollama, Pilot
   retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
   éteint ou lent : des timeouts bornent l'attente et le prompt part sans
-  contexte au besoin.
+  contexte au besoin. À la **première génération** de l'index **ou** au clic sur
+  le bouton 📑 « Contexte » (rebuild RAG), un **sablier animé au centre de
+  l'écran** s'affiche avec le texte « Construction de l'index RAG en cours… »
+  en dessous, et disparaît quand l'index est prêt.
 
 ---
 

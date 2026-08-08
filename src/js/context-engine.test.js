@@ -1,6 +1,6 @@
 // Tests unitaires — context-engine.js (Context Engine H1 : fonctions pures)
 import { describe, it, expect } from "vitest";
-import { estimateTokens, truncateToTokens, extractImports, parseAgentsNavTable } from "./context-engine.js";
+import { estimateTokens, truncateToTokens, extractImports, parseAgentsNavTable, filterRagChunksByPath } from "./context-engine.js";
 
 // ── estimateTokens ────────────────────────────────────────────────────
 describe("estimateTokens", () => {
@@ -103,7 +103,36 @@ describe("extractImports Markdown", () => {
   });
 });
 
-// ── parseAgentsNavTable ───────────────────────────────────────────────
+// ── filterRagChunksByPath ────────────────────────────────────────────
+describe("filterRagChunksByPath", () => {
+  it("retourne le contexte inchangé si aucune exclusion", () => {
+    const ctx = "### src/a.js (l. 1-10, score 0.50)\ncode\n\n### src/b.js (l. 1-5, score 0.40)\ncode2";
+    expect(filterRagChunksByPath(ctx, null)).toBe(ctx);
+    expect(filterRagChunksByPath(ctx, new Set())).toBe(ctx);
+    expect(filterRagChunksByPath("", new Set(["package.json"]))).toBe("");
+  });
+
+  it("retire les chunks dont le chemin est dans le boost structurel", () => {
+    const ctx =
+      "### package.json (l. 1-20, score 0.60)\n{...}\n\n" +
+      "### src/main.js (l. 1-10, score 0.55)\ncode\n\n" +
+      "### Cargo.toml (l. 1-15, score 0.50)\n[deps]";
+    const out = filterRagChunksByPath(ctx, new Set(["package.json", "Cargo.toml"]));
+    expect(out).toContain("src/main.js");
+    expect(out).not.toContain("package.json");
+    expect(out).not.toContain("Cargo.toml");
+  });
+
+  it("retourne vide si tous les chunks sont exclus", () => {
+    const ctx = "### package.json (l. 1-20, score 0.60)\n{...}";
+    expect(filterRagChunksByPath(ctx, new Set(["package.json"]))).toBe("");
+  });
+
+  it("gère les chemins avec espaces (avant le marqueur (l. )", () => {
+    const ctx = "### mon dossier/package.json (l. 1-5, score 0.50)\n{...}";
+    expect(filterRagChunksByPath(ctx, new Set(["mon dossier/package.json"]))).toBe("");
+  });
+});
 describe("parseAgentsNavTable", () => {
   it("retourne [] sur contenu vide", () => {
     expect(parseAgentsNavTable("")).toEqual([]);

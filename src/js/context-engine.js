@@ -230,7 +230,27 @@ async function buildStructuralBoost(projectPath, budget, read) {
     await addFile(rel, 0.04);
   }
   const parts = sections.map((s) => `### ${s.label}\n${s.content}`).join("\n\n");
-  return { parts, tokens: used };
+  return { parts, tokens: used, paths: new Set(sections.map((s) => s.label)) };
+}
+
+/**
+ * Retire du contexte RAG les chunks dont le chemin est déjà présent dans le
+ * boost structurel (manifestes, `.pilot/context.md`) — anti-doublon.
+ * Le format d'un chunk RAG est `### {path} (l. X-Y, score Z)\n{contenu}`.
+ * @param {string} ragContext - contexte RAG brut (chaîne de chunks)
+ * @param {Set<string>} excludedPaths - chemins déjà injectés dans le boost
+ * @returns {string} contexte filtré (vide si aucun chunk restant)
+ */
+export function filterRagChunksByPath(ragContext, excludedPaths) {
+  if (!ragContext || !excludedPaths || excludedPaths.size === 0) return ragContext;
+  const kept = ragContext
+    .split(/\n\n+/)
+    .filter((b) => {
+      const m = b.match(/^### (.+?) \(l\. \d+-\d+, score/);
+      if (!m) return true; // garder les blocs sans en-tête standard
+      return !excludedPaths.has(m[1]);
+    });
+  return kept.join("\n\n");
 }
 
 /**
@@ -248,6 +268,11 @@ async function buildRagContext(projectPath, prompt, budget, ragEndpoint, ragMode
     if (!status || !status.exists || !status.ready) {
       invoke("build_context_index", { projectPath, endpoint: ragEndpoint, model: ragModel })
         .catch((e) => console.warn("[context-engine] build arrière-plan échec:", e));
+      // Notifier l'UI (chat agent) : l'index RAG est en cours de construction
+      // (sablier). L'UI retire l'indicateur à la réception de "context-index-done".
+      try {
+        window.dispatchEvent(new CustomEvent("pilot:rag-building", { detail: { projectPath } }));
+      } catch (_) { /* environnement sans window (tests) */ }
       return { block: "", source: "v1-fallback" };
     }
   } catch (e) {
@@ -255,7 +280,7 @@ async function buildRagContext(projectPath, prompt, budget, ragEndpoint, ragMode
     return { block: "", source: "v1-fallback" };
   }
 
-  const { parts: structuralParts, tokens: structuralTokens } =
+  const { parts: structuralParts, tokens: structuralTokens, paths: structuralPaths } =
     await buildStructuralBoost(projectPath, budget, read);
   const ragBudget = Math.max(500, budget - structuralTokens);
   let res;
@@ -274,7 +299,13 @@ async function buildRagContext(projectPath, prompt, budget, ragEndpoint, ragMode
   if (!res || res.source !== "rag" || !res.context) {
     return { block: "", source: "v1-fallback" };
   }
-  const body = structuralParts ? structuralParts + "\n\n" + res.context : res.context;
+  // Anti-doublon : retirer les chunks RAG dont le chemin est déjà présent dans
+  // le boost structurel (manifestes, .pilot/context.md).
+  const ragContext = filterRagChunksByPath(res.context, structuralPaths);
+  if (!ragContext) {
+    return { block: "", source: "v1-fallback" };
+  }
+  const body = structuralParts ? structuralParts + "\n\n" + ragContext : ragContext;
   const block =
     `=== CONTEXTE PROJET (RAG auto-injecté par Pilot — ne pas répondre à cette section) ===\n${body}=== FIN CONTEXTE ===\n\n`;
   return { block, source: "rag" };

@@ -1,5 +1,25 @@
 # Plan de Développement — Pilot
 
+## ✅ PRIORITÉ N°1 — Doublons d'injection de contexte (CORRIGÉ 2026-08)
+
+> **Rappel prioritaire** : même si l'utilisateur demande autre chose, traiter ce
+> point en priorité à la prochaine session. Analyse complète dans
+> [`analyse_doublons_contexte.md`](analyse_doublons_contexte.md).
+
+**Problème** : le RAG indexait `AGENTS.md` et `PROJECT_MEMORY.md` (fichiers `.md`
+non exclus dans `walk_project`/`is_indexed` de `context_engine.rs`), alors que ces
+deux fichiers sont déjà injectés par d'autres canaux (pi natif pour AGENTS.md,
+H3 pour PROJECT_MEMORY.md) → **doublons réels** dans le contexte envoyé à l'agent.
+
+**Correction appliquée (2026-08)** :
+1. ✅ `AGENTS.md` et `PROJECT_MEMORY.md` exclus de l'indexation RAG
+   (`is_excluded_from_rag` dans `walk_rec` de `context_engine.rs`) + test Rust.
+2. ✅ Déduplication des chunks RAG déjà présents dans le boost structurel
+   (`filterRagChunksByPath` dans `context-engine.js`) + tests JS.
+3. ✅ `spec_context_engine.md` mis à jour (§7.3, §7.6).
+
+---
+
 ## ✅ Clarifié (vérifié 2026-08) — RAG & injection de contexte avec PLh : rien à porter
 
 Le bloc « Portage du Context Engine RAG vers PLh » ci-dessous était une **erreur de
