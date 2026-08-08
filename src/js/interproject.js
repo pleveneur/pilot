@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
 import { toastSuccess, toastError } from "./toast.js";
+import { animateModalOpen } from "./modal-anim.js";
 
 let modal, linksEl, openListEl, targetSel, contentEl, resultEl;
 
@@ -28,7 +29,7 @@ export function initInterproject() {
   contentEl = document.getElementById("interproject-content");
   resultEl = document.getElementById("interproject-result");
 
-  document.getElementById("btn-interproject").addEventListener("click", openModal);
+  document.getElementById("btn-interproject").addEventListener("click", (e) => openModal(e.clientX, e.clientY));
   document.getElementById("interproject-close").addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => {
     if (e.target === modal) closeModal();
@@ -40,10 +41,11 @@ function currentProject() {
   return window._pilotProjectPath || "";
 }
 
-async function openModal() {
+async function openModal(clickX, clickY) {
   resultEl.textContent = "";
   contentEl.value = "";
   modal.classList.remove("hidden");
+  animateModalOpen(modal, clickX, clickY);
   await render();
 }
 

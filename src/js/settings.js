@@ -6,6 +6,7 @@ import { refreshShowThinking, refreshShowTools } from "./agent-pi.js";
 import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
+import { animateModalOpen } from "./modal-anim.js";
 
 let currentConfig = null;
 
@@ -122,6 +123,7 @@ export async function initSettings() {
   const chkAutoSave = document.getElementById("setting-auto-save");
   const inputAutoSaveDelay = document.getElementById("setting-auto-save-delay");
   const chkWordWrap = document.getElementById("setting-word-wrap");
+  const chkModalAnim = document.getElementById("setting-modal-anim");
   const chkOrchestration = document.getElementById("setting-orchestration");
   const inputOrchestratorModel = document.getElementById("setting-orchestrator-model");
   const inputCoderModel = document.getElementById("setting-coder-model");
@@ -255,8 +257,9 @@ export async function initSettings() {
     return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  btnWebAudit.addEventListener("click", async () => {
+  btnWebAudit.addEventListener("click", async (e) => {
     auditModal.classList.remove("hidden");
+    animateModalOpen(auditModal, e.clientX, e.clientY);
     await loadAudit();
   });
   auditClose.addEventListener("click", () => auditModal.classList.add("hidden"));
@@ -268,11 +271,12 @@ export async function initSettings() {
   });
 
   // Ouvrir la modale
-  btnSettings.addEventListener("click", async () => {
+  btnSettings.addEventListener("click", async (e) => {
+    const clickX = e.clientX, clickY = e.clientY;
     try {
       currentConfig = await invoke("get_config");
     } catch (_) {
-      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text" };
+      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text", modal_animations: true };
     }
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
@@ -289,6 +293,8 @@ export async function initSettings() {
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
     chkWordWrap.checked = currentConfig.word_wrap || false;
+    if (chkModalAnim) chkModalAnim.checked = currentConfig.modal_animations !== false;
+    window._pilotModalAnimations = currentConfig.modal_animations !== false;
     chkOrchestration.checked = currentConfig.orchestration_enabled || false;
     chkOrchConfirmModelSwitch.checked = currentConfig.orchestration_confirm_model_switch || false;
     inputCoderContextWindow.value = currentConfig.coder_context_window || 0;
@@ -383,6 +389,7 @@ export async function initSettings() {
       applyTheme(selectTheme.value, selectSubtheme.value);
     });
     modal.classList.remove("hidden");
+    animateModalOpen(modal, clickX, clickY);
   });
 
   // ── Context Engine V2 (RAG) : toggle d'affichage du block + bouton test ──
@@ -483,6 +490,7 @@ export async function initSettings() {
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,
         favorites: currentConfig?.favorites || [],
         word_wrap: chkWordWrap.checked,
+        modal_animations: chkModalAnim ? chkModalAnim.checked : true,
         orchestration_enabled: chkOrchestration.checked,
         orchestrator_provider: orchParts[0] || "",
         orchestrator_model_id: orchParts[1] || "",
@@ -544,6 +552,7 @@ export async function initSettings() {
       };
     try {
       await invoke("save_config", { config });
+      window._pilotModalAnimations = config.modal_animations !== false;
       applyTheme(config.theme, config.subtheme || "default");
       refreshShowThinking();
       refreshShowTools();
@@ -826,6 +835,7 @@ export async function initSettings() {
   // Charger et appliquer le thème au démarrage
   try {
     const cfg = await invoke("get_config");
+    window._pilotModalAnimations = cfg.modal_animations !== false;
     applyTheme(cfg.theme || "dark", cfg.subtheme || "default");
   } catch (_) {
     applyTheme("dark", "default");

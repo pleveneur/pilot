@@ -27,6 +27,10 @@ import { lintExtension } from "./editor-lint.js";
 
 // Compartment pour le word wrap (permet de le toggle dynamiquement)
 const wrapCompartment = new Compartment();
+// Compartment pour le thème sombre CodeMirror (oneDark) — permet de basculer
+// dark/light dynamiquement à la volée (remplace l'ancien usage invalide de la
+// Facet EditorView.darkTheme qui n'a pas de méthode .reconfigure()).
+const themeCompartment = new Compartment();
 
 /**
  * Crée une instance CodeMirror 6
@@ -101,7 +105,7 @@ export async function createEditor(parent, initialContent = "", onChange, onCurs
       highlightSelectionMatches(),
       autoComplete,
       mdDomHandlers,
-      oneDark,
+      themeCompartment.of([oneDark]),
       placeholder("Commencez à écrire..."),
       updateListener,
       // Écouter la position du curseur
@@ -175,9 +179,7 @@ export async function createEditor(parent, initialContent = "", onChange, onCurs
   window.addEventListener("theme-changed", (e) => {
     const isDark = e.detail.theme === "dark";
     view.dispatch({
-      effects: view.state.field(EditorView.darkTheme).reconfigure(
-        isDark ? oneDark : []
-      ),
+      effects: themeCompartment.reconfigure(isDark ? [oneDark] : []),
     });
   });
 

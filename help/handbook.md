@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-07 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot

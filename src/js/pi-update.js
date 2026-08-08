@@ -8,6 +8,7 @@
 // `pi_skip_update_check` persisté dans la config).
 
 import { invoke } from "@tauri-apps/api/core";
+import { animateModalOpen } from "./modal-anim.js";
 import { toastSuccess, toastError, toastInfo } from "./toast.js";
 import { getBackendInfoSync } from "./backend-info.js";
 
@@ -95,6 +96,7 @@ export async function checkPiUpdate() {
       _statusEl.textContent = "";
       _updateBtn.disabled = false;
       modal.classList.remove("hidden");
+      animateModalOpen(modal); // origine = centre (ouverture non liée à un clic)
     }
   } catch (e) {
     console.warn("check_pi_update:", e);

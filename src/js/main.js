@@ -19,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
+import { animateModalOpen } from "./modal-anim.js";
 
 // --- Palette de commandes ---
 
@@ -240,6 +241,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 1b. Remplacer les balises <i data-lucide="..."> du HTML statique par des
   // icônes SVG Lucide. À rappeler après toute insertion dynamique d'icônes.
   refreshIcons();
+
+  // Enregistrer la position du dernier clic → origine des animations d'ouverture
+  // des nouveaux onglets (tabs.js / modal-anim.js). Phase de capture pour couvrir
+  // toutes les surfaces (arbre de fichiers, boutons du panneau bas, barre d'onglets).
+  window.addEventListener("click", (e) => {
+    window._pilotLastClick = { x: e.clientX, y: e.clientY };
+  }, true);
 
   // 2. Initialiser le gestionnaire d'onglets
   const tabs = initTabs();
@@ -847,8 +855,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnCloseShortcuts = document.getElementById("btn-close-shortcuts");
 
   if (btnShortcuts && shortcutsModal) {
-    btnShortcuts.addEventListener("click", () => {
+    btnShortcuts.addEventListener("click", (e) => {
       shortcutsModal.classList.remove("hidden");
+      animateModalOpen(shortcutsModal, e.clientX, e.clientY);
     });
   }
   if (btnCloseShortcuts && shortcutsModal) {

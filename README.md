@@ -6,6 +6,11 @@
 
 ## Fonctionnalités
 
+### Animations d'ouverture
+- **Modales** : les modales (Paramètres ⚙️, raccourcis, commandes projet, inter-projets, etc.) s'ouvrent avec une **animation de zoom** depuis le point de clic (bouton ou option de menu) jusqu'à leur taille finale.
+- **Nouveaux onglets** : l'ouverture d'un **nouvel onglet** (fichier dans l'explorateur, bouton du panneau bas, bascule vers un onglet jamais encore affiché) bénéficie du même **zoom depuis le point cliqué**, appliqué au contenu. La bascule vers un onglet déjà affiché reste instantanée.
+- **Paramètre ⚙️ → Général → Apparence → « Animer l'ouverture des modales »** : force les animations même si la **réduction de mouvement** est active côté système. **Activé par défaut** (y compris après mise à jour d'une ancienne version, pour laquelle le paramètre n'existait pas encore). Le désactiver restore le respect strict de l'accessibilité.
+
 ### Explorateur de fichiers
 - **Arborescence en temps réel** — mise à jour automatique dès qu'un fichier est créé, modifié ou supprimé (même par un processus externe).
 - **Flèches ▶/▼** pour déplier/replier les dossiers. Les dossiers vides n'affichent pas de flèche.

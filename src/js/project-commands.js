@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { refreshIcons } from "./icons.js";
 import { toastSuccess, toastError } from "./toast.js";
+import { animateModalOpen } from "./modal-anim.js";
 
 let commandsModal, commandsList;
 let currentProject = "";
@@ -21,7 +22,7 @@ export function initProjectCommands() {
   commandsModal = document.getElementById("commands-modal");
   commandsList = document.getElementById("commands-list");
 
-  document.getElementById("btn-commands").addEventListener("click", openCommandsModal);
+  document.getElementById("btn-commands").addEventListener("click", (e) => openCommandsModal(e.clientX, e.clientY));
   document.getElementById("btn-close-commands").addEventListener("click", () =>
     commandsModal.classList.add("hidden")
   );
@@ -42,7 +43,7 @@ export function initProjectCommands() {
 
 // ── Liste des commandes ──
 
-async function openCommandsModal() {
+async function openCommandsModal(clickX, clickY) {
   currentProject = window._pilotProjectPath;
   if (!currentProject) {
     toastError("Aucun projet ouvert");
@@ -53,6 +54,7 @@ async function openCommandsModal() {
     currentCommands = Array.isArray(data) ? data : [];
     renderCommands();
     commandsModal.classList.remove("hidden");
+    animateModalOpen(commandsModal, clickX, clickY);
   } catch (e) {
     toastError("Lecture des commandes : " + e);
   }
@@ -105,7 +107,9 @@ function openCommandForm(cmd) {
     cmd ? "Modifier la commande" : "Nouvelle commande"
   }`;
   refreshIcons(title);
-  document.getElementById("command-form-modal").classList.remove("hidden");
+  const formModal = document.getElementById("command-form-modal");
+  formModal.classList.remove("hidden");
+  animateModalOpen(formModal);
   document.getElementById("cmd-name").focus();
 }
 

@@ -18,6 +18,7 @@ import { createSessionHistory } from "./session-history.js";
 import { createFeedback } from "./feedback.js";
 import { scheduleOutlineUpdate } from "./outline.js";
 import { toastError } from "./toast.js";
+import { animatePanelOpen } from "./modal-anim.js";
 import { createPromptBuilder } from "./prompt-builder.js";
 import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
@@ -1269,6 +1270,14 @@ class TabsManager {
     if (tab.wrapper) {
       tab.wrapper.style.display = "";
       this._hideEmpty();
+      // Animation d'ouverture d'un NOUVEL onglet (zoom depuis le point du clic) :
+      // uniquement à la première affiche, pas à chaque bascule. L'origine est la
+      // position du dernier clic (ligne du fichier / bouton du panneau bas).
+      if (tab.animated !== true) {
+        tab.animated = true;
+        const src = window._pilotLastClick;
+        animatePanelOpen(tab.wrapper, src ? src.x : undefined, src ? src.y : undefined);
+      }
     }
 
     // Marquer le bouton actif
