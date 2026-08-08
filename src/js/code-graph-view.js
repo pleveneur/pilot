@@ -18,6 +18,7 @@
 // bundle au démarrage.
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { graphStatus, rebuildGraph } from "./code-graph.js";
 
 // Couleurs par type de nœud — palettes adaptées au thème (sombre / clair).
@@ -45,6 +46,7 @@ const RELATION_COLORS_DARK = {
   inherits: "#d2a8ff",
   references: "#a0a6b4",
   uses: "#6b8cff",
+  contains: "#6e7681",
 };
 const RELATION_COLORS_LIGHT = {
   calls: "#d64545",
@@ -52,6 +54,7 @@ const RELATION_COLORS_LIGHT = {
   inherits: "#8b5cf6",
   references: "#6b7280",
   uses: "#3b5bdb",
+  contains: "#9ca3af",
 };
 
 function isLightTheme() {
@@ -97,7 +100,8 @@ export function createCodeGraphView(wrapper) {
   let fitPending = false; // recentrage à la prochaine stabilisation
   let autoAggregated = false; // vue par fichier auto-activée (1re ouverture)
   let focusedNode = null; // nœud sur lequel le graphe est recentré (voisinage)
-  let lastClick = { id: null, time: 0 }; // détection double-clic
+  let buildProgress = null; // { done, total, file } pendant la construction
+  let unlistenBuildProgress = null; // arrêt de l'écoute de progression
 
   // ── Construction du DOM ──
   wrapper.classList.add("codegraph-view");
@@ -448,6 +452,13 @@ export function createCodeGraphView(wrapper) {
           ctx.lineWidth = 1 / globalScale;
           ctx.stroke();
 
+          // Étiquette : n'afficher que si suffisamment zoomé. Sur les gros
+          // graphes (ex: 1936 nœuds), les fonds semi-opaques des libellés
+          // dessinés pour CHAQUE nœud masquaient les liaisons (les nœuds sont
+          // rendus après les liens). Dézoomé, on ne montre que les cercles →
+          // les liaisons redeviennent visibles.
+          if (globalScale < 1.5) return;
+
           // Étiquette avec fond adapté au thème.
           ctx.font = `${fontSize}px Sans-Serif`;
           const textWidth = ctx.measureText(label).width;
@@ -466,22 +477,13 @@ export function createCodeGraphView(wrapper) {
           ctx.textBaseline = "middle";
           ctx.fillStyle = theme.text;
           ctx.fillText(label, node.x, by + bh / 2);
-          node.__bckgDimensions = [bw, bh];
         })
         .onNodeClick((node) => {
-          const now = Date.now();
-          if (lastClick.id === node.id && now - lastClick.time < 350) {
-            // Double-clic → ouvrir le fichier dans un onglet d'édition.
-            lastClick = { id: null, time: 0 };
-            if (node.path && window._pilotTabs) {
-              const abs = projectPath().replace(/[\\/]+$/, "") + "/" + node.path;
-              window._pilotTabs.openFile(abs, "edit").catch(() => {});
-            }
-            return;
+          // Clic → ouvrir le fichier dans un onglet d'édition.
+          if (node.path && window._pilotTabs) {
+            const abs = projectPath().replace(/[\\/]+$/, "") + "/" + node.path;
+            window._pilotTabs.openFile(abs, "edit").catch(() => {});
           }
-          lastClick = { id: node.id, time: now };
-          // Clic simple → recentrer le graphe sur le voisinage de ce nœud.
-          focusOn(node.id);
         })
         .onNodeHover((node) => {
           canvasEl.style.cursor = node ? "pointer" : "default";
@@ -545,13 +547,38 @@ export function createCodeGraphView(wrapper) {
   }
 
   // ── Événements ──
+  // ── Rendu de l'état « construction en cours » (sablier + progression) ──
+  function renderBuilding() {
+    if (!statusEl) return;
+    const prog = buildProgress && buildProgress.total
+      ? ` · ${buildProgress.done}/${buildProgress.total} fichiers`
+      : "";
+    const file = buildProgress && buildProgress.file
+      ? ` · <span class="cg-file">${buildProgress.file}</span>`
+      : "";
+    statusEl.innerHTML =
+      `<span class="cg-building"><span class="cg-spinner"></span> Construction du graphe…${prog}${file}</span>`;
+  }
+
   btnRebuild.onclick = async () => {
     const p = projectPath();
     if (!p) return;
     btnRebuild.disabled = true;
-    if (statusEl) statusEl.innerHTML = '<span class="muted">⏳ Construction du graphe… (peut prendre quelques secondes)</span>';
+    buildProgress = null;
+    renderBuilding();
+    // Suivi de la progression (événements émis par le backend à chaque lot).
+    if (!unlistenBuildProgress) {
+      unlistenBuildProgress = await listen("graph-build-progress", (ev) => {
+        const d = ev.payload;
+        if (d && typeof d.done === "number") {
+          buildProgress = { done: d.done, total: d.total || 0, file: d.file || null };
+          renderBuilding();
+        }
+      });
+    }
     try {
       const stats = await rebuildGraph(p);
+      buildProgress = null;
       if (statusEl && stats) {
         statusEl.innerHTML =
           `<span><b>Graphe reconstruit</b></span>` +
@@ -561,6 +588,7 @@ export function createCodeGraphView(wrapper) {
       toastInfo("📊 Graphe du projet reconstruit");
       await load();
     } catch (e) {
+      buildProgress = null;
       if (statusEl) statusEl.innerHTML = `<span class="muted">❌ Échec : ${e}</span>`;
     } finally {
       btnRebuild.disabled = false;
@@ -617,6 +645,7 @@ export function createCodeGraphView(wrapper) {
   const unlisten = () => {
     destroyed = true;
     ro.disconnect();
+    if (unlistenBuildProgress) { try { unlistenBuildProgress(); } catch (_) {} unlistenBuildProgress = null; }
     document.removeEventListener("pilot-file-selected", onFileSelected);
     window.removeEventListener("theme-changed", onThemeChanged);
     if (graph && graph._destructor) graph._destructor();

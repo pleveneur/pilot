@@ -328,6 +328,20 @@ fn short_name(name: &str) -> String {
     name.rsplit('.').next().unwrap_or(name).to_string()
 }
 
+/// Construit un label lisible pour un nœud import : dernier segment du chemin,
+/// sans l'extension de fichier (ex: `../src/modes/rpc/rpc-client.ts` → `rpc-client`).
+/// Contrairement à `short_name`, on ne coupe PAS sur le dernier `.` (qui donnerait
+/// `ts` pour `rpc-client.ts`) : on retire seulement une extension de fichier connue.
+fn import_label(target: &str) -> String {
+    let base = target.rsplit('/').next().unwrap_or(target);
+    for ext in ["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "md", "json", "toml", "css", "scss", "html", "vue", "svelte"] {
+        if let Some(stem) = base.strip_suffix(&format!(".{ext}")) {
+            return stem.to_string();
+        }
+    }
+    base.to_string()
+}
+
 /// Dispatch extraction selon le backend configuré.
 fn extract_file(rel: &str, content: &str, extraction: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
     if extraction == "treesitter" {
@@ -363,7 +377,7 @@ fn extract_v1(rel: &str, content: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
                         let target = cap;
                         if target.starts_with('.') || target.starts_with('/') || target.starts_with('#') {
                             let imp_id = node_id("import", rel, &target);
-                            nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&target), kind: "import".into(), path: rel.to_string(), line: line_no });
+                            nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&target), kind: "import".into(), path: rel.to_string(), line: line_no });
                             edges.push(EdgeDef { source: file_id.clone(), target: imp_id.clone(), relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                         }
                     }
@@ -371,7 +385,7 @@ fn extract_v1(rel: &str, content: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
                     // from .relative import X
                     if let Some(target) = regex_find(r"^\s*from\s+(\.+[\w.]*)\s+import", line) {
                         let imp_id = node_id("import", rel, &target);
-                        nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&target), kind: "import".into(), path: rel.to_string(), line: line_no });
+                        nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&target), kind: "import".into(), path: rel.to_string(), line: line_no });
                         edges.push(EdgeDef { source: file_id.clone(), target: imp_id.clone(), relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                     }
                 }
@@ -412,7 +426,7 @@ fn extract_v1(rel: &str, content: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
                 let line_no = (i + 1) as i64;
                 if let Some(imp) = regex_find(r"^\s*(?:pub\s+)?use\s+([\w:]+)", line) {
                     let imp_id = node_id("import", rel, &imp);
-                    nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&imp), kind: "import".into(), path: rel.to_string(), line: line_no });
+                    nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&imp), kind: "import".into(), path: rel.to_string(), line: line_no });
                     edges.push(EdgeDef { source: file_id.clone(), target: imp_id.clone(), relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                 } else if let Some(name) = regex_find(r"^\s*(?:pub\s+)?fn\s+([A-Za-z_]\w*)", line) {
                     let nid = node_id("function", rel, &name);
@@ -436,7 +450,7 @@ fn extract_v1(rel: &str, content: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
                     let t = target.split('#').next().unwrap_or("").trim().to_string();
                     if !t.is_empty() && !t.starts_with("http") && !t.starts_with("mailto:") {
                         let imp_id = node_id("import", rel, &t);
-                        nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&t), kind: "import".into(), path: rel.to_string(), line: line_no });
+                        nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&t), kind: "import".into(), path: rel.to_string(), line: line_no });
                         edges.push(EdgeDef { source: file_id.clone(), target: imp_id.clone(), relation: "references".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                     }
                     // avancer
@@ -450,11 +464,18 @@ fn extract_v1(rel: &str, content: &str) -> (Vec<NodeDef>, Vec<EdgeDef>) {
 
     // Pass 2 : calls / references simples par nom (INFERRED). On cherche les
     // symboles définis localement dans le fichier et on repère les usages.
+    // Pré-calcul de la ligne de définition de chaque symbole : l'ancien code
+    // faisait un scan O(nodes) (`nodes.iter().find`) pour CHAQUE (ligne,
+    // symbole) → complexité O(lignes × symboles × nœuds), très lente sur les
+    // gros fichiers (ex: agent-pi.js ~360 Ko). Le lookup devient O(1).
+    let def_line_of: HashMap<&String, i64> = defined.keys()
+        .map(|name| (name, nodes.iter().find(|n| n.label == *name).map(|n| n.line).unwrap_or(0)))
+        .collect();
     for (i, &line) in lines.iter().enumerate() {
         for name in defined.keys() {
             if name.len() < 2 { continue; }
             // Ignorer la ligne de définition elle-même
-            let def_line = nodes.iter().find(|n| n.label == *name).map(|n| n.line).unwrap_or(0);
+            let def_line = def_line_of.get(name).copied().unwrap_or(0);
             if (i + 1) as i64 == def_line { continue; }
             if line.contains(name) {
                 if let Some(def_id) = defined.get(name) {
@@ -666,7 +687,7 @@ fn walk_v2(node: tree_sitter::Node, lang: &str, rel: &str, file_id: &str, conten
                     let s = source.trim_matches(|c| c == '\'' || c == '"').to_string();
                     if is_relative_import(&s) {
                         let imp_id = node_id("import", rel, &s);
-                        nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&s), kind: "import".into(), path: rel.to_string(), line });
+                        nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&s), kind: "import".into(), path: rel.to_string(), line });
                         edges.push(EdgeDef { source: file_id.to_string(), target: imp_id, relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                     }
                 }
@@ -674,7 +695,7 @@ fn walk_v2(node: tree_sitter::Node, lang: &str, rel: &str, file_id: &str, conten
                 if let Some(name) = field_text(node, "name", content) {
                     if is_relative_import(&name) {
                         let imp_id = node_id("import", rel, &name);
-                        nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&name), kind: "import".into(), path: rel.to_string(), line });
+                        nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&name), kind: "import".into(), path: rel.to_string(), line });
                         edges.push(EdgeDef { source: file_id.to_string(), target: imp_id, relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                     }
                 }
@@ -684,7 +705,7 @@ fn walk_v2(node: tree_sitter::Node, lang: &str, rel: &str, file_id: &str, conten
             if let Some(module) = field_text(node, "module_name", content) {
                 if is_relative_import(&module) {
                     let imp_id = node_id("import", rel, &module);
-                    nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&module), kind: "import".into(), path: rel.to_string(), line });
+                    nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&module), kind: "import".into(), path: rel.to_string(), line });
                     edges.push(EdgeDef { source: file_id.to_string(), target: imp_id, relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                 }
             }
@@ -693,7 +714,7 @@ fn walk_v2(node: tree_sitter::Node, lang: &str, rel: &str, file_id: &str, conten
             if let Some(arg) = field_text(node, "argument", content) {
                 if !arg.is_empty() {
                     let imp_id = node_id("import", rel, &arg);
-                    nodes.push(NodeDef { id: imp_id.clone(), label: short_name(&arg), kind: "import".into(), path: rel.to_string(), line });
+                    nodes.push(NodeDef { id: imp_id.clone(), label: import_label(&arg), kind: "import".into(), path: rel.to_string(), line });
                     edges.push(EdgeDef { source: file_id.to_string(), target: imp_id, relation: "imports".into(), confidence: "EXTRACTED".into(), path: rel.to_string() });
                 }
             }
@@ -820,9 +841,13 @@ fn build_graph_blocking_inner(app: &AppHandle, project_path: &str) -> Result<Gra
         }
         done += 1;
         if done % 10 == 0 || done == total {
-            let _ = app.emit("graph-build-progress", serde_json::json!({ "done": done, "total": total }));
+            let _ = app.emit("graph-build-progress", serde_json::json!({ "done": done, "total": total, "file": rel }));
         }
     }
+    // Résoudre les imports → arêtes inter-fichiers (fichier → fichier cible).
+    let file_set: HashSet<String> = files.iter().map(|(r, _)| r.clone()).collect();
+    let cross = refresh_cross_file_imports(&conn, &file_set)?;
+    edges_total += cross;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     meta_set(&conn, "graph_built_at", &now.to_string())?;
     meta_set(&conn, "graph_extraction", &extraction)?;
@@ -847,6 +872,82 @@ fn index_file_graph(conn: &Connection, rel: &str, abs: &Path, extraction: &str, 
     delete_file_graph(conn, rel)?;
     insert_file_graph(conn, rel, &hash, mtime, &nodes, &edges)?;
     Ok((nodes.len(), edges.len()))
+}
+
+/// Résout un chemin d'import relatif vers un fichier réel du projet.
+/// Retourne le chemin relatif normalisé si trouvé, sinon None.
+fn resolve_import_target(importing_rel: &str, target: &str, files: &HashSet<String>) -> Option<String> {
+    let importing_dir = Path::new(importing_rel).parent().unwrap_or(Path::new(""));
+    let base = importing_dir.join(target);
+    // Essayer le chemin tel quel, puis avec chaque extension connue.
+    let mut candidates = vec![base.clone()];
+    for ext in ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "py", "rs", "md", "json", "toml"] {
+        candidates.push(base.with_extension(ext));
+    }
+    for c in candidates {
+        let norm = normalize_rel_path(&c);
+        if files.contains(&norm) { return Some(norm); }
+    }
+    None
+}
+
+/// Normalise un chemin relatif (résout `.` et `..`) et le rend en `/`.
+fn normalize_rel_path(p: &Path) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::Normal(s) => out.push(s.to_string_lossy().to_string()),
+            std::path::Component::ParentDir => { out.pop(); }
+            std::path::Component::CurDir => {}
+            _ => {}
+        }
+    }
+    out.join("/")
+}
+
+/// Ajoute les arêtes inter-fichiers `imports` (fichier → fichier cible) en
+/// résolvant les imports relatifs vers des fichiers réels du projet. Sans
+/// cela, le graphe ne contient que des arêtes intra-fichier → la vue « par
+/// fichier » ne montre aucun lien entre fichiers.
+fn add_cross_file_imports(conn: &Connection, files: &HashSet<String>) -> Result<usize, String> {
+    let mut stmt = conn.prepare(
+        "SELECT source, target FROM graph_edges WHERE relation = 'imports'"
+    ).map_err(|e| format!("prep imports: {e}"))?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    }).map_err(|e| format!("query imports: {e}"))?;
+    let mut added = 0usize;
+    for row in rows.flatten() {
+        let (src, tgt) = row;
+        // src = file:<rel>:<rel> ; tgt = import:<rel>:<target>
+        let rel = src.strip_prefix("file:")
+            .and_then(|s| s.rsplit_once(':').map(|(r, _)| r.to_string()));
+        let Some(rel) = rel else { continue; };
+        let prefix = format!("import:{rel}:");
+        let Some(target) = tgt.strip_prefix(&prefix) else { continue; };
+        if let Some(resolved) = resolve_import_target(&rel, target, files) {
+            if resolved != rel {
+                let src_file = node_id("file", &rel, &rel);
+                let tgt_file = node_id("file", &resolved, &resolved);
+                conn.execute(
+                    "INSERT OR IGNORE INTO graph_edges(source, target, relation, confidence, path) VALUES (?1, ?2, 'imports', 'EXTRACTED', ?3)",
+                    rusqlite::params![src_file, tgt_file, rel],
+                ).map_err(|e| format!("ins cross import: {e}"))?;
+                added += 1;
+            }
+        }
+    }
+    Ok(added)
+}
+
+/// Supprime puis recrée les arêtes inter-fichiers d'import (utilisé par le
+/// refresh incrémental pour ne pas laisser d'arêtes obsolètes).
+fn refresh_cross_file_imports(conn: &Connection, files: &HashSet<String>) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM graph_edges WHERE relation = 'imports' AND source LIKE 'file:%' AND target LIKE 'file:%'",
+        [],
+    ).map_err(|e| format!("del cross imports: {e}"))?;
+    add_cross_file_imports(conn, files)
 }
 
 fn incremental_refresh(conn: &Connection, project_path: &str, max_files: usize, extraction: &str, include_calls: bool) {
@@ -882,6 +983,9 @@ fn incremental_refresh(conn: &Connection, project_path: &str, max_files: usize, 
             eprintln!("[code-graph] refresh skip {rel}: {e}");
         }
     }
+    // Recréer les arêtes inter-fichiers d'import (les fichiers ont pu changer).
+    let file_set: HashSet<String> = disk_files.iter().map(|(r, _)| r.clone()).collect();
+    let _ = refresh_cross_file_imports(conn, &file_set);
 }
 
 // ── Requêtes ─────────────────────────────────────────────────────────────────
@@ -1388,6 +1492,16 @@ mod tests {
     }
 
     #[test]
+    fn import_label_strips_extension_not_last_dot() {
+        // Le bug : short_name("rpc-client.ts") → "ts". import_label doit donner "rpc-client".
+        assert_eq!(import_label("../src/modes/rpc/rpc-client.ts"), "rpc-client");
+        assert_eq!(import_label("../src/modes/rpc/rpc-client"), "rpc-client");
+        assert_eq!(import_label("./utils"), "utils");
+        assert_eq!(import_label("@/components/Button"), "Button");
+        assert_eq!(import_label("../b"), "b");
+    }
+
+    #[test]
     fn extract_python_defs_and_imports() {
         let content = "import os\nfrom .utils import helper\n\ndef main():\n    pass\n\nclass Foo:\n    pass\n";
         let (nodes, edges) = extract_v1("main.py", content);
@@ -1540,6 +1654,36 @@ mod tests {
         let adj = build_adjacency(&edges);
         let out = explain_block(&nodes, &adj, "rien");
         assert!(out.contains("introuvable"));
+    }
+
+    #[test]
+    fn resolve_import_target_finds_file_with_extension() {
+        let files: HashSet<String> = ["src/modes/rpc/rpc-client.ts".to_string()].into_iter().collect();
+        // Depuis pi-docs/rpc-client-clone.test.ts, import '../src/modes/rpc/rpc-client'
+        let resolved = resolve_import_target("pi-docs/rpc-client-clone.test.ts", "../src/modes/rpc/rpc-client", &files);
+        assert_eq!(resolved.as_deref(), Some("src/modes/rpc/rpc-client.ts"));
+    }
+
+    #[test]
+    fn add_cross_file_imports_creates_file_to_file_edges() {
+        let tmp = std::env::temp_dir().join(format!("cg-cross-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".pilot")).unwrap();
+        let conn = open_db(&tmp.join(".pilot").join("context-index.db")).unwrap();
+        // Fichier A importe B : arête file→import (même chemin) + nœud import.
+        let (nodes, edges) = extract_v1("src/a.ts", "import x from '../b'\n");
+        insert_file_graph(&conn, "src/a.ts", "h1", 0, &nodes, &edges).unwrap();
+        // Fichier B existe dans le projet (import '../b' depuis src/a.ts → b.ts à la racine).
+        let files: HashSet<String> = ["src/a.ts".to_string(), "b.ts".to_string()].into_iter().collect();
+        let added = add_cross_file_imports(&conn, &files).unwrap();
+        assert!(added >= 1);
+        // Vérifier l'arête inter-fichiers file:src/a.ts → file:b.ts
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM graph_edges WHERE source = 'file:src/a.ts:src/a.ts' AND target = 'file:b.ts:b.ts' AND relation = 'imports'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 

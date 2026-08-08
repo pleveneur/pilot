@@ -5924,6 +5924,36 @@ body.pilot-loading *::after {
   flex-wrap: wrap;
   align-items: center;
 }
+/* Sablier pendant la (re)construction du graphe */
+.cg-building {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.cg-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: cg-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+/* Nom du fichier en cours de traitement */
+.cg-file {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--accent);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+@keyframes cg-spin {
+  to { transform: rotate(360deg); }
+}
 .codegraph-actions {
   display: flex;
   gap: 8px;

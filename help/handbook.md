@@ -472,6 +472,23 @@ réponde aux questions d'architecture **sans relire les fichiers** (économie de
 - **Mise à jour au fil de l'eau** : le graphe se re-synchronise automatiquement sur
   les fichiers modifiés (incrémental à la requête + refresh auto via le watcher de
   fichiers). Il ne bloque jamais le chat et fonctionne sans Ollama (contrairement au RAG).
+- **Retour visuel pendant la (re)construction** : un **sablier animé** + la
+  **progression** (fichiers traités / total) s'affichent dans l'onglet Graphe pendant
+  un rebuild, via l'événement `graph-build-progress` émis par le backend.
+- **Liaisons toujours visibles** : sur les gros graphes, les étiquettes des nœuds ne
+  s'affichent qu'**en zoomant** (seuil `globalScale ≥ 1.5`) — dézoomé, seuls les
+  cercles colorés sont dessinés, ce qui laisse les liaisons apparentes (les fonds de
+  libellés semi-opaques les masquaient auparavant). La relation `contains` a sa
+  propre couleur.
+- **Liens inter-fichiers (vue « par fichier »)** : les imports relatifs sont résolus
+  vers les fichiers réels du projet (`resolve_import_target` + `add_cross_file_imports`)
+  → des arêtes `imports` **fichier → fichier cible** sont créées. Sans cela, toutes les
+  arêtes étaient intra-fichier et la vue « par fichier » ne montrait aucun lien.
+- **Labels d'import corrects** : les nœuds import portent le **nom du module** (dernier
+  segment sans extension, ex: `rpc-client` pour `../src/modes/rpc/rpc-client.ts`) via
+  `import_label` — l'ancien `short_name` coupait sur le dernier `.` et donnait `ts`.
+- **Clic sur un nœud** : un **clic simple ouvre le fichier** dans un onglet d'édition
+  (le double-clic a été supprimé).
 
 ---
 
