@@ -1874,6 +1874,7 @@ pub fn run() {
             code_graph::graph_affected,
             code_graph::graph_path,
             code_graph::build_graph_wiki,
+            code_graph::graph_export,
             session_history::index_sessions,
             session_history::search_sessions,
             session_history::get_session_detail,

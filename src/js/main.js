@@ -442,6 +442,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Historique", "history");
   });
 
+  // 📊 Graphe : onglet de visualisation 2D du Code Graph — spec_code_graph.md (Option C).
+  document.getElementById("btn-code-graph").addEventListener("click", () => {
+    // Mémoriser le fichier actif pour le sous-graphe contextuel (l'onglet
+    // Graphe devient actif à l'ouverture, on perdrait le fichier courant).
+    const active = tabs.getActiveTab();
+    if (active && active.path) window._lastEditedFile = active.path;
+    tabs.openFile("Graphe", "code-graph");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

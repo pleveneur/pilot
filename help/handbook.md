@@ -436,7 +436,10 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
    call-graph + switch `graph_extraction`.
 3. ✅ **V2.1** : branchement watcher pour refresh différé auto
    (`refresh_by_watcher` + `is_graph_file` + verrou `GRAPH_DB_LOCK`).
-4. Doc : AGENTS.md, README, bloc HELP, plan_dev.md.
+4. ✅ **Option C** : onglet « Graphe » dédié (remplace la modale) + visualisation
+   2D interactive `force-graph` (pan/zoom, clic nœud → ouvre fichier, survol,
+   coloration, filtres, sous-graphe contextuel) + commande Rust `graph_export`.
+5. Doc : AGENTS.md, README, bloc HELP, plan_dev.md.
 
 ---
 
@@ -447,8 +450,12 @@ Pilot construit localement un **graphe structurel** du projet (fichiers, fonctio
 classes, imports, appels) **sans LLM ni clé API**, et l'injecte à l'agent pour qu'il
 réponde aux questions d'architecture **sans relire les fichiers** (économie de tokens).
 
-- **Bouton 📊 Code Graph** (toolbar agent) : modale d'état du graphe + bouton
-  « (Re)construire le graphe » (après un gros refactor ou un changement de mode).
+- **Bouton 📊 Graphe** (panneau d'actions projet, en bas à gauche) : ouvre un
+  **onglet « Graphe »** dédié. En haut : état du graphe + boutons
+  « (Re)construire » / « Actualiser ». En dessous : **visualisation 2D interactive**
+  (pan/zoom, clic sur un nœud → ouvre le fichier, survol → surligne les connexions,
+  coloration par type, filtres par relation/fichier/recherche, sous-graphe du
+  fichier actif en option).
 - **Paramètres → Code Graph** :
   - *Activer le graphe* : master switch.
   - *Moteur d'extraction* : `heuristique` (rapide, sans dépendance) ou

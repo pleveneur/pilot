@@ -202,6 +202,12 @@ class TabsManager {
       return;
     }
 
+    // Onglet Graphe (📊) — spec_code_graph.md : visualisation 2D du Code Graph.
+    if (mode === "code-graph") {
+      await this._openCodeGraph(path || "Graphe");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -617,6 +623,45 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">🎭</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Agents</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Graphe (📊) — visualisation 2D du Code Graph
+   * (spec_code_graph.md, Option C). Remplace l'ancienne modale.
+   */
+  async _openCodeGraph(label = "Graphe") {
+    const existing = this.tabs.find((t) => t.mode === "code-graph");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "code-graph");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper codegraph-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createCodeGraphView } = await import("./code-graph-view.js");
+      const result = createCodeGraphView(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenCodeGraph = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Graphe:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">📊</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Graphe</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -1079,6 +1124,11 @@ class TabsManager {
       tab.unlistenAgents = null;
       invoke("stop_all_agent_processes").catch(() => {});
     }
+    // Nettoyage onglet Graphe (📊) — spec_code_graph.md
+    if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {
+      tab.unlistenCodeGraph();
+      tab.unlistenCodeGraph = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -1172,6 +1222,11 @@ class TabsManager {
       tab.unlistenAgents();
       tab.unlistenAgents = null;
       invoke("stop_all_agent_processes").catch(() => {});
+    }
+    // Nettoyage onglet Graphe (📊) — spec_code_graph.md
+    if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {
+      tab.unlistenCodeGraph();
+      tab.unlistenCodeGraph = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();

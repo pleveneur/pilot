@@ -617,6 +617,7 @@ class Sidebar {
       row.innerHTML = `<span class="icon icon-cat-${iconCategory(icon)}"><i data-lucide="${icon}" class="icon-sm"></i></span><span class="name">${this._esc(node.name)}</span>${badgeHtml}`;
 
       row.addEventListener("click", () => {
+        this._notifyFileSelected(node.path);
         this.tabs.openFile(node.path, "edit");
       });
 
@@ -768,6 +769,7 @@ class Sidebar {
       await invoke("create_file", { path: filePath });
       // Le watcher va détecter la création et rafraîchir l'arbre.
       // On ouvre le fichier directement dans l'éditeur.
+      this._notifyFileSelected(filePath);
       this.tabs.openFile(filePath, "edit");
       toastSuccess("Fichier créé");
     } catch (e) {
@@ -1002,6 +1004,12 @@ class Sidebar {
     return div.innerHTML;
   }
 
+  // Notifie l'ouverture d'un fichier (pour l'onglet Graphe : sous-graphe contextuel).
+  _notifyFileSelected(path) {
+    if (!path) return;
+    document.dispatchEvent(new CustomEvent("pilot-file-selected", { detail: { path } }));
+  }
+
   // ── Favoris / Bookmarks ──
 
   async _loadFavorites() {
@@ -1065,6 +1073,7 @@ class Sidebar {
     // Click handlers for favorite rows
     section.querySelectorAll(".favorite-row").forEach(row => {
       row.addEventListener("click", () => {
+        this._notifyFileSelected(row.dataset.path);
         this.tabs.openFile(row.dataset.path, "edit");
       });
       row.addEventListener("contextmenu", (e) => {

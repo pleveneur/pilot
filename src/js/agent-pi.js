@@ -7,7 +7,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import markdownit from "markdown-it";
 import { isImageFile } from "./image-paste.js";
 import { buildProjectContext } from "./context-engine.js";
-import { buildGraphBlock, graphStatus, rebuildGraph } from "./code-graph.js";
+import { buildGraphBlock } from "./code-graph.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
 import { generateAgentsMd } from "./agents-md.js";
 import { exportConversationMarkdown, copyConversationHtml } from "./conversation-export.js";
@@ -140,7 +140,6 @@ export async function createAgentPi(container, resumed = false) {
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)"><i data-lucide="shield-check" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
-    <button class="agent-btn" data-action="code-graph" id="agent-cg-btn" title="Code Graph : état du graphe de connaissances du projet + (re)construction"><i data-lucide="network" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="file-text" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-md" title="Exporter la conversation en Markdown"><i data-lucide="download" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-html" title="Copier la conversation en HTML dans le presse-papiers"><i data-lucide="copy" class="icon-sm"></i></button>
@@ -1480,9 +1479,10 @@ export async function createAgentPi(container, resumed = false) {
         break;
       }
       case "code-graph": {
-        // Code Graph (spec_code_graph.md) : ouvrir la modale d'état + (re)construction.
+        // Code Graph (spec_code_graph.md) : l'onglet Graphe a remplacé la modale.
+        // Le bouton est désormais dans le panneau d'actions (btn-code-graph).
         try {
-          await openCodeGraphModal(e.clientX, e.clientY);
+          window._pilotTabs.openFile("Graphe", "code-graph");
         } catch (e) {
           console.error("Ouverture code-graph:", e);
           appendErrorMessage(messagesEl, `❌ Ouverture du graphe échouée : ${e}`);
@@ -7396,75 +7396,4 @@ function appendCompactionSummary(parent, summary) {
 
 function scrollToBottom(container) {
   container.scrollTop = container.scrollHeight;
-}
-
-// ── Code Graph : modale d'état + (re)construction ───────────────────────────
-
-/** Ouvre la modale Code Graph et charge l'état du graphe du projet courant. */
-async function openCodeGraphModal(originX, originY) {
-  const modal = document.getElementById("codegraph-modal");
-  if (!modal) return;
-  const statusEl = document.getElementById("codegraph-status");
-  const projectPath = window._pilotProjectPath;
-
-  function renderStatus(s) {
-    if (!statusEl) return;
-    if (!projectPath) {
-      statusEl.innerHTML = '<span class="muted">Ouvrez d\'abord un projet pour construire le graphe.</span>';
-      return;
-    }
-    if (!s || !s.exists) {
-      statusEl.innerHTML =
-        '<span class="muted">Aucun graphe construit pour ce projet.</span><br>' +
-        '<small class="muted">Le graphe est construit automatiquement au 1er prompt (mode A) et mis à jour ' +
-        'au fil de l\'eau. Vous pouvez le reconstruire manuellement après un gros refactor.</small>';
-      return;
-    }
-    statusEl.innerHTML =
-      `<div><b>Graphe construit</b> (${s.ready ? "prêt" : "vide"})</div>` +
-      `<div>Nœuds : <b>${s.nodes}</b> · Arêtes : <b>${s.edges}</b> · Construit le ${s.built_at || "—"}</div>` +
-      '<div><small class="muted">Relations marquées EXTRACTED (lues) ou INFERRED (déduites).</small></div>';
-  }
-
-  // Boutons
-  const btnRebuild = document.getElementById("btn-codegraph-rebuild");
-  const btnRefresh = document.getElementById("btn-codegraph-refresh");
-  const btnClose = document.getElementById("codegraph-close");
-
-  async function load() {
-    const s = await graphStatus(projectPath);
-    renderStatus(s);
-  }
-
-  // Ouvrir
-  modal.classList.remove("hidden");
-  animateModalOpen(modal, originX, originY);
-  await load();
-
-  btnRebuild.onclick = async () => {
-    if (!projectPath) return;
-    btnRebuild.disabled = true;
-    if (statusEl) statusEl.innerHTML = '<span class="muted">⏳ Construction du graphe… (peut prendre quelques secondes)</span>';
-    try {
-      const stats = await rebuildGraph(projectPath);
-      if (statusEl && stats) {
-        statusEl.innerHTML =
-          `<div><b>Graphe reconstruit</b></div>` +
-          `<div>Nœuds : <b>${stats.nodes}</b> · Arêtes : <b>${stats.edges}</b> · ${stats.files} fichiers en ${(stats.elapsed_ms / 1000).toFixed(1)} s</div>`;
-      }
-      const { toastInfo } = await import("./toast.js");
-      toastInfo("📊 Graphe du projet reconstruit");
-    } catch (e) {
-      if (statusEl) statusEl.innerHTML = `<span class="muted">❌ Échec : ${e}</span>`;
-    } finally {
-      btnRebuild.disabled = false;
-    }
-  };
-
-  btnRefresh.onclick = () => { load(); };
-
-  btnClose.onclick = () => { modal.classList.add("hidden"); };
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) modal.classList.add("hidden");
-  });
 }

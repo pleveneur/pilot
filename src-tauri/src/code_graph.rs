@@ -100,6 +100,32 @@ pub struct QueryGraphResult {
     pub source: String, // "graph" | "empty"
 }
 
+// ── Export complet pour la visualisation (onglet Graphe) ────────────────────
+
+#[derive(Serialize, Clone)]
+pub struct GraphNodeView {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    pub path: String,
+    pub line: i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct GraphEdgeView {
+    pub source: String,
+    pub target: String,
+    pub relation: String,
+    pub confidence: String,
+    pub path: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct GraphExport {
+    pub nodes: Vec<GraphNodeView>,
+    pub edges: Vec<GraphEdgeView>,
+}
+
 // ── Utilitaires (dupliqués de context_engine.rs — ne pas toucher à l'existant) ─
 
 fn db_path(project_path: &str) -> PathBuf {
@@ -1325,6 +1351,22 @@ pub fn graph_path(project_path: String, from: String, to: String) -> Result<Stri
 #[tauri::command]
 pub fn build_graph_wiki(project_path: String) -> Result<String, String> {
     build_graph_wiki_inner(&project_path)
+}
+
+/// Export complet du graphe (nœuds + arêtes) pour la visualisation 2D
+/// (onglet Graphe). Retourne un objet vide si le graphe est absent.
+#[tauri::command]
+pub fn graph_export(project_path: String) -> Result<GraphExport, String> {
+    let dbp = db_path(&project_path);
+    if !dbp.exists() {
+        return Ok(GraphExport { nodes: Vec::new(), edges: Vec::new() });
+    }
+    let conn = open_db(&dbp)?;
+    let (nodes, edges) = load_graph(&conn);
+    Ok(GraphExport {
+        nodes: nodes.into_iter().map(|(id, label, kind, path, line)| GraphNodeView { id, label, kind, path, line }).collect(),
+        edges: edges.into_iter().map(|(source, target, relation, confidence, path)| GraphEdgeView { source, target, relation, confidence, path }).collect(),
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

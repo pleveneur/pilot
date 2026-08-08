@@ -6,12 +6,17 @@
 > connecte ». Injecté à pi/plh au 1er prompt (mode A) **et** disponible comme
 > wiki Markdown interrogeable par l'agent (mode B). Mise à jour incrémentale.
 >
-> **Statut : ✅ Implémenté** — V1 (heuristique, regex), V2 (tree-sitter) et V2.1
-> (refresh auto via watcher).
+> **Statut : ✅ Implémenté** — V1 (heuristique, regex), V2 (tree-sitter), V2.1
+> (refresh auto via watcher) et **Option C (visualisation 2D interactive)**.
 > Backend sélectionné par la config `graph_extraction` (`"heuristic"` | `"treesitter"`),
 > un rebuild (`build_code_graph --force`) régénère l'index avec le backend actif.
 > Mise à jour au fil de l'eau : refresh incrémental à la query (auto-lazy) + refresh
 > différé automatique déclenché par le watcher de fichiers (V2.1).
+>
+> **Option C (✅ implémentée)** : la modale 📊 est remplacée par un **onglet « Graphe »**
+> dédié (bouton dans le panneau d'actions projet, en bas à gauche) qui reprend l'état +
+> (re)construction en haut et affiche en dessous une **visualisation 2D interactive**
+> du graphe (lib `force-graph`, chargée en lazy).
 
 ---
 
@@ -244,18 +249,48 @@ Deux modes activables ensemble (décision utilisateur : « les deux combinés »
 
 ## 8. Reconstruction / maintenance du graphe
 
-### 8.1 Bouton de (re)construction
-- **Bouton 📊 « Code Graph »** dans la toolbar agent (à côté de 📑 Contexte / 📝
-  Mémoire) : ouvre la modale du graphe avec état + actions.
-- Bouton **« (Re)construire le graphe »** : `build_code_graph(projectPath,
-  {force: true})` → purge + re-extraction complète avec le backend actif. Requis
-  après changement de `graph_extraction` (V1↔V2) ou de langages.
+### 8.1 Bouton d'ouverture de l'onglet Graphe
+- **Bouton 📊 « Graphe »** dans le **panneau d'actions projet** (en bas à gauche,
+  classe `project-only hidden`) : ouvre l'**onglet « Graphe »** dédié.
+- L'onglet reprend l'ancien contenu de la modale (état + actions) **en haut**, et
+  affiche la **visualisation 2D** en dessous.
 
-### 8.2 Modale du graphe (état)
+### 8.2 Onglet Graphe (état + visualisation)
 - `graph_status(projectPath)` → `{ exists, nodes, edges, built_at, extraction,
   incremental }`.
-- Affiche : nombre de nœuds/arêtes, backend actif (heuristique/tree-sitter), date
-  de construction, indicateur de fraîcheur.
+- Affiche en haut : nombre de nœuds/arêtes, backend actif (heuristique/tree-sitter),
+  date de construction, indicateur de fraîcheur + boutons **« (Re)construire »**
+  (`build_code_graph --force`) et **« Actualiser »**.
+- En dessous : **visualisation 2D interactive** (`force-graph`, lazy-load) :
+  - **Pan/zoom** + disposition force-directed.
+  - **Clic sur un nœud** → ouvre le fichier correspondant dans un onglet d'édition.
+  - **Survol** → surligne les connexions (calls / imports / extends).
+  - **Coloration par type** (fichier / classe / fonction / méthode / import / module)
+    et par type de relation, avec **légende** affichée au-dessus du graphe.
+  - **Filtres** : par type de relation, par fichier, recherche de nœud.
+  - **Vue par fichier (agrégation)** : pour les gros projets, regroupe tous les
+    nœuds d'un même fichier en un seul nœud-fichier (taille ∝ nb de symboles) et
+    agrège les arêtes entre fichiers (relation dominante). **Auto-activée** quand
+    le graphe dépasse ~250 nœuds ; bascule vers la vue détaillée via la case
+    « Vue par fichier ».
+  - **Sous-graphe contextuel** (case à cocher) : voisinage du fichier actif
+    (analyse d'impact avant édition) ; décochée par défaut (graphe complet).
+  - **Centrage automatique** : positions initiales en cercle + `zoomToFit` après
+    stabilisation de la simulation (le graphe s'affiche centré à l'ouverture).
+  - **Rendu adapté au thème** (clair/sombre) : fond des étiquettes et couleurs
+    lus depuis les variables CSS ; **palettes de couleurs distinctes** pour les
+    nœuds et les liaisons selon le thème (sombre/clair) ; **liaisons très
+    visibles** (rendu personnalisé : trait épais + halo coloré, flèches de
+    direction) ; **survol** → surligne les connexions du nœud (liens directs
+    épaissis). Le graphe se re-rend automatiquement au changement de thème.
+  - **Focus sur un nœud** : un **clic** sur un nœud recentre le graphe sur son
+    voisinage direct (réaffiche sur le même onglet) ; un **double-clic** ouvre le
+    fichier dans un onglet d'édition. Un bandeau « Focus » avec bouton
+    « Réinitialiser » permet de revenir à la vue complète.
+  - **Synchronisation explorateur** : ouvrir un fichier dans l'explorateur met à
+    jour le sous-graphe contextuel (si la case est cochée et l'onglet visible).
+- Le rendu est alimenté par la commande Rust `graph_export(projectPath)` qui
+  retourne `{ nodes, edges }` (reprend `load_graph`).
 
 ### 8.3 Mise à jour incrémentale (au fil de l'eau)
 - **Auto-lazy à la query** : avant d'injecter (mode A), `incremental_refresh()`
@@ -287,11 +322,16 @@ Deux modes activables ensemble (décision utilisateur : « les deux combinés »
 
 | Fichier | Action |
 |---|---|
-| `src-tauri/src/code_graph.rs` | **Nouveau** : extraction V1+V2, build, refresh, requêtes, commandes |
-| `src-tauri/src/lib.rs` | Config AppConfig (8 champs) + `.manage` + enregistrer les commandes |
-| `src-tauri/Cargo.toml` | (V2) dépendances tree-sitter + grammaires |
-| `src/js/code-graph.js` | **Nouveau** : build bloc Markdown, wiki, modale, état |
-| `src/js/agent-pi.js` | Injection mode A+B dans `handoffBlocks` ; flag `state.graphInjected` ; reset |
+| `src-tauri/src/code_graph.rs` | **Nouveau** : extraction V1+V2, build, refresh, requêtes, commandes + `graph_export` (Option C) |
+| `src-tauri/src/lib.rs` | Config AppConfig (8 champs) + `.manage` + enregistrer les commandes (dont `graph_export`) |
+| `src-tauri/Cargo.toml` | (V2) dépendances tree-sitter + grammaires ; (Option C) `force-graph` côté npm |
+| `src/js/code-graph.js` | **Nouveau** : build bloc Markdown, wiki, état (`graphStatus`), rebuild |
+| `src/js/code-graph-view.js` | **Nouveau (Option C)** : vue onglet Graphe — état + boutons + rendu `force-graph` 2D |
+| `src/js/agent-pi.js` | Injection mode A+B dans `handoffBlocks` ; flag `state.graphInjected` ; reset ; case `code-graph` → ouvre l'onglet |
+| `src/js/tabs.js` | Mode `"code-graph"` : `_openCodeGraph`, dispatch `openFile`, nettoyage `unlistenCodeGraph` (closeTab + closeAllTabs) |
+| `src/js/main.js` | Bouton `btn-code-graph` → `tabs.openFile("Graphe", "code-graph")` ; capture `window._lastEditedFile` |
+| `index.html` | Bouton `btn-code-graph` (action-panel, `project-only hidden`) ; **modale `codegraph-modal` supprimée** |
+| `src/css/style.css` | Styles `.codegraph-view` (toolbar, filtres, canvas) |
 | `src/js/context-engine.js` | (réutilise la dispatch d'extensions/langages) |
 | `src/js/settings.js` + `index.html` | Section « Code Graph » (6 réglages UI) — dont `graph_include_calls` |
 | `AGENTS.md` | Arborescence + table de navigation |
@@ -329,7 +369,10 @@ Deux modes activables ensemble (décision utilisateur : « les deux combinés »
    call-graph + switch `graph_extraction`.
 3. ✅ **V2.1** : branchement watcher pour refresh différé auto
    (`refresh_by_watcher` + `is_graph_file` + verrou `GRAPH_DB_LOCK`).
-4. Doc : AGENTS.md, README, bloc HELP, plan_dev.md.
+4. ✅ **Option C** : onglet « Graphe » dédié (remplace la modale) + visualisation
+   2D interactive `force-graph` (pan/zoom, clic nœud → ouvre fichier, survol,
+   coloration, filtres, sous-graphe contextuel) + commande Rust `graph_export`.
+5. Doc : AGENTS.md, README, bloc HELP, plan_dev.md.
 
 ---
 
@@ -340,8 +383,12 @@ Pilot construit localement un **graphe structurel** du projet (fichiers, fonctio
 classes, imports, appels) **sans LLM ni clé API**, et l'injecte à l'agent pour qu'il
 réponde aux questions d'architecture **sans relire les fichiers** (économie de tokens).
 
-- **Bouton 📊 Code Graph** (toolbar agent) : modale d'état du graphe + bouton
-  « (Re)construire le graphe » (après un gros refactor ou un changement de mode).
+- **Bouton 📊 Graphe** (panneau d'actions projet, en bas à gauche) : ouvre un
+  **onglet « Graphe »** dédié. En haut : état du graphe + boutons
+  « (Re)construire » / « Actualiser ». En dessous : **visualisation 2D interactive**
+  (pan/zoom, clic sur un nœud → ouvre le fichier, survol → surligne les connexions,
+  coloration par type, filtres par relation/fichier/recherche, sous-graphe du
+  fichier actif en option).
 - **Paramètres → Code Graph** :
   - *Activer le graphe* : master switch.
   - *Moteur d'extraction* : `heuristique` (rapide, sans dépendance) ou

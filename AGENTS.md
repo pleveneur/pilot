@@ -157,7 +157,8 @@ pilot/
 │       ├── help.js           # Onglet « ❓ Aide » : chat LLM sur le handbook
 │       ├── review.js         # Onglet « 🔍 Review » : revue de code assistée (H5, pi temporaire cadré)
 │       ├── context-engine.js  # Context Engine (H1) : injection auto-contexte projet avant 1er prompt
-│       ├── code-graph.js      # Code Graph : bloc graphe injecté + wiki + modale d'état/rebuild
+│       ├── code-graph.js      # Code Graph : bloc graphe injecté + wiki + état/rebuild
+│       ├── code-graph-view.js # Onglet « Graphe » (Option C) : état + boutons + visualisation 2D force-graph
 │       ├── icons.js          # Icônes Lucide (refreshIcons → createIcons, pour HTML statique et dynamique)
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
 │       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags

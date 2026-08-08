@@ -56,6 +56,7 @@
       <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
       <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
       <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
+      <button id="btn-code-graph" class="project-only hidden" title="Graphe du projet (visualisation 2D du Code Graph)"><i data-lucide="network" class="icon"></i></button>
       <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
       <button id="btn-help" title="Aide sur Pilot (poser une question)"><i data-lucide="circle-help" class="icon"></i></button>
       <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i> <b id="remote-badge-count">0</b></span>
@@ -748,28 +749,6 @@
           </thead>
           <tbody id="audit-body"></tbody>
         </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modale : Code Graph (graphe de connaissances projet) -->
-  <div id="codegraph-modal" class="modal hidden">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2><i data-lucide="network" class="icon-lg"></i> Code Graph</h2>
-        <button id="codegraph-close" class="modal-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
-      </div>
-      <p class="muted" style="font-size:12px">
-        Graphe structurel du projet (fichiers, fonctions, classes, imports, relations),
-        construit localement sans LLM. Injecté à l'agent au 1er prompt et consultable
-        via le wiki <code>.pilot/graph-wiki/</code>.
-      </p>
-      <div id="codegraph-status" class="codegraph-status" style="margin:12px 0;font-size:13px">
-        <span class="muted">Chargement…</span>
-      </div>
-      <div class="modal-actions">
-        <button id="btn-codegraph-rebuild" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> (Re)construire le graphe</button>
-        <button id="btn-codegraph-refresh" class="web-btn"><i data-lucide="rotate-cw" class="icon-sm"></i> Actualiser</button>
       </div>
     </div>
   </div>
