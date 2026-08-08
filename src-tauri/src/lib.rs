@@ -184,6 +184,12 @@ struct AppConfig {
     project_links: HashMap<String, Vec<String>>,
     #[serde(default)]
     word_wrap: bool,
+    // Option B (modale animée) : forcer l'animation d'ouverture des modales même
+    // si la réduction de mouvement (prefers-reduced-motion) est active côté système.
+    // Activé par défaut (default_true) pour que les anciennes configs / nouvelles
+    // installations aient l'animation sans action de l'utilisateur.
+    #[serde(default = "default_true")]
+    modal_animations: bool,
     // Mode Orchestration
     #[serde(default)]
     orchestration_enabled: bool,
@@ -450,6 +456,7 @@ impl Default for AppConfig {
             favorites: Vec::new(),
             project_links: HashMap::new(),
             word_wrap: false,
+            modal_animations: true,
             orchestration_enabled: false,
             orchestrator_provider: String::new(),
             orchestrator_model_id: String::new(),
