@@ -7093,41 +7093,231 @@ async function handleExtensionUiRequest(payload, container, state) {
       await handleEditGateConfirm(id, rawMsg.slice(SENTINEL.length), container, state);
       return;
     }
-    const ok = await domConfirm(payload.title || "Confirmation", payload.message || "");
-    await invoke("send_rpc_command", {
-      command: {
-        type: "extension_ui_response",
-        id,
-        confirmed: ok,
-        cancelled: !ok,
-      },
-    });
+    // Mode Orchestration autonome : ne pas bloquer sur une saisie → auto-répondre.
+    if (state.orchestrationRunning) {
+      await invoke("send_rpc_command", {
+        command: { type: "extension_ui_response", id, confirmed: true, cancelled: false },
+      });
+      return;
+    }
+    renderInlineConfirm(container, state, id, payload.title || "Confirmation", payload.message || "");
   } else if (method === "select") {
     const options = payload.options || [];
-    const choice = await domSelect(payload.title || "Choix", options);
-    if (choice) {
-      await invoke("send_rpc_command", {
-        command: { type: "extension_ui_response", id, value: choice },
-      });
-    } else {
-      await invoke("send_rpc_command", {
-        command: { type: "extension_ui_response", id, cancelled: true },
-      });
+    const rawTitle = payload.title || "Choix";
+    // Multi-sélection (issue #30) : titre préfixé par le sentinel pilot-choices.
+    const MULTI_SENTINEL = "PILOT_MULTI_CHOICE::";
+    const multi = rawTitle.startsWith(MULTI_SENTINEL);
+    const title = multi ? rawTitle.slice(MULTI_SENTINEL.length) : rawTitle;
+    // Mode Orchestration autonome : ne pas bloquer → auto-répondre (1re option).
+    if (state.orchestrationRunning) {
+      if (options.length > 0) {
+        const val = multi ? JSON.stringify([options[0]]) : options[0];
+        await invoke("send_rpc_command", {
+          command: { type: "extension_ui_response", id, value: val },
+        });
+      } else {
+        await invoke("send_rpc_command", {
+          command: { type: "extension_ui_response", id, cancelled: true },
+        });
+      }
+      return;
     }
+    renderInlineChoice(container, state, id, title, options, multi);
   } else if (method === "input") {
-    const value = await domPrompt(payload.title || "Entrée", payload.placeholder || "");
-    if (value !== null && value !== undefined) {
-      await invoke("send_rpc_command", {
-        command: { type: "extension_ui_response", id, value },
-      });
-    } else {
+    // Mode Orchestration autonome : pas de saisie utilisateur → annuler.
+    if (state.orchestrationRunning) {
       await invoke("send_rpc_command", {
         command: { type: "extension_ui_response", id, cancelled: true },
       });
+      return;
     }
+    renderInlineInput(container, state, id, payload.title || "Entrée", payload.placeholder || "");
   } else if (method === "editor") {
     appendExtensionEditor(container, id, payload);
   }
+}
+
+// ── Boutons de choix / confirmation / saisie inline dans le chat (issue #30) ──
+
+/**
+ * Attache un élément à la bulle assistant courante (ou en crée une).
+ */
+function getChoiceAttachTarget(container, state) {
+  let attachTo = state.currentAssistantBlock;
+  if (!attachTo) {
+    attachTo = createAssistantBlock(container);
+    state.currentAssistantBlock = attachTo;
+  }
+  return getBubbleTarget(attachTo) || attachTo;
+}
+
+/**
+ * Rend des boutons de choix inline dans le chat. `multi` = cases à cocher
+ * (plusieurs choix) avec un bouton Valider ; sinon un clic répond immédiatement.
+ */
+function renderInlineChoice(container, state, id, title, options, multi) {
+  const target = getChoiceAttachTarget(container, state);
+  const wrapper = document.createElement("div");
+  wrapper.className = "agent-choice";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-choice-title";
+  titleEl.textContent = title;
+  wrapper.appendChild(titleEl);
+
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+
+  const respond = async (value, cancelled) => {
+    const btns = wrapper.querySelectorAll("button");
+    btns.forEach((b) => { b.disabled = true; });
+    const inputs = wrapper.querySelectorAll(".agent-choice-input");
+    inputs.forEach((i) => { i.disabled = true; });
+    wrapper.classList.add("resolved");
+    const cmd = { type: "extension_ui_response", id };
+    if (cancelled) cmd.cancelled = true;
+    else cmd.value = value;
+    try {
+      await invoke("send_rpc_command", { command: cmd });
+    } catch (e) {
+      console.error("Erreur extension_ui_response (choice):", e);
+    }
+  };
+
+  if (multi) {
+    const selected = new Set();
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.className = "agent-choice-btn";
+      btn.textContent = opt;
+      btn.addEventListener("click", () => {
+        if (selected.has(opt)) { selected.delete(opt); btn.classList.remove("selected"); }
+        else { selected.add(opt); btn.classList.add("selected"); }
+      });
+      buttons.appendChild(btn);
+    }
+    // Champ de texte optionnel (précision / détail) avant validation.
+    const note = document.createElement("input");
+    note.type = "text";
+    note.className = "agent-choice-input agent-choice-note";
+    note.placeholder = "Ajouter une précision (optionnel)…";
+    wrapper.appendChild(note);
+    const validate = document.createElement("button");
+    validate.className = "agent-choice-btn agent-choice-validate";
+    validate.textContent = "✓ Valider";
+    validate.addEventListener("click", () =>
+      respond(JSON.stringify({ selected: [...selected], note: note.value.trim() }), false));
+    buttons.appendChild(validate);
+  } else {
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.className = "agent-choice-btn";
+      btn.textContent = opt;
+      btn.addEventListener("click", () => respond(opt, false));
+      buttons.appendChild(btn);
+    }
+  }
+
+  wrapper.appendChild(buttons);
+  target.appendChild(wrapper);
+  scrollToBottom(container);
+}
+
+/**
+ * Rend des boutons Oui / Non inline dans le chat.
+ */
+function renderInlineConfirm(container, state, id, title, message) {
+  const target = getChoiceAttachTarget(container, state);
+  const wrapper = document.createElement("div");
+  wrapper.className = "agent-choice";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-choice-title";
+  titleEl.textContent = title;
+  wrapper.appendChild(titleEl);
+  if (message) {
+    const msg = document.createElement("div");
+    msg.className = "agent-choice-message";
+    msg.textContent = message;
+    wrapper.appendChild(msg);
+  }
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+  const respond = async (confirmed) => {
+    const btns = wrapper.querySelectorAll("button");
+    btns.forEach((b) => { b.disabled = true; });
+    wrapper.classList.add("resolved");
+    try {
+      await invoke("send_rpc_command", {
+        command: { type: "extension_ui_response", id, confirmed, cancelled: !confirmed },
+      });
+    } catch (e) {
+      console.error("Erreur extension_ui_response (confirm):", e);
+    }
+  };
+  const yes = document.createElement("button");
+  yes.className = "agent-choice-btn agent-choice-yes";
+  yes.textContent = "✓ Oui";
+  yes.addEventListener("click", () => respond(true));
+  const no = document.createElement("button");
+  no.className = "agent-choice-btn agent-choice-no";
+  no.textContent = "✗ Non";
+  no.addEventListener("click", () => respond(false));
+  buttons.appendChild(yes);
+  buttons.appendChild(no);
+  wrapper.appendChild(buttons);
+  target.appendChild(wrapper);
+  scrollToBottom(container);
+}
+
+/**
+ * Rend un champ de saisie inline dans le chat.
+ */
+function renderInlineInput(container, state, id, title, placeholder) {
+  const target = getChoiceAttachTarget(container, state);
+  const wrapper = document.createElement("div");
+  wrapper.className = "agent-choice";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-choice-title";
+  titleEl.textContent = title;
+  wrapper.appendChild(titleEl);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "agent-choice-input";
+  input.placeholder = placeholder || "";
+  wrapper.appendChild(input);
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+  const respond = async (value, cancelled) => {
+    const btns = wrapper.querySelectorAll("button");
+    btns.forEach((b) => { b.disabled = true; });
+    input.disabled = true;
+    wrapper.classList.add("resolved");
+    const cmd = { type: "extension_ui_response", id };
+    if (cancelled) cmd.cancelled = true;
+    else cmd.value = value;
+    try {
+      await invoke("send_rpc_command", { command: cmd });
+    } catch (e) {
+      console.error("Erreur extension_ui_response (input):", e);
+    }
+  };
+  const ok = document.createElement("button");
+  ok.className = "agent-choice-btn agent-choice-validate";
+  ok.textContent = "✓ Valider";
+  ok.addEventListener("click", () => respond(input.value, false));
+  const cancel = document.createElement("button");
+  cancel.className = "agent-choice-btn agent-choice-cancel";
+  cancel.textContent = "Annuler";
+  cancel.addEventListener("click", () => respond(null, true));
+  buttons.appendChild(ok);
+  buttons.appendChild(cancel);
+  wrapper.appendChild(buttons);
+  target.appendChild(wrapper);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") respond(input.value, false);
+    if (e.key === "Escape") respond(null, true);
+  });
+  setTimeout(() => input.focus(), 0);
+  scrollToBottom(container);
 }
 
 // ── Diff Review (A4 V2) : porte pré-écriture (pilot-edit-gate) ──

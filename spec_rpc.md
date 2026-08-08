@@ -148,7 +148,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | `queue_update` | Non traité (log console) |
 | `model_change` | Met à jour le sélecteur de modèle et les stats |
 | `extension_error` | Message d'erreur dans le chat |
-| `extension_ui_request` | Dialogues navigateur (prompt/confirm) pour select/confirm/input/editor |
+| `extension_ui_request` | Dialogues navigateur (prompt/confirm) pour select/confirm/input/editor. **Issue #30 :** select/confirm/input sont rendus **inline dans le chat** (boutons cliquables) via l'extension `pilot-choices` ; un titre préfixé `PILOT_MULTI_CHOICE::` déclenche une multi-sélection (cases à cocher). En Mode Orchestration autonome, auto-réponse (pas de blocage). |
 | `auto_retry_start` / `auto_retry_end` | **Mode Orchestration :** abort + pause/mensaje « orchestrateur injoignable ». **Chat standard :** dé-duplication des erreurs de connexion — un seul bloc « 🔄 nouvelle tentative (n) » mis à jour (au lieu d'empiler `❌ Erreur` à chaque retry) ; sur `agent_end` sans réponse, transformation en `❌ Modèle injoignable après n tentative(s)` + bouton « Réessayer » (retry 1-clic du dernier prompt via `state.lastUserPrompt` / `lastRetryImages`). Sans cela, l'agent se figeait en silence après épuisement des retries (sessions `019f4b28`, `019f891a`). |
 | `process_exit` | Statut → "⚠️ Déconnecté", bouton abort → reconnect 🔄 |
 
@@ -182,12 +182,50 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | Reconnexion automatique si crash (bouton 🔄) | ✅ |
 | Redémarrage à chaud de l'agent si reconfig du backend (chemin/session RPC) dans les Paramètres | ✅ |
 | Dialogues d'extension (via prompt/confirm navigateur) | ✅ |
+| **Boutons de choix / confirmation / saisie inline dans le chat (issue #30)** | ✅ |
 | Messages système et erreurs | ✅ |
 | Autocomplétion des commandes slash (/) | ✅ |
 | Reprise de session (/resume) avec popup de sélection | ✅ |
 | Affichage conditionnel des pensées (show_thinking) | ✅ |
 | Relance auto après réponse tronquée (`stopReason:"length"`) — chat standard | ✅ |
 | Images dans les prompts (drag & drop, Ctrl+V) | ✅ |
+
+---
+
+## 8bis. Boutons de choix / confirmation / saisie (issue #30)
+
+Quand l'agent a besoin d'un choix, d'une confirmation ou d'une saisie, il peut
+appeler des outils dédiés au lieu d'écrire la question en texte libre — Pilot
+affiche alors des **boutons cliquables inline dans le chat** (pas de saisie
+manuelle).
+
+### Extension `pilot-choices.ts`
+
+Chargée dès que le backend supporte `--extension` (indépendante de
+`confirm_file_edits`). Enregistre 4 outils appelables par le LLM :
+
+| Outil | Méthode pi | Rendu Pilot |
+|-------|-----------|-------------|
+| `ask_choice(title, options)` | `ctx.ui.select()` | Boutons (1 choix) |
+| `ask_multi_choice(title, options)` | `ctx.ui.select()` (titre préfixé `PILOT_MULTI_CHOICE::`) | Cases à cocher + champ de texte optionnel + Valider (plusieurs choix) |
+| `ask_confirm(title, message)` | `ctx.ui.confirm()` | Boutons Oui / Non |
+| `ask_input(title, placeholder)` | `ctx.ui.input()` | Champ texte + Valider |
+
+Chaque outil est `executionMode: "sequential"` (bloque pi en attendant la
+réponse, comme la porte pré-écriture). Les `promptSnippet` / `promptGuidelines`
+instruisent le LLM d'utiliser ces outils au lieu d'écrire la question en texte.
+
+### Frontend (`agent-pi.js`)
+
+`handleExtensionUiRequest` rend `select`/`confirm`/`input` **inline dans la bulle
+assistant** (fonctions `renderInlineChoice` / `renderInlineConfirm` /
+`renderInlineInput`), attachées au bloc assistant courant. La multi-sélection est
+détectée par le sentinel `PILOT_MULTI_CHOICE::` dans le titre ; elle affiche des
+cases à cocher **plus un champ de texte optionnel** (précision/détail, non
+obligatoire) avant le bouton Valider. La réponse est un JSON
+`{ selected: string[], note?: string }`. En **Mode Orchestration autonome**, ces
+requêtes sont auto-répondues (confirm → Oui, select → 1re option, input →
+annulé) pour ne pas bloquer l'agent.
 
 ---
 
@@ -406,6 +444,11 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →
   « Ajouter au prompt » pour l'envoyer comme contexte à l'agent.
 - **Interrompre** : bouton ⏹️. **Stats tokens/coût** affichées en haut.
+- **Boutons de choix / confirmation** : quand l'agent a besoin d'un choix, d'une
+  confirmation ou d'une saisie, il affiche des **boutons cliquables directement
+  dans le chat** (choix unique, cases à cocher pour plusieurs choix, Oui/Non,
+  champ texte) — cliquez pour répondre sans taper. Pour les cases à cocher, un
+  **champ de texte optionnel** permet d'ajouter une précision avant de valider.
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
 

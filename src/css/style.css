@@ -3388,6 +3388,116 @@ body.zen-mode #action-panel {
   opacity: 0.85;
 }
 
+/* ── Boutons de choix / confirmation / saisie inline dans le chat (issue #30) ── */
+.agent-choice {
+  margin: 10px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  padding: 10px 12px;
+}
+
+.agent-choice-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-choice-message {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-choice-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-choice-btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.agent-choice-btn:hover {
+  background: var(--bg-hover);
+}
+
+.agent-choice-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.agent-choice-btn.selected {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
+.agent-choice-yes {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.agent-choice-no {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.agent-choice-validate {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+}
+
+.agent-choice-validate:hover {
+  opacity: 0.85;
+  background: var(--accent-color);
+}
+
+.agent-choice-cancel {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.agent-choice-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.agent-choice-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.agent-choice-note {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.agent-choice.resolved {
+  opacity: 0.7;
+}
+
 /* Popup de sélection de sessions (au-dessus de l'input, comme l'autocomplétion) */
 .agent-resume-popup {
   position: absolute;

@@ -314,10 +314,11 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         None
     };
 
-    // Extensions pi : pilot-edit-gate (porte pré-écriture A4 V2) et pilot-context
+    // Extensions pi : pilot-edit-gate (porte pré-écriture A4 V2), pilot-context
     // (injection contexte/mémoire dans le system prompt — spec_context_engine /
-    // spec_project_memory). `--extension` accepte plusieurs valeurs. Écrites dans
-    // le dossier data depuis include_str! (imports type-only, effacés par jiti —
+    // spec_project_memory) et pilot-choices (boutons de choix/confirmation/saisie
+    // — issue #30). `--extension` accepte plusieurs valeurs. Écrites dans le
+    // dossier data depuis include_str! (imports type-only, effacés par jiti —
     // aucune dépendance npm).
     // - pilot-edit-gate : chargée UNIQUEMENT si `confirm_file_edits` est activé ET
     //   si le backend supporte `--extension`. Quand désactivé (défaut) ou non
@@ -325,6 +326,10 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
     //   aucun blocage, l'agent écrit librement.
     // - pilot-context : chargée dès que `--extension` est supporté (indépendante
     //   de confirm_file_edits). No-op si Pilot n'écrit pas de fichier de handoff.
+    // - pilot-choices : chargée dès que `--extension` est supporté (indépendante
+    //   de confirm_file_edits). Enregistre des outils (ask_choice, ask_confirm,
+    //   ask_input, ask_multi_choice) que le LLM peut appeler pour demander une
+    //   interaction à l'utilisateur via des boutons rendus par Pilot.
     let ext_supported = probe_extension_support(state, &pi_path);
     let mut extensions: Vec<String> = Vec::new();
     if ext_supported {
@@ -340,6 +345,10 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
                 let ctx_file = dir.join("pilot-context.ts");
                 if fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
                     extensions.push(ctx_file.to_string_lossy().to_string());
+                }
+                let choices_file = dir.join("pilot-choices.ts");
+                if fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
+                    extensions.push(choices_file.to_string_lossy().to_string());
                 }
             }
         }

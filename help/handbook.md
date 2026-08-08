@@ -260,6 +260,11 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →
   « Ajouter au prompt » pour l'envoyer comme contexte à l'agent.
 - **Interrompre** : bouton ⏹️. **Stats tokens/coût** affichées en haut.
+- **Boutons de choix / confirmation** : quand l'agent a besoin d'un choix, d'une
+  confirmation ou d'une saisie, il affiche des **boutons cliquables directement
+  dans le chat** (choix unique, cases à cocher pour plusieurs choix, Oui/Non,
+  champ texte) — cliquez pour répondre sans taper. Pour les cases à cocher, un
+  **champ de texte optionnel** permet d'ajouter une précision avant de valider.
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
 
