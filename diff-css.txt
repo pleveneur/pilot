@@ -1,0 +1,37 @@
+diff --git a/src/css/style.css b/src/css/style.css
+index e885f55..ac25f24 100644
+--- a/src/css/style.css
++++ b/src/css/style.css
+@@ -3424,7 +3424,7 @@ body.zen-mode #action-panel {
+   font-size: 12px;
+   padding: 5px 12px;
+   border: 1px solid var(--border-color);
+-  border-radius: 6px;
++  border-radius: 8px;
+   background: var(--bg-primary);
+   color: var(--text-primary);
+   cursor: pointer;
+@@ -3456,6 +3456,23 @@ body.zen-mode #action-panel {
+   color: var(--danger);
+ }
+ 
++/* Palette de couleurs cyclique pour les boutons de choix (chaque option a sa
++   couleur, comme Oui/Non). Les classes opt-0..opt-5 sont attribuées par index
++   dans renderInlineChoice (agent-pi.js). Couleurs choisies pour rester lisibles
++   en thème clair et sombre. */
++.agent-choice-opt-0 { border-color: #4f8ef7; color: #4f8ef7; }
++.agent-choice-opt-0:hover { background: color-mix(in srgb, #4f8ef7 12%, transparent); }
++.agent-choice-opt-1 { border-color: #2ecc71; color: #2ecc71; }
++.agent-choice-opt-1:hover { background: color-mix(in srgb, #2ecc71 12%, transparent); }
++.agent-choice-opt-2 { border-color: #f39c12; color: #f39c12; }
++.agent-choice-opt-2:hover { background: color-mix(in srgb, #f39c12 12%, transparent); }
++.agent-choice-opt-3 { border-color: #e84393; color: #e84393; }
++.agent-choice-opt-3:hover { background: color-mix(in srgb, #e84393 12%, transparent); }
++.agent-choice-opt-4 { border-color: #00bcd4; color: #00bcd4; }
++.agent-choice-opt-4:hover { background: color-mix(in srgb, #00bcd4 12%, transparent); }
++.agent-choice-opt-5 { border-color: #e74c3c; color: #e74c3c; }
++.agent-choice-opt-5:hover { background: color-mix(in srgb, #e74c3c 12%, transparent); }
++
+ .agent-choice-validate {
+   background: var(--accent-color);
+   color: #fff;

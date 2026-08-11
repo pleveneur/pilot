@@ -614,6 +614,24 @@ export async function createAgentPi(container, resumed = false) {
     }
   }
   const statusEl = wrapper.querySelector("#agent-status");
+  // Multi-projets : si l'agent de CE projet est déjà en train de travailler
+  // (busy) au moment où l'onglet est (re)créé (ex: bascule sur un projet dont
+  // l'agent tourne en arrière-plan), initialiser le statut à « Réflexion… »
+  // au lieu de « Prêt » par défaut. Sans cela, le statut restait « Prêt »
+  // jusqu'à l'agent_end suivant (l'agent_start avait déjà été émis avant la
+  // bascule et n'était donc pas reçu par ce listener). Affichage uniquement :
+  // on ne touche pas à state.isStreaming (l'état réel est géré par le backend).
+  (async () => {
+    try {
+      const states = await invoke("get_project_agent_states");
+      if (!states) return;
+      const key = (window._pilotProjectPath || "").replace(/\\/g, "/");
+      if (key && states[key] && states[key].busy) {
+        statusEl.textContent = "🤔 Réflexion...";
+        statusEl.className = "agent-status agent-status-streaming";
+      }
+    } catch (_) { /* ignore : statut par défaut */ }
+  })();
   const autocompleteEl = wrapper.querySelector("#agent-autocomplete");
   const resumePopup = wrapper.querySelector("#agent-resume-popup");
   const promptPopup = wrapper.querySelector("#agent-prompt-popup");
@@ -1799,7 +1817,14 @@ export async function createAgentPi(container, resumed = false) {
   updateStats();
 
   // ── Charger les modèles disponibles (forcer le defaultModel global) ──
-  loadModels(state, true);
+  // preferFile=true : la liste RPC du backend peut être en cache mémoire (stale)
+  // et ne pas contenir le defaultModel (issue #16). On lit donc le fichier frais
+  // pour garantir que le defaultModel est bien dans les options, sinon loadModels
+  // retombe sur le modèle actif de session (ex: llama-cpp éteint) au lieu du défaut.
+  // await : checkDefaultModelReachable (ci-dessous) doit s'exécuter APRÈS que le
+  // modèle actif a été basculé vers le défaut, sinon il teste l'ancien modèle de
+  // session et affiche un faux avertissement de serveur injoignable.
+  await loadModels(state, true, true);
 
   // ── Vérifier la reachabilité du modèle actif (point 2) ──
   // Détecte au démarrage un modèle par défaut injoignable (ex: serveur
@@ -4543,7 +4568,9 @@ export async function createAgentPi(container, resumed = false) {
       statusEl.textContent = "Prêt";
       statusEl.className = "agent-status agent-status-idle";
       appendSystemMessage(messagesEl, "🔄 Agent redémarré (paramètres RPC modifiés).");
-      await loadModels(state, true);
+      // preferFile=true : la liste RPC peut être stale (issue #16) et ne pas
+      // contenir le defaultModel → on lit le fichier frais pour le forcer.
+      await loadModels(state, true, true);
       updateStats();
       loadCommands();
       // Context Engine : reset (réinjecter au prochain prompt)
@@ -7126,12 +7153,32 @@ async function handleExtensionUiRequest(payload, container, state) {
     const rawTitle = payload.title || "Choix";
     // Multi-sélection (issue #30) : titre préfixé par le sentinel pilot-choices.
     const MULTI_SENTINEL = "PILOT_MULTI_CHOICE::";
+    // Confirmation Oui/Non (issue #30) : titre préfixé par le sentinel + JSON
+    // {title, message} → on rend des boutons Oui/Non + champ de précision.
+    const CONFIRM_SENTINEL = "PILOT_CONFIRM::";
     const multi = rawTitle.startsWith(MULTI_SENTINEL);
-    const title = multi ? rawTitle.slice(MULTI_SENTINEL.length) : rawTitle;
+    const confirm = rawTitle.startsWith(CONFIRM_SENTINEL);
+    let title = rawTitle;
+    let confirmMessage = "";
+    if (multi) {
+      title = rawTitle.slice(MULTI_SENTINEL.length);
+    } else if (confirm) {
+      try {
+        const parsed = JSON.parse(rawTitle.slice(CONFIRM_SENTINEL.length));
+        title = parsed.title || "Confirmation";
+        confirmMessage = parsed.message || "";
+      } catch {
+        title = rawTitle.slice(CONFIRM_SENTINEL.length);
+      }
+    }
     // Mode Orchestration autonome : ne pas bloquer → auto-répondre (1re option).
     if (state.orchestrationRunning) {
       if (options.length > 0) {
-        const val = multi ? JSON.stringify([options[0]]) : options[0];
+        const val = multi
+          ? JSON.stringify([options[0]])
+          : confirm
+            ? JSON.stringify({ confirmed: options[0] === "Oui" })
+            : options[0];
         await invoke("send_rpc_command", {
           command: { type: "extension_ui_response", id, value: val },
         });
@@ -7142,7 +7189,11 @@ async function handleExtensionUiRequest(payload, container, state) {
       }
       return;
     }
-    renderInlineChoice(container, state, id, title, options, multi);
+    if (confirm) {
+      renderInlineConfirm(container, state, id, title, confirmMessage);
+    } else {
+      renderInlineChoice(container, state, id, title, options, multi);
+    }
   } else if (method === "input") {
     // Mode Orchestration autonome : pas de saisie utilisateur → annuler.
     if (state.orchestrationRunning) {
@@ -7205,16 +7256,16 @@ function renderInlineChoice(container, state, id, title, options, multi) {
 
   if (multi) {
     const selected = new Set();
-    for (const opt of options) {
+    options.forEach((opt, i) => {
       const btn = document.createElement("button");
-      btn.className = "agent-choice-btn";
+      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
       btn.textContent = opt;
       btn.addEventListener("click", () => {
         if (selected.has(opt)) { selected.delete(opt); btn.classList.remove("selected"); }
         else { selected.add(opt); btn.classList.add("selected"); }
       });
       buttons.appendChild(btn);
-    }
+    });
     // Champ de texte optionnel (précision / détail) avant validation.
     const note = document.createElement("input");
     note.type = "text";
@@ -7228,11 +7279,19 @@ function renderInlineChoice(container, state, id, title, options, multi) {
       respond(JSON.stringify({ selected: [...selected], note: note.value.trim() }), false));
     buttons.appendChild(validate);
   } else {
-    for (const opt of options) {
+    // Choix unique : un clic répond immédiatement, avec un champ de précision
+    // optionnel (envoyé avec le choix si rempli).
+    const note = document.createElement("input");
+    note.type = "text";
+    note.className = "agent-choice-input agent-choice-note";
+    note.placeholder = "Ajouter une précision (optionnel)…";
+    wrapper.appendChild(note);
+    for (const [i, opt] of options.entries()) {
       const btn = document.createElement("button");
-      btn.className = "agent-choice-btn";
+      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
       btn.textContent = opt;
-      btn.addEventListener("click", () => respond(opt, false));
+      btn.addEventListener("click", () =>
+        respond(JSON.stringify({ selected: opt, note: note.value.trim() }), false));
       buttons.appendChild(btn);
     }
   }
@@ -7261,13 +7320,25 @@ function renderInlineConfirm(container, state, id, title, message) {
   }
   const buttons = document.createElement("div");
   buttons.className = "agent-choice-buttons";
+  // Champ de texte optionnel (précision / détail) envoyé avec la confirmation.
+  const note = document.createElement("input");
+  note.type = "text";
+  note.className = "agent-choice-input agent-choice-note";
+  note.placeholder = "Ajouter une précision (optionnel)…";
+  wrapper.appendChild(note);
   const respond = async (confirmed) => {
     const btns = wrapper.querySelectorAll("button");
     btns.forEach((b) => { b.disabled = true; });
+    const inputs = wrapper.querySelectorAll(".agent-choice-input");
+    inputs.forEach((i) => { i.disabled = true; });
     wrapper.classList.add("resolved");
     try {
       await invoke("send_rpc_command", {
-        command: { type: "extension_ui_response", id, confirmed, cancelled: !confirmed },
+        command: {
+          type: "extension_ui_response",
+          id,
+          value: JSON.stringify({ confirmed, note: note.value.trim() }),
+        },
       });
     } catch (e) {
       console.error("Erreur extension_ui_response (confirm):", e);

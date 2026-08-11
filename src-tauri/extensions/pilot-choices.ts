@@ -5,10 +5,15 @@
 // Cette extension enregistre des outils que le LLM peut appeler pour demander
 // une interaction à l'utilisateur via des BOUTONS rendus par Pilot :
 //   - ask_choice       → ctx.ui.select()  → Pilot affiche des boutons (1 choix)
+//                          + champ de précision optionnel. La valeur renvoyée
+//                          est un JSON `{ selected, note? }`.
 //   - ask_multi_choice → ctx.ui.select()  → Pilot affiche des cases à cocher
 //                          (plusieurs choix) — titre préfixé par un sentinel
 //                          que Pilot interprète comme une multi-sélection.
-//   - ask_confirm      → ctx.ui.confirm() → Pilot affiche Oui / Non
+//   - ask_confirm      → ctx.ui.select()  → Pilot affiche Oui / Non + champ de
+//                          précision optionnel — titre préfixé par un sentinel
+//                          que Pilot interprète comme une confirmation. La
+//                          valeur renvoyée est un JSON `{ confirmed, note? }`.
 //   - ask_input        → ctx.ui.input()  → Pilot affiche un champ texte
 //
 // En mode RPC, ctx.ui.* émet un `extension_ui_request` sur stdout et BLOQUE pi
@@ -26,6 +31,10 @@ import { Type } from "typebox";
 // `select` reçu et rend des cases à cocher au lieu de boutons à choix unique.
 // La valeur renvoyée est un JSON array de chaînes.
 const MULTI_SENTINEL = "PILOT_MULTI_CHOICE::";
+// Sentinel préfixant le titre d'une confirmation Oui/Non. Pilot le détecte dans
+// le `select` reçu et rend des boutons Oui/Non + un champ de précision optionnel.
+// La valeur renvoyée est un JSON `{ confirmed: boolean, note?: string }`.
+const CONFIRM_SENTINEL = "PILOT_CONFIRM::";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -47,7 +56,23 @@ export default function (pi: ExtensionAPI) {
       if (choice == null) {
         return { content: [{ type: "text", text: "L'utilisateur a annulé le choix." }] };
       }
-      return { content: [{ type: "text", text: `Choix de l'utilisateur : ${choice}` }] };
+      // Pilot renvoie un JSON `{ selected: string, note?: string }`
+      // (note = précision optionnelle saisie par l'utilisateur).
+      let selected = "";
+      let note = "";
+      try {
+        const parsed = JSON.parse(choice);
+        if (typeof parsed === "string") {
+          selected = parsed;
+        } else if (parsed && typeof parsed === "object") {
+          selected = typeof parsed.selected === "string" ? parsed.selected : "";
+          note = typeof parsed.note === "string" ? parsed.note : "";
+        }
+      } catch {
+        selected = choice;
+      }
+      const notePart = note ? `\nPrécision de l'utilisateur : ${note}` : "";
+      return { content: [{ type: "text", text: `Choix de l'utilisateur : ${selected}${notePart}` }] };
     },
   });
 
@@ -106,9 +131,37 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const ok = await ctx.ui.confirm(params.title, params.message);
+      // Titre préfixé par le sentinel + JSON {title, message} → Pilot rend des
+      // boutons Oui/Non + un champ de précision optionnel. La valeur renvoyée
+      // est un JSON `{ confirmed: boolean, note?: string }`.
+      const choice = await ctx.ui.select(
+        CONFIRM_SENTINEL + JSON.stringify({ title: params.title, message: params.message }),
+        ["Oui", "Non"],
+      );
+      if (choice == null) {
+        return { content: [{ type: "text", text: "L'utilisateur a annulé la confirmation." }] };
+      }
+      let confirmed = false;
+      let note = "";
+      try {
+        const parsed = JSON.parse(choice);
+        if (typeof parsed === "string") {
+          confirmed = parsed === "Oui";
+        } else if (parsed && typeof parsed === "object") {
+          confirmed = parsed.confirmed === true;
+          note = typeof parsed.note === "string" ? parsed.note : "";
+        }
+      } catch {
+        confirmed = choice === "Oui";
+      }
+      const notePart = note ? `\nPrécision de l'utilisateur : ${note}` : "";
       return {
-        content: [{ type: "text", text: ok ? "L'utilisateur a confirmé (Oui)." : "L'utilisateur a refusé (Non)." }],
+        content: [{
+          type: "text",
+          text: confirmed
+            ? `L'utilisateur a confirmé (Oui).${notePart}`
+            : `L'utilisateur a refusé (Non).${notePart}`,
+        }],
       };
     },
   });
