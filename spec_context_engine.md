@@ -251,13 +251,14 @@ en boost n'est pas ré-injecté comme chunk RAG.
 Bouton 📑 « Contexte » : force un **rebuild complet** (supprime l'index puis
 `build_context_index`) si RAG activé ; sinon refresh V1.
 
-**Indicateur de construction (sablier centré)** : quand un build RAG est
-déclenché — en arrière-plan au 1er prompt (index absent) **ou** via le bouton
-📑 « Contexte » (rebuild complet) — `agent-pi.js` affiche un **sablier animé au
-centre de l'écran** (`#rag-building-overlay`) avec le texte « Construction de
-l'index RAG en cours… » en dessous. Le backend émet `context-index-done`
-(succès ou échec) à la fin du build → l'overlay est masqué. (Cet event
-`context-index-done` est aussi celui attendu par le toast du bouton 📑.)
+**Indicateur de construction (spinner circulaire centré)** : quand un build RAG
+est déclenché — en arrière-plan au 1er prompt (index absent) **ou** via le
+bouton 📑 « Contexte » (rebuild complet) — `agent-pi.js` affiche un **spinner
+circulaire au centre de l'écran** (`#rag-building-overlay`, identique à celui
+de « Démarrage de Agent Pi ») avec le texte « Construction de l'index RAG en
+cours… » en dessous. Le backend émet `context-index-done` (succès ou échec) à
+la fin du build → l'overlay est masqué. (Cet event `context-index-done` est
+aussi celui attendu par le toast du bouton 📑.)
 
 ### 7.7bis Ceinture-bretelles frontend (anti-gel)
 
@@ -318,7 +319,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
   éteint ou lent : des timeouts bornent l'attente et le prompt part sans
   contexte au besoin. À la **première génération** de l'index **ou** au clic sur
-  le bouton 📑 « Contexte » (rebuild RAG), un **sablier animé au centre de
+  le bouton 📑 « Contexte » (rebuild RAG), un **spinner circulaire au centre de
   l'écran** s'affiche avec le texte « Construction de l'index RAG en cours… »
   en dessous, et disparaît quand l'index est prêt.
 <!-- /HELP:context-engine -->

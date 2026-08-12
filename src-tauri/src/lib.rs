@@ -73,7 +73,11 @@ mod pi_update;
 #[allow(dead_code)]
 struct ProjectState {
     path: String,
-    rpc: Option<rpc_manager::RpcSession>,
+    /// Sessions agent de CE projet, indexées par id d'agent (multi-onglets agents,
+    /// spec_multi_agents). L'agent par défaut utilise la clé "default". Les
+    /// sessions non actives sont « parkées » ici (processus pi vivant en
+    /// arrière-plan) ; la session affichée vit dans `AppState.rpc_state`.
+    rpc: HashMap<String, rpc_manager::RpcSession>,
     watcher: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
 }
 
@@ -96,6 +100,10 @@ struct AppState {
     watch_state: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
     terminals: Mutex<HashMap<String, terminal::TerminalState>>,
     rpc_state: Mutex<Option<rpc_manager::RpcSession>>,
+    /// Multi-onglets agents (spec_multi_agents) : id de l'agent dont la session
+    /// est actuellement active dans `rpc_state` ("default" pour l'agent par
+    /// défaut, "agent-1", "agent-2", ... pour les onglets supplémentaires).
+    active_agent_id: Mutex<Option<String>>,
     /// H2 V1 : session reviewer dédiée (pi --no-session, contexte vierge). Lancée
     /// lazy au 1er besoin de review, recyclée via new_session. Canal séparé.
     rpc_reviewer: Mutex<Option<rpc_manager::RpcSession>>,
@@ -156,6 +164,16 @@ struct AppConfig {
     rpc_no_session: bool,
     #[serde(default)]
     rpc_session_dir: String,
+    // Multi-onglets agents (spec_multi_agents) : si true, permet d'ouvrir
+    // plusieurs onglets agent indépendants sur le même projet (bouton « + »
+    // dans la barre d'onglets). Chaque agent a sa propre session/conversation.
+    #[serde(default)]
+    multi_agent_tabs: bool,
+    // Purge automatique des sessions (H9) : délai de rétention en jours des
+    // fichiers de session pi (défaut 15). 0 = purge désactivée. Exécutée par
+    // un thread autonome (start_session_purge) sur tous les projets ouverts.
+    #[serde(default = "default_session_retention_days")]
+    session_retention_days: u32,
     // Issue #26 : si true, ne plus proposer la mise à jour de Pi (choix
     // « Ne plus demander » dans la modale). La vérification reste possible
     // manuellement. Détection automatique à l'ouverture de l'onglet agent.
@@ -378,6 +396,7 @@ fn default_orchestration_granularity() -> String { "fine".to_string() }
 fn default_coder_context_window() -> u32 { 0 }
 fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
+fn default_session_retention_days() -> u32 { 15 }
 
 /// Port web effectif. En build dev (`debug_assertions`), on décale le port
 /// configuré de +1 pour permettre à la version installée et à la version dev
@@ -468,6 +487,8 @@ impl Default for AppConfig {
             rpc_pi_path: String::new(),
             rpc_no_session: false,
             rpc_session_dir: String::new(),
+            multi_agent_tabs: false,
+            session_retention_days: default_session_retention_days(),
             pi_skip_update_check: false,
             quality_gate_enabled: false,
             show_thinking: true,
@@ -846,7 +867,7 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
             .entry(path.to_string())
             .or_insert_with(|| ProjectState {
                 path: path.to_string(),
-                rpc: None,
+                rpc: HashMap::new(),
                 watcher: None,
             });
     }
@@ -1329,8 +1350,9 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
     // session parkée (multi-projets) si elle existe — sinon fuite de processus pi.
     {
         let mut projects = state.projects.lock().unwrap();
-        if let Some(ps) = projects.remove(&target) {
-            if let Some(mut session) = ps.rpc {
+        if let Some(mut ps) = projects.remove(&target) {
+            // Multi-onglets agents : tuer TOUTES les sessions parkées de ce projet.
+            for (_, mut session) in ps.rpc.drain() {
                 rpc_manager::stop_session(&mut session);
             }
         }
@@ -1372,7 +1394,7 @@ fn park_previous_active_if_switching(state: &AppState, new_path: &str) {
     let cur = state.active_project.lock().unwrap().clone();
     if let Some(cur_p) = cur {
         if cur_p != new_path {
-            let _ = crate::rpc::do_park_agent_session(state);
+            let _ = crate::rpc::do_park_agent_session(state, None);
         }
     }
 }
@@ -1464,7 +1486,7 @@ fn restore_open_projects(state: State<AppState>) -> (Vec<String>, Option<String>
         for p in &open {
             projects.entry(p.clone()).or_insert_with(|| ProjectState {
                 path: p.clone(),
-                rpc: None,
+                rpc: HashMap::new(),
                 watcher: None,
             });
         }
@@ -1672,6 +1694,10 @@ pub fn run() {
             // d'arrêt dans AppState.web_shutdown (pour le rechargement à chaud).
             web_server::start_if_enabled(handle.clone());
             sync_tray(&handle);
+            // Purge automatique des sessions (H9) : thread autonome qui supprime
+            // les sessions pi plus anciennes que le délai de rétention configuré
+            // (session_retention_days, défaut 15) pour tous les projets ouverts.
+            session_history::start_session_purge(handle.clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1716,6 +1742,7 @@ pub fn run() {
                 watch_state: Mutex::new(None),
                 terminals: Mutex::new(HashMap::new()),
                 rpc_state: Mutex::new(None),
+                active_agent_id: Mutex::new(None),
                 rpc_reviewer: Mutex::new(None),
                 agent_sessions: Mutex::new(HashMap::new()),
                 event_tx,

@@ -1167,6 +1167,18 @@ body.theme-light.theme-tokyo-day {
   box-shadow: inset 0 2px 0 var(--accent);
 }
 
+/* Multi-onglets agents : bouton « + » pour ouvrir un nouvel onglet agent. */
+.tab.tab-add-agent {
+  color: var(--text-secondary);
+  font-size: 15px;
+  padding: 0 10px;
+  opacity: 0.7;
+}
+.tab.tab-add-agent:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-dirty { color: var(--accent); font-weight: bold; }
 .tab .tab-close {
@@ -3449,29 +3461,40 @@ body.zen-mode #action-panel {
 .agent-choice-yes {
   border-color: var(--accent-color);
   color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 25%, transparent);
+}
+
+.agent-choice-yes:hover {
+  background: color-mix(in srgb, var(--accent-color) 40%, transparent);
 }
 
 .agent-choice-no {
   border-color: var(--danger);
   color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.agent-choice-no:hover {
+  background: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 /* Palette de couleurs cyclique pour les boutons de choix (chaque option a sa
    couleur, comme Oui/Non). Les classes opt-0..opt-5 sont attribuées par index
-   dans renderInlineChoice (agent-pi.js). Couleurs choisies pour rester lisibles
-   en thème clair et sombre. */
-.agent-choice-opt-0 { border-color: #4f8ef7; color: #4f8ef7; }
-.agent-choice-opt-0:hover { background: color-mix(in srgb, #4f8ef7 12%, transparent); }
-.agent-choice-opt-1 { border-color: #2ecc71; color: #2ecc71; }
-.agent-choice-opt-1:hover { background: color-mix(in srgb, #2ecc71 12%, transparent); }
-.agent-choice-opt-2 { border-color: #f39c12; color: #f39c12; }
-.agent-choice-opt-2:hover { background: color-mix(in srgb, #f39c12 12%, transparent); }
-.agent-choice-opt-3 { border-color: #e84393; color: #e84393; }
-.agent-choice-opt-3:hover { background: color-mix(in srgb, #e84393 12%, transparent); }
-.agent-choice-opt-4 { border-color: #00bcd4; color: #00bcd4; }
-.agent-choice-opt-4:hover { background: color-mix(in srgb, #00bcd4 12%, transparent); }
-.agent-choice-opt-5 { border-color: #e74c3c; color: #e74c3c; }
-.agent-choice-opt-5:hover { background: color-mix(in srgb, #e74c3c 12%, transparent); }
+   dans renderInlineChoice (agent-pi.js). Fond coloré semi-transparent (comme le
+   bouton valider) pour que le bouton soit visible, texte de la couleur pleine
+   pour rester lisible en thème clair et sombre. */
+.agent-choice-opt-0 { border-color: #4f8ef7; color: #4f8ef7; background: color-mix(in srgb, #4f8ef7 25%, transparent); }
+.agent-choice-opt-0:hover { background: color-mix(in srgb, #4f8ef7 40%, transparent); }
+.agent-choice-opt-1 { border-color: #2ecc71; color: #2ecc71; background: color-mix(in srgb, #2ecc71 25%, transparent); }
+.agent-choice-opt-1:hover { background: color-mix(in srgb, #2ecc71 40%, transparent); }
+.agent-choice-opt-2 { border-color: #f39c12; color: #f39c12; background: color-mix(in srgb, #f39c12 25%, transparent); }
+.agent-choice-opt-2:hover { background: color-mix(in srgb, #f39c12 40%, transparent); }
+.agent-choice-opt-3 { border-color: #e84393; color: #e84393; background: color-mix(in srgb, #e84393 25%, transparent); }
+.agent-choice-opt-3:hover { background: color-mix(in srgb, #e84393 40%, transparent); }
+.agent-choice-opt-4 { border-color: #00bcd4; color: #00bcd4; background: color-mix(in srgb, #00bcd4 25%, transparent); }
+.agent-choice-opt-4:hover { background: color-mix(in srgb, #00bcd4 40%, transparent); }
+.agent-choice-opt-5 { border-color: #e74c3c; color: #e74c3c; background: color-mix(in srgb, #e74c3c 25%, transparent); }
+.agent-choice-opt-5:hover { background: color-mix(in srgb, #e74c3c 40%, transparent); }
 
 .agent-choice-validate {
   background: var(--accent-color);
@@ -4059,7 +4082,7 @@ body.zen-mode #action-panel {
   to { transform: rotate(360deg); }
 }
 
-/* --- Construction de l'index RAG : sablier centré --- */
+/* --- Construction de l'index RAG : spinner circulaire centré --- */
 #rag-building-overlay {
   position: fixed;
   top: 0;
@@ -4079,31 +4102,12 @@ body.zen-mode #action-panel {
   display: none;
 }
 .rag-hourglass {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  animation: rag-hourglass-flip 1.4s ease-in-out infinite;
-}
-.rag-hourglass::before,
-.rag-hourglass::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  width: 100%;
-  height: 50%;
-  background: var(--accent);
-}
-.rag-hourglass::before {
-  top: 0;
-  clip-path: polygon(0 0, 100% 0, 50% 100%);
-}
-.rag-hourglass::after {
-  bottom: 0;
-  clip-path: polygon(0 100%, 100% 100%, 50% 0);
-}
-@keyframes rag-hourglass-flip {
-  0%, 100% { transform: rotate(0deg); }
-  50% { transform: rotate(180deg); }
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: loading-spin 0.7s linear infinite;
 }
 .rag-building-message {
   margin-top: 16px;

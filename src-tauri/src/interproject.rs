@@ -128,7 +128,7 @@ pub fn interproject_handoff(
     //    Avant de basculer, parker l'éventuelle session active du projet source
     //    (processus pi vivant en arrière-plan, conforme au multi-projets) pour ne
     //    pas bloquer le lancement de l'agent de la cible (« session déjà active »).
-    let _ = rpc::do_park_agent_session(state.inner());
+    let _ = rpc::do_park_agent_session(state.inner(), None);
     let registered = state.projects.lock().unwrap().contains_key(&target);
     if !registered {
         open_project_shared(&app, &target)?;
@@ -137,7 +137,7 @@ pub fn interproject_handoff(
     }
 
     // 3. Lancer / reprendre l'agent de la cible (session active).
-    rpc::do_start_agent_session(state.inner(), &app)?;
+    rpc::do_start_agent_session(state.inner(), &app, None)?;
 
     // 4. Envoyer le prompt de traitement du handoff.
     let prompt = format!(

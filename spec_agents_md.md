@@ -34,19 +34,27 @@ l'IA (modèle du chat) l'analyse du projet et la rédaction du fichier.
 ### 3.1 Bouton toolbar agent
 
 Bouton **📄** (`data-action="agents-md"`, id `agent-amd-btn`, icône Lucide
-`file-text`) dans la toolbar agent, **juste après** le bouton mémoire projet
+`scroll-text`) dans la toolbar agent, **juste après** le bouton mémoire projet
 (📝 `notebook-pen`).
 
 Title : « Générer / mettre à jour AGENTS.md (instructions projet pour l'agent) ».
 
 Au clic :
 1. Désactive le bouton (le temps de la génération).
-2. Ajoute un message système « 🤖 Génération / mise à jour d'AGENTS.md… ».
-3. Appelle `generateAgentsMd(state.currentModel, ui)`.
-4. Réussite → toast success + message système + ouvre `AGENTS.md` dans
+2. Masque l'**overlay RAG** (`#rag-building-overlay`, z-index 10001) s'il est
+   visible : il recouvrirait le spinner de `showLoading` (z-index 10000) et
+   afficherait un double spinner. Il est restauré en `finally` s'il était
+   visible (build RAG réel en cours).
+3. Affiche un **spinner circulaire centré** (identique à « Démarrage de Agent
+   Pi ») avec le message « Génération AGENTS.md en cours » (composant
+   `showLoading`/`hideLoading` de `loading.js`).
+4. Ajoute un message système « 🤖 Génération / mise à jour d'AGENTS.md… ».
+5. Appelle `generateAgentsMd(state.currentModel, ui)`.
+6. Réussite → toast success + message système + ouvre `AGENTS.md` dans
    l'éditeur (onglet édition) + affiche le résumé de l'agent.
-5. Échec → toast error + message système d'erreur.
-6. Réactive le bouton (`finally`).
+7. Échec → toast error + message système d'erreur.
+8. Masque le spinner, restaure l'overlay RAG si besoin et réactive le bouton
+   (`finally`).
 
 Indépendant de toute option de config (toujours disponible dès qu'un projet
 est ouvert et qu'un modèle est sélectionné).
@@ -140,6 +148,9 @@ projet en utilisant l'IA.
 - **Bouton 📄** (toolbar agent, à côté du bouton 📝 mémoire projet) : analyse
   le projet (structure, manifestes, fichiers source) et crée ou met à jour
   `AGENTS.md`. Utilise le **modèle actif du chat**.
+- Pendant la génération (qui peut prendre 1–3 min), un **spinner circulaire
+  centré** (identique à « Démarrage de Agent Pi ») s'affiche avec le message
+  « Génération AGENTS.md en cours ».
 - `AGENTS.md` est lu automatiquement par pi et plh au début de chaque session :
   c'est le fichier d'instructions projet (stack, structure, commandes,
   conventions, pièges). Pilot ne le réinjecte pas (discovery native).

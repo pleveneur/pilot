@@ -117,6 +117,8 @@ export async function initSettings() {
   const inputRpcPath = document.getElementById("setting-rpc-path");
   const chkRpcNoSession = document.getElementById("setting-rpc-no-session");
   const inputRpcSessionDir = document.getElementById("setting-rpc-session-dir");
+  const chkMultiAgentTabs = document.getElementById("setting-multi-agent-tabs");
+  const inputSessionRetention = document.getElementById("setting-session-retention");
   const chkShowThinking = document.getElementById("setting-show-thinking");
   const chkShowTools = document.getElementById("setting-show-tools");
   const inputPdfMdModel = document.getElementById("setting-pdf-md-model");
@@ -283,7 +285,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     try {
       currentConfig = await invoke("get_config");
     } catch (_) {
-      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text", modal_animations: true };
+      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", multi_agent_tabs: false, quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text", modal_animations: true };
     }
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
@@ -294,6 +296,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
     chkRpcNoSession.checked = currentConfig.rpc_no_session || false;
     inputRpcSessionDir.value = currentConfig.rpc_session_dir || "";
+    if (chkMultiAgentTabs) chkMultiAgentTabs.checked = currentConfig.multi_agent_tabs === true;
+    if (inputSessionRetention) inputSessionRetention.value = currentConfig.session_retention_days ?? 15;
     chkShowThinking.checked = currentConfig.show_thinking !== false;
     chkShowTools.checked = currentConfig.show_tools || false;
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
@@ -496,6 +500,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         rpc_pi_path: inputRpcPath.value.trim(),
         rpc_no_session: chkRpcNoSession.checked,
         rpc_session_dir: inputRpcSessionDir.value.trim(),
+        multi_agent_tabs: chkMultiAgentTabs ? chkMultiAgentTabs.checked : false,
+        session_retention_days: inputSessionRetention ? (parseInt(inputSessionRetention.value, 10) || 15) : 15,
         quality_gate_enabled: currentConfig?.quality_gate_enabled || false,
         show_thinking: chkShowThinking.checked,
         show_tools: chkShowTools.checked,

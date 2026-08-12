@@ -10,7 +10,7 @@ import { createPdfPreview } from "./pdf-preview.js";
 import { createImageViewer } from "./image-viewer.js";
 import { createCsvPreview } from "./csv-preview.js";
 import { createTerminal, killTerminal } from "./terminal.js";
-import { createAgentPi, renderMessageHistory } from "./agent-pi.js";
+import { createAgentPi, renderMessageHistory, activateAgentTab } from "./agent-pi.js";
 import { agentDisplayLabel, getPiHealthSync, checkPiHealth } from "./backend-info.js";
 import { createHelp } from "./help.js";
 import { createReview } from "./review.js";
@@ -113,11 +113,18 @@ class TabsManager {
     this._autoSaveTimer = null;
     // Word wrap
     this._wordWrapEnabled = false;
+    // Multi-onglets agents (spec_multi_agents) : si true, on peut ouvrir
+    // plusieurs onglets agent indépendants sur le même projet (bouton « + »).
+    this._multiAgentEnabled = false;
+    // Id de l'agent dont la session est actuellement active (rpc_state).
+    this._activeAgentId = null;
 
     // Charger la config auto-save au démarrage
     invoke("get_config").then((config) => {
       this._autoSaveEnabled = config.auto_save || false;
       this._autoSaveDelay = config.auto_save_delay || 3000;
+      this._multiAgentEnabled = config.multi_agent_tabs === true;
+      this._updateMultiAgentButton();
       this._wordWrapEnabled = config.word_wrap || false;
       this._updateAutoSaveStatus();
       // Appliquer le word wrap sur les onglets déjà ouverts
@@ -130,6 +137,12 @@ class TabsManager {
       this._autoSaveEnabled = config.auto_save || false;
       this._autoSaveDelay = config.auto_save_delay || 3000;
       this._updateAutoSaveStatus();
+      // Multi-onglets agents : mettre à jour le bouton « + » de la barre d'onglets.
+      const newMulti = config.multi_agent_tabs === true;
+      if (newMulti !== this._multiAgentEnabled) {
+        this._multiAgentEnabled = newMulti;
+        this._updateMultiAgentButton();
+      }
       // Word wrap
       const newWrap = config.word_wrap || false;
       if (newWrap !== this._wordWrapEnabled) {
@@ -140,8 +153,10 @@ class TabsManager {
 
     // Renommer l'onglet agent (et la barre de statut) quand le backend change
     // (pi ↔ plh), car la sonde peut terminer après l'ouverture de l'onglet.
+    // Multi-onglets agents : on ne renomme que l'agent PAR DÉFAUT (les onglets
+    // supplémentaires ont un nom personnalisé « Agent N »).
     window.addEventListener("pilot-backend-changed", () => {
-      const agentTab = this.tabs.find((t) => t.mode === "agent");
+      const agentTab = this.tabs.find((t) => t.mode === "agent" && t.agentId === "default");
       if (!agentTab) return;
       const newLabel = agentDisplayLabel();
       if (agentTab.name === newLabel) return;
@@ -154,9 +169,45 @@ class TabsManager {
       // Mettre à jour la barre de statut si l'onglet agent est actif.
       const active = this.getActiveTab();
       if (active && active.mode === "agent") {
-        statusFiletype.textContent = `${newLabel} (RPC)`;
+        statusFiletype.textContent = `${active.name} (RPC)`;
       }
     });
+  }
+
+  /**
+   * Multi-onglets agents : affiche/retire le bouton « + » de la barre d'onglets
+   * (ouvre un nouvel onglet agent indépendant) selon l'option `multi_agent_tabs`.
+   */
+  _updateMultiAgentButton() {
+    let btn = this.tabBar.querySelector(".tab-add-agent");
+    if (!this._multiAgentEnabled) {
+      if (btn) btn.remove();
+      return;
+    }
+    if (btn) return;
+    btn = document.createElement("div");
+    btn.className = "tab tab-special tab-add-agent";
+    btn.title = "Nouvel onglet agent indépendant";
+    btn.innerHTML = `<span class="tab-name">＋</span>`;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._openNewAgentTab();
+    });
+    this.tabBar.appendChild(btn);
+  }
+
+  /**
+   * Multi-onglets agents : ouvre un nouvel onglet agent indépendant (id
+   * `agent-<n>` auto-incrémenté, nom « Agent <n> »). Chaque agent a sa propre
+   * session/conversation persistée.
+   */
+  async _openNewAgentTab() {
+    // Trouver le prochain numéro d'agent libre (agent-1, agent-2, ...).
+    let n = 1;
+    const used = new Set(this.tabs.filter((t) => t.mode === "agent" && t.agentId && t.agentId !== "default").map((t) => t.agentId));
+    while (used.has(`agent-${n}`)) n++;
+    const agentId = `agent-${n}`;
+    await this._openAgent(`Agent ${n}`, agentId);
   }
 
   /**
@@ -168,7 +219,7 @@ class TabsManager {
   async openFile(path, mode = "edit", runDefault = false) {
     // Onglet Agent Pi (RPC)
     if (mode === "agent") {
-      await this._openAgent(path || agentDisplayLabel(), runDefault);
+      await this._openAgent(path || agentDisplayLabel(), "default", runDefault);
       return;
     }
 
@@ -333,11 +384,14 @@ class TabsManager {
   }
 
   /**
-   * Ouvre l'onglet Agent Pi (RPC) avec l'interface de chat
+   * Ouvre l'onglet Agent Pi (RPC) avec l'interface de chat.
+   * Multi-onglets agents : `agentId` identifie l'agent ("default" = agent par
+   * défaut, "agent-N" = onglets supplémentaires). Chaque agent a sa propre
+   * session/conversation indépendante.
    */
-  async _openAgent(label, runDefault = false) {
-    // Vérifier si déjà ouvert
-    const existing = this.tabs.find((t) => t.mode === "agent");
+  async _openAgent(label, agentId = "default", runDefault = false) {
+    // Vérifier si un onglet agent avec CET id est déjà ouvert.
+    const existing = this.tabs.find((t) => t.mode === "agent" && t.agentId === agentId);
     if (existing) {
       this.switchTab(existing.id);
       return;
@@ -345,6 +399,16 @@ class TabsManager {
 
     const id = ++tabIdCounter;
     const tab = new Tab(id, "", label || agentDisplayLabel(), "agent");
+    tab.agentId = agentId;
+
+    // Multi-onglets agents : parker la session de l'agent précédemment actif
+    // AVANT de rendre cet onglet actif. Sans cela, `switchTab` (ci-dessous)
+    // déclencherait `_syncAgentSession` qui tenterait de reprendre une session
+    // pas encore démarrée (erreur « session déjà active »).
+    if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
+      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
+    }
+    this._activeAgentId = agentId;
 
     tab.wrapper = document.createElement("div");
     tab.wrapper.className = "editor-wrapper";
@@ -393,22 +457,28 @@ class TabsManager {
     }
 
     // Lancer la session RPC
-    showLoading(`Démarrage de ${agentDisplayLabel()}…`);
+    showLoading(`Démarrage de ${label || agentDisplayLabel()}…`);
     try {
       // Issue #26 : vérifier (en arrière-plan) si une mise à jour de Pi est
       // disponible et proposer de la faire. Ne fait rien si backend non pi,
       // « Ne plus demander » activé, ou déjà en cours.
       window._pilotCheckPiUpdate?.();
 
+      // Multi-onglets agents : la session de l'agent précédent a déjà été
+      // parkée avant le switchTab (voir plus haut). On démarre CET agent.
+
       // start_agent_session retourne true si la session a été reprise depuis un
-      // parking multi-projets (pi vivant en arrière-plan), false si nouvelle.
-      const resumed = await invoke("start_agent_session");
+      // parking (pi vivant en arrière-plan), false si nouvelle.
+      const resumed = await invoke("start_agent_session", { agentId });
 
       // Créer l'interface de chat
-      const result = await createAgentPi(tab.wrapper, resumed === true);
+      const result = await createAgentPi(tab.wrapper, resumed === true, agentId);
       tab.view = result.wrapper;
       tab.unlistenRpc = result.unlisten;
       tab.unlistenDragDrop = result.unlistenDragDrop;
+      tab.agentElements = result.elements;
+      tab.agentReady = true;
+      activateAgentTab(result.elements);
 
       // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
       // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
@@ -1084,13 +1154,17 @@ class TabsManager {
         tab.unlistenDragDrop();
         tab.unlistenDragDrop = null;
       }
+      // Multi-onglets agents : si on ferme l'agent actif, oublier son id.
+      if (this._activeAgentId === (tab.agentId || "default")) {
+        this._activeAgentId = null;
+      }
       // `skipAgentStop` (bascule de projet) : l'agent a déjà été « parké »
       // (processus pi vivant rangé dans ProjectState.rpc), on ne doit PAS appeler
       // stop_agent_session — sinon on émettrait une commande qui, traitée après le
       // start_agent_session du projet suivant, tuerait la session parkée venue
       // d'être reprise. Dans le cas normal (fermeture d'onglet), on arrête bien.
       if (!options.skipAgentStop) {
-        invoke("stop_agent_session").catch(() => {});
+        invoke("stop_agent_session", { agentId: tab.agentId || "default" }).catch(() => {});
       }
     }
     // Nettoyage prompt builder
@@ -1360,6 +1434,70 @@ class TabsManager {
     this._updateStatusBar(tab);
     // Mettre à jour l'outline quand on change d'onglet
     scheduleOutlineUpdate();
+
+    // Multi-onglets agents : synchroniser la session agent active (parking/
+    // reprise) quand on bascule vers/depuis un onglet agent.
+    this._syncAgentSession(tab);
+  }
+
+  /**
+   * Multi-onglets agents : synchronise la session RPC active avec l'onglet
+   * affiché. À la bascule vers un onglet agent, on parke la session de l'agent
+   * précédent et on reprend celle de l'agent ciblé (processus pi vivant). À la
+   * bascule vers un onglet non-agent, on parke l'agent actif. No-op si l'option
+   * multi-onglets est désactivée (comportement historique : un seul agent).
+   * Les syncs sont sérialisées (chaîne de promesses) pour éviter les courses
+   * lors de bascules rapides entre onglets agent.
+   */
+  _syncAgentSession(tab) {
+    if (!this._multiAgentEnabled) return;
+    if (!tab) return;
+    this._agentSyncChain = (this._agentSyncChain || Promise.resolve())
+      .then(() => this._doSyncAgentSession(tab))
+      .catch(() => {});
+  }
+
+  async _doSyncAgentSession(tab) {
+    if (tab.mode !== "agent") {
+      // Bascule vers un onglet non-agent → parker l'agent actif.
+      if (this._activeAgentId) {
+        try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
+        this._activeAgentId = null;
+      }
+      return;
+    }
+    // Bascule vers un onglet agent.
+    const agentId = tab.agentId || "default";
+    if (this._activeAgentId === agentId) {
+      // Déjà actif : réactiver les globals d'UI de cet onglet.
+      if (tab.agentElements) activateAgentTab(tab.agentElements);
+      return;
+    }
+    // Onglet agent dont la session n'a jamais démarré (health check échoué) :
+    // on ne lance pas de session, on réactive juste l'UI (écran d'erreur).
+    if (!tab.agentReady) {
+      if (tab.agentElements) activateAgentTab(tab.agentElements);
+      return;
+    }
+    // Parker l'agent précédent.
+    if (this._activeAgentId) {
+      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
+    }
+    // Reprendre l'agent ciblé.
+    const resumed = await invoke("start_agent_session", { agentId }).catch(() => false);
+    this._activeAgentId = agentId;
+    if (tab.agentElements) activateAgentTab(tab.agentElements);
+    // Re-rendre l'historique si la session a été reprise (conversation existante).
+    if (resumed === true && tab.view) {
+      const msgContainer = tab.view.querySelector(".agent-chat-messages");
+      if (msgContainer) {
+        for (let i = 0; i < 10; i++) {
+          const n = await renderMessageHistory(msgContainer);
+          if (n !== -1) break;
+          if (i < 9) await new Promise((r) => setTimeout(r, 300));
+        }
+      }
+    }
   }
 
   _updateCursorPos(view) {
@@ -2082,9 +2220,11 @@ class TabsManager {
       }
     });
 
-    // Double-clic sur le nom → renommer le fichier (onglets liés à un fichier uniquement)
+    // Double-clic sur le nom → renommer le fichier (onglets liés à un fichier
+    // uniquement) OU renommer un onglet agent (multi-onglets agents).
     const nameSpan = btn.querySelector(".tab-name");
-    if (nameSpan && tab.path && !tab.isScratchpad) {
+    const canRename = (tab.path && !tab.isScratchpad) || (tab.mode === "agent" && this._multiAgentEnabled);
+    if (nameSpan && canRename) {
       nameSpan.addEventListener("dblclick", (e) => {
         e.stopPropagation();
         this._startTabRename(btn, tab, nameSpan);
@@ -2250,9 +2390,11 @@ class TabsManager {
    * Uniquement pour les onglets liés à un fichier (pas agent/terminal/brouillon).
    */
   _startTabRename(btn, tab, nameSpan) {
-    // Les onglets sans fichier (agent, aide, terminal, prompt-builder) ne sont
+    // Les onglets sans fichier (aide, review, terminal, prompt-builder) ne sont
     // pas renommables : pas de path sur disque → rename_file_or_dir échouerait.
-    if (["agent", "help", "review", "terminal", "prompt-builder"].includes(tab.mode)) return;
+    // Exception : les onglets agent (multi-onglets agents) sont renommables en
+    // simple libellé (pas de fichier sur disque).
+    if (["help", "review", "terminal", "prompt-builder"].includes(tab.mode)) return;
     const oldName = tab.name;
     const oldPath = tab.path;
     const originalHTML = nameSpan.innerHTML;
@@ -2285,6 +2427,16 @@ class TabsManager {
       const newName = input.value.trim();
       if (!commit || !newName || newName === oldName) {
         nameSpan.innerHTML = originalHTML;
+        return;
+      }
+      // Onglet agent (multi-onglets) : simple renommage du libellé, pas de
+      // fichier sur disque.
+      if (tab.mode === "agent") {
+        tab.name = newName;
+        nameSpan.innerHTML = originalHTML;
+        const icon = "π ";
+        nameSpan.textContent = `${icon}${newName} (RPC)`;
+        this._scheduleSave();
         return;
       }
       try {

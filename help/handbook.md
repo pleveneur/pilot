@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-11 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -409,7 +409,7 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
   retombe automatiquement sur V1. Le chat ne fige jamais si Ollama est
   éteint ou lent : des timeouts bornent l'attente et le prompt part sans
   contexte au besoin. À la **première génération** de l'index **ou** au clic sur
-  le bouton 📑 « Contexte » (rebuild RAG), un **sablier animé au centre de
+  le bouton 📑 « Contexte » (rebuild RAG), un **spinner circulaire au centre de
   l'écran** s'affiche avec le texte « Construction de l'index RAG en cours… »
   en dessous, et disparaît quand l'index est prêt.
 
@@ -602,6 +602,10 @@ session.
 - **Confidentialité** : l'index est local (`.pilot/sessions.jsonl`), jamais
   envoyé au cloud ni au web distant. Il contient vos prompts : ajoutez
   `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.
+- **Purge automatique** : les sessions pi plus anciennes que le délai de
+  rétention configuré (défaut 15 jours) sont supprimées automatiquement en
+  arrière-plan. Réglez ce délai dans **Paramètres ⚙️ → Agent Pi → Rétention
+des sessions (jours)** (0 = désactivé).
 
 ---
 
@@ -661,6 +665,9 @@ projet en utilisant l'IA.
 - **Bouton 📄** (toolbar agent, à côté du bouton 📝 mémoire projet) : analyse
   le projet (structure, manifestes, fichiers source) et crée ou met à jour
   `AGENTS.md`. Utilise le **modèle actif du chat**.
+- Pendant la génération (qui peut prendre 1–3 min), un **spinner circulaire
+  centré** (identique à « Démarrage de Agent Pi ») s'affiche avec le message
+  « Génération AGENTS.md en cours ».
 - `AGENTS.md` est lu automatiquement par pi et plh au début de chaque session :
   c'est le fichier d'instructions projet (stack, structure, commandes,
   conventions, pièges). Pilot ne le réinjecte pas (discovery native).

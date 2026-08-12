@@ -915,8 +915,8 @@ async fn project_open(
         if was_active {
             // Stopper le reviewer global de l'ancien projet (rpc_state est déjà
             // vidé par le parking ; ne tue pas la session parkée du projet préc.).
-            do_stop_agent_session(&state);
-            if let Err(e) = do_start_agent_session(&state, &app2) {
+            do_stop_agent_session(&state, None);
+            if let Err(e) = do_start_agent_session(&state, &app2, None) {
                 eprintln!("[web] Redémarrage agent après changement de projet échoué : {}", e);
             }
         }
@@ -966,8 +966,8 @@ async fn project_select(
         let was_active = state.rpc_state.lock().unwrap().is_some();
         do_set_active_project(&state, &app2, &path2)?;
         if was_active {
-            do_stop_agent_session(&state);
-            if let Err(e) = do_start_agent_session(&state, &app2) {
+            do_stop_agent_session(&state, None);
+            if let Err(e) = do_start_agent_session(&state, &app2, None) {
                 eprintln!("[web] Redémarrage agent après sélection de projet échoué : {}", e);
             }
         }

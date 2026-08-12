@@ -164,8 +164,31 @@ impact sur le mode « Projet sensible » (H7) à venir.
 - Pas de graphe de coût (un simple total par période suffit en V1 ; un
   dashboard « 📊 Usage » est évoqué mais reporté).
 - La rétro-indexation ne remonte pas le coût/tokens (non persisté par pi).
-- Pas de purge automatique : l'utilisateur peut supprimer
-  `.pilot/sessions.jsonl` pour repartir de zéro.
+- Purge automatique : les sessions pi plus anciennes que le délai de rétention
+  configuré sont supprimées en arrière-plan (voir §9).
+
+## 9. Purge automatique des sessions
+
+Pour éviter l'accumulation de fichiers de session pi, Pilot purge automatiquement
+les sessions plus anciennes qu'un délai de rétention paramétrable.
+
+- **Paramètre** : `session_retention_days` dans `AppConfig` (défaut **15** jours,
+  `0` = purge désactivée). Éditable dans **Paramètres ⚙️ → Agent Pi → Rétention
+des sessions (jours)**.
+- **Thread autonome** : `session_history::start_session_purge` démarre au `setup`
+  un thread std détaché (`pilot-session-purge`) qui purge au démarrage puis
+  toutes les heures. Il lit la config à chaque passe (paramètre modifiable à
+  chaud, sans redémarrage).
+- **Portée** : tous les projets ouverts (`config.open_projects`, sinon le projet
+  actif).
+- **Comportement** : `purge_old_sessions` supprime les fichiers `.jsonl` du
+  dossier de sessions pi du projet dont le mtime est antérieur à
+  `now - retention_days`, puis retire de l'index `.pilot/sessions.jsonl` les
+  entrées dont le fichier n'existe plus et nettoie les tags correspondants dans
+  `.pilot/sessions-tags.json`. Les données live (coût/tokens) des sessions
+  restantes sont préservées (l'index n'est pas reconstruit en entier).
+- **Sécurité** : `retention_days == 0` → aucune suppression. Une passe échouée
+  est journalisée en stderr sans bloquer l'UI.
 
 ---
 
@@ -191,4 +214,8 @@ session.
 - **Confidentialité** : l'index est local (`.pilot/sessions.jsonl`), jamais
   envoyé au cloud ni au web distant. Il contient vos prompts : ajoutez
   `.pilot/sessions.jsonl` au `.gitignore` si vous ne voulez pas le committer.
+- **Purge automatique** : les sessions pi plus anciennes que le délai de
+  rétention configuré (défaut 15 jours) sont supprimées automatiquement en
+  arrière-plan. Réglez ce délai dans **Paramètres ⚙️ → Agent Pi → Rétention
+des sessions (jours)** (0 = désactivé).
 <!-- /HELP:session-history -->

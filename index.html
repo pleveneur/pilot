@@ -292,9 +292,17 @@
               <input type="checkbox" id="setting-rpc-no-session" />
               <label for="setting-rpc-no-session">Mode sans session (--no-session)</label>
             </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-multi-agent-tabs" />
+              <label for="setting-multi-agent-tabs" title="Permet d'ouvrir plusieurs onglets agent indépendants sur le même projet (bouton « + » dans la barre d'onglets). Chaque agent a sa propre conversation persistée.">Multi-onglets agents (plusieurs agents indépendants sur le même projet)</label>
+            </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-rpc-session-dir">Dossier des sessions :</label>
               <input type="text" id="setting-rpc-session-dir" placeholder="~/.pi/agent/sessions" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-session-retention" title="Supprime automatiquement les sessions pi plus anciennes que ce nombre de jours (0 = désactivé). Purge exécutée en arrière-plan toutes les heures.">Rétention des sessions (jours) :</label>
+              <input type="number" id="setting-session-retention" min="0" max="3650" step="1" value="15" />
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-show-thinking" />
@@ -692,7 +700,7 @@
     <div class="loading-message"></div>
   </div>
 
-  <!-- Indicateur de construction de l'index RAG (sablier centré) -->
+  <!-- Indicateur de construction de l'index RAG (spinner circulaire centré) -->
   <div id="rag-building-overlay" class="hidden">
     <div class="rag-hourglass" aria-hidden="true"></div>
     <div class="rag-building-message">Construction de l'index RAG en cours…</div>

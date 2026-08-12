@@ -29,17 +29,41 @@ pub(crate) fn project_event_channel(path: &str) -> String {
     format!("rpc-event-{:08x}", hash)
 }
 
+/// Id d'agent par défaut (onglet agent unique, rétrocompat).
+pub(crate) const DEFAULT_AGENT_ID: &str = "default";
+
+/// Normalise un id d'agent (None/vide → "default").
+pub(crate) fn normalize_agent_id(agent_id: Option<&str>) -> String {
+    let a = agent_id.unwrap_or("").trim();
+    if a.is_empty() { DEFAULT_AGENT_ID.to_string() } else { a.to_string() }
+}
+
+/// Multi-onglets agents (spec_multi_agents) : canal d'événements d'une session
+/// agent d'un projet. L'agent par défaut conserve le canal hérité
+/// `rpc-event-<hash>` (rétrocompat) ; les onglets supplémentaires utilisent
+/// `rpc-event-<hash>-<agentid>` pour que chaque agent émette sur son propre
+/// canal et que les chats ne se polluent pas.
+pub(crate) fn agent_event_channel(path: &str, agent_id: &str) -> String {
+    let base = project_event_channel(path);
+    if agent_id == DEFAULT_AGENT_ID {
+        base
+    } else {
+        format!("{}-{}", base, agent_id)
+    }
+}
+
 /// Multi-projets : retourne le canal d'événements de la session du projet actif,
 /// pour que le frontend écoute le bon canal lors de la création de l'onglet agent.
+/// `agent_id` : id de l'agent (None/vide → agent par défaut).
 #[tauri::command]
-pub fn get_agent_event_channel(state: State<AppState>) -> Result<String, String> {
+pub fn get_agent_event_channel(state: State<AppState>, agent_id: Option<String>) -> Result<String, String> {
     let project = state
         .project_path
         .lock()
         .unwrap()
         .clone()
         .ok_or("Aucun projet ouvert")?;
-    Ok(project_event_channel(&project))
+    Ok(agent_event_channel(&project, &normalize_agent_id(agent_id.as_deref())))
 }
 use crate::session_history;
 use crate::AppState;
@@ -243,25 +267,29 @@ pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String>
     Ok(Value::Object(map))
 }
 
-pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Result<bool, String> {
+pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id: Option<&str>) -> Result<bool, String> {
+    let agent_id = normalize_agent_id(agent_id);
     let project = state.project_path.lock().unwrap();
     let cwd = project
         .as_ref()
         .ok_or("Aucun projet ouvert")?
         .clone();
+    drop(project);
 
     // Multi-projets (spec_multiprojects.md §3) : reprendre une session parkée du
     // projet actif si elle existe (vrai multi-agent) au lieu d'en relancer une.
-    // La session parkée vit dans `ProjectState.rpc` (processus pi toujours vivant) ;
-    // on la remonte dans `rpc_state` pour reprendre exactement là où on en était.
+    // Multi-onglets agents (spec_multi_agents) : la session parkée est indexée
+    // par id d'agent dans `ProjectState.rpc` (processus pi toujours vivant) ; on
+    // la remonte dans `rpc_state` pour reprendre exactement là où on en était.
     let resumed = {
         let mut projects = state.projects.lock().unwrap();
         projects
             .get_mut(&cwd)
-            .and_then(|ps| ps.rpc.take())
+            .and_then(|ps| ps.rpc.remove(&agent_id))
     };
     if let Some(session) = resumed {
         *state.rpc_state.lock().unwrap() = Some(session);
+        *state.active_agent_id.lock().unwrap() = Some(agent_id);
         // Reprendre la session : pas de `new_session` (on garde l'historique).
         return Ok(true);
     }
@@ -282,14 +310,19 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         )
     };
 
-    // Construire le répertoire de session avec le sous-dossier projet
-    let session_dir_resolved = if session_dir.is_empty() {
+    // Construire le répertoire de session avec le sous-dossier projet. Multi-
+    // onglets agents : chaque agent a SON propre sous-dossier (`agent-<id>`) pour
+    // une conversation indépendante ; l'agent par défaut garde le chemin hérité.
+    let mut session_dir_resolved = if session_dir.is_empty() {
         resolve_agent_home(&pi_path)?.join("agent").join("sessions")
             .join(session_history::project_to_session_folder(&cwd))
     } else {
         std::path::PathBuf::from(&session_dir)
             .join(session_history::project_to_session_folder(&cwd))
     };
+    if agent_id != DEFAULT_AGENT_ID {
+        session_dir_resolved = session_dir_resolved.join(&agent_id);
+    }
     let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
 
     // Quality-gate interne (Évolution 7) : si activé, écrire le SKILL.md embarqué
@@ -354,8 +387,9 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
         }
     }
 
+    let channel = agent_event_channel(&cwd, &agent_id);
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &project_event_channel(&cwd), None,
+        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &channel, None,
         // Issue #13 : observateur d'activité → map par projet (agent_start/settled).
         Some(make_project_activity_observer(&state.agent_activity, &cwd)),
     )
@@ -367,6 +401,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
             }
         })?;
     *rpc = Some(session);
+    *state.active_agent_id.lock().unwrap() = Some(agent_id);
 
     // Démarrer une nouvelle session
     if let Some(sess) = rpc.as_mut() {
@@ -378,8 +413,8 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle) -> Resul
 }
 
 #[tauri::command]
-pub fn start_agent_session(state: State<AppState>, app: AppHandle) -> Result<bool, String> {
-    do_start_agent_session(state.inner(), &app)
+pub fn start_agent_session(state: State<AppState>, app: AppHandle, agent_id: Option<String>) -> Result<bool, String> {
+    do_start_agent_session(state.inner(), &app, agent_id.as_deref())
 }
 
 /// Multi-projets (spec_multiprojects.md §3) : « parke » la session agent du
@@ -387,7 +422,15 @@ pub fn start_agent_session(state: State<AppState>, app: AppHandle) -> Result<boo
 /// multi-agent en arrière-plan). À la bascule, `do_start_agent_session`
 /// reprend la session parkée au lieu d'en relancer une. Idempotent : no-op si
 /// aucune session active ou si le projet actif est inconnu.
-pub(crate) fn do_park_agent_session(state: &AppState) -> Result<(), String> {
+/// Multi-onglets agents (spec_multi_agents) : `agent_id` indexe la session
+/// parkée dans la map du projet (None/vide → agent par défaut).
+pub(crate) fn do_park_agent_session(state: &AppState, agent_id: Option<&str>) -> Result<(), String> {
+    // None → parker l'agent actif (rétrocompat des appelants existants).
+    let agent_id = match agent_id {
+        Some(a) => normalize_agent_id(Some(a)),
+        None => state.active_agent_id.lock().unwrap().clone()
+            .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
+    };
     let active = state.active_project.lock().unwrap().clone();
     let session = state.rpc_state.lock().unwrap().take();
     let Some(session) = session else {
@@ -396,7 +439,8 @@ pub(crate) fn do_park_agent_session(state: &AppState) -> Result<(), String> {
     if let Some(ref active_path) = active {
         let mut projects = state.projects.lock().unwrap();
         if let Some(ps) = projects.get_mut(active_path) {
-            ps.rpc = Some(session);
+            ps.rpc.insert(agent_id, session);
+            *state.active_agent_id.lock().unwrap() = None;
             return Ok(());
         }
         // Projet actif inconnu dans la collection → tuer pour éviter une fuite.
@@ -407,25 +451,48 @@ pub(crate) fn do_park_agent_session(state: &AppState) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn park_agent_session(state: State<AppState>) -> Result<(), String> {
-    do_park_agent_session(state.inner())
+pub fn park_agent_session(state: State<AppState>, agent_id: Option<String>) -> Result<(), String> {
+    do_park_agent_session(state.inner(), agent_id.as_deref())
 }
 
 /// Arrête l'agent pi en cours (s'il existe) et libère la session. Idempotent : no-op
-/// si aucune session n'est active.
-pub(crate) fn do_stop_agent_session(state: &AppState) {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    if let Some(mut session) = rpc.take() {
-        // Issue #13 : remettre le projet actif à « libre » UNIQUEMENT quand une
-        // session a réellement été arrêtée. Dans le cas d'un parking (multi-
-        // projets, session déjà déplacée dans `ProjectState.rpc`), `rpc_state`
-        // est vide : le processus pi continue de travailler en arrière-plan et on
-        // ne doit PAS éteindre sa pastille d'activité (issue #13 — indicateur sur
-        // un projet non au premier plan).
-        if let Some(p) = state.project_path.lock().unwrap().clone() {
-            reset_project_activity(state, &p);
+/// si aucune session n'est active. Multi-onglets agents : `agent_id` cible l'agent
+/// à arrêter (None/vide → agent par défaut). Si l'agent ciblé n'est pas l'actif,
+/// on arrête sa session parkée dans `ProjectState.rpc`.
+pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
+    // None → arrêter l'agent actif (rétrocompat des appelants existants).
+    let agent_id = match agent_id {
+        Some(a) => normalize_agent_id(Some(a)),
+        None => state.active_agent_id.lock().unwrap().clone()
+            .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
+    };
+    let active = state.active_agent_id.lock().unwrap().clone();
+    if active.as_deref() == Some(agent_id.as_str()) {
+        let mut rpc = state.rpc_state.lock().unwrap();
+        if let Some(mut session) = rpc.take() {
+            // Issue #13 : remettre le projet actif à « libre » UNIQUEMENT quand une
+            // session a réellement été arrêtée. Dans le cas d'un parking (multi-
+            // projets, session déjà déplacée dans `ProjectState.rpc`), `rpc_state`
+            // est vide : le processus pi continue de travailler en arrière-plan et on
+            // ne doit PAS éteindre sa pastille d'activité (issue #13 — indicateur sur
+            // un projet non au premier plan).
+            if let Some(p) = state.project_path.lock().unwrap().clone() {
+                reset_project_activity(state, &p);
+            }
+            rpc_manager::stop_session(&mut session);
         }
-        rpc_manager::stop_session(&mut session);
+        *state.active_agent_id.lock().unwrap() = None;
+    } else {
+        // Agent non actif → arrêter sa session parkée dans CE projet.
+        let cwd = state.project_path.lock().unwrap().clone();
+        if let Some(cwd) = cwd {
+            let mut projects = state.projects.lock().unwrap();
+            if let Some(ps) = projects.get_mut(&cwd) {
+                if let Some(mut session) = ps.rpc.remove(&agent_id) {
+                    rpc_manager::stop_session(&mut session);
+                }
+            }
+        }
     }
     // H2 V1 : arrêter aussi le reviewer (cycle de vie lié à la session principale).
     let mut rev = state.rpc_reviewer.lock().unwrap();
@@ -435,8 +502,8 @@ pub(crate) fn do_stop_agent_session(state: &AppState) {
 }
 
 #[tauri::command]
-pub fn stop_agent_session(state: State<AppState>) -> Result<(), String> {
-    do_stop_agent_session(state.inner());
+pub fn stop_agent_session(state: State<AppState>, agent_id: Option<String>) -> Result<(), String> {
+    do_stop_agent_session(state.inner(), agent_id.as_deref());
     Ok(())
 }
 
@@ -461,11 +528,11 @@ pub(crate) fn do_shutdown_all_sessions(state: &AppState) {
             rpc_manager::stop_session(&mut session);
         }
     }
-    // Sessions parkées par projet (multi-projets).
+    // Sessions parkées par projet (multi-projets / multi-onglets agents).
     {
         let mut projects = state.projects.lock().unwrap();
         for (_, ps) in projects.iter_mut() {
-            if let Some(mut session) = ps.rpc.take() {
+            for (_, mut session) in ps.rpc.drain() {
                 rpc_manager::stop_session(&mut session);
             }
         }

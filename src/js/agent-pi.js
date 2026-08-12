@@ -10,6 +10,7 @@ import { buildProjectContext } from "./context-engine.js";
 import { buildGraphBlock } from "./code-graph.js";
 import { buildMemoryBlock, buildMemoryExtractPrompt, initProjectMemory, memoryAbsPath } from "./project-memory.js";
 import { generateAgentsMd } from "./agents-md.js";
+import { showLoading, hideLoading } from "./loading.js";
 import { exportConversationMarkdown, copyConversationHtml } from "./conversation-export.js";
 import { renderEditGateDialog } from "./diff-view.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
@@ -21,10 +22,12 @@ import { getTabsManager } from "./tabs.js";
  * projet actif (rpc-event-<hash>). Chaque projet émet sur son propre canal, on
  * écoute donc celui du projet actif. Retourne "rpc-event" (canal hérité) en
  * cas d'échec, pour rester compatible si la commande est indisponible.
+ * Multi-onglets agents : `agentId` cible le canal de l'agent (l'agent par
+ * défaut garde le canal du projet, les autres ont un canal dédié).
  */
-async function getAgentEventChannel() {
+async function getAgentEventChannel(agentId = "default") {
   try {
-    return await invoke("get_agent_event_channel");
+    return await invoke("get_agent_event_channel", { agentId });
   } catch (_) {
     return "rpc-event";
   }
@@ -114,7 +117,7 @@ const md = markdownit({
  * @param {HTMLElement} container - Élément conteneur (.editor-wrapper)
  * @returns {Promise<{wrapper: HTMLElement, unlisten: Function}>}
  */
-export async function createAgentPi(container, resumed = false) {
+export async function createAgentPi(container, resumed = false, agentId = "default") {
   // Charger la configuration show_thinking
   await refreshShowThinking();
   // Charger la configuration show_tools
@@ -140,7 +143,7 @@ export async function createAgentPi(container, resumed = false) {
     <button class="agent-btn" data-action="quality-gate" id="agent-qg-btn" title="Quality-gate (cliquez pour activer l'anti-régression avant modif. de code)"><i data-lucide="shield-check" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="context" id="agent-ctx-btn" title="Context Engine : forcer la ré-injection du contexte projet au prochain envoi"><i data-lucide="layers" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="memory" id="agent-mem-btn" title="Mémoire projet : ouvrir/éditer PROJECT_MEMORY.md"><i data-lucide="notebook-pen" class="icon-sm"></i></button>
-    <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="file-text" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="scroll-text" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-md" title="Exporter la conversation en Markdown"><i data-lucide="download" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-html" title="Copier la conversation en HTML dans le presse-papiers"><i data-lucide="copy" class="icon-sm"></i></button>
     <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
@@ -1449,8 +1452,8 @@ export async function createAgentPi(container, resumed = false) {
             if (config && config.context_rag_enabled === true && window._pilotProjectPath
                 && config.context_rag_endpoint && config.context_rag_model) {
               ragRebuild = true;
-              // Sablier centré pendant le rebuild RAG (masqué par le listener
-              // persistant "context-index-done" de createAgentPi).
+              // Spinner circulaire centré pendant le rebuild RAG (masqué par le
+              // listener persistant "context-index-done" de createAgentPi).
               showRagBuilding();
               toastInfo("📑 Indexation RAG en cours… (peut prendre quelques secondes)");
               // Écouter la fin du build (une seule fois) — event émis par le backend.
@@ -1518,7 +1521,15 @@ export async function createAgentPi(container, resumed = false) {
         const { toastError, toastSuccess, toastInfo } = await import("./toast.js");
         const amdBtn = btn;
         if (amdBtn) amdBtn.disabled = true;
+        // Masquer l'overlay RAG (#rag-building-overlay, z-index 10001) pendant
+        // la génération : il recouvrirait le spinner de showLoading (z-index
+        // 10000) et afficherait un double spinner. On le restaure en finally
+        // s'il était visible (build RAG réel en cours).
+        const ragOverlay = document.getElementById("rag-building-overlay");
+        const ragWasVisible = ragOverlay && !ragOverlay.classList.contains("hidden");
+        if (ragOverlay) ragOverlay.classList.add("hidden");
         try {
+          showLoading("Génération AGENTS.md en cours");
           appendSystemMessage(messagesEl, "🤖 Génération / mise à jour d'AGENTS.md… (l'agent analyse le projet)");
           const summary = await generateAgentsMd(state.currentModel, {
             onInfo: (m) => toastInfo(m),
@@ -1533,6 +1544,8 @@ export async function createAgentPi(container, resumed = false) {
           toastError(`Échec génération AGENTS.md : ${e}`);
           appendErrorMessage(messagesEl, `❌ Génération AGENTS.md échouée : ${e}`);
         } finally {
+          hideLoading();
+          if (ragOverlay && ragWasVisible) ragOverlay.classList.remove("hidden");
           if (amdBtn) amdBtn.disabled = false;
         }
         break;
@@ -1781,8 +1794,8 @@ export async function createAgentPi(container, resumed = false) {
   // ── Écoute des événements RPC ──
   const orchFns = { renderOrchestrationPlan, executeNextTask, handleOrchestrationAgentEnd, handleOrchestrationTimeout, handleTaskFailure, handleOrchestrationConnectionError, switchToOrchestrator, switchToCoder, resetIdleTimer: resetOrchestrationIdleTimer, parsePlanResponse, validatePlan };
   // Multi-projets : chaque projet émet sur son propre canal (rpc-event-<hash>).
-  // On écoute le canal du projet actif pour ne recevoir que SES événements.
-  const rpcChannel = await getAgentEventChannel();
+  // Multi-onglets agents : chaque agent émet sur son propre canal (agentId).
+  const rpcChannel = await getAgentEventChannel(agentId);
   const unlisten = await listen(rpcChannel, (event) => {
     const payload = event.payload;
     try {
@@ -2015,7 +2028,7 @@ export async function createAgentPi(container, resumed = false) {
     // IMPORTANT : agent_end seul NE signifie PAS un succès (pi émet aussi
     // agent_end après un abort/erreur de connexion). On n'accepte le succès
     // que si du texte a réellement été reçu.
-    unlistenTest = await listen(await getAgentEventChannel(), (event) => {
+    unlistenTest = await listen(await getAgentEventChannel(agentId), (event) => {
       const p = event.payload;
       const t = p.type;
       if (t === "message_update") {
@@ -4587,9 +4600,9 @@ export async function createAgentPi(container, resumed = false) {
   };
   window.addEventListener("pilot-agent-restart-needed", onRestartNeeded);
 
-  // ── RAG (Context Engine V2) : sablier centré pendant la construction ──
+  // ── RAG (Context Engine V2) : spinner circulaire centré pendant la construction ──
   // Quand le RAG est généré la 1re fois (build arrière-plan déclenché depuis
-  // context-engine.js → event "pilot:rag-building"), on affiche un sablier au
+  // context-engine.js → event "pilot:rag-building"), on affiche un spinner au
   // centre de l'écran avec un texte en dessous. Il est retiré quand le backend
   // émet "context-index-done".
   const ragOverlay = document.getElementById("rag-building-overlay");
@@ -4612,7 +4625,31 @@ export async function createAgentPi(container, resumed = false) {
       window.removeEventListener("pilot:rag-building", showRagBuilding);
     },
     unlistenDragDrop,
+    // Multi-onglets agents : éléments du chat de CET onglet, pour que tabs.js
+    // puisse les réactiver (globals d'autocomplétion/popups) à la bascule.
+    elements: {
+      messagesEl,
+      inputEl,
+      autocompleteEl,
+      resumePopup,
+      promptPopup,
+    },
   };
+}
+
+/**
+ * Multi-onglets agents : réactive les globals d'UI (autocomplétion, popups de
+ * reprise/prompt) sur les éléments de l'onglet agent qui vient d'être affiché.
+ * Sans cela, avec plusieurs onglets agent, ces globals pointeraient vers le
+ * dernier onglet créé et les popups s'afficheraient dans le mauvais onglet.
+ */
+export function activateAgentTab(elements) {
+  if (!elements) return;
+  if (elements.messagesEl) resumeMessagesEl = elements.messagesEl;
+  if (elements.inputEl) acInputEl = elements.inputEl;
+  if (elements.autocompleteEl) acPopupEl = elements.autocompleteEl;
+  if (elements.resumePopup) resumePopupEl = elements.resumePopup;
+  if (elements.promptPopup) promptPopupEl = elements.promptPopup;
 }
 
 // ── Stats tokens/coûts ──

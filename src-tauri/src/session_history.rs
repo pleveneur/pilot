@@ -11,7 +11,7 @@ use std::fs;
 
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::{resolve_agent_home, rpc_manager, AppConfig, AppState};
 
@@ -685,6 +685,129 @@ pub fn record_session_entry(state: State<AppState>, entry: Value) -> Result<(), 
     write_session_index(&project_path, &entries)
 }
 
+// ── Purge automatique des sessions (H9) ──
+// Thread autonome (start_session_purge) qui supprime périodiquement les fichiers
+// de session pi plus anciens que le délai de rétention configuré
+// (session_retention_days, défaut 15 jours ; 0 = désactivé), puis nettoie
+// l'index `.pilot/sessions.jsonl` et les tags des sessions supprimées.
+
+/// Supprime les sessions pi du projet plus anciennes que `retention_days` jours.
+/// Retourne le nombre de fichiers supprimés. Nettoie ensuite l'index et les tags
+/// des sessions supprimées (les données live des sessions restantes sont préservées).
+pub fn purge_old_sessions(
+    config: &AppConfig,
+    project_path: &str,
+    retention_days: u32,
+) -> Result<usize, String> {
+    if retention_days == 0 {
+        return Ok(0); // purge désactivée
+    }
+    let session_dir = project_sessions_dir(config);
+    let folder_name = project_to_session_folder(project_path);
+    let project_dir = session_dir.join(&folder_name);
+
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(retention_days as i64);
+    let mut removed = 0usize;
+    if project_dir.exists() {
+        for entry in fs::read_dir(&project_dir)
+            .map_err(|e| format!("Lecture dossier sessions: {}", e))?
+        {
+            let entry = entry.map_err(|e| format!("Entrée dossier sessions: {}", e))?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let mtime = match fs::metadata(&path).and_then(|m| m.modified()) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let dt: chrono::DateTime<chrono::Utc> = mtime.into();
+            if dt < cutoff && fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+
+    // Collecter les ids de sessions encore présents sur disque.
+    let mut live_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if project_dir.exists() {
+        if let Ok(entries_iter) = fs::read_dir(&project_dir) {
+            for entry in entries_iter.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if let Some(id) = stem.splitn(2, '_').nth(1) {
+                    if !id.is_empty() {
+                        live_ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Filtrer l'index : retirer les entrées dont le fichier a été supprimé.
+    let mut entries = read_session_index(project_path);
+    let before = entries.len();
+    entries.retain(|e| {
+        e.get("id")
+            .and_then(|x| x.as_str())
+            .map(|id| live_ids.contains(id))
+            .unwrap_or(false)
+    });
+    if entries.len() != before {
+        write_session_index(project_path, &entries)?;
+    }
+
+    // Nettoyer les tags des sessions supprimées.
+    let mut tags = read_session_tags(project_path);
+    let before_tags = tags.len();
+    tags.retain(|id, _| live_ids.contains(id));
+    if tags.len() != before_tags {
+        write_session_tags(project_path, &tags)?;
+    }
+
+    Ok(removed)
+}
+
+/// Exécute une passe de purge sur tous les projets ouverts (config.open_projects,
+/// sinon le projet actif). Lit la config à chaque passe pour refléter les
+/// changements de paramètres sans redémarrage.
+fn run_purge_pass(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let config = state.config.lock().unwrap().clone();
+    let retention = config.session_retention_days;
+    let mut projects: Vec<String> = config.open_projects.clone();
+    if projects.is_empty() {
+        if let Some(p) = state.project_path.lock().unwrap().clone() {
+            projects.push(p);
+        }
+    }
+    for p in projects {
+        match purge_old_sessions(&config, &p, retention) {
+            Ok(n) if n > 0 => {
+                eprintln!("[sessions] Purge : {} session(s) supprimée(s) pour {}", n, p);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[sessions] Purge échouée pour {} : {}", p, e),
+        }
+    }
+}
+
+/// Démarre le thread autonome de purge des sessions (H9). Boucle périodique :
+/// purge au démarrage puis toutes les heures. Ne bloque jamais l'UI (thread std
+/// détaché). Lit la config à chaque passe (paramètre modifiable à chaud).
+pub fn start_session_purge(app_handle: AppHandle) {
+    std::thread::Builder::new()
+        .name("pilot-session-purge".into())
+        .spawn(move || loop {
+            run_purge_pass(&app_handle);
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        })
+        .ok();
+}
+
 // ── Sessions pi (liste + reprise) ──
 
 #[tauri::command]
@@ -917,5 +1040,69 @@ mod tests {
         let v = serde_json::json!({"path": "", "file_path": "ok.rs"});
         assert_eq!(extract_tool_path(&v).as_deref(), Some("ok.rs"));
         assert_eq!(extract_tool_path(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn purge_retention_zero_disabled() {
+        // retention 0 = purge désactivée : rien n'est supprimé, index intact.
+        let tmp = std::env::temp_dir().join(format!("pilot_purge_0_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let session_dir = tmp.join("sessions");
+        let project = tmp.join("proj");
+        let folder = project_to_session_folder(&project.to_string_lossy());
+        let proj_dir = session_dir.join(&folder);
+        fs::create_dir_all(&proj_dir).unwrap();
+        let file = proj_dir.join("2026-01-01T00-00-00-000Z_abc123.jsonl");
+        fs::write(&file, "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"bonjour\"}}\n").unwrap();
+
+        let mut config = AppConfig::default();
+        config.rpc_session_dir = session_dir.to_string_lossy().to_string();
+        let proj_str = project.to_string_lossy().to_string();
+
+        // retention 0 → aucun fichier supprimé.
+        let removed = purge_old_sessions(&config, &proj_str, 0).unwrap();
+        assert_eq!(removed, 0);
+        assert!(file.exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn purge_cleans_index_and_tags_for_missing_files() {
+        // Un fichier de session supprimé (manuellement ou par purge) doit faire
+        // disparaître son entrée d'index et ses tags.
+        let tmp = std::env::temp_dir().join(format!("pilot_purge_1_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let session_dir = tmp.join("sessions");
+        let project = tmp.join("proj");
+        let folder = project_to_session_folder(&project.to_string_lossy());
+        let proj_dir = session_dir.join(&folder);
+        fs::create_dir_all(&proj_dir).unwrap();
+        let file = proj_dir.join("2026-01-01T00-00-00-000Z_abc123.jsonl");
+        fs::write(&file, "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"bonjour\"}}\n").unwrap();
+
+        let mut config = AppConfig::default();
+        config.rpc_session_dir = session_dir.to_string_lossy().to_string();
+        let proj_str = project.to_string_lossy().to_string();
+
+        // Index + tag pour la session abc123.
+        let entry = serde_json::json!({"id":"abc123","timestamp":"2026-01-01T00:00:00","project":proj_str,"tags":[]});
+        write_session_index(&proj_str, &[entry]).unwrap();
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("abc123".to_string(), vec!["archi".to_string()]);
+        write_session_tags(&proj_str, &tags).unwrap();
+
+        // Supprimer le fichier (simule une session expirée déjà purgée).
+        fs::remove_file(&file).unwrap();
+
+        // Purge : le fichier n'existe plus → entrée d'index et tag retirés.
+        let removed = purge_old_sessions(&config, &proj_str, 15).unwrap();
+        assert_eq!(removed, 0);
+        let entries = read_session_index(&proj_str);
+        assert!(entries.is_empty(), "l'entrée d'index doit être retirée");
+        let tags_after = read_session_tags(&proj_str);
+        assert!(!tags_after.contains_key("abc123"), "le tag doit être retiré");
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

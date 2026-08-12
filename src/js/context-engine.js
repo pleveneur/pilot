@@ -269,7 +269,7 @@ async function buildRagContext(projectPath, prompt, budget, ragEndpoint, ragMode
       invoke("build_context_index", { projectPath, endpoint: ragEndpoint, model: ragModel })
         .catch((e) => console.warn("[context-engine] build arrière-plan échec:", e));
       // Notifier l'UI (chat agent) : l'index RAG est en cours de construction
-      // (sablier). L'UI retire l'indicateur à la réception de "context-index-done".
+      // (spinner). L'UI retire l'indicateur à la réception de "context-index-done".
       try {
         window.dispatchEvent(new CustomEvent("pilot:rag-building", { detail: { projectPath } }));
       } catch (_) { /* environnement sans window (tests) */ }
