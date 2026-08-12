@@ -179,6 +179,9 @@ export async function initSettings() {
   const inputGraphBudget = document.getElementById("setting-graph-budget-tokens");
   const chkGraphInjectB = document.getElementById("setting-graph-inject-mode-b");
 const chkGraphIncludeCalls = document.getElementById("setting-graph-include-calls");
+  // ── Super-agent (spec_super_agent.md) ──
+  const inputSuperAgentName = document.getElementById("setting-superagent-name");
+  const taSuperAgentClients = document.getElementById("setting-superagent-clients");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -485,6 +488,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     if (inputGraphBudget) inputGraphBudget.value = currentConfig.graph_budget_tokens || 4000;
     if (chkGraphInjectB) chkGraphInjectB.checked = currentConfig.graph_inject_mode_b !== false;
     if (chkGraphIncludeCalls) chkGraphIncludeCalls.checked = currentConfig.graph_include_calls !== false;
+  // ── Super-agent (spec_super_agent.md) ──
+  if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Super-agent";
+  if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
+    ? currentConfig.super_agent_clients.join("\n") : "";
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -688,6 +695,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         agent_max_total_calls: parseInt(inputAgentMaxTotalCalls.value, 10) || 30,
         agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 300000,
         agent_max_result_tokens: parseInt(inputAgentMaxResultTokens.value, 10) || 4000,
+        // ── Super-agent (spec_super_agent.md) ──
+        super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Super-agent").trim() || "Super-agent",
+        super_agent_clients: taSuperAgentClients
+          ? taSuperAgentClients.value.split(/\n+/).map((s) => s.trim()).filter(Boolean)
+          : [],
       };
     try {
       await invoke("save_config", { config });

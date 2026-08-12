@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -743,3 +743,64 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
   (il peut le consulter pour le contexte, sans le modifier).
 - L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
   agent du projet cible.
+
+---
+
+## Aide utilisateur — Super-agent
+
+L'onglet **🧭 Super-agent** est un assistant dédié qui **suit tous vos projets**
+(organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
+apprend et répond.
+
+### Donner un nom à votre assistant
+- **Paramètres ⚙️ → onglet « Super-agent »** : donnez un nom à votre assistant
+  (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
+  🧭 et dans ses réponses.
+
+### Gérer les clients
+- **Paramètres ⚙️ → onglet « Super-agent » → Clients** : saisissez la liste de
+  vos clients.
+- Chaque projet ouvert peut être **attaché à un client** (sélection dans la
+  barre « Projets en cours » ou dans l'onglet Super-agent).
+
+### Suivre les projets
+- Le Super-agent suit chaque projet **de la demande jusqu'à la livraison** :
+  il enregistre les tâches, leur état, les décisions et l'historique.
+- Il **n'effectue aucune action** sur les projets : il ne modifie, ne crée ni
+  ne supprime aucun fichier. Il est **lecture seule**.
+- Il construit **sa propre base de données locale** (SQLite) pour organiser
+  clients, projets et tâches, et s'enrichit au fil du temps.
+
+### Apprendre en continu
+- À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
+  est envoyé automatiquement au Super-agent : il apprend ainsi ce qui a été fait,
+  décidé et livré, sans que vous ayez à le lui demander.
+- Pour un **projet déjà existant**, utilisez le bouton **« Initialiser »** :
+  le Super-agent analyse le projet (structure, documentation, historique des
+  sessions) puis pose les questions nécessaires à son fonctionnement.
+
+### Poser des questions
+- Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
+  (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en
+  attente ? », « Qu'a-t-on décidé sur Z ? »).
+- Le Super-agent consulte sa base et les projets pour répondre.
+
+### Choisir le modèle
+- Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
+  🧭 (même liste que les agents de coding). Le changement s'applique à la
+  session du Super-agent.
+
+### Position et persistance de l'onglet
+- L'onglet 🧭 est **toujours le plus à gauche** de la barre d'onglets, avant
+  même le bouton « + » d'ajout d'agents. Il ne peut pas être déplacé par
+  glisser-déposer (et aucun onglet ne peut être placé avant lui).
+- **Global (multi-projets)** : l'onglet Super-agent existe **une seule fois pour
+  Pilot**, pas par projet. Fermer ou basculer un projet **ne le ferme pas**.
+- **Persistance** : si l'onglet Super-agent est ouvert à la fermeture de Pilot,
+  il est **rouvert automatiquement au démarrage** (état `super_agent_open`
+  persisté dans la config globale, pas par projet).
+
+### Lecture seule — garantie
+- Le Super-agent est **strictement en lecture seule** : il ne peut pas écrire
+  dans vos projets. Seule sa propre base de données (dans `~/.pilot/`) est
+  modifiée par lui.

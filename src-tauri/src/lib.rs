@@ -61,6 +61,7 @@ mod web_commands;
 mod agents;
 mod rpc;
 mod interproject;
+mod super_agent;
 mod pi_update;
 mod project_agents;
 
@@ -135,6 +136,9 @@ struct AppState {
     /// Map run_id → processus enfant (permet l'arrêt `command_stop`). Vide si
     /// aucune commande ne tourne.
     web_runs: Mutex<HashMap<String, std::process::Child>>,
+    /// Super-agent (spec_super_agent.md) : session RPC dédiée (canal
+    /// `rpc-event-superagent`), lecture seule. Lancée lazy au 1er besoin.
+    rpc_superagent: Mutex<Option<rpc_manager::RpcSession>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -381,9 +385,28 @@ struct AppConfig {
     agent_timeout_ms: u32,
     #[serde(default = "default_agent_max_result_tokens")]
     agent_max_result_tokens: u32,
+    // ── Super-agent (spec_super_agent.md) ──
+    // Assistant de suivi multi-projets, lecture seule. Nom configurable, liste
+    // de clients, association projet → client. La base de suivi (clients,
+    // projets, tâches, décisions) vit dans `~/.pilot/super-agent.db` (SQLite).
+    #[serde(default = "default_super_agent_name")]
+    super_agent_name: String,
+    #[serde(default)]
+    super_agent_clients: Vec<String>,
+    #[serde(default)]
+    super_agent_project_client: HashMap<String, String>,
+    // Modèle actif du super-agent (format "provider/modelId"). Persisté pour
+    // l'appel bloquant `ask_super_agent` (process frais par tour).
+    #[serde(default)]
+    super_agent_model: String,
+    // L'onglet Super-agent est GLOBAL (multi-projets) : son état d'ouverture est
+    // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
+    #[serde(default)]
+    super_agent_open: bool,
 }
 
 fn default_true() -> bool { true }
+fn default_super_agent_name() -> String { "Super-agent".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
 fn default_rag_model() -> String { "nomic-embed-text".to_string() }
@@ -558,6 +581,12 @@ impl Default for AppConfig {
             agent_max_total_calls: default_agent_max_total_calls(),
             agent_timeout_ms: default_agent_timeout_ms(),
             agent_max_result_tokens: default_agent_max_result_tokens(),
+            // ── Super-agent (spec_super_agent.md) ──
+            super_agent_name: default_super_agent_name(),
+            super_agent_clients: Vec::new(),
+            super_agent_project_client: HashMap::new(),
+            super_agent_model: String::new(),
+            super_agent_open: false,
         }
     }
 }
@@ -1754,6 +1783,7 @@ pub fn run() {
                 ext_gate_cache: std::sync::Mutex::new(None),
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
                 web_runs: Mutex::new(HashMap::new()),
+                rpc_superagent: Mutex::new(None),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1911,6 +1941,26 @@ pub fn run() {
             session_history::set_session_tags,
             session_history::list_session_tags,
             session_history::record_session_entry,
+            // ── Super-agent (spec_super_agent.md) ──
+            super_agent::start_super_agent_session,
+            super_agent::stop_super_agent_session,
+            super_agent::send_super_agent_prompt,
+            super_agent::ask_super_agent,
+            super_agent::new_super_agent_session,
+            super_agent::set_super_agent_model,
+            super_agent::abort_super_agent,
+            super_agent::get_super_agent_state,
+            super_agent::get_super_agent_config,
+            super_agent::set_super_agent_config,
+            super_agent::set_super_agent_open,
+            super_agent::inject_session_summary,
+            super_agent::initialize_super_agent,
+            super_agent::list_clients,
+            super_agent::add_client,
+            super_agent::remove_client,
+            super_agent::rename_client,
+            super_agent::set_project_client,
+            super_agent::query_super_agent,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

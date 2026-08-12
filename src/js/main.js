@@ -480,6 +480,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Agents", "agents");
   });
 
+  // 🧭 Super-agent : assistant de suivi multi-projets, lecture seule
+  // (spec_super_agent.md).
+  document.getElementById("btn-superagent").addEventListener("click", async () => {
+    const { superAgentDisplayLabel } = await import("./super-agent.js");
+    tabs.openFile(superAgentDisplayLabel(), "superagent");
+  });
+
   document.getElementById("btn-scratchpad").addEventListener("click", () => {
     tabs._openScratchpad();
   });
@@ -774,6 +781,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch (_) {
     // Pas grave
   }
+
+  // Super-agent (🧭) : onglet GLOBAL (multi-projets). S'il était ouvert à la
+  // fermeture de Pilot, on le rouvre au démarrage (état persisté dans la config,
+  // pas par projet).
+  try {
+    const cfg = await invoke("get_config");
+    if (cfg.super_agent_open === true) {
+      const { superAgentDisplayLabel } = await import("./super-agent.js");
+      tabs.openFile(superAgentDisplayLabel(), "superagent");
+    }
+  } catch (_) {}
 
   // 8. Écouter le drag & drop natif Tauri (images dans l'éditeur + fichiers dans l'arborescence)
   const unlistenDragDrop = await getCurrentWindow().onDragDropEvent(async (event) => {

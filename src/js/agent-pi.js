@@ -35,6 +35,7 @@ async function getAgentEventChannel(agentId = "default") {
 import { refreshIcons, setIcon } from "./icons.js";
 import { notifyAgentDoneFromRemote } from "./desktop-notify.js";
 import { recordCurrentSession } from "./session-history.js";
+import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -5387,6 +5388,15 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         captureSessionHistory(state, _h9Files).catch((e) =>
           console.error("captureSessionHistory:", e)
         );
+        // Super-agent (spec_super_agent.md) : apprentissage en continu. Injecte
+        // un résumé du dernier échange à la fin de session (fire-and-forget).
+        const saSummary = [
+          state.lastUserPrompt ? `Demande: ${state.lastUserPrompt.slice(0, 500)}` : "",
+          state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText.slice(0, 800)}` : "",
+        ].filter(Boolean).join("\n");
+        if (saSummary) {
+          injectSessionSummaryToSuperAgent(saSummary, window._pilotProjectPath).catch(() => {});
+        }
       }
 
       // ── Chat standard : finalisation d'une rafale de retries de connexion ──

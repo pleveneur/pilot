@@ -53,6 +53,7 @@
       <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon"></i></button>
       <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
       <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
+      <button id="btn-superagent" class="project-only hidden" title="Super-agent : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i></button>
       <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
       <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
       <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
@@ -217,6 +218,7 @@
           <button class="settings-tab" data-settings-tab="remote" role="tab" aria-selected="false"><i data-lucide="globe" class="icon"></i> Accès distant</button>
           <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
           <button class="settings-tab" data-settings-tab="codegraph" role="tab" aria-selected="false"><i data-lucide="network" class="icon"></i> Graphe</button>
+          <button class="settings-tab" data-settings-tab="superagent" role="tab" aria-selected="false"><i data-lucide="compass" class="icon"></i> Super-agent</button>
         </nav>
         <div class="settings-panels">
 
@@ -663,6 +665,29 @@
             </div>
             <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
               Le graphe est construit automatiquement au 1er prompt et mis à jour au fil de l'eau. Le bouton <i data-lucide="network" class="icon-sm"></i> de l'agent permet de le (re)construire. Index dans <code>.pilot/context-index.db</code> + wiki <code>.pilot/graph-wiki/</code>.
+            </div>
+          </div>
+          </div>
+
+          <div class="settings-panel" data-settings-panel="superagent" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="compass" class="icon-sm"></i> Super-agent (suivi multi-projets)</h3>
+            <div class="setting-row">
+              <label for="setting-superagent-name" title="Nom de votre assistant de suivi (affiché dans l'onglet 🧭 et ses réponses).">Nom de l'assistant :</label>
+              <input type="text" id="setting-superagent-name" placeholder="Super-agent" style="width:220px;" />
+            </div>
+            <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+              Le Super-agent est <b>lecture seule</b> : il suit vos projets (par client) de la demande à la livraison, apprend des sessions d'agents et répond à vos questions. Il ne modifie jamais vos fichiers.
+            </div>
+          </div>
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>
+            <div class="setting-row">
+              <label for="setting-superagent-clients" title="Liste des clients (un par ligne). Chaque projet peut être attaché à un client.">Liste des clients (un par ligne) :</label>
+              <textarea id="setting-superagent-clients" rows="5" placeholder="Client A&#10;Client B&#10;Client C" style="width:260px;font-family:var(--font-mono);font-size:12px;"></textarea>
+            </div>
+            <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+              L'association projet → client se fait dans l'onglet 🧭 Super-agent (bouton ⚙️) ou ici en renseignant le chemin du projet.
             </div>
           </div>
           </div>

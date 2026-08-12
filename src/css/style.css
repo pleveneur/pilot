@@ -117,6 +117,7 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   /* Accent & états */
   --accent: #6b8cff;
   --accent-hover: #5a7bf0;
+  --superagent-accent: #b06ef7;
   --danger: #f87171;
   --success: #4ade80;
   --warning: #fbbf24;
@@ -196,6 +197,7 @@ button .icon, button .icon-sm, button .icon-lg { display: inline-flex; }
   /* Accent & états */
   --accent: #4f6ef7;
   --accent-hover: #3d5ce0;
+  --superagent-accent: #8b5cf6;
   --danger: #e5484d;
   --success: #30a46c;
   --warning: #f5a524;
@@ -1187,6 +1189,31 @@ body.theme-light.theme-tokyo-day {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   box-shadow: inset 0 2px 0 var(--accent);
+}
+
+/* Super-agent (🧭, spec_super_agent.md) : couleur d'accent distincte des
+   agents de coding (violet/teal) pour le différencier visuellement. */
+.tab.tab-superagent {
+  color: var(--superagent-accent);
+  font-weight: var(--fw-medium);
+}
+.tab.tab-superagent:hover {
+  background: color-mix(in srgb, var(--superagent-accent) 10%, transparent);
+  color: var(--superagent-accent);
+}
+.tab.tab-superagent.active {
+  background: color-mix(in srgb, var(--superagent-accent) 14%, var(--surface-3));
+  color: var(--superagent-accent);
+  border-color: color-mix(in srgb, var(--superagent-accent) 30%, transparent);
+  box-shadow: inset 0 2px 0 var(--superagent-accent);
+}
+.superagent-wrapper .agent-chat-toolbar {
+  border-bottom-color: color-mix(in srgb, var(--superagent-accent) 30%, transparent);
+}
+.superagent-wrapper .agent-bubble-assistant {
+  border-left: 3px solid var(--superagent-accent);
+  background: color-mix(in srgb, var(--surface-2) 92%, var(--superagent-accent) 8%);
+  color: var(--text-primary);
 }
 
 /* Multi-onglets agents : bouton « + » pour ouvrir un nouvel onglet agent. */

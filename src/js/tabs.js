@@ -23,6 +23,7 @@ import { createPromptBuilder } from "./prompt-builder.js";
 import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
 import { createAgents } from "./agents-ui.js";
+import { createSuperAgent, superAgentDisplayLabel } from "./super-agent.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
@@ -233,6 +234,13 @@ class TabsManager {
     // Onglet Agent Pi (RPC)
     if (mode === "agent") {
       await this._openAgent(path || agentDisplayLabel(), "default", runDefault);
+      return;
+    }
+
+    // Onglet Super-agent (🧭) — spec_super_agent.md : assistant de suivi
+    // multi-projets, lecture seule, couleur d'accent distincte.
+    if (mode === "superagent") {
+      await this._openSuperAgent(path || superAgentDisplayLabel());
       return;
     }
 
@@ -553,6 +561,47 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">❓</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Aide</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Super-agent (🧭) — spec_super_agent.md : assistant de
+   * suivi multi-projets, lecture seule, couleur d'accent distincte.
+   */
+  async _openSuperAgent(label = "Super-agent") {
+    const existing = this.tabs.find((t) => t.mode === "superagent");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "superagent");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper superagent-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+    // L'onglet Super-agent est GLOBAL : on persiste son état d'ouverture dans la
+    // config (pas par projet) pour le rouvrir au démarrage de Pilot.
+    invoke("set_super_agent_open", { open: true }).catch(() => {});
+
+    try {
+      const result = await createSuperAgent(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenSuperAgent = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Super-agent:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🧭</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Super-agent</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -1180,6 +1229,16 @@ class TabsManager {
         invoke("stop_agent_session", { agentId: tab.agentId || "default" }).catch(() => {});
       }
     }
+    // Nettoyage super-agent (spec_super_agent.md) : arrêter la session dédiée.
+    if (tab.mode === "superagent") {
+      if (tab.unlistenSuperAgent) {
+        tab.unlistenSuperAgent();
+        tab.unlistenSuperAgent = null;
+      }
+      if (!options.skipAgentStop) {
+        invoke("stop_super_agent_session").catch(() => {});
+      }
+    }
     // Nettoyage prompt builder
     if (tab.mode === "prompt-builder" && tab.unlistenPromptBuilder) {
       tab.unlistenPromptBuilder();
@@ -1278,6 +1337,17 @@ class TabsManager {
         tab.unlistenDragDrop = null;
       }
       invoke("stop_agent_session").catch(() => {});
+    }
+    // Nettoyage super-agent (spec_super_agent.md)
+    if (tab.mode === "superagent") {
+      if (tab.unlistenSuperAgent) {
+        tab.unlistenSuperAgent();
+        tab.unlistenSuperAgent = null;
+      }
+      invoke("stop_super_agent_session").catch(() => {});
+      // L'onglet Super-agent est GLOBAL : on persiste son état de fermeture dans
+      // la config (pas par projet).
+      invoke("set_super_agent_open", { open: false }).catch(() => {});
     }
     // Nettoyage prompt builder
     if (tab.mode === "prompt-builder" && tab.unlistenPromptBuilder) {
@@ -1552,6 +1622,13 @@ class TabsManager {
       this._updateFileInfo(tab);
     } else if (tab && tab.mode === "agent") {
       statusFiletype.textContent = `${agentDisplayLabel()} (RPC)`;
+      statusCursor.textContent = '';
+      statusStats.textContent = '';
+      statusEncoding.textContent = '';
+      statusEol.textContent = '';
+      statusAutosave.textContent = '';
+    } else if (tab && tab.mode === "superagent") {
+      statusFiletype.textContent = `${superAgentDisplayLabel()} (Suivi)`;
       statusCursor.textContent = '';
       statusStats.textContent = '';
       statusEncoding.textContent = '';
@@ -2203,12 +2280,12 @@ class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder"].includes(tab.mode);
-    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}`;
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent"].includes(tab.mode);
+    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}`;
     btn.dataset.tabId = tab.id;
 
-    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
-    const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "history" ? " (Sessions)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
+    const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "superagent" ? "🧭 " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
+    const suffix = tab.isScratchpad ? " (Brouillon)" : tab.mode === "preview" ? " (aperçu)" : tab.mode === "pdf" ? " (PDF)" : tab.mode === "image" ? " (image)" : tab.mode === "csv" ? " (CSV)" : tab.mode === "agent" ? " (RPC)" : tab.mode === "superagent" ? " (Suivi)" : tab.mode === "history" ? " (Sessions)" : tab.mode === "prompt-builder" ? " (Prompt)" : "";
 
     btn.innerHTML = `
       <span class="tab-name">${icon}${tab.name}${suffix}</span>
@@ -2244,10 +2321,22 @@ class TabsManager {
       });
     }
 
-    this.tabBar.appendChild(btn);
+    // L'onglet Super-agent (🧭) doit TOUJOURS rester le plus à gauche, avant
+    // même le bouton « + » d'ajout d'agents. On l'insère donc avant ce bouton
+    // (`.tab-add-agent`) s'il existe, sinon en tête de barre.
+    if (tab.mode === "superagent") {
+      const addBtn = this.tabBar.querySelector(".tab-add-agent");
+      if (addBtn) this.tabBar.insertBefore(btn, addBtn);
+      else this.tabBar.prepend(btn);
+    } else {
+      this.tabBar.appendChild(btn);
+    }
 
-    // Drag & drop pour réorganiser les onglets
-    this._initTabDragHandlers(btn, tab);
+    // Drag & drop pour réorganiser les onglets (sauf le Super-agent, qui doit
+    // rester TOUJOURS le plus à gauche).
+    if (tab.mode !== "superagent") {
+      this._initTabDragHandlers(btn, tab);
+    }
   }
 
   /**
@@ -2358,6 +2447,12 @@ class TabsManager {
   _moveTabToIndex(tabId, targetIndex) {
     const sourceIdx = this.tabs.findIndex((t) => String(t.id) === String(tabId));
     if (sourceIdx === -1) return;
+    // Le Super-agent (🧭) doit rester en première position : on ne peut pas
+    // déplacer un autre onglet à l'index 0 s'il est occupé par le super-agent.
+    const superAgentIdx = this.tabs.findIndex((t) => t.mode === "superagent");
+    if (superAgentIdx === 0 && targetIndex === 0 && String(this.tabs[0].id) !== String(tabId)) {
+      targetIndex = 1;
+    }
     const [movedTab] = this.tabs.splice(sourceIdx, 1);
     const btn = this.tabBar.querySelector(`[data-tab-id="${tabId}"]`);
     if (btn) btn.remove();
@@ -2379,6 +2474,13 @@ class TabsManager {
 
   _reorderTab(sourceId, targetId, insertAfter) {
     if (String(sourceId) === String(targetId)) return;
+    // Le Super-agent (🧭) doit rester TOUJOURS le plus à gauche : on ne peut
+    // pas placer un onglet avant lui (le drop sur sa moitié gauche est forcé
+    // « après »).
+    const targetTab = this.tabs.find((t) => String(t.id) === String(targetId));
+    if (targetTab && targetTab.mode === "superagent" && !insertAfter) {
+      insertAfter = true;
+    }
     const sourceIdx = this.tabs.findIndex((t) => String(t.id) === String(sourceId));
     const targetIdx = this.tabs.findIndex((t) => String(t.id) === String(targetId));
     if (sourceIdx === -1 || targetIdx === -1) return;

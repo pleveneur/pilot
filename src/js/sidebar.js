@@ -1337,10 +1337,14 @@ class Sidebar {
       // il l'est AVANT `start_agent_session` du projet entrant. En cas de bascule
       // (`parked=true`), `skipAgentStop` évite même d'émettre stop_agent_session :
       // l'agent parké ne doit pas être arrêté.
+      // L'onglet Super-agent (🧭) est GLOBAL (multi-projets) : il n'est PAS fermé ici,
+      // il persiste à travers les bascules et fermetures de projets.
       await Promise.all(
-        [...this.tabs.tabs].map((tab) =>
-          this.tabs.closeTab(tab.id, { skipConfirm: true, skipAgentStop: !!parked }).catch(() => {})
-        )
+        this.tabs.tabs
+          .filter((t) => t.mode !== "superagent")
+          .map((tab) =>
+            this.tabs.closeTab(tab.id, { skipConfirm: true, skipAgentStop: !!parked }).catch(() => {})
+          )
       );
       return hadAgentTab;
     } finally {

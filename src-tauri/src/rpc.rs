@@ -539,6 +539,13 @@ pub(crate) fn do_shutdown_all_sessions(state: &AppState) {
     }
     // Sessions agents multi-rôles (H2 V2).
     crate::agents::do_stop_all_agent_processes(state);
+    // Session super-agent (spec_super_agent.md).
+    {
+        let mut sa = state.rpc_superagent.lock().unwrap();
+        if let Some(mut session) = sa.take() {
+            rpc_manager::stop_session(&mut session);
+        }
+    }
 }
 
 #[tauri::command]
