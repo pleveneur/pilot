@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
+<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -195,6 +195,28 @@ cas, une modale te propose de la mettre à jour via la commande intégrée de Pi
 
 La vérification ne concerne que l'agent **Pi** (pas PLh) et n'est proposée que
 si une version plus récente existe réellement.
+
+---
+
+## Plusieurs agents sur un même projet (multi-onglets)
+
+Tu peux ouvrir **plusieurs onglets agent indépendants** sur le même projet,
+chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
+
+- **Activer** : Paramètres ⚙️ → onglet « Agent Pi » → cocher « Multi-onglets
+  agents ».
+- **Ouvrir un agent** : bouton « + » de la barre d'onglets (toujours en
+  première position, avant les autres onglets).
+- **Renommer un onglet** : double-clic sur son nom.
+- **Configurer le nombre et les noms au démarrage** : Paramètres ⚙️ → onglet
+  « Agent Pi » → section « Agents du projet ». Définis les agents rechargés
+  automatiquement à l'ouverture du projet, chacun avec son nom. La
+  configuration est enregistrée dans `.pilot/agents.json` du projet (versionnée
+  et partagée entre utilisateurs).
+- Le **renommage manuel** d'un onglet (double-clic) **prime** sur le nom
+  configuré.
+- Le bouton « + » reste disponible pour ajouter des agents au-delà de ceux
+  configurés.
 
 ---
 

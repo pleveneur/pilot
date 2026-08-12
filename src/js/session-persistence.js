@@ -71,14 +71,25 @@ export async function saveTabSession(tabs, projectPath) {
   // `agentIndex` : position de l'onglet agent dans `tabs.tabs` (-1 si absent),
   // pour restaurer l'ordre original des onglets (ex: agent en premier) — sinon
   // l'agent était toujours rouvert en dernier.
-  const agentIndex = tabs.tabs.findIndex((t) => t.mode === "agent");
-  const hadAgent = agentIndex >= 0;
+  // `agents` (multi-onglets, issue #35) : liste complète des onglets agents
+  // ouverts (id + nom, y compris renommés) avec leur position, pour restaurer
+  // TOUS les agents d'un projet (config `.pilot/agents.json` + renommages
+  // manuels qui priment) au démarrage.
+  const agents = [];
+  tabs.tabs.forEach((t, idx) => {
+    if (t.mode === "agent") {
+      agents.push({ id: t.agentId || "default", name: t.name, index: idx });
+    }
+  });
+  const hadAgent = agents.length > 0;
+  const agentIndex = agents.length ? agents[0].index : -1;
 
   const data = JSON.stringify({
     activePath,
     tabs: serializable,
     hadAgent,
     agentIndex,
+    agents,
   });
 
   await invoke("save_tab_session", { projectPath, data }).catch(() => {});
@@ -164,11 +175,25 @@ export async function restoreTabs(tabs, projectPath, onProgress) {
 
   const hasTabs = Array.isArray(session.tabs) && session.tabs.length > 0;
   const hasAgent = session.hadAgent === true;
-  // Rien à restaurer : ni onglets d'édition, ni onglet agent. Il ne faut PAS
-  // retourner quand `hasAgent` est vrai même si `tabs` est vide (projet qui n'a
-  // QUE son onglet agent ouvert) — sinon l'onglet agent ne serait jamais rouvert
-  // au retour sur ce projet.
-  if (!hasTabs && !hasAgent) return;
+  // Multi-onglets agents (issue #35) : détecter le multi-onglets et lire la
+  // config `.pilot/agents.json` AVANT le early return, pour restaurer les agents
+  // paramétrés même si la session ne contient ni onglet d'édition ni onglet
+  // agent (ex: l'agent standard n'a jamais été ouvert, seule la config existe).
+  let multiAgentEnabled = tabs._multiAgentEnabled;
+  try {
+    const cfg = await invoke("get_config");
+    multiAgentEnabled = cfg.multi_agent_tabs === true;
+  } catch (_) {}
+  const cfgAgents = multiAgentEnabled
+    ? await invoke("read_project_agents", { projectPath }).catch(() => [])
+    : [];
+  const hasConfigAgents = cfgAgents.length > 0;
+  // Rien à restaurer : ni onglets d'édition, ni onglet agent, ni agent configuré.
+  // Il ne faut PAS retourner quand `hasAgent` est vrai même si `tabs` est vide
+  // (projet qui n'a QUE son onglet agent ouvert) — sinon l'onglet agent ne serait
+  // jamais rouvert au retour sur ce projet. De même, ne pas retourner quand une
+  // config d'agents existe (issue #35).
+  if (!hasTabs && !hasAgent && !hasConfigAgents) return;
 
   tabs._restoring = true;
 
@@ -239,7 +264,61 @@ export async function restoreTabs(tabs, projectPath, onProgress) {
   // start_agent_session → renderMessageHistory réaffiche la conversation). Sans
   // cela, un chat lancé sur un projet puis quitté n'était plus affiché au retour
   // (impression que l'agent s'est « arrêté »).
-  if (hasAgent) {
+  // Multi-onglets agents (issue #35) : config `.pilot/agents.json` (nombre +
+  // noms par défaut) + état de la session (agents ouverts, y compris renommés
+  // — le renommage manuel prime sur le nom configuré). Au démarrage du projet,
+  // les agents paramétrés sont rechargés ; les agents ajoutés via « + » au-delà
+  // de la config et présents dans la session sont conservés.
+  // Lecture directe de la config (pas `tabs._multiAgentEnabled`, défini en async
+  // dans le constructeur) pour éviter toute course avec l'ouverture du projet.
+  // → `multiAgentEnabled` et `cfgAgents` sont lus en tête de `restoreTabs` (avant
+  // le early return) pour couvrir le cas où la config existe sans session.
+  if (multiAgentEnabled) {
+    // Rétrocompatibilité : les sessions antérieures n'ont pas `agents` mais un
+    // simple flag `hadAgent` → on ne restaure que l'agent principal.
+    const sessionAgents =
+      session.agents && Array.isArray(session.agents)
+        ? session.agents
+        : hasAgent
+          ? [{ id: "default", name: agentDisplayLabel(), index: session.agentIndex }]
+          : [];
+    // Fusion : agent principal, puis agents configurés (nom renommé de la
+    // session si présent, sinon nom configuré), puis agents de la session
+    // absents de la config.
+    const toOpen = [];
+    const seen = new Set();
+    const pushAgent = (a) => {
+      if (seen.has(a.id)) return;
+      seen.add(a.id);
+      toOpen.push(a);
+    };
+    const sessionDefault = sessionAgents.find((a) => a.id === "default");
+    if (sessionDefault) pushAgent(sessionDefault);
+    for (const cfg of cfgAgents) {
+      if (seen.has(cfg.id)) continue;
+      const sess = sessionAgents.find((a) => a.id === cfg.id);
+      pushAgent({ id: cfg.id, name: sess ? sess.name : cfg.name, index: sess ? sess.index : -1 });
+    }
+    for (const sa of sessionAgents) pushAgent(sa);
+    // Ouvrir chaque agent (chaque onglet démarre/reprent sa propre session).
+    for (const a of toOpen) {
+      try {
+        await tabs._openAgent(a.name || agentDisplayLabel(), a.id);
+      } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+    }
+    // Restaurer l'ordre des onglets agents (positions persistées).
+    for (const a of toOpen) {
+      if (typeof a.index === "number" && a.index >= 0) {
+        const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === a.id);
+        if (t) {
+          const cur = tabs.tabs.indexOf(t);
+          if (cur !== -1 && cur !== a.index) tabs._moveTabToIndex(t.id, a.index);
+        }
+      }
+    }
+  } else if (hasAgent) {
+    // Multi-onglets désactivé : comportement historique — restaurer uniquement
+    // l'agent principal.
     try {
       await tabs.openFile(agentDisplayLabel(), "agent");
       // Restaurer la position originale de l'onglet agent (index persisté) pour

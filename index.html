@@ -11,7 +11,7 @@
 
   <!-- Écran de chargement (sablier) -->
   <div id="boot-overlay">
-    <img id="boot-logo" src="images/LogoPilotAvecNom.PNG" alt="Pilot" />
+    <img id="boot-logo" src="images/logo_pilot_vector.svg" alt="Pilot" />
     <div class="boot-spinner"></div>
     <div class="boot-label">Chargement de Pilot…</div>
   </div>
@@ -19,8 +19,8 @@
   <!-- Barre Latérale (Gauche) -->
   <aside id="sidebar">
     <div id="project-selector">
-      <img id="btn-project-logo" src="images/LogoPilotSeul.PNG" alt="Logo" />
-      <img id="btn-project-name" src="images/PilotNomSeul.png" alt="Pilot" />
+      <img id="btn-project-logo" src="images/logo_pilot_vector.svg" alt="Logo" />
+      <span id="btn-project-name">Pilot</span>
       <button id="btn-open-project" title="Projets">
         <span class="dropdown-arrow"><i data-lucide="chevron-down" class="icon-sm"></i></span>
       </button>
@@ -69,6 +69,7 @@
     <div id="tab-bar"></div>
     <div id="main-content">
       <div id="editor-container"></div>
+      <img id="empty-logo" src="images/logo_pilot_vector.svg" alt="Pilot" class="hidden" />
       <!-- Panneau Outline (table des matières) -->
       <div id="outline-panel" class="hidden">
         <div class="outline-header">
@@ -365,6 +366,21 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-agent-max-result-tokens">Taille max d'un résultat renvoyé (tokens) :</label>
               <input type="number" id="setting-agent-max-result-tokens" min="500" max="32000" value="4000" />
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title"><i data-lucide="layout-grid" class="icon-sm"></i> Agents du projet (multi-onglets)</div>
+            <div class="setting-row" style="flex-direction:column;align-items:flex-start;gap:4px;font-size:12px;opacity:.85;">
+              Nombre d'agents et noms pour le projet actif : <code id="project-agents-project"></code>.
+              Au démarrage du projet, les agents paramétrés sont rechargés. Enregistré dans <code>.pilot/agents.json</code> (versionné).
+              <span id="project-agents-warn" style="display:none;color:var(--danger);">Activez d'abord « Multi-onglets agents » ci-dessus.</span>
+            </div>
+            <div id="project-agents-list" style="display:flex;flex-direction:column;gap:6px;margin:8px 0;"></div>
+            <div class="setting-row" style="gap:8px;flex-wrap:wrap;">
+              <button type="button" id="btn-add-project-agent" class="web-btn">＋ Ajouter un agent</button>
+              <button type="button" id="btn-save-project-agents" class="web-btn">Enregistrer les agents</button>
+              <span id="project-agents-status" style="font-size:11px;opacity:.8;"></span>
             </div>
           </div>
 

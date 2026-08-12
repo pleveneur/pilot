@@ -68,6 +68,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Quality-gate interne | `spec_quality_gate.md` |
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
+| Agents du projet (multi-onglets configurés) | `spec_project_agents.md` |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -209,6 +210,7 @@ pilot/
         ├── web_auth.rs       # Auth distante : argon2, token opaque, sessions
         ├── web_rate.rs       # Rate limiting login/prompt/WS (garde-fous distants)
         ├── web_audit.rs      # Journal d'audit distant (ring buffer 500, actions sensibles)
+        ├── project_agents.rs # Config des agents du projet (.pilot/agents.json, issue #35)
         ├── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
         └── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
 ```

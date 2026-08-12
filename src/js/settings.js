@@ -187,6 +187,15 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const inputAgentMaxTotalCalls = document.getElementById("setting-agent-max-total-calls");
   const inputAgentTimeoutMs = document.getElementById("setting-agent-timeout-ms");
   const inputAgentMaxResultTokens = document.getElementById("setting-agent-max-result-tokens");
+  // ── Agents du projet (issue #35) : config `.pilot/agents.json` ──
+  const projectAgentsProject = document.getElementById("project-agents-project");
+  const projectAgentsWarn = document.getElementById("project-agents-warn");
+  const projectAgentsList = document.getElementById("project-agents-list");
+  const projectAgentsStatus = document.getElementById("project-agents-status");
+  const btnAddProjectAgent = document.getElementById("btn-add-project-agent");
+  const btnSaveProjectAgents = document.getElementById("btn-save-project-agents");
+  let projectAgents = []; // état éditable (liste {id, name})
+  let projectAgentsDirty = false;
   const tsBlock = document.getElementById("tailscale-block");
   const tsBadge = document.getElementById("tailscale-badge");
   const tsUrl = document.getElementById("tailscale-url");
@@ -266,6 +275,105 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // ── Agents du projet (issue #35) ──
+  function renderProjectAgentsList() {
+    if (!projectAgentsList) return;
+    projectAgentsList.innerHTML = "";
+    if (projectAgents.length === 0) {
+      projectAgentsList.innerHTML = '<div style="font-size:12px;opacity:.6;padding:4px 0;">Aucun agent configuré pour ce projet.</div>';
+      return;
+    }
+    projectAgents.forEach((agent, i) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;";
+      const label = document.createElement("span");
+      label.style.cssText = "font-size:11px;opacity:.6;min-width:70px;";
+      label.textContent = agent.id;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = agent.name || "";
+      input.placeholder = "Nom de l'agent";
+      input.style.cssText = "flex:1;min-width:0;padding:4px 8px;border:1px solid var(--border-color,#444);background:var(--bg-color,#222);color:var(--text-color,#ddd);border-radius:6px;";
+      input.addEventListener("input", () => {
+        projectAgents[i].name = input.value.trim();
+        projectAgentsDirty = true;
+      });
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "web-btn";
+      del.textContent = "✕";
+      del.title = "Retirer cet agent";
+      del.addEventListener("click", () => {
+        projectAgents.splice(i, 1);
+        projectAgentsDirty = true;
+        renderProjectAgentsList();
+      });
+      row.appendChild(label);
+      row.appendChild(input);
+      row.appendChild(del);
+      projectAgentsList.appendChild(row);
+    });
+  }
+
+  async function loadProjectAgents() {
+    projectAgentsDirty = false;
+    if (!projectAgentsList) return;
+    const path = window._pilotProjectPath || "";
+    if (projectAgentsProject) {
+      projectAgentsProject.textContent = path
+        ? (path.replace(/\\/g, "/").split("/").pop() || path)
+        : "— (aucun projet)";
+    }
+    if (!path) {
+      projectAgents = [];
+      if (projectAgentsWarn) projectAgentsWarn.style.display = "block";
+      renderProjectAgentsList();
+      return;
+    }
+    projectAgents = await invoke("read_project_agents", { projectPath: path }).catch(() => []);
+    renderProjectAgentsList();
+    const enabled = currentConfig?.multi_agent_tabs === true;
+    if (projectAgentsWarn) projectAgentsWarn.style.display = enabled ? "none" : "block";
+    if (projectAgentsStatus) projectAgentsStatus.textContent = "";
+  }
+
+  async function saveProjectAgents() {
+    const path = window._pilotProjectPath;
+    if (!path) { alert("Aucun projet ouvert pour enregistrer la config d'agents."); return; }
+    if (projectAgentsStatus) projectAgentsStatus.textContent = "Enregistrement…";
+    try {
+      await invoke("write_project_agents", { projectPath: path, agents: projectAgents });
+      projectAgentsDirty = false;
+      // Issue #35 : ouvrir immédiatement les agents paramétrés qui ne le sont pas
+      // déjà (ex: config enregistrée depuis Paramètres), si le multi-onglets est
+      // activé. Chaque `_openAgent` démarre/reprent sa propre session.
+      if (currentConfig?.multi_agent_tabs === true && window._pilotTabs) {
+        for (const a of projectAgents) {
+          const exists = window._pilotTabs.tabs.some((t) => t.mode === "agent" && (t.agentId || "default") === a.id);
+          if (!exists) {
+            try {
+              await window._pilotTabs._openAgent(a.name || a.id, a.id);
+            } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+          }
+        }
+      }
+      if (projectAgentsStatus) projectAgentsStatus.textContent = "✓ Enregistré";
+      setTimeout(() => { if (projectAgentsStatus) projectAgentsStatus.textContent = ""; }, 2000);
+    } catch (e) {
+      if (projectAgentsStatus) projectAgentsStatus.textContent = "Erreur : " + e;
+    }
+  }
+
+  btnAddProjectAgent?.addEventListener("click", () => {
+    const used = new Set(projectAgents.map((a) => a.id));
+    let n = 1;
+    while (used.has(`agent-${n}`)) n++;
+    projectAgents.push({ id: `agent-${n}`, name: `Agent ${n}` });
+    projectAgentsDirty = true;
+    renderProjectAgentsList();
+  });
+  btnSaveProjectAgents?.addEventListener("click", saveProjectAgents);
+
   btnWebAudit.addEventListener("click", async (e) => {
     auditModal.classList.remove("hidden");
     animateModalOpen(auditModal, e.clientX, e.clientY);
@@ -287,6 +395,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     } catch (_) {
       currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", multi_agent_tabs: false, quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text", modal_animations: true };
     }
+    // Agents du projet (issue #35) : charger la config du projet actif.
+    await loadProjectAgents();
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
     chkAutoLoad.checked = currentConfig.auto_load_last_project || false;
@@ -465,6 +575,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         const ok = await saveProvidersIfDirty();
         if (!ok) return;
       }
+      // Agents du projet (issue #35) : sauvegarder la config si modifiée.
+      if (projectAgentsDirty) await saveProjectAgents();
       // Parse orchestrator model: "provider/modelId" or empty
       const orchParts = inputOrchestratorModel.value.trim().split("/", 2);
       const coderParts = inputCoderModel.value.trim().split("/", 2);

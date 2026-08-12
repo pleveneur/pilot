@@ -193,7 +193,11 @@ class TabsManager {
       e.stopPropagation();
       this._openNewAgentTab();
     });
-    this.tabBar.appendChild(btn);
+    // Le bouton « + » doit TOUJOURS rester en première position de la barre
+    // d'onglets (avant tous les autres onglets). `prepend` garantit qu'il est
+    // inséré en tête, et comme il n'a pas de `data-tab-id`, le drag & drop ne
+    // peut ni le déplacer ni placer un onglet avant lui.
+    this.tabBar.prepend(btn);
   }
 
   /**
@@ -205,6 +209,15 @@ class TabsManager {
     // Trouver le prochain numéro d'agent libre (agent-1, agent-2, ...).
     let n = 1;
     const used = new Set(this.tabs.filter((t) => t.mode === "agent" && t.agentId && t.agentId !== "default").map((t) => t.agentId));
+    // Éviter les ids déjà configurés dans `.pilot/agents.json` (issue #35), même
+    // si l'onglet correspondant n'est pas encore ouvert, pour ne pas créer un
+    // doublon d'id (agent-N) entre config et onglets manuels.
+    if (window._pilotProjectPath) {
+      try {
+        const cfg = await invoke("read_project_agents", { projectPath: window._pilotProjectPath });
+        for (const a of cfg || []) used.add(a.id);
+      } catch (_) {}
+    }
     while (used.has(`agent-${n}`)) n++;
     const agentId = `agent-${n}`;
     await this._openAgent(`Agent ${n}`, agentId);
@@ -2352,7 +2365,13 @@ class TabsManager {
     const clamped = Math.max(0, Math.min(targetIndex, this.tabs.length));
     this.tabs.splice(clamped, 0, movedTab);
     if (btn) {
-      const ref = this.tabBar.children[clamped];
+      // Le bouton « + » (`.tab-add-agent`) est le premier enfant de la barre
+      // d'onglets quand le multi-onglets agents est actif. Il n'a pas de
+      // `data-tab-id` et n'apparaît donc pas dans `this.tabs` : il faut décaler
+      // l'index DOM de +1 pour retomber sur le bon onglet.
+      const addBtn = this.tabBar.querySelector(".tab-add-agent");
+      const domIdx = addBtn ? clamped + 1 : clamped;
+      const ref = this.tabBar.children[domIdx];
       if (ref) this.tabBar.insertBefore(btn, ref);
       else this.tabBar.appendChild(btn);
     }
@@ -2482,12 +2501,13 @@ class TabsManager {
   }
 
   _showEmpty() {
-    // Message vide supprimé (aucun affichage au centre de l'écran)
+    const el = document.getElementById("empty-logo");
+    if (el) el.classList.remove("hidden");
   }
 
   _hideEmpty() {
-    const el = this.container.querySelector(".empty-message");
-    if (el) el.style.display = "none";
+    const el = document.getElementById("empty-logo");
+    if (el) el.classList.add("hidden");
   }
 }
 

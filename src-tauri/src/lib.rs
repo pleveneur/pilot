@@ -62,6 +62,7 @@ mod agents;
 mod rpc;
 mod interproject;
 mod pi_update;
+mod project_agents;
 
 // ── État global de l'application ──
 
@@ -1818,6 +1819,8 @@ pub fn run() {
             agents::convert_pdf_to_md_ai,
             tabs::save_tab_session,
             tabs::load_tab_session,
+            project_agents::read_project_agents,
+            project_agents::write_project_agents,
             search::search_in_files,
             code_check::lint_file,
             search::replace_in_files,

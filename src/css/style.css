@@ -33,10 +33,9 @@
   letter-spacing: 0.3px;
 }
 #boot-logo {
-  width: 240px;
-  max-width: 60vw;
+  width: 160px;
+  max-width: 50vw;
   height: auto;
-  object-fit: contain;
 }
 @keyframes boot-spin {
   to { transform: rotate(360deg); }
@@ -494,6 +493,21 @@ body.theme-light.theme-tokyo-day {
   position: relative;
 }
 
+#empty-logo {
+  position: absolute;
+  inset: 0;
+  width: 65%;
+  max-width: 550px;
+  height: auto;
+  margin: auto;
+  opacity: 0.08;
+  pointer-events: none;
+  user-select: none;
+}
+#empty-logo.hidden {
+  display: none;
+}
+
 /* --- Status Bar --- */
 #status-bar {
   height: 24px;
@@ -638,10 +652,18 @@ body.theme-light.theme-tokyo-day {
 }
 
 #btn-project-name {
+  font-family: 'Avenir', 'Avenir Next', 'Segoe UI', sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-primary);
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
   height: 48px;
-  width: auto;
-  object-fit: contain;
-  margin-left: -8px; /* annule le gap du conteneur : logo + nom collés */
+  padding-left: 4px;
+  padding-bottom: 2px;
+  user-select: none;
 }
 
 .dropdown-arrow {

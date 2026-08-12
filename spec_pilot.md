@@ -40,6 +40,7 @@ L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de T
 | Prévisualisation CSV | `.csv` | 📊 | Parseur JS + tableau HTML |
 | Terminal intégré | — | 🖥️ | xterm.js + PTY |
 | Agent Pi | — | π | RPC (voir `spec_rpc.md`) |
+| Multi-onglets agents | — | π + | Plusieurs onglets agent indépendants (bouton « + ») ; nombre + noms configurés par projet dans `.pilot/agents.json`, rechargés au démarrage (voir [`spec_project_agents.md`](spec_project_agents.md)) |
 | Prompt Builder | — | 🧩 | Clic-droit → Ajouter + templates + envoi à Agent Pi |
 | Agents multi-rôles | — | 🎭 | Coordinateur + agents spécialisés, protocole `[[CALL:…]]` séquentiel (voir [`spec_gestion_agents.md`](spec_gestion_agents.md)) |
 
