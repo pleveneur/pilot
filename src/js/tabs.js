@@ -570,7 +570,7 @@ class TabsManager {
    * Ouvre l'onglet Super-agent (🧭) — spec_super_agent.md : assistant de
    * suivi multi-projets, lecture seule, couleur d'accent distincte.
    */
-  async _openSuperAgent(label = "Super-agent") {
+  async _openSuperAgent(label = "Assistant") {
     const existing = this.tabs.find((t) => t.mode === "superagent");
     if (existing) {
       this.switchTab(existing.id);
@@ -597,11 +597,11 @@ class TabsManager {
       tab.view = result.wrapper;
       tab.unlistenSuperAgent = result.unlisten;
     } catch (e) {
-      console.error("Erreur onglet Super-agent:", e);
+      console.error("Erreur onglet Assistant:", e);
       tab.wrapper.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">🧭</div>
-          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Super-agent</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Assistant</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }

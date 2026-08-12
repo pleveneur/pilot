@@ -69,7 +69,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Gestion des modèles IA (providers + alias) | `spec_rpc.md` § Édition des modèles |
 | Gestion d'agents multi-rôles | `spec_gestion_agents.md` |
 | Agents du projet (multi-onglets configurés) | `spec_project_agents.md` |
-| Super-agent (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
+| Assistant (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -117,7 +117,7 @@ pilot/
 ├── spec_diff_review.md       # Spécifications Diff Review agent (A4 V2, porte pré-écriture write/edit)
 ├── spec_session_history.md   # Spécifications historique de sessions searchable (H9)
 ├── spec_feedback.md          # Spécifications feedback utilisateurs (remarques/évolutions)
-├── spec_super_agent.md       # Spécifications Super-agent (suivi multi-projets, lecture seule)
+├── spec_super_agent.md       # Spécifications Assistant (suivi multi-projets, lecture seule)
 ├── plan_dev.md                # Plan de développement (résumé, ce qui reste)
 ├── idees_evolutions.md        # Idées d'évolutions futures
 ├── README.md                  # Documentation utilisateur
@@ -166,7 +166,7 @@ pilot/
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
 │       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags
 │       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
-│       ├── super-agent.js    # Onglet « 🧭 Super-agent » : suivi multi-projets lecture seule (chat, config, init)
+│       ├── super-agent.js    # Onglet « 🧭 Assistant » : suivi multi-projets lecture seule (chat, config, init)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
 │       ├── models-config.js  # Onglet « Fournisseurs » : édition UI models.json + model-switch.json (pi/plh)
 │       ├── conversation-export.js # Export conversation agent (F2 Markdown / F3 Copy HTML)
@@ -216,7 +216,7 @@ pilot/
         ├── project_agents.rs # Config des agents du projet (.pilot/agents.json, issue #35)
         ├── context_engine.rs # Context Engine V2 (RAG) : embeddings Ollama + index SQLite + cosinus
         ├── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
-        └── super_agent.rs    # Super-agent : session RPC dédiée + base SQLite (clients/projets/tâches)
+        └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches)
 ```
 
 ---

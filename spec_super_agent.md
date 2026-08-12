@@ -1,29 +1,29 @@
-# Spécification — Super-agent (assistant de suivi multi-projets)
+# Spécification — Assistant (assistant de suivi multi-projets)
 
-> Onglet **🧭 Super-agent** : un assistant nommé, **lecture seule**, qui suit
+> Onglet **🧭 Assistant** : un assistant nommé, **lecture seule**, qui suit
 > l'ensemble des projets (par client) de la demande jusqu'à la livraison, apprend
 > en continu des sessions d'agents, et répond à toute question sur les projets.
 
 <!-- HELP:super-agent -->
-## Aide utilisateur — Super-agent
+## Aide utilisateur — Assistant
 
-L'onglet **🧭 Super-agent** est un assistant dédié qui **suit tous vos projets**
+L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
 (organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
 apprend et répond.
 
 ### Donner un nom à votre assistant
-- **Paramètres ⚙️ → onglet « Super-agent »** : donnez un nom à votre assistant
+- **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
 
 ### Gérer les clients
-- **Paramètres ⚙️ → onglet « Super-agent » → Clients** : saisissez la liste de
+- **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
 - Chaque projet ouvert peut être **attaché à un client** (sélection dans la
-  barre « Projets en cours » ou dans l'onglet Super-agent).
+  barre « Projets en cours » ou dans l'onglet Assistant).
 
 ### Suivre les projets
-- Le Super-agent suit chaque projet **de la demande jusqu'à la livraison** :
+- L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.
 - Il **n'effectue aucune action** sur les projets : il ne modifie, ne crée ni
   ne supprime aucun fichier. Il est **lecture seule**.
@@ -32,35 +32,40 @@ apprend et répond.
 
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
-  est envoyé automatiquement au Super-agent : il apprend ainsi ce qui a été fait,
+  est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
   décidé et livré, sans que vous ayez à le lui demander.
 - Pour un **projet déjà existant**, utilisez le bouton **« Initialiser »** :
-  le Super-agent analyse le projet (structure, documentation, historique des
+  l'Assistant analyse le projet (structure, documentation, historique des
   sessions) puis pose les questions nécessaires à son fonctionnement.
 
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
   (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en
   attente ? », « Qu'a-t-on décidé sur Z ? »).
-- Le Super-agent consulte sa base et les projets pour répondre.
+- L'Assistant consulte sa base et les projets pour répondre.
 
 ### Choisir le modèle
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
   🧭 (même liste que les agents de coding). Le changement s'applique à la
-  session du Super-agent.
+  session de l'Assistant.
+
+### Personnaliser le prompt
+- **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
+  prompt qui cadre le comportement de l'Assistant à chaque tour (rôle,
+  consignes, ton). Il est préfixé à chaque question.
 
 ### Position et persistance de l'onglet
 - L'onglet 🧭 est **toujours le plus à gauche** de la barre d'onglets, avant
   même le bouton « + » d'ajout d'agents. Il ne peut pas être déplacé par
   glisser-déposer (et aucun onglet ne peut être placé avant lui).
-- **Global (multi-projets)** : l'onglet Super-agent existe **une seule fois pour
+- **Global (multi-projets)** : l'onglet Assistant existe **une seule fois pour
   Pilot**, pas par projet. Fermer ou basculer un projet **ne le ferme pas**.
-- **Persistance** : si l'onglet Super-agent est ouvert à la fermeture de Pilot,
+- **Persistance** : si l'onglet Assistant est ouvert à la fermeture de Pilot,
   il est **rouvert automatiquement au démarrage** (état `super_agent_open`
   persisté dans la config globale, pas par projet).
 
 ### Lecture seule — garantie
-- Le Super-agent est **strictement en lecture seule** : il ne peut pas écrire
+- L'Assistant est **strictement en lecture seule** : il ne peut pas écrire
   dans vos projets. Seule sa propre base de données (dans `~/.pilot/`) est
   modifiée par lui.
 <!-- /HELP:super-agent -->
@@ -73,7 +78,7 @@ apprend et répond.
 - Suivre **tous les projets** (organisés par **client**) de la demande à la
   livraison, **sans aucune action** sur les projets (lecture seule stricte).
 - **Apprendre en continu** : à chaque fin de session d'agent, un résumé est
-  injecté automatiquement au Super-agent.
+  injecté automatiquement à l'Assistant.
 - Répondre à **toute question** sur l'ensemble des projets.
 - Construire **sa propre organisation interne** (base SQLite locale) pour suivre
   l'évolution de chaque tâche.
@@ -84,11 +89,11 @@ apprend et répond.
 
 | Concept | Description |
 |---|---|
-| **Super-agent** | Assistant nommé, lecture seule, qui suit tous les projets. |
+| **Assistant** | Assistant nommé, lecture seule, qui suit tous les projets. |
 | **Client** | Entité commerciale à laquelle sont rattachés des projets. Liste saisissable. |
 | **Projet** | Projet ouvert dans Pilot, attaché à un client (optionnel). |
 | **Tâche** | Unité de suivi (demande → livraison) extraite des sessions d'agents. |
-| **Base interne** | Base SQLite locale (`~/.pilot/super-agent.db`) gérée par le Super-agent. |
+| **Base interne** | Base SQLite locale (`~/.pilot/super-agent.db`) gérée par l'Assistant. |
 
 ## 3. Architecture
 
@@ -96,7 +101,7 @@ apprend et répond.
 Sessions d'agents (chat / orchestration)
         │  résumé à la fin de session
         ▼
-   Super-agent (session pi/plh dédiée, lecture seule)
+   Assistant (session pi/plh dédiée, lecture seule)
         │  lit / écrit
         ▼
    Base SQLite locale  ~/.pilot/super-agent.db
@@ -108,7 +113,7 @@ Sessions d'agents (chat / orchestration)
 
 - **Session dédiée** : un processus `pi --mode rpc` (ou `plh`) séparé, canal
   d'événements propre `rpc-event-superagent` (ne pollue pas les canaux existants).
-- **Lecture seule stricte** : le Super-agent reçoit une consigne système
+- **Lecture seule stricte** : l'Assistant reçoit une consigne système
   interdisant toute écriture dans les projets. Seule sa base interne est
   modifiable (via des commandes Tauri dédiées, pas via les outils de l'agent).
 
@@ -126,9 +131,9 @@ Tables (V1) :
 | `decisions` | `id`, `project_id`, `task_id` (nullable), `summary`, `source_session`, `created_at` |
 | `session_summaries` | `id`, `project_id`, `session_id`, `summary`, `created_at` |
 
-- La base est **gérée par le Super-agent** via des commandes Tauri dédiées
+- La base est **gérée par l'Assistant** via des commandes Tauri dédiées
   (pas par les outils d'écriture de l'agent, pour garantir la lecture seule).
-- Le Super-agent peut **créer ses propres tables** au fil de ses besoins
+- L'Assistant peut **créer ses propres tables** au fil de ses besoins
   (organisation interne auto-construite), dans la limite de la base dédiée.
 
 ### Registre de configuration `~/.pilot/super-agent.json`
@@ -145,24 +150,24 @@ Tables (V1) :
 
 - À chaque **fin de session d'agent** (chat standard `agent_end`, ou fin de
   tâche d'orchestration), Pilot génère un **résumé** (réutilise la logique de
-  capture H9 / synthèse d'orchestration) et l'**injecte** au Super-agent via un
+  capture H9 / synthèse d'orchestration) et l'**injecte** à l'Assistant via un
   prompt système ou un message dédié.
-- Le Super-agent met à jour sa base : tâches, décisions, état d'avancement.
+- L'Assistant met à jour sa base : tâches, décisions, état d'avancement.
 - **Ne pas bloquer** : l'injection est asynchrone et ne ralentit pas la session
   d'origine.
 
 ## 6. Initialisation d'un projet existant
 
 - Bouton **« Initialiser »** dans l'onglet 🧭 (ou par projet).
-- Le Super-agent **analyse le projet** : structure, documentation, historique
+- L'Assistant **analyse le projet** : structure, documentation, historique
   des sessions (H9), puis **pose les questions nécessaires** à son fonctionnement
   (contexte, objectifs, client, jalons).
 - Il apprend ensuite de l'analyse des discussions avec les agents individuels.
 
 ## 7. Interface
 
-### Onglet 🧭 Super-agent
-- Chat avec le Super-agent (nom affiché dans le titre).
+### Onglet 🧭 Assistant
+- Chat avec l'Assistant (nom affiché dans le titre).
 - **Sélecteur de modèle** dans la barre d'outils (même liste que les agents de
   coding, via `list_agent_models` / `get_available_models_list`).
 - Bouton **« Initialiser »**.
@@ -172,21 +177,22 @@ Tables (V1) :
 - L'onglet 🧭 est **toujours le plus à gauche** de la barre d'onglets, avant
   même le bouton « + » d'ajout d'agents. Il ne peut pas être déplacé par
   glisser-déposer (et aucun onglet ne peut être placé avant lui).
-- **Global (multi-projets)** : l'onglet Super-agent existe **une seule fois pour
+- **Global (multi-projets)** : l'onglet Assistant existe **une seule fois pour
   Pilot**, pas par projet. Fermer ou basculer un projet **ne le ferme pas**.
-- **Persistance** : si l'onglet Super-agent est ouvert à la fermeture de Pilot,
+- **Persistance** : si l'onglet Assistant est ouvert à la fermeture de Pilot,
   il est **rouvert automatiquement au démarrage** (état `super_agent_open`
   persisté dans la config globale, pas par projet).
 
-### Paramètres ⚙️ → onglet « Super-agent »
+### Paramètres ⚙️ → onglet « Assistant »
 - **Nom** de l'assistant.
+- **Prompt système** personnalisé (préfixé à chaque tour).
 - **Liste des clients** (ajout / suppression / renommage).
 - Association **projet → client**.
 
 ## 8. Garde-fous
 
 - **Lecture seule stricte** : consigne système + absence d'outils d'écriture
-  (write/edit) pour le Super-agent. Seule la base interne est modifiable.
+  (write/edit) pour l'Assistant. Seule la base interne est modifiable.
 - **Isolation** : canal d'événements séparé, session dédiée, arrêt propre à la
   fermeture de l'onglet / du projet / de l'application.
 - **Anti-régression** : ne pas toucher à `rpc_state`, `rpc_reviewer`,
@@ -194,7 +200,7 @@ Tables (V1) :
 
 ## 9. Perspective — lien futur avec un serveur de sources
 
-- Le Super-agent est conçu pour s'appuyer plus tard sur le **gestionnaire de
+- L'Assistant est conçu pour s'appuyer plus tard sur le **gestionnaire de
   source** (pilier V2, dev multi-utilisateurs via git ou gestionnaire intégré).
 - La base interne (clients, projets, tâches) est le socle de données qui
   alimentera ce lien : suivi de livraison, jalons, statuts synchronisables avec

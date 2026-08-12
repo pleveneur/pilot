@@ -746,25 +746,25 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 
 ---
 
-## Aide utilisateur — Super-agent
+## Aide utilisateur — Assistant
 
-L'onglet **🧭 Super-agent** est un assistant dédié qui **suit tous vos projets**
+L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
 (organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
 apprend et répond.
 
 ### Donner un nom à votre assistant
-- **Paramètres ⚙️ → onglet « Super-agent »** : donnez un nom à votre assistant
+- **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
 
 ### Gérer les clients
-- **Paramètres ⚙️ → onglet « Super-agent » → Clients** : saisissez la liste de
+- **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
 - Chaque projet ouvert peut être **attaché à un client** (sélection dans la
-  barre « Projets en cours » ou dans l'onglet Super-agent).
+  barre « Projets en cours » ou dans l'onglet Assistant).
 
 ### Suivre les projets
-- Le Super-agent suit chaque projet **de la demande jusqu'à la livraison** :
+- L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.
 - Il **n'effectue aucune action** sur les projets : il ne modifie, ne crée ni
   ne supprime aucun fichier. Il est **lecture seule**.
@@ -773,34 +773,39 @@ apprend et répond.
 
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
-  est envoyé automatiquement au Super-agent : il apprend ainsi ce qui a été fait,
+  est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
   décidé et livré, sans que vous ayez à le lui demander.
 - Pour un **projet déjà existant**, utilisez le bouton **« Initialiser »** :
-  le Super-agent analyse le projet (structure, documentation, historique des
+  l'Assistant analyse le projet (structure, documentation, historique des
   sessions) puis pose les questions nécessaires à son fonctionnement.
 
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
   (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en
   attente ? », « Qu'a-t-on décidé sur Z ? »).
-- Le Super-agent consulte sa base et les projets pour répondre.
+- L'Assistant consulte sa base et les projets pour répondre.
 
 ### Choisir le modèle
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
   🧭 (même liste que les agents de coding). Le changement s'applique à la
-  session du Super-agent.
+  session de l'Assistant.
+
+### Personnaliser le prompt
+- **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
+  prompt qui cadre le comportement de l'Assistant à chaque tour (rôle,
+  consignes, ton). Il est préfixé à chaque question.
 
 ### Position et persistance de l'onglet
 - L'onglet 🧭 est **toujours le plus à gauche** de la barre d'onglets, avant
   même le bouton « + » d'ajout d'agents. Il ne peut pas être déplacé par
   glisser-déposer (et aucun onglet ne peut être placé avant lui).
-- **Global (multi-projets)** : l'onglet Super-agent existe **une seule fois pour
+- **Global (multi-projets)** : l'onglet Assistant existe **une seule fois pour
   Pilot**, pas par projet. Fermer ou basculer un projet **ne le ferme pas**.
-- **Persistance** : si l'onglet Super-agent est ouvert à la fermeture de Pilot,
+- **Persistance** : si l'onglet Assistant est ouvert à la fermeture de Pilot,
   il est **rouvert automatiquement au démarrage** (état `super_agent_open`
   persisté dans la config globale, pas par projet).
 
 ### Lecture seule — garantie
-- Le Super-agent est **strictement en lecture seule** : il ne peut pas écrire
+- L'Assistant est **strictement en lecture seule** : il ne peut pas écrire
   dans vos projets. Seule sa propre base de données (dans `~/.pilot/`) est
   modifiée par lui.

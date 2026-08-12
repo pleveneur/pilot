@@ -399,6 +399,10 @@ struct AppConfig {
     // l'appel bloquant `ask_super_agent` (process frais par tour).
     #[serde(default)]
     super_agent_model: String,
+    // Prompt système personnalisé du super-agent (éditable dans Paramètres).
+    // Préfixé à chaque tour de `ask_super_agent` pour cadrer le comportement.
+    #[serde(default)]
+    super_agent_prompt: String,
     // L'onglet Super-agent est GLOBAL (multi-projets) : son état d'ouverture est
     // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
     #[serde(default)]
@@ -406,7 +410,7 @@ struct AppConfig {
 }
 
 fn default_true() -> bool { true }
-fn default_super_agent_name() -> String { "Super-agent".to_string() }
+fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
 fn default_rag_model() -> String { "nomic-embed-text".to_string() }
@@ -586,6 +590,7 @@ impl Default for AppConfig {
             super_agent_clients: Vec::new(),
             super_agent_project_client: HashMap::new(),
             super_agent_model: String::new(),
+            super_agent_prompt: String::new(),
             super_agent_open: false,
         }
     }

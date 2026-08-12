@@ -480,7 +480,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Agents", "agents");
   });
 
-  // 🧭 Super-agent : assistant de suivi multi-projets, lecture seule
+  // 🧭 Assistant : assistant de suivi multi-projets, lecture seule
   // (spec_super_agent.md).
   document.getElementById("btn-superagent").addEventListener("click", async () => {
     const { superAgentDisplayLabel } = await import("./super-agent.js");

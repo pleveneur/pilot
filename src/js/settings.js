@@ -182,6 +182,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // ── Super-agent (spec_super_agent.md) ──
   const inputSuperAgentName = document.getElementById("setting-superagent-name");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
+  const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -489,9 +490,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     if (chkGraphInjectB) chkGraphInjectB.checked = currentConfig.graph_inject_mode_b !== false;
     if (chkGraphIncludeCalls) chkGraphIncludeCalls.checked = currentConfig.graph_include_calls !== false;
   // ── Super-agent (spec_super_agent.md) ──
-  if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Super-agent";
+  if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
   if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
     ? currentConfig.super_agent_clients.join("\n") : "";
+  if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -696,10 +698,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 300000,
         agent_max_result_tokens: parseInt(inputAgentMaxResultTokens.value, 10) || 4000,
         // ── Super-agent (spec_super_agent.md) ──
-        super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Super-agent").trim() || "Super-agent",
+        super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Assistant").trim() || "Assistant",
         super_agent_clients: taSuperAgentClients
           ? taSuperAgentClients.value.split(/\n+/).map((s) => s.trim()).filter(Boolean)
           : [],
+        super_agent_prompt: taSuperAgentPrompt ? taSuperAgentPrompt.value : "",
       };
     try {
       await invoke("save_config", { config });

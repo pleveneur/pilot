@@ -195,9 +195,13 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model) = {
+    let (pi_path, mut model, system_prompt) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.rpc_pi_path.clone(), cfg.super_agent_model.clone())
+        (
+            cfg.rpc_pi_path.clone(),
+            cfg.super_agent_model.clone(),
+            cfg.super_agent_prompt.clone(),
+        )
     };
 
     // Si aucun modèle n'a été choisi, retomber sur le modèle par défaut du
@@ -215,10 +219,15 @@ pub async fn ask_super_agent(
         .clone()
         .unwrap_or_default();
 
-    // Construire le prompt : historique + message courant.
+    // Construire le prompt : prompt système (configurable) + historique + message
+    // courant. Le prompt système cadre le comportement de l'assistant à chaque
+    // tour (le process pi frais est sans mémoire).
     let mut prompt = String::new();
+    if !system_prompt.trim().is_empty() {
+        prompt.push_str(&format!("{}\n\n", system_prompt.trim()));
+    }
     for turn in &history {
-        let role = if turn.role == "user" { "Utilisateur" } else { "Super-agent" };
+        let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
         prompt.push_str(&format!("{} : {}\n\n", role, turn.content));
     }
     prompt.push_str(&format!("Utilisateur : {}", message));
@@ -319,6 +328,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "name": cfg.super_agent_name,
         "clients": cfg.super_agent_clients,
         "project_client": cfg.super_agent_project_client,
+        "prompt": cfg.super_agent_prompt,
     }))
 }
 
@@ -329,6 +339,7 @@ pub fn set_super_agent_config(
     name: Option<String>,
     clients: Option<Vec<String>>,
     project_client: Option<HashMap<String, String>>,
+    prompt: Option<String>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -339,6 +350,9 @@ pub fn set_super_agent_config(
     }
     if let Some(pc) = project_client {
         cfg.super_agent_project_client = pc;
+    }
+    if let Some(p) = prompt {
+        cfg.super_agent_prompt = p;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())

@@ -1,8 +1,9 @@
-// super-agent.js — Super-agent (spec_super_agent.md)
+// super-agent.js — Assistant de suivi (spec_super_agent.md)
 //
-// Onglet 🧭 Super-agent : assistant de suivi multi-projets, lecture seule.
+// Onglet 🧭 Assistant : assistant de suivi multi-projets, lecture seule.
 // Session RPC dédiée (canal rpc-event-superagent), couleur d'accent distincte
-// des agents de coding. Gère le chat, la config (nom, clients) et l'initialisation.
+// des agents de coding. Gère le chat, la config (nom, clients, prompt) et
+// l'initialisation.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -20,15 +21,15 @@ const md = markdownit({
   breaks: true,
 });
 
-/** État global du super-agent (nom, clients) — cache sync pour l'UI. */
-let configCache = { name: "Super-agent", clients: [], project_client: {} };
+/** État global de l'assistant (nom, clients) — cache sync pour l'UI. */
+let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "" };
 
-/** Recharge la config (nom, clients) depuis Rust. */
+/** Recharge la config (nom, clients, prompt) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
     configCache = await invoke("get_super_agent_config");
   } catch (_) {
-    configCache = { name: "Super-agent", clients: [], project_client: {} };
+    configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "" };
   }
   return configCache;
 }
@@ -38,9 +39,9 @@ export function getSuperAgentConfigSync() {
   return configCache;
 }
 
-/** Nom affichable du super-agent (titre d'onglet). */
+/** Nom affichable de l'assistant (titre d'onglet). */
 export function superAgentDisplayLabel() {
-  return configCache.name || "Super-agent";
+  return configCache.name || "Assistant";
 }
 
 // ── Rendu de messages (réutilise les classes du chat standard agent-pi.js) ──
@@ -90,7 +91,7 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="abort" title="Arrêter"><i data-lucide="square" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="new-session" title="Nouvelle session"><i data-lucide="plus" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
-    <button class="agent-btn" data-action="config" title="Configurer (nom, clients)"><i data-lucide="settings" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
