@@ -230,11 +230,10 @@ class TabsManager {
    * @param {'edit'|'preview'|'terminal'} mode
    * @param {boolean} [runDefault] - lancer la commande par défaut (terminal uniquement)
    */
-  async openFile(path, mode = "edit", runDefault = false) {
+  async openFile(path, mode = "edit", runDefault = false, switchTo = true) {
     // Onglet Agent Pi (RPC)
     if (mode === "agent") {
-      await this._openAgent(path || agentDisplayLabel(), "default", runDefault);
-      return;
+      return await this._openAgent(path || agentDisplayLabel(), "default", runDefault, switchTo);
     }
 
     // Onglet Super-agent (🧭) — spec_super_agent.md : assistant de suivi
@@ -410,12 +409,25 @@ class TabsManager {
    * défaut, "agent-N" = onglets supplémentaires). Chaque agent a sa propre
    * session/conversation indépendante.
    */
-  async _openAgent(label, agentId = "default", runDefault = false) {
+  async _openAgent(label, agentId = "default", runDefault = false, switchTo = true) {
     // Vérifier si un onglet agent avec CET id est déjà ouvert.
     const existing = this.tabs.find((t) => t.mode === "agent" && t.agentId === agentId);
     if (existing) {
-      this.switchTab(existing.id);
-      return;
+      if (switchTo) {
+        this.switchTab(existing.id);
+      } else {
+        // Issue #49 : ouvrir en arrière-plan SANS basculer sur l'onglet agent
+        // (l'assistant reste sur son onglet pour attendre le retour). Reprendre
+        // la session si elle est parkée pour que send_agent_prompt fonctionne.
+        if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
+          try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
+        }
+        if (existing.agentReady) {
+          try { await invoke("start_agent_session", { agentId }); } catch (_) {}
+        }
+        this._activeAgentId = agentId;
+      }
+      return existing;
     }
 
     const id = ++tabIdCounter;
@@ -447,7 +459,10 @@ class TabsManager {
     this.container.appendChild(tab.wrapper);
     this.tabs.push(tab);
     this._renderTabButton(tab);
-    this.switchTab(id);
+    // Issue #49 : si switchTo=false (délégation depuis l'assistant), on démarre
+    // la session en arrière-plan SANS rendre l'onglet agent actif — l'utilisateur
+    // reste sur l'onglet Assistant pour attendre le retour de l'agent.
+    if (switchTo) this.switchTab(id);
     // Persister immédiatement `hadAgent` pour ce projet : sans cela, ouvrir
     // l'onglet agent ne déclenchait aucune sauvegarde et le flag n'était mis à
     // jour que si une autre sauvegarde survenait avant de quitter le projet →
@@ -508,7 +523,10 @@ class TabsManager {
       tab.unlistenDragDrop = result.unlistenDragDrop;
       tab.agentElements = result.elements;
       tab.agentReady = true;
-      activateAgentTab(result.elements);
+      // Issue #49 : ne pas activer les globals d'UI de l'agent si on ne bascule
+      // pas (l'onglet Assistant reste actif — ses globals d'autocomplétion ne
+      // doivent pas être écrasés). Ils seront activés au prochain switchTab.
+      if (switchTo) activateAgentTab(result.elements);
 
       // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
       // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
@@ -534,6 +552,7 @@ class TabsManager {
     } finally {
       hideLoading();
     }
+    return tab;
   }
 
   /**

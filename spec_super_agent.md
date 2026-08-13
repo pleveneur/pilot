@@ -89,9 +89,10 @@ apprend et répond.
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
   coding).
-- Il **ouvre l'onglet de l'agent** (le rend visible) et lui **envoie la demande
-  dans sa session de discussion**, en précisant qu'elle vient de l'Assistant
-  projets. Vous voyez la demande dans la conversation de l'agent.
+- Il **démarre l'agent en arrière-plan** et lui **envoie la demande dans sa
+  session de discussion**, en précisant qu'elle vient de l'Assistant projets.
+  Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
+  déléguée est visible dans la conversation de l'agent quand vous y basculez).
 
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
@@ -220,7 +221,10 @@ Sessions d'agents (chat / orchestration)
   pour le rendre actif) et `delegate_to_coder` (déléguer une demande de code à
   l'agent standard du projet). La demande déléguée est affichée dans la
   discussion de l'agent du projet (à droite, comme un message utilisateur, mais
-  en violet pour montrer qu'elle provient de l'Assistant — issue #45). Quand
+  en violet pour montrer qu'elle provient de l'Assistant — issue #45). La
+  délégation ne bascule PAS sur l'onglet de l'agent (issue #49) : l'utilisateur
+  reste sur l'onglet Assistant pour attendre le retour de l'agent (la session
+  agent est démarrée en arrière-plan). Quand
   l'agent a terminé la tâche déléguée, un feedback est renvoyé à l'Assistant
   (issue #47) : à l'`agent_end`, le résumé injecté au super-agent est marqué
   `[Tâche déléguée terminée]` avec la demande transmise, pour que l'Assistant

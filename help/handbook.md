@@ -842,9 +842,10 @@ apprend et répond.
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
   coding).
-- Il **ouvre l'onglet de l'agent** (le rend visible) et lui **envoie la demande
-  dans sa session de discussion**, en précisant qu'elle vient de l'Assistant
-  projets. Vous voyez la demande dans la conversation de l'agent.
+- Il **démarre l'agent en arrière-plan** et lui **envoie la demande dans sa
+  session de discussion**, en précisant qu'elle vient de l'Assistant projets.
+  Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
+  déléguée est visible dans la conversation de l'agent quand vous y basculez).
 
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**

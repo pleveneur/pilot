@@ -855,15 +855,16 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      // Ouvrir l'onglet agent du projet actif (le rend visible + démarre la
-      // session RPC si elle était fermée). Idempotent : si déjà ouvert, bascule.
-      await tabs.openFile("", "agent");
+      // Issue #49 : ouvrir/démarrer l'agent du projet SANS basculer sur son
+      // onglet — on reste sur l'onglet Assistant pour attendre le retour de
+      // l'agent (feedback de tâche déléguée, issue #47). `openFile(..., false)`
+      // démarre la session en arrière-plan et retourne l'onglet agent (créé ou
+      // existant) pour accéder à sa discussion.
+      const agentTab = await tabs.openFile("", "agent", false, false);
       // Issue #45 : afficher la demande déléguée dans la discussion de l'agent
       // (à droite, comme un message utilisateur, mais en violet pour montrer
-      // qu'elle provient de l'Assistant). L'onglet agent est maintenant actif et
-      // son conteneur de messages est accessible via agentElements.messagesEl.
-      const activeTab = tabs.getActiveTab?.();
-      const agentMessagesEl = activeTab && activeTab.agentElements ? activeTab.agentElements.messagesEl : null;
+      // qu'elle provient de l'Assistant).
+      const agentMessagesEl = agentTab && agentTab.agentElements ? agentTab.agentElements.messagesEl : null;
       if (agentMessagesEl) {
         appendDelegatedMessage(agentMessagesEl, request);
       }
@@ -877,7 +878,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       };
       // Envoyer la demande à l'agent standard (session active du projet).
       await invoke("send_agent_prompt", { message: request });
-      appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (son onglet est ouvert).");
+      appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (il travaille en arrière-plan, je reste ici pour son retour).");
       await respondSuperAgentAction(id, true);
     } else {
       await respondSuperAgentAction(id, false);
