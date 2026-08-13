@@ -33,7 +33,7 @@ async function getAgentEventChannel(agentId = "default") {
   }
 }
 import { refreshIcons, setIcon } from "./icons.js";
-import { notifyAgentDoneFromRemote } from "./desktop-notify.js";
+import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
 import {
@@ -5383,6 +5383,12 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         notifyAgentDoneFromRemote();
         state.lastPromptOrigin = null;
       }
+      // Issue #41 : notification native pour un chat LOCAL (si activé dans les
+      // Paramètres). Limitée au chat standard (le mode orchestration notifie à
+      // la fin du plan, pas à chaque tâche).
+      if (!state.orchestrationEnabled) {
+        notifyAgentDone({ local: true }).catch(() => {});
+      }
       state.isStreaming = false;
       state.pendingRender = false;
       // Le dernier prompt a été répondu (agent_end reçu). Une compaction de fond
@@ -7314,10 +7320,21 @@ async function handleExtensionUiRequest(payload, container, state) {
       }
       return;
     }
-    if (confirm) {
-      renderInlineConfirm(container, state, id, title, confirmMessage);
-    } else {
-      renderInlineChoice(container, state, id, title, options, multi);
+    // Issue #44 : garde-fou — si le rendu du choix échoue pour une raison
+    // inattendue, on répond `cancelled` pour ne JAMAIS laisser pi bloqué
+    // (sinon l'agent « réfléchit sans s'arrêter » et l'utilisateur doit
+    // l'arrêter à la main).
+    try {
+      if (confirm) {
+        renderInlineConfirm(container, state, id, title, confirmMessage);
+      } else {
+        renderInlineChoice(container, state, id, title, options, multi);
+      }
+    } catch (err) {
+      console.error("Erreur rendu choix, réponse cancelled:", err);
+      await invoke("send_rpc_command", {
+        command: { type: "extension_ui_response", id, cancelled: true },
+      }).catch(() => {});
     }
   } else if (method === "input") {
     // Mode Orchestration autonome : pas de saisie utilisateur → annuler.
@@ -7379,8 +7396,32 @@ function renderInlineChoice(container, state, id, title, options, multi) {
     }
   };
 
+  // Champ de texte optionnel (précision / détail) avant validation.
+  const note = document.createElement("input");
+  note.type = "text";
+  note.className = "agent-choice-input agent-choice-note";
+  note.placeholder = "Ajouter une précision (optionnel)…";
+  wrapper.appendChild(note);
+  // État de sélection : multi → Set d'options cochées ; unique → option cohée
+  // (null si aucune — précision libre).
+  const selected = new Set();
+  let selectedOpt = null;
+  // Bouton Valider : soumet la sélection + la précision. Pour le choix unique,
+  // permet de valider SANS sélectionner d'option (précision libre) — issue #39.
+  const validate = document.createElement("button");
+  validate.className = "agent-choice-btn agent-choice-validate";
+  validate.textContent = "✓ Valider";
+  validate.addEventListener("click", () => {
+    const noteVal = note.value.trim();
+    if (multi) {
+      respond(JSON.stringify({ selected: [...selected], note: noteVal }), false);
+    } else {
+      respond(JSON.stringify({ selected: selectedOpt, note: noteVal }), false);
+    }
+  });
+  buttons.appendChild(validate);
+
   if (multi) {
-    const selected = new Set();
     options.forEach((opt, i) => {
       const btn = document.createElement("button");
       btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
@@ -7391,34 +7432,24 @@ function renderInlineChoice(container, state, id, title, options, multi) {
       });
       buttons.appendChild(btn);
     });
-    // Champ de texte optionnel (précision / détail) avant validation.
-    const note = document.createElement("input");
-    note.type = "text";
-    note.className = "agent-choice-input agent-choice-note";
-    note.placeholder = "Ajouter une précision (optionnel)…";
-    wrapper.appendChild(note);
-    const validate = document.createElement("button");
-    validate.className = "agent-choice-btn agent-choice-validate";
-    validate.textContent = "✓ Valider";
-    validate.addEventListener("click", () =>
-      respond(JSON.stringify({ selected: [...selected], note: note.value.trim() }), false));
-    buttons.appendChild(validate);
   } else {
-    // Choix unique : un clic répond immédiatement, avec un champ de précision
-    // optionnel (envoyé avec le choix si rempli).
-    const note = document.createElement("input");
-    note.type = "text";
-    note.className = "agent-choice-input agent-choice-note";
-    note.placeholder = "Ajouter une précision (optionnel)…";
-    wrapper.appendChild(note);
-    for (const [i, opt] of options.entries()) {
+    // Choix unique : toggle (on peut re-cliquer pour dé-sélectionner) + Valider.
+    options.forEach((opt, i) => {
       const btn = document.createElement("button");
       btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
       btn.textContent = opt;
-      btn.addEventListener("click", () =>
-        respond(JSON.stringify({ selected: opt, note: note.value.trim() }), false));
+      btn.addEventListener("click", () => {
+        if (selectedOpt === opt) {
+          selectedOpt = null;
+          btn.classList.remove("selected");
+        } else {
+          selectedOpt = opt;
+          buttons.querySelectorAll(".selected").forEach((b) => b.classList.remove("selected"));
+          btn.classList.add("selected");
+        }
+      });
       buttons.appendChild(btn);
-    }
+    });
   }
 
   wrapper.appendChild(buttons);

@@ -72,6 +72,14 @@ export default function (pi: ExtensionAPI) {
         selected = choice;
       }
       const notePart = note ? `\nPrécision de l'utilisateur : ${note}` : "";
+      if (!selected && note) {
+        // Issue #39 : l'utilisateur a validé sans choisir d'option, avec une
+        // précision libre.
+        return { content: [{ type: "text", text: `Aucune option choisie par l'utilisateur.${notePart}` }] };
+      }
+      if (!selected) {
+        return { content: [{ type: "text", text: "L'utilisateur n'a choisi aucune option." }] };
+      }
       return { content: [{ type: "text", text: `Choix de l'utilisateur : ${selected}${notePart}` }] };
     },
   });

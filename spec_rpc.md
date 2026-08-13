@@ -457,8 +457,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   champ texte) — cliquez pour répondre sans taper. Un **champ de texte optionnel**
   permet d'ajouter une **précision** à votre réponse (choix unique, cases à
   cocher ou confirmation Oui/Non) : si vous la remplissez, elle est envoyée à
-  l'agent avec votre choix ou votre confirmation. Vous pouvez aussi valider sans
-  rien saisir.
+  l'agent avec votre choix ou votre confirmation. Vous pouvez aussi **valider
+  sans rien saisir**, **ou saisir une précision et valider sans cocher d'option**
+  (bouton **✓ Valider**).
+- **Notification de fin** : réglable dans **Paramètres ⚙️ → onglet « Agent »**
+  via « Notifier quand l'agent a terminé (tâche locale) » — envoie une
+  **notification native Windows/OS** à la fin d'une tâche, y compris pour un chat
+  local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
 

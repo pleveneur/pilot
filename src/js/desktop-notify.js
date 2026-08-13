@@ -8,6 +8,8 @@
 // jamais d'erreur (la notification est un confort, pas une fonctionnalité
 // critique). Aucune régression possible sur le flux agent.
 
+import { invoke } from "@tauri-apps/api/core";
+
 let _permissionChecked = false;
 let _granted = false;
 
@@ -43,8 +45,29 @@ async function ensurePermission() {
  * @param {object} [opts] — { title?: string, body?: string }
  */
 export async function notifyAgentDoneFromRemote(opts = {}) {
+  await notifyAgentDone({ ...opts, title: opts.title || "Pilot — Agent terminé", body: opts.body || "✅ La tâche lancée à distance est terminée." });
+}
+
+/**
+ * Notifie l'utilisateur quand l'agent a terminé sa tâche. Utilisé à la fois pour
+ * une tâche à distance (notifyAgentDoneFromRemote) et pour un chat local (issue
+ * #41, réglage `notify_agent_done`). Vérifie la config pour le chat local : si
+ * le réglage est désactivé (défaut), on n'émet rien. Le mode remote est
+ * insensible au réglage (l'utilisateur a explicitement lancé à distance).
+ * @param {object} [opts] — { title?: string, body?: string, local?: boolean }
+ */
+export async function notifyAgentDone(opts = {}) {
+  if (opts.local) {
+    // Chat local : uniquement si le réglage est activé (issue #41).
+    try {
+      const cfg = await invoke("get_config");
+      if (!cfg || !cfg.notify_agent_done) return;
+    } catch (_) {
+      return;
+    }
+  }
   const title = opts.title || "Pilot — Agent terminé";
-  const body = opts.body || "✅ La tâche lancée à distance est terminée.";
+  const body = opts.body || "✅ L'agent a terminé.";
   try {
     const mod = await import("@tauri-apps/plugin-notification");
     // Vérifier la permission (demande au 1er appel si pas encore fait).

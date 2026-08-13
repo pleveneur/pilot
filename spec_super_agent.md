@@ -24,10 +24,23 @@ apprend et répond.
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
-- Chaque projet suivi peut être **attaché à un client** : dans l'onglet 🧭
-  Assistant, cliquez sur le bouton **🏢 (Projets & clients)** pour ouvrir le
-  panneau listant les projets suivis, puis choisissez le client de chaque projet
-  dans le menu déroulant. L'association est enregistrée immédiatement.
+- **Créer un client à la volée** : dans l'onglet 🧭 Assistant, le bouton **🏢
+  (Projets & clients)** permet aussi de **créer un nouveau client** directement
+  (champ « Nom du nouveau client » + bouton **+ Ajouter un client**), sans
+  passer par les Paramètres. Le nouveau client est aussitôt disponible dans les
+  sélecteurs.
+- Chaque projet suivi peut être **attaché à un client** : dans le panneau
+  **🏢 (Projets & clients)**, choisissez le client de chaque projet dans le menu
+  déroulant. L'association est enregistrée immédiatement.
+
+### Rendu de la conversation (harmonisé avec l'agent)
+- La conversation avec l'Assistant utilise **le même rendu que l'agent
+  standard** : bulles, cadres, **pensée/réflexion**, **outils utilisés** et
+  **boutons de choix** (avec l'accent **violet** dédié à l'Assistant au lieu du
+  bleu).
+- **Paramétrer** : **Paramètres ⚙️ → onglet « Assistant »** → cochez/décochez
+  « Afficher la réflexion de l'Assistant » et « Afficher les outils de
+  l'Assistant » pour masquer (ou montrer) ces blocs.
 
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
