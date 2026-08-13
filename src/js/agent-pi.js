@@ -6431,6 +6431,22 @@ function appendUserMessage(container, text) {
   return el;
 }
 
+/**
+ * Issue #45 : message délégué par l'Assistant (🧭) à l'agent du projet.
+ * S'affiche comme un message utilisateur (à droite) mais avec une couleur
+ * distincte (violet, accent de l'Assistant) pour montrer qu'il provient de
+ * l'assistant et non de l'utilisateur. Appelé depuis super-agent.js quand
+ * l'assistant délègue une demande à l'agent de coding (delegate_to_coder).
+ */
+export function appendDelegatedMessage(container, text) {
+  const el = document.createElement("div");
+  el.className = "agent-message agent-message-user agent-message-delegated";
+  el.innerHTML = `<div class="agent-bubble agent-bubble-user agent-bubble-delegated">${escapeHtml(text)}</div>`;
+  container.appendChild(el);
+  scrollToBottom(container);
+  return el;
+}
+
 function createAssistantBlock(container) {
   const el = document.createElement("div");
   el.className = "agent-message agent-message-assistant";

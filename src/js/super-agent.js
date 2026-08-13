@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import markdownit from "markdown-it";
 import { refreshIcons } from "./icons.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
+import { appendDelegatedMessage } from "./agent-pi.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -43,6 +44,22 @@ export function getSuperAgentConfigSync() {
 /** Nom affichable de l'assistant (titre d'onglet). */
 export function superAgentDisplayLabel() {
   return configCache.name || "Assistant";
+}
+
+/**
+ * Issue #46 : bascule automatiquement sur l'onglet Assistant (🧭) une fois le
+ * projet chargé, si l'onglet assistant est ouvert (l'assistant est « activé »
+ * par l'utilisateur). Ne force rien si l'onglet n'existe pas (assistant non
+ * utilisé) pour ne pas surprendre. Appelé après chargement de projet et au
+ * démarrage de Pilot.
+ */
+export function switchToSuperAgent() {
+  const tabs = window._pilotTabs;
+  if (!tabs || !tabs.tabs) return;
+  const superTab = tabs.tabs.find((t) => t.mode === "superagent");
+  if (superTab && typeof tabs.switchTab === "function") {
+    tabs.switchTab(superTab.id);
+  }
 }
 
 // État de streaming partagé entre createSuperAgent et handleSuperAgentEvent
@@ -834,6 +851,15 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // Ouvrir l'onglet agent du projet actif (le rend visible + démarre la
       // session RPC si elle était fermée). Idempotent : si déjà ouvert, bascule.
       await tabs.openFile("", "agent");
+      // Issue #45 : afficher la demande déléguée dans la discussion de l'agent
+      // (à droite, comme un message utilisateur, mais en violet pour montrer
+      // qu'elle provient de l'Assistant). L'onglet agent est maintenant actif et
+      // son conteneur de messages est accessible via agentElements.messagesEl.
+      const activeTab = tabs.getActiveTab?.();
+      const agentMessagesEl = activeTab && activeTab.agentElements ? activeTab.agentElements.messagesEl : null;
+      if (agentMessagesEl) {
+        appendDelegatedMessage(agentMessagesEl, request);
+      }
       // Envoyer la demande à l'agent standard (session active du projet).
       await invoke("send_agent_prompt", { message: request });
       appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (son onglet est ouvert).");

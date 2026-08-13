@@ -13,6 +13,7 @@ import { restoreTabs, saveTabSession, cancelScheduleSave } from "./session-persi
 import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
+import { switchToSuperAgent } from "./super-agent.js";
 import { toastError, toastSuccess, toastInfo } from "./toast.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
@@ -434,6 +435,10 @@ class Sidebar {
       // l'onglet agent de CE projet si la session persistée en avait un).
       restoreTabs(this.tabs, folderPath);
       toastSuccess("Projet ouvert : " + name);
+      // Issue #46 : une fois le projet entièrement chargé, basculer sur l'onglet
+      // Assistant (🧭) si celui-ci est ouvert (assistant activé). Ne force rien
+      // si l'utilisateur n'utilise pas l'assistant.
+      switchToSuperAgent();
     } catch (e) {
       toastError("Erreur ouverture projet : " + e);
     } finally {

@@ -2706,6 +2706,23 @@ body.zen-mode #action-panel {
   white-space: pre-wrap;
 }
 
+/* Issue #45 : message délégué par l'Assistant (🧭) à l'agent du projet.
+   S'affiche à droite comme un message utilisateur mais avec l'accent violet
+   de l'Assistant pour montrer qu'il provient de l'assistant. */
+.agent-bubble-delegated {
+  background: color-mix(in srgb, var(--superagent-accent) 22%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--superagent-accent) 30%, transparent);
+}
+.agent-message-delegated::before {
+  content: "🧭 Assistant";
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--superagent-accent);
+  text-align: right;
+  margin-bottom: 3px;
+  padding-right: 2px;
+}
+
 /* Badge « via remote » sous un prompt utilisateur tapé à distance. */
 .agent-message-remote::after {
   content: "📱 via remote";

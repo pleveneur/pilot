@@ -150,6 +150,10 @@ apprend et répond.
 - **Persistance** : si l'onglet Assistant est ouvert à la fermeture de Pilot,
   il est **rouvert automatiquement au démarrage** (état `super_agent_open`
   persisté dans la config globale, pas par projet).
+- **Bascule automatique (issue #46)** : à l'ouverture d'un projet (et au
+  démarrage de Pilot), une fois le projet entièrement chargé, Pilot bascule
+  automatiquement sur l'onglet Assistant **si celui-ci est ouvert** (assistant
+  activé). Si l'utilisateur n'utilise pas l'assistant, rien n'est forcé.
 
 ### Lecture seule — garantie
 - L'Assistant est **strictement en lecture seule** sur vos projets : il ne
@@ -214,7 +218,9 @@ Sessions d'agents (chat / orchestration)
   (ask_choice, ask_confirm, ask_input, ask_multi_choice). L'extension
   `pilot-assistant-actions` fournit les outils `open_project` (ouvrir un projet
   pour le rendre actif) et `delegate_to_coder` (déléguer une demande de code à
-  l'agent standard du projet). L'extension `pilot-assistant-db` fournit les
+  l'agent standard du projet). La demande déléguée est affichée dans la
+  discussion de l'agent du projet (à droite, comme un message utilisateur, mais
+  en violet pour montrer qu'elle provient de l'Assistant — issue #45). L'extension `pilot-assistant-db` fournit les
   outils `db_query` / `db_execute` (accès contrôlé à la base de suivi de
   l'assistant). L'extension `pilot-assistant-prompt` fournit l'outil
   `update_my_prompt` (auto-adaptation du prompt personnalisé). Les cinq sont

@@ -788,8 +788,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const cfg = await invoke("get_config");
     if (cfg.super_agent_open === true) {
-      const { superAgentDisplayLabel } = await import("./super-agent.js");
-      tabs.openFile(superAgentDisplayLabel(), "superagent");
+      const { superAgentDisplayLabel, switchToSuperAgent } = await import("./super-agent.js");
+      await tabs.openFile(superAgentDisplayLabel(), "superagent");
+      // Issue #46 : au démarrage, une fois le projet chargé et l'onglet assistant
+      // ouvert, basculer dessus (l'assistant est activé).
+      switchToSuperAgent();
     }
   } catch (_) {}
 
