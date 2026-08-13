@@ -220,7 +220,12 @@ Sessions d'agents (chat / orchestration)
   pour le rendre actif) et `delegate_to_coder` (déléguer une demande de code à
   l'agent standard du projet). La demande déléguée est affichée dans la
   discussion de l'agent du projet (à droite, comme un message utilisateur, mais
-  en violet pour montrer qu'elle provient de l'Assistant — issue #45). L'extension `pilot-assistant-db` fournit les
+  en violet pour montrer qu'elle provient de l'Assistant — issue #45). Quand
+  l'agent a terminé la tâche déléguée, un feedback est renvoyé à l'Assistant
+  (issue #47) : à l'`agent_end`, le résumé injecté au super-agent est marqué
+  `[Tâche déléguée terminée]` avec la demande transmise, pour que l'Assistant
+  mette à jour son suivi (tâches, décisions) et décide des prochaines étapes
+  (boucle de feedback agent → assistant). L'extension `pilot-assistant-db` fournit les
   outils `db_query` / `db_execute` (accès contrôlé à la base de suivi de
   l'assistant). L'extension `pilot-assistant-prompt` fournit l'outil
   `update_my_prompt` (auto-adaptation du prompt personnalisé). Les cinq sont

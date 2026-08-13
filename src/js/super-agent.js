@@ -25,6 +25,13 @@ const md = markdownit({
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
 let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
 
+// Issue #47 : délégation en attente de feedback. Quand l'assistant délègue une
+// tâche à l'agent d'un projet (delegate_to_coder), on mémorise la demande ici.
+// À l'agent_end du chat standard, le résumé injecté au super-agent inclut le
+// contexte de délégation (demande + résultat) pour que l'assistant mette à jour
+// son suivi et décide des prochaines étapes. Puis on vide le tracker.
+let pendingDelegation = null;
+
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
@@ -860,6 +867,14 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       if (agentMessagesEl) {
         appendDelegatedMessage(agentMessagesEl, request);
       }
+      // Issue #47 : mémoriser la délégation en attente. À l'agent_end, le résumé
+      // injecté au super-agent inclura cette demande + le résultat de l'agent,
+      // pour que l'assistant mette à jour son suivi et décide des prochaines
+      // étapes (boucle de feedback agent → assistant).
+      pendingDelegation = {
+        request: String(request).slice(0, 500),
+        projectPath: window._pilotProjectPath || null,
+      };
       // Envoyer la demande à l'agent standard (session active du projet).
       await invoke("send_agent_prompt", { message: request });
       appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (son onglet est ouvert).");
@@ -1086,11 +1101,23 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder) {
  * @param {string} [projectPath] - chemin du projet actif.
  */
 export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
+  // Issue #47 : si une délégation est en attente (delegate_to_coder), marquer le
+  // résumé comme un feedback de tâche déléguée pour que l'assistant mette à jour
+  // son suivi et décide des prochaines étapes. On consomme le tracker (une seule
+  // fois) pour ne pas marquer les sessions suivantes.
+  let finalSummary = String(summary || "");
+  if (pendingDelegation) {
+    const del = pendingDelegation;
+    pendingDelegation = null;
+    const marker =
+      `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
+    finalSummary = marker + finalSummary;
+  }
   try {
     await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
-      summary: String(summary || "").slice(0, 2000),
+      summary: finalSummary.slice(0, 2000),
     });
   } catch (_) {
     // Silencieux : le super-agent n'est pas indispensable au chat.
