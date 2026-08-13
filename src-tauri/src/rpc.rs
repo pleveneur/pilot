@@ -287,11 +287,29 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
             .get_mut(&cwd)
             .and_then(|ps| ps.rpc.remove(&agent_id))
     };
-    if let Some(session) = resumed {
-        *state.rpc_state.lock().unwrap() = Some(session);
-        *state.active_agent_id.lock().unwrap() = Some(agent_id);
-        // Reprendre la session : pas de `new_session` (on garde l'historique).
-        return Ok(true);
+    if let Some(mut session) = resumed {
+        // Issue #48 : vérifier que le processus pi de la session parkée est
+        // TOUJOURS vivant avant de la reprendre. Si le pi est mort pendant le
+        // parking (crash, kill, redémarrage), reprendre la session donne une
+        // session morte : `get_agent_messages` échoue (pipe fermé) → discussion
+        // vide, aucun événement RPC reçu (agent_end jamais reçu → sessions non
+        // persistées), et le statut reste bloqué en « streaming ». On jette la
+        // session morte et on en démarre une nouvelle (l'historique pi reste
+        // récupérable via list_sessions / index_sessions).
+        let alive = session
+            .child
+            .try_wait()
+            .map(|s| s.is_none())
+            .unwrap_or(false);
+        if alive {
+            *state.rpc_state.lock().unwrap() = Some(session);
+            *state.active_agent_id.lock().unwrap() = Some(agent_id);
+            // Reprendre la session : pas de `new_session` (on garde l'historique).
+            return Ok(true);
+        }
+        // Session morte : on la laisse tomber (try_wait a déjà récolté le
+        // processus) et on démarre une nouvelle session ci-dessous.
+        drop(session);
     }
 
     let mut rpc = state.rpc_state.lock().unwrap();

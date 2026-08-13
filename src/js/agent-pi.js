@@ -645,6 +645,37 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       }
     } catch (_) { /* ignore : statut par défaut */ }
   })();
+  // Issue #48 : poll périodique de l'activité de l'agent pour ne pas laisser le
+  // statut bloqué en « streaming » (clignotant) si l'agent_end n'a pas été reçu
+  // (événements RPC manqués). Si l'agent n'est plus occupé, on repasse à « Prêt ».
+  // N'interfère pas avec le streaming normal : tant que busy=true, on ne touche
+  // pas au statut (déjà géré par les événements).
+  const statusPoll = setInterval(async () => {
+    try {
+      const states = await invoke("get_project_agent_states");
+      if (!states) return;
+      const key = (window._pilotProjectPath || "").replace(/\\/g, "/");
+      const busy = key && states[key] && states[key].busy;
+      if (!busy && statusEl.classList.contains("agent-status-streaming")) {
+        statusEl.textContent = "Prêt";
+        statusEl.className = "agent-status agent-status-idle";
+      }
+    } catch (_) { /* ignore */ }
+  }, 2000);
+  // Nettoyer le poll quand l'onglet est fermé (évite les fuites). On observe le
+  // parent du conteneur : quand le wrapper est retiré du DOM (fermeture d'onglet),
+  // on arrête l'intervalle.
+  const _clearStatusPoll = () => clearInterval(statusPoll);
+  const _statusPollParent = container.parentNode;
+  if (_statusPollParent) {
+    const _statusPollObs = new MutationObserver(() => {
+      if (!container.isConnected) {
+        _clearStatusPoll();
+        _statusPollObs.disconnect();
+      }
+    });
+    _statusPollObs.observe(_statusPollParent, { childList: true });
+  }
   const autocompleteEl = wrapper.querySelector("#agent-autocomplete");
   const resumePopup = wrapper.querySelector("#agent-resume-popup");
   const promptPopup = wrapper.querySelector("#agent-prompt-popup");
@@ -5113,8 +5144,20 @@ async function updateStats() {
 async function captureSessionHistory(state, filesThisTurn) {
   try {
     const sessions = await invoke("list_sessions");
-    if (!sessions || !sessions.length) return; // --no-session ou projet sans session pi
-    const top = sessions[0];
+    // Issue #48 : si list_sessions est vide (dossier de sessions pi introuvable
+    // ou non encore écrit), on tente une rétro-indexation via index_sessions
+    // (reconstruit l'index depuis le dossier pi). Si elle trouve des sessions,
+    // on relit list_sessions pour capturer la plus récente. Sinon on abandonne
+    // (--no-session ou projet sans session pi).
+    let list = sessions;
+    if (!list || !list.length) {
+      try {
+        const n = await invoke("index_sessions");
+        if (n > 0) list = await invoke("list_sessions");
+      } catch (_) { /* index_sessions indisponible : on abandonne */ }
+    }
+    if (!list || !list.length) return;
+    const top = list[0];
     const id = top && top.id;
     if (!id) return;
 
@@ -6617,7 +6660,13 @@ export async function renderMessageHistory(container) {
   try {
     raw = await invoke("get_agent_messages");
   } catch (_) {
-    return -1; // session pas encore prête (à réessayer) — distinct d'un historique vide
+    // Issue #48 : la session RPC peut être indisponible (session parkée morte,
+    // rpc_state vide). Au lieu de retourner -1 (→ boucle de retry qui abandonne
+    // → discussion vide), on retombe sur la lecture directe du fichier de
+    // session pi le plus récent pour reconstruire la discussion. Si le fichier
+    // est introuvable, on retourne -1 (session pas encore prête, à réessayer).
+    const n = await renderMessageHistoryFromFile(container);
+    return n === 0 ? -1 : n;
   }
   // Formats défensifs : tableau direct, {messages:[...]}, {data:{messages:[...]}}.
   let arr = raw;
@@ -6625,7 +6674,52 @@ export async function renderMessageHistory(container) {
     arr = (arr.data && arr.data.messages) || arr.messages || [];
   }
   if (!Array.isArray(arr) || arr.length === 0) return 0;
+  return renderMessagesFromArray(container, arr);
+}
 
+/**
+ * Issue #48 : reconstruit la discussion depuis le fichier de session pi le plus
+ * récent du projet (fallback quand la session RPC est indisponible). Lit le
+ * fichier JSONL via `list_sessions` + `read_file_content`, extrait les messages
+ * (type "message") et les rend via le même chemin visuel que le streaming.
+ * @returns {Promise<number>} nombre de messages rendus (0 si aucun fichier)
+ */
+async function renderMessageHistoryFromFile(container) {
+  let sessions;
+  try {
+    sessions = await invoke("list_sessions");
+  } catch (_) {
+    return 0;
+  }
+  if (!sessions || !sessions.length) return 0;
+  const top = sessions[0];
+  if (!top || !top.file) return 0;
+  let content;
+  try {
+    content = await invoke("read_file_content", { path: top.file });
+  } catch (_) {
+    return 0;
+  }
+  const messages = [];
+  for (const line of String(content || "").split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj && obj.type === "message" && obj.message && typeof obj.message === "object") {
+        messages.push(obj.message);
+      }
+    } catch (_) { /* ligne invalide : ignorée */ }
+  }
+  if (!messages.length) return 0;
+  return renderMessagesFromArray(container, messages);
+}
+
+/**
+ * Rend un tableau de messages (rôle user/assistant) dans `container` via les
+ * helpers de rendu existants (même chemin visuel que le streaming).
+ * @returns {number} nombre de messages rendus
+ */
+function renderMessagesFromArray(container, arr) {
   // Vider et re-rendre.
   container.innerHTML = "";
   let rendered = 0;

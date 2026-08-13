@@ -95,7 +95,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 
 | Commande | Type | Description |
 |----------|------|-------------|
-| `start_agent_session` | async | Lance `pi --mode rpc [+ --no-session]` dans le cwd du projet |
+| `start_agent_session` | async | Lance `pi --mode rpc [+ --no-session]` dans le cwd du projet. Multi-projets : reprend une session parkée du projet actif si elle existe. Issue #48 : si le processus pi de la session parkée est mort (crash pendant le parking), la session est jetée et une nouvelle est démarrée (sinon `get_agent_messages` échouait → discussion vide, aucun événement reçu, sessions non persistées). |
 | `stop_agent_session` | async | Tue le processus pi proprement |
 | `send_agent_prompt` | async | Envoie un message à l'agent avec images optionnelles |
 | `abort_agent` | async | Annule l'opération en cours |
