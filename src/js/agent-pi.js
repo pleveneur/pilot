@@ -56,6 +56,7 @@ import {
   matchesGlob, matchesAnyCritical,
   buildReviewPrompt, parseReviewResult, buildReviewCorrectionPrompt,
 } from "./orchestration-reviewer.js";
+import { detectRepeatedBlock } from "./loop-detection.js";
 
 // ── État global de l'autocomplétion ──
 let allCommands = [];
@@ -316,6 +317,14 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     pendingToolCalls: new Map(),  // toolCallId → { name, args } (en attente de tool_execution_start)
     lengthNudgeAttempts: 0,  // compteur de relances auto après stopReason:"length" (chat standard, max 2)
     lastStopReason: "",      // dernier stopReason assistant reçu (détection réponse tronquée)
+    // ── Détection de boucle dans la réflexion (issue #37) ──
+    // Voir loop-detection.js. Le buffer accumule le flux streamé (thinking_delta
+    // + text_delta) ; quand un bloc répété est détecté, on arrête l'agent puis on
+    // le relance avec une demande de correction. Mode Orchestration exclu.
+    loopBuffer: "",            // buffer de la réflexion/texte streamé du tour courant
+    loopLastChecked: 0,        // timestamp du dernier test (throttle du streaming)
+    loopCorrectionPending: false, // true entre l'arrêt (abort) et l'envoi du prompt de correction
+    loopCorrectionCount: 0,    // nb de corrections de boucle déjà faites (max 2)
     // ── Erreurs de connexion (chat standard) ──
     // pi émet auto_retry_start puis un message error à chaque retry. Sans
     // dé-duplication, l'UI empile « ❌ Erreur de connexion » 3-4× d'affilée,
@@ -5190,6 +5199,48 @@ function toRelPath(abs) {
   return abs;
 }
 
+// ── Détection de boucle dans la réflexion (issue #37) ──
+// Nombre maximal de corrections de boucle par session (évite une boucle sans fin
+// de détection/correction). Après 2 corrections, on laisse l'agent terminer et
+// on prévient l'utilisateur.
+const MAX_LOOP_CORRECTIONS = 2;
+// Intervalle minimal entre deux tests de boucle pendant le streaming (ms).
+const LOOP_CHECK_INTERVAL_MS = 500;
+// Taille minimale du buffer de réflexion avant de tester (évite les faux positifs
+// sur un début de réponse trop court).
+const LOOP_BUFFER_MIN = 200;
+
+/**
+ * Accumule un delta streamé dans le buffer de réflexion puis, de façon
+ * throttlée, détecte un éventuel bouclage. En cas de boucle, arrête l'agent
+ * (abort) et mémorise `loopCorrectionPending` pour que l'agent_end envoie la
+ * demande de correction. Mode Orchestration exclu : cycle Réfléchir/Faire/
+ * Contrôler inchangé.
+ * @param {object} state
+ * @param {Element} messagesEl
+ */
+function maybeDetectReflectionLoop(state, messagesEl) {
+  if (!state || state.orchestrationRunning) return;
+  if (state.loopCorrectionPending) return; // déjà en cours de correction
+  if (state.loopCorrectionCount >= MAX_LOOP_CORRECTIONS) return;
+  if (!state.isStreaming) return;
+
+  // Throttle : ne tester qu'une fois toutes les LOOP_CHECK_INTERVAL_MS.
+  const now = Date.now();
+  if (now - state.loopLastChecked < LOOP_CHECK_INTERVAL_MS) return;
+  state.loopLastChecked = now;
+
+  const buffer = state.loopBuffer || "";
+  if (buffer.length < LOOP_BUFFER_MIN) return;
+
+  if (detectRepeatedBlock(buffer)) {
+    state.loopCorrectionPending = true;
+    console.warn("[loop-detection] boucle détectée, arrêt de l'agent pour correction");
+    appendSystemMessage(messagesEl, "🔁 Boucle détectée dans la réflexion : le modèle répète le même bloc de texte. Arrêt de l'agent pour correction…");
+    invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (loop):", e));
+  }
+}
+
 async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn, orchFns) {
   const type = payload.type;
 
@@ -5341,6 +5392,25 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       if (state.orchestrationCompactionResumePending) {
         state.orchestrationCompactionResumePending = false;
         if (state.orchestrationCompactionTimer) { clearTimeout(state.orchestrationCompactionTimer); state.orchestrationCompactionTimer = null; }
+      }
+      // Issue #37 : reprise après arrêt pour boucle de réflexion. L'agent a été
+      // arrêté (abort) quand une boucle a été détectée ; on lui renvoie ici une
+      // demande de correction dans la même session pour qu'il reprenne (max 2).
+      if (state.loopCorrectionPending) {
+        state.loopCorrectionPending = false;
+        state.loopBuffer = "";
+        if (state.loopCorrectionCount < MAX_LOOP_CORRECTIONS) {
+          state.loopCorrectionCount++;
+          appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle (${state.loopCorrectionCount}/${MAX_LOOP_CORRECTIONS})…`);
+          invoke("send_agent_prompt", {
+            message: "Tu tournes en boucle : tu répètes à l'identique le même bloc de texte. Arrête-toi, corrige-toi, et poursuis ta réponse de façon progressive, sans répéter le même contenu.",
+          }).catch((e) => {
+            console.error("Erreur envoi correction boucle:", e);
+            appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de boucle : ${e}`);
+          });
+        } else {
+          appendSystemMessage(messagesEl, "⚠️ L'agent a tourné en boucle plusieurs fois. Veuillez reformuler votre demande ou changer de modèle.");
+        }
       }
       // Finaliser le bloc assistant en cours
       if (state.currentAssistantBlock) {
@@ -5707,6 +5777,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         state.pendingText = "";
         state.pendingRender = false;
         state.lastAssistantRawText = "";
+        // Issue #37 : nouveau message → reset du buffer de détection de boucle.
+        state.loopBuffer = "";
       }
       break;
     }
@@ -5736,6 +5808,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         case "text_delta":
           state.pendingText += delta.delta || "";
           state.lastAssistantRawText += delta.delta || "";
+          // Issue #37 : accumuler le flux pour la détection de boucle.
+          state.loopBuffer += delta.delta || "";
+          maybeDetectReflectionLoop(state, messagesEl);
           // Comptage des caractères de réponse pour les métriques (point N)
           if (state.orchestrationEnabled && state.orchestrationRunning) {
             state.orchestrationResponseChars = (state.orchestrationResponseChars || 0) + (delta.delta ? delta.delta.length : 0);
@@ -5800,6 +5875,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           break;
 
         case "thinking_delta":
+          // Issue #37 : accumuler la réflexion streamée pour la détection de boucle.
+          state.loopBuffer += delta.delta || "";
+          maybeDetectReflectionLoop(state, messagesEl);
           if (state.currentThinkingBlock) {
             if (showThinkingEnabled) {
               const contents = state.currentThinkingBlock.querySelectorAll(".agent-thinking-content");

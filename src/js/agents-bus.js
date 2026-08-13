@@ -16,10 +16,16 @@ import {
   aggregateParallelResults,
   buildDefaultCoordinator,
 } from "./agents.js";
+import { detectRepeatedBlock } from "./loop-detection.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
 const DEFAULT_TIMEOUT_MS = 300000; // 5 min d'inactivité (le codeur fait des outils longs)
+
+// Issue #37 : détection de boucle dans la réflexion des sous-agents.
+const MAX_AGENT_LOOP_CORRECTIONS = 2; // max par agent et par run
+const AGENT_LOOP_CHECK_INTERVAL_MS = 500; // throttle du streaming
+const AGENT_LOOP_BUFFER_MIN = 200; // taille min de texte avant test
 
 let busState = {
   listeners: null,
@@ -40,6 +46,10 @@ let busState = {
   parallelGroup: null, // { assignments, pending, results, onComplete }
   pendingPromise: null,
   isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
+  // Issue #37 : état de détection de boucle par agent.
+  loopCorrectionPending: {}, // agentId → true (arrêt en cours, correction à l'agent_end)
+  loopCorrectionCount: {}, // agentId → nb de corrections déjà faites
+  loopLastChecked: {}, // agentId → timestamp du dernier test
   config: null,
   callbacks: {},
 };
@@ -57,6 +67,9 @@ function resetBusState() {
   busState.parallelGroup = null;
   busState.pendingPromise = null;
   busState.isCompacting = false;
+  busState.loopCorrectionPending = {};
+  busState.loopCorrectionCount = {};
+  busState.loopLastChecked = {};
 }
 
 function emit(event, data) {
@@ -157,6 +170,33 @@ let piTurnCount = 0;
 const MAX_TURNS = 50;
 const MAX_PI_TURNS_PER_AGENT = 40;
 
+/**
+ * Issue #37 : détecte une boucle dans la réflexion d'un sous-agent et, le cas
+ * échéant, arrête son processus (abort) pour renvoyer ensuite une demande de
+ * correction à l'agent_end. Appelé sur chaque text_delta (throttlé).
+ * @param {string} agentId
+ */
+function maybeDetectAgentLoop(agentId) {
+  if (busState.runState !== "running") return;
+  if (busState.loopCorrectionPending[agentId]) return; // déjà en cours
+  if ((busState.loopCorrectionCount[agentId] || 0) >= MAX_AGENT_LOOP_CORRECTIONS) return;
+
+  const now = Date.now();
+  if (now - (busState.loopLastChecked[agentId] || 0) < AGENT_LOOP_CHECK_INTERVAL_MS) return;
+  busState.loopLastChecked[agentId] = now;
+
+  const text = busState.streamingTextByAgent[agentId] || "";
+  if (text.length < AGENT_LOOP_BUFFER_MIN) return;
+
+  if (detectRepeatedBlock(text)) {
+    busState.loopCorrectionPending[agentId] = true;
+    busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
+    console.warn("[agents-bus] boucle détectée", agentId);
+    emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
+    invoke("abort_agent_process", { agentId }).catch(() => {});
+  }
+}
+
 function handleAgentEvent(ev) {
   const payload = ev.payload || {};
   const agentId = payload.agent_id;
@@ -199,6 +239,8 @@ function handleAgentEvent(ev) {
     } else if (delta.type === "text_delta" && typeof delta.delta === "string") {
       busState.streamingTextByAgent[agentId] = (busState.streamingTextByAgent[agentId] || "") + delta.delta;
       emit("delta", { agentId, text: delta.delta });
+      // Issue #37 : détection de boucle dans la réflexion du sous-agent.
+      maybeDetectAgentLoop(agentId);
     }
   } else if (type === "message") {
     // L'event "message" apporte le message assistant COMPLET (role, stopReason,
@@ -226,6 +268,20 @@ function handleAgentEvent(ev) {
   } else if (type === "extension_ui_request") {
     handleExtensionUiRequest(agentId, event);
   } else if (type === "agent_end") {
+    // Issue #37 : si cet agent a été arrêté pour boucle, on le relance avec une
+    // demande de correction au lieu de terminer son tour (reste actif).
+    if (busState.loopCorrectionPending[agentId]) {
+      busState.loopCorrectionPending[agentId] = false;
+      busState.streamingTextByAgent[agentId] = "";
+      piTurnCount = 0; // c'est une continuation du tour, pas un nouveau tour
+      resetTimeout();
+      const correction = "Tu tournes en boucle : tu répètes à l'identique le même bloc de texte. Arrête-toi, corrige-toi, et poursuis ta tâche de façon progressive, sans répéter le même contenu.";
+      sendPromptToAgent(agentId, correction).catch((e) => {
+        console.error("[agents-bus] erreur envoi correction boucle", agentId, e);
+        failAgentTurn(agentId, String(e));
+      });
+      return;
+    }
     turnCount++;
     piTurnCount = 0;
     console.log("[agents-bus] agent_end turn=" + turnCount, agentId);

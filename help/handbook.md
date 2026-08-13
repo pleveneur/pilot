@@ -277,6 +277,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   milieu (souvent un `write` de gros fichier). Pilot détecte la troncation et
   relance automatiquement le modèle pour qu'il reprenne (max 2), au lieu de
   rester silencieux. Vous voyez « ✂️ Réponse tronquée… Relance automatique… ».
+- **Boucle dans la réflexion** : si le modèle se met à répéter à l'identique le
+  même bloc de texte (réflexion qui tourne en boucle, plusieurs lignes), Pilot
+  détecte la boucle sur les dernières lignes streamées, **arrête l'agent** puis
+  le relance automatiquement avec une demande de correction (« tu tournes en
+  boucle, corrige-toi »), max 2 fois. Vous voyez « 🔁 Boucle détectée dans la
+  réflexion… » puis « ✍️ Reprise de l'agent avec correction… ». Ce comportement
+  s'applique aussi aux sous-agents (H2) ; le **Mode Orchestration** est exclu.
 - **Nouvelle conversation** : bouton ➕ (new session). **Reprendre une session** :
   commande `/resume` liste les sessions enregistrées pour le projet courant.
 - **Prompt Builder** : clic-droit sur un fichier/dossier de l'explorateur →

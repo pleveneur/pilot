@@ -170,6 +170,7 @@ pilot/
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
 │       ├── models-config.js  # Onglet « Fournisseurs » : édition UI models.json + model-switch.json (pi/plh)
 │       ├── conversation-export.js # Export conversation agent (F2 Markdown / F3 Copy HTML)
+│       ├── loop-detection.js # Détection de boucle dans la réflexion du modèle (issue #37) — pure, branchée chat + sous-agents
 │       ├── backend-info.js   # Sonde backend (pi vs plh) + libellé dynamique "Agent Pi"/"Agent PLh"
 │       ├── desktop-notify.js  # Notifications desktop natives (D1) — agent terminé à distance
 │       └── terminal.js        # Terminal intégré xterm.js
