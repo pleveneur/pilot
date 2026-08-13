@@ -121,6 +121,7 @@ export async function initSettings() {
   const inputSessionRetention = document.getElementById("setting-session-retention");
   const chkShowThinking = document.getElementById("setting-show-thinking");
   const chkShowTools = document.getElementById("setting-show-tools");
+  const chkNotifyAgentDone = document.getElementById("setting-notify-agent-done");
   const inputPdfMdModel = document.getElementById("setting-pdf-md-model");
   const chkAutoSave = document.getElementById("setting-auto-save");
   const inputAutoSaveDelay = document.getElementById("setting-auto-save-delay");
@@ -183,6 +184,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const inputSuperAgentName = document.getElementById("setting-superagent-name");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
+  const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
+  const chkSuperAgentTools = document.getElementById("setting-superagent-tools");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -414,6 +417,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     if (inputSessionRetention) inputSessionRetention.value = currentConfig.session_retention_days ?? 15;
     chkShowThinking.checked = currentConfig.show_thinking !== false;
     chkShowTools.checked = currentConfig.show_tools || false;
+    if (chkNotifyAgentDone) chkNotifyAgentDone.checked = currentConfig.notify_agent_done === true;
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
@@ -494,6 +498,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
     ? currentConfig.super_agent_clients.join("\n") : "";
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+  if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
+  if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -626,6 +632,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         quality_gate_enabled: currentConfig?.quality_gate_enabled || false,
         show_thinking: chkShowThinking.checked,
         show_tools: chkShowTools.checked,
+        notify_agent_done: chkNotifyAgentDone ? chkNotifyAgentDone.checked : false,
         pdf_md_model: inputPdfMdModel.value.trim(),
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,
@@ -703,6 +710,8 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
           ? taSuperAgentClients.value.split(/\n+/).map((s) => s.trim()).filter(Boolean)
           : [],
         super_agent_prompt: taSuperAgentPrompt ? taSuperAgentPrompt.value : "",
+        super_agent_show_thinking: chkSuperAgentThinking ? chkSuperAgentThinking.checked !== false : true,
+        super_agent_show_tools: chkSuperAgentTools ? chkSuperAgentTools.checked === true : false,
       };
     try {
       await invoke("save_config", { config });

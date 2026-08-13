@@ -316,6 +316,10 @@
               <label for="setting-show-tools">Afficher les tools utilisés</label>
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-notify-agent-done" />
+              <label for="setting-notify-agent-done" title="Envoyer une notification native Windows (ou OS) quand l'agent a fini sa tâche, même pour un chat local (pas seulement à distance).">Notifier quand l'agent a terminé (tâche locale)</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-context-engine" />
               <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session"><i data-lucide="layers" class="icon-sm"></i> Context Engine (auto-contexte agent)</label>
             </div>
@@ -682,6 +686,14 @@
             <div class="setting-row" style="margin-top:10px;">
               <label for="setting-superagent-prompt" title="Prompt système personnalisé : cadre le comportement de l'Assistant à chaque tour.">Prompt système :</label>
               <textarea id="setting-superagent-prompt" rows="6" placeholder="Tu es un assistant de suivi de projets. Tu suis chaque projet de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets." style="width:100%;font-family:var(--font-mono);font-size:12px;"></textarea>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-superagent-thinking" />
+              <label for="setting-superagent-thinking" title="Afficher la réflexion de l'Assistant (pensée) dans la conversation — même rendu que l'agent standard.">Afficher la réflexion de l'Assistant</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-superagent-tools" />
+              <label for="setting-superagent-tools" title="Afficher les outils (actions) utilisés par l'Assistant dans la conversation — même rendu que l'agent standard.">Afficher les outils de l'Assistant</label>
             </div>
           </div>
           <div class="settings-section">

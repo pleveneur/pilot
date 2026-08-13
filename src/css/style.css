@@ -1215,6 +1215,20 @@ body.theme-light.theme-tokyo-day {
   background: color-mix(in srgb, var(--surface-2) 92%, var(--superagent-accent) 8%);
   color: var(--text-primary);
 }
+/* Issue #43 : la réflexion et les outils de l'Assistant utilisent la même
+   structure de rendu que l'agent standard, mais avec l'accent violet dédié. */
+.superagent-wrapper .agent-thinking {
+  border-left-color: var(--superagent-accent);
+}
+.superagent-wrapper .agent-tool-inline .agent-tool-label {
+  color: var(--superagent-accent);
+}
+.superagent-wrapper .agent-choice-btn.selected,
+.superagent-wrapper .agent-choice-validate {
+  border-color: var(--superagent-accent);
+  color: var(--superagent-accent);
+  background: color-mix(in srgb, var(--superagent-accent) 20%, transparent);
+}
 
 /* Multi-onglets agents : bouton « + » pour ouvrir un nouvel onglet agent. */
 .tab.tab-add-agent {
@@ -3591,6 +3605,16 @@ body.zen-mode #action-panel {
 .superagent-projects {
   min-width: 320px;
   max-width: 100%;
+}
+.superagent-new-client {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.superagent-new-client .agent-choice-input {
+  flex: 1;
+  min-width: 0;
 }
 .superagent-project-list {
   display: flex;

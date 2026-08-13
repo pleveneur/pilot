@@ -13,11 +13,6 @@ import { agentDisplayLabel, backendKind } from "./backend-info.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
-// État de streaming partagé entre createSuperAgent et handleSuperAgentEvent
-// (module scope : handleSuperAgentEvent y accède directement).
-let currentBody = null;
-let pendingText = "";
-
 // Rendu Markdown identique à l'agent standard (agent-pi.js).
 const md = markdownit({
   html: false,
@@ -26,16 +21,17 @@ const md = markdownit({
   breaks: true,
 });
 
-/** État global de l'assistant (nom, clients) — cache sync pour l'UI. */
-let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "" };
+/** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
+let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
 
-/** Recharge la config (nom, clients, prompt) depuis Rust. */
+/** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
     configCache = await invoke("get_super_agent_config");
   } catch (_) {
-    configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "" };
+    configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
   }
+  refreshSuperRenderOptions();
   return configCache;
 }
 
@@ -49,7 +45,98 @@ export function superAgentDisplayLabel() {
   return configCache.name || "Assistant";
 }
 
-// ── Rendu de messages (réutilise les classes du chat standard agent-pi.js) ──
+// État de streaming partagé entre createSuperAgent et handleSuperAgentEvent
+// (module scope : handleSuperAgentEvent y accède directement). Même structure
+// de rendu que l'agent standard (agent-pi.js) : bloc assistant + flux
+// chronologique (sections texte / pensée / outils) — voir issue #43.
+let currentBody = null;      // élément `.agent-message-assistant` du tour courant
+let currentFlow = null;      // sous-élément `.agent-stream-flow`
+let currentTextSection = null; // section texte non fermée
+let currentThinkingBlock = null; // bloc pensée courant
+let pendingText = "";
+let pendingRender = false;
+let lastAssistantRawText = "";
+let superShowThinking = true; // réglage « Afficher la réflexion » (issue #43)
+let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
+
+// Recharger les options de rendu depuis la config cache.
+function refreshSuperRenderOptions() {
+  superShowThinking = configCache.show_thinking !== false;
+  superShowTools = configCache.show_tools === true;
+}
+
+// ── Rendu de messages (même structure DOM que l'agent standard agent-pi.js) ──
+
+/** Crée un bloc message assistant avec flux chronologique (comme agent-pi). */
+function createSuperAgentBlock(messagesEl) {
+  const el = document.createElement("div");
+  el.className = "agent-message agent-message-assistant";
+  const bubble = document.createElement("div");
+  bubble.className = "agent-bubble agent-bubble-assistant";
+  const flow = document.createElement("div");
+  flow.className = "agent-stream-flow";
+  bubble.appendChild(flow);
+  el.appendChild(bubble);
+  messagesEl.appendChild(el);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return el;
+}
+
+/** Ajoute (ou réutilise) une section texte rendue en Markdown. */
+function appendSuperTextSection(content, reuse = true) {
+  if (!currentFlow) return null;
+  let section = null;
+  if (reuse) {
+    const sections = currentFlow.querySelectorAll(".agent-text-section");
+    for (let i = sections.length - 1; i >= 0; i--) {
+      if (!sections[i].dataset.closed) { section = sections[i]; break; }
+    }
+  }
+  if (!section) {
+    section = document.createElement("div");
+    section.className = "agent-text-section";
+    currentFlow.appendChild(section);
+  }
+  if (content) section.innerHTML = md.render(content);
+  return section;
+}
+
+/** Ajoute un bloc pensée (respecte le réglage « Afficher la réflexion »). */
+function appendSuperThinkingSection(content, allowEmpty = false) {
+  if (!currentFlow) return null;
+  const trimmed = (content || "").trim();
+  if (!allowEmpty && (!trimmed || trimmed === "{}")) return null;
+  const block = document.createElement("div");
+  block.className = "agent-thinking";
+  if (superShowThinking) {
+    block.innerHTML = `<div class="agent-thinking-content">${trimmed ? escapeHtmlForSuper(trimmed) : ""}</div>`;
+  } else {
+    block.innerHTML = `<div class="agent-thinking-dots">pensée</div>`;
+  }
+  currentFlow.appendChild(block);
+  return block;
+}
+
+/** Ajoute une ligne outil (respecte le réglage « Afficher les outils »). */
+function appendSuperToolInline(label, name) {
+  if (!currentFlow || !superShowTools) return null;
+  const line = document.createElement("div");
+  line.className = "agent-tool-inline";
+  const lab = document.createElement("span");
+  lab.className = "agent-tool-label";
+  lab.textContent = label || "outil";
+  const code = document.createElement("code");
+  code.textContent = name || "";
+  line.appendChild(lab);
+  line.appendChild(code);
+  currentFlow.appendChild(line);
+  return line;
+}
+
+/** Échappe le HTML (pour les blocs pensée, rendus en texte brut). */
+function escapeHtmlForSuper(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 function appendMessage(messagesEl, role, text) {
   const el = document.createElement("div");
@@ -57,7 +144,6 @@ function appendMessage(messagesEl, role, text) {
   const bubble = document.createElement("div");
   bubble.className = `agent-bubble agent-bubble-${role}`;
   if (role === "assistant") {
-    // Rendu Markdown (comme l'agent standard).
     bubble.innerHTML = md.render(text || "");
   } else {
     bubble.textContent = text;
@@ -92,7 +178,7 @@ export async function createSuperAgent(container) {
   });
 
   const wrapper = document.createElement("div");
-  wrapper.className = "agent-chat-container";
+  wrapper.className = "agent-chat-container superagent-wrapper";
 
   // Zone des messages
   const messagesEl = document.createElement("div");
@@ -333,7 +419,12 @@ export async function createSuperAgent(container) {
       handleSuperAgentEvent(payload, messagesEl, statusEl, state, () => {
         isStreaming = false;
         currentBody = null;
+        currentFlow = null;
+        currentTextSection = null;
+        currentThinkingBlock = null;
         pendingText = "";
+        pendingRender = false;
+        lastAssistantRawText = "";
         state.currentAssistantBlock = null;
       });
     } catch (err) {
@@ -408,40 +499,143 @@ export async function createSuperAgent(container) {
 function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   const type = payload.type;
   if (type === "message_start") {
-    // Début d'un message assistant streamé.
-    if (!currentBody) {
-      currentBody = appendMessage(messagesEl, "assistant", "");
-    }
-    pendingText = "";
-  } else if (type === "message_update") {
-    const delta = payload.assistantMessageEvent;
-    if (delta && delta.type === "text_delta" && delta.delta) {
+    const msg = payload.message;
+    if (msg && msg.role === "assistant") {
+      // Début d'un message assistant streamé : créer un bloc avec flux.
       if (!currentBody) {
-        currentBody = appendMessage(messagesEl, "assistant", "");
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+      }
+      currentTextSection = null;
+      currentThinkingBlock = null;
+      pendingText = "";
+      pendingRender = false;
+      lastAssistantRawText = "";
+    }
+    return;
+  }
+  if (type === "message_update") {
+    const delta = payload.assistantMessageEvent;
+    if (!delta) return;
+    // Deltas de texte.
+    if (delta.type === "text_start") {
+      if (!currentBody) {
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+      }
+      currentTextSection = appendSuperTextSection("", false);
+      pendingText = "";
+      pendingRender = false;
+    } else if (delta.type === "text_delta" && typeof delta.delta === "string") {
+      if (!currentBody) {
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
       }
       pendingText += delta.delta;
-      currentBody.textContent = pendingText;
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      lastAssistantRawText += delta.delta;
+      if (!currentTextSection) currentTextSection = appendSuperTextSection("", false);
+      if (!pendingRender && currentTextSection) {
+        pendingRender = true;
+        requestAnimationFrame(() => {
+          pendingRender = false;
+          if (currentTextSection && pendingText) {
+            currentTextSection.innerHTML = md.render(pendingText);
+          }
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        });
+      }
+    } else if (delta.type === "text_end") {
+      pendingRender = false;
+      if (currentTextSection && pendingText) {
+        currentTextSection.innerHTML = md.render(pendingText);
+      }
+      if (currentTextSection) currentTextSection.dataset.closed = "true";
+      pendingText = "";
+    } else if (delta.type === "thinking_start") {
+      if (!currentBody) {
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+      }
+      currentThinkingBlock = appendSuperThinkingSection("", true);
+    } else if (delta.type === "thinking_delta" && typeof delta.delta === "string") {
+      if (!currentBody) {
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+      }
+      if (currentThinkingBlock) {
+        if (superShowThinking) {
+          const content = currentThinkingBlock.querySelector(".agent-thinking-content");
+          if (content) content.textContent += delta.delta;
+        } else {
+          const dots = currentThinkingBlock.querySelector(".agent-thinking-dots");
+          if (dots) {
+            const n = (dots.textContent.match(/\./g) || []).length;
+            dots.textContent = "pensée" + ".".repeat(n >= 3 ? 1 : n + 1);
+          }
+        }
+      }
+    } else if (delta.type === "thinking_end") {
+      if (currentThinkingBlock) {
+        if (!superShowThinking) {
+          currentThinkingBlock.remove();
+        } else {
+          const content = currentThinkingBlock.querySelector(".agent-thinking-content");
+          const hasContent = content && content.textContent.trim().length > 0;
+          if (!hasContent) currentThinkingBlock.remove();
+        }
+        currentThinkingBlock = null;
+      }
+    } else if (delta.type === "toolcall_start") {
+      if (!currentBody) {
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+      }
+      // On affiche l'outil à tool_execution_start (quand le nom est connu).
+    } else if (delta.type === "toolcall_end") {
+      // Rien à faire ici (le nom/args arrivent via tool_execution_start).
     }
-  } else if (type === "message_end") {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+  if (type === "tool_execution_start") {
+    const toolName = payload.toolName || payload.tool || "outil";
+    if (!currentBody) {
+      currentBody = createSuperAgentBlock(messagesEl);
+      currentFlow = currentBody.querySelector(".agent-stream-flow");
+    }
+    appendSuperToolInline("outil", toolName);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return;
+  }
+  if (type === "message_end") {
     // Fin du message streamé. Vérifier une erreur (ex: serveur LLM injoignable).
+    pendingRender = false;
     const endMsg = payload.message;
     if (endMsg && endMsg.stopReason === "error" && endMsg.errorMessage) {
       appendSystemMessage(messagesEl, `❌ ${endMsg.errorMessage}`);
       statusEl.textContent = "Erreur";
     } else if (currentBody) {
-      // Le streaming affiche le texte brut via textContent (message_update).
-      // On re-rend en Markdown à la fin pour un affichage comme l'agent standard.
-      if (pendingText && pendingText.trim()) {
-        currentBody.innerHTML = md.render(pendingText);
-      } else if (!currentBody.textContent || !currentBody.textContent.trim()) {
-        // Bulle vide (message sans texte, ex: uniquement des appels d'outils) →
-        // retirer la bulle créée par message_start pour éviter les bulles violettes vides.
+      // Finaliser la section texte en attente.
+      if (currentTextSection && pendingText) {
+        currentTextSection.innerHTML = md.render(pendingText);
+        pendingText = "";
+      }
+      // Retirer le bloc si rien de visible (évite les bulles vides / espaces
+      // parasites entre réponses — issue #42). On ne retire que s'il n'y a ni
+      // texte, ni pensée visible, ni outil, ni widget attaché.
+      const flow = currentBody.querySelector(".agent-stream-flow");
+      const hasChildren = flow && flow.children.length > 0;
+      const hasChoices = currentBody.querySelector(".agent-choice");
+      const bubble = currentBody.querySelector(".agent-bubble-assistant");
+      const hasText = bubble && bubble.textContent && bubble.textContent.trim().length > 0;
+      if (!hasChildren && !hasChoices && !hasText) {
         currentBody.remove();
       }
     }
     onEnd();
-  } else if (type === "message") {
+    return;
+  }
+  if (type === "message") {
     const msg = payload.message;
     if (msg && msg.role === "assistant") {
       if (msg.stopReason === "error" && msg.errorMessage) {
@@ -459,21 +653,32 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
         }
       }
       if (text) {
-        currentBody = appendMessage(messagesEl, "assistant", text);
+        currentBody = createSuperAgentBlock(messagesEl);
+        currentFlow = currentBody.querySelector(".agent-stream-flow");
+        appendSuperTextSection(text, false);
         pendingText = "";
       }
     }
-  } else if (type === "agent_start") {
+    return;
+  }
+  if (type === "agent_start") {
     statusEl.textContent = "Réfléchit…";
-  } else if (type === "agent_end") {
+    return;
+  }
+  if (type === "agent_end") {
     statusEl.textContent = "Prêt";
     onEnd();
-  } else if (type === "extension_ui_request") {
+    return;
+  }
+  if (type === "extension_ui_request") {
     handleSuperAgentExtensionUiRequest(payload, messagesEl, state);
-  } else if (type === "process_exit" || type === "process_error") {
+    return;
+  }
+  if (type === "process_exit" || type === "process_error") {
     statusEl.textContent = "Déconnecté";
     appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
     onEnd();
+    return;
   }
 }
 
@@ -654,14 +859,17 @@ async function respondSuperAgentAction(id, ok) {
   }
 }
 
-/** Cible d'attache des boutons : la bulle assistant courante (ou en crée une). */
+/** Cible d'attache des boutons : le flux de la bulle assistant courante (ou en crée une). */
 function getSuperAgentAttachTarget(messagesEl, state) {
+  // Attacher au flux du bloc assistant courant si possible (rendu harmonisé, #43).
+  if (currentFlow) return currentFlow;
   let attachTo = state.currentAssistantBlock;
   if (!attachTo) {
-    attachTo = appendMessage(messagesEl, "assistant", "");
+    attachTo = createSuperAgentBlock(messagesEl);
+    currentFlow = attachTo.querySelector(".agent-stream-flow");
     state.currentAssistantBlock = attachTo;
   }
-  return attachTo;
+  return currentFlow || attachTo;
 }
 
 /** Envoie la réponse d'un bouton au processus pi du super-agent. */
@@ -719,19 +927,36 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi) {
       respond(JSON.stringify({ selected: [...selected], note: note.value.trim() }), false));
     buttons.appendChild(validate);
   } else {
+    // Choix unique : toggle + Valider — permet de valider SANS choisir d'option
+    // (précision libre, issue #39). `selected` = null si aucune option cochée.
     const note = document.createElement("input");
     note.type = "text";
     note.className = "agent-choice-input agent-choice-note";
     note.placeholder = "Ajouter une précision (optionnel)…";
     wrapper.appendChild(note);
+    let selectedOpt = null;
     for (const [i, opt] of options.entries()) {
       const btn = document.createElement("button");
       btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
       btn.textContent = opt;
-      btn.addEventListener("click", () =>
-        respond(JSON.stringify({ selected: opt, note: note.value.trim() }), false));
+      btn.addEventListener("click", () => {
+        if (selectedOpt === opt) {
+          selectedOpt = null;
+          btn.classList.remove("selected");
+        } else {
+          selectedOpt = opt;
+          buttons.querySelectorAll(".selected").forEach((b) => b.classList.remove("selected"));
+          btn.classList.add("selected");
+        }
+      });
       buttons.appendChild(btn);
     }
+    const validate = document.createElement("button");
+    validate.className = "agent-choice-btn agent-choice-validate";
+    validate.textContent = "✓ Valider";
+    validate.addEventListener("click", () =>
+      respond(JSON.stringify({ selected: selectedOpt, note: note.value.trim() }), false));
+    buttons.appendChild(validate);
   }
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
@@ -889,6 +1114,49 @@ async function showProjectsPanel(messagesEl, state) {
   titleEl.className = "agent-choice-title";
   titleEl.textContent = "Projets & clients";
   wrapper.appendChild(titleEl);
+
+  // ── Nouveau client (issue #38) : créer un client sans passer par les
+  // Paramètres. Le bouton appelle `add_client` (persisté dans la config) puis
+  // ré-affiche le panneau pour que le nouveau client soit disponible dans les
+  // sélecteurs.
+  const newClientRow = document.createElement("div");
+  newClientRow.className = "superagent-new-client";
+  const newClientInput = document.createElement("input");
+  newClientInput.type = "text";
+  newClientInput.className = "agent-choice-input";
+  newClientInput.placeholder = "Nom du nouveau client…";
+  newClientInput.maxLength = 120;
+  const addClientBtn = document.createElement("button");
+  addClientBtn.className = "agent-choice-btn agent-choice-validate";
+  addClientBtn.textContent = "+ Ajouter un client";
+  const addClient = async () => {
+    const name = newClientInput.value.trim();
+    if (!name) return;
+    if (clients.some((c) => c.name === name)) {
+      appendSystemMessage(messagesEl, `ℹ️ Le client « ${name} » existe déjà.`);
+      return;
+    }
+    addClientBtn.disabled = true;
+    newClientInput.disabled = true;
+    try {
+      await invoke("add_client", { name });
+      appendSystemMessage(messagesEl, `✅ Client « ${name} » ajouté.`);
+      // Ré-afficher le panneau pour refléter le nouveau client.
+      wrapper.remove();
+      await showProjectsPanel(messagesEl, state);
+    } catch (e) {
+      appendSystemMessage(messagesEl, `❌ Impossible d'ajouter le client : ${e}`);
+      addClientBtn.disabled = false;
+      newClientInput.disabled = false;
+    }
+  };
+  addClientBtn.addEventListener("click", addClient);
+  newClientInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addClient();
+  });
+  newClientRow.appendChild(newClientInput);
+  newClientRow.appendChild(addClientBtn);
+  wrapper.appendChild(newClientRow);
 
   if (projects.length === 0) {
     const empty = document.createElement("div");
