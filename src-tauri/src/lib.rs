@@ -197,6 +197,10 @@ struct AppConfig {
     show_thinking: bool,
     #[serde(default)]
     show_tools: bool,
+    // Issue #41 : notification native desktop quand l'agent a terminé une tâche,
+    // y compris pour un chat LOCAL (pas seulement à distance). Défaut off.
+    #[serde(default)]
+    notify_agent_done: bool,
     #[serde(default)]
     pdf_md_model: String,
     #[serde(default = "default_sidebar_width")]
@@ -412,6 +416,12 @@ struct AppConfig {
     // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
     #[serde(default)]
     super_agent_open: bool,
+    // Issue #43 : options de rendu de la conversation de l'Assistant, harmonisées
+    // avec l'agent standard (afficher la réflexion / les outils).
+    #[serde(default = "default_true")]
+    super_agent_show_thinking: bool,
+    #[serde(default)]
+    super_agent_show_tools: bool,
 }
 
 fn default_true() -> bool { true }
@@ -526,6 +536,7 @@ impl Default for AppConfig {
             quality_gate_enabled: false,
             show_thinking: true,
             show_tools: false,
+            notify_agent_done: false,
             pdf_md_model: String::new(),
             sidebar_width: 280,
             auto_save: false,
@@ -597,6 +608,8 @@ impl Default for AppConfig {
             super_agent_model: String::new(),
             super_agent_prompt: String::new(),
             super_agent_open: false,
+            super_agent_show_thinking: true,
+            super_agent_show_tools: false,
         }
     }
 }

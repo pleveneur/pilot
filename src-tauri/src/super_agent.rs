@@ -231,6 +231,40 @@ pub fn stop_super_agent_session(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Construit le contexte projet injecté dans le prompt système du super-agent.
+/// Le projet ACTIF est toujours la cible par défaut de la conversation ; l'ancien
+/// projet de travail n'est rappelé qu'en second plan pour éviter que l'assistant
+/// se focalise sur le mauvais projet (issue #40).
+/// Retourne une chaîne vide si aucun projet actif ni de travail.
+fn build_project_context(active: Option<&str>, working: Option<&str>) -> String {
+    let mut ctx = String::new();
+    if let Some(ap) = active {
+        ctx.push_str(&format!(
+            "\n\nProjet actuellement actif dans Pilot : « {} ». C'est le projet courant de la conversation.",
+            ap
+        ));
+        if let Some(wp) = working {
+            if Some(ap) != working {
+                ctx.push_str(&format!(
+                    "\nAncien projet de travail (ne le considère PLUS comme actif) : « {} ».",
+                    wp
+                ));
+            }
+        }
+    } else if let Some(wp) = working {
+        ctx.push_str(&format!(
+            "\n\nProjet sur lequel tu travaillais : « {} ».",
+            wp
+        ));
+    }
+    if !ctx.is_empty() {
+        ctx.push_str(
+            "\nRègle : quand l'utilisateur parle d'un projet, considère TOUJOURS le projet actif comme le projet par défaut. N'utilise un ancien projet de travail que si l'utilisateur le nomme ou le mentionne explicitement. Si tu n'es pas sûr, demande-lui de préciser.",
+        );
+    }
+    ctx
+}
+
 #[tauri::command]
 pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: String) -> Result<(), String> {
     // Démarrage paresseux : garantit qu'une session existe avant d'envoyer.
@@ -250,31 +284,10 @@ pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: 
     );
     // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
     // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
-    // L'assistant doit savoir quel projet est actif pour ne pas confondre les
-    // projets quand l'utilisateur en change en cours de discussion.
+    // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
     let active_project = state.active_project.lock().unwrap().clone();
     let working_project = state.working_project.lock().unwrap().clone();
-    let mut project_ctx = String::new();
-    if let Some(ap) = &active_project {
-        project_ctx.push_str(&format!(
-            "\n\nProjet actuellement ouvert dans Pilot : « {} ».",
-            ap
-        ));
-    }
-    if let Some(wp) = &working_project {
-        if active_project.as_ref() != Some(wp) {
-            project_ctx.push_str(&format!(
-                "\nProjet sur lequel tu travaillais : « {} ».",
-                wp
-            ));
-        }
-    }
-    if !project_ctx.is_empty() {
-        project_ctx.push_str(
-            "\nSi l'utilisateur parle d'un projet, précise bien de quel projet il s'agit. S'il continue une discussion en cours, il parle probablement du projet sur lequel tu travaillais. Si tu n'es pas sûr du projet dont il parle (surtout s'il a changé de projet), demande-lui de préciser.",
-        );
-        full_system.push_str(&project_ctx);
-    }
+    full_system.push_str(&build_project_context(active_project.as_deref(), working_project.as_deref()));
     // Apprendre où se trouvent les projets : injecter la liste des projets
     // connus de la base (s'enrichit au fil des discussions / sessions).
     full_system.push_str(&known_projects_context(&app));
@@ -534,6 +547,8 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "clients": cfg.super_agent_clients,
         "project_client": cfg.super_agent_project_client,
         "prompt": cfg.super_agent_prompt,
+        "show_thinking": cfg.super_agent_show_thinking,
+        "show_tools": cfg.super_agent_show_tools,
     }))
 }
 
@@ -545,6 +560,8 @@ pub fn set_super_agent_config(
     clients: Option<Vec<String>>,
     project_client: Option<HashMap<String, String>>,
     prompt: Option<String>,
+    show_thinking: Option<bool>,
+    show_tools: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -558,6 +575,12 @@ pub fn set_super_agent_config(
     }
     if let Some(p) = prompt {
         cfg.super_agent_prompt = p;
+    }
+    if let Some(v) = show_thinking {
+        cfg.super_agent_show_thinking = v;
+    }
+    if let Some(v) = show_tools {
+        cfg.super_agent_show_tools = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
@@ -785,4 +808,42 @@ pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: Strin
     let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "prompt", "message": question});
     rpc_manager::send_command(session, &cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_project_context;
+
+    #[test]
+    fn active_project_is_always_the_default_target() {
+        let ctx = build_project_context(Some("/proj/actif"), Some("/proj/ancien"));
+        // Le projet actif est annoncé comme « projet courant de la conversation ».
+        assert!(ctx.contains("Projet actuellement actif dans Pilot : « /proj/actif »."));
+        // L'ancien projet de travail est explicitement rétrogradé.
+        assert!(ctx.contains("Ancien projet de travail (ne le considère PLUS comme actif) : « /proj/ancien »."));
+        // La règle insiste sur la primauté du projet actif.
+        assert!(ctx.contains("considère TOUJOURS le projet actif comme le projet par défaut"));
+        // L'index de l'ancien projet (source du bug #40) n'apparaît PAS comme actif.
+        assert!(!ctx.contains("Projet actuellement actif dans Pilot : « /proj/ancien »."));
+    }
+
+    #[test]
+    fn no_working_when_same_as_active() {
+        // Si l'ancien projet == projet actif, on ne parle pas d'un « ancien projet ».
+        let ctx = build_project_context(Some("/proj"), Some("/proj"));
+        assert!(ctx.contains("Projet actuellement actif"));
+        assert!(!ctx.contains("Ancien projet de travail"));
+    }
+
+    #[test]
+    fn working_only_when_no_active() {
+        let ctx = build_project_context(None, Some("/proj"));
+        assert!(ctx.contains("Projet sur lequel tu travaillais : « /proj »."));
+        assert!(!ctx.contains("Projet actuellement actif"));
+    }
+
+    #[test]
+    fn empty_when_no_project() {
+        assert_eq!(build_project_context(None, None), "");
+    }
 }
