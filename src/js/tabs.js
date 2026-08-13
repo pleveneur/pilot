@@ -422,6 +422,15 @@ class TabsManager {
     const tab = new Tab(id, "", label || agentDisplayLabel(), "agent");
     tab.agentId = agentId;
 
+    // Attendre que les syncs d'onglets agents en attente (ex: bascule vers le
+    // super-agent 🧭) soient drainées AVANT de démarrer la session. Sans cela,
+    // une sync périmée (parking de l'agent précédent) peut s'exécuter pendant
+    // `start_agent_session` ci-dessous et parker la session qu'on vient de créer
+    // → `rpc_state` vide → erreur « Aucune session agent active » dans
+    // createAgentPi (new_session / loadCommands) quand le super-agent ouvre un
+    // projet (open_project → openProjectByPath → restoreTabs → _openAgent).
+    await this._awaitAgentSync();
+
     // Multi-onglets agents : parker la session de l'agent précédemment actif
     // AVANT de rendre cet onglet actif. Sans cela, `switchTab` (ci-dessous)
     // déclencherait `_syncAgentSession` qui tenterait de reprendre une session
@@ -605,6 +614,19 @@ class TabsManager {
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
+  }
+
+  /**
+   * Met à jour le nom affiché de l'onglet Super-agent (🧭) après un changement
+   * de config (nom de l'assistant). Re-rend le bouton d'onglet.
+   */
+  updateSuperAgentLabel(label) {
+    const tab = this.tabs.find((t) => t.mode === "superagent");
+    if (!tab) return;
+    tab.name = label || "Assistant";
+    const oldBtn = this.tabBar.querySelector(`[data-tab-id="${tab.id}"]`);
+    if (oldBtn) oldBtn.remove();
+    this._renderTabButton(tab);
   }
 
   /**
@@ -1538,6 +1560,17 @@ class TabsManager {
     this._agentSyncChain = (this._agentSyncChain || Promise.resolve())
       .then(() => this._doSyncAgentSession(tab))
       .catch(() => {});
+  }
+
+  /**
+   * Retourne la chaîne de syncs d'onglets agents en cours (ou une promesse
+   * résolue si aucune). Permet d'attendre que les syncs périmées (parking de
+   * l'agent précédent, ex: bascule vers le super-agent) soient drainées avant
+   * de démarrer une nouvelle session, pour éviter qu'elles ne parkent la
+   * session qu'on vient de créer (course → « Aucune session agent active »).
+   */
+  _awaitAgentSync() {
+    return this._agentSyncChain || Promise.resolve();
   }
 
   async _doSyncAgentSession(tab) {

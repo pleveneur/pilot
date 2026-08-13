@@ -714,3 +714,194 @@ Intérêt : le flash rouge actuel est frustrant car on ne sait pas quoi faire. U
       rendu), `spec_code_graph.md` + bloc `HELP` (doc).
 - **Valeur :** 🟠 haute (analyse d'impact visuelle avant édition, complémentaire
       du wiki textuel mode B) · **Effort :** moyen.
+
+---
+
+## 27. ✅ Espace de travail fichiers du Super-agent — `~/.pilot/assistant/` (IMPLÉMENTÉ)
+
+> ✅ **Implémenté et vérifié.** `cargo check` OK, `vite build` OK (4066 modules), handbook régénéré (29 blocs, topic `super-agent` inclus).
+
+> Décision utilisateur (échange en 2 temps : « dis-moi ce que tu en penses avant de
+> modifier » → validation de l'idée). **FEU VERT UTILISATEUR pour implémenter**
+> (échange final : « N'hésites pas à être critique si tu penses que quelque chose ne
+> va pas. Sinon, je suis d'accord pour implémenter. » → aucun blocage remonté).
+> *Précisé par l'utilisateur après validation : points 1-4 ci-dessous.*
+> **Priorité : implémenter à la prochaine session de code touchant le Super-agent.**
+
+**Objectif** : donner au Super-agent (onglet 🧭) un **espace de fichiers libres** où
+il peut écrire notes, analyses, exports — complémentaire de sa base SQLite
+(`~/.pilot/super-agent.db`) et de sa config (`~/.pilot/super-agent.json`) qui
+restent sa « mémoire structurée ».
+
+**Arborescence décidée** (deux espaces d'écriture distincts) :
+
+1. **Fichiers liés à un projet** → `~/.pilot/assistant/<client>/<projet>/`
+   (suivi spécifique par client, puis par projet — calqué sur l'organisation
+   relationnelle de la base : `client_id` → `project_id`).
+2. **Fichiers propres à l'assistant** (aucun projet, spécifiques à lui-même) →
+   `~/.pilot/assistant/` (racine).
+
+**Point de conception** : distinguer « fichiers de suivi d'un projet » (rangés sous
+`<client>/<projet>/`) de « fichiers personnels de l'assistant » (racine) pour éviter
+qu'un contenu sans projet ne soit artificiellement rangé sous un client/projet.
+
+**Précisions utilisateur (validées) — points 1 à 4 :**
+1. ✅ **Fichiers liés à un projet** → `~/.pilot/assistant/<client>/<projet>/` — validé.
+2. ✅ **Fichiers propres à l'assistant** (aucun projet) → `~/.pilot/assistant/` (racine) — validé.
+3. **Création à l'usage** : c'est **l'assistant lui-même** qui crée les fichiers et
+   répertoires **au fur et à mesure** de l'utilisation (pas de pré-génération ni
+   d'arborescence pré-créée).
+4. **Autonomie de décision** : laisser l'implémentation décider de ce qui est le mieux
+   (organisation, granularité, moment de création) — liberté de conception.
+
+**Point de conception technique (recommandation pour le point 4) — extension pi dédiée :**
+Le chat du super-agent passe par `ask_pi_caged_timed` (dans `help.rs`, ligne 249 de
+`super_agent.rs`) : un **process pi frais par tour** (`--mode rpc --no-session`, sans
+`--extension` → aucune extension chargée). La session RPC persistante `rpc_superagent`
+(`lib.rs`) n'est utilisée que pour l'initialisation, l'injection de résumés et les
+questions. Or les extensions pi (ex: `pilot-choices` pour poser des questions, ou une
+extension d'écriture) ne sont chargées que via `--extension` au lancement du process.
+
+→ **Recommandation** : une **extension pi dédiée** `pilot-assistant-files.ts`, chargée
+dans la session du super-agent, qui fournit les tools d'écriture/lecture/listing dans
+`~/.pilot/assistant/` (et le cadrage « pose des questions » via `ask_choice`/
+`ask_confirm`/`ask_input` de `pilot-choices`). À trancher à l'implémentation : soit
+l'extension est chargée dans une session RPC persistante dédiée (changement
+architectural du chat), soit `ask_pi_caged_timed` est adapté pour passer `--extension`.
+
+**Comportement clé — l'assistant doit poser des questions à l'utilisateur :**
+L'agent ne doit **pas hésiter à interroger l'utilisateur** quand il lui manque de
+l'information :
+- S'il ne **connaît pas le client** → il **demande** (plutôt que de deviner).
+- S'il lui **manque des infos pour ses suivis** → il **demande**.
+Cette directive est à porter dans le **prompt système du Super-agent** (`super_agent_prompt`
+dans `AppConfig`) pour guider le comportement au fil de l'usage.
+
+**Branchements à prévoir** (liste mentale, à compléter à l'implémentation) :
+- Création des répertoires **à l'usage** (par l'assistant, à la demande), pas de
+  pré-génération.
+- Chemin dérivé de `app_data_dir()` (`~/.pilot/`) comme la base existante.
+- Commandes Tauri (Rust) d'écriture/lecture/listing des fichiers assistant + UI
+  (onglet 🧭 et/ou Paramètres).
+- **Prompt système** du Super-agent enrichi de la directive « pose des questions à
+  l'utilisateur si client inconnu / infos manquantes pour les suivis ».
+- **Extension pi `pilot-assistant-files.ts`** (à créer dans `src-tauri/extensions/`,
+  incluse via `include_str!`) pour fournir les tools d'écriture/lecture/listing + le
+  cadrage « pose des questions » (réutilise `pilot-choices`). À brancher au lancement
+  du chat du super-agent.
+- Doc : `spec_super_agent.md` + bloc `HELP:super-agent`.
+
+**✅ Fait à l'implémentation :**
+- `pilot-assistant-files.ts` créé dans `src-tauri/extensions/` (2,7 Ko).
+- `super_agent.rs` : charge `pilot-assistant-files.ts` + `pilot-choices.ts` dans la
+  session super-agent ; nouvelle commande `send_super_agent_command` ;
+  `send_super_agent_prompt` préfixe le prompt système personnalisé à chaque tour.
+- `lib.rs` : enregistre `send_super_agent_command`.
+- Frontend `super-agent.js` : appelle `send_super_agent_command` (ligne 433).
+- `spec_super_agent.md` mis à jour + bloc HELP.
+
+**Fichiers concernés (à l'implémentation) :** `src-tauri/src/super_agent.rs`,
+`src/js/super-agent.js`, `src/js/super-agent-config.js`, `spec_super_agent.md`.
+
+**Valeur :** 🟡 haute (l'assistant peut matérialiser notes/analyses/rapports sans
+polluer les projets, lecture seule stricte préservée) · **Effort :** moyen.
+
+---
+
+## 28. 🧭 Super-agent : ouvrir le projet discuté + déléguer le code à l'agent standard (VALIDÉ — À IMPLÉMENTER)
+
+> **Demande utilisateur.** Points 1-4 et début du point 5 **tranchés** (échange de
+> précision ci-dessous) ; la fin de la réponse (point 5) est **tronquée** — à
+> confirmer si besoin avant implémentation. **À implémenter** à la prochaine session
+> de code concernée.
+
+**Point 1 — Ouvrir le projet discuté et le rendre actif :**
+Quand on discute d'un projet avec l'assistant (ex: « où en est le projet X ? »),
+l'assistant doit pouvoir **ouvrir ce projet dans Pilot** et le rendre **actif** (projet
+en cours de traitement), comme si on l'avait ouvert manuellement. → outil d'ouverture
+réutilisant le mécanisme multi-projets existant : `open_project_path` (lib.rs:938) +
+`set_active_project` (lib.rs:1413) pour basculer le projet actif.
+
+**Point 2 — Déléguer le code à l'agent standard du projet :**
+Si l'utilisateur demande une **modification de code**, l'assistant ne doit **pas** la
+faire lui-même (il reste lecture seule). Il doit **déléguer la tâche à l'agent standard**
+du projet concerné. Si cet agent est **fermé**, il le lance en **ouvrant son onglet**
+(mécanisme `_openAgent` dans tabs.js:413).
+
+**Décisions utilisateur (points de précision tranchés) :**
+1. **Ouverture automatique** : l'ouverture du projet se fait **en automatique**.
+   Si besoin ou s'il a des **doutes**, l'assistant **demande à l'utilisateur** et
+   agit **en fonction des réponses**.
+2. **Délégation via mode RPC (option b)** : l'assistant utilise **le mode RPC de
+   l'agent standard**, afin que ses demandes **fassent partie des sessions de
+   discussion** de cet agent. Il **précise** (dans sa demande) qu'il est
+   **l'assistant projets**.
+3. **Onglet** : **oui**, ouvrir l'onglet de l'agent standard, le **rendre visible**
+   et lui **envoyer la demande** — on doit **voir la demande dans sa session de
+   discussion**.
+4. **Oui** (point 4 non détaillé dans le résumé — à confirmer).
+5. **Il demande à l'agent** ce que l'u… *(tronqué)* — à compléter.
+
+**Point de conception à valider avant implémentation (reste) :**
+- Comment l'assistant connaît la liste des projets connus (base `clients`/`projects`)
+  et choisit quel projet ouvrir (ex: si plusieurs projets → poser la question,
+  cohérent avec la directive « pose des questions » de la §27).
+- Comment la délégation est transmise à l'agent standard (outil pi qui déclenche le
+  lancement de l'onglet agent du projet + injection du prompt de tâche).
+- Boucle de retour : l'assistant récupère-t-il le résultat de la tâche déléguée pour
+  son suivi (clients/projets/tâches) ?
+
+**Fichiers concernés (à l'implémentation) :** `src-tauri/src/super_agent.rs`,
+`src-tauri/extensions/pilot-assistant-files.ts` (ou nouvelle extension),
+`src-tauri/src/lib.rs`, `src/js/tabs.js`, `src/js/super-agent.js`, `spec_super_agent.md`.
+
+**Valeur :** 🟡 haute (l'assistant devient capable d'agir sur les projets sans violer
+sa lecture seule, en orchestrant l'agent standard) · **Effort :** moyen-haut.
+
+## 28. 🧭 Assistant — création de nouveaux projets (ÉVOLUTION FUTURE)
+
+> **Noté pour les prochaines évolutions** (demande utilisateur, non implémenté).
+
+**Objectif** : permettre à l'Assistant (onglet 🧭) de **créer de nouveaux projets**
+(aujourd'hui il ne peut que suivre des projets existants, en lecture seule).
+
+**Contexte** : l'Assistant sait désormais quel projet est actif et sur quel projet
+il travaille (contexte projet injecté à chaque tour), et apprend où se trouvent les
+projets au fil des discussions. À terme, il devra pouvoir **créer un nouveau projet**
+(choisir un emplacement, initialiser la structure, l'attacher à un client).
+
+**Points de conception à valider avant implémentation :**
+- Comment l'Assistant choisit l'emplacement du nouveau projet (demande à
+  l'utilisateur ? dossier par défaut ?).
+- Quelle structure initiale créer (README, AGENTS.md, .pilot/…).
+- Compatibilité avec la **lecture seule stricte** : la création d'un projet est une
+  action sur le système de fichiers hors de `~/.pilot/assistant/` — il faudra une
+  action dédiée (comme `open_project` / `delegate_to_coder`) exécutée par Pilot,
+  pas par l'agent.
+- Enregistrement du nouveau projet dans la base (`projects`) et association client.
+
+**Valeur :** 🟡 haute (l'assistant devient capable de démarrer de nouveaux projets
+de bout en bout) · **Effort :** moyen.
+
+## 29. 🧭 Assistant — installation d'outils (validation utilisateur)
+
+> **Noté pour les prochaines évolutions** (demande utilisateur, non implémenté).
+
+**Objectif** : permettre à l'Assistant (onglet 🧭) d'**installer des outils** pour
+gérer au mieux certaines tâches de suivi, **après validation de l'utilisateur**.
+
+**Règle** : si l'assistant a besoin d'installer un outil (package, utilitaire,
+dépendance), il **demande d'abord** à l'utilisateur, qui doit **valider** (via
+`ask_confirm` / `ask_choice`). Aucune installation sans accord explicite.
+
+**Points de conception à valider avant implémentation :**
+- Quels types d'outils (npm packages, binaires système, scripts) et où les
+  installer (espace dédié `~/.pilot/assistant/` ? environnement global ?).
+- Comment l'assistant exécute l'installation (commande Rust dédiée, exécution
+  d'un script validé).
+- Compatibilité avec la **lecture seule stricte** sur les projets : l'installation
+  ne doit jamais toucher aux fichiers des projets.
+- Journal des outils installés (base de suivi) pour traçabilité.
+
+**Valeur :** 🟡 haute (l'assistant devient autonome pour optimiser son suivi) ·
+**Effort :** moyen.

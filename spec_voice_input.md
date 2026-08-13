@@ -14,6 +14,7 @@ chat agent, pour dicter directement le texte de l'instruction. Fonctionne sur le
 
 - **Web remote** (`web/`) : barre `#prompt-form` (textarea `#prompt-input` + bouton `#prompt-send` ➤).
 - **Desktop** (`src/js/agent-pi.js`) : barre de saisie (textarea `#agent-input` + bouton `.agent-send-btn` ▶️).
+- **Desktop — Assistant (🧭)** (`src/js/super-agent.js`) : barre d'outils de l'onglet Assistant (bouton micro 🎙️), même mécanisme.
 
 La transcription est injectée dans le `textarea` ; l'utilisateur valide ensuite avec
 le bouton envoyer existant (aucun changement du flux d'envoi).

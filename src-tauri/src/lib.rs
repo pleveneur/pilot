@@ -139,6 +139,11 @@ struct AppState {
     /// Super-agent (spec_super_agent.md) : session RPC dédiée (canal
     /// `rpc-event-superagent`), lecture seule. Lancée lazy au 1er besoin.
     rpc_superagent: Mutex<Option<rpc_manager::RpcSession>>,
+    /// Super-agent : projet sur lequel l'assistant travaille (dernier projet
+    /// ouvert via l'action `open_project`). Distinct du projet actif : quand
+    /// l'utilisateur change de projet, le projet de travail reste celui de la
+    /// discussion en cours, pour que l'assistant ne confonde pas les projets.
+    working_project: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1789,6 +1794,7 @@ pub fn run() {
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
                 web_runs: Mutex::new(HashMap::new()),
                 rpc_superagent: Mutex::new(None),
+                working_project: Mutex::new(None),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1950,13 +1956,18 @@ pub fn run() {
             super_agent::start_super_agent_session,
             super_agent::stop_super_agent_session,
             super_agent::send_super_agent_prompt,
+            super_agent::send_super_agent_command,
             super_agent::ask_super_agent,
             super_agent::new_super_agent_session,
             super_agent::set_super_agent_model,
+            super_agent::set_super_agent_working_project,
+            super_agent::super_agent_db_query,
+            super_agent::super_agent_db_execute,
             super_agent::abort_super_agent,
             super_agent::get_super_agent_state,
             super_agent::get_super_agent_config,
             super_agent::set_super_agent_config,
+            super_agent::set_super_agent_prompt,
             super_agent::set_super_agent_open,
             super_agent::inject_session_summary,
             super_agent::initialize_super_agent,
@@ -1965,6 +1976,7 @@ pub fn run() {
             super_agent::remove_client,
             super_agent::rename_client,
             super_agent::set_project_client,
+            super_agent::list_super_agent_projects,
             super_agent::query_super_agent,
         ])
         .build(tauri::generate_context!())

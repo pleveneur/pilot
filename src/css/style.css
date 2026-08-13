@@ -3587,6 +3587,48 @@ body.zen-mode #action-panel {
   opacity: 0.7;
 }
 
+/* Panneau Projets & clients (super-agent) : liste des projets avec sélecteur de client */
+.superagent-projects {
+  min-width: 320px;
+  max-width: 100%;
+}
+.superagent-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.superagent-project-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.superagent-project-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.superagent-project-client {
+  flex-shrink: 0;
+  max-width: 180px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 /* Popup de sélection de sessions (au-dessus de l'input, comme l'autocomplétion) */
 .agent-resume-popup {
   position: absolute;

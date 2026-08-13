@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent -->
+<!-- PILOT-HELP generated=2026-08-13 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -756,12 +756,19 @@ apprend et répond.
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
+- Le nom est **injecté dans le prompt système** envoyé à chaque tour :
+  l'assistant sait toujours qui il est et qu'il est l'assistant de suivi
+  multi-projets (pas l'agent d'un projet). Même sans prompt personnalisé, il
+  reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
+  projets par client, lecture seule).
 
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
-- Chaque projet ouvert peut être **attaché à un client** (sélection dans la
-  barre « Projets en cours » ou dans l'onglet Assistant).
+- Chaque projet suivi peut être **attaché à un client** : dans l'onglet 🧭
+  Assistant, cliquez sur le bouton **🏢 (Projets & clients)** pour ouvrir le
+  panneau listant les projets suivis, puis choisissez le client de chaque projet
+  dans le menu déroulant. L'association est enregistrée immédiatement.
 
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
@@ -771,6 +778,49 @@ apprend et répond.
 - Il construit **sa propre base de données locale** (SQLite) pour organiser
   clients, projets et tâches, et s'enrichit au fil du temps.
 
+### Espace d'écriture dédié (fichiers de suivi)
+- L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`
+  pour ses **fichiers libres** (notes, analyses, exports), organisé par
+  **client puis par projet** : `~/.pilot/assistant/<client>/<projet>/`.
+- Il **crée lui-même** ses fichiers au fil de l'usage (pas de création
+  systématique). Le dossier projet utilise le **nom du projet** (dernier
+  segment du chemin), avec repli sur le chemin complet en cas de collision
+  entre clients.
+- **Garantie technique** : l'Assistant ne peut **jamais** écrire hors de
+  `~/.pilot/assistant/` (une extension dédiée bloque toute écriture dans les
+  projets). La base SQLite reste la **source de vérité** pour le suivi
+  structuré (tâches, décisions, statuts).
+
+### Poser des questions à l'utilisateur
+- Quand des informations manquent (client inconnu, données de suivi
+  incomplètes), l'Assistant peut **poser des questions** directement dans le
+  chat : choix, confirmation Oui/Non, ou saisie libre, via des **boutons**
+  inline. Répondez en cliquant ; l'Assistant reprend son raisonnement avec
+  votre réponse.
+
+### Ouvrir un projet discuté
+- Quand vous **discutez d'un projet**, l'Assistant peut **l'ouvrir** pour le
+  rendre **actif** (projet en cours de traitement), comme si vous l'aviez
+  ouvert manuellement. S'il a un doute sur le projet, il vous **demande**
+  d'abord.
+
+### Suivre le projet en cours de discussion
+- L'Assistant **sait quel projet est actuellement ouvert** dans Pilot et **sur
+  quel projet il travaillait** (le dernier projet qu'il a ouvert).
+- Si vous **changez de projet** en cours de discussion, il ne confond pas : il
+  continue de suivre le projet dont vous parlez, et **vous demande de préciser**
+  s'il a un doute.
+- Il **apprend où se trouvent les projets** au fil des discussions et des
+  sessions d'agents (liste des projets connus injectée à chaque tour).
+
+### Déléguer le code à l'agent du projet
+- Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
+  lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
+  coding).
+- Il **ouvre l'onglet de l'agent** (le rend visible) et lui **envoie la demande
+  dans sa session de discussion**, en précisant qu'elle vient de l'Assistant
+  projets. Vous voyez la demande dans la conversation de l'agent.
+
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
   est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
@@ -779,11 +829,35 @@ apprend et répond.
   l'Assistant analyse le projet (structure, documentation, historique des
   sessions) puis pose les questions nécessaires à son fonctionnement.
 
+### L'assistant gère son propre suivi
+- L'Assistant est **responsable de son suivi des projets** : il met à jour
+  lui-même sa base de données (SQLite `~/.pilot/super-agent.db`) et ses fichiers
+  personnels (`~/.pilot/assistant/`) au fil des discussions.
+- Il dispose d'outils **`db_query`** (lecture SELECT) et **`db_execute`**
+  (écriture : CREATE TABLE, INSERT, UPDATE, DELETE…) sur **sa base uniquement**.
+  Il **construit ses propres tables** de suivi selon ses besoins, et fait le
+  maximum pour que ses données soient à jour (il vérifie dans les projets ou
+  réfléchit sur vos demandes).
+- Il ne touche **jamais** aux fichiers des projets (lecture seule stricte,
+  garantie technique).
+- Il **adapte son propre prompt** au fil des discussions : via l'outil
+  `update_my_prompt`, il met à jour ses instructions durables (préférences,
+  règles, contexte) pour prendre systématiquement en compte ce qu'il apprend.
+  Le changement est persisté et pris en compte dès le message suivant.
+- S'il a besoin d'**installer des outils** pour gérer au mieux certaines tâches,
+  il vous **demande d'abord** (validation utilisateur requise).
+
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
   (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en
   attente ? », « Qu'a-t-on décidé sur Z ? »).
 - L'Assistant consulte sa base et les projets pour répondre.
+
+### Dicter sa question
+- Un bouton **micro 🎙️** est disponible dans la barre d'outils de l'onglet 🧭 :
+  il vous permet de **dicter votre question** au lieu de la taper (Web Speech
+  API, langue `fr-FR`, comme le chat de l'agent standard). La transcription est
+  insérée dans la zone de saisie ; validez ensuite avec Entrée.
 
 ### Choisir le modèle
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
@@ -806,6 +880,8 @@ apprend et répond.
   persisté dans la config globale, pas par projet).
 
 ### Lecture seule — garantie
-- L'Assistant est **strictement en lecture seule** : il ne peut pas écrire
-  dans vos projets. Seule sa propre base de données (dans `~/.pilot/`) est
-  modifiée par lui.
+- L'Assistant est **strictement en lecture seule** sur vos projets : il ne
+  peut pas écrire dedans. Seul son **espace dédié** `~/.pilot/assistant/` et
+  sa base de données (dans `~/.pilot/`) sont modifiables par lui.
+- Cette garantie est **technique** (extension qui bloque toute écriture hors
+  de l'espace dédié), pas seulement une consigne système.

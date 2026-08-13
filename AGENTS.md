@@ -186,7 +186,11 @@ pilot/
     ├── extensions/            # Extensions pi embarquées (incluses via include_str!)
     │   ├── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)
     │   ├── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
-    │   └── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
+    │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
+    │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)
+    │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder (actions Pilot via sentinel)
+    │   ├── pilot-assistant-db.ts # 🧭 : db_query / db_execute (accès contrôlé à la base de suivi de l'assistant)
+    │   └── pilot-assistant-prompt.ts # 🧭 : update_my_prompt (auto-adaptation du prompt personnalisé)
     ├── vendor/                # wry 0.55.1 patché (handler micro WebView2) — dictée vocale desktop
     │   └── wry/
     └── src/

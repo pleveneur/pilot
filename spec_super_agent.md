@@ -15,12 +15,19 @@ apprend et répond.
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
   (ex: « Aria », « Chef de projet »). Ce nom s'affiche dans le titre de l'onglet
   🧭 et dans ses réponses.
+- Le nom est **injecté dans le prompt système** envoyé à chaque tour :
+  l'assistant sait toujours qui il est et qu'il est l'assistant de suivi
+  multi-projets (pas l'agent d'un projet). Même sans prompt personnalisé, il
+  reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
+  projets par client, lecture seule).
 
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.
-- Chaque projet ouvert peut être **attaché à un client** (sélection dans la
-  barre « Projets en cours » ou dans l'onglet Assistant).
+- Chaque projet suivi peut être **attaché à un client** : dans l'onglet 🧭
+  Assistant, cliquez sur le bouton **🏢 (Projets & clients)** pour ouvrir le
+  panneau listant les projets suivis, puis choisissez le client de chaque projet
+  dans le menu déroulant. L'association est enregistrée immédiatement.
 
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
@@ -30,6 +37,49 @@ apprend et répond.
 - Il construit **sa propre base de données locale** (SQLite) pour organiser
   clients, projets et tâches, et s'enrichit au fil du temps.
 
+### Espace d'écriture dédié (fichiers de suivi)
+- L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`
+  pour ses **fichiers libres** (notes, analyses, exports), organisé par
+  **client puis par projet** : `~/.pilot/assistant/<client>/<projet>/`.
+- Il **crée lui-même** ses fichiers au fil de l'usage (pas de création
+  systématique). Le dossier projet utilise le **nom du projet** (dernier
+  segment du chemin), avec repli sur le chemin complet en cas de collision
+  entre clients.
+- **Garantie technique** : l'Assistant ne peut **jamais** écrire hors de
+  `~/.pilot/assistant/` (une extension dédiée bloque toute écriture dans les
+  projets). La base SQLite reste la **source de vérité** pour le suivi
+  structuré (tâches, décisions, statuts).
+
+### Poser des questions à l'utilisateur
+- Quand des informations manquent (client inconnu, données de suivi
+  incomplètes), l'Assistant peut **poser des questions** directement dans le
+  chat : choix, confirmation Oui/Non, ou saisie libre, via des **boutons**
+  inline. Répondez en cliquant ; l'Assistant reprend son raisonnement avec
+  votre réponse.
+
+### Ouvrir un projet discuté
+- Quand vous **discutez d'un projet**, l'Assistant peut **l'ouvrir** pour le
+  rendre **actif** (projet en cours de traitement), comme si vous l'aviez
+  ouvert manuellement. S'il a un doute sur le projet, il vous **demande**
+  d'abord.
+
+### Suivre le projet en cours de discussion
+- L'Assistant **sait quel projet est actuellement ouvert** dans Pilot et **sur
+  quel projet il travaillait** (le dernier projet qu'il a ouvert).
+- Si vous **changez de projet** en cours de discussion, il ne confond pas : il
+  continue de suivre le projet dont vous parlez, et **vous demande de préciser**
+  s'il a un doute.
+- Il **apprend où se trouvent les projets** au fil des discussions et des
+  sessions d'agents (liste des projets connus injectée à chaque tour).
+
+### Déléguer le code à l'agent du projet
+- Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
+  lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
+  coding).
+- Il **ouvre l'onglet de l'agent** (le rend visible) et lui **envoie la demande
+  dans sa session de discussion**, en précisant qu'elle vient de l'Assistant
+  projets. Vous voyez la demande dans la conversation de l'agent.
+
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
   est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
@@ -38,11 +88,35 @@ apprend et répond.
   l'Assistant analyse le projet (structure, documentation, historique des
   sessions) puis pose les questions nécessaires à son fonctionnement.
 
+### L'assistant gère son propre suivi
+- L'Assistant est **responsable de son suivi des projets** : il met à jour
+  lui-même sa base de données (SQLite `~/.pilot/super-agent.db`) et ses fichiers
+  personnels (`~/.pilot/assistant/`) au fil des discussions.
+- Il dispose d'outils **`db_query`** (lecture SELECT) et **`db_execute`**
+  (écriture : CREATE TABLE, INSERT, UPDATE, DELETE…) sur **sa base uniquement**.
+  Il **construit ses propres tables** de suivi selon ses besoins, et fait le
+  maximum pour que ses données soient à jour (il vérifie dans les projets ou
+  réfléchit sur vos demandes).
+- Il ne touche **jamais** aux fichiers des projets (lecture seule stricte,
+  garantie technique).
+- Il **adapte son propre prompt** au fil des discussions : via l'outil
+  `update_my_prompt`, il met à jour ses instructions durables (préférences,
+  règles, contexte) pour prendre systématiquement en compte ce qu'il apprend.
+  Le changement est persisté et pris en compte dès le message suivant.
+- S'il a besoin d'**installer des outils** pour gérer au mieux certaines tâches,
+  il vous **demande d'abord** (validation utilisateur requise).
+
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
   (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en
   attente ? », « Qu'a-t-on décidé sur Z ? »).
 - L'Assistant consulte sa base et les projets pour répondre.
+
+### Dicter sa question
+- Un bouton **micro 🎙️** est disponible dans la barre d'outils de l'onglet 🧭 :
+  il vous permet de **dicter votre question** au lieu de la taper (Web Speech
+  API, langue `fr-FR`, comme le chat de l'agent standard). La transcription est
+  insérée dans la zone de saisie ; validez ensuite avec Entrée.
 
 ### Choisir le modèle
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
@@ -65,9 +139,11 @@ apprend et répond.
   persisté dans la config globale, pas par projet).
 
 ### Lecture seule — garantie
-- L'Assistant est **strictement en lecture seule** : il ne peut pas écrire
-  dans vos projets. Seule sa propre base de données (dans `~/.pilot/`) est
-  modifiée par lui.
+- L'Assistant est **strictement en lecture seule** sur vos projets : il ne
+  peut pas écrire dedans. Seul son **espace dédié** `~/.pilot/assistant/` et
+  sa base de données (dans `~/.pilot/`) sont modifiables par lui.
+- Cette garantie est **technique** (extension qui bloque toute écriture hors
+  de l'espace dédié), pas seulement une consigne système.
 <!-- /HELP:super-agent -->
 
 ---
@@ -92,8 +168,10 @@ apprend et répond.
 | **Assistant** | Assistant nommé, lecture seule, qui suit tous les projets. |
 | **Client** | Entité commerciale à laquelle sont rattachés des projets. Liste saisissable. |
 | **Projet** | Projet ouvert dans Pilot, attaché à un client (optionnel). |
+| **Projet de travail** | Projet sur lequel l'assistant travaille (dernier projet ouvert via `open_project`). Distinct du projet actif : quand l'utilisateur change de projet, le projet de travail reste celui de la discussion en cours. |
 | **Tâche** | Unité de suivi (demande → livraison) extraite des sessions d'agents. |
-| **Base interne** | Base SQLite locale (`~/.pilot/super-agent.db`) gérée par l'Assistant. |
+| **Base interne** | Base SQLite locale (`~/.pilot/super-agent.db`) gérée par l'Assistant, source de vérité du suivi structuré. |
+| **Espace d'écriture** | Dossier dédié `~/.pilot/assistant/<client>/<projet>/` pour les fichiers libres (notes, analyses, exports). |
 
 ## 3. Architecture
 
@@ -104,8 +182,11 @@ Sessions d'agents (chat / orchestration)
    Assistant (session pi/plh dédiée, lecture seule)
         │  lit / écrit
         ▼
-   Base SQLite locale  ~/.pilot/super-agent.db
+   Base SQLite locale  ~/.pilot/super-agent.db   (source de vérité structurée)
    (clients, projets, tâches, décisions, historique)
+        │
+        ▼
+   Espace d'écriture dédié  ~/.pilot/assistant/<client>/<projet>/  (fichiers libres)
         ▲
         │  lit
    Projets ouverts (fichiers, docs, historique sessions)
@@ -113,9 +194,21 @@ Sessions d'agents (chat / orchestration)
 
 - **Session dédiée** : un processus `pi --mode rpc` (ou `plh`) séparé, canal
   d'événements propre `rpc-event-superagent` (ne pollue pas les canaux existants).
-- **Lecture seule stricte** : l'Assistant reçoit une consigne système
-  interdisant toute écriture dans les projets. Seule sa base interne est
-  modifiable (via des commandes Tauri dédiées, pas via les outils de l'agent).
+- **Lecture seule stricte (technique)** : l'extension `pilot-assistant-files`
+  intercepte les outils `write`/`edit` et **bloque toute écriture hors de
+  `~/.pilot/assistant/`** (création automatique de l'arborescence client/projet
+  au besoin). L'extension `pilot-choices` fournit les outils de question
+  (ask_choice, ask_confirm, ask_input, ask_multi_choice). L'extension
+  `pilot-assistant-actions` fournit les outils `open_project` (ouvrir un projet
+  pour le rendre actif) et `delegate_to_coder` (déléguer une demande de code à
+  l'agent standard du projet). L'extension `pilot-assistant-db` fournit les
+  outils `db_query` / `db_execute` (accès contrôlé à la base de suivi de
+  l'assistant). L'extension `pilot-assistant-prompt` fournit l'outil
+  `update_my_prompt` (auto-adaptation du prompt personnalisé). Les cinq sont
+  chargées dès que le backend supporte `--extension`.
+- **Chat sur session persistante** : le chat de l'onglet 🧭 utilise la session
+  persistante `rpc_superagent` (streaming + mémoire de conversation), ce qui
+  permet de charger les extensions et de poser des questions.
 
 ## 4. Données
 
@@ -136,6 +229,19 @@ Tables (V1) :
 - L'Assistant peut **créer ses propres tables** au fil de ses besoins
   (organisation interne auto-construite), dans la limite de la base dédiée.
 
+### Espace d'écriture dédié `~/.pilot/assistant/`
+
+- Arborescence par **client puis par projet** :
+  `~/.pilot/assistant/<client>/<projet>/…` (fichiers libres : notes, analyses,
+  exports). `~/.pilot/assistant/` est la racine pour les fichiers propres à
+  l'assistant.
+- Le dossier projet utilise le **nom du projet** (dernier segment du chemin),
+  avec repli sur le chemin complet en cas de collision entre clients.
+- **Création à la demande** : l'Assistant crée ses fichiers lui-même au fil de
+  l'usage (pas de création systématique). L'extension `pilot-assistant-files`
+  crée les dossiers parents au besoin et **bloque toute écriture hors de cette
+  racine** (garantie technique de lecture seule sur les projets).
+
 ### Registre de configuration `~/.pilot/super-agent.json`
 
 ```json
@@ -155,6 +261,12 @@ Tables (V1) :
 - L'Assistant met à jour sa base : tâches, décisions, état d'avancement.
 - **Ne pas bloquer** : l'injection est asynchrone et ne ralentit pas la session
   d'origine.
+- **Contexte projet à chaque tour** : le prompt système injecte le **projet
+  actif** (ouvert dans Pilot), le **projet de travail** (dernier projet ouvert
+  via `open_project`) et la **liste des projets connus** de la base. L'Assistant
+  sait ainsi quel projet est en cours de discussion, ne confond pas les projets
+  quand l'utilisateur en change, et apprend où se trouvent les projets au fil
+  des discussions.
 
 ## 6. Initialisation d'un projet existant
 
@@ -191,12 +303,38 @@ Tables (V1) :
 
 ## 8. Garde-fous
 
-- **Lecture seule stricte** : consigne système + absence d'outils d'écriture
-  (write/edit) pour l'Assistant. Seule la base interne est modifiable.
+- **Lecture seule stricte (technique)** : l'extension `pilot-assistant-files`
+  bloque toute écriture hors de `~/.pilot/assistant/` (les projets sont
+  inaccessibles en écriture, indépendamment de la consigne système).
+- **Espace d'écriture dédié** : `~/.pilot/assistant/<client>/<projet>/` pour
+  les fichiers libres ; la base SQLite reste la source de vérité structurée.
+- **Questions** : l'Assistant peut poser des questions (choix/confirmation/
+  saisie) via `pilot-choices`, rendues en boutons inline dans le chat.
+- **Actions sur les projets (TÂCHE 2)** : l'extension `pilot-assistant-actions`
+  fournit `open_project` (ouvrir un projet → le rendre actif via
+  `openProjectByPath`) et `delegate_to_coder` (déléguer une demande de code à
+  l'agent standard du projet → ouvrir son onglet via `tabs.openFile("", "agent")`
+  puis envoyer la demande via `send_agent_prompt`). Ces actions sont exécutées
+  par Pilot (pas par l'agent), donc compatibles avec la lecture seule stricte.
+- **Accès à la base de suivi (responsabilité de l'assistant)** : l'extension
+  `pilot-assistant-db` fournit `db_query` (SELECT) et `db_execute` (CREATE/INSERT/
+  UPDATE/DELETE/ALTER/DROP/PRAGMA) sur **la base de l'assistant uniquement**
+  (`~/.pilot/super-agent.db`), via des commandes Rust (`super_agent_db_query` /
+  `super_agent_db_execute`). L'assistant construit et met à jour ses propres
+  tables de suivi ; il ne touche jamais aux fichiers des projets.
+- **Auto-adaptation du prompt** : l'extension `pilot-assistant-prompt` fournit
+  l'outil `update_my_prompt` qui remplace le prompt personnalisé de l'assistant
+  (commande Rust `set_super_agent_prompt`, persistée dans la config + historique
+  `prompt-history.md`). L'assistant l'utilise pour prendre systématiquement en
+  compte ce qu'il apprend des discussions et des choix de l'utilisateur.
+- **Installation d'outils (validation utilisateur)** : si l'assistant a besoin
+  d'installer des outils pour gérer certaines tâches, il **demande d'abord** à
+  l'utilisateur, qui doit valider (via `ask_confirm` / `ask_choice`).
 - **Isolation** : canal d'événements séparé, session dédiée, arrêt propre à la
   fermeture de l'onglet / du projet / de l'application.
 - **Anti-régression** : ne pas toucher à `rpc_state`, `rpc_reviewer`,
-  `agent-pi.js`, `orchestration.js`, `agents.js`.
+  `agent-pi.js`, `orchestration.js`, `agents.js`. `ask_pi_caged_timed`
+  (partagé par help/review/agents_md) n'est pas modifié.
 
 ## 9. Perspective — lien futur avec un serveur de sources
 
@@ -211,29 +349,43 @@ Tables (V1) :
 ## 10. Backend Rust (esquisse)
 
 - `super_agent.rs` : session dédiée, injection de résumés, commandes de base.
+- Extensions pi : `pilot-assistant-files.ts` (espace d'écriture restreint
+  `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
+  `pilot-assistant-actions.ts` (open_project / delegate_to_coder),
+  `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi) et
+  `pilot-assistant-prompt.ts` (update_my_prompt), chargées dans la session
+  super-agent dès que le backend supporte `--extension`.
 - Commandes Tauri (esquisse) :
   - `get_super_agent_config()` / `set_super_agent_config(config)`
   - `start_super_agent_session()` / `stop_super_agent_session()`
-  - `send_super_agent_prompt(message)`
+  - `send_super_agent_prompt(message)` (chat sur session persistante)
+  - `send_super_agent_command(command)` (réponses aux questions, ex:
+    `extension_ui_response`)
   - `inject_session_summary(project_id, summary)`
   - `initialize_super_agent(project_path)`
   - `list_clients()` / `add_client(name)` / `remove_client(id)` / `rename_client(id, name)`
   - `set_project_client(project_path, client_id)`
+  - `list_super_agent_projects()` (liste les projets suivis + leur client)
+  - `set_super_agent_working_project(path)` (projet de travail de la discussion)
+  - `super_agent_db_query(sql)` / `super_agent_db_execute(sql)` (accès contrôlé à
+    la base de suivi de l'assistant)
+  - `set_super_agent_prompt(prompt)` (auto-adaptation du prompt personnalisé,
+    avec historique `prompt-history.md`)
   - `query_super_agent(question)` (recherche dans la base + projets)
 
 ## 11. Frontend (esquisse)
 
 | Fichier | Rôle |
 |---|---|
-| `src/js/super-agent.js` | Onglet 🧭 : chat, initialisation, vue clients/projets. |
+| `src/js/super-agent.js` | Onglet 🧭 : chat (session persistante + streaming), questions (boutons pilot-choices), actions (open_project / delegate_to_coder), initialisation, panneau Projets & clients (association projet→client). |
 | `src/js/super-agent-config.js` | Paramètres ⚙️ : nom, clients, association projet→client. |
 
 ## 12. Anti-régression
 
 - Session et canal dédiés (`rpc-event-superagent`).
-- Lecture seule garantie (pas d'outils d'écriture).
-- Base interne isolée dans `~/.pilot/`.
-- Ne pas modifier les modules existants d'agents.
+- Lecture seule garantie techniquement (extension `pilot-assistant-files`).
+- Base interne isolée dans `~/.pilot/` + espace d'écriture `~/.pilot/assistant/`.
+- Ne pas modifier les modules existants d'agents ni `ask_pi_caged_timed`.
 
 ---
 

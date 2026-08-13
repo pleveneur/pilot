@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
 use crate::rpc_manager;
+use crate::rpc::probe_extension_support;
 use crate::AppState;
 
 /// Canal d'événements dédié au super-agent (ne pollue pas les canaux existants).
@@ -88,8 +89,11 @@ fn init_db(conn: &Connection) -> Result<(), String> {
 
 // ── Session RPC dédiée ──
 
-/// Démarre (lazy) la session super-agent. Lecture seule : pas d'extensions
-/// d'écriture (pilot-edit-gate), pas de skill. Canal dédié.
+/// Démarre (lazy) la session super-agent. Lecture seule stricte sur les projets :
+/// l'extension `pilot-assistant-files` bloque techniquement toute écriture hors de
+/// `~/.pilot/assistant/` (espace d'écriture dédié de l'assistant), et
+/// `pilot-choices` fournit les outils de question (ask_choice, ask_input,
+/// ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
 pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
     let mut rpc = state.rpc_superagent.lock().unwrap();
     if rpc.is_some() {
@@ -102,8 +106,41 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
         .unwrap()
         .clone()
         .unwrap_or_default();
+    // Extensions pi : pilot-assistant-files (espace d'écriture restreint
+    // `~/.pilot/assistant/` — garantie lecture seule sur les projets),
+    // pilot-choices (boutons de question) et pilot-assistant-actions (outils
+    // open_project / delegate_to_coder — TÂCHE 2). Chargées dès que
+    // `--extension` est supporté par le backend.
+    let mut extensions: Vec<String> = Vec::new();
+    if probe_extension_support(state, &pi_path) {
+        if let Ok(data_dir) = app.path().app_data_dir() {
+            let dir = data_dir.join("extensions");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let files = dir.join("pilot-assistant-files.ts");
+                if std::fs::write(&files, include_str!("../extensions/pilot-assistant-files.ts")).is_ok() {
+                    extensions.push(files.to_string_lossy().to_string());
+                }
+                let choices = dir.join("pilot-choices.ts");
+                if std::fs::write(&choices, include_str!("../extensions/pilot-choices.ts")).is_ok() {
+                    extensions.push(choices.to_string_lossy().to_string());
+                }
+                let actions = dir.join("pilot-assistant-actions.ts");
+                if std::fs::write(&actions, include_str!("../extensions/pilot-assistant-actions.ts")).is_ok() {
+                    extensions.push(actions.to_string_lossy().to_string());
+                }
+                let db = dir.join("pilot-assistant-db.ts");
+                if std::fs::write(&db, include_str!("../extensions/pilot-assistant-db.ts")).is_ok() {
+                    extensions.push(db.to_string_lossy().to_string());
+                }
+                let prompt = dir.join("pilot-assistant-prompt.ts");
+                if std::fs::write(&prompt, include_str!("../extensions/pilot-assistant-prompt.ts")).is_ok() {
+                    extensions.push(prompt.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(),
+        &cwd, &pi_path, true, "", None, extensions, app.clone(), state.event_tx.clone(),
         SUPERAGENT_CHANNEL, None, None,
     )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
@@ -124,8 +161,7 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
 /// Résout le modèle par défaut du backend actif depuis `model-switch.json`
 /// (`~/.<stem>/agent/model-switch.json`, champ `defaultModel`). Retourne
 /// `(provider, model_id)` si présent.
-fn default_model_from_config(pi_path: &str) -> Option<(String, String)> {
-    let stem = if pi_path.is_empty() {
+fn default_model_from_config(pi_path: &str) -> Option<(String, String)> {    let stem = if pi_path.is_empty() {
         "pi".to_string()
     } else {
         std::path::Path::new(pi_path)
@@ -148,6 +184,39 @@ fn default_model_from_config(pi_path: &str) -> Option<(String, String)> {
     Some((def[..idx].to_string(), def[idx + 1..].to_string()))
 }
 
+/// Liste concise des projets connus de la base (path + nom), pour que
+/// l'assistant apprenne où se trouvent les projets au fil des discussions.
+/// Retourne une chaîne vide si la base est vide ou inaccessible.
+fn known_projects_context(app: &AppHandle) -> String {
+    let conn = match open_db(app) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let mut stmt = match conn.prepare("SELECT path, name FROM projects ORDER BY updated_at DESC") {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+    let rows = match stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+        Ok(r) => r,
+        Err(_) => return String::new(),
+    };
+    let mut items: Vec<String> = Vec::new();
+    for row in rows.flatten() {
+        let (path, name) = row;
+        let label = if name.is_empty() || name == path {
+            path
+        } else {
+            format!("{} ({})", name, path)
+        };
+        items.push(label);
+    }
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nProjets que tu connais :\n- {}", items.join("\n- "))
+    }
+}
+
 #[tauri::command]
 pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)
@@ -166,9 +235,57 @@ pub fn stop_super_agent_session(state: State<AppState>) -> Result<(), String> {
 pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: String) -> Result<(), String> {
     // Démarrage paresseux : garantit qu'une session existe avant d'envoyer.
     do_start_super_agent_session(state.inner(), &app)?;
+    // Prompt système : nom de l'assistant + rôle de suivi multi-projets + prompt
+    // personnalisé (configurable). Le nom est toujours injecté pour que
+    // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
+    // prompt personnalisé.
+    let (name, system_prompt) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone())
+    };
+    let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
+    let mut full_system = format!(
+        "Tu es « {} », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.",
+        name
+    );
+    // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
+    // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
+    // L'assistant doit savoir quel projet est actif pour ne pas confondre les
+    // projets quand l'utilisateur en change en cours de discussion.
+    let active_project = state.active_project.lock().unwrap().clone();
+    let working_project = state.working_project.lock().unwrap().clone();
+    let mut project_ctx = String::new();
+    if let Some(ap) = &active_project {
+        project_ctx.push_str(&format!(
+            "\n\nProjet actuellement ouvert dans Pilot : « {} ».",
+            ap
+        ));
+    }
+    if let Some(wp) = &working_project {
+        if active_project.as_ref() != Some(wp) {
+            project_ctx.push_str(&format!(
+                "\nProjet sur lequel tu travaillais : « {} ».",
+                wp
+            ));
+        }
+    }
+    if !project_ctx.is_empty() {
+        project_ctx.push_str(
+            "\nSi l'utilisateur parle d'un projet, précise bien de quel projet il s'agit. S'il continue une discussion en cours, il parle probablement du projet sur lequel tu travaillais. Si tu n'es pas sûr du projet dont il parle (surtout s'il a changé de projet), demande-lui de préciser.",
+        );
+        full_system.push_str(&project_ctx);
+    }
+    // Apprendre où se trouvent les projets : injecter la liste des projets
+    // connus de la base (s'enrichit au fil des discussions / sessions).
+    full_system.push_str(&known_projects_context(&app));
+    if !system_prompt.trim().is_empty() {
+        full_system.push_str("\n\n");
+        full_system.push_str(system_prompt.trim());
+    }
     let mut rpc = state.rpc_superagent.lock().unwrap();
     let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
-    let cmd = serde_json::json!({"type": "prompt", "message": message});
+    let full_message = format!("{}\n\n{}", full_system, message);
+    let cmd = serde_json::json!({"type": "prompt", "message": full_message});
     rpc_manager::send_command(session, &cmd)
 }
 
@@ -264,6 +381,83 @@ pub async fn ask_super_agent(
     result
 }
 
+/// Enregistre le projet sur lequel l'assistant travaille (dernier projet ouvert
+/// via l'action `open_project`). Distinct du projet actif : quand l'utilisateur
+/// change de projet, le projet de travail reste celui de la discussion en cours.
+#[tauri::command]
+pub fn set_super_agent_working_project(state: State<AppState>, path: String) -> Result<(), String> {
+    *state.working_project.lock().unwrap() = Some(path);
+    Ok(())
+}
+
+// ── Accès à la base de suivi par l'assistant (outils db_query / db_execute) ──
+//
+// L'assistant est responsable de son suivi : il construit et met à jour ses
+// propres structures dans sa base SQLite (~/.pilot/super-agent.db). Ces commandes
+// lui donnent un accès contrôlé (lecture SELECT / écriture CREATE/INSERT/UPDATE/
+// DELETE/ALTER/DROP) sur SA base uniquement — jamais sur les fichiers des projets.
+// Le frontend intercepte les outils d'extension (sentinel) et appelle ces
+// commandes ; le résultat est renvoyé au LLM.
+
+fn sqlite_value_to_json(v: rusqlite::types::Value) -> Value {
+    match v {
+        rusqlite::types::Value::Null => Value::Null,
+        rusqlite::types::Value::Integer(i) => Value::Number(i.into()),
+        rusqlite::types::Value::Real(f) => serde_json::Number::from_f64(f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        rusqlite::types::Value::Text(s) => Value::String(s),
+        rusqlite::types::Value::Blob(b) => Value::String(format!("<blob {} octets>", b.len())),
+    }
+}
+
+/// Exécute une requête SELECT en lecture seule sur la base de suivi de
+/// l'assistant. Retourne `{ rows: [...], count: n }`.
+#[tauri::command]
+pub fn super_agent_db_query(app: AppHandle, sql: String) -> Result<Value, String> {
+    let trimmed = sql.trim_start();
+    if !trimmed.to_uppercase().starts_with("SELECT") {
+        return Err("super_agent_db_query : seules les requêtes SELECT sont autorisées".to_string());
+    }
+    let conn = open_db(&app)?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Erreur SQL : {}", e))?;
+    let col_count = stmt.column_count();
+    let col_names: Vec<String> = (0..col_count)
+        .map(|i| stmt.column_name(i).unwrap_or("").to_string())
+        .collect();
+    let rows = stmt
+        .query_map([], |r| {
+            let mut obj = serde_json::Map::new();
+            for (i, name) in col_names.iter().enumerate() {
+                let val = r
+                    .get::<_, rusqlite::types::Value>(i)
+                    .unwrap_or(rusqlite::types::Value::Null);
+                obj.insert(name.clone(), sqlite_value_to_json(val));
+            }
+            Ok(serde_json::Value::Object(obj))
+        })
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let mut result: Vec<Value> = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| format!("Erreur SQL : {}", e))?);
+    }
+    Ok(serde_json::json!({ "rows": result, "count": result.len() }))
+}
+
+/// Exécute une requête d'écriture (CREATE TABLE, INSERT, UPDATE, DELETE, ALTER,
+/// DROP, PRAGMA) sur la base de suivi de l'assistant. Retourne `{ ok: true }`.
+#[tauri::command]
+pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, String> {
+    let trimmed = sql.trim_start();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("SELECT") {
+        return Err("super_agent_db_execute : utilisez super_agent_db_query pour les SELECT".to_string());
+    }
+    let conn = open_db(&app)?;
+    conn.execute_batch(&sql).map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
 #[tauri::command]
 pub fn new_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
@@ -299,6 +493,17 @@ pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: S
     cfg.super_agent_model = format!("{}/{}", provider, model_id);
     crate::save_config_disk(&app, &cfg).ok();
     Ok(())
+}
+
+/// Envoie une commande arbitraire au processus pi du super-agent (ex:
+/// `extension_ui_response` pour répondre aux boutons de question posés par
+/// l'assistant via pilot-choices).
+#[tauri::command]
+pub fn send_super_agent_command(state: State<AppState>, app: AppHandle, command: Value) -> Result<(), String> {
+    do_start_super_agent_session(state.inner(), &app)?;
+    let mut rpc = state.rpc_superagent.lock().unwrap();
+    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
+    rpc_manager::send_command(session, &command)
 }
 
 #[tauri::command]
@@ -355,6 +560,31 @@ pub fn set_super_agent_config(
         cfg.super_agent_prompt = p;
     }
     crate::save_config_disk(&app, &cfg)?;
+    Ok(())
+}
+
+/// Permet à l'assistant de mettre à jour son propre prompt personnalisé au fil
+/// des discussions (outil `update_my_prompt`). Le changement est persisté dans
+/// la config (donc pris en compte dès le prochain message) et un historique des
+/// versions est conservé pour traçabilité / réversibilité.
+#[tauri::command]
+pub fn set_super_agent_prompt(state: State<AppState>, app: AppHandle, prompt: String) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_prompt = prompt.clone();
+    crate::save_config_disk(&app, &cfg)?;
+    // Historique des versions du prompt (traçabilité / réversibilité).
+    if let Ok(dir) = app.path().app_data_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let hist = dir.join("prompt-history.md");
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let entry = format!("\n--- {ts} ---\n{prompt}\n");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&hist)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
+        }
+    }
     Ok(())
 }
 
@@ -425,6 +655,36 @@ pub fn set_project_client(state: State<AppState>, app: AppHandle, project_path: 
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
+}
+
+/// Liste les projets connus de la base avec leur client associé (source de
+/// vérité : la config `super_agent_project_client`, path → nom de client).
+/// Retourne `{ projects: [{ path, name, client }] }`.
+#[tauri::command]
+pub fn list_super_agent_projects(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT path, name FROM projects ORDER BY updated_at DESC")
+        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+    let mut projects: Vec<Value> = Vec::new();
+    for row in rows {
+        if let Ok((path, name)) = row {
+            projects.push(serde_json::json!({"path": path, "name": name}));
+        }
+    }
+    drop(stmt);
+    drop(conn);
+    // Associer le client depuis la config (source de vérité de l'association).
+    let cfg = state.config.lock().unwrap();
+    for p in projects.iter_mut() {
+        let path = p.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let client = cfg.super_agent_project_client.get(path).cloned().unwrap_or_default();
+        p["client"] = serde_json::json!(client);
+    }
+    Ok(serde_json::json!({"projects": projects}))
 }
 
 // ── Apprentissage : injection de résumé de session ──

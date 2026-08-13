@@ -1,5 +1,26 @@
 # Plan de Développement — Pilot
 
+## 🔴 PRIORITÉ N°1 — Super-agent 🧭 : bugs + erreurs console (À TRAITER EN PREMIER)
+
+> **Rappel prioritaire** : traiter ce point en priorité à la prochaine session.
+> L'utilisateur a signalé des **soucis persistants** et des **erreurs dans la
+> console** concernant le super-agent (onglet 🧭), après les dernières
+> modifications (TÂCHE 2 : open_project / delegate_to_coder, association
+> projet→client, nom de l'assistant injecté dans le prompt).
+
+**Contexte des dernières modifs (à vérifier)** :
+- `pilot-assistant-actions.ts` (extension open_project / delegate_to_coder)
+- `super_agent.rs` : chargement de l'extension + prompt système (nom + rôle)
+- `super-agent.js` : sentinel `PILOT_ASSISTANT_ACTION::`, panneau Projets &
+  clients, écouteur `pilot-config-changed`
+- `tabs.js` : `updateSuperAgentLabel`
+- `list_super_agent_projects` (commande Rust)
+
+**À faire** : ouvrir la console, reproduire, corriger les erreurs, vérifier
+qu'aucune régression (help/review/agents_md utilisent `ask_pi_caged_timed`).
+
+---
+
 ## ✅ PRIORITÉ N°1 — Doublons d'injection de contexte (CORRIGÉ 2026-08)
 
 > **Rappel prioritaire** : même si l'utilisateur demande autre chose, traiter ce
@@ -98,6 +119,7 @@ Au-delà de l'éditeur de texte mono-projet actuel, Pilot vise à terme deux pil
 
 | Domaine | Fichier | Statut |
 |---|---|---|
+| Espace de travail fichiers du Super-agent (H-🗂) | [`idees_evolutions.md`](idees_evolutions.md) §27 | ✅ Implémenté (2026-08) — `~/.pilot/assistant/` : fichiers de suivi par projet `~/.pilot/assistant/<client>/<projet>/`, fichiers propres à l'assistant à la racine ; création à l'usage par l'assistant ; extension pi `pilot-assistant-files.ts` (tools écriture/lecture/listing) + cadrage « pose des questions » (réutilise `pilot-choices`) ; commande `send_super_agent_command` ; prompt système préfixé à chaque tour. Voir `spec_super_agent.md` |
 | Assistant (suivi multi-projets, lecture seule) | [`spec_super_agent.md`](spec_super_agent.md) | ✅ Implémenté (2026-08) — onglet 🧭 dédié (couleur distincte, global multi-projets), session RPC dédiée (canal `rpc-event-superagent`), base SQLite `~/.pilot/super-agent.db` (clients/projets/tâches/décisions/résumés), config (nom + clients + prompt système) dans Paramètres, injection auto de résumés à l'agent_end (apprentissage continu), bouton « Initialiser », lecture seule stricte. Voir [`spec_super_agent.md`](spec_super_agent.md) |
 | Gestion d'agents multi-rôles (H2 V2, séquentiel) | [`spec_gestion_agents.md`](spec_gestion_agents.md) | ✅ Implémenté (2026-08) — onglet 🎭 Agents, registre global `~/.pilot/agents.json`, coordinateur + sous-agents, protocole `[[CALL:...]]`, bus frontend, garde-fous (profondeur, budget, cycle, timeout), sélection modèle par backend. Voir [`plan_gestion_agents.md`](plan_gestion_agents.md) |
 | Discussion inter-projets (H12/#15) | [`spec_interproject.md`](spec_interproject.md) | ✅ Implémenté (2026-08) — liaison persistée de projets (`project_links`), dépôt d'une tâche/analyse dans `cible/.pilot/handoffs/`, ouverture+activation de la cible, lancement de son agent et prompt de traitement, projet source en lecture seule (consigne). Modale 🔗 (lier/unlier/envoyer). 4 commandes Tauri (`get_project_links`, `set_project_links`, `remove_project_link`, `interproject_handoff`). Bouton 🔗 dans la barre d'actions |

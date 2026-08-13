@@ -1,6 +1,8 @@
 # Pilot — Éditeur de texte pour Agents IA
 
-**Pilot** est un éditeur de texte et prévisualiseur multiplateforme conçu pour accompagner l'agent IA en ligne de commande (CLI) nommé **pi**. Pendant que l'agent travaille en arrière-plan dans le terminal, Pilot permet de **visualiser, suivre et éditer** les fichiers du projet en temps réel, avec une interface native rapide et épurée.
+**Pilot** est un éditeur de texte et prévisualiseur multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) conçu pour accompagner l'agent IA en ligne de commande — **pi** et **plh**. Au-delà de l'édition temps réel, il intègre un **chat agent** (RPC), le **Mode Orchestration**, la **conversion PDF → Markdown**, la **dictée vocale** et l'**accès distant web**.
+
+Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieurs projets simultanément, chacun avec son propre agent dédié en arrière-plan, ses onglets et sa discussion — le tout complété par le multi-agents, la mémoire de projet, l'historique de sessions, le super-agent de suivi et un système de tests anti-régression.
 
 ---
 
