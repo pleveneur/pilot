@@ -141,7 +141,7 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
     }
     let session = rpc_manager::spawn_and_start(
         &cwd, &pi_path, true, "", None, extensions, app.clone(), state.event_tx.clone(),
-        SUPERAGENT_CHANNEL, None, None,
+        SUPERAGENT_CHANNEL, None, None, Some("superagent".to_string()),
     )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
     *rpc = Some(session);
@@ -231,6 +231,15 @@ pub fn stop_super_agent_session(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Construit la consigne « réponses courtes » à injecter dans le prompt système
+/// du super-agent (évolution 3). Retourne une chaîne vide si le mode est désactivé.
+fn concise_guideline(enabled: bool) -> String {
+    if !enabled {
+        return String::new();
+    }
+    "\n\nRègle de style : réponds de façon concise. Informe l'utilisateur et prends des décisions, mais ne détaille pas tout ce qui se fait, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
+}
+
 /// Construit le contexte projet injecté dans le prompt système du super-agent.
 /// Le projet ACTIF est toujours la cible par défaut de la conversation ; l'ancien
 /// projet de travail n'est rappelé qu'en second plan pour éviter que l'assistant
@@ -265,17 +274,23 @@ fn build_project_context(active: Option<&str>, working: Option<&str>) -> String 
     ctx
 }
 
-#[tauri::command]
-pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: String) -> Result<(), String> {
+/// Envoie un prompt au super-agent (session RPC dédiée). Helper réutilisable par
+/// la commande Tauri desktop et par le web remote (évolution 2). Démarre
+/// paresseusement la session si nécessaire.
+pub(crate) fn do_send_super_agent_prompt(
+    state: &AppState,
+    app: &AppHandle,
+    message: String,
+) -> Result<(), String> {
     // Démarrage paresseux : garantit qu'une session existe avant d'envoyer.
-    do_start_super_agent_session(state.inner(), &app)?;
+    do_start_super_agent_session(state, app)?;
     // Prompt système : nom de l'assistant + rôle de suivi multi-projets + prompt
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt) = {
+    let (name, system_prompt, concise) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone())
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise)
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let mut full_system = format!(
@@ -290,16 +305,23 @@ pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: 
     full_system.push_str(&build_project_context(active_project.as_deref(), working_project.as_deref()));
     // Apprendre où se trouvent les projets : injecter la liste des projets
     // connus de la base (s'enrichit au fil des discussions / sessions).
-    full_system.push_str(&known_projects_context(&app));
+    full_system.push_str(&known_projects_context(app));
     if !system_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());
     }
+    // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
+    full_system.push_str(&concise_guideline(concise));
     let mut rpc = state.rpc_superagent.lock().unwrap();
     let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let full_message = format!("{}\n\n{}", full_system, message);
     let cmd = serde_json::json!({"type": "prompt", "message": full_message});
     rpc_manager::send_command(session, &cmd)
+}
+
+#[tauri::command]
+pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: String) -> Result<(), String> {
+    do_send_super_agent_prompt(state.inner(), &app, message)
 }
 
 /// Un tour de la conversation du super-agent (côté frontend).
@@ -325,12 +347,13 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt) = {
+    let (pi_path, mut model, system_prompt, concise) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
             cfg.super_agent_model.clone(),
             cfg.super_agent_prompt.clone(),
+            cfg.super_agent_concise,
         )
     };
 
@@ -356,6 +379,8 @@ pub async fn ask_super_agent(
     if !system_prompt.trim().is_empty() {
         prompt.push_str(&format!("{}\n\n", system_prompt.trim()));
     }
+    // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
+    prompt.push_str(&concise_guideline(concise));
     for turn in &history {
         let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
         prompt.push_str(&format!("{} : {}\n\n", role, turn.content));

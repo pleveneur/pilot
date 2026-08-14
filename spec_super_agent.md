@@ -51,6 +51,13 @@ apprend et répond.
 - **Désactivé par défaut** pour éviter la sur-notification : les réponses
   banales de l'Assistant ne déclenchent **aucune** notification.
 
+### Réponses courtes
+- **Paramètres ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
+  détailler, sauf demande explicite) »** : quand activé, l'Assistant répond de
+  façon **concise** — il **informe et prend des décisions** sans détailler tout
+  ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
+- **Désactivé par défaut**.
+
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.

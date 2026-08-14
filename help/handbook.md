@@ -385,6 +385,13 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   Fichiers, saisis des instructions (ou choisis un template), puis **Assembler**
   pour prévisualiser, **Envoyer à l'agent** (bascule sur le Chat) ou **Sauvegarder
   .md** à la racine du projet.
+- **🧭 Mode Assistant** : en haut, un sélecteur **« 🧭 Assistant » / « 🤖 Agents »**
+  choisit avec quoi discuter. **« Assistant »** (défaut) affiche une interface
+  **minimaliste** pour parler à l'Assistant de suivi multi-projets (lecture
+  seule, **aucun projet à ouvrir**) : il peut déléguer des tâches aux agents des
+  projets et répondre sur leur état. **« Agents »** restitue l'interface complète
+  (agent du projet, fichiers, projets, commandes, Prompt Builder). Le mode choisi
+  est mémorisé sur l'appareil.
 
 ---
 
@@ -805,6 +812,13 @@ apprend et répond.
   une **anomalie** de suivi (ex: connexion au super-agent perdue).
 - **Désactivé par défaut** pour éviter la sur-notification : les réponses
   banales de l'Assistant ne déclenchent **aucune** notification.
+
+### Réponses courtes
+- **Paramètres ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
+  détailler, sauf demande explicite) »** : quand activé, l'Assistant répond de
+  façon **concise** — il **informe et prend des décisions** sans détailler tout
+  ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
+- **Désactivé par défaut**.
 
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :

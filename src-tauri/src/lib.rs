@@ -433,6 +433,11 @@ struct AppConfig {
     // suivi). Défaut off (désactivé), même principe que notify_agent_done.
     #[serde(default)]
     notify_super_agent_done: bool,
+    // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
+    // informe et décide sans détailler tout ce qui se fait, sauf demande
+    // explicite. Défaut off. Injecté dans le prompt système.
+    #[serde(default)]
+    super_agent_concise: bool,
 }
 
 fn default_true() -> bool { true }
@@ -622,6 +627,7 @@ impl Default for AppConfig {
             super_agent_show_thinking: true,
             super_agent_show_tools: false,
             notify_super_agent_done: false,
+            super_agent_concise: false,
         }
     }
 }
