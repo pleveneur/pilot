@@ -14,7 +14,8 @@ const TOKEN_KEY = 'pilot_web_token';
 // Évolution 2 : mode par défaut du web remote. « assistant » = discussion
 // minimaliste avec l'Assistant (suivi multi-projets, lecture seule), sans
 // ouvrir de projet. « agents » = interface complète (mode existant).
-const WEB_MODE_KEY = 'pilot_web_mode';
+// Issue #61 : le mode est persisté côté serveur (config) via /api/settings ;
+// la constante WEB_MODE_DEFAULT sert de valeur par défaut.
 const WEB_MODE_DEFAULT = 'assistant';
 
 // ──État global ──
@@ -35,8 +36,10 @@ const state = {
   currentModel: '',
   readonly: false,
   // Évolution 2 : mode courant du web remote — 'assistant' (minimaliste, défaut)
-  // ou 'agents' (interface complète existante).
-  mode: localStorage.getItem(WEB_MODE_KEY) || WEB_MODE_DEFAULT,
+  // ou 'agents' (interface complète existante). Issue #61 : persisté côté serveur
+  // (config) via /api/settings, chargé dans enterApp() ; le localStorage n'est
+  // plus la source de vérité (fallback défaut).
+  mode: WEB_MODE_DEFAULT,
   // Pagination historique : on ne charge que les 200 messages les plus récents,
   // puis « Charger plus » prepend les plus anciens par pages (spec §6.4 pagination).
   historyOffset: 0,        // nb de messages récents déjà skipés
@@ -199,13 +202,29 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 function enterApp() {
   hide('#login-screen');
   show('#app-screen');
-  applyMode();
-  connectWs();
-  resyncAll();
-  loadFiles();
-  loadProjects();
-  loadCommands();
-  initPromptBuilder();
+  // Issue #61 : charger le mode d'interface persisté côté serveur (config),
+  // puis appliquer l'interface avant de connecter le WS.
+  loadWebMode().then(() => {
+    applyMode();
+    connectWs();
+    resyncAll();
+    loadFiles();
+    loadProjects();
+    loadCommands();
+    initPromptBuilder();
+  });
+}
+
+// Issue #61 : charge le mode d'interface (assistant/agents) depuis /api/settings.
+async function loadWebMode() {
+  try {
+    const s = await apiJson('/api/settings');
+    if (s && (s.web_mode === 'assistant' || s.web_mode === 'agents')) {
+      state.mode = s.web_mode;
+    }
+  } catch (_) {
+    // En cas d'échec, garder le mode par défaut.
+  }
 }
 
 // ── WebSocket ──
@@ -1009,7 +1028,10 @@ document.querySelectorAll('#web-mode-toggle .mode-btn').forEach((btn) => {
     const mode = btn.dataset.mode;
     if (mode === state.mode) return;
     state.mode = mode;
-    localStorage.setItem(WEB_MODE_KEY, mode);
+    // Issue #61 : persister côté serveur (config) via /api/settings, au lieu du
+    // localStorage (par appareil).
+    api('/api/settings', { method: 'POST', body: JSON.stringify({ web_mode: mode }) })
+      .catch((e) => console.error('persist web_mode:', e));
     applyMode();
   });
 });

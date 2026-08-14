@@ -528,14 +528,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    // Ctrl+1..Ctrl+9 : aller à l'onglet par position (ordre actuel des onglets).
-    // e.code (Digit/Numpad) est indépendant de la disposition du clavier.
+    // Ctrl+1..Ctrl+9 : aller à l'onglet par position (ordre VISUEL réel de la
+    // barre d'onglets, bouton « ＋ » exclu — issue #58). e.code (Digit/Numpad)
+    // est indépendant de la disposition du clavier.
     const m = e.code.match(/^(?:Digit|Numpad)([1-9])$/);
     if (m) {
       e.preventDefault();
       e.stopImmediatePropagation();
       const pos = parseInt(m[1], 10) - 1;
-      const tab = tabs.tabs[pos];
+      const visualTabs = tabs.getTabsInVisualOrder();
+      const tab = visualTabs[pos];
       if (tab) tabs.switchTab(tab.id);
       return;
     }

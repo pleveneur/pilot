@@ -568,6 +568,24 @@ class TabsManager {
   }
 
   /**
+   * Évolution 64 : démarre la session agent en arrière-plan SANS créer d'onglet
+   * (agent invisible). Utilisé par l'Assistant (🧭) quand l'option « agent
+   * invisible » est activée : la délégation s'exécute sans aucun onglet agent
+   * visible. Reprend la logique essentielle de `_openAgent` (drain des syncs,
+   * parking de l'agent précédent, start_agent_session) sans créer de Tab ni
+   * d'UI de chat. Retourne `true` si la session a été reprise depuis un parking.
+   * @param {string} [agentId] — id de l'agent (défaut "default").
+   */
+  async startAgentInvisible(agentId = "default") {
+    await this._awaitAgentSync();
+    if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
+      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
+    }
+    this._activeAgentId = agentId;
+    return await invoke("start_agent_session", { agentId });
+  }
+
+  /**
    * Ouvre l'onglet Aide (❓) — chat LLM sur le handbook (spec_help.md).
    * Pas de session RPC persistante : l'aide lance un process pi temporaire
    * (--no-session) via la commande ask_help à chaque question.
@@ -2941,6 +2959,26 @@ class TabsManager {
   _hideEmpty() {
     const el = document.getElementById("empty-logo");
     if (el) el.classList.add("hidden");
+  }
+
+  /**
+   * Onglets dans l'ORDRE VISUEL de la barre d'onglets (issue #58).
+   * L'ordre de `this.tabs` (tableau) peut diverger de l'ordre affiché : le
+   * bouton « ＋ » (`.tab-add-agent`) est toujours prepend en tête de la barre
+   * et n'a pas de `data-tab-id`, et certains onglets (ex: 🧭 Assistant) sont
+   * insérés en tête visuellement. On interroge donc le DOM (ordre réel) et on
+   * exclut le bouton « ＋ » pour que Ctrl+1..9 suive l'ordre visuel réel.
+   * @returns {Array<object>} onglets dans l'ordre visuel (bouton « ＋ » exclu).
+   */
+  getTabsInVisualOrder() {
+    const byId = new Map(this.tabs.map((t) => [t.id, t]));
+    const order = [];
+    const buttons = this.tabBar.querySelectorAll("[data-tab-id]");
+    for (const btn of buttons) {
+      const tab = byId.get(btn.dataset.tabId);
+      if (tab) order.push(tab);
+    }
+    return order;
   }
 }
 

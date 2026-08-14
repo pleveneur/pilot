@@ -11,7 +11,7 @@ import markdownit from "markdown-it";
 import { refreshIcons } from "./icons.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage } from "./agent-pi.js";
-import { detectRepeatedBlock } from "./loop-detection.js";
+import { detectRepeatedBlock, detectRepeatedWord } from "./loop-detection.js";
 import { notifySuperAgentDone } from "./desktop-notify.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -23,6 +23,19 @@ const md = markdownit({
   typographer: true,
   breaks: true,
 });
+
+// Seuil (px) : on ne force le scroll en bas que si l'utilisateur est déjà en
+// bas (ou proche), pour ne pas l'empêcher de remonter pendant que l'assistant
+// écrit (issue #60).
+const SUPER_SCROLL_BOTTOM_THRESHOLD = 60;
+
+/** Scroll intelligent : ne force le bas que si l'utilisateur est déjà en bas. */
+function scrollSuperToBottom(messagesEl) {
+  if (!messagesEl) return;
+  if (messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - SUPER_SCROLL_BOTTOM_THRESHOLD) {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+}
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
 let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
@@ -97,6 +110,23 @@ let superLoopStopped = false;
 const SUPER_LOOP_CHECK_INTERVAL_MS = 500;
 const SUPER_LOOP_BUFFER_MIN = 200;
 
+// ── Agent invisible (évolution 64) ──
+// Quand l'option « agent invisible » est activée, l'Assistant délègue une
+// demande à l'agent SANS créer d'onglet agent. On écoute alors le canal
+// d'événements de l'agent en arrière-plan pour : (1) détecter la fin de la
+// tâche (agent_end) et notifier l'utilisateur, (2) détecter une boucle de
+// réflexion (loop-detection) et arrêter l'agent automatiquement, (3) offrir un
+// bouton « Arrêter » dans le chat de l'Assistant pour tuer l'agent à tout moment.
+let invisibleAgentActive = false;
+let invisibleAgentBuffer = "";
+let invisibleAgentLastChecked = 0;
+let invisibleAgentLoopStopped = false;
+let invisibleAgentUnlisten = null;
+let invisibleAgentStatusEl = null; // élément de statut (avec bouton Arrêter) dans le chat
+let invisibleAgentMessagesEl = null;
+const INVISIBLE_LOOP_CHECK_INTERVAL_MS = 500;
+const INVISIBLE_LOOP_BUFFER_MIN = 200;
+
 // Recharger les options de rendu depuis la config cache.
 function refreshSuperRenderOptions() {
   superShowThinking = configCache.show_thinking !== false;
@@ -116,7 +146,7 @@ function createSuperAgentBlock(messagesEl) {
   bubble.appendChild(flow);
   el.appendChild(bubble);
   messagesEl.appendChild(el);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
   return el;
 }
 
@@ -188,7 +218,7 @@ function appendMessage(messagesEl, role, text) {
   }
   el.appendChild(bubble);
   messagesEl.appendChild(el);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
   return bubble;
 }
 
@@ -197,7 +227,7 @@ function appendSystemMessage(messagesEl, text) {
   el.className = "agent-message agent-message-system";
   el.textContent = text;
   messagesEl.appendChild(el);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }
 
 // ── Création de l'interface ──
@@ -523,6 +553,10 @@ export async function createSuperAgent(container) {
     }
   });
   inputBar.querySelector('[data-action="send"]').addEventListener("click", send);
+  // Le bouton micro (dictée vocale) est dans inputBar, pas dans toolbar : on lui
+  // attache un listener dédié (même pattern que le bouton send) pour que le clic
+  // soit bien capté (issue #62).
+  inputBar.querySelector('[data-action="voice"]').addEventListener("click", toggleVoiceInput);
 
   // Auto-resize
   inputEl.addEventListener("input", () => {
@@ -549,6 +583,9 @@ export async function createSuperAgent(container) {
   };
   window.addEventListener("pilot-agent-relay-request", onAgentRelayRequest);
   window._pilotSuperAgentOpen = true;
+  // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est ouvert (pour
+  // désactiver sa saisie si l'option est activée).
+  window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
   const origUnlisten = unlisten;
 
   return {
@@ -557,6 +594,8 @@ export async function createSuperAgent(container) {
       origUnlisten();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window._pilotSuperAgentOpen = false;
+      // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
+      window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
     },
   };
 }
@@ -576,7 +615,7 @@ function maybeDetectSuperAgentLoop(messagesEl) {
   if (now - superLoopLastChecked < SUPER_LOOP_CHECK_INTERVAL_MS) return;
   superLoopLastChecked = now;
   if (superLoopBuffer.length < SUPER_LOOP_BUFFER_MIN) return;
-  if (detectRepeatedBlock(superLoopBuffer)) {
+  if (detectRepeatedBlock(superLoopBuffer) || detectRepeatedWord(superLoopBuffer)) {
     superLoopStopped = true;
     console.warn("[loop-detection] boucle détectée sur l'assistant, arrêt");
     appendSystemMessage(
@@ -640,7 +679,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
           if (currentTextSection && pendingText) {
             currentTextSection.innerHTML = md.render(pendingText);
           }
-          messagesEl.scrollTop = messagesEl.scrollHeight;
+          scrollSuperToBottom(messagesEl);
         });
       }
     } else if (delta.type === "text_end") {
@@ -696,7 +735,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     } else if (delta.type === "toolcall_end") {
       // Rien à faire ici (le nom/args arrivent via tool_execution_start).
     }
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollSuperToBottom(messagesEl);
     return;
   }
   if (type === "tool_execution_start") {
@@ -706,7 +745,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       currentFlow = currentBody.querySelector(".agent-stream-flow");
     }
     appendSuperToolInline("outil", toolName);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollSuperToBottom(messagesEl);
     return;
   }
   if (type === "message_end") {
@@ -957,6 +996,17 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         projectPath: window._pilotProjectPath || null,
       };
       // Envoyer la demande à l'agent standard (session active du projet).
+      // Évolution 63 : si l'option est activée (défaut), purger la conversation
+      // de l'agent avant d'appliquer la nouvelle demande (équivalent au clic sur
+      // « + » de l'onglet agent).
+      try {
+        const cfg = await invoke("get_config");
+        if (cfg && cfg.super_agent_purge_agent_conversation !== false) {
+          await invoke("purge_agent_conversation");
+        }
+      } catch (e) {
+        console.warn("Purge conversation agent (assistant):", e);
+      }
       await invoke("send_agent_prompt", { message: request });
       appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (il travaille en arrière-plan, je reste ici pour son retour).");
       await respondSuperAgentAction(id, true);
@@ -1071,7 +1121,7 @@ function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, stat
   } else if (method === "input") {
     renderSuperAgentInput(messagesEl, state, id, payload.title || "Entrée", payload.placeholder || "", responder, target);
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }
 
 /** Rend des boutons de choix inline (unique ou multi).
@@ -1153,7 +1203,7 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, re
   }
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }
 
 /** Rend des boutons Oui / Non inline.
@@ -1199,7 +1249,7 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
   buttons.appendChild(no);
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }
 
 /** Rend un champ de saisie inline.
@@ -1243,7 +1293,7 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder, respon
     if (e.key === "Escape") respond(null, true);
   });
   setTimeout(() => input.focus(), 0);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }
 
 // ── Initialisation du suivi du projet actif ──
@@ -1376,7 +1426,7 @@ async function showProjectsPanel(messagesEl, state) {
     empty.textContent = "Aucun projet suivi pour l'instant. Ouvrez un projet puis cliquez sur ✨ (Initialiser) pour démarrer le suivi.";
     wrapper.appendChild(empty);
     target.appendChild(wrapper);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    scrollSuperToBottom(messagesEl);
     return;
   }
 
@@ -1421,5 +1471,5 @@ async function showProjectsPanel(messagesEl, state) {
   }
   wrapper.appendChild(list);
   target.appendChild(wrapper);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  scrollSuperToBottom(messagesEl);
 }

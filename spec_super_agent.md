@@ -58,6 +58,17 @@ apprend et répond.
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
+### Purge de la conversation de l'agent (Évolution 63)
+- **Paramètres ⚙️ → onglet « Assistant » → « Purger la conversation de l'agent
+  avant chaque demande de l'Assistant »** : quand l'Assistant délègue une demande
+  à l'agent d'un projet (`delegate_to_coder`), la conversation de l'agent est
+  **purgée** avant d'appliquer la nouvelle demande — équivalent au clic sur
+  « + » de l'onglet agent (départ d'une conversation vierge).
+- **Activé par défaut**. Si désactivé, la conversation de l'agent est
+  **conservée** (comportement historique).
+- Le modèle actif de l'agent est **préservé** lors de la purge (le mécanisme
+  `new_session` réinitialise le modèle par défaut de pi ; Pilot le ré-applique).
+
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.

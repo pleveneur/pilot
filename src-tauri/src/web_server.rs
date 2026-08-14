@@ -21,7 +21,7 @@ use crate::{
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
     do_send_agent_prompt, do_set_active_project, do_set_agent_model, do_start_agent_session,
     do_stop_agent_session, open_project_shared, project_event_channel, super_agent::do_send_super_agent_prompt,
-    AppConfig, AppState,
+    AppConfig, AppState, save_config_disk,
 };
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -188,6 +188,9 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/commands/stop", post(command_stop))
         // Prompt Builder : templates utilisateur du dossier templates/ du projet.
         .route("/api/prompt/templates", get(prompt_templates))
+        // Issue #61 : mode d'interface du web remote (assistant/agents), persisté
+        // côté serveur (config) au lieu du localStorage.
+        .route("/api/settings", get(web_settings_get).post(web_settings_set))
         .layer(from_fn_with_state(ctx.clone(), auth_middleware));
 
     Router::new()
@@ -914,6 +917,49 @@ async fn project_info(State(ctx): State<Arc<WebCtx>>) -> Response {
             "roots": roots,
             "readonly": cfg.web_readonly,
         }))
+    })
+    .await
+    .map_err(|e| e.to_string());
+    json_result(res.and_then(|r| r))
+}
+
+// ── Issue #61 : mode d'interface du web remote (assistant/agents) ──
+// Persisté côté serveur (config) pour être cohérent sur tous les appareils,
+// au lieu du localStorage (par appareil).
+
+async fn web_settings_get(State(ctx): State<Arc<WebCtx>>) -> Response {
+    let app = ctx.app_handle.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let cfg = state.config.lock().unwrap().clone();
+        Ok(json!({ "web_mode": cfg.web_mode }))
+    })
+    .await
+    .map_err(|e| e.to_string());
+    json_result(res.and_then(|r| r))
+}
+
+#[derive(Deserialize)]
+struct WebSettingsBody {
+    web_mode: Option<String>,
+}
+
+async fn web_settings_set(
+    State(ctx): State<Arc<WebCtx>>,
+    Json(body): Json<WebSettingsBody>,
+) -> Response {
+    let app = ctx.app_handle.clone();
+    let mode = body.web_mode.unwrap_or_default();
+    if mode != "assistant" && mode != "agents" {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "web_mode invalide (attendu 'assistant' ou 'agents')" }))).into_response();
+    }
+    let res = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut cfg = state.config.lock().unwrap().clone();
+        cfg.web_mode = mode.clone();
+        save_config_disk(&app, &cfg)?;
+        *state.config.lock().unwrap() = cfg;
+        Ok(json!({ "web_mode": mode }))
     })
     .await
     .map_err(|e| e.to_string());

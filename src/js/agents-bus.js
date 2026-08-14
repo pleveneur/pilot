@@ -16,7 +16,7 @@ import {
   aggregateParallelResults,
   buildDefaultCoordinator,
 } from "./agents.js";
-import { detectRepeatedBlock } from "./loop-detection.js";
+import { detectRepeatedBlock, detectRepeatedWord } from "./loop-detection.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -188,7 +188,7 @@ function maybeDetectAgentLoop(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   if (text.length < AGENT_LOOP_BUFFER_MIN) return;
 
-  if (detectRepeatedBlock(text)) {
+  if (detectRepeatedBlock(text) || detectRepeatedWord(text)) {
     busState.loopCorrectionPending[agentId] = true;
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle détectée", agentId);

@@ -815,6 +815,62 @@ pub fn new_agent_session(state: State<AppState>) -> Result<(), String> {
     do_new_agent_session(state.inner())
 }
 
+/// Évolution 63 : purge la conversation de l'agent (équivalent au clic sur
+/// « + » de l'onglet agent) en préservant le modèle actif. Utilisé par
+/// l'Assistant (🧭) avant de déléguer une demande à l'agent, quand l'option
+/// `super_agent_purge_agent_conversation` est activée.
+///
+/// `new_session` réinitialise le modèle au modèle par défaut de pi — on capture
+/// donc le modèle actif (get_state) avant la purge et on le ré-applique après,
+/// pour ne pas perdre le choix de modèle de l'utilisateur.
+#[tauri::command]
+pub fn purge_agent_conversation(state: State<AppState>) -> Result<(), String> {
+    do_purge_agent_conversation(state.inner())
+}
+
+pub(crate) fn do_purge_agent_conversation(state: &AppState) -> Result<(), String> {
+    let mut rpc = state.rpc_state.lock().unwrap();
+    let session = rpc
+        .as_mut()
+        .ok_or("Aucune session agent active")?;
+    let model = get_current_model(session);
+    let cmd = serde_json::json!({ "type": "new_session" });
+    rpc_manager::send_command_sync(session, cmd).ok();
+    if let Some((provider, model_id)) = model {
+        let set_cmd = serde_json::json!({
+            "type": "set_model",
+            "provider": provider,
+            "modelId": model_id
+        });
+        rpc_manager::send_command_sync(session, set_cmd).ok();
+    }
+    Ok(())
+}
+
+/// Lit le modèle actuellement actif (provider/id) de la session pi via
+/// get_state, s'il est disponible.
+fn get_current_model(session: &mut rpc_manager::RpcSession) -> Option<(String, String)> {
+    let cmd = serde_json::json!({ "type": "get_state" });
+    if let Ok(resp) = rpc_manager::send_command_sync_timeout(session, cmd, 8) {
+        if let Some(model) = resp.get("data").and_then(|d| d.get("model")) {
+            let provider = model
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let id = model
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !provider.is_empty() && !id.is_empty() {
+                return Some((provider, id));
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn do_get_agent_messages(state: &AppState) -> Result<Value, String> {
     let mut rpc = state.rpc_state.lock().unwrap();
     let session = rpc

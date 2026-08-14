@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectRepeatedBlock, normalizeLoopLine } from "./loop-detection.js";
+import { detectRepeatedBlock, detectRepeatedWord, normalizeLoopLine } from "./loop-detection.js";
 
 describe("normalizeLoopLine", () => {
   it("trimme et collapse les espaces multiples", () => {
@@ -95,5 +95,60 @@ describe("detectRepeatedBlock", () => {
     expect(detectRepeatedBlock(Array(2).fill(line).join("\n"), { minBlockChars: 100 })).toBe(false);
     // 3 répétitions → boucle
     expect(detectRepeatedBlock(Array(3).fill(line).join("\n"), { minBlockChars: 100 })).toBe(true);
+  });
+});
+
+describe("detectRepeatedWord", () => {
+  it("false sur entrée vide / invalide", () => {
+    expect(detectRepeatedWord("")).toBe(false);
+    expect(detectRepeatedWord(null)).toBe(false);
+    expect(detectRepeatedWord(undefined)).toBe(false);
+    expect(detectRepeatedWord("   ")).toBe(false);
+  });
+
+  it("detecte un même mot court répété consécutivement (issue #62)", () => {
+    const text = Array(8).fill("tool").join(" ");
+    expect(detectRepeatedWord(text)).toBe(true);
+  });
+
+  it("false si le mot n'est pas répété assez de fois", () => {
+    const text = Array(3).fill("tool").join(" ");
+    expect(detectRepeatedWord(text)).toBe(false);
+  });
+
+  it("detecte une séquence de caractères périodique sans espaces (issue #62)", () => {
+    // "tool" répété 3 fois = 12 caractères, motif minimal "tool"
+    expect(detectRepeatedWord("tooltooltool")).toBe(true);
+    expect(detectRepeatedWord("thornthornthorn")).toBe(true);
+  });
+
+  it("detecte une séquence périodique noyée dans une ligne", () => {
+    const text = "Je réfléchis tooltooltooltooltooltooltooltool et je continue.";
+    expect(detectRepeatedWord(text)).toBe(true);
+  });
+
+  it("false sur un texte normal sans répétition", () => {
+    const text =
+      "Je continue l'analyse du composant et je vérifie chaque branche de la " +
+      "gestion des erreurs avant de proposer une correction ciblée.";
+    expect(detectRepeatedWord(text)).toBe(false);
+  });
+
+  it("false sur un mot long non périodique", () => {
+    expect(detectRepeatedWord("internationalization")).toBe(false);
+  });
+
+  it("respecte l'option minWordRepeat", () => {
+    // 6 répétitions → pas une boucle avec minWordRepeat=8
+    expect(detectRepeatedWord(Array(6).fill("tool").join(" "))).toBe(false);
+    // 8 répétitions → boucle
+    expect(detectRepeatedWord(Array(8).fill("tool").join(" "))).toBe(true);
+  });
+
+  it("respecte l'option minSeqRepeat", () => {
+    // "tool" répété 2 fois = 8 caractères → sous minSeqChars, non détecté
+    expect(detectRepeatedWord("tooltool")).toBe(false);
+    // 3 répétitions → détecté
+    expect(detectRepeatedWord("tooltooltool")).toBe(true);
   });
 });

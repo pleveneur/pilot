@@ -273,6 +273,11 @@ struct AppConfig {
     web_browse_roots: Vec<String>,
     #[serde(default)]
     web_keep_alive: bool,
+    // Issue #61 : mode d'interface du web remote — « assistant » (minimaliste,
+    // défaut) ou « agents » (interface complète). Persisté côté serveur (config)
+    // pour être cohérent sur tous les appareils, au lieu du localStorage.
+    #[serde(default = "default_web_mode")]
+    web_mode: String,
     // Automatisation Tailscale Serve (spec_web_remote.md §14) : si activé, Pilot
     // configure automatiquement Tailscale Serve (HTTPS 443 → 127.0.0.1:web_port)
     // et resync au changement de port. Opt-in, exige web_bind == 127.0.0.1.
@@ -438,6 +443,23 @@ struct AppConfig {
     // explicite. Défaut off. Injecté dans le prompt système.
     #[serde(default)]
     super_agent_concise: bool,
+    // Issue #59 : quand l'onglet 🧭 Assistant est ouvert, bloquer/désactiver la
+    // saisie de l'agent (éviter de répondre à l'agent au lieu de l'assistant).
+    // Défaut off.
+    #[serde(default)]
+    super_agent_block_agent_input: bool,
+    // Évolution 63 : quand l'Assistant (🧭) délègue une demande à l'agent
+    // (delegate_to_coder), purger la conversation de l'agent avant d'appliquer
+    // la nouvelle demande (équivalent au clic sur « + » de l'onglet agent).
+    // Activé par défaut.
+    #[serde(default = "default_true")]
+    super_agent_purge_agent_conversation: bool,
+    // Évolution 64 : « agent invisible ». Quand l'Assistant (🧭) délègue une
+    // demande à l'agent (delegate_to_coder), l'agent s'exécute en arrière-plan
+    // SANS créer d'onglet agent visible (aucun onglet créé du tout). Activé par
+    // défaut. Désactivé → comportement actuel (l'onglet agent s'ouvre).
+    #[serde(default = "default_true")]
+    super_agent_invisible_agent: bool,
 }
 
 fn default_true() -> bool { true }
@@ -455,6 +477,7 @@ fn default_orchestration_granularity() -> String { "fine".to_string() }
 fn default_coder_context_window() -> u32 { 0 }
 fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
+fn default_web_mode() -> String { "assistant".to_string() }
 fn default_session_retention_days() -> u32 { 15 }
 
 /// Port web effectif. En build dev (`debug_assertions`), on décale le port
@@ -580,6 +603,7 @@ impl Default for AppConfig {
             web_readonly: false,
             web_browse_roots: Vec::new(),
             web_keep_alive: false,
+            web_mode: default_web_mode(),
             web_tailscale_serve: false,
             help_model: String::new(),
             review_model: String::new(),
@@ -628,6 +652,9 @@ impl Default for AppConfig {
             super_agent_show_tools: false,
             notify_super_agent_done: false,
             super_agent_concise: false,
+            super_agent_block_agent_input: false,
+            super_agent_purge_agent_conversation: true,
+            super_agent_invisible_agent: true,
         }
     }
 }
@@ -1880,6 +1907,7 @@ pub fn run() {
             rpc::send_agent_prompt,
             rpc::abort_agent,
             rpc::new_agent_session,
+            rpc::purge_agent_conversation,
             session_history::resume_agent_session,
             rpc::get_agent_messages,
             rpc::set_agent_model,

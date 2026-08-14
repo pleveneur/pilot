@@ -56,7 +56,7 @@ import {
   matchesGlob, matchesAnyCritical,
   buildReviewPrompt, parseReviewResult, buildReviewCorrectionPrompt,
 } from "./orchestration-reviewer.js";
-import { detectRepeatedBlock } from "./loop-detection.js";
+import { detectRepeatedBlock, detectRepeatedWord } from "./loop-detection.js";
 
 // ── État global de l'autocomplétion ──
 let allCommands = [];
@@ -107,6 +107,28 @@ export async function refreshShowTools() {
   }
 }
 
+// ── Issue #59 : bloquer la saisie de l'agent quand l'onglet 🧭 Assistant est
+// ouvert (éviter de répondre à l'agent au lieu de l'assistant). ──
+let blockAgentInputWhenSuperOpen = false;
+
+/** Recharge le paramètre super_agent_block_agent_input depuis la config. */
+export async function refreshBlockAgentInput() {
+  try {
+    const config = await invoke("get_config");
+    blockAgentInputWhenSuperOpen = config.super_agent_block_agent_input === true;
+  } catch (_) {
+    blockAgentInputWhenSuperOpen = false;
+  }
+}
+
+/**
+ * La saisie de l'agent est-elle bloquée ? Vrai si l'option est activée ET que
+ * l'onglet 🧭 Assistant est ouvert (window._pilotSuperAgentOpen).
+ */
+export function isAgentInputBlocked() {
+  return blockAgentInputWhenSuperOpen && window._pilotSuperAgentOpen === true;
+}
+
 const md = markdownit({
   html: false,
   linkify: true,
@@ -124,6 +146,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   await refreshShowThinking();
   // Charger la configuration show_tools
   await refreshShowTools();
+  // Issue #59 : charger l'option de blocage de la saisie agent
+  await refreshBlockAgentInput();
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container";
@@ -190,6 +214,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   refreshConfirmFileEdits();
   // Recharger quand les paramètres sont sauvegardés (event custom émis par main.js)
   window.addEventListener("pilot-config-changed", refreshConfirmFileEdits);
+  // Issue #59 : recharger l'option de blocage de la saisie agent à chaud.
+  window.addEventListener("pilot-config-changed", refreshBlockAgentInput);
 
   // ── Auto-test post-modification (E2) : recharger la config à chaud ──
   async function refreshOrchestrationTestConfig() {
@@ -445,6 +471,23 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   state.agentId = agentId;
 
   const inputEl = wrapper.querySelector("#agent-input");
+  const sendBtn = wrapper.querySelector(".agent-send-btn");
+
+  // Issue #59 : désactive/active visuellement la saisie de l'agent selon que
+  // l'option est activée ET que l'onglet 🧭 Assistant est ouvert.
+  function updateAgentInputBlockedState() {
+    const blocked = isAgentInputBlocked();
+    if (inputEl) inputEl.disabled = blocked;
+    if (sendBtn) sendBtn.disabled = blocked;
+    if (inputEl) inputEl.placeholder = blocked
+      ? "Saisie désactivée : l'onglet 🧭 Assistant est ouvert (paramètre ⚙️ → Assistant)"
+      : "Écrire un message... (Entrée pour envoyer, Shift+Entrée pour nouvelle ligne, / pour les commandes)";
+  }
+  updateAgentInputBlockedState();
+  // Réagir à l'ouverture/fermeture de l'onglet 🧭 Assistant (event émis par
+  // super-agent.js) et aux changements de config.
+  window.addEventListener("pilot-superagent-open-changed", updateAgentInputBlockedState);
+  window.addEventListener("pilot-config-changed", updateAgentInputBlockedState);
 
   // ── Context Engine (H1) : helpers pour construire le contexte projet ──
   /** Retourne l'onglet d'édition actif { path, content } pour l'injection de contexte. */
@@ -835,6 +878,12 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 
   // Envoi du message
   const sendPrompt = async () => {
+    // Issue #59 : si la saisie de l'agent est bloquée (option activée + onglet
+    // 🧭 Assistant ouvert), on refuse l'envoi et on guide l'utilisateur.
+    if (isAgentInputBlocked()) {
+      appendSystemMessage(messagesEl, "⛔ La saisie de l'agent est désactivée pendant que l'onglet 🧭 Assistant est ouvert (paramètre ⚙️ → Assistant). Répondez à l'assistant dans son onglet, ou fermez-le pour réactiver la saisie de l'agent.");
+      return;
+    }
     const text = inputEl.value.trim();
     if (!text || state.isStreaming) return;
     if (voiceActive) stopVoiceInput();
@@ -5280,7 +5329,7 @@ function maybeDetectReflectionLoop(state, messagesEl) {
   const buffer = state.loopBuffer || "";
   if (buffer.length < LOOP_BUFFER_MIN) return;
 
-  if (detectRepeatedBlock(buffer)) {
+  if (detectRepeatedBlock(buffer) || detectRepeatedWord(buffer)) {
     state.loopCorrectionPending = true;
     console.warn("[loop-detection] boucle détectée, arrêt de l'agent pour correction");
     appendSystemMessage(messagesEl, "🔁 Boucle détectée dans la réflexion : le modèle répète le même bloc de texte. Arrêt de l'agent pour correction…");
@@ -8005,6 +8054,15 @@ function appendCompactionSummary(parent, summary) {
   return block;
 }
 
+// Seuil (px) : on ne force le scroll en bas que si l'utilisateur est déjà en
+// bas (ou proche), pour ne pas l'empêcher de remonter pendant que l'agent écrit
+// (issue #60).
+const SCROLL_BOTTOM_THRESHOLD = 60;
+
 function scrollToBottom(container) {
-  container.scrollTop = container.scrollHeight;
+  if (!container) return;
+  // Ne forcer le scroll que si l'utilisateur est déjà en bas (ou proche).
+  if (container.scrollTop + container.clientHeight >= container.scrollHeight - SCROLL_BOTTOM_THRESHOLD) {
+    container.scrollTop = container.scrollHeight;
+  }
 }
