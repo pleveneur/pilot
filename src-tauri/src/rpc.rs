@@ -410,6 +410,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
         &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &channel, None,
         // Issue #13 : observateur d'activité → map par projet (agent_start/settled).
         Some(make_project_activity_observer(&state.agent_activity, &cwd)),
+        None,
     )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -916,7 +917,7 @@ pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Re
     }
 
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None, None,
+        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None, None, None,
     )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
     *rpc = Some(session);

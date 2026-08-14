@@ -20,7 +20,8 @@ use crate::{
     agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
     do_send_agent_prompt, do_set_active_project, do_set_agent_model, do_start_agent_session,
-    do_stop_agent_session, open_project_shared, project_event_channel, AppConfig, AppState,
+    do_stop_agent_session, open_project_shared, project_event_channel, super_agent::do_send_super_agent_prompt,
+    AppConfig, AppState,
 };
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -172,6 +173,7 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         .route("/api/agent/new", post(agent_new))
         .route("/api/agent/compact", post(agent_compact))
         .route("/api/agent/model", post(agent_set_model))
+        .route("/api/superagent/prompt", post(superagent_prompt))
         .route("/api/tree", get(file_tree))
         .route("/api/file", get(file_content).put(file_save).post(file_create))
         .route("/api/file/meta", get(file_meta))
@@ -525,6 +527,56 @@ async fn agent_prompt(
         &authed.key,
         "prompt",
         &format!("{} car{}{}", msg_len, if has_images > 0 { format!(", {} img", has_images) } else { String::new() }, if ok { "" } else { " (err)" }),
+        ok,
+    );
+    ok_result(res.and_then(|r| r))
+}
+
+/// Route web « mode assistant » (évolution 2) : envoie un prompt au super-agent
+/// (session RPC dédiée, canal `rpc-event-superagent`). Le super-agent est
+/// strictement en lecture seule et suit les projets de manière multi-projets,
+/// sans qu'un projet précis ne soit ouvert. Rate limiting partagé avec les
+/// prompts agent (même garde-fou par token).
+async fn superagent_prompt(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<PromptBody>,
+) -> Response {
+    // Rate limiting prompt : max 10 / 60 s / token (protection crédits API / DoS).
+    if !ctx.guard.check_prompt(&authed.key) {
+        ctx.audit.record(&authed.ip, &authed.key, "rate_limited", "superagent_prompt", false);
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "60")],
+            Json(json!({"error": "Trop de prompts. Réessayez dans 1 min."})),
+        )
+            .into_response();
+    }
+    if body.message.len() > 100 * 1024 {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": "Prompt trop volumineux (max 100 Ko)"})),
+        )
+            .into_response();
+    }
+    if is_readonly(&ctx.app_handle) {
+        return forbidden();
+    }
+    let app = ctx.app_handle.clone();
+    let message = body.message;
+    let msg_len = message.len();
+    let res = tokio::task::spawn_blocking(move || {
+        let st = app.state::<AppState>();
+        do_send_super_agent_prompt(st.inner(), &app, message)
+    })
+    .await
+    .map_err(|e| e.to_string());
+    let ok = res.is_ok();
+    ctx.audit.record(
+        &authed.ip,
+        &authed.key,
+        "superagent_prompt",
+        &format!("{} car{}", msg_len, if ok { "" } else { " (err)" }),
         ok,
     );
     ok_result(res.and_then(|r| r))

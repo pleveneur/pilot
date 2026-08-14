@@ -193,7 +193,7 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
     };
     let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
     let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id), None,
+        &cwd, &pi_path, no_session, &session_dir_str, None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id), None, None,
     ).map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
     sessions.insert(agent_id, session);
     Ok(())

@@ -11,6 +11,11 @@
 //   - Projets : récents + browse racines (whitelist backend).
 
 const TOKEN_KEY = 'pilot_web_token';
+// Évolution 2 : mode par défaut du web remote. « assistant » = discussion
+// minimaliste avec l'Assistant (suivi multi-projets, lecture seule), sans
+// ouvrir de projet. « agents » = interface complète (mode existant).
+const WEB_MODE_KEY = 'pilot_web_mode';
+const WEB_MODE_DEFAULT = 'assistant';
 
 // ──État global ──
 const state = {
@@ -29,6 +34,9 @@ const state = {
   models: [], // [{provider, modelId, label}]
   currentModel: '',
   readonly: false,
+  // Évolution 2 : mode courant du web remote — 'assistant' (minimaliste, défaut)
+  // ou 'agents' (interface complète existante).
+  mode: localStorage.getItem(WEB_MODE_KEY) || WEB_MODE_DEFAULT,
   // Pagination historique : on ne charge que les 200 messages les plus récents,
   // puis « Charger plus » prepend les plus anciens par pages (spec §6.4 pagination).
   historyOffset: 0,        // nb de messages récents déjà skipés
@@ -191,6 +199,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 function enterApp() {
   hide('#login-screen');
   show('#app-screen');
+  applyMode();
   connectWs();
   resyncAll();
   loadFiles();
@@ -396,6 +405,19 @@ function updateProjectBadges(projectPath) {
 const messagesEl = () => document.getElementById('chat-messages');
 
 function handleWsEvent(payload) {
+  // Évolution 2 : les événements du super-agent (mode assistant) sont enveloppés
+  // par le backend dans {"__channel":"superagent","event": value} pour être
+  // distingués des événements de l'agent du projet. On ne traite que les
+  // événements du canal correspondant au mode courant : en mode 'assistant' on
+  // suit uniquement le canal superagent, en mode 'agents' uniquement les
+  // événements non taggés (agent du projet). Le canal est ignoré sinon.
+  const channel = payload && payload.__channel;
+  if (channel === 'superagent') {
+    if (state.mode !== 'assistant') return; // hors mode → ignorer
+    payload = payload.event || payload;
+  } else if (state.mode === 'assistant') {
+    return; // événement agent du projet en mode assistant → ignorer
+  }
   const type = payload.type;
   switch (type) {
     case 'agent_start':
@@ -776,7 +798,10 @@ document.getElementById('prompt-form').addEventListener('submit', async (e) => {
   appendUserMessage(msg);
   input.value = '';
   try {
-    await apiJson('/api/agent/prompt', {
+    // Évolution 2 : en mode assistant, le prompt part vers le super-agent
+    // (suivi multi-projets) ; sinon vers l'agent du projet actif.
+    const endpoint = state.mode === 'assistant' ? '/api/superagent/prompt' : '/api/agent/prompt';
+    await apiJson(endpoint, {
       method: 'POST',
       body: JSON.stringify({ message: msg, images: null }),
     });
@@ -913,17 +938,79 @@ function renderHistory(list) {
 
 // ── Navigation vues ──
 
+function switchView(name) {
+  document.querySelectorAll('#tabbar button').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`#tabbar button[data-view="${name}"]`);
+  if (btn) btn.classList.add('active');
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  const v = document.getElementById('view-' + name);
+  if (v) v.classList.add('active');
+  // Le sélecteur de modèle n'a de sens qu'en onglet Chat : on le masque ailleurs.
+  const modelBar = document.getElementById('chat-model-bar');
+  if (modelBar) modelBar.hidden = (name !== 'chat');
+  if (name === 'files') setEditorMode(false);
+}
+
+// ── Mode du web remote (évolution 2) : 'assistant' (minimaliste) vs 'agents' ──
+
+// Vide la conversation affichée et remet l'état de streaming à zéro (utilisé au
+// changement de mode pour ne pas mélanger les canaux agent / super-agent).
+function clearChat() {
+  messagesEl().innerHTML = '';
+  state.isStreaming = false;
+  state.currentAssistantBlock = null;
+  state.currentTextBlock = null;
+  state.currentThinkingBlock = null;
+  state.pendingText = '';
+  state.pendingToolCalls.clear();
+  updateStatusUi();
+}
+
+// Applique le mode courant à l'interface. En mode « assistant », l'interface est
+// minimaliste : seul le chat est visible (pas de sélecteur de modèle, pas de
+// contrôles agent, pas d'onglets fichiers/prompt/projets/commandes). En mode
+// « agents », l'interface complète existante est restituée.
+function applyMode() {
+  const isAssistant = state.mode === 'assistant';
+  document.querySelectorAll('#web-mode-toggle .mode-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === state.mode);
+  });
+  const modelBar = document.getElementById('chat-model-bar');
+  if (modelBar) modelBar.hidden = isAssistant;
+  ['btn-new', 'btn-abort', 'btn-compact', 'btn-load-history'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = isAssistant ? 'none' : '';
+  });
+  document.querySelectorAll('#tabbar button').forEach((btn) => {
+    const view = btn.dataset.view;
+    btn.style.display = (isAssistant && view !== 'chat') ? 'none' : '';
+  });
+  const input = document.getElementById('prompt-input');
+  if (input) input.placeholder = isAssistant ? "Message à l'Assistant…" : "Instruction à l'agent…";
+  const hint = document.getElementById('chat-mode-hint');
+  if (hint) {
+    hint.textContent = isAssistant
+      ? '🧭 Assistant — discussion avec le suivi multi-projets (lecture seule). Il peut déléguer des tâches aux agents des projets ; aucune ouverture de projet requise.'
+      : '';
+    hint.hidden = !isAssistant;
+  }
+  // En mode assistant, forcer l'onglet chat ; puis vider la conversation pour
+  // partir d'un état propre (canal distinct).
+  if (isAssistant) switchView('chat');
+  clearChat();
+}
+
 document.querySelectorAll('#tabbar button').forEach((btn) => {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+});
+
+document.querySelectorAll('#web-mode-toggle .mode-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('#tabbar button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById('view-' + btn.dataset.view).classList.add('active');
-    // Le sélecteur de modèle n'a de sens qu'en onglet Chat : on le masque ailleurs.
-    const modelBar = document.getElementById('chat-model-bar');
-    if (modelBar) modelBar.hidden = (btn.dataset.view !== 'chat');
-    // Rafraîchir les boutons d'édition fichiers (notamment « Nouveau » selon readonly).
-    if (btn.dataset.view === 'files') setEditorMode(false);
+    const mode = btn.dataset.mode;
+    if (mode === state.mode) return;
+    state.mode = mode;
+    localStorage.setItem(WEB_MODE_KEY, mode);
+    applyMode();
   });
 });
 

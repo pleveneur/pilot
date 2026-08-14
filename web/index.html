@@ -40,6 +40,12 @@
         <span id="agent-status" class="status idle">idle</span>
       </div>
 
+      <!-- Sélecteur de mode (Assistant minimaliste vs Agents complet) -->
+      <div class="top-area-mode" id="web-mode-toggle" title="Choisir avec quoi discuter : l'Assistant (suivi multi-projets, lecture seule) ou les agents des projets.">
+        <button data-mode="assistant" class="mode-btn active">🧭 Assistant</button>
+        <button data-mode="agents" class="mode-btn">🤖 Agents</button>
+      </div>
+
       <!-- Sélecteur de thème / sous-thème (aperçu en direct) -->
       <div class="top-area-theme">
         <select id="web-theme" title="Thème">
@@ -55,6 +61,7 @@
       <div id="view-chat" class="view active">
 
         <div id="chat-project" class="chat-project" hidden></div>
+        <div id="chat-mode-hint" class="chat-mode-hint" hidden></div>
         <div id="chat-messages"></div>
         <div id="chat-controls">
           <button id="btn-new" class="ctrl">🆕 New</button>

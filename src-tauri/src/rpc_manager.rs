@@ -41,7 +41,7 @@ pub type EventObserver = Arc<dyn Fn(&Value) + Send + Sync>;
 /// `agent_id` : si Some, chaque événement est enveloppé dans
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
 /// `observer` : observateur d'événements optionnel (indicateur d'activité par projet).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>) -> Result<RpcSession, String> {
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>) -> Result<RpcSession, String> {
     let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
 
     let mut cmd = Command::new(pi_exe);
@@ -104,8 +104,9 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let app_exit = app_handle.clone();
     let running_exit = running.clone();
     let channel_stdout = event_channel.to_string();
+    let broadcast_channel_owned = broadcast_channel;
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), observer_stdout);
+        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), observer_stdout, broadcast_channel_owned);
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
         // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
         // pour un changement de projet distant) n'émet rien → le desktop
@@ -213,6 +214,7 @@ fn read_jsonl_loop(
     event_channel: &str,
     agent_id: Option<&str>,
     observer: Option<EventObserver>,
+    broadcast_channel: Option<String>,
 ) {
     let mut buffer = String::new();
     let mut buf = [0u8; 4096];
@@ -278,7 +280,16 @@ fn read_jsonl_loop(
                             // Note : en V1, le reviewer n'est pas fan-out vers le web (canal
                             // séparé, pas de session distante dédiée) — le fan-out se fait sur
                             // le canal principal uniquement via l'event_tx de la session main.
-                            let _ = event_tx.send(value.clone());
+                            // Si un canal de broadcast est fourni (ex: "superagent"), l'événement
+                            // est enveloppé dans {"__channel": ch, "event": value} pour que le
+                            // client web puisse distinguer les sessions (mode assistant vs agents,
+                            // évolution 2). Les sessions non taggées (None) gardent le format brut
+                            // existant → aucune régression sur le web remote actuel.
+                            let broadcast_value = match &broadcast_channel {
+                                Some(ch) => serde_json::json!({ "__channel": ch, "event": value }),
+                                None => value,
+                            };
+                            let _ = event_tx.send(broadcast_value);
                         }
                         Err(e) => {
                             eprintln!(

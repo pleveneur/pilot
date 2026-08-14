@@ -178,6 +178,35 @@ Les commandes slash (`/…`) sont exclues (commandes système, non affichées). 
 
 Le frontend web reconstruit les blocs (message / pensées / outils) exactement comme `agent-pi.js` le fait côté desktop.
 
+### 5.1 Mode Assistant (évolution 2)
+
+Le web remote propose un **sélecteur de mode** en haut de l'interface :
+
+- **🧭 Assistant** (par défaut) : discussion **minimaliste** avec l'Assistant de
+  suivi multi-projets (super-agent, `spec_super_agent.md`), **lecture seule**,
+  **sans qu'aucun projet ne soit ouvert**. L'interface ne montre que le chat
+  (pas de sélecteur de modèle, de contrôles agent, ni d'onglets
+  fichiers/prompt/projets/commandes). L'Assistant peut déléguer des tâches aux
+  agents des projets depuis sa propre logique.
+- **🤖 Agents** : interface complète existante (agent du projet actif,
+  fichiers, projets, commandes, Prompt Builder).
+
+Le mode choisi est **persisté par appareil** (`localStorage`, clé
+`pilot_web_mode`) ; le défaut est `assistant`.
+
+**Côté backend** :
+- Nouvelle route `POST /api/superagent/prompt` (body `{ message }`) → délègue à
+  `do_send_super_agent_prompt` (démarre paresseusement la session super-agent et
+  envoie le prompt sur le canal RPC dédié). Rate limiting partagé avec les
+  prompts agent (même garde-fou par token). Refus en mode `web_readonly`.
+- Les événements RPC du super-agent sont diffusés sur le WebSocket `/ws/agent`
+  **enveloppés** dans `{ "__channel": "superagent", "event": value }` pour être
+  distingués de ceux de l'agent du projet. Le client web ne traite que le canal
+  correspondant au mode courant (canal superagent en mode assistant, événements
+  non taggés en mode agents). La diffusion desktop (canal Tauri
+  `rpc-event-superagent`) et le format brut des événements agent sont inchangés
+  → aucune régression.
+
 ---
 
 ## 6. Sécurité & accès distant
@@ -533,4 +562,11 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   Fichiers, saisis des instructions (ou choisis un template), puis **Assembler**
   pour prévisualiser, **Envoyer à l'agent** (bascule sur le Chat) ou **Sauvegarder
   .md** à la racine du projet.
+- **🧭 Mode Assistant** : en haut, un sélecteur **« 🧭 Assistant » / « 🤖 Agents »**
+  choisit avec quoi discuter. **« Assistant »** (défaut) affiche une interface
+  **minimaliste** pour parler à l'Assistant de suivi multi-projets (lecture
+  seule, **aucun projet à ouvrir**) : il peut déléguer des tâches aux agents des
+  projets et répondre sur leur état. **« Agents »** restitue l'interface complète
+  (agent du projet, fichiers, projets, commandes, Prompt Builder). Le mode choisi
+  est mémorisé sur l'appareil.
 <!-- /HELP:web-remote -->
