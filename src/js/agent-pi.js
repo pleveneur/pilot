@@ -5509,12 +5509,20 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         );
         // Super-agent (spec_super_agent.md) : apprentissage en continu. Injecte
         // un résumé du dernier échange à la fin de session (fire-and-forget).
-        const saSummary = [
-          state.lastUserPrompt ? `Demande: ${state.lastUserPrompt.slice(0, 500)}` : "",
-          state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText.slice(0, 800)}` : "",
-        ].filter(Boolean).join("\n");
-        if (saSummary) {
-          injectSessionSummaryToSuperAgent(saSummary, window._pilotProjectPath).catch(() => {});
+        // Issue #54 : pendant une compaction de fond, pi peut émettre un agent_end
+        // parasite (le tour réel n'est pas fini). On ne consomme PAS pendingDelegation
+        // dans ce cas — sinon l'assistant croirait la tâche déléguée terminée et
+        // renverrait des instructions alors que l'agent travaille encore. Le vrai
+        // agent_end post-compaction (repris par orchestrationCompactionResumePending)
+        // consommera correctement la délégation.
+        if (!state.isCompacting) {
+          const saSummary = [
+            state.lastUserPrompt ? `Demande: ${state.lastUserPrompt.slice(0, 500)}` : "",
+            state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText.slice(0, 800)}` : "",
+          ].filter(Boolean).join("\n");
+          if (saSummary) {
+            injectSessionSummaryToSuperAgent(saSummary, window._pilotProjectPath).catch(() => {});
+          }
         }
       }
 

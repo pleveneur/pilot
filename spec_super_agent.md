@@ -229,7 +229,15 @@ Sessions d'agents (chat / orchestration)
   (issue #47) : à l'`agent_end`, le résumé injecté au super-agent est marqué
   `[Tâche déléguée terminée]` avec la demande transmise, pour que l'Assistant
   mette à jour son suivi (tâches, décisions) et décide des prochaines étapes
-  (boucle de feedback agent → assistant). L'extension `pilot-assistant-db` fournit les
+  (boucle de feedback agent → assistant).
+  **Garde anti-compaction (issue #54)** : pendant une compaction de fond, pi
+  peut émettre un `agent_end` parasite (le tour réel n'est pas fini). Ce
+  `agent_end` ne consomme PAS la délégation en attente (`pendingDelegation`) :
+  l'injection du résumé au super-agent est ignorée tant que `isCompacting` est
+  vrai. Le vrai `agent_end` post-compaction (repris par
+  `orchestrationCompactionResumePending`) consommera correctement la délégation,
+  évitant que l'Assistant croie la tâche terminée et renvoie des instructions
+  alors que l'agent travaille encore. L'extension `pilot-assistant-db` fournit les
   outils `db_query` / `db_execute` (accès contrôlé à la base de suivi de
   l'assistant). L'extension `pilot-assistant-prompt` fournit l'outil
   `update_my_prompt` (auto-adaptation du prompt personnalisé). Les cinq sont
