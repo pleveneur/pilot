@@ -428,6 +428,11 @@ struct AppConfig {
     super_agent_show_thinking: bool,
     #[serde(default)]
     super_agent_show_tools: bool,
+    // Issue #16 : notification native desktop quand l'Assistant (🧭) signale un
+    // événement important (tâche déléguée à un agent terminée, anomalie de
+    // suivi). Défaut off (désactivé), même principe que notify_agent_done.
+    #[serde(default)]
+    notify_super_agent_done: bool,
 }
 
 fn default_true() -> bool { true }
@@ -616,6 +621,7 @@ impl Default for AppConfig {
             super_agent_open: false,
             super_agent_show_thinking: true,
             super_agent_show_tools: false,
+            notify_super_agent_done: false,
         }
     }
 }

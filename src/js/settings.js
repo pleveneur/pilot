@@ -186,6 +186,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   const chkSuperAgentTools = document.getElementById("setting-superagent-tools");
+  const chkSuperAgentNotifyDone = document.getElementById("setting-superagent-notify-done");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -500,6 +501,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
   if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
+  if (chkSuperAgentNotifyDone) chkSuperAgentNotifyDone.checked = currentConfig.notify_super_agent_done === true;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -712,6 +714,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         super_agent_prompt: taSuperAgentPrompt ? taSuperAgentPrompt.value : "",
         super_agent_show_thinking: chkSuperAgentThinking ? chkSuperAgentThinking.checked !== false : true,
         super_agent_show_tools: chkSuperAgentTools ? chkSuperAgentTools.checked === true : false,
+        notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
       };
     try {
       await invoke("save_config", { config });

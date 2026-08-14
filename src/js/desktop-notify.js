@@ -81,3 +81,33 @@ export async function notifyAgentDone(opts = {}) {
     console.warn("[desktop-notify] échec envoi notification:", e);
   }
 }
+
+/**
+ * Notifie l'utilisateur quand l'assistant (🧭, super-agent) signale un
+ * événement IMPORTANT (tâche déléguée terminée, anomalie de suivi, connexion
+ * perdue). Consulte le réglage `notify_super_agent_done` (défaut off, issue
+ * #16) : si désactivé, on n'émet rien — évite la sur-notification sur les
+ * réponses banales de l'assistant. Défensif (ne lève jamais d'erreur).
+ * @param {object} [opts] — { title?: string, body?: string }
+ */
+export async function notifySuperAgentDone(opts = {}) {
+  try {
+    const cfg = await invoke("get_config");
+    if (!cfg || !cfg.notify_super_agent_done) return;
+  } catch (_) {
+    return;
+  }
+  const title = opts.title || "Pilot — Assistant";
+  const body = opts.body || "ℹ️ L'assistant signale un événement important.";
+  try {
+    const mod = await import("@tauri-apps/plugin-notification");
+    let granted = _granted;
+    if (!granted) granted = await ensurePermission();
+    if (!granted) return;
+    if (typeof mod.sendNotification === "function") {
+      await mod.sendNotification({ title, body });
+    }
+  } catch (e) {
+    console.warn("[desktop-notify] échec envoi notification assistant:", e);
+  }
+}

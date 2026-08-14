@@ -42,6 +42,15 @@ apprend et répond.
   « Afficher la réflexion de l'Assistant » et « Afficher les outils de
   l'Assistant » pour masquer (ou montrer) ces blocs.
 
+### Notifications natives
+- **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
+  terminé une tâche déléguée ou signale une anomalie »** : recevez une
+  **notification native** (bannière OS) quand l'Assistant signale un événement
+  **important** : une **tâche déléguée** à un agent du projet **est terminée**, ou
+  une **anomalie** de suivi (ex: connexion au super-agent perdue).
+- **Désactivé par défaut** pour éviter la sur-notification : les réponses
+  banales de l'Assistant ne déclenchent **aucune** notification.
+
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.

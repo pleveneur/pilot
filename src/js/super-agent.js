@@ -12,6 +12,7 @@ import { refreshIcons } from "./icons.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage } from "./agent-pi.js";
 import { detectRepeatedBlock } from "./loop-detection.js";
+import { notifySuperAgentDone } from "./desktop-notify.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -778,6 +779,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "process_exit" || type === "process_error") {
     statusEl.textContent = "Déconnecté";
     appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
+    // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
+    notifySuperAgentDone({ title: "Pilot — Assistant", body: "⚠️ Connexion au super-agent perdue." }).catch(() => {});
     onEnd();
     return;
   }
@@ -1263,6 +1266,11 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
     finalSummary = marker + finalSummary;
+    // Issue #16 : tâche déléguée terminée → notification native (si activée).
+    notifySuperAgentDone({
+      title: "Pilot — Assistant",
+      body: `✅ Tâche déléguée terminée (projet « ${del.projectPath || "inconnu"} »). L'agent a répondu à la demande transmise.`,
+    }).catch(() => {});
   }
   try {
     await invoke("inject_session_summary", {
