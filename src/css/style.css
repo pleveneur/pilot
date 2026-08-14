@@ -1223,11 +1223,20 @@ body.theme-light.theme-tokyo-day {
 .superagent-wrapper .agent-tool-inline .agent-tool-label {
   color: var(--superagent-accent);
 }
-.superagent-wrapper .agent-choice-btn.selected,
+.superagent-wrapper .agent-choice-btn.selected {
+  /* Issue #57 : même rendu renforcé que l'agent (fond marqué + contour +
+     coche ✓) mais avec la couleur d'accent de l'assistant. La coche ✓ vient du
+     sélecteur commun `.agent-choice-btn.selected::before`. */
+  border-color: var(--superagent-accent);
+  color: var(--superagent-accent);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--superagent-accent) 40%, transparent);
+  box-shadow: 0 0 0 1.5px var(--superagent-accent);
+}
 .superagent-wrapper .agent-choice-validate {
   border-color: var(--superagent-accent);
   color: var(--superagent-accent);
-  background: color-mix(in srgb, var(--superagent-accent) 20%, transparent);
+  background: color-mix(in srgb, var(--superagent-accent) 25%, transparent);
 }
 
 /* Multi-onglets agents : bouton « + » pour ouvrir un nouvel onglet agent. */
@@ -3545,9 +3554,22 @@ body.zen-mode #action-panel {
 }
 
 .agent-choice-btn.selected {
+  /* Issue #57 : le bouton sélectionné doit ressortir nettement — fond plus
+     marqué, bordure/contour contrasté et coche ✓ (rendu homogène agent /
+     assistant, issues #42/#43). La box-shadow en anneau évite tout reflow
+     (bordure conservée à 1px). */
   border-color: var(--accent-color);
   color: var(--accent-color);
-  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-color) 40%, transparent);
+  box-shadow: 0 0 0 1.5px var(--accent-color);
+}
+
+/* Coche ✓ sur le bouton sélectionné (agent + assistant, via le sélecteur
+   commun ci-dessus). Le ✓ hérite de la couleur d'accent. */
+.agent-choice-btn.selected::before {
+  content: "✓ ";
+  font-weight: 700;
 }
 
 .agent-choice-yes {

@@ -227,6 +227,13 @@ obligatoire) avant le bouton Valider. La réponse est un JSON
 requêtes sont auto-répondues (confirm → Oui, select → 1re option, input →
 annulé) pour ne pas bloquer l'agent.
 
+**Visuel du bouton sélectionné (issue #57)** : l'option choisie ressort
+nettement — **fond plus marqué** (accent ~40%), **contour contrasté** (anneau
+`box-shadow` sans reflow) et **coche ✓** (`::before`). Le rendu est **homogène
+agent / assistant** (issues #42/#43) : l'assistant (`superagent-wrapper`)
+applique le même style avec sa couleur d'accent dédiée (`--superagent-accent`),
+coche ✓ incluse. Applicable aussi aux choix relayés via l'assistant (tâche #22).
+
 ---
 
 ## 9. Cycle de vie
