@@ -145,8 +145,9 @@ Un onglet spécial sans fichier associé, persisté en `localStorage`, pour les 
 - [x] 17.1 Onglet "📝 Brouillon" toujours disponible, contenu sauvegardé dans `localStorage`
 - [x] 17.2 Raccourci `Ctrl+Shift+N` pour ouvrir le brouillon
 - [x] 17.3 Export possible vers un fichier `.md` du projet
+- [x] 17.4 Plusieurs pages par projet, nommées, renommables et supprimables (issue #53)
 
-✅ Implémenté — Voir `tabs.js` (méthodes `_openScratchpad`, `_saveScratchpad`, `_exportScratchpad`), bouton 📝 dans le panneau d'actions, palette de commandes, `session-persistence.js` (marqueur `__scratchpad__`).
+✅ Implémenté — Voir `tabs.js` (méthodes `_openScratchpad`, `_saveScratchpad`, `_exportScratchpad`, `_loadScratchpadData`, `_renderScratchpadPages`, `_switchScratchPage`, `_addScratchPage`, `_renameScratchPage`, `_deleteScratchPage`), bouton 📝 dans le panneau d'actions, palette de commandes, `session-persistence.js` (marqueur `__scratchpad__`).
 
 Intérêt : tout développeur a besoin d'un espace temporaire. Actuellement, il faut créer un fichier, puis le supprimer.
 

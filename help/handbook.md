@@ -43,7 +43,9 @@ externe.
    **réordonner** les onglets par glisser-déposer, et **renommer** un onglet par
    double-clic sur son titre.
 6. **Brouillon** : `Ctrl+Shift+N` ouvre un brouillon rapide (scratchpad) non lié
-   au projet courant.
+   au projet courant. Vous pouvez y avoir **plusieurs pages** (mini-onglets en
+   haut : « + » pour ajouter, clic sur le nom pour renommer, ✕ pour supprimer),
+   sauvegardées localement par projet.
 
 ---
 

@@ -1155,7 +1155,7 @@ class TabsManager {
 
   /**
    * Ouvre l'onglet Brouillon (Scratchpad)
-   * Contenu persiste dans localStorage, pas de fichier associé.
+   * Contenu persiste dans localStorage (multi-pages par projet, issue #53).
    */
   async _openScratchpad() {
     // Vérifier si déjà ouvert
@@ -1169,21 +1169,12 @@ class TabsManager {
     const tab = new Tab(id, "", "\u{1F4DD} Brouillon", "edit");
     tab.isScratchpad = true;
 
-    // Charger le contenu depuis localStorage (1 brouillon par projet)
-    let content = "";
-    const scratchKey = this._scratchpadKey();
-    try {
-      content = localStorage.getItem(scratchKey) || "";
-      // Migration unique : rattacher l'ancien brouillon global au premier projet
-      if (!content && window._pilotProjectPath) {
-        const legacy = localStorage.getItem("pilot-scratchpad");
-        if (legacy) {
-          content = legacy;
-          localStorage.setItem(scratchKey, legacy);
-          localStorage.removeItem("pilot-scratchpad");
-        }
-      }
-    } catch (_) {}
+    // Charger les pages depuis localStorage (multi-pages par projet, issue #53)
+    const data = this._loadScratchpadData();
+    tab.scratchPages = data.pages;
+    tab.scratchActiveId = data.pages[0]?.id || null;
+    const activePage = tab.scratchPages.find((p) => p.id === tab.scratchActiveId) || tab.scratchPages[0];
+    const content = activePage ? activePage.content : "";
     tab.savedContent = content;
 
     // Créer le wrapper
@@ -1199,6 +1190,11 @@ class TabsManager {
       <button class="scratchpad-btn" data-action="scratchpad-export" title=\"Exporter vers un fichier .md du projet\">\u{1F4BE} Exporter</button>
     `;
     tab.wrapper.appendChild(toolbar);
+
+    // Barre des pages (mini-onglets, issue #53)
+    const pagesBar = document.createElement("div");
+    pagesBar.className = "scratchpad-pages";
+    tab.wrapper.appendChild(pagesBar);
 
     // Conteneur éditeur
     const editorContainer = document.createElement("div");
@@ -1228,6 +1224,9 @@ class TabsManager {
       setWordWrap(tab.view, true);
     }
 
+    // Rendre les mini-onglets des pages
+    this._renderScratchpadPages(tab, pagesBar);
+
     // Handler export
     toolbar.addEventListener("click", async (e) => {
       const btn = e.target.closest("[data-action=\"scratchpad-export\"]");
@@ -1242,7 +1241,7 @@ class TabsManager {
   }
 
   /**
-   * Clé localStorage du brouillon, distincte par projet (1 brouillon par projet).
+   * Clé localStorage du brouillon, distincte par projet (multi-pages par projet).
    * Fallback sur la clé globale si aucun projet n'est ouvert.
    */
   _scratchpadKey() {
@@ -1252,20 +1251,209 @@ class TabsManager {
   }
 
   /**
-   * Sauvegarde le contenu du brouillon dans localStorage (clé par projet)
+   * Génère un identifiant unique de page de brouillon.
+   */
+  _newScratchId() {
+    return "sp-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  }
+
+  /**
+   * Charge les pages du brouillon depuis localStorage (format JSON multi-pages,
+   * issue #53), avec migration de l'ancien brouillon (1 page en texte brut).
+   * @returns {{ pages: Array<{id:string,name:string,content:string}> }}
+   */
+  _loadScratchpadData() {
+    const key = this._scratchpadKey();
+    let raw = "";
+    try { raw = localStorage.getItem(key) || ""; } catch (_) {}
+    if (raw) {
+      // Nouveau format JSON { pages: [...] }
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+          // Nettoyer les pages (garantir id/name/content)
+          const pages = parsed.pages.map((p, i) => ({
+            id: p.id || this._newScratchId(),
+            name: (p.name && String(p.name).trim()) || "Page " + (i + 1),
+            content: typeof p.content === "string" ? p.content : "",
+          }));
+          return { pages };
+        }
+      } catch (_) {
+        // Pas du JSON → ancien format texte brut → migration ci-dessous
+      }
+      // Migration : ancien contenu texte brut → première page "Notes"
+      const pages = [{ id: this._newScratchId(), name: "Notes", content: raw }];
+      this._persistScratchData({ pages });
+      return { pages };
+    }
+    // Aucun contenu → une page vide par défaut
+    const pages = [{ id: this._newScratchId(), name: "Notes", content: "" }];
+    this._persistScratchData({ pages });
+    return { pages };
+  }
+
+  /**
+   * Persiste les pages du brouillon dans localStorage (JSON par projet).
+   */
+  _persistScratchData(data) {
+    try {
+      localStorage.setItem(this._scratchpadKey(), JSON.stringify(data));
+    } catch (_) {}
+  }
+
+  /**
+   * Sauvegarde le contenu de la page active du brouillon dans localStorage.
    */
   _saveScratchpad(tab) {
     if (!tab.isScratchpad || !tab.view) return;
     try {
       const content = getContent(tab.view);
-      localStorage.setItem(this._scratchpadKey(), content);
+      const page = tab.scratchPages.find((p) => p.id === tab.scratchActiveId);
+      if (page) page.content = content;
+      this._persistScratchData({ pages: tab.scratchPages });
       tab.savedContent = content;
       tab.dirty = false;
     } catch (_) {}
   }
 
   /**
-   * Exporte le contenu du brouillon vers un fichier .md du projet
+   * Rendu des mini-onglets de pages du brouillon (issue #53).
+   */
+  _renderScratchpadPages(tab, pagesBar) {
+    pagesBar.innerHTML = "";
+    for (const page of tab.scratchPages) {
+      const el = document.createElement("div");
+      el.className = "scratchpad-page-tab" + (page.id === tab.scratchActiveId ? " active" : "");
+      el.dataset.pageId = page.id;
+
+      const name = document.createElement("span");
+      name.className = "scratchpad-page-name";
+      name.textContent = page.name || "Sans nom";
+      name.title = "Cliquer pour renommer";
+      name.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._renameScratchPage(tab, pagesBar, page, name);
+      });
+
+      const del = document.createElement("button");
+      del.className = "scratchpad-page-del";
+      del.textContent = "✕";
+      del.title = "Supprimer la page";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this._deleteScratchPage(tab, pagesBar, page);
+      });
+
+      el.appendChild(name);
+      el.appendChild(del);
+      el.addEventListener("click", () => this._switchScratchPage(tab, pagesBar, page.id));
+      pagesBar.appendChild(el);
+    }
+
+    const add = document.createElement("button");
+    add.className = "scratchpad-page-add";
+    add.textContent = "+";
+    add.title = "Ajouter une page";
+    add.addEventListener("click", () => this._addScratchPage(tab, pagesBar));
+    pagesBar.appendChild(add);
+  }
+
+  /**
+   * Bascule vers une page du brouillon (sauvegarde la page courante au passage).
+   */
+  _switchScratchPage(tab, pagesBar, pageId) {
+    if (pageId === tab.scratchActiveId) return;
+    // Sauvegarder le contenu de la page courante avant de basculer
+    const current = getContent(tab.view);
+    const curPage = tab.scratchPages.find((p) => p.id === tab.scratchActiveId);
+    if (curPage) curPage.content = current;
+    // Basculer sur la page cible
+    tab.scratchActiveId = pageId;
+    const next = tab.scratchPages.find((p) => p.id === pageId);
+    const content = next ? next.content : "";
+    setContent(tab.view, content, { preserveCursor: false });
+    tab.savedContent = content;
+    tab.dirty = false;
+    this._persistScratchData({ pages: tab.scratchPages });
+    this._renderScratchpadPages(tab, pagesBar);
+    this._updateTabButton(tab);
+  }
+
+  /**
+   * Ajoute une nouvelle page vide au brouillon et bascule dessus.
+   */
+  _addScratchPage(tab, pagesBar) {
+    const n = tab.scratchPages.length + 1;
+    const page = { id: this._newScratchId(), name: "Page " + n, content: "" };
+    tab.scratchPages.push(page);
+    this._switchScratchPage(tab, pagesBar, page.id);
+  }
+
+  /**
+   * Renomme une page du brouillon via un champ inline.
+   */
+  _renameScratchPage(tab, pagesBar, page, nameEl) {
+    const input = document.createElement("input");
+    input.className = "scratchpad-page-input";
+    input.value = page.name || "";
+    input.maxLength = 40;
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = () => {
+      const val = input.value.trim();
+      if (val) page.name = val;
+      this._persistScratchData({ pages: tab.scratchPages });
+      this._renderScratchpadPages(tab, pagesBar);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+      } else if (e.key === "Escape") {
+        this._renderScratchpadPages(tab, pagesBar);
+      }
+    });
+    input.addEventListener("blur", commit);
+  }
+
+  /**
+   * Supprime une page du brouillon (avec confirmation). Si c'est la dernière
+   * page, on la vide à la place (on ne laisse jamais le brouillon sans page).
+   */
+  async _deleteScratchPage(tab, pagesBar, page) {
+    if (tab.scratchPages.length <= 1) {
+      page.content = "";
+      this._persistScratchData({ pages: tab.scratchPages });
+      setContent(tab.view, "", { preserveCursor: false });
+      tab.savedContent = "";
+      tab.dirty = false;
+      this._updateTabButton(tab);
+      return;
+    }
+    const ok = await confirm(`Supprimer la page « ${page.name || "Sans nom"} » ?`, {
+      title: "Pilot",
+      kind: "warning",
+    });
+    if (!ok) return;
+    const idx = tab.scratchPages.findIndex((p) => p.id === page.id);
+    tab.scratchPages.splice(idx, 1);
+    if (tab.scratchActiveId === page.id) {
+      const next = tab.scratchPages[Math.min(idx, tab.scratchPages.length - 1)];
+      tab.scratchActiveId = next.id;
+      const content = next.content;
+      setContent(tab.view, content, { preserveCursor: false });
+      tab.savedContent = content;
+      tab.dirty = false;
+    }
+    this._persistScratchData({ pages: tab.scratchPages });
+    this._renderScratchpadPages(tab, pagesBar);
+    this._updateTabButton(tab);
+  }
+
+  /**
+   * Exporte le contenu de la page active du brouillon vers un fichier .md du projet
    */
   async _exportScratchpad(tab) {
     if (!tab.isScratchpad || !tab.view) return;

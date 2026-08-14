@@ -4581,6 +4581,87 @@ body.pilot-loading *::after {
   flex: 1;
   overflow: hidden;
 }
+/* Barre des pages du brouillon (issue #53) */
+.scratchpad-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: var(--bg-secondary, #1e1e2e);
+  border-bottom: 1px solid var(--border, #333);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.scratchpad-page-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.scratchpad-page-tab:hover {
+  background: var(--hover, rgba(255,255,255,0.05));
+}
+.scratchpad-page-tab.active {
+  background: var(--accent, #6c8edd);
+  color: #fff;
+  border-color: var(--accent, #6c8edd);
+}
+.scratchpad-page-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scratchpad-page-name:hover {
+  text-decoration: underline;
+}
+.scratchpad-page-input {
+  background: var(--bg-primary, #14141e);
+  color: var(--text, #ddd);
+  border: 1px solid var(--accent, #6c8edd);
+  border-radius: 3px;
+  font-size: 12px;
+  padding: 0 4px;
+  width: 120px;
+}
+.scratchpad-page-del {
+  background: transparent;
+  color: inherit;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.6;
+  line-height: 1;
+}
+.scratchpad-page-del:hover {
+  opacity: 1;
+  color: #ff6b6b;
+}
+.scratchpad-page-add {
+  background: transparent;
+  color: var(--text-muted, #888);
+  border: 1px dashed var(--border, #555);
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.scratchpad-page-add:hover {
+  background: var(--hover, rgba(255,255,255,0.08));
+  color: var(--accent, #6c8edd);
+}
 
 /* --- Mode Orchestration --- */
 
