@@ -62,6 +62,7 @@ mod agents;
 mod rpc;
 mod interproject;
 mod super_agent;
+mod dashboard;
 mod pi_update;
 mod project_agents;
 
@@ -1991,6 +1992,8 @@ pub fn run() {
             super_agent::set_project_client,
             super_agent::list_super_agent_projects,
             super_agent::query_super_agent,
+            // ── Tableau de bord projet (issue #51) ──
+            dashboard::get_project_dashboard,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

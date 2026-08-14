@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-13 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent -->
+<!-- PILOT-HELP generated=2026-08-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -915,3 +915,37 @@ apprend et répond.
   sa base de données (dans `~/.pilot/`) sont modifiables par lui.
 - Cette garantie est **technique** (extension qui bloque toute écriture hors
   de l'espace dédié), pas seulement une consigne système.
+
+---
+
+## Aide utilisateur — Tableau de bord
+
+L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale, visible
+quand un projet est ouvert) affiche une vue d'ensemble du **projet actif** :
+stockage, Git, langages, activité de l'agent IA, vélocité et documentation.
+Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
+
+### Ce que vous voyez
+- **En-tête** : nom du projet, chemin local, client associé (si renseigné dans
+  l'onglet 🧭 Assistant) et horodatage du dernier rafraîchissement.
+- **Stockage & Poids** : taille totale du répertoire, nombre de fichiers et de
+  dossiers, poids du **code source pur** (hors dépendances/caches comme
+  `node_modules`, `target`, `.git`…) et les fichiers les plus lourds.
+- **État Git** : branche active, fichiers modifiés, non suivis (untracked) et
+  prêts à être commités (staged).
+- **Analyse du Code & Langages** : répartition des langages en %, métriques
+  globales (lignes, fonctions, classes), marqueurs TODO/FIXME et écosystème de
+  dépendances détecté (Node.js, Rust/Cargo, Python…).
+- **Activité & Métriques de l'Agent IA** : nombre de sessions, tokens
+  consommés sur 7 jours, total de messages échangés, actions exécutées (Bash,
+  éditions, écritures) et date de la dernière session.
+- **Évolution & Vélocité (7 jours)** : commits, fichiers modifiés, lignes et
+  taille modifiées sur la période.
+- **Contexte & Documentation** : extrait du README, fichiers de mémoire /
+  décisions d'architecture, derniers fichiers modifiés avec horodatage relatif.
+- **Bandeau d'Alertes & Suggestions** : badges des points d'attention (fichiers
+  volumineux, éléments non commités, langage principal).
+
+### Actualiser
+Le bouton **Actualiser** relance l'analyse du projet. L'analyse peut prendre
+quelques secondes sur les gros projets (parcours du répertoire + Git).

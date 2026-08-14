@@ -451,6 +451,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Graphe", "code-graph");
   });
 
+  // 📊 Tableau de bord : vue détaillée du projet actif — issue #51.
+  document.getElementById("btn-dashboard").addEventListener("click", () => {
+    tabs.openFile("Tableau de bord", "dashboard");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

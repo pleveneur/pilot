@@ -36,7 +36,7 @@ fn sessions_tags_path(project_path: &str) -> std::path::PathBuf {
 
 /// Dossier des sessions pi pour le projet courant (même résolution que
 /// `list_sessions` : `rpc_session_dir` si défini, sinon `~/.{stem}/agent/sessions`).
-fn project_sessions_dir(config: &AppConfig) -> std::path::PathBuf {
+pub(crate) fn project_sessions_dir(config: &AppConfig) -> std::path::PathBuf {
     if config.rpc_session_dir.is_empty() {
         // safe unwrap : resolve_agent_home ne peut échouer que si USERPROFILE/HOME
         // absent — auquel cas on retombe sur un chemin vide (gestion plus loin).
@@ -267,7 +267,7 @@ fn parse_session_file(path: &std::path::Path, project_path: &str) -> Option<Valu
 }
 
 /// Lit l'index `.pilot/sessions.jsonl` → Vec<Value>.
-fn read_session_index(project_path: &str) -> Vec<Value> {
+pub(crate) fn read_session_index(project_path: &str) -> Vec<Value> {
     let path = sessions_index_path(project_path);
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,

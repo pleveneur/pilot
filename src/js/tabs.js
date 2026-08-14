@@ -279,6 +279,12 @@ class TabsManager {
       return;
     }
 
+    // Onglet Tableau de bord (📊) — issue #51 : vue détaillée du projet actif.
+    if (mode === "dashboard") {
+      await this._openDashboard(path || "Tableau de bord");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -879,6 +885,46 @@ class TabsManager {
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>
       `;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Tableau de bord (📊) — issue #51 : vue détaillée du projet
+   * actif (stockage, Git, langages, activité agent, vélocité, contexte).
+   * Lecture seule, alimenté par `get_project_dashboard` (Rust).
+   */
+  async _openDashboard(label = "Tableau de bord") {
+    const existing = this.tabs.find((t) => t.mode === "dashboard");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "dashboard");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper dashboard-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createDashboard } = await import("./dashboard.js");
+      const result = createDashboard(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenDashboard = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Tableau de bord:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">📊</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Tableau de bord</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
     }
   }
 

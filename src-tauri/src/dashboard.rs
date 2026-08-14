@@ -1,0 +1,744 @@
+// dashboard.rs — Tableau de bord projet (issue #51).
+//
+// Onglet « 📊 Tableau de bord » : vue détaillée du projet actif, alimentée par
+// les métriques fichiers/Git (Rust) + la base de suivi de l'assistant
+// (super-agent) + l'index de sessions (session_history). Réutilise
+// `crate::run_captured` (git), `session_history::read_session_index` /
+// `project_sessions_dir` / `project_to_session_folder` (activité) et la config
+// (client associé). Lecture seule : ne modifie aucun fichier du projet.
+//
+// Sections : en-tête, stockage & poids, état Git, analyse code & langages,
+// activité agent, évolution & vélocité, contexte & documentation, alertes.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
+
+use serde_json::Value;
+use tauri::State;
+
+use crate::{run_captured, AppState};
+
+/// Dossiers/dépendances/caches exclus du « poids du code source pur ».
+const EXCLUDED_DIRS: &[&str] = &[
+    "node_modules", "target", ".git", "dist", "build", "out", ".venv", "venv",
+    "__pycache__", ".pilot", ".idea", ".vscode", "coverage", ".next", ".nuxt",
+    "vendor", ".cache", ".gradle", ".tox", ".mypy_cache", ".pytest_cache",
+    ".terraform", ".svn", ".hg", ".gitlab", ".github", "Pods", ".dart_tool",
+];
+
+/// Extension → langage (pour la répartition). Retourne None pour les fichiers
+/// non-code (binaires, images, etc.).
+fn lang_for_ext(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "js" | "mjs" | "cjs" => "JavaScript",
+        "jsx" => "JavaScript (React)",
+        "ts" | "mts" | "cts" => "TypeScript",
+        "tsx" => "TypeScript (React)",
+        "py" => "Python",
+        "rs" => "Rust",
+        "go" => "Go",
+        "java" => "Java",
+        "c" => "C",
+        "h" => "C/C++ Header",
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" => "C++",
+        "cs" => "C#",
+        "rb" => "Ruby",
+        "php" => "PHP",
+        "swift" => "Swift",
+        "kt" | "kts" => "Kotlin",
+        "scala" => "Scala",
+        "html" | "htm" => "HTML",
+        "css" => "CSS",
+        "scss" | "sass" => "SCSS",
+        "less" => "Less",
+        "vue" => "Vue",
+        "svelte" => "Svelte",
+        "sql" => "SQL",
+        "sh" | "bash" => "Shell",
+        "ps1" => "PowerShell",
+        "bat" | "cmd" => "Batch",
+        "json" => "JSON",
+        "yaml" | "yml" => "YAML",
+        "toml" => "TOML",
+        "xml" => "XML",
+        "md" | "markdown" => "Markdown",
+        "txt" => "Text",
+        "lua" => "Lua",
+        "r" => "R",
+        "dart" => "Dart",
+        "ex" | "exs" => "Elixir",
+        "erl" => "Erlang",
+        "hs" => "Haskell",
+        "clj" | "cljs" => "Clojure",
+        "zig" => "Zig",
+        "nim" => "Nim",
+        "proto" => "Protobuf",
+        "graphql" | "gql" => "GraphQL",
+        "ini" | "cfg" => "Config",
+        "dockerfile" => "Dockerfile",
+        "makefile" => "Makefile",
+        _ => return None,
+    })
+}
+
+/// Détecte l'écosystème de dépendances du projet (fichiers de manifest présents).
+fn detect_dependencies(root: &Path) -> Vec<String> {
+    let mut deps: Vec<String> = Vec::new();
+    let mut push = |name: &str, present: bool| {
+        if present && !deps.contains(&name.to_string()) {
+            deps.push(name.to_string());
+        }
+    };
+    push("Node.js", root.join("package.json").exists());
+    push("Rust (Cargo)", root.join("Cargo.toml").exists());
+    push("Python (pip)", root.join("requirements.txt").exists() || root.join("pyproject.toml").exists() || root.join("setup.py").exists());
+    push("Go", root.join("go.mod").exists());
+    push("Java (Maven)", root.join("pom.xml").exists());
+    push("Java (Gradle)", root.join("build.gradle").exists() || root.join("build.gradle.kts").exists());
+    push("Ruby (Bundler)", root.join("Gemfile").exists());
+    push("PHP (Composer)", root.join("composer.json").exists());
+    push(".NET", root.join("*.csproj").exists() || root.join("*.sln").exists());
+    push("Elixir (Mix)", root.join("mix.exs").exists());
+    push("Dart (pub)", root.join("pubspec.yaml").exists());
+    deps
+}
+
+/// Compte les lignes, fonctions et classes d'un fichier texte (heuristique).
+fn count_code_metrics(content: &str) -> (u64, u64, u64) {
+    let mut lines = 0u64;
+    let mut functions = 0u64;
+    let mut classes = 0u64;
+    for line in content.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        lines += 1;
+        // Heuristique fonctions (multi-langages).
+        if t.contains("function")
+            || t.contains("=>")
+            || t.starts_with("def ")
+            || t.starts_with("fn ")
+            || t.starts_with("func ")
+            || t.starts_with("public ")
+            || t.starts_with("private ")
+            || t.starts_with("protected ")
+            || t.contains("() {")
+        {
+            functions += 1;
+        }
+        // Heuristique classes/structs/interfaces.
+        if t.starts_with("class ")
+            || t.starts_with("struct ")
+            || t.starts_with("interface ")
+            || t.starts_with("enum ")
+            || t.starts_with("trait ")
+            || t.starts_with("type ")
+        {
+            classes += 1;
+        }
+    }
+    (lines, functions, classes)
+}
+
+/// Compte les marqueurs TODO/FIXME dans un contenu.
+fn count_todos(content: &str) -> (u64, u64) {
+    let mut todo = 0u64;
+    let mut fixme = 0u64;
+    for line in content.lines() {
+        let up = line.to_uppercase();
+        if up.contains("TODO") {
+            todo += 1;
+        }
+        if up.contains("FIXME") {
+            fixme += 1;
+        }
+    }
+    (todo, fixme)
+}
+
+/// Parcourt récursivement le projet et agrège les métriques de stockage + code.
+/// Retourne (total_size, file_count, dir_count, code_size, code_file_count,
+/// heaviest_files, lang_map, ext_map, total_lines, total_functions,
+/// total_classes, total_todos, total_fixmes, files_modified_7d).
+#[allow(clippy::too_many_arguments)]
+fn scan_project(
+    root: &Path,
+) -> (
+    u64, u64, u64, u64, u64,
+    Vec<(String, u64)>,
+    HashMap<String, (u64, u64, u64)>, // lang → (files, lines, funcs)
+    HashMap<String, u64>,            // ext → count
+    u64, u64, u64, u64, u64,
+    Vec<(String, u64)>,
+) {
+    let mut total_size = 0u64;
+    let mut file_count = 0u64;
+    let mut dir_count = 0u64;
+    let mut code_size = 0u64;
+    let mut code_file_count = 0u64;
+    let mut heaviest: Vec<(String, u64)> = Vec::new();
+    let mut lang_map: HashMap<String, (u64, u64, u64)> = HashMap::new();
+    let mut ext_map: HashMap<String, u64> = HashMap::new();
+    let mut total_lines = 0u64;
+    let mut total_functions = 0u64;
+    let mut total_classes = 0u64;
+    let mut total_todos = 0u64;
+    let mut total_fixmes = 0u64;
+    let mut files_modified_7d: Vec<(String, u64)> = Vec::new();
+
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
+
+    let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                // Ignorer les dossiers exclus (dépendances/caches).
+                if EXCLUDED_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                dir_count += 1;
+                stack.push(path);
+            } else {
+                let meta = match fs::metadata(&path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let size = meta.len();
+                total_size += size;
+                file_count += 1;
+                // Fichiers modifiés sur 7 jours (vélocité).
+                if let Ok(modified) = meta.modified() {
+                    if modified >= cutoff {
+                        files_modified_7d.push((path.to_string_lossy().to_string(), size));
+                    }
+                }
+                // Fichiers les plus lourds (top 10).
+                if heaviest.len() < 10 {
+                    heaviest.push((path.to_string_lossy().to_string(), size));
+                    heaviest.sort_by(|a, b| b.1.cmp(&a.1));
+                } else if let Some(last) = heaviest.last() {
+                    if size > last.1 {
+                        heaviest.pop();
+                        heaviest.push((path.to_string_lossy().to_string(), size));
+                        heaviest.sort_by(|a, b| b.1.cmp(&a.1));
+                    }
+                }
+                // Analyse code.
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                // Fichiers spéciaux sans extension.
+                let base = name.to_lowercase();
+                let lang = if base == "dockerfile" {
+                    Some("Dockerfile")
+                } else if base == "makefile" {
+                    Some("Makefile")
+                } else {
+                    lang_for_ext(&ext)
+                };
+                if let Some(lang) = lang {
+                    code_file_count += 1;
+                    code_size += size;
+                    *ext_map.entry(ext.clone()).or_insert(0) += 1;
+                    // Lire le contenu pour les métriques (limité aux fichiers texte).
+                    if size < 2_000_000 {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            let (lines, funcs, classes) = count_code_metrics(&content);
+                            let (todo, fixme) = count_todos(&content);
+                            total_lines += lines;
+                            total_functions += funcs;
+                            total_classes += classes;
+                            total_todos += todo;
+                            total_fixmes += fixme;
+                            let e = lang_map.entry(lang.to_string()).or_insert((0, 0, 0));
+                            e.0 += 1;
+                            e.1 += lines;
+                            e.2 += funcs;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (
+        total_size, file_count, dir_count, code_size, code_file_count,
+        heaviest, lang_map, ext_map, total_lines, total_functions,
+        total_classes, total_todos, total_fixmes, files_modified_7d,
+    )
+}
+
+/// État Git : branche active, fichiers modifiés / non suivis / prêts à commiter.
+fn git_state(cwd: &str) -> Value {
+    let check = run_captured("git", &["-C", cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        return serde_json::json!({ "is_repo": false });
+    }
+    let branch = run_captured("git", &["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3));
+    let branch = branch.trim().to_string();
+    let out = run_captured(
+        "git",
+        &["-C", cwd, "status", "--porcelain", "-uall", "--no-renames"],
+        Duration::from_secs(8),
+    );
+    let mut modified = 0u64;
+    let mut untracked = 0u64;
+    let mut staged = 0u64;
+    for line in out.lines() {
+        if line.len() < 2 {
+            continue;
+        }
+        let code = &line[..2];
+        let x = code.chars().next().unwrap_or(' ');
+        let y = code.chars().nth(1).unwrap_or(' ');
+        if x == '?' && y == '?' {
+            untracked += 1;
+        } else if x != ' ' {
+            staged += 1;
+        } else if y != ' ' {
+            modified += 1;
+        }
+    }
+    let total = modified + untracked + staged;
+    serde_json::json!({
+        "is_repo": true,
+        "branch": branch,
+        "modified": modified,
+        "untracked": untracked,
+        "staged": staged,
+        "total": total,
+    })
+}
+
+/// Activité agent : sessions, tokens 7j, messages, actions, dernière session.
+/// S'appuie sur l'index `.pilot/sessions.jsonl` (session_history) + scan des
+/// fichiers de session pi pour les actions d'outils.
+fn activity_metrics(state: &AppState, project_path: &str) -> Value {
+    let entries = crate::session_history::read_session_index(project_path);
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::days(7);
+
+    let mut session_count = 0u64;
+    let mut tokens_7d = 0u64;
+    let mut total_messages = 0u64;
+    let mut last_session: Option<String> = None;
+
+    for e in &entries {
+        session_count += 1;
+        if let Some(t) = e.get("turns").and_then(|x| x.as_u64()) {
+            total_messages += t;
+        }
+        let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+            let dt_utc = dt.with_timezone(&chrono::Utc);
+            if dt_utc >= cutoff {
+                if let Some(t) = e.get("tokens").and_then(|x| x.as_u64()) {
+                    tokens_7d += t;
+                }
+            }
+            if last_session.is_none() || dt_utc > last_session_parse(last_session.as_deref()) {
+                last_session = Some(ts.to_string());
+            }
+        } else if last_session.is_none() {
+            last_session = Some(ts.to_string());
+        }
+    }
+
+    // Actions d'outils : scanner les fichiers de session pi du projet.
+    let mut actions: HashMap<String, u64> = HashMap::new();
+    let config = state.config.lock().unwrap();
+    let session_dir = crate::session_history::project_sessions_dir(&config);
+    let folder = crate::session_history::project_to_session_folder(project_path);
+    let project_dir = session_dir.join(&folder);
+    drop(config);
+    if project_dir.exists() {
+        if let Ok(entries_iter) = fs::read_dir(&project_dir) {
+            for entry in entries_iter.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                if let Ok(content) = fs::read_to_string(&path) {
+                    for line in content.lines() {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let v: Value = match serde_json::from_str(line) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                        if t == "tool_execution_start" || t == "toolcall_start" {
+                            let name = v
+                                .get("tool")
+                                .and_then(|x| x.get("name"))
+                                .and_then(|x| x.as_str())
+                                .or_else(|| v.get("toolName").and_then(|x| x.as_str()))
+                                .or_else(|| v.get("name").and_then(|x| x.as_str()))
+                                .unwrap_or("outil")
+                                .to_string();
+                            *actions.entry(name).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let total_actions: u64 = actions.values().sum();
+    let bash = actions.get("Bash").or_else(|| actions.get("bash")).copied().unwrap_or(0);
+    let edit = actions.get("edit").copied().unwrap_or(0);
+    let write = actions.get("write").copied().unwrap_or(0);
+
+    serde_json::json!({
+        "session_count": session_count,
+        "tokens_7d": tokens_7d,
+        "total_messages": total_messages,
+        "actions": {
+            "bash": bash,
+            "edit": edit,
+            "write": write,
+            "total": total_actions,
+        },
+        "last_session": last_session,
+    })
+}
+
+fn last_session_parse(s: Option<&str>) -> chrono::DateTime<chrono::Utc> {
+    s.and_then(|x| chrono::DateTime::parse_from_rfc3339(x).ok())
+        .map(|d| d.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
+}
+
+/// Contexte & documentation : extrait README, fichiers mémoire, derniers fichiers.
+fn context_docs(root: &Path, files_modified_7d: &[(String, u64)]) -> Value {
+    // README (extrait).
+    let mut readme = String::new();
+    for name in ["README.md", "readme.md", "README", "Readme.md"] {
+        let p = root.join(name);
+        if p.exists() {
+            if let Ok(c) = fs::read_to_string(&p) {
+                let chars: Vec<char> = c.chars().take(600).collect();
+                readme = chars.iter().collect::<String>();
+                if c.chars().count() > 600 {
+                    readme.push('…');
+                }
+            }
+            break;
+        }
+    }
+    // Fichiers mémoire / décisions d'architecture.
+    let mut memory_files: Vec<String> = Vec::new();
+    for name in ["PROJECT_MEMORY.md", "AGENTS.md", "ARCHITECTURE.md", "docs/architecture.md", "DECISIONS.md", "ADR.md"] {
+        if root.join(name).exists() {
+            memory_files.push(name.to_string());
+        }
+    }
+    // Derniers fichiers modifiés (tri par mtime décroissant, top 8).
+    let mut recent: Vec<(String, u64)> = files_modified_7d.to_vec();
+    recent.sort_by(|a, b| b.1.cmp(&a.1));
+    let recent: Vec<Value> = recent
+        .iter()
+        .take(8)
+        .map(|(p, _)| {
+            let rel = p
+                .strip_prefix(&root.to_string_lossy().to_string())
+                .unwrap_or(p)
+                .trim_start_matches(['/', '\\'])
+                .to_string();
+            let mtime = fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
+            serde_json::json!({ "path": rel, "mtime": mtime })
+        })
+        .collect();
+    serde_json::json!({
+        "readme": readme,
+        "memory_files": memory_files,
+        "recent_files": recent,
+    })
+}
+
+/// Construit la liste d'alertes & suggestions.
+fn build_alerts(
+    heaviest: &[(String, u64)],
+    git: &Value,
+    lang_map: &HashMap<String, (u64, u64, u64)>,
+    total_size: u64,
+) -> Vec<Value> {
+    let mut alerts: Vec<Value> = Vec::new();
+    // Fichiers volumineux.
+    for (p, size) in heaviest.iter().take(3) {
+        if *size > 1_000_000 {
+            let rel = p.rsplit(['/', '\\']).next().unwrap_or(p);
+            alerts.push(serde_json::json!({
+                "level": "warning",
+                "text": format!("Fichier volumineux : {} ({})", rel, human_size(*size)),
+            }));
+        }
+    }
+    // Éléments non commités.
+    if git.get("is_repo").and_then(|x| x.as_bool()).unwrap_or(false) {
+        let total = git.get("total").and_then(|x| x.as_u64()).unwrap_or(0);
+        if total > 0 {
+            alerts.push(serde_json::json!({
+                "level": "info",
+                "text": format!("{} élément(s) non commité(s) ({} modifié(s), {} non suivi(s), {} prêt(s)).", total,
+                    git.get("modified").and_then(|x| x.as_u64()).unwrap_or(0),
+                    git.get("untracked").and_then(|x| x.as_u64()).unwrap_or(0),
+                    git.get("staged").and_then(|x| x.as_u64()).unwrap_or(0)),
+            }));
+        }
+    }
+    // Langage principal.
+    if let Some((lang, _)) = lang_map.iter().max_by_key(|(_, v)| v.0) {
+        alerts.push(serde_json::json!({
+            "level": "info",
+            "text": format!("Langage principal : {}.", lang),
+        }));
+    }
+    // Taille globale.
+    if total_size > 500_000_000 {
+        alerts.push(serde_json::json!({
+            "level": "warning",
+            "text": format!("Projet volumineux : {} au total.", human_size(total_size)),
+        }));
+    }
+    alerts
+}
+
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} Go", b / GB)
+    } else if b >= MB {
+        format!("{:.1} Mo", b / MB)
+    } else if b >= KB {
+        format!("{:.1} Ko", b / KB)
+    } else {
+        format!("{} o", bytes)
+    }
+}
+
+/// Commande principale : renvoie toutes les métriques du tableau de bord du
+/// projet actif. Lecture seule. Retourne un objet JSON structuré par section.
+#[tauri::command]
+pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let root = Path::new(&project_path);
+    if !root.exists() {
+        return Err(format!("Le projet « {} » n'existe pas.", project_path));
+    }
+
+    // ── En-tête ──
+    let name = root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&project_path)
+        .to_string();
+    let client = {
+        let cfg = state.config.lock().unwrap();
+        cfg.super_agent_project_client
+            .get(&project_path)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let refreshed_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // ── Stockage & poids ──
+    let (
+        total_size, file_count, dir_count, code_size, code_file_count,
+        heaviest, lang_map, ext_map, total_lines, total_functions,
+        total_classes, total_todos, total_fixmes, files_modified_7d,
+    ) = scan_project(root);
+
+    // ── État Git ──
+    let git = git_state(&project_path);
+
+    // ── Analyse code & langages ──
+    let total_lang_files: u64 = lang_map.values().map(|v| v.0).sum();
+    let mut distribution: Vec<Value> = lang_map
+        .iter()
+        .map(|(lang, (files, lines, funcs))| {
+            let percent = if total_lang_files > 0 {
+                (*files as f64 / total_lang_files as f64) * 100.0
+            } else {
+                0.0
+            };
+            serde_json::json!({
+                "name": lang,
+                "percent": (percent * 10.0).round() / 10.0,
+                "files": files,
+                "lines": lines,
+                "functions": funcs,
+            })
+        })
+        .collect();
+    distribution.sort_by(|a, b| {
+        b.get("files").and_then(|x| x.as_u64()).unwrap_or(0)
+            .cmp(&a.get("files").and_then(|x| x.as_u64()).unwrap_or(0))
+    });
+    let mut extensions: Vec<Value> = ext_map
+        .iter()
+        .map(|(ext, count)| serde_json::json!({ "ext": ext, "count": count }))
+        .collect();
+    extensions.sort_by(|a, b| {
+        b.get("count").and_then(|x| x.as_u64()).unwrap_or(0)
+            .cmp(&a.get("count").and_then(|x| x.as_u64()).unwrap_or(0))
+    });
+    let dependencies = detect_dependencies(root);
+
+    // ── Activité agent ──
+    let activity = activity_metrics(&state, &project_path);
+
+    // ── Évolution & vélocité ──
+    let commits_7d = run_captured(
+        "git",
+        &["-C", &project_path, "log", "--since=7 days ago", "--oneline"],
+        Duration::from_secs(5),
+    )
+    .lines()
+    .filter(|l| !l.trim().is_empty())
+    .count() as u64;
+    let files_modified_7d_count = files_modified_7d.len() as u64;
+    let lines_modified_7d: u64 = files_modified_7d
+        .iter()
+        .filter_map(|(p, _)| fs::read_to_string(p).ok())
+        .map(|c| c.lines().count() as u64)
+        .sum();
+    let size_modified_7d: u64 = files_modified_7d.iter().map(|(_, s)| s).sum();
+
+    // ── Contexte & documentation ──
+    let context = context_docs(root, &files_modified_7d);
+
+    // ── Alertes ──
+    let alerts = build_alerts(&heaviest, &git, &lang_map, total_size);
+
+    Ok(serde_json::json!({
+        "project": {
+            "name": name,
+            "path": project_path,
+            "client": client,
+            "refreshed_at": refreshed_at,
+        },
+        "storage": {
+            "total_size": total_size,
+            "total_size_h": human_size(total_size),
+            "file_count": file_count,
+            "dir_count": dir_count,
+            "code_size": code_size,
+            "code_size_h": human_size(code_size),
+            "code_file_count": code_file_count,
+            "heaviest": heaviest.iter().map(|(p, s)| serde_json::json!({
+                "path": p,
+                "size": s,
+                "size_h": human_size(*s),
+            })).collect::<Vec<_>>(),
+        },
+        "git": git,
+        "languages": {
+            "distribution": distribution,
+            "extensions": extensions,
+            "metrics": {
+                "lines": total_lines,
+                "functions": total_functions,
+                "classes": total_classes,
+            },
+            "todos": total_todos,
+            "fixmes": total_fixmes,
+            "dependencies": dependencies,
+        },
+        "activity": activity,
+        "evolution": {
+            "period_days": 7,
+            "commits_7d": commits_7d,
+            "files_modified_7d": files_modified_7d_count,
+            "lines_modified_7d": lines_modified_7d,
+            "size_modified_7d": size_modified_7d,
+            "size_modified_7d_h": human_size(size_modified_7d),
+        },
+        "context": context,
+        "alerts": alerts,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lang_for_ext_known() {
+        assert_eq!(lang_for_ext("rs"), Some("Rust"));
+        assert_eq!(lang_for_ext("ts"), Some("TypeScript"));
+        assert_eq!(lang_for_ext("py"), Some("Python"));
+        assert_eq!(lang_for_ext("js"), Some("JavaScript"));
+    }
+
+    #[test]
+    fn lang_for_ext_unknown() {
+        assert_eq!(lang_for_ext("png"), None);
+        assert_eq!(lang_for_ext("exe"), None);
+    }
+
+    #[test]
+    fn count_code_metrics_counts_lines() {
+        let (lines, funcs, classes) = count_code_metrics("fn main() {\n  let x = 1;\n}\n\nclass Foo {}\n");
+        assert_eq!(lines, 4);
+        assert!(funcs >= 1);
+        assert!(classes >= 1);
+    }
+
+    #[test]
+    fn count_todos_detects_markers() {
+        let (todo, fixme) = count_todos("// TODO: fix this\n// FIXME: later\n// todo again\n");
+        assert_eq!(todo, 2);
+        assert_eq!(fixme, 1);
+    }
+
+    #[test]
+    fn human_size_formats() {
+        assert_eq!(human_size(500), "500 o");
+        assert_eq!(human_size(2048), "2.0 Ko");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 Mo");
+    }
+
+    #[test]
+    fn detect_dependencies_empty_dir() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_deps_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let deps = detect_dependencies(&tmp);
+        assert!(deps.is_empty());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_dependencies_node() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_deps2_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        fs::write(tmp.join("package.json"), "{}").unwrap();
+        let deps = detect_dependencies(&tmp);
+        assert!(deps.contains(&"Node.js".to_string()));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+}
