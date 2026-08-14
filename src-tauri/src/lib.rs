@@ -63,6 +63,7 @@ mod rpc;
 mod interproject;
 mod super_agent;
 mod dashboard;
+mod vault;
 mod pi_update;
 mod project_agents;
 
@@ -145,6 +146,10 @@ struct AppState {
     /// l'utilisateur change de projet, le projet de travail reste celui de la
     /// discussion en cours, pour que l'assistant ne confonde pas les projets.
     working_project: Mutex<Option<String>>,
+    /// Coffre fort (issue #52) : clé AES-256 dérivée du mot de passe maître,
+    /// conservée en mémoire uniquement tant que le coffre est déverrouillé.
+    /// `None` = verrouillé. Jamais persistée sur disque.
+    vault_key: Mutex<Option<Vec<u8>>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1809,6 +1814,7 @@ pub fn run() {
                 web_runs: Mutex::new(HashMap::new()),
                 rpc_superagent: Mutex::new(None),
                 working_project: Mutex::new(None),
+                vault_key: Mutex::new(None),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1994,6 +2000,15 @@ pub fn run() {
             super_agent::query_super_agent,
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
+            // ── Coffre fort de mots de passe (issue #52) ──
+            vault::vault_status,
+            vault::vault_unlock,
+            vault::vault_lock,
+            vault::vault_set_master_password,
+            vault::vault_list,
+            vault::vault_add,
+            vault::vault_update,
+            vault::vault_delete,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

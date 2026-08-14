@@ -456,6 +456,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Tableau de bord", "dashboard");
   });
 
+  // 🔐 Coffre : coffre fort de mots de passe chiffré — issue #52.
+  document.getElementById("btn-vault").addEventListener("click", () => {
+    tabs.openFile("Coffre", "vault");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

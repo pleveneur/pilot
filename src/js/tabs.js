@@ -285,6 +285,12 @@ class TabsManager {
       return;
     }
 
+    // Onglet Coffre (🔐) — issue #52 : coffre fort de mots de passe chiffré.
+    if (mode === "vault") {
+      await this._openVault(path || "Coffre");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -923,6 +929,45 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">📊</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Tableau de bord</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Coffre (🔐) — issue #52 : coffre fort de mots de passe
+   * chiffré (AES-256-GCM, mot de passe maître). Fichier ~/.pilot/vault.json.
+   */
+  async _openVault(label = "Coffre") {
+    const existing = this.tabs.find((t) => t.mode === "vault");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "vault");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper vault-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createVault } = await import("./vault.js");
+      const result = createVault(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenVault = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Coffre:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🔐</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Coffre</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }

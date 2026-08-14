@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard -->
+<!-- PILOT-HELP generated=2026-08-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -949,3 +949,35 @@ Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
 ### Actualiser
 Le bouton **Actualiser** relance l'analyse du projet. L'analyse peut prendre
 quelques secondes sur les gros projets (parcours du répertoire + Git).
+
+---
+
+## Aide utilisateur — Coffre fort
+
+L'onglet **🔐 Coffre** (bouton **🔐** de la barre latérale) stocke vos mots de
+passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
+(`~/.pilot/vault.json`). Tout est protégé par un **mot de passe maître**.
+
+### Première utilisation
+- À la première ouverture, créez un **mot de passe maître** (min. 4 caractères).
+  Il n'est **jamais stocké en clair** : une clé AES-256 est dérivée via Argon2id.
+- ⚠️ **Si vous l'oubliez, vos données sont irrécupérables.** Il n'existe aucun
+  moyen de réinitialiser le coffre sans perdre son contenu.
+
+### Déverrouiller / verrouiller
+- À chaque ouverture de l'onglet, le coffre est **verrouillé** : saisissez le
+  mot de passe maître pour y accéder.
+- Le bouton **Verrouiller** efface la clé en mémoire (le coffre se reverrouille).
+- Le bouton **Mot de passe maître** permet de le changer (les entrées sont
+  ré-chiffrées avec la nouvelle clé).
+
+### Gérer les entrées
+- Chaque entrée = **description** (ex: « Serveur OVH ») + **login** + **mot de passe**.
+- **Portée** : choisissez à la création/édition si l'entrée est **🌐 globale**
+  (visible dans tous les projets) ou **📁 spécifique au projet actif**.
+- **Copier** : boutons de copie pour le **login** et pour le **mot de passe**
+  (copie dans le presse-papiers).
+- **Masqué par défaut** : les mots de passe sont affichés en `••••••••` ; le
+  bouton **œil** les révèle temporairement.
+- **Modifier / Supprimer** : boutons d'édition et de suppression sur chaque
+  entrée, depuis la vue globale.
