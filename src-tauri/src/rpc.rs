@@ -575,6 +575,63 @@ pub fn send_rpc_command(state: State<AppState>, command: Value) -> Result<(), St
     rpc_manager::send_command(session, &command)
 }
 
+/// Relais des choix d'agent via l'assistant (tâche de suivi #22).
+///
+/// Envoie une commande (ex: `extension_ui_response`) à la session agent d'un
+/// projet donné, identifiée par (project_path, agent_id). Priorité à la session
+/// active (`rpc_state`) si elle correspond au couple projet/agent visé, sinon à
+/// la session parkée du projet (`projects[path].rpc[agent_id]`, multi-onglets
+/// agents — processus pi vivant en arrière-plan), sinon aux sessions des agents
+/// multi-rôles (`agent_sessions`, H2 V2).
+///
+/// Permet de répondre à un bouton de question rendu dans le chat de l'assistant
+/// en routant la réponse vers LE bon agent, sans mélanger les réponses quand
+/// plusieurs agents sont en attente (exigence multi-agents).
+#[tauri::command]
+pub fn send_agent_command_to(
+    state: State<AppState>,
+    project_path: Option<String>,
+    agent_id: Option<String>,
+    command: Value,
+) -> Result<(), String> {
+    let agent_id = normalize_agent_id(agent_id.as_deref());
+    let proj = project_path.filter(|p| !p.trim().is_empty());
+
+    // 1) Session active si elle correspond au (projet, agent) ciblé.
+    {
+        let active_proj = state.active_project.lock().unwrap().clone();
+        let active_agent = state.active_agent_id.lock().unwrap().clone()
+            .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
+        let proj_matches = match &proj {
+            Some(p) => active_proj.as_deref() == Some(p.as_str()),
+            None => true, // projet non précisé → session active
+        };
+        if proj_matches && active_agent == agent_id {
+            let mut rpc = state.rpc_state.lock().unwrap();
+            if let Some(session) = rpc.as_mut() {
+                return rpc_manager::send_command(session, &command);
+            }
+        }
+    }
+    // 2) Session parkée du projet ciblé (multi-onglets agents).
+    if let Some(p) = &proj {
+        let mut projects = state.projects.lock().unwrap();
+        if let Some(ps) = projects.get_mut(p) {
+            if let Some(session) = ps.rpc.get_mut(&agent_id) {
+                return rpc_manager::send_command(session, &command);
+            }
+        }
+    }
+    // 3) Session des agents multi-rôles (H2 V2).
+    {
+        let mut agents = state.agent_sessions.lock().unwrap();
+        if let Some(session) = agents.get_mut(&agent_id) {
+            return rpc_manager::send_command(session, &command);
+        }
+    }
+    Err("Aucune session agent trouvée pour relayer la réponse".to_string())
+}
+
 pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
     let mut rpc = state.rpc_state.lock().unwrap();
     let session = rpc

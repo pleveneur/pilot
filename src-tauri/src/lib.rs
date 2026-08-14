@@ -1859,6 +1859,7 @@ pub fn run() {
             rpc::stop_agent_session,
             rpc::park_agent_session,
             rpc::send_rpc_command,
+            rpc::send_agent_command_to,
             rpc::get_agent_event_channel,
             rpc::get_agent_state,
             rpc::get_project_agent_states,

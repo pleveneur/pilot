@@ -531,7 +531,33 @@ export async function createSuperAgent(container) {
 
   appendSystemMessage(messagesEl, `🧭 ${superAgentDisplayLabel()} prêt. Je suis en lecture seule : je suis vos projets (par client) de la demande à la livraison.`);
 
-  return { wrapper, unlisten };
+  // ── Relais passif des choix d'agent via l'assistant (tâche de suivi #22) ──
+  // Un agent du projet peut émettre un `extension_ui_request` pilot-choices
+  // (ask_choice / ask_confirm / ask_input / ask_multi_choice). Quand l'onglet
+  // 🧭 est ouvert, agent-pi.js déclenche `pilot-agent-relay-request` ; on rend
+  // la question ici (dans la conversation de l'assistant) et la réponse est
+  // routée vers LA bonne session agent via `send_agent_command_to` (multi-agents
+  // : chaque agent est identifié, les réponses ne sont pas mélangées).
+  const onAgentRelayRequest = (e) => {
+    const d = e.detail || {};
+    try {
+      relayAgentChoiceRequest(d.payload, d.agentId, d.projectPath, messagesEl, state);
+    } catch (err) {
+      console.error("[relais-agent] erreur:", err);
+    }
+  };
+  window.addEventListener("pilot-agent-relay-request", onAgentRelayRequest);
+  window._pilotSuperAgentOpen = true;
+  const origUnlisten = unlisten;
+
+  return {
+    wrapper,
+    unlisten: () => {
+      origUnlisten();
+      window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
+      window._pilotSuperAgentOpen = false;
+    },
+  };
 }
 
 // ── Traitement des événements RPC ──
@@ -977,9 +1003,80 @@ async function respondSuperAgent(id, value, cancelled) {
   }
 }
 
-/** Rend des boutons de choix inline (unique ou multi). */
-function renderSuperAgentChoice(messagesEl, state, id, title, options, multi) {
-  const target = getSuperAgentAttachTarget(messagesEl, state);
+/** Envoie la réponse d'un bouton RELAIS à la session agent ciblée (tâche #22). */
+async function respondAgentRelay(projectPath, agentId, id, value, cancelled) {
+  const cmd = { type: "extension_ui_response", id };
+  if (cancelled) cmd.cancelled = true;
+  else cmd.value = value;
+  try {
+    await invoke("send_agent_command_to", { projectPath, agentId, command: cmd });
+  } catch (e) {
+    console.error("Erreur extension_ui_response (relais agent):", e);
+  }
+}
+
+/**
+ * Relais passif et transparent des choix d'un agent du projet via l'assistant
+ * (tâche de suivi #22). Reçoit un `extension_ui_request` pilot-choices émis par
+ * un agent de projet (agent-pi.js le détecte et déclenche l'événement
+ * `pilot-agent-relay-request`) et le rend dans le chat 🧭 avec un en-tête
+ * identifiant l'agent source. L'utilisateur peut annoter / modifier / valider sa
+ * réponse, qui est alors routée vers LA bonne session agent (multi-agents).
+ */
+function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, state) {
+  const { id, method } = payload;
+  // Répondre en routant vers la session agent ciblée (et non le super-agent).
+  const responder = (value, cancelled) =>
+    respondAgentRelay(projectPath, agentId, id, value, cancelled);
+
+  // Bloc dédié (distinct du flux de l'assistant) : en-tête + widget.
+  const block = createSuperAgentBlock(messagesEl);
+  const target = block.querySelector(".agent-stream-flow") || block;
+  const label = agentId === "default" ? "par défaut" : agentId;
+  const header = document.createElement("div");
+  header.className = "agent-relay-header";
+  header.textContent = `🤖 L'agent « ${label} » du projet attend une réponse :`;
+  target.appendChild(header);
+
+  if (method === "confirm") {
+    renderSuperAgentConfirm(messagesEl, state, id, payload.title || "Confirmation", payload.message || "", responder, target);
+  } else if (method === "select") {
+    const options = payload.options || [];
+    const rawTitle = payload.title || "Choix";
+    const MULTI = "PILOT_MULTI_CHOICE::";
+    const CONFIRM = "PILOT_CONFIRM::";
+    const multi = rawTitle.startsWith(MULTI);
+    const confirm = rawTitle.startsWith(CONFIRM);
+    let title = rawTitle;
+    let confirmMessage = "";
+    if (multi) {
+      title = rawTitle.slice(MULTI.length);
+    } else if (confirm) {
+      try {
+        const parsed = JSON.parse(rawTitle.slice(CONFIRM.length));
+        title = parsed.title || "Confirmation";
+        confirmMessage = parsed.message || "";
+      } catch {
+        title = rawTitle.slice(CONFIRM.length);
+      }
+    }
+    if (confirm) {
+      renderSuperAgentConfirm(messagesEl, state, id, title, confirmMessage, responder, target);
+    } else {
+      renderSuperAgentChoice(messagesEl, state, id, title, options, multi, responder, target);
+    }
+  } else if (method === "input") {
+    renderSuperAgentInput(messagesEl, state, id, payload.title || "Entrée", payload.placeholder || "", responder, target);
+  }
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/** Rend des boutons de choix inline (unique ou multi).
+ * @param {Function} responder - (id, value, cancelled) => Promise ; par défaut
+ *   envoie au super-agent, sinon (relais) route vers la session agent ciblée.
+ * @param {HTMLElement|null} targetOverride - cible d'attache (sinon auto). */
+function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, responder = respondSuperAgent, targetOverride = null) {
+  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
   const wrapper = document.createElement("div");
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
@@ -994,7 +1091,7 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi) {
     const inputs = wrapper.querySelectorAll(".agent-choice-input");
     inputs.forEach((i) => { i.disabled = true; });
     wrapper.classList.add("resolved");
-    await respondSuperAgent(id, value, cancelled);
+    await responder(id, value, cancelled);
   };
   if (multi) {
     const selected = new Set();
@@ -1056,9 +1153,10 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-/** Rend des boutons Oui / Non inline. */
-function renderSuperAgentConfirm(messagesEl, state, id, title, message) {
-  const target = getSuperAgentAttachTarget(messagesEl, state);
+/** Rend des boutons Oui / Non inline.
+ * @param {Function} responder - (id, value, cancelled) => Promise */
+function renderSuperAgentConfirm(messagesEl, state, id, title, message, responder = respondSuperAgent, targetOverride = null) {
+  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
   const wrapper = document.createElement("div");
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
@@ -1084,7 +1182,7 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message) {
     const inputs = wrapper.querySelectorAll(".agent-choice-input");
     inputs.forEach((i) => { i.disabled = true; });
     wrapper.classList.add("resolved");
-    await respondSuperAgent(id, JSON.stringify({ confirmed, note: note.value.trim() }), false);
+    await responder(id, JSON.stringify({ confirmed, note: note.value.trim() }), false);
   };
   const yes = document.createElement("button");
   yes.className = "agent-choice-btn agent-choice-yes";
@@ -1101,9 +1199,10 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-/** Rend un champ de saisie inline. */
-function renderSuperAgentInput(messagesEl, state, id, title, placeholder) {
-  const target = getSuperAgentAttachTarget(messagesEl, state);
+/** Rend un champ de saisie inline.
+ * @param {Function} responder - (id, value, cancelled) => Promise */
+function renderSuperAgentInput(messagesEl, state, id, title, placeholder, responder = respondSuperAgent, targetOverride = null) {
+  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
   const wrapper = document.createElement("div");
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
@@ -1122,7 +1221,7 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder) {
     btns.forEach((b) => { b.disabled = true; });
     input.disabled = true;
     wrapper.classList.add("resolved");
-    await respondSuperAgent(id, value, cancelled);
+    await responder(id, value, cancelled);
   };
   const ok = document.createElement("button");
   ok.className = "agent-choice-btn agent-choice-validate";

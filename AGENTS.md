@@ -170,7 +170,7 @@ pilot/
 │       ├── project-memory.js # Mémoire projet (H3) : PROJECT_MEMORY.md injection + extraction post-tâche
 │       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags
 │       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
-│       ├── super-agent.js    # Onglet « 🧭 Assistant » : suivi multi-projets lecture seule (chat, config, init)
+│       ├── super-agent.js    # Onglet « 🧭 Assistant » : suivi multi-projets lecture seule (chat, config, init, relais des choix d'agent, tâche #22)
 │       ├── dashboard.js      # Onglet « 📊 Tableau de bord » (issue #51) : métriques projet (stockage, Git, langages, activité)
 │       ├── vault.js          # Onglet « 🔐 Coffre » (issue #52) : coffre fort de mots de passe chiffré (AES-256-GCM)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)
@@ -214,7 +214,7 @@ pilot/
         ├── session_history.rs # H9 : historique de sessions searchable
         ├── tabs.rs           # Persistance des onglets d'édition
         ├── web_commands.rs   # Mode remote : commandes desktop de pilotage
-        ├── rpc.rs            # Agent RPC pi : sessions, prompts, reviewer, sonde backend
+        ├── rpc.rs            # Agent RPC pi : sessions, prompts, reviewer, sonde backend, relais choix → send_agent_command_to (tâche #22)
         ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
         ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
         ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)

@@ -439,6 +439,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     restarting: false,
   };
   window.__agentState = state;
+  // Multi-onglets agents : identifie la session de cet onglet, utilisé pour le
+  // relais des choix via l'assistant (tâche de suivi #22) afin de router la
+  // réponse vers la bonne session agent.
+  state.agentId = agentId;
 
   const inputEl = wrapper.querySelector("#agent-input");
 
@@ -6366,6 +6370,30 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           updateStats();
         }
       }
+      // Relais des choix d'agent via l'assistant (tâche de suivi #22) : quand
+      // l'onglet 🧭 Assistant est OUVERT et ACTIF (l'utilisateur regarde la
+      // conversation de l'assistant), un choix pilot-choices émis par l'agent du
+      // projet est relayé dans le chat de l'assistant (qui sert d'interface) au
+      // lieu d'afficher les boutons dans l'onglet agent. La réponse est routée
+      // vers CETTE session agent via send_agent_command_to (state.agentId +
+      // projet courant) pour ne pas mélanger les réponses (multi-agents).
+      // Exclusions : orchestration (auto-réponse) et demandes internes
+      // (edit-gate, actions assistant).
+      if (
+        window._pilotSuperAgentOpen
+        && !state.orchestrationRunning
+        && isSuperAgentActiveTab()
+        && isRelayableAgentChoice(payload)
+      ) {
+        window.dispatchEvent(new CustomEvent("pilot-agent-relay-request", {
+          detail: {
+            payload,
+            agentId: state.agentId || "default",
+            projectPath: window._pilotProjectPath || null,
+          },
+        }));
+        break;
+      }
       handleExtensionUiRequest(payload, messagesEl, state);
       break;
 
@@ -7360,6 +7388,34 @@ function domSelect(title, options) {
     animatePanelOpen(box);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) done(null); });
   });
+}
+
+/** Relais via l'assistant (tâche de suivi #22) : vrai si l'onglet Assistant
+ * (mode "superagent") est l'onglet actif (l'utilisateur regarde la conversation
+ * de l'assistant, qui sert alors d'interface). */
+function isSuperAgentActiveTab() {
+  try {
+    return window._pilotTabs?.getActiveTab?.()?.mode === "superagent";
+  } catch {
+    return false;
+  }
+}
+
+/** Relais via l'assistant (tâche de suivi #22) : un choix pilot-choices émis par
+ * un agent du projet (select/confirm/input) est relayé dans le chat 🧭 quand
+ * l'onglet Assistant est ouvert. On exclut les demandes internes (porte
+ * pré-écriture pilot-edit-gate, actions assistant) qui ont leur propre
+ * traitement. */
+function isRelayableAgentChoice(payload) {
+  const m = payload.method;
+  if (m === "select" || m === "input") return true;
+  if (m === "confirm") {
+    const msg = payload.message || "";
+    if (msg.startsWith("PILOT_EDIT_GATE::")) return false;
+    if (msg.startsWith("PILOT_ASSISTANT_ACTION::")) return false;
+    return true;
+  }
+  return false;
 }
 
 async function handleExtensionUiRequest(payload, container, state) {

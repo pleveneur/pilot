@@ -849,6 +849,17 @@ apprend et répond.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
 
+### Relayer les questions des agents du projet (tâche #22)
+- Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
+  de votre part pendant son travail (choix d'une approche, confirmation,
+  saisie…), c'est **l'Assistant qui sert d'interface** : tant que vous êtes sur
+  l'onglet 🧭, la question de l'agent est **affichée dans la conversation de
+  l'Assistant**, avec les options proposées.
+- Vous pouvez **annoter / modifier / valider** votre réponse avant qu'elle soit
+  envoyée à l'agent (champ de précision optionnel + bouton de validation).
+- La réponse est transmise au **bon agent** (chaque agent est identifié : ses
+  réponses ne sont pas mélangées), qui poursuit son travail débloqué.
+
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
   est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,

@@ -3498,6 +3498,18 @@ body.zen-mode #action-panel {
   word-break: break-word;
 }
 
+/* En-tête d'un relais de choix d'agent via l'assistant (tâche de suivi #22) */
+.agent-relay-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 8px 0 4px;
+  padding: 4px 8px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-secondary);
+  border-radius: 4px;
+}
+
 .agent-choice-message {
   font-size: 12px;
   color: var(--text-muted);

@@ -94,6 +94,17 @@ apprend et répond.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
 
+### Relayer les questions des agents du projet (tâche #22)
+- Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
+  de votre part pendant son travail (choix d'une approche, confirmation,
+  saisie…), c'est **l'Assistant qui sert d'interface** : tant que vous êtes sur
+  l'onglet 🧭, la question de l'agent est **affichée dans la conversation de
+  l'Assistant**, avec les options proposées.
+- Vous pouvez **annoter / modifier / valider** votre réponse avant qu'elle soit
+  envoyée à l'agent (champ de précision optionnel + bouton de validation).
+- La réponse est transmise au **bon agent** (chaque agent est identifié : ses
+  réponses ne sont pas mélangées), qui poursuit son travail débloqué.
+
 ### Apprendre en continu
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
   est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
@@ -257,6 +268,22 @@ Sessions d'agents (chat / orchestration)
   message clair est affiché (« ⚠️ L'assistant a tourné en boucle… Veuillez
   reformuler votre demande. »). Pas de reprise automatique : l'Assistant est un
   outil de suivi, pas un codeur.
+- **Relais des choix d'agent (tâche de suivi #22)** : quand un agent du projet
+  émet une demande pilot-choices (`extension_ui_request` select/confirm/input via
+  pilot-choices), et que l'onglet 🧭 est **ouvert et actif** (hors Mode
+  Orchestration, hors demandes internes edit-gate / actions assistant), la
+  demande n'est plus rendue dans l'onglet agent mais **relayée dans le chat de
+  l'Assistant** : agent-pi.js détecte la demande (`isRelayableAgentChoice`),
+  l'identifie (agentId + projet courant) et déclenche l'événement
+  `pilot-agent-relay-request` ; super-agent.js la rend (`relayAgentChoiceRequest`)
+  avec un en-tête « 🤖 L'agent « X » du projet attend une réponse » + les options.
+  L'utilisateur peut **annoter / modifier / valider** sa réponse (champ de
+  précision + bouton de validation, validation utilisateur avant transmission).
+  La réponse est routée vers **LA bonne session agent** via la commande Rust
+  `send_agent_command_to(project_path, agent_id, command)` (priorité à la
+  session active, sinon session parkée `projects[path].rpc[agent_id]`, sinon
+  `agent_sessions`) → chaque agent est identifié, les réponses ne sont jamais
+  mélangées (multi-agents).
 - **Chat sur session persistante** : le chat de l'onglet 🧭 utilise la session
   persistante `rpc_superagent` (streaming + mémoire de conversation), ce qui
   permet de charger les extensions et de poser des questions.
