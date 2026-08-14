@@ -162,6 +162,13 @@ apprend et répond.
   sa base de données (dans `~/.pilot/`) sont modifiables par lui.
 - Cette garantie est **technique** (extension qui bloque toute écriture hors
   de l'espace dédié), pas seulement une consigne système.
+
+### Détection de boucle (issue #55)
+- Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
+  réponse), Pilot **arrête la génération** et affiche un message :
+  « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
+- Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
+  pas un codeur. Reformulez simplement votre question pour relancer.
 <!-- /HELP:super-agent -->
 
 ---
@@ -242,6 +249,14 @@ Sessions d'agents (chat / orchestration)
   l'assistant). L'extension `pilot-assistant-prompt` fournit l'outil
   `update_my_prompt` (auto-adaptation du prompt personnalisé). Les cinq sont
   chargées dès que le backend supporte `--extension`.
+- **Détection de boucle (issue #55)** : le flux de l'Assistant (text_delta +
+  thinking_delta) est accumulé dans un buffer et analysé par
+  `detectRepeatedBlock` (loop-detection.js, issue #37), comme pour l'agent
+  standard. Contrairement à l'agent (qui se relance avec une correction),
+  l'Assistant **s'arrête** sur boucle : `abort_super_agent` est appelé et un
+  message clair est affiché (« ⚠️ L'assistant a tourné en boucle… Veuillez
+  reformuler votre demande. »). Pas de reprise automatique : l'Assistant est un
+  outil de suivi, pas un codeur.
 - **Chat sur session persistante** : le chat de l'onglet 🧭 utilise la session
   persistante `rpc_superagent` (streaming + mémoire de conversation), ce qui
   permet de charger les extensions et de poser des questions.

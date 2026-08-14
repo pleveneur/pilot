@@ -916,6 +916,13 @@ apprend et répond.
 - Cette garantie est **technique** (extension qui bloque toute écriture hors
   de l'espace dédié), pas seulement une consigne système.
 
+### Détection de boucle (issue #55)
+- Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
+  réponse), Pilot **arrête la génération** et affiche un message :
+  « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
+- Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
+  pas un codeur. Reformulez simplement votre question pour relancer.
+
 ---
 
 ## Aide utilisateur — Tableau de bord

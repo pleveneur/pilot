@@ -11,6 +11,7 @@ import markdownit from "markdown-it";
 import { refreshIcons } from "./icons.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { appendDelegatedMessage } from "./agent-pi.js";
+import { detectRepeatedBlock } from "./loop-detection.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -82,6 +83,18 @@ let pendingRender = false;
 let lastAssistantRawText = "";
 let superShowThinking = true; // réglage « Afficher la réflexion » (issue #43)
 let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
+
+// ── Détection de boucle dans la réflexion (issue #55) ──
+// Même mécanique que l'agent standard (loop-detection.js, issue #37) : on
+// accumule le flux streamé (text_delta + thinking_delta) et, si un bloc répété
+// est détecté, on ARRÊTE l'assistant avec un message clair. Pas de reprise
+// automatique avec correction : l'assistant est un outil de suivi, pas un
+// codeur — quand il boucle, on stoppe et on invite l'utilisateur à reformuler.
+let superLoopBuffer = "";
+let superLoopLastChecked = 0;
+let superLoopStopped = false;
+const SUPER_LOOP_CHECK_INTERVAL_MS = 500;
+const SUPER_LOOP_BUFFER_MIN = 200;
 
 // Recharger les options de rendu depuis la config cache.
 function refreshSuperRenderOptions() {
@@ -450,6 +463,9 @@ export async function createSuperAgent(container) {
         pendingRender = false;
         lastAssistantRawText = "";
         state.currentAssistantBlock = null;
+        // Issue #55 : fin de tour → reset du buffer de détection de boucle.
+        superLoopBuffer = "";
+        superLoopStopped = false;
       });
     } catch (err) {
       console.error("[rpc-event-superagent] erreur:", err);
@@ -520,6 +536,32 @@ export async function createSuperAgent(container) {
 
 // ── Traitement des événements RPC ──
 
+/**
+ * Accumule un delta streamé dans le buffer de réflexion de l'assistant puis,
+ * de façon throttlée, détecte un éventuel bouclage (issue #55). En cas de
+ * boucle, ARRÊTE l'assistant (abort_super_agent) et affiche un message clair.
+ * Pas de reprise automatique : l'assistant est un outil de suivi, pas un codeur.
+ * @param {Element} messagesEl
+ */
+function maybeDetectSuperAgentLoop(messagesEl) {
+  if (superLoopStopped) return; // déjà arrêté pour boucle
+  const now = Date.now();
+  if (now - superLoopLastChecked < SUPER_LOOP_CHECK_INTERVAL_MS) return;
+  superLoopLastChecked = now;
+  if (superLoopBuffer.length < SUPER_LOOP_BUFFER_MIN) return;
+  if (detectRepeatedBlock(superLoopBuffer)) {
+    superLoopStopped = true;
+    console.warn("[loop-detection] boucle détectée sur l'assistant, arrêt");
+    appendSystemMessage(
+      messagesEl,
+      "⚠️ L'assistant a tourné en boucle (répétition du même texte). Génération arrêtée. Veuillez reformuler votre demande."
+    );
+    invoke("abort_super_agent").catch((e) =>
+      console.error("Erreur abort_super_agent (loop):", e)
+    );
+  }
+}
+
 function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   const type = payload.type;
   if (type === "message_start") {
@@ -535,6 +577,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       pendingText = "";
       pendingRender = false;
       lastAssistantRawText = "";
+      // Issue #55 : nouveau message → reset du buffer de détection de boucle.
+      superLoopBuffer = "";
+      superLoopStopped = false;
     }
     return;
   }
@@ -557,6 +602,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       }
       pendingText += delta.delta;
       lastAssistantRawText += delta.delta;
+      // Issue #55 : accumuler le flux pour la détection de boucle.
+      superLoopBuffer += delta.delta;
+      maybeDetectSuperAgentLoop(messagesEl);
       if (!currentTextSection) currentTextSection = appendSuperTextSection("", false);
       if (!pendingRender && currentTextSection) {
         pendingRender = true;
@@ -586,6 +634,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
         currentBody = createSuperAgentBlock(messagesEl);
         currentFlow = currentBody.querySelector(".agent-stream-flow");
       }
+      // Issue #55 : accumuler la réflexion streamée pour la détection de boucle.
+      superLoopBuffer += delta.delta;
+      maybeDetectSuperAgentLoop(messagesEl);
       if (currentThinkingBlock) {
         if (superShowThinking) {
           const content = currentThinkingBlock.querySelector(".agent-thinking-content");
