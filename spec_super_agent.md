@@ -464,6 +464,13 @@ Tables (V1) :
   (`~/.pilot/super-agent.db`), via des commandes Rust (`super_agent_db_query` /
   `super_agent_db_execute`). L'assistant construit et met à jour ses propres
   tables de suivi ; il ne touche jamais aux fichiers des projets.
+- **Supervision des sessions d'agents (P2)** : l'extension
+  `pilot-assistant-sessions` fournit l'outil `list_agent_sessions` qui retourne
+  la vue d'ensemble de toutes les sessions d'agents (projet, agent, mode
+  main/agent_process, état active/parked, vivacité du processus, visibilité et
+  pointeur actif), via la commande Rust `list_agent_sessions` (AgentService).
+  L'assistant l'utilise pour superviser quels agents tournent avant de déléguer
+  ou d'arrêter.
 - **Auto-adaptation du prompt** : l'extension `pilot-assistant-prompt` fournit
   l'outil `update_my_prompt` qui remplace le prompt personnalisé de l'assistant
   (commande Rust `set_super_agent_prompt`, persistée dans la config + historique
@@ -497,8 +504,9 @@ Tables (V1) :
   `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
   `pilot-assistant-actions.ts` (open_project / delegate_to_coder /
   purge_agent_conversation / create_agent / run_agents),
-  `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi) et
-  `pilot-assistant-prompt.ts` (update_my_prompt), chargées dans la session
+  `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi),
+  `pilot-assistant-prompt.ts` (update_my_prompt) et
+  `pilot-assistant-sessions.ts` (list_agent_sessions), chargées dans la session
   super-agent dès que le backend supporte `--extension`.
 - Commandes Tauri (esquisse) :
   - `get_super_agent_config()` / `set_super_agent_config(config)`
@@ -517,6 +525,8 @@ Tables (V1) :
   - `set_super_agent_prompt(prompt)` (auto-adaptation du prompt personnalisé,
     avec historique `prompt-history.md`)
   - `query_super_agent(question)` (recherche dans la base + projets)
+  - `list_agent_sessions()` (vue d'ensemble des sessions d'agents, P2 —
+    AgentService)
 
 ## 11. Frontend (esquisse)
 

@@ -82,6 +82,17 @@ function resetBusState() {
   busState.loopLastChecked = {};
 }
 
+// Bug #9 : watchdog de sécurité du verrou de run. Si la run est marquée
+// "running" mais qu'aucun agent n'est actif et qu'aucun groupe parallèle n'est
+// en cours, le verrou est bloqué (fin normale/erreur sans libération). On force
+// la libération pour ne pas bloquer les appels suivants à run_agents.
+function releaseStuckRunLock() {
+  if (busState.runState === "running" && busState.activeAgents.size === 0 && !busState.parallelGroup) {
+    console.warn("[agents-bus] watchdog : verrou de run bloqué, libération forcée.");
+    resetBusState();
+  }
+}
+
 function emit(event, data) {
   const cb = busState.callbacks[event];
   if (cb) cb(data);
@@ -156,6 +167,30 @@ export async function initAgentsBus(options = {}) {
     busState.listeners = null;
   }
   busState.listeners = await listen("rpc-event-agents", handleAgentEvent);
+}
+
+/**
+ * Recharge la map des agents depuis le registre persistant (P4).
+ * Le bus ne charge le registre qu'à l'init ; un agent créé entre-temps (ex:
+ * create_agent de l'assistant) ne serait pas visible dans run_agents. On
+ * re-synchronise donc la map (et le coordinateur) avant chaque run.
+ */
+async function reloadAgentsRegistry() {
+  busState.registry = await loadAgentRegistry();
+  const rawAgents = Array.isArray(busState.registry.agents) ? busState.registry.agents : [];
+  busState.agents = new Map();
+  for (const raw of rawAgents) {
+    const a = normalizeAgent(raw);
+    if (a && a.id) busState.agents.set(a.id, a);
+  }
+  const regCoord = busState.agents.get("coordinateur");
+  if (regCoord) {
+    busState.coordinator = regCoord;
+  } else {
+    const fallback = resolveCoordinatorFallback();
+    busState.coordinator = buildDefaultCoordinator({ pi: fallback, plh: fallback });
+    busState.agents.set("coordinateur", busState.coordinator);
+  }
 }
 
 function resolveCoordinatorFallback() {
@@ -504,6 +539,7 @@ async function failAgentTurn(agentId, reason) {
 }
 
 export async function startAgentsRun(userPrompt, projectContext = "") {
+  releaseStuckRunLock();
   if (busState.runState === "running") {
     throw new Error("Une run est déjà en cours.");
   }
@@ -531,6 +567,7 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
  * `assignments` : [{ agentId, brief }].
  */
 export async function startParallelRun(assignments, projectContext = "") {
+  releaseStuckRunLock();
   if (busState.runState === "running") {
     throw new Error("Une run est déjà en cours.");
   }
@@ -544,11 +581,21 @@ export async function startParallelRun(assignments, projectContext = "") {
   turnCount = 0;
 
   emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
-  await dispatchParallel(assignments, async (results) => {
-    const aggregated = aggregateParallelResults(results);
-    emit("parallelDone", { results });
-    emit("done", { agentId: "parallel", text: aggregated });
-  });
+  try {
+    await dispatchParallel(assignments, async (results) => {
+      const aggregated = aggregateParallelResults(results);
+      emit("parallelDone", { results });
+      emit("done", { agentId: "parallel", text: aggregated });
+      // Bug #9 : libérer le verrou de run à la fin normale (ou erreur agrégée)
+      // de la run parallèle. Sans ce reset, runState restait "running" et les
+      // appels suivants à run_agents échouaient avec « Une run est déjà en cours ».
+      resetBusState();
+    });
+  } catch (e) {
+    // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
+    resetBusState();
+    throw e;
+  }
 }
 
 /**
@@ -564,27 +611,27 @@ export async function runAgentsForAssistant(assignments) {
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
+  // P4 : re-synchroniser la map des agents depuis le registre persistant pour
+  // qu'un agent créé entre-temps (create_agent) soit visible/sélectionnable.
+  await reloadAgentsRegistry();
   return new Promise((resolve, reject) => {
     const prevCallbacks = busState.callbacks;
+    // Bug #9 : garde anti double-résolution — la Promise ne doit se régler
+    // qu'une seule fois (done/error/stop/échec de startParallelRun).
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      busState.callbacks = prevCallbacks;
+      fn(value);
+    };
     busState.callbacks = {
       ...prevCallbacks,
-      done: ({ text }) => {
-        busState.callbacks = prevCallbacks;
-        resolve(text || "");
-      },
-      error: ({ message }) => {
-        busState.callbacks = prevCallbacks;
-        reject(new Error(message || "Erreur de la run agents."));
-      },
-      stop: () => {
-        busState.callbacks = prevCallbacks;
-        reject(new Error("Run agents arrêtée."));
-      },
+      done: ({ text }) => finish(resolve, text || ""),
+      error: ({ message }) => finish(reject, new Error(message || "Erreur de la run agents.")),
+      stop: () => finish(reject, new Error("Run agents arrêtée.")),
     };
-    startParallelRun(assignments).catch((e) => {
-      busState.callbacks = prevCallbacks;
-      reject(e);
-    });
+    startParallelRun(assignments).catch((e) => finish(reject, e));
   });
 }
 

@@ -1189,7 +1189,7 @@ class Sidebar {
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
         item.innerHTML =
-          `<span class="open-project-status" data-path="${this._esc(p)}" title="Agent en attente"></span>` +
+          `<span class="open-project-status" data-path="${this._esc(p)}" title="En attente"></span>` +
           `<span class="open-project-name">${this._esc(name)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
         // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
@@ -1261,7 +1261,7 @@ class Sidebar {
         const p = dot.dataset.path;
         const busy = st[p] && st[p].busy;
         dot.classList.toggle("busy", !!busy);
-        dot.title = busy ? "Agent en cours de travail" : "Agent en attente";
+        dot.title = busy ? "En cours" : "En attente";
       });
     } catch (_) { /* ignore : pas de mise à jour */ }
   }

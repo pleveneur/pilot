@@ -18,7 +18,7 @@ import {
   detectSemanticLoop,
 } from "./loop-detection.js";
 import { notifySuperAgentDone } from "./desktop-notify.js";
-import { loadAgentRegistry, saveAgentRegistry, normalizeAgent, validateAgentId } from "./agents.js";
+import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
 import { runAgentsForAssistant } from "./agents-bus.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -993,6 +993,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const DB_EXEC_SENTINEL = "PILOT_ASSISTANT_DB_EXEC::";
     const PROMPT_SENTINEL = "PILOT_ASSISTANT_PROMPT::";
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
+    const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1058,6 +1059,18 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(SESSIONS_SENTINEL)) {
+      // Outil list_agent_sessions (P2) : l'assistant demande la vue d'ensemble
+      // des sessions d'agents. On interroge la commande Rust et on renvoie le
+      // résultat (JSON) comme `value` de la réponse.
+      try {
+        const result = await invoke("list_agent_sessions");
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }
       return;
@@ -1183,6 +1196,19 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // Rust préserve le modèle actif (new_session + ré-application du modèle).
       try {
         await invoke("purge_agent_conversation");
+        // Bug d'affichage : le backend a reçu `new_session` (session repart à
+        // zéro) mais le DOM de l'onglet agent gardait l'ancienne discussion.
+        // On vide donc visuellement la conversation de l'onglet agent actif.
+        const tabManager = window._pilotTabs;
+        const agentTabs = (tabManager && Array.isArray(tabManager.tabs))
+          ? tabManager.tabs.filter((t) => t && t.mode === "agent")
+          : [];
+        const activeAgentTab =
+          agentTabs.find((t) => t.id === tabManager.activeTabId) || agentTabs[0];
+        // Cas agent invisible / aucun onglet agent ouvert : rien à vider visuellement.
+        if (activeAgentTab && activeAgentTab.agentElements && activeAgentTab.agentElements.messagesEl) {
+          activeAgentTab.agentElements.messagesEl.innerHTML = "";
+        }
         appendSystemMessage(messagesEl, "🧹 Conversation de l'agent purgée (modèle actif préservé).");
         await respondSuperAgentAction(id, true);
       } catch (e) {
@@ -1242,9 +1268,10 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
           max_calls_per_run: typeof agent.max_calls_per_run === "number" ? agent.max_calls_per_run : 5,
           call_depth: typeof agent.call_depth === "number" ? agent.call_depth : 1,
         });
-        agents.push(newAgent);
-        registry.agents = agents;
-        await saveAgentRegistry(registry);
+        // P4 : écriture atomique de l'agent seul (upsert) au lieu de
+        // replace_agents (delete-all + re-insert). Garantit la persistance réelle
+        // sur disque sans risque de perte partielle du registre.
+        await upsertAgent(newAgent);
         appendSystemMessage(messagesEl, `✅ Agent « ${newAgent.name} » (${newAgent.id}) créé dans le registre global.`);
         await respondSuperAgentAction(id, true);
       } catch (e) {

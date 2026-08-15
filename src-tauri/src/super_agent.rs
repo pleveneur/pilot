@@ -183,6 +183,21 @@ fn concise_guideline(enabled: bool) -> String {
     "\n\nRègle de style : réponds de façon concise. Informe l'utilisateur et prends des décisions, mais ne détaille pas tout ce qui se fait, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
 }
 
+/// Construit la consigne « personnalité adaptée à l'utilisateur » (A18) à
+/// injecter dans le prompt système du super-agent. S'appuie sur la personnalité
+/// déduite en arrière-plan de la conversation (persistée dans la config).
+/// Retourne une chaîne vide si le mode est désactivé ou si aucune personnalité
+/// n'a encore été déduite.
+fn personality_guideline(enabled: bool, personality: &str) -> String {
+    if !enabled || personality.trim().is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nPersonnalité adaptée à l'utilisateur (déduite de la conversation) :\n{}",
+        personality.trim()
+    )
+}
+
 /// Construit le contexte projet injecté dans le prompt système du super-agent.
 /// Le projet ACTIF est toujours la cible par défaut de la conversation ; l'ancien
 /// projet de travail n'est rappelé qu'en second plan pour éviter que l'assistant
@@ -231,9 +246,9 @@ pub(crate) fn do_send_super_agent_prompt(
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt, concise) = {
+    let (name, system_prompt, concise, user_memory, adaptive_personality, personality) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise)
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone())
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let mut full_system = format!(
@@ -253,6 +268,16 @@ pub(crate) fn do_send_super_agent_prompt(
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());
     }
+    // A17 : mémoire utilisateur persistée (profil/notes sur l'utilisateur ou
+    // développeur de Pilot). Injectée comme le prompt personnalisé pour que
+    // l'assistant prenne en compte durablement les préférences et le contexte.
+    if !user_memory.trim().is_empty() {
+        full_system.push_str("\n\nMémoire sur l'utilisateur (profil/notes appris au fil des discussions) :\n");
+        full_system.push_str(user_memory.trim());
+    }
+    // A18 : personnalité adaptée à l'utilisateur (déduite en arrière-plan de la
+    // conversation). Injectée comme la mémoire utilisateur A17.
+    full_system.push_str(&personality_guideline(adaptive_personality, &personality));
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
     let full_message = format!("{}\n\n{}", full_system, message);
@@ -288,13 +313,16 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise) = {
+    let (pi_path, mut model, system_prompt, concise, user_memory, adaptive_personality, personality) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
             cfg.super_agent_model.clone(),
             cfg.super_agent_prompt.clone(),
             cfg.super_agent_concise,
+            cfg.super_agent_user_memory.clone(),
+            cfg.super_agent_adaptive_personality,
+            cfg.super_agent_personality.clone(),
         )
     };
 
@@ -320,6 +348,15 @@ pub async fn ask_super_agent(
     if !system_prompt.trim().is_empty() {
         prompt.push_str(&format!("{}\n\n", system_prompt.trim()));
     }
+    // A17 : mémoire utilisateur persistée (profil/notes sur l'utilisateur).
+    if !user_memory.trim().is_empty() {
+        prompt.push_str(&format!(
+            "Mémoire sur l'utilisateur (profil/notes appris au fil des discussions) :\n{}\n\n",
+            user_memory.trim()
+        ));
+    }
+    // A18 : personnalité adaptée à l'utilisateur (déduite en arrière-plan).
+    prompt.push_str(&personality_guideline(adaptive_personality, &personality));
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     prompt.push_str(&concise_guideline(concise));
     for turn in &history {
@@ -505,6 +542,8 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "show_thinking": cfg.super_agent_show_thinking,
         "show_tools": cfg.super_agent_show_tools,
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
+        "adaptive_personality": cfg.super_agent_adaptive_personality,
+        "personality": cfg.super_agent_personality,
     }))
 }
 
@@ -518,6 +557,7 @@ pub fn set_super_agent_config(
     prompt: Option<String>,
     show_thinking: Option<bool>,
     show_tools: Option<bool>,
+    adaptive_personality: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -537,6 +577,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = show_tools {
         cfg.super_agent_show_tools = v;
+    }
+    if let Some(v) = adaptive_personality {
+        cfg.super_agent_adaptive_personality = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
@@ -565,6 +608,123 @@ pub fn set_super_agent_prompt(state: State<AppState>, app: AppHandle, prompt: St
         }
     }
     Ok(())
+}
+
+/// Permet à l'assistant de mettre à jour la mémoire persistée sur l'utilisateur
+/// (A17, outil `update_user_memory`). Profil/notes sur l'utilisateur ou
+/// développeur de Pilot (préférences, contexte, habitudes) appris au fil des
+/// discussions. Le changement est persisté dans la config (donc injecté dès le
+/// prochain message) et un historique des versions est conservé pour traçabilité
+/// / réversibilité.
+#[tauri::command]
+pub fn set_super_agent_user_memory(state: State<AppState>, app: AppHandle, memory: String) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_user_memory = memory.clone();
+    crate::save_config_disk(&app, &cfg)?;
+    // Historique des versions de la mémoire (traçabilité / réversibilité).
+    if let Ok(dir) = app.path().app_data_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let hist = dir.join("user-memory-history.md");
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let entry = format!("\n--- {ts} ---\n{memory}\n");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&hist)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
+        }
+    }
+    Ok(())
+}
+
+/// Persiste la personnalité adaptée à l'utilisateur (A18) déduite en
+/// arrière-plan de la conversation. Le changement est persisté dans la config
+/// (donc injecté dès le prochain message) et un historique des versions est
+/// conservé pour traçabilité / réversibilité.
+#[tauri::command]
+pub fn set_super_agent_personality(state: State<AppState>, app: AppHandle, personality: String) -> Result<(), String> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_personality = personality.clone();
+    crate::save_config_disk(&app, &cfg)?;
+    // Historique des versions de la personnalité (traçabilité / réversibilité).
+    if let Ok(dir) = app.path().app_data_dir() {
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let hist = dir.join("personality-history.md");
+            let ts = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let entry = format!("\n--- {ts} ---\n{personality}\n");
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&hist)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, entry.as_bytes()));
+        }
+    }
+    Ok(())
+}
+
+/// Analyse en arrière-plan la conversation en cours (A18) pour déduire le
+/// style/ton/personnalité qui correspond le mieux à l'utilisateur. Lance un
+/// process pi frais `--no-session` (pattern `ask_pi_caged`, éprouvé par l'aide
+/// et le reviewer) sur l'historique fourni et retourne une description concise
+/// de la personnalité. Commande **async** : le travail bloquant est exécuté dans
+/// `spawn_blocking` avec un timeout global, pour ne jamais bloquer l'UI.
+#[tauri::command]
+pub async fn analyze_super_agent_personality(
+    state: State<'_, AppState>,
+    history: Vec<SuperAgentTurn>,
+) -> Result<String, String> {
+    let (pi_path, mut model) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.rpc_pi_path.clone(), cfg.super_agent_model.clone())
+    };
+    if model.trim().is_empty() {
+        if let Some((p, id)) = default_model_from_config(&pi_path) {
+            model = format!("{}/{}", p, id);
+        }
+    }
+    let cwd = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_default();
+
+    // Construire le prompt d'analyse à partir de l'historique de la conversation.
+    let mut prompt = String::from(
+        "Analyse la conversation suivante entre un utilisateur et un assistant de suivi de projets. Déduis le style, le ton et la personnalité qui correspondent le mieux à l'UTILISATEUR (sa façon de s'exprimer, son niveau de détail, son humour, sa formalité, ses préférences de communication). Réponds UNIQUEMENT par une description concise (2 à 4 phrases) de la personnalité à adopter pour s'adapter à cet utilisateur, à la première personne du point de vue de l'assistant (ex: « Je m'adresse à toi de façon directe et concise, avec un ton léger… »). Ne répète pas la conversation.",
+    );
+    for turn in &history {
+        let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
+        prompt.push_str(&format!("\n\n{} : {}", role, turn.content));
+    }
+
+    let pi_path_owned = pi_path;
+    let cwd_owned = cwd;
+    let prompt_owned = prompt;
+    let model_owned = model;
+
+    let result: String = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        tokio::task::spawn_blocking(move || {
+            let model_opt = if model_owned.trim().is_empty() {
+                None
+            } else {
+                Some(model_owned.as_str())
+            };
+            crate::help::ask_pi_caged_timed(
+                &cwd_owned,
+                &pi_path_owned,
+                &prompt_owned,
+                model_opt,
+                std::time::Duration::from_secs(110),
+            )
+        }),
+    )
+    .await
+    .map_err(|_| "L'analyse de personnalité a mis trop de temps à répondre (120 s).".to_string())?
+    .map_err(|e| format!("Erreur interne: {}", e))??;
+
+    Ok(result.trim().to_string())
 }
 
 // L'onglet Super-agent est GLOBAL (multi-projets) : son état d'ouverture est

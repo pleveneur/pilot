@@ -158,31 +158,7 @@ impl AgentService {
     /// Insère ou met à jour un agent. Retourne l'agent persisté.
     pub fn upsert_agent(&self, app: &AppHandle, agent: &Agent) -> Result<Agent, String> {
         let conn = db::open_conn(app)?;
-        let capabilities = serde_json::to_string(&agent.capabilities)
-            .map_err(|e| format!("Erreur sérialisation capabilities: {}", e))?;
-        conn.execute(
-            "INSERT INTO agents (
-                id, project_path, name, icon, description, role,
-                models_pi, models_plh, capabilities, readonly, keep_context,
-                max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
-             ON CONFLICT(id, project_path) DO UPDATE SET
-                name=excluded.name, icon=excluded.icon, description=excluded.description,
-                role=excluded.role, models_pi=excluded.models_pi, models_plh=excluded.models_plh,
-                capabilities=excluded.capabilities, readonly=excluded.readonly,
-                keep_context=excluded.keep_context, max_calls_per_run=excluded.max_calls_per_run,
-                call_depth=excluded.call_depth, loaded=excluded.loaded, busy=excluded.busy,
-                proc_state=excluded.proc_state, visible=excluded.visible, last_active_at=excluded.last_active_at",
-            params![
-                agent.id, agent.project_path, agent.name, agent.icon, agent.description, agent.role,
-                agent.models.pi, agent.models.plh, capabilities,
-                agent.readonly as i64, agent.keep_context as i64,
-                agent.max_calls_per_run as i64, agent.call_depth as i64,
-                agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
-                agent.visible as i64, agent.last_active_at
-            ],
-        )
-        .map_err(|e| format!("Erreur upsert_agent: {}", e))?;
+        upsert_agent_conn(&conn, agent)?;
         self.get_agent(app, &agent.id, agent.project_path.as_deref())?
             .ok_or_else(|| "Agent non retrouvé après upsert".to_string())
     }
@@ -604,6 +580,41 @@ impl AgentService {
         *self.active.lock().unwrap() = None;
     }
 
+    /// Vue d'ensemble de TOUTES les sessions d'agents du registre (P2).
+    /// Retourne une liste JSON avec, pour chaque session : projet, agent, mode
+    /// (main/agent_process), état (active/parked), vivacité du processus,
+    /// visibilité (table agents) et pointeur actif (chat principal).
+    /// Consommé par l'assistant (super-agent) via l'outil `list_agent_sessions`
+    /// pour superviser l'état des agents.
+    pub fn list_agent_sessions(&self, app: &AppHandle) -> Result<Value, String> {
+        let active = self.active.lock().unwrap().clone();
+        // Collecte sous le verrou, puis libération avant les accès DB (visible).
+        let raw = {
+            let mut sessions = self.sessions.lock().unwrap();
+            collect_session_states(&mut sessions, &active)
+        };
+        let mut out = Vec::new();
+        for (project, agent_id, state, mode, alive, is_active) in raw {
+            // Visibilité depuis la table agents (projet porté par la session).
+            let visible = self
+                .get_agent(app, &agent_id, Some(&project))
+                .ok()
+                .flatten()
+                .map(|a| a.visible)
+                .unwrap_or(false);
+            out.push(serde_json::json!({
+                "project": project,
+                "agent": agent_id,
+                "mode": mode,
+                "state": state,
+                "alive": alive,
+                "visible": visible,
+                "active": is_active,
+            }));
+        }
+        Ok(serde_json::json!({ "sessions": out }))
+    }
+
     // ── Reviewer d'orchestration (H2 V1) ──
     // Session dédiée `pi --mode rpc --no-session` (contexte vierge, jetable),
     // canal séparé `rpc-event-reviewer`, pas de skill/extension (lecture seule).
@@ -786,7 +797,8 @@ impl AgentService {
     /// Lance un nouveau processus pi --mode rpc pour le super-agent (Assistant
     /// 🧭). Canal dédié `rpc-event-superagent`, `--no-session`, pas de skill,
     /// extensions assistant (pilot-assistant-files lecture seule, pilot-choices,
-    /// pilot-assistant-actions, pilot-assistant-db, pilot-assistant-prompt).
+    /// pilot-assistant-actions, pilot-assistant-db, pilot-assistant-prompt,
+    /// pilot-assistant-sessions).
     /// Reproduit l'ancien `do_start_super_agent_session` (super_agent.rs).
     fn spawn_superagent_session(
         app: &AppHandle,
@@ -818,6 +830,10 @@ impl AgentService {
                     let prompt = dir.join("pilot-assistant-prompt.ts");
                     if std::fs::write(&prompt, include_str!("../extensions/pilot-assistant-prompt.ts")).is_ok() {
                         extensions.push(prompt.to_string_lossy().to_string());
+                    }
+                    let sessions = dir.join("pilot-assistant-sessions.ts");
+                    if std::fs::write(&sessions, include_str!("../extensions/pilot-assistant-sessions.ts")).is_ok() {
+                        extensions.push(sessions.to_string_lossy().to_string());
                     }
                 }
             }
@@ -1001,6 +1017,123 @@ fn default_agent_name(id: &str) -> String {
     }
 }
 
+/// Extrait l'état brut de toutes les sessions du registre (P2) — pur, sans
+/// accès DB (testable). Retourne pour chaque session : (projet, agent, état,
+/// mode, vivacité, actif). La clé composite est "project\u{1f}agent".
+fn collect_session_states(
+    sessions: &mut HashMap<String, SessionEntry>,
+    active: &Option<String>,
+) -> Vec<(String, String, String, String, bool, bool)> {
+    sessions
+        .iter_mut()
+        .map(|(key, entry)| {
+            let mut parts = key.splitn(2, '\u{1f}');
+            let project = parts.next().unwrap_or("").to_string();
+            let agent_id = parts.next().unwrap_or("").to_string();
+            let alive = entry
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false);
+            let state = match entry.state {
+                SessionState::Active => "active",
+                SessionState::Parked => "parked",
+            };
+            let mode = match entry.mode {
+                SpawnMode::MainSession => "main",
+                SpawnMode::AgentProcess => "agent_process",
+            };
+            let is_active = entry.mode == SpawnMode::MainSession
+                && active.as_deref() == Some(agent_id.as_str());
+            (project, agent_id, state.to_string(), mode.to_string(), alive, is_active)
+        })
+        .collect()
+}
+
+/// Insère ou met à jour un agent dans la connexion donnée (P4).
+///
+/// Bug de persistance : `UNIQUE(id, project_path)` traite les NULL comme
+/// distincts en SQLite → pour un agent global (project_path = NULL), le
+/// `ON CONFLICT(id, project_path)` ne se déclenche JAMAIS et on insérerait un
+/// doublon à chaque upsert (écriture en mémoire mais pas de vraie mise à jour
+/// sur disque). On gère donc le cas global explicitement (check-then-update/
+/// insert) pour rendre l'upsert idempotent. Les agents de projet (project_path
+/// non-NULL) gardent le `ON CONFLICT` natif.
+fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), String> {
+    let capabilities = serde_json::to_string(&agent.capabilities)
+        .map_err(|e| format!("Erreur sérialisation capabilities: {}", e))?;
+    if agent.project_path.is_none() {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agents WHERE id = ?1 AND project_path IS NULL)",
+                params![agent.id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Erreur vérification upsert_agent: {}", e))?;
+        if exists {
+            conn.execute(
+                "UPDATE agents SET name=?1, icon=?2, description=?3, role=?4,
+                 models_pi=?5, models_plh=?6, capabilities=?7, readonly=?8,
+                 keep_context=?9, max_calls_per_run=?10, call_depth=?11,
+                 loaded=?12, busy=?13, proc_state=?14, visible=?15, last_active_at=?16
+                 WHERE id=?17 AND project_path IS NULL",
+                params![
+                    agent.name, agent.icon, agent.description, agent.role,
+                    agent.models.pi, agent.models.plh, capabilities,
+                    agent.readonly as i64, agent.keep_context as i64,
+                    agent.max_calls_per_run as i64, agent.call_depth as i64,
+                    agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
+                    agent.visible as i64, agent.last_active_at, agent.id
+                ],
+            )
+            .map_err(|e| format!("Erreur update upsert_agent: {}", e))?;
+        } else {
+            conn.execute(
+                "INSERT INTO agents (
+                    id, project_path, name, icon, description, role,
+                    models_pi, models_plh, capabilities, readonly, keep_context,
+                    max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
+                 ) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    agent.id, agent.name, agent.icon, agent.description, agent.role,
+                    agent.models.pi, agent.models.plh, capabilities,
+                    agent.readonly as i64, agent.keep_context as i64,
+                    agent.max_calls_per_run as i64, agent.call_depth as i64,
+                    agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
+                    agent.visible as i64, agent.last_active_at
+                ],
+            )
+            .map_err(|e| format!("Erreur insert upsert_agent: {}", e))?;
+        }
+    } else {
+        conn.execute(
+            "INSERT INTO agents (
+                id, project_path, name, icon, description, role,
+                models_pi, models_plh, capabilities, readonly, keep_context,
+                max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT(id, project_path) DO UPDATE SET
+                name=excluded.name, icon=excluded.icon, description=excluded.description,
+                role=excluded.role, models_pi=excluded.models_pi, models_plh=excluded.models_plh,
+                capabilities=excluded.capabilities, readonly=excluded.readonly,
+                keep_context=excluded.keep_context, max_calls_per_run=excluded.max_calls_per_run,
+                call_depth=excluded.call_depth, loaded=excluded.loaded, busy=excluded.busy,
+                proc_state=excluded.proc_state, visible=excluded.visible, last_active_at=excluded.last_active_at",
+            params![
+                agent.id, agent.project_path, agent.name, agent.icon, agent.description, agent.role,
+                agent.models.pi, agent.models.plh, capabilities,
+                agent.readonly as i64, agent.keep_context as i64,
+                agent.max_calls_per_run as i64, agent.call_depth as i64,
+                agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
+                agent.visible as i64, agent.last_active_at
+            ],
+        )
+        .map_err(|e| format!("Erreur upsert_agent: {}", e))?;
+    }
+    Ok(())
+}
+
 /// Dossier utilisateur Pilot (`~/.pilot`). Utilisé pour le dossier de session
 /// des agents multi-rôles H2 V2 quand le chemin de config n'est pas résoluble.
 fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
@@ -1098,6 +1231,15 @@ pub fn list_agent_views(state: State<AppState>, app: AppHandle, project_path: St
 #[tauri::command]
 pub fn save_agent_views(state: State<AppState>, app: AppHandle, project_path: String, views: Vec<AgentView>) -> Result<(), String> {
     state.agent_service.save_agent_views(&app, &project_path, &views)
+}
+
+/// Vue d'ensemble de toutes les sessions d'agents (P2). Retourne la liste des
+/// sessions avec projet, agent, mode, état, vivacité, visibilité et pointeur
+/// actif. Exposé comme outil pour l'assistant (super-agent) via l'extension
+/// pilot-assistant-sessions.
+#[tauri::command]
+pub fn list_agent_sessions(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    state.agent_service.list_agent_sessions(&app)
 }
 
 #[cfg(test)]
@@ -1254,5 +1396,124 @@ mod tests {
         assert!(svc.superagent_alive());
         svc.shutdown_all();
         assert!(!svc.superagent_alive(), "arrêt complet → session super-agent purgée");
+    }
+
+    /// P2 : `collect_session_states` extrait l'état de toutes les sessions du
+    /// registre (projet, agent, état, mode, vivacité, actif) sans accès DB.
+    #[test]
+    fn collect_session_states_lists_all_sessions() {
+        let svc = AgentService::new();
+        // Session main active (agent affiché) + session agent_process parkée.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key("/p/A", "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: "/p/A".to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+            sessions.insert(
+                AgentService::session_key("/p/B", "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: "/p/B".to_string(),
+                    state: SessionState::Parked,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        *svc.active.lock().unwrap() = Some("default".to_string());
+
+        let raw = {
+            let mut sessions = svc.sessions.lock().unwrap();
+            collect_session_states(&mut sessions, &svc.active.lock().unwrap().clone())
+        };
+        assert_eq!(raw.len(), 2, "deux sessions listées");
+
+        // Session main active : état active, mode main, actif=true.
+        let main = raw.iter().find(|(_, a, _, _, _, _)| a == "default").expect("session default");
+        assert_eq!(main.0, "/p/A");
+        assert_eq!(main.2, "active");
+        assert_eq!(main.3, "main");
+        assert!(main.4, "processus vivant");
+        assert!(main.5, "agent affiché → actif");
+
+        // Session agent_process parkée : état parked, mode agent_process, actif=false.
+        let proc = raw.iter().find(|(_, a, _, _, _, _)| a == "codeur").expect("session codeur");
+        assert_eq!(proc.0, "/p/B");
+        assert_eq!(proc.2, "parked");
+        assert_eq!(proc.3, "agent_process");
+        assert!(proc.4, "processus vivant");
+        assert!(!proc.5, "agent multi-rôles → jamais actif");
+    }
+
+    /// P4 : `upsert_agent_conn` est idempotent pour un agent GLOBAL
+    /// (project_path = NULL). En SQLite, `UNIQUE(id, project_path)` traite les
+    /// NULL comme distincts → le `ON CONFLICT` ne se déclencherait jamais et on
+    /// insérerait un doublon. Le check-then-update/insert doit garantir qu'un
+    /// second upsert met à jour la ligne existante au lieu d'en créer une autre.
+    #[test]
+    fn upsert_global_agent_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
+        conn.execute_batch(
+            "CREATE TABLE agents (
+                id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
+                icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
+                models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
+                capabilities TEXT DEFAULT '[]', readonly INTEGER DEFAULT 0,
+                keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
+                call_depth INTEGER DEFAULT 1, loaded INTEGER DEFAULT 0, busy INTEGER DEFAULT 0,
+                proc_state TEXT DEFAULT 'Unloaded', visible INTEGER DEFAULT 1, last_active_at TEXT,
+                UNIQUE (id, project_path)
+            );",
+        )
+        .expect("création table");
+
+        let agent = Agent {
+            id: "analyseur".to_string(),
+            name: "Analyseur".to_string(),
+            icon: "🔍".to_string(),
+            description: "Analyse".to_string(),
+            role: "Tu analyses.".to_string(),
+            models: crate::agent::AgentModels { pi: String::new(), plh: String::new() },
+            capabilities: Vec::new(),
+            readonly: true,
+            keep_context: false,
+            max_calls_per_run: 5,
+            call_depth: 1,
+            project_path: None,
+            loaded: false,
+            busy: false,
+            state: AgentProcessState::Unloaded,
+            visible: true,
+            last_active_at: None,
+        };
+
+        // Premier upsert : insertion.
+        upsert_agent_conn(&conn, &agent).expect("premier upsert");
+        // Second upsert (même id global) : mise à jour, pas de doublon.
+        let mut updated = agent.clone();
+        updated.name = "Analyseur v2".to_string();
+        upsert_agent_conn(&conn, &updated).expect("second upsert");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE id = ?1 AND project_path IS NULL",
+                params!["analyseur"],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(count, 1, "un seul agent global, pas de doublon");
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM agents WHERE id = ?1 AND project_path IS NULL",
+                params!["analyseur"],
+                |r| r.get(0),
+            )
+            .expect("name");
+        assert_eq!(name, "Analyseur v2", "le second upsert a bien mis à jour la ligne");
     }
 }

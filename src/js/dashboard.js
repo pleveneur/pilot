@@ -352,6 +352,8 @@ export function createDashboard(container) {
     const trackingProjects = (tracking && tracking.projects) || [];
     if (trackingProjects.length > 0) {
       const tr = card("Suivi multi-projets", "folders");
+      // Sur grand écran, la table de suivi occupe toute la largeur (A12).
+      tr.el.classList.add("dash-card-wide");
       const tbl = document.createElement("div");
       tbl.className = "dash-tracking-table";
       // En-tête.
@@ -374,7 +376,7 @@ export function createDashboard(container) {
         tasksCell.textContent = `${p.open_tasks || 0}/${p.task_count || 0}`;
         const agentCell = document.createElement("span");
         agentCell.className = "dash-tracking-agent" + (p.agent_busy ? " busy" : "");
-        agentCell.innerHTML = p.agent_busy ? '<i data-lucide="loader" class="icon-sm"></i> occupé' : '✓ prêt';
+        agentCell.innerHTML = p.agent_busy ? '<i data-lucide="loader" class="icon-sm"></i> En cours' : '✓ Prêt';
         const lastCell = document.createElement("span");
         lastCell.className = "dash-muted";
         lastCell.textContent = p.last_session ? String(p.last_session).slice(0, 10) : "—";

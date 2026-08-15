@@ -756,10 +756,10 @@ function scrollToBottom() {
 function updateStatusUi() {
   const s = document.getElementById('agent-status');
   if (state.isStreaming) {
-    s.textContent = 'busy';
+    s.textContent = 'En cours';
     s.className = 'status busy';
   } else {
-    s.textContent = 'idle';
+    s.textContent = 'Prêt';
     s.className = 'status idle';
   }
   document.getElementById('btn-abort').disabled = !state.isStreaming;
@@ -1534,7 +1534,7 @@ async function sendPromptToAgent() {
   if (!prompt) prompt = await assemblePrompt();
   if (!prompt) return;
   if (state.isStreaming) {
-    appendSystem('⚠️ L\'agent est occupé. Attendez la fin du streaming.');
+    appendSystem('⚠️ L\'agent est en cours. Attendez la fin du streaming.');
     return;
   }
   // Bascule sur l'onglet Chat pour voir la réponse.

@@ -410,6 +410,12 @@ struct AppConfig {
     // Préfixé à chaque tour de `ask_super_agent` pour cadrer le comportement.
     #[serde(default)]
     super_agent_prompt: String,
+    // Mémoire utilisateur persistée (A17) : profil/notes sur l'utilisateur ou
+    // développeur de Pilot (préférences, contexte, habitudes). Renseignée par
+    // l'assistant via l'outil `update_user_memory` et injectée dans son prompt
+    // système (comme le prompt personnalisé). Persistée dans la config.
+    #[serde(default)]
+    super_agent_user_memory: String,
     // L'onglet Super-agent est GLOBAL (multi-projets) : son état d'ouverture est
     // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
     #[serde(default)]
@@ -443,6 +449,16 @@ struct AppConfig {
     // explicite. Défaut off. Injecté dans le prompt système.
     #[serde(default)]
     super_agent_concise: bool,
+    // A18 : personnalité adaptée à l'utilisateur. Quand activé, l'assistant
+    // analyse en arrière-plan la conversation en cours pour déduire le
+    // style/ton/personnalité qui correspond le mieux à l'utilisateur, puis
+    // injecte cette personnalité dans son prompt système (comme la mémoire
+    // utilisateur A17). `super_agent_personality` est la personnalité déduite,
+    // persistée. Défaut off.
+    #[serde(default)]
+    super_agent_adaptive_personality: bool,
+    #[serde(default)]
+    super_agent_personality: String,
     // Issue #59 : quand l'onglet 🧭 Assistant est ouvert, bloquer/désactiver la
     // saisie de l'agent (éviter de répondre à l'agent au lieu de l'assistant).
     // Défaut off.
@@ -650,6 +666,9 @@ impl Default for AppConfig {
             super_agent_show_tools: false,
             notify_super_agent_done: false,
             super_agent_concise: false,
+            super_agent_adaptive_personality: false,
+            super_agent_personality: String::new(),
+            super_agent_user_memory: String::new(),
             super_agent_block_agent_input: false,
             super_agent_invisible_agent: true,
         }
@@ -1979,6 +1998,7 @@ pub fn run() {
             agent_service::set_agent_state,
             agent_service::list_agent_views,
             agent_service::save_agent_views,
+            agent_service::list_agent_sessions,
             agents::start_agent_process,
             agents::stop_agent_process,
             agents::stop_all_agent_processes,
@@ -2042,6 +2062,9 @@ pub fn run() {
             super_agent::set_super_agent_config,
             super_agent::set_super_agent_prompt,
             super_agent::set_super_agent_open,
+            super_agent::set_super_agent_user_memory,
+            super_agent::set_super_agent_personality,
+            super_agent::analyze_super_agent_personality,
             super_agent::inject_session_summary,
             super_agent::initialize_super_agent,
             super_agent::list_clients,

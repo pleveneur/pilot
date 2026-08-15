@@ -6978,6 +6978,39 @@ body.pilot-loading *::after {
   animation: spin 1.2s linear infinite;
 }
 
+/* ── Grand écran (PC) : redispose le tableau de bord pour occuper tout l'écran ── */
+@media (min-width: 1200px) {
+  .dash-scroll {
+    padding: 20px 28px 48px;
+  }
+  .dash-grid {
+    /* auto-fit : les cartes s'étendent pour remplir la ligne (au lieu de
+       rester à ~340px avec auto-fill). minmax plus large pour de meilleures
+       proportions sur grand écran. */
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 18px;
+  }
+  .dash-card {
+    padding: 16px 20px;
+  }
+  .dash-title {
+    font-size: 24px;
+  }
+  .dash-metric-value {
+    font-size: 18px;
+  }
+  .dash-metric {
+    padding: 10px 12px;
+  }
+  .dash-bar-label {
+    width: 160px;
+  }
+  /* La table de suivi multi-projets occupe toute la largeur sur grand écran. */
+  .dash-card-wide {
+    grid-column: 1 / -1;
+  }
+}
+
 /* ── Coffre fort de mots de passe (issue #52) ── */
 .vault-view {
   display: flex;

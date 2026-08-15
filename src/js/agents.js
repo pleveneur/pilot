@@ -19,6 +19,15 @@ export async function saveAgentRegistry(registry) {
   return await invoke("replace_agents", { agents });
 }
 
+/**
+ * Persiste un agent (insert ou update) dans le registre global (P4).
+ * Écriture atomique d'un seul agent, sans delete-all + re-insert : garantit que
+ * l'agent créé est réellement écrit sur disque sans risque de perte partielle.
+ */
+export async function upsertAgent(agent) {
+  return await invoke("upsert_agent", { agent });
+}
+
 /** Applique les valeurs par défaut manquantes sur un agent. */
 export function normalizeAgent(agent) {
   if (!agent || typeof agent !== "object") return null;

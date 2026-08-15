@@ -203,7 +203,8 @@ pilot/
     │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)
     │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder / purge_agent_conversation (actions Pilot via sentinel)
     │   ├── pilot-assistant-db.ts # 🧭 : db_query / db_execute (accès contrôlé à la base de suivi de l'assistant)
-    │   └── pilot-assistant-prompt.ts # 🧭 : update_my_prompt (auto-adaptation du prompt personnalisé)
+    │   ├── pilot-assistant-prompt.ts # 🧭 : update_my_prompt (auto-adaptation du prompt personnalisé)
+    │   └── pilot-assistant-sessions.ts # 🧭 : list_agent_sessions (vue d'ensemble des sessions d'agents, P2)
     ├── vendor/                # wry 0.55.1 patché (handler micro WebView2) — dictée vocale desktop
     │   └── wry/
     └── src/
