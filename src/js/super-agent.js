@@ -1466,13 +1466,12 @@ async function resolveDelegationAgentId(projectPath) {
     const agent = await invoke("get_agent", { agentId: DEFAULT_AGENT_ID, projectPath: projectPath || null });
     if (agent && agent.id) return agent.id;
   } catch (_) {}
-  // Dernier recours : l'onglet agent actuellement affiché.
-  const tabs = window._pilotTabs;
-  if (tabs && Array.isArray(tabs.tabs)) {
-    const agentTab = tabs.tabs.find((t) => t.mode === "agent");
-    if (agentTab && agentTab.agentId) return agentTab.agentId;
-  }
-  return null;
+  // Dernier recours (Bug principal / Bug 5) : l'agent par défaut. start_agent_session
+  // (AgentService::start) le seed automatiquement en base avec des valeurs par
+  // défaut, donc retourner "default" est sûr même sans objet existant. On ne
+  // désigne plus l'onglet agent affiché (3e repli) : il pouvait viser un agent
+  // différent de celui que l'utilisateur a configuré pour la délégation.
+  return DEFAULT_AGENT_ID;
 }
 
 /**

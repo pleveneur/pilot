@@ -245,12 +245,17 @@ impl AgentService {
     /// Pose la visibilité d'un agent (0 = invisible, 1 = vue ouverte).
     pub fn set_visible(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>, visible: bool) -> Result<(), String> {
         let conn = db::open_conn(app)?;
-        conn.execute(
+        let changed = conn.execute(
             "UPDATE agents SET visible = ?1
              WHERE id = ?2 AND ((?3 IS NULL AND project_path IS NULL) OR (?3 IS NOT NULL AND project_path = ?3))",
             params![visible as i64, agent_id, project_path],
         )
         .map_err(|e| format!("Erreur set_visible: {}", e))?;
+        // Bug 3 : un UPDATE qui ne matche aucune ligne = agent absent → erreur
+        // explicite au lieu d'un échec silencieux.
+        if changed == 0 {
+            return Err(format!("Agent {} introuvable (set_visible)", agent_id));
+        }
         // 4.3 : notifier le frontend (super-agent.js) de la transition d'état.
         self.emit_state_changed(app, agent_id, project_path);
         Ok(())
@@ -267,12 +272,17 @@ impl AgentService {
         state: &AgentProcessState,
     ) -> Result<(), String> {
         let conn = db::open_conn(app)?;
-        conn.execute(
+        let changed = conn.execute(
             "UPDATE agents SET loaded = ?1, busy = ?2, proc_state = ?3
              WHERE id = ?4 AND ((?5 IS NULL AND project_path IS NULL) OR (?5 IS NOT NULL AND project_path = ?5))",
             params![loaded as i64, busy as i64, state.as_str(), agent_id, project_path],
         )
         .map_err(|e| format!("Erreur set_state: {}", e))?;
+        // Bug 3 : un UPDATE qui ne matche aucune ligne = agent absent → erreur
+        // explicite au lieu d'un échec silencieux.
+        if changed == 0 {
+            return Err(format!("Agent {} introuvable (set_state)", agent_id));
+        }
         // 4.3 : notifier le frontend (super-agent.js) de la transition d'état.
         self.emit_state_changed(app, agent_id, project_path);
         Ok(())
@@ -322,6 +332,46 @@ impl AgentService {
         mode: SpawnMode,
     ) -> Result<bool, String> {
         let key = Self::session_key(project, agent_id);
+        // Seed : si l'agent n'existe pas en base (ex: agent `default` du chat
+        // principal jamais créé automatiquement), le créer AVANT de lancer la
+        // session pour que `set_state`/`set_visible` (UPDATE) fonctionnent.
+        // Valeurs par défaut : name dérivé de l'id, modèles depuis la config
+        // (modèle codeur), visible=true. Porté par le projet courant (Some),
+        // aligné sur la scope que ciblent `set_state`/`set_visible`.
+        if self.get_agent(app, agent_id, Some(project))?.is_none() {
+            let state = app.state::<AppState>();
+            let coder_model = {
+                let config = state.config.lock().unwrap();
+                if !config.coder_provider.is_empty() && !config.coder_model_id.is_empty() {
+                    format!("{}/{}", config.coder_provider, config.coder_model_id)
+                } else {
+                    String::new()
+                }
+            };
+            let agent = Agent {
+                id: agent_id.to_string(),
+                name: default_agent_name(agent_id),
+                icon: String::new(),
+                description: String::new(),
+                role: String::new(),
+                models: crate::agent::AgentModels {
+                    pi: coder_model.clone(),
+                    plh: coder_model,
+                },
+                capabilities: Vec::new(),
+                readonly: false,
+                keep_context: false,
+                max_calls_per_run: 0,
+                call_depth: 0,
+                project_path: Some(project.to_string()),
+                loaded: false,
+                busy: false,
+                state: AgentProcessState::Unloaded,
+                visible: true,
+                last_active_at: None,
+            };
+            self.upsert_agent(app, &agent)?;
+        }
         let resumed = {
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(entry) = sessions.get_mut(&key) {
@@ -333,6 +383,10 @@ impl AgentService {
                     .unwrap_or(false);
                 if alive {
                     entry.state = SessionState::Active;
+                    // Bug 6 : à la reprise d'une session vivante, réappliquer le
+                    // mode demandé (une session parkée du chat principal peut
+                    // être reprise comme agent multi-rôles et inversement).
+                    entry.mode = mode;
                     true
                 } else {
                     // Session morte : la retirer et en relancer une.
@@ -932,6 +986,18 @@ impl AgentService {
         let cmd = serde_json::json!({"type": "new_session"});
         rpc_manager::send_command_sync(&mut session, cmd).ok();
         Ok(session)
+    }
+}
+
+/// Dérive un nom d'agent lisible depuis son id (ex: "default" → "Default",
+/// "orch-reviewer" → "Orch reviewer"). Utilisé au seed d'un agent absent en
+/// base (Bug principal).
+fn default_agent_name(id: &str) -> String {
+    let human = id.replace(['-', '_'], " ");
+    let mut chars = human.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::from("Agent"),
     }
 }
 

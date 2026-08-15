@@ -675,6 +675,33 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+/// Charge la config depuis le disque si elle est encore le défaut (chargement
+/// paresseux). À appeler avant de lire des champs de config sensibles (ex:
+/// `rpc_pi_path`) dans les commandes qui ne passent pas par `get_config` —
+/// sinon, au démarrage, ces champs sont vides tant que `get_config` n'a pas été
+/// appelé (bug « Pi indisponible » : health check E4 lu avant le chargement).
+fn ensure_config_loaded(state: &AppState, app: &AppHandle) {
+    let mut config = state.config.lock().unwrap();
+    let default = AppConfig::default();
+    if config.theme == default.theme
+        && config.subtheme == default.subtheme
+        && config.default_command == default.default_command
+        && config.recent_projects.is_empty()
+        && config.last_project == default.last_project
+        && config.auto_load_last_project == default.auto_load_last_project
+        && config.auto_run_command == default.auto_run_command
+        && config.integrated_terminal == default.integrated_terminal
+        && config.rpc_agent_enabled == default.rpc_agent_enabled
+        && config.show_thinking == default.show_thinking
+        && config.show_tools == default.show_tools
+        && config.pdf_md_model == default.pdf_md_model
+    {
+        let mut disk = load_config_disk(app);
+        disk.migrate();
+        *config = disk;
+    }
+}
+
 fn load_config_disk(app: &AppHandle) -> AppConfig {
     let path = match config_path(app) {
         Ok(p) => p,
@@ -1105,7 +1132,8 @@ struct BackendInfo {
 }
 
 #[tauri::command]
-fn get_backend_info(state: State<AppState>) -> Result<BackendInfo, String> {
+fn get_backend_info(state: State<AppState>, app: AppHandle) -> Result<BackendInfo, String> {
+    ensure_config_loaded(&state, &app);
     let config = state.config.lock().unwrap();
     let pi_path = config.rpc_pi_path.clone();
     drop(config);
@@ -1131,7 +1159,8 @@ struct PiHealth {
 }
 
 #[tauri::command]
-fn pi_health_check(state: State<AppState>) -> Result<PiHealth, String> {
+fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, String> {
+    ensure_config_loaded(&state, &app);
     let config = state.config.lock().unwrap();
     let pi_path = config.rpc_pi_path.clone();
     drop(config);
@@ -1166,27 +1195,8 @@ fn pi_health_check(state: State<AppState>) -> Result<PiHealth, String> {
 
 #[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
-    let mut config = state.config.lock().unwrap();
-    // Chargement paresseux : si le config est encore le défaut, tenter de charger du disque
-    let default = AppConfig::default();
-    if config.theme == default.theme
-        && config.subtheme == default.subtheme
-        && config.default_command == default.default_command
-        && config.recent_projects.is_empty()
-        && config.last_project == default.last_project
-        && config.auto_load_last_project == default.auto_load_last_project
-        && config.auto_run_command == default.auto_run_command
-        && config.integrated_terminal == default.integrated_terminal
-        && config.rpc_agent_enabled == default.rpc_agent_enabled
-        && config.show_thinking == default.show_thinking
-        && config.show_tools == default.show_tools
-    && config.pdf_md_model == default.pdf_md_model
-    {
-        let mut disk = load_config_disk(&app);
-        disk.migrate();
-        *config = disk;
-    }
-    Ok(config.clone())
+    ensure_config_loaded(&state, &app);
+    Ok(state.config.lock().unwrap().clone())
 }
 
 #[tauri::command]

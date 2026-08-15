@@ -110,14 +110,14 @@ export function scheduleSave(tabs, projectPath) {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     saveTimeout = null;
-    // Sauvegarder le projet ACTIF au moment du déclenchement, pas le
-    // `projectPath` capturé à la planification. Ce debounce est global (un seul
-    // timeout) : si l'utilisateur a changé de projet entre-temps, l'ancien projet
-    // garde sa session telle qu'elle a été sauvée par `saveTabSession` lors de la
-    // bascule.
-    const active = window._pilotProjectPath;
-    if (!active) return;
-    saveTabSession(tabs, active);
+    // Sauvegarder sur le projet CAPTURÉ à la planification (`projectPath`),
+    // pas le projet actif au moment du déclenchement. Bug 2 : si on ferme un
+    // onglet agent puis change de projet dans la fenêtre du debounce (300ms),
+    // la sauvegarde doit rester sur le projet d'origine — sinon l'agent_view
+    // fermé n'est jamais retiré du projet d'origine (l'ancien projet garderait
+    // un onglet agent fantôme à la restauration).
+    if (!projectPath) return;
+    saveTabSession(tabs, projectPath);
   }, 300);
 }
 

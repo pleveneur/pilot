@@ -369,10 +369,10 @@ pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
     if let Some(project) = project {
         let _ = state.agent_service.stop(&project, &agent_id);
     }
-    // H2 V1 : arrêter aussi le reviewer (cycle de vie lié à la session principale).
-    if let Some(project) = state.project_path.lock().unwrap().clone() {
-        state.agent_service.stop_reviewer(&project);
-    }
+    // Bug 4 : le reviewer (H2 V1) est INDÉPENDANT de la session principale ; il
+    // ne doit PAS être tué à chaque arrêt de celle-ci. Son cycle de vie est lié
+    // au cycle d'orchestration (démarré/arrêté explicitement via
+    // start_reviewer_session / stop_reviewer_session / orchestration).
 }
 
 #[tauri::command]
