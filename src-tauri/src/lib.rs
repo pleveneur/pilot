@@ -66,6 +66,9 @@ mod dashboard;
 mod vault;
 mod pi_update;
 mod project_agents;
+mod db;
+mod agent;
+mod agent_service;
 
 // ── État global de l'application ──
 
@@ -77,11 +80,6 @@ mod project_agents;
 #[allow(dead_code)]
 struct ProjectState {
     path: String,
-    /// Sessions agent de CE projet, indexées par id d'agent (multi-onglets agents,
-    /// spec_multi_agents). L'agent par défaut utilise la clé "default". Les
-    /// sessions non actives sont « parkées » ici (processus pi vivant en
-    /// arrière-plan) ; la session affichée vit dans `AppState.rpc_state`.
-    rpc: HashMap<String, rpc_manager::RpcSession>,
     watcher: Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>,
 }
 
@@ -103,17 +101,9 @@ struct AppState {
     config: Mutex<AppConfig>,
     watch_state: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
     terminals: Mutex<HashMap<String, terminal::TerminalState>>,
-    rpc_state: Mutex<Option<rpc_manager::RpcSession>>,
-    /// Multi-onglets agents (spec_multi_agents) : id de l'agent dont la session
-    /// est actuellement active dans `rpc_state` ("default" pour l'agent par
-    /// défaut, "agent-1", "agent-2", ... pour les onglets supplémentaires).
-    active_agent_id: Mutex<Option<String>>,
-    /// H2 V1 : session reviewer dédiée (pi --no-session, contexte vierge). Lancée
-    /// lazy au 1er besoin de review, recyclée via new_session. Canal séparé.
-    rpc_reviewer: Mutex<Option<rpc_manager::RpcSession>>,
-    /// H2 V2 : sessions des agents spécialisés (id -> RpcSession). Généralisation
-    /// du reviewer ; canal commun rpc-event-agents avec enveloppe agent_id.
-    agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>,
+    /// Refonte (cahier §3.1) : service propriétaire des agents (registre en base
+    /// + sessions en Phase 2). Source de vérité de l'objet Agent.
+    agent_service: Arc<agent_service::AgentService>,
     /// Canal de fan-out des événements RPC vers les WebSockets distants (décision 13.3).
     event_tx: tokio::sync::broadcast::Sender<Value>,
     /// Authentification distante partagée (sessions en mémoire). Permet au desktop
@@ -138,9 +128,6 @@ struct AppState {
     /// Map run_id → processus enfant (permet l'arrêt `command_stop`). Vide si
     /// aucune commande ne tourne.
     web_runs: Mutex<HashMap<String, std::process::Child>>,
-    /// Super-agent (spec_super_agent.md) : session RPC dédiée (canal
-    /// `rpc-event-superagent`), lecture seule. Lancée lazy au 1er besoin.
-    rpc_superagent: Mutex<Option<rpc_manager::RpcSession>>,
     /// Super-agent : projet sur lequel l'assistant travaille (dernier projet
     /// ouvert via l'action `open_project`). Distinct du projet actif : quand
     /// l'utilisateur change de projet, le projet de travail reste celui de la
@@ -427,6 +414,19 @@ struct AppConfig {
     // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
     #[serde(default)]
     super_agent_open: bool,
+    // Évolution « Tableau de bord systématique » : si true, l'onglet 📊 Tableau
+    // de bord s'ouvre automatiquement au démarrage (uniquement si un projet est
+    // chargé) et est verrouillé en position dans la barre d'onglets (juste après
+    // l'onglet 🧭 Assistant, avant le bouton « + »). Défaut off.
+    #[serde(default)]
+    dashboard_auto_open: bool,
+    // Rafraîchissement automatique du Tableau de bord : quand activé (défaut),
+    // l'onglet 📊 recharge ses données toutes les `dashboard_auto_refresh_seconds`
+    // secondes tant qu'il est visible/actif. Défaut : activé, 10 s.
+    #[serde(default = "default_true")]
+    dashboard_auto_refresh: bool,
+    #[serde(default = "default_dashboard_refresh_seconds")]
+    dashboard_auto_refresh_seconds: u32,
     // Issue #43 : options de rendu de la conversation de l'Assistant, harmonisées
     // avec l'agent standard (afficher la réflexion / les outils).
     #[serde(default = "default_true")]
@@ -448,12 +448,6 @@ struct AppConfig {
     // Défaut off.
     #[serde(default)]
     super_agent_block_agent_input: bool,
-    // Évolution 63 : quand l'Assistant (🧭) délègue une demande à l'agent
-    // (delegate_to_coder), purger la conversation de l'agent avant d'appliquer
-    // la nouvelle demande (équivalent au clic sur « + » de l'onglet agent).
-    // Activé par défaut.
-    #[serde(default = "default_true")]
-    super_agent_purge_agent_conversation: bool,
     // Évolution 64 : « agent invisible ». Quand l'Assistant (🧭) délègue une
     // demande à l'agent (delegate_to_coder), l'agent s'exécute en arrière-plan
     // SANS créer d'onglet agent visible (aucun onglet créé du tout). Activé par
@@ -479,6 +473,7 @@ fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
 fn default_web_mode() -> String { "assistant".to_string() }
 fn default_session_retention_days() -> u32 { 15 }
+fn default_dashboard_refresh_seconds() -> u32 { 10 }
 
 /// Port web effectif. En build dev (`debug_assertions`), on décale le port
 /// configuré de +1 pour permettre à la version installée et à la version dev
@@ -648,12 +643,14 @@ impl Default for AppConfig {
             super_agent_model: String::new(),
             super_agent_prompt: String::new(),
             super_agent_open: false,
+            dashboard_auto_open: false,
+            dashboard_auto_refresh: true,
+            dashboard_auto_refresh_seconds: default_dashboard_refresh_seconds(),
             super_agent_show_thinking: true,
             super_agent_show_tools: false,
             notify_super_agent_done: false,
             super_agent_concise: false,
             super_agent_block_agent_input: false,
-            super_agent_purge_agent_conversation: true,
             super_agent_invisible_agent: true,
         }
     }
@@ -951,21 +948,20 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
 
     // Multi-projets (issue #14) : comme `do_set_active_project`, parker la
     // session active du projet précédent avant de rendre ce projet actif —
-    // sinon la session resterait orpheline dans `rpc_state` et ne serait jamais
-    // tuée à la fermeture de son projet (fuite de processus pi/plh).
+    // sinon la session resterait orpheline (hors de l'AgentService) et ne serait
+    // jamais tuée à la fermeture de son projet (fuite de processus pi/plh).
     park_previous_active_if_switching(&state, path);
 
     // Multi-projets (spec_multiprojects.md) : enregistrer le projet dans la
     // collection des projets ouverts (clé = chemin normalisé) s'il n'y est pas,
-    // puis le rendre actif. `project_path`/`watch_state`/`rpc_state` restent
-    // l'état du projet actif (adaptateur progressif).
+    // puis le rendre actif. `project_path`/`watch_state` restent l'état du projet
+    // actif (adaptateur progressif).
     {
         let mut projects = state.projects.lock().unwrap();
         projects
             .entry(path.to_string())
             .or_insert_with(|| ProjectState {
                 path: path.to_string(),
-                rpc: HashMap::new(),
                 watcher: None,
             });
     }
@@ -1417,23 +1413,16 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
 
     if is_active || path.is_none() {
         stop_watcher(&state);
-        // Arrêter la session RPC si active
-        {
-            let mut rpc = state.rpc_state.lock().unwrap();
-            if let Some(mut session) = rpc.take() {
-                rpc_manager::stop_session(&mut session);
-            }
+        // Arrêter la session active via l'AgentService (tue le processus pi et
+        // réinitialise le pointeur actif).
+        if let Some(agent_id) = state.agent_service.active_agent() {
+            let _ = state.agent_service.stop(&target, &agent_id);
         }
         // Arrêter aussi la session reviewer (H2 V1) si elle tourne : c'est un
         // `pi`/`plh.exe` séparé (--no-session) qui ne meurt pas avec la session
         // principale → sans cet arrêt, il resterait en mémoire à la fermeture
         // du projet (fuite de processus issue #14).
-        {
-            let mut rev = state.rpc_reviewer.lock().unwrap();
-            if let Some(mut session) = rev.take() {
-                rpc_manager::stop_session(&mut session);
-            }
-        }
+        state.agent_service.stop_reviewer(&target);
         // H2 V2 : arrêter tous les processus agents au changement/fermeture de projet.
         agents::do_stop_all_agent_processes(&state);
         *state.project_path.lock().unwrap() = None;
@@ -1444,16 +1433,15 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
         }
     }
 
-    // Retirer le projet de la collection multi-projets, en tuant proprement sa
-    // session parkée (multi-projets) si elle existe — sinon fuite de processus pi.
+    // Retirer le projet de la collection multi-projets, en tuant proprement ses
+    // sessions parkées (multi-projets / multi-onglets agents) si elles existent —
+    // sinon fuite de processus pi. Les sessions parkées de CE projet
+    // vivent dans le registre unique de l'AgentService (clé composite
+    // (projet, agent)) et sont arrêtées via `stop_project_sessions`.
+    state.agent_service.stop_project_sessions(&target);
     {
         let mut projects = state.projects.lock().unwrap();
-        if let Some(mut ps) = projects.remove(&target) {
-            // Multi-onglets agents : tuer TOUTES les sessions parkées de ce projet.
-            for (_, mut session) in ps.rpc.drain() {
-                rpc_manager::stop_session(&mut session);
-            }
-        }
+        projects.remove(&target);
     }
 
     // Issue #13 : oublier l'activité de l'agent de CE projet (pas de fuite de map).
@@ -1477,15 +1465,15 @@ fn set_active_project(state: State<AppState>, app: AppHandle, path: String) -> R
     do_set_active_project(&state, &app, &path)
 }
 
-/// Multi-projets (issue #14) : invariant « aucune session orpheline dans
-/// `rpc_state` ». Si une session agent est active ET que le projet actif diffère
+/// Multi-projets (issue #14) : invariant « aucune session orpheline ». Si une
+/// session agent est active ET que le projet actif diffère
 /// de `new_path`, on la parke dans SON projet (processus pi/plh conservé en
 /// arrière-plan, conforme au multi-projets) avant le changement de projet actif.
 /// No-op si aucune session active ou si on reste sur le même projet. Empêche que
 /// la session d'un projet ne reste vivante hors de tout slot traçable par
 /// `close_project` → fuite de processus.
 fn park_previous_active_if_switching(state: &AppState, new_path: &str) {
-    let has_session = state.rpc_state.lock().unwrap().is_some();
+    let has_session = state.agent_service.active_agent().is_some();
     if !has_session {
         return;
     }
@@ -1506,10 +1494,11 @@ pub(crate) fn do_set_active_project(
     path: &str,
 ) -> Result<(), String> {
     // Multi-projets (issue #14) : garantir qu'aucune session active du projet
-    // précédent ne reste orpheline dans `rpc_state`. Si le frontend a déjà parké/
-    // stoppé (flux desktop normal), c'est un no-op ; sinon (parking échoué, chemin
-    // web, appel direct), on parke la session dans SON projet avant de basculer —
-    // sans quoi fermer ce projet ne la tuerait jamais (fuite de processus pi/plh).
+    // précédent ne reste orpheline (hors de l'AgentService). Si le frontend a déjà
+    // parké/stoppé (flux desktop normal), c'est un no-op ; sinon (parking échoué,
+    // chemin web, appel direct), on parke la session dans SON projet avant de
+    // basculer — sans quoi fermer ce projet ne la tuerait jamais (fuite de
+    // processus pi/plh).
     park_previous_active_if_switching(state.inner(), path);
 
     // Le projet doit être dans la collection des projets ouverts.
@@ -1584,7 +1573,6 @@ fn restore_open_projects(state: State<AppState>) -> (Vec<String>, Option<String>
         for p in &open {
             projects.entry(p.clone()).or_insert_with(|| ProjectState {
                 path: p.clone(),
-                rpc: HashMap::new(),
                 watcher: None,
             });
         }
@@ -1781,6 +1769,16 @@ pub fn run() {
             let config = load_config_disk(&handle);
             let state: State<'_, AppState> = app.state();
             *state.config.lock().unwrap() = config;
+            // 5.1 : poser le handle d'application sur l'AgentService pour permettre
+            // l'émission des événements `agent-state-changed` depuis les transitions
+            // de session (start/pause/stop).
+            state.agent_service.set_app_handle(handle.clone());
+            // 5.2 : remettre l'état d'exécution des agents à « non chargé » au
+            // démarrage (les processus pi sont morts après `shutdown_all` ;
+            // `loaded` est un état runtime, pas une vérité persistée). Sans ce
+            // reset, un agent `loaded=true` ne relancerait pas son processus à
+            // l'ouverture de son onglet (lazy start).
+            let _ = state.agent_service.reset_runtime_state(&handle);
             // Audit distant persistant : charger l'historique disque (web_audit.jsonl)
             // dans le ring buffer et activer l'append-only JSONL. À faire avant
             // start_if_enabled pour ne perdre aucune entrée dès la première requête.
@@ -1839,10 +1837,7 @@ pub fn run() {
                 config: Mutex::new(AppConfig::default()),
                 watch_state: Mutex::new(None),
                 terminals: Mutex::new(HashMap::new()),
-                rpc_state: Mutex::new(None),
-                active_agent_id: Mutex::new(None),
-                rpc_reviewer: Mutex::new(None),
-                agent_sessions: Mutex::new(HashMap::new()),
+                agent_service: Arc::new(agent_service::AgentService::new()),
                 event_tx,
                 auth: Arc::new(web_auth::WebAuth::new()),
                 guard: Arc::new(web_rate::WebGuard::new()),
@@ -1851,7 +1846,6 @@ pub fn run() {
                 ext_gate_cache: std::sync::Mutex::new(None),
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
                 web_runs: Mutex::new(HashMap::new()),
-                rpc_superagent: Mutex::new(None),
                 working_project: Mutex::new(None),
                 vault_key: Mutex::new(None),
             }
@@ -1965,9 +1959,16 @@ pub fn run() {
             rpc::abort_reviewer,
             rpc::get_reviewer_state,
             // ── Gestion d'agents multi-rôles (H2 V2) ──
-            agents::load_agent_registry,
-            agents::save_agent_registry,
             agents::reset_agent_registry,
+            // ── Refonte système d'agents (cahier §3.1) : objet Agent en base ──
+            agent_service::list_agents,
+            agent_service::get_agent,
+            agent_service::upsert_agent,
+            agent_service::replace_agents,
+            agent_service::set_agent_visible,
+            agent_service::set_agent_state,
+            agent_service::list_agent_views,
+            agent_service::save_agent_views,
             agents::start_agent_process,
             agents::stop_agent_process,
             agents::stop_all_agent_processes,
@@ -2008,6 +2009,7 @@ pub fn run() {
             code_graph::build_graph_wiki,
             code_graph::graph_export,
             session_history::index_sessions,
+            session_history::get_agent_sessions,
             session_history::search_sessions,
             session_history::get_session_detail,
             session_history::set_session_tags,
@@ -2041,6 +2043,7 @@ pub fn run() {
             super_agent::query_super_agent,
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
+            dashboard::get_project_tracking,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
             vault::vault_unlock,

@@ -2987,13 +2987,14 @@ dependencies = [
 
 [[package]]
 name = "pilot"
-version = "0.2.61"
+version = "0.2.62"
 dependencies = [
  "aes-gcm",
  "argon2",
  "axum",
  "base64 0.22.1",
  "chrono",
+ "embed-resource",
  "include_dir",
  "open",
  "portable-pty",

@@ -8,10 +8,19 @@
 <!-- HELP:dashboard -->
 ## Aide utilisateur — Tableau de bord
 
-L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale, visible
-quand un projet est ouvert) affiche une vue d'ensemble du **projet actif** :
-stockage, Git, langages, activité de l'agent IA, vélocité et documentation.
-Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
+L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale) affiche une
+vue d'ensemble du **projet actif** : stockage, Git, langages, activité de
+l'agent IA, vélocité et documentation. Tout est **en lecture seule** : le
+tableau de bord n'édite jamais vos fichiers.
+
+Le tableau de bord a **deux volets** :
+- **Volet Assistant** (toujours visible) : activité & métriques de l'agent IA.
+- **Volet Projet** (visible seulement quand un projet est ouvert) : stockage,
+  Git, langages, vélocité, contexte, alertes.
+
+Quand **aucun projet n'est ouvert**, seul le volet Assistant est affiché (le
+volet Projet est masqué) et l'onglet **📊** reste ouvert dans la barre
+d'onglets.
 
 ### Ce que vous voyez
 - **En-tête** : nom du projet, chemin local, client associé (si renseigné dans
@@ -21,22 +30,56 @@ Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
   `node_modules`, `target`, `.git`…) et les fichiers les plus lourds.
 - **État Git** : branche active, fichiers modifiés, non suivis (untracked) et
   prêts à être commités (staged).
-- **Analyse du Code & Langages** : répartition des langages en %, métriques
-  globales (lignes, fonctions, classes), marqueurs TODO/FIXME et écosystème de
+- **Analyse du Code & Langages** : répartition des langages en % (camembert + barres),
+  métriques globales (lignes, fonctions, classes), marqueurs TODO/FIXME et écosystème de
   dépendances détecté (Node.js, Rust/Cargo, Python…).
-- **Activité & Métriques de l'Agent IA** : nombre de sessions, tokens
-  consommés sur 7 jours, total de messages échangés, actions exécutées (Bash,
-  éditions, écritures) et date de la dernière session.
-- **Évolution & Vélocité (7 jours)** : commits, fichiers modifiés, lignes et
-  taille modifiées sur la période.
-- **Contexte & Documentation** : extrait du README, fichiers de mémoire /
+- **Activité & Métriques de l'Agent IA** : nombre de sessions, tokens consommés sur 7 jours,
+  total de messages échangés, actions exécutées (Bash, éditions, écritures) et date de la
+  dernière session. Graphiques : **barres** tokens/messages par jour et **camembert** de la
+  répartition des actions.
+- **Évolution & Vélocité (7 jours)** : commits, fichiers modifiés, lignes et taille modifiées
+  sur la période, avec **barres** de l'évolution des commits et des fichiers modifiés par jour.
+- **Contexte & Documentation** : extrait du README **rendu en Markdown**, fichiers de mémoire /
   décisions d'architecture, derniers fichiers modifiés avec horodatage relatif.
-- **Bandeau d'Alertes & Suggestions** : badges des points d'attention (fichiers
-  volumineux, éléments non commités, langage principal).
+- **Bandeau d'Alertes & Suggestions** : badges des points d'attention (fichiers volumineux,
+  éléments non commités, langage principal).
+
+Chaque graphique (camemberts et barres) est dessiné en **SVG inline** (sans bibliothèque
+externe), avec **tooltips** au survol, **légendes**, pourcentages et une **ligne d'insight**
+(« lecture intelligente ») qui résume le point clé (ex : « Le projet est dominé par Rust
+(45%) »).
 
 ### Actualiser
 Le bouton **Actualiser** relance l'analyse du projet. L'analyse peut prendre
 quelques secondes sur les gros projets (parcours du répertoire + Git).
+
+Le tableau de bord se **rafraîchit automatiquement** tant que son onglet est
+actif : par défaut toutes les **10 secondes**. Vous pouvez désactiver ce
+comportement ou modifier l'intervalle dans **Paramètres → Général** (« Activer
+le rafraîchissement automatique du tableau de bord » + durée en secondes).
+
+### Suivi multi-projets
+Quand plusieurs projets sont ouverts, une section **Suivi multi-projets**
+apparaît en tête du tableau de bord : un tableau récapitulatif (projet, client,
+statut, tâches ouvertes/total, agent occupé ou prêt, dernière session). Le
+projet actif est mis en évidence (📍). Cela permet de superviser d'un coup
+ d'œil tous les projets en cours et l'activité de leurs agents respectifs.
+
+### Afficher le Tableau de bord systématiquement
+Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
+systématiquement »** (désactivée par défaut) permet d'ouvrir automatiquement
+l'onglet **📊** au démarrage de Pilot, **uniquement si un projet est ouvert**
+(le tableau de bord est lié au projet actif). Quand elle est activée, l'onglet
+**📊** est **verrouillé en position** dans la barre d'onglets : juste après
+l'onglet **🧭 Assistant** et avant le bouton **＋** d'ajout d'agents, et il n'est
+plus déplaçable au glisser-déposer. Désactivez l'option pour retrouver le
+comportement normal (onglet déplaçable, ouvert via le bouton **📊** de la barre
+latérale).
+
+L'onglet **📊** n'est **pas fermé** quand on ferme le projet actif : il reste
+affiche dans la barre d'onglets (à côté de l'onglet **🧭 Assistant**) et bascule
+automatiquement sur le volet Assistant seul. Il se rafraîchit au changement de
+projet (ouverture, fermeture, bascule).
 <!-- /HELP:dashboard -->
 
 ---
@@ -45,23 +88,109 @@ quelques secondes sur les gros projets (parcours du répertoire + Git).
 
 | Couche | Rôle |
 |---|---|
-| **Backend** `src-tauri/src/dashboard.rs` | Commande `get_project_dashboard` : scan du répertoire (stockage, langages, métriques code), état Git, activité agent, vélocité, contexte, alertes. Réutilise `crate::run_captured` (git), `session_history::read_session_index` / `project_sessions_dir` / `project_to_session_folder` (activité) et la config (client associé). |
-| **Frontend** `src/js/dashboard.js` | `createDashboard(container)` : rend les 8 sections, bouton Actualiser, appel `invoke("get_project_dashboard")`. |
-| **Onglet** `src/js/tabs.js` | Mode `dashboard` (`_openDashboard`), bouton 📊 dans `index.html` + câblage `main.js`. |
+| **Backend** `src-tauri/src/dashboard.rs` | Commande `get_project_dashboard` : scan du répertoire (stockage, langages, métriques code), état Git, activité agent, vélocité, contexte, alertes. Réutilise `crate::run_captured` (git), `session_history::read_session_index` / `project_sessions_dir` / `project_to_session_folder` (activité) et la config (client associé). Retourne `has_project: false` + volet Assistant seul quand aucun projet n'est ouvert (au lieu d'une erreur). Commande `get_project_tracking` : état de suivi de tous les projets ouverts (client, statut, tâches ouvertes/total, agent occupé, dernière session) — croise la base de l'assistant (`super_agent::open_db`), la config (clients) et `agent_activity` (activité agent). |
+| **Frontend** `src/js/dashboard.js` | `createDashboard(container)` : rend les sections, bouton Actualiser, appel `invoke("get_project_dashboard")` + `invoke("get_project_tracking")`. Masque le volet Projet quand `has_project` est faux ; expose `refresh` (rechargement si le projet actif a changé) et `setActive(active)` (activation/désactivation de l'auto-refresh). Auto-refresh configurable (timer `setInterval` piloté par la config, actif seulement quand l'onglet est l'onglet courant). |
+| **Onglet** `src/js/tabs.js` | Mode `dashboard` (`_openDashboard`), bouton 📊 dans `index.html` + câblage `main.js`. Position verrouillée (après 🧭, avant ＋) et non-déplaçable quand `dashboard_auto_open` est activé (`_renderTabButton`, `_repositionDashboardTab`). Rafraîchit l'onglet au changement de projet via `dashboardRefresh` (appelé dans `switchTab`). |
 | **CSS** `src/css/style.css` | Classes `.dash-*` (cartes, métriques, barres de langages, alertes). |
+
+## Ouverture systématique (Évolution)
+
+- **Config** : champ `dashboard_auto_open` (bool, défaut `false`) dans `AppConfig`
+  (`src-tauri/src/lib.rs`), avec `#[serde(default)]`.
+- **Paramètres** : case à cocher « Afficher le Tableau de bord systématiquement »
+  (`#setting-dashboard-auto-open`) dans `index.html`, chargée/sauvegardée dans
+  `src/js/settings.js` (à côté de l'option multi-onglets agents).
+- **Démarrage** : dans `src/js/main.js`, après l'ouverture de l'onglet 🧭
+  Assistant, si `dashboard_auto_open` est vrai **et** qu'un projet est chargé
+  (`window._pilotProjectPath`), ouvrir l'onglet 📊 via `tabs.openFile("Tableau de
+  bord", "dashboard")`.
+- **Persistance** : dans `src/js/sidebar.js` (`_closeAllTabs`), l'onglet 📊 n'est
+  **pas fermé** à la fermeture/bascule de projet (comme l'onglet 🧭 Assistant) :
+  il reste affiché et se rafraîchit au changement de projet.
+- **Rafraîchissement** : dans `src/js/tabs.js` (`switchTab`), quand l'onglet 📊
+  devient actif, `tab.dashboardRefresh()` recharge les données si le projet
+  actif a changé depuis le dernier affichage.
+- **Position & verrouillage** : dans `src/js/tabs.js`, quand l'option est
+  activée, l'onglet 📊 est inséré après l'onglet 🧭 (`.tab-superagent`) et avant
+  le bouton ＋ (`.tab-add-agent`), et exclu du drag & drop. Ordre visé :
+  🧭 → 📊 → ＋ → π. Quand l'option est désactivée, comportement normal.
+
+## Rafraîchissement automatique (Évolution)
+
+- **Config** : champs `dashboard_auto_refresh` (bool, défaut `true`) et
+  `dashboard_auto_refresh_seconds` (u32, défaut `10`) dans `AppConfig`
+  (`src-tauri/src/lib.rs`), avec `#[serde(default = …)]`.
+- **Paramètres** : case « Activer le rafraîchissement automatique du tableau de
+  bord » (`#setting-dashboard-auto-refresh`) + champ durée
+  `#setting-dashboard-auto-refresh-seconds` (min 2, max 3600) dans `index.html`,
+  chargés/sauvegardés dans `src/js/settings.js`.
+- **Frontend** (`src/js/dashboard.js`) : un `setInterval` recharge les données
+  tant que l'onglet 📊 est l'onglet actif. Le timer est (re)planifié par
+  `scheduleAuto()` à partir de la config ; il est arrêté quand l'onglet devient
+  inactif (`setActive(false)` appelé par `tabs.js` dans `switchTab`) et
+  relancé à l'activation (`setActive(true)`). La config est rechargée à chaud
+  sur l'événement `pilot-config-changed` (réagit au changement de paramètres
+  sans redémarrage). Un chargement en cours (bouton Actualiser désactivé) ne
+  lance pas de double requête.
+
+## Suivi multi-projets (Évolution)
+
+- **Commande Rust** `get_project_tracking` (`src-tauri/src/dashboard.rs`) :
+  retourne `{ projects: […], active }` pour tous les projets ouverts (ou le
+  projet actif seul si la liste est vide). Pour chaque projet : chemin, nom,
+  client associé (config `super_agent_project_client`), `active` (projet
+  actif ?), `agent_busy` (activité agent via `agent_activity` + fenêtre de
+  grâce `ACTIVITY_GRACE_SECS`), `task_count` / `open_tasks` (depuis la base de
+  l'assistant `super_agent::open_db`), `status` et `last_session` (dernier
+  horodatage indexé via `session_history::read_session_index`).
+- **Frontend** (`src/js/dashboard.js`) : section « Suivi multi-projets » rendue
+  en tête de grille dès qu'au moins un projet est suivi. Tableau récapitulatif
+  (projet, client, statut, tâches ouvertes/total, agent occupé/prêt, dernière
+  session) + ligne d'insight (nombre de projets, tâches ouvertes, agents
+  actifs). Styles `.dash-tracking-*` dans `src/css/style.css`.
+- **Réutilisabilité** : `super_agent::open_db` est `pub(crate)` ;
+  `rpc::ACTIVITY_GRACE_SECS` est `pub(crate)` (partagé avec le tableau de bord).
 
 ## Sections & sources de données
 
 | Section | Source |
 |---|---|
 | En-tête (nom, chemin, client, rafraîchissement) | `state.project_path` + config `super_agent_project_client` + horodatage local |
-| Stockage & Poids | Scan récursif du répertoire (exclusion des dossiers de dépendances/caches) |
+| Stockage & Poids | Scan récursif du répertoire (exclusion des dossiers de dépendances/caches) + donut code vs non-code |
 | État Git | `git rev-parse` / `git status --porcelain` (via `run_captured`) |
-| Analyse Code & Langages | Scan des fichiers code (extension → langage), comptage lignes/fonctions/classes, TODO/FIXME, détection des manifests de dépendances |
-| Activité Agent | Index `.pilot/sessions.jsonl` (sessions, tokens 7 j, messages) + scan des fichiers de session pi (actions d'outils) |
-| Évolution & Vélocité | `git log --since=7 days ago` (commits) + fichiers modifiés sur 7 j (mtime) |
-| Contexte & Documentation | README (extrait), fichiers mémoire/décisions, derniers fichiers modifiés |
+| Analyse Code & Langages | Scan des fichiers code (extension → langage), comptage lignes/fonctions/classes, TODO/FIXME, détection des manifests de dépendances + donut de répartition |
+| Activité Agent | Index `.pilot/sessions.jsonl` (sessions, tokens 7 j, messages) + scan des fichiers de session pi (actions d'outils) + barres tokens/messages par jour + donut des actions |
+| Évolution & Vélocité | `git log --since=7 days ago` (commits) + fichiers modifiés sur 7 j (mtime) + barres commits/fichiers par jour |
+| Contexte & Documentation | README (extrait, rendu Markdown), fichiers mémoire/décisions, derniers fichiers modifiés |
 | Alertes & Suggestions | Règles : fichiers volumineux, éléments non commités, langage principal, taille globale |
+
+## Graphiques (camemberts & barres)
+
+Les graphiques sont dessinés en **SVG inline** (donut via `stroke-dasharray`, barres via
+`<rect>`), **sans dépendance externe**, pour un contrôle total du style et la cohérence avec
+le CSS existant (classes `.dash-*`). Ils sont générés côté frontend (`src/js/dashboard.js`)
+par les helpers purs `donutChart`, `barChart`, `legend` et `insight`.
+
+| Graphique | Données | Emplacement |
+|---|---|---|
+| Camembert langages | `languages.distribution` (name, percent, files) | Carte Analyse du Code |
+| Camembert stockage | `storage.code_size` vs `storage.total_size - code_size` | Carte Stockage & Poids |
+| Barres commits / fichiers par jour | `evolution.commits_by_day` / `evolution.files_by_day` | Carte Évolution & Vélocité |
+| Barres tokens / messages par jour | `activity.by_day` (date, tokens, messages) | Carte Activité Agent |
+| Camembert actions | `activity.actions` (bash, edit, write, autres = total − bash − edit − write) | Carte Activité Agent |
+
+Chaque graphique affiche un **tooltip** au survol, une **légende**, les **pourcentages** et
+une **ligne d'insight** (« lecture intelligente ») résumant le point clé.
+
+### Séries temporelles par jour (backend `dashboard.rs`)
+
+- `commits_by_day` : `git log --since=7 days ago --format=%ad --date=short`, agrégé par jour.
+- `files_by_day` : mtime des fichiers modifiés sur 7 jours, agrégé par date locale.
+- `activity.by_day` : tokens & messages par jour depuis l'index `.pilot/sessions.jsonl`.
+
+Les trois séries couvrent **toujours 7 jours** (les jours sans donnée valent 0), du plus
+ancien au plus récent. `scan_project` stocke désormais le mtime (epoch secs) dans
+`files_modified_7d` (triplet chemin, taille, mtime).
 
 ## Règles
 

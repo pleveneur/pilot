@@ -7,7 +7,7 @@
 // `pi --mode rpc --no-session`, on lui envoie un prompt fortement cadré
 // (handbook + consigne « pas d'outils, pas de fichiers » + historique d'aide +
 // question), on collecte la réponse, puis on tue le process. La session de
-// coding principale (`rpc_state` dans `lib.rs`) n'est **jamais touchée** →
+// coding principale (AgentService) n'est **jamais touchée** →
 // aucune pollution, aucune modif de `rpc_manager.rs`.
 //
 // IMPORTANT — synchronisation des commandes : pi traite les commandes RPC de

@@ -3,6 +3,8 @@
 > Spécifications fonctionnelles et techniques de l'éditeur Pilot.
 > Pour l'architecture et la stack, voir `AGENTS.md`.
 
+**Pilot** est un **environnement de développement intégré (IDE)** multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) dont le cœur est constitué des agents IA de codage **pi** et **plh**. Les **fournisseurs et modèles LLM sont paramétrables** (d'autres providers et modèles d'API peuvent être configurés ; certains modèles peuvent ne pas être testés — des évolutions peuvent être demandées). Pilot porte la **vision particulière de son développeur (Patrick Leveneur)**, potentiellement différente des autres solutions existantes, avec une **intégration maximale de l'IA**. Le but final : un **assistant de codage** mais aussi un **assistant de suivi de dossiers** — grâce à l'IA et aux agents, suivre une activité de façon très efficace et faire des propositions et ajustements très élaborés.
+
 ---
 
 ## 1. Interface

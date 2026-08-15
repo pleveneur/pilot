@@ -9,10 +9,84 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::time::Duration;
 
 use tauri::State;
 
 use crate::{run_captured, AppState};
+
+// ── Helpers git génériques (GDS, spec_gds.md §4) ──
+// Opérations git serveur/poste réutilisées par `gds.rs` (Phase A3) : init bare,
+// clone, remote add, push, pull. Toutes passent par `run_captured` (helper
+// process partagé) et retournent une erreur lisible en cas d'échec.
+
+/// Initialise un dépôt bare (côté serveur GDS).
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_init_bare(path: &str) -> Result<(), String> {
+    let out = run_captured("git", &["init", "--bare", path], Duration::from_secs(10));
+    if out.trim().is_empty() {
+        return Err("git init --bare a échoué (git absent ?)".to_string());
+    }
+    Ok(())
+}
+
+/// Clone un dépôt distant dans un dossier local.
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
+    let out = run_captured("git", &["clone", url, dest], Duration::from_secs(60));
+    if out.trim().is_empty() {
+        return Err(format!("git clone a échoué: {}", url));
+    }
+    Ok(())
+}
+
+/// Ajoute (ou met à jour) un remote à un dépôt local.
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
+    // Retirer un remote existant du même nom pour être idempotent.
+    run_captured("git", &["-C", cwd, "remote", "remove", name], Duration::from_secs(5));
+    let out = run_captured("git", &["-C", cwd, "remote", "add", name, url], Duration::from_secs(5));
+    if out.trim().is_empty() {
+        return Err(format!("git remote add a échoué: {}", name));
+    }
+    Ok(())
+}
+
+/// Pousse la branche courante (ou HEAD) vers un remote.
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
+    let out = run_captured(
+        "git",
+        &["-C", cwd, "push", "-u", remote, branch],
+        Duration::from_secs(60),
+    );
+    if out.trim().is_empty() {
+        return Err(format!("git push a échoué (remote {}): {}", remote, out.trim()));
+    }
+    Ok(())
+}
+
+/// Tire les changements depuis un remote (branch courante).
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_pull(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
+    let out = run_captured(
+        "git",
+        &["-C", cwd, "pull", remote, branch],
+        Duration::from_secs(60),
+    );
+    if out.trim().is_empty() {
+        return Err(format!("git pull a échoué (remote {}): {}", remote, out.trim()));
+    }
+    Ok(())
+}
+
+/// Nom de la branche courante d'un dépôt local (vide si détaché / pas de HEAD).
+#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
+pub fn git_current_branch(cwd: &str) -> String {
+    run_captured("git", &["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3))
+        .trim()
+        .to_string()
+}
 
 /// Résultat de `git_status` : `is_repo` (faux → pas un work tree Git), et la map
 /// path → code porcelain v1 (`M`, `A`, `D`, `??`, …) pour les badges explorateur.

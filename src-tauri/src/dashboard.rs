@@ -16,7 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::{run_captured, AppState};
 
@@ -163,6 +163,7 @@ fn count_todos(content: &str) -> (u64, u64) {
 /// Retourne (total_size, file_count, dir_count, code_size, code_file_count,
 /// heaviest_files, lang_map, ext_map, total_lines, total_functions,
 /// total_classes, total_todos, total_fixmes, files_modified_7d).
+/// `files_modified_7d` est une liste de (chemin, taille, mtime_epoch_secs).
 #[allow(clippy::too_many_arguments)]
 fn scan_project(
     root: &Path,
@@ -172,7 +173,7 @@ fn scan_project(
     HashMap<String, (u64, u64, u64)>, // lang → (files, lines, funcs)
     HashMap<String, u64>,            // ext → count
     u64, u64, u64, u64, u64,
-    Vec<(String, u64)>,
+    Vec<(String, u64, u64)>,
 ) {
     let mut total_size = 0u64;
     let mut file_count = 0u64;
@@ -187,7 +188,7 @@ fn scan_project(
     let mut total_classes = 0u64;
     let mut total_todos = 0u64;
     let mut total_fixmes = 0u64;
-    let mut files_modified_7d: Vec<(String, u64)> = Vec::new();
+    let mut files_modified_7d: Vec<(String, u64, u64)> = Vec::new();
 
     let cutoff = std::time::SystemTime::now() - Duration::from_secs(7 * 24 * 3600);
 
@@ -218,7 +219,11 @@ fn scan_project(
                 // Fichiers modifiés sur 7 jours (vélocité).
                 if let Ok(modified) = meta.modified() {
                     if modified >= cutoff {
-                        files_modified_7d.push((path.to_string_lossy().to_string(), size));
+                        let mtime = modified
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        files_modified_7d.push((path.to_string_lossy().to_string(), size, mtime));
                     }
                 }
                 // Fichiers les plus lourds (top 10).
@@ -322,9 +327,10 @@ fn git_state(cwd: &str) -> Value {
 
 /// Activité agent : sessions, tokens 7j, messages, actions, dernière session.
 /// S'appuie sur l'index `.pilot/sessions.jsonl` (session_history) + scan des
-/// fichiers de session pi pour les actions d'outils.
-fn activity_metrics(state: &AppState, project_path: &str) -> Value {
-    let entries = crate::session_history::read_session_index(project_path);
+/// fichiers de session pi pour les actions d'outils. Agrège sur UN OU PLUSIEURS
+/// projets (un seul quand un projet est actif ; tous les projets ouverts quand
+/// aucun n'est actif, pour le volet Assistant du tableau de bord).
+fn activity_metrics(state: &AppState, project_paths: &[String]) -> Value {
     let now = chrono::Utc::now();
     let cutoff = now - chrono::Duration::days(7);
 
@@ -333,72 +339,80 @@ fn activity_metrics(state: &AppState, project_path: &str) -> Value {
     let mut total_messages = 0u64;
     let mut last_session: Option<String> = None;
 
-    for e in &entries {
-        session_count += 1;
-        if let Some(t) = e.get("turns").and_then(|x| x.as_u64()) {
-            total_messages += t;
-        }
-        let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-            let dt_utc = dt.with_timezone(&chrono::Utc);
-            if dt_utc >= cutoff {
-                if let Some(t) = e.get("tokens").and_then(|x| x.as_u64()) {
-                    tokens_7d += t;
-                }
+    for project_path in project_paths {
+        let entries = crate::session_history::read_session_index(project_path);
+        for e in &entries {
+            session_count += 1;
+            if let Some(t) = e.get("turns").and_then(|x| x.as_u64()) {
+                total_messages += t;
             }
-            if last_session.is_none() || dt_utc > last_session_parse(last_session.as_deref()) {
+            let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+                let dt_utc = dt.with_timezone(&chrono::Utc);
+                if dt_utc >= cutoff {
+                    if let Some(t) = e.get("tokens").and_then(|x| x.as_u64()) {
+                        tokens_7d += t;
+                    }
+                }
+                if last_session.is_none() || dt_utc > last_session_parse(last_session.as_deref()) {
+                    last_session = Some(ts.to_string());
+                }
+            } else if last_session.is_none() {
                 last_session = Some(ts.to_string());
             }
-        } else if last_session.is_none() {
-            last_session = Some(ts.to_string());
         }
     }
 
-    // Actions d'outils : scanner les fichiers de session pi du projet.
+    // Actions d'outils : scanner les fichiers de session pi des projets.
     let mut actions: HashMap<String, u64> = HashMap::new();
     let config = state.config.lock().unwrap();
     let session_dir = crate::session_history::project_sessions_dir(&config);
-    let folder = crate::session_history::project_to_session_folder(project_path);
-    let project_dir = session_dir.join(&folder);
-    drop(config);
-    if project_dir.exists() {
-        if let Ok(entries_iter) = fs::read_dir(&project_dir) {
-            for entry in entries_iter.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Ok(content) = fs::read_to_string(&path) {
-                    for line in content.lines() {
-                        let line = line.trim();
-                        if line.is_empty() {
-                            continue;
-                        }
-                        let v: Value = match serde_json::from_str(line) {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-                        if t == "tool_execution_start" || t == "toolcall_start" {
-                            let name = v
-                                .get("tool")
-                                .and_then(|x| x.get("name"))
-                                .and_then(|x| x.as_str())
-                                .or_else(|| v.get("toolName").and_then(|x| x.as_str()))
-                                .or_else(|| v.get("name").and_then(|x| x.as_str()))
-                                .unwrap_or("outil")
-                                .to_string();
-                            *actions.entry(name).or_insert(0) += 1;
+    for project_path in project_paths {
+        let folder = crate::session_history::project_to_session_folder(project_path);
+        let project_dir = session_dir.join(&folder);
+        if project_dir.exists() {
+            if let Ok(entries_iter) = fs::read_dir(&project_dir) {
+                for entry in entries_iter.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                        continue;
+                    }
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        for line in content.lines() {
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            let v: Value = match serde_json::from_str(line) {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                            let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                            if t == "tool_execution_start" || t == "toolcall_start" {
+                                let name = v
+                                    .get("tool")
+                                    .and_then(|x| x.get("name"))
+                                    .and_then(|x| x.as_str())
+                                    .or_else(|| v.get("toolName").and_then(|x| x.as_str()))
+                                    .or_else(|| v.get("name").and_then(|x| x.as_str()))
+                                    .unwrap_or("outil")
+                                    .to_string();
+                                *actions.entry(name).or_insert(0) += 1;
+                            }
                         }
                     }
                 }
             }
         }
     }
+    drop(config);
     let total_actions: u64 = actions.values().sum();
     let bash = actions.get("Bash").or_else(|| actions.get("bash")).copied().unwrap_or(0);
     let edit = actions.get("edit").copied().unwrap_or(0);
     let write = actions.get("write").copied().unwrap_or(0);
+
+    // Série temporelle tokens/messages par jour (7 jours).
+    let by_day = activity_by_day(project_paths);
 
     serde_json::json!({
         "session_count": session_count,
@@ -410,6 +424,7 @@ fn activity_metrics(state: &AppState, project_path: &str) -> Value {
             "write": write,
             "total": total_actions,
         },
+        "by_day": by_day,
         "last_session": last_session,
     })
 }
@@ -420,8 +435,84 @@ fn last_session_parse(s: Option<&str>) -> chrono::DateTime<chrono::Utc> {
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
 }
 
+/// Liste des 7 derniers jours (dates locales YYYY-MM-DD, du plus ancien au plus récent).
+fn last_7_days() -> Vec<String> {
+    let now = chrono::Local::now();
+    (0..7)
+        .rev()
+        .map(|i| (now - chrono::Duration::days(i)).format("%Y-%m-%d").to_string())
+        .collect()
+}
+
+/// Remplit les 7 derniers jours depuis une map date → valeur (0 si absent).
+fn fill_days(map: &HashMap<String, u64>) -> Vec<Value> {
+    last_7_days()
+        .into_iter()
+        .map(|d| serde_json::json!({ "date": d, "value": map.get(&d).copied().unwrap_or(0) }))
+        .collect()
+}
+
+/// Commits par jour sur 7 jours (git log --date=short, agrégé par date).
+fn commits_by_day(cwd: &str) -> Vec<Value> {
+    let out = run_captured(
+        "git",
+        &["-C", cwd, "log", "--since=7 days ago", "--format=%ad", "--date=short"],
+        Duration::from_secs(5),
+    );
+    let mut map: HashMap<String, u64> = HashMap::new();
+    for line in out.lines() {
+        let d = line.trim();
+        if d.is_empty() {
+            continue;
+        }
+        *map.entry(d.to_string()).or_insert(0) += 1;
+    }
+    fill_days(&map)
+}
+
+/// Fichiers modifiés par jour sur 7 jours (mtime, agrégé par date locale).
+fn files_by_day(files: &[(String, u64, u64)]) -> Vec<Value> {
+    let mut map: HashMap<String, u64> = HashMap::new();
+    for (_, _, mtime) in files {
+        let day = chrono::DateTime::from_timestamp(*mtime as i64, 0)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string())
+            .unwrap_or_default();
+        if !day.is_empty() {
+            *map.entry(day).or_insert(0) += 1;
+        }
+    }
+    fill_days(&map)
+}
+
+/// Tokens & messages par jour sur 7 jours, depuis l'index de sessions.
+fn activity_by_day(project_paths: &[String]) -> Vec<Value> {
+    let mut map: HashMap<String, (u64, u64)> = HashMap::new();
+    for project_path in project_paths {
+        let entries = crate::session_history::read_session_index(project_path);
+        for e in &entries {
+            let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+            let day = match chrono::DateTime::parse_from_rfc3339(ts) {
+                Ok(dt) => dt.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string(),
+                Err(_) => continue,
+            };
+            let tokens = e.get("tokens").and_then(|x| x.as_u64()).unwrap_or(0);
+            let turns = e.get("turns").and_then(|x| x.as_u64()).unwrap_or(0);
+            let entry = map.entry(day).or_insert((0, 0));
+            entry.0 += tokens;
+            entry.1 += turns;
+        }
+    }
+    last_7_days()
+        .into_iter()
+        .map(|d| {
+            let (tokens, messages) = map.get(&d).copied().unwrap_or((0, 0));
+            serde_json::json!({ "date": d, "tokens": tokens, "messages": messages })
+        })
+        .collect()
+}
+
 /// Contexte & documentation : extrait README, fichiers mémoire, derniers fichiers.
-fn context_docs(root: &Path, files_modified_7d: &[(String, u64)]) -> Value {
+fn context_docs(root: &Path, files_modified_7d: &[(String, u64, u64)]) -> Value {
     // README (extrait).
     let mut readme = String::new();
     for name in ["README.md", "readme.md", "README", "Readme.md"] {
@@ -445,12 +536,12 @@ fn context_docs(root: &Path, files_modified_7d: &[(String, u64)]) -> Value {
         }
     }
     // Derniers fichiers modifiés (tri par mtime décroissant, top 8).
-    let mut recent: Vec<(String, u64)> = files_modified_7d.to_vec();
+    let mut recent: Vec<(String, u64, u64)> = files_modified_7d.to_vec();
     recent.sort_by(|a, b| b.1.cmp(&a.1));
     let recent: Vec<Value> = recent
         .iter()
         .take(8)
-        .map(|(p, _)| {
+        .map(|(p, _, _)| {
             let rel = p
                 .strip_prefix(&root.to_string_lossy().to_string())
                 .unwrap_or(p)
@@ -540,12 +631,26 @@ fn human_size(bytes: u64) -> String {
 /// projet actif. Lecture seule. Retourne un objet JSON structuré par section.
 #[tauri::command]
 pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
-    let project_path = state
-        .project_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Aucun projet ouvert")?;
+    let project_path = state.project_path.lock().unwrap().clone();
+
+    // Aucun projet ouvert : retourner le volet Assistant uniquement (métriques
+    // agent agrégées sur tous les projets ouverts, ou vides si aucun). Le
+    // frontend masque la partie projet via `has_project: false`.
+    let Some(project_path) = project_path else {
+        let projects = state.config.lock().unwrap().open_projects.clone();
+        let activity = activity_metrics(&state, &projects);
+        return Ok(serde_json::json!({
+            "has_project": false,
+            "project": {
+                "name": "",
+                "path": "",
+                "client": "",
+                "refreshed_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            },
+            "activity": activity,
+        }));
+    };
+
     let root = Path::new(&project_path);
     if !root.exists() {
         return Err(format!("Le projet « {} » n'existe pas.", project_path));
@@ -610,7 +715,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
     let dependencies = detect_dependencies(root);
 
     // ── Activité agent ──
-    let activity = activity_metrics(&state, &project_path);
+    let activity = activity_metrics(&state, &[project_path.clone()]);
 
     // ── Évolution & vélocité ──
     let commits_7d = run_captured(
@@ -624,10 +729,14 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
     let files_modified_7d_count = files_modified_7d.len() as u64;
     let lines_modified_7d: u64 = files_modified_7d
         .iter()
-        .filter_map(|(p, _)| fs::read_to_string(p).ok())
+        .filter_map(|(p, _, _)| fs::read_to_string(p).ok())
         .map(|c| c.lines().count() as u64)
         .sum();
-    let size_modified_7d: u64 = files_modified_7d.iter().map(|(_, s)| s).sum();
+    let size_modified_7d: u64 = files_modified_7d.iter().map(|(_, s, _)| s).sum();
+
+    // ── Séries temporelles par jour (7 jours) ──
+    let commits_by_day = commits_by_day(&project_path);
+    let files_by_day = files_by_day(&files_modified_7d);
 
     // ── Contexte & documentation ──
     let context = context_docs(root, &files_modified_7d);
@@ -636,6 +745,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
     let alerts = build_alerts(&heaviest, &git, &lang_map, total_size);
 
     Ok(serde_json::json!({
+        "has_project": true,
         "project": {
             "name": name,
             "path": project_path,
@@ -677,10 +787,113 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
             "lines_modified_7d": lines_modified_7d,
             "size_modified_7d": size_modified_7d,
             "size_modified_7d_h": human_size(size_modified_7d),
+            "commits_by_day": commits_by_day,
+            "files_by_day": files_by_day,
         },
         "context": context,
         "alerts": alerts,
     }))
+}
+
+/// Suivi multi-projets (tableau de bord) : état de suivi de tous les projets
+/// ouverts (ou du projet actif seul si la liste est vide). Pour chaque projet :
+/// chemin, nom, client associé, activité de l'agent (occupé ?), nombre de
+/// tâches (total + ouvertes), statut de suivi et horodatage de la dernière
+/// session indexée. Lecture seule — ne modifie aucun fichier.
+#[tauri::command]
+pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    let config = state.config.lock().unwrap();
+    let mut projects: Vec<String> = if config.open_projects.is_empty() {
+        state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .collect()
+    } else {
+        config.open_projects.clone()
+    };
+    // Dédoublonner + conserver l'ordre.
+    let mut seen = std::collections::HashSet::new();
+    projects.retain(|p| seen.insert(p.clone()));
+    let active = state.active_project.lock().unwrap().clone();
+    let client_map = config.super_agent_project_client.clone();
+    drop(config);
+
+    // Activité de l'agent par projet (issue #13). Calculée sous le verrou puis
+    // libérée avant les I/O disque (lecture des index de sessions).
+    let now = std::time::Instant::now();
+    let grace = std::time::Duration::from_secs(crate::rpc::ACTIVITY_GRACE_SECS);
+    let busy_map: HashMap<String, bool> = {
+        let activity = state.agent_activity.lock().unwrap();
+        projects
+            .iter()
+            .map(|p| {
+                let busy = activity
+                    .get(p)
+                    .map(|a| a.busy || now.duration_since(a.updated) < grace)
+                    .unwrap_or(false);
+                (p.clone(), busy)
+            })
+            .collect()
+    };
+
+    // Tâches + statut depuis la base de l'assistant (super-agent).
+    let mut task_counts: HashMap<String, (u64, u64, String)> = HashMap::new();
+    if let Ok(conn) = crate::super_agent::open_db(&app) {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT p.path, p.status, COUNT(t.id), \
+             SUM(CASE WHEN t.status NOT IN ('done','cancelled','closed') THEN 1 ELSE 0 END) \
+             FROM projects p LEFT JOIN tasks t ON t.project_id = p.id \
+             GROUP BY p.path",
+        ) {
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1).unwrap_or_default(),
+                    r.get::<_, i64>(2).unwrap_or(0) as u64,
+                    r.get::<_, i64>(3).unwrap_or(0) as u64,
+                ))
+            });
+            if let Ok(rows) = rows {
+                for row in rows.flatten() {
+                    task_counts.insert(row.0, (row.2, row.3, row.1));
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<Value> = Vec::new();
+    for path in &projects {
+        let name = Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path)
+            .to_string();
+        let client = client_map.get(path).cloned().unwrap_or_default();
+        let busy = *busy_map.get(path).unwrap_or(&false);
+        let (task_count, open_tasks, status) =
+            task_counts.get(path).cloned().unwrap_or((0, 0, String::new()));
+        // Dernière session indexée pour ce projet.
+        let last_session = crate::session_history::read_session_index(path)
+            .into_iter()
+            .filter_map(|e| e.get("timestamp").and_then(|x| x.as_str()).map(String::from))
+            .max();
+        out.push(serde_json::json!({
+            "path": path,
+            "name": name,
+            "client": client,
+            "active": active.as_deref() == Some(path.as_str()),
+            "agent_busy": busy,
+            "task_count": task_count,
+            "open_tasks": open_tasks,
+            "status": status,
+            "last_session": last_session.unwrap_or_default(),
+        }));
+    }
+
+    Ok(serde_json::json!({ "projects": out, "active": active }))
 }
 
 #[cfg(test)]

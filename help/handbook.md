@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
+<!-- PILOT-HELP generated=2026-08-15 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -391,7 +391,7 @@ via le réseau privé **Tailscale** (WireGuard chiffré).
   seule, **aucun projet à ouvrir**) : il peut déléguer des tâches aux agents des
   projets et répondre sur leur état. **« Agents »** restitue l'interface complète
   (agent du projet, fichiers, projets, commandes, Prompt Builder). Le mode choisi
-  est mémorisé sur l'appareil.
+  est mémorisé côté serveur (cohérent sur tous vos appareils).
 
 ---
 
@@ -820,6 +820,18 @@ apprend et répond.
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
+### Purge de la conversation de l'agent (à la demande)
+- La conversation de l'agent d'un projet est **conservée** entre les demandes
+  déléguées par l'Assistant : chaque délégation s'appuie sur l'historique
+  existant de l'agent.
+- L'Assistant peut **purger à la demande** la conversation de l'agent (outil
+  `purge_agent_conversation`) — équivalent au clic sur « + » de l'onglet agent
+  (départ d'une conversation vierge). Il l'utilise **au début d'une
+  conversation** ou **quand il faut arrêter l'agent**, pas avant chaque
+  demande.
+- Le modèle actif de l'agent est **préservé** lors de la purge (le mécanisme
+  `new_session` réinitialise le modèle par défaut de pi ; Pilot le ré-applique).
+
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
   il enregistre les tâches, leur état, les décisions et l'historique.
@@ -871,6 +883,24 @@ apprend et répond.
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
+
+### L'Assistant, coordinateur de la redistribution des tâches
+L'Assistant est le **coordinateur** de la redistribution des tâches entre les
+agents du registre (`~/.pilot/agents.json`). Il peut :
+
+1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
+   agents disponibles ne conviennent pas à la tâche : il définit lui-même le
+   rôle (system prompt), le nom, l'icône, la description, les modèles (pi/plh),
+   la lecture seule, le budget et la profondeur. L'agent est ajouté au registre
+   global et devient aussitôt sélectionnable.
+2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
+   agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
+   confie une tâche. Pilot les lance (en parallèle si plusieurs) et renvoie le
+   résultat agrégé à l'Assistant, qui continue son raisonnement.
+
+Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
+l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un
+agent qu'il a lui-même créé).
 
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
@@ -954,7 +984,8 @@ apprend et répond.
 
 ### Détection de boucle (issue #55)
 - Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
-  réponse), Pilot **arrête la génération** et affiche un message :
+  réponse) **ou les mêmes appels d'outils** (ex: la même commande bash enchaînée
+  sans avancer), Pilot **arrête la génération** et affiche un message :
   « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
 - Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
   pas un codeur. Reformulez simplement votre question pour relancer.
@@ -963,10 +994,19 @@ apprend et répond.
 
 ## Aide utilisateur — Tableau de bord
 
-L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale, visible
-quand un projet est ouvert) affiche une vue d'ensemble du **projet actif** :
-stockage, Git, langages, activité de l'agent IA, vélocité et documentation.
-Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
+L'onglet **📊 Tableau de bord** (bouton **📊** de la barre latérale) affiche une
+vue d'ensemble du **projet actif** : stockage, Git, langages, activité de
+l'agent IA, vélocité et documentation. Tout est **en lecture seule** : le
+tableau de bord n'édite jamais vos fichiers.
+
+Le tableau de bord a **deux volets** :
+- **Volet Assistant** (toujours visible) : activité & métriques de l'agent IA.
+- **Volet Projet** (visible seulement quand un projet est ouvert) : stockage,
+  Git, langages, vélocité, contexte, alertes.
+
+Quand **aucun projet n'est ouvert**, seul le volet Assistant est affiché (le
+volet Projet est masqué) et l'onglet **📊** reste ouvert dans la barre
+d'onglets.
 
 ### Ce que vous voyez
 - **En-tête** : nom du projet, chemin local, client associé (si renseigné dans
@@ -976,22 +1016,56 @@ Tout est **en lecture seule** : le tableau de bord n'édite jamais vos fichiers.
   `node_modules`, `target`, `.git`…) et les fichiers les plus lourds.
 - **État Git** : branche active, fichiers modifiés, non suivis (untracked) et
   prêts à être commités (staged).
-- **Analyse du Code & Langages** : répartition des langages en %, métriques
-  globales (lignes, fonctions, classes), marqueurs TODO/FIXME et écosystème de
+- **Analyse du Code & Langages** : répartition des langages en % (camembert + barres),
+  métriques globales (lignes, fonctions, classes), marqueurs TODO/FIXME et écosystème de
   dépendances détecté (Node.js, Rust/Cargo, Python…).
-- **Activité & Métriques de l'Agent IA** : nombre de sessions, tokens
-  consommés sur 7 jours, total de messages échangés, actions exécutées (Bash,
-  éditions, écritures) et date de la dernière session.
-- **Évolution & Vélocité (7 jours)** : commits, fichiers modifiés, lignes et
-  taille modifiées sur la période.
-- **Contexte & Documentation** : extrait du README, fichiers de mémoire /
+- **Activité & Métriques de l'Agent IA** : nombre de sessions, tokens consommés sur 7 jours,
+  total de messages échangés, actions exécutées (Bash, éditions, écritures) et date de la
+  dernière session. Graphiques : **barres** tokens/messages par jour et **camembert** de la
+  répartition des actions.
+- **Évolution & Vélocité (7 jours)** : commits, fichiers modifiés, lignes et taille modifiées
+  sur la période, avec **barres** de l'évolution des commits et des fichiers modifiés par jour.
+- **Contexte & Documentation** : extrait du README **rendu en Markdown**, fichiers de mémoire /
   décisions d'architecture, derniers fichiers modifiés avec horodatage relatif.
-- **Bandeau d'Alertes & Suggestions** : badges des points d'attention (fichiers
-  volumineux, éléments non commités, langage principal).
+- **Bandeau d'Alertes & Suggestions** : badges des points d'attention (fichiers volumineux,
+  éléments non commités, langage principal).
+
+Chaque graphique (camemberts et barres) est dessiné en **SVG inline** (sans bibliothèque
+externe), avec **tooltips** au survol, **légendes**, pourcentages et une **ligne d'insight**
+(« lecture intelligente ») qui résume le point clé (ex : « Le projet est dominé par Rust
+(45%) »).
 
 ### Actualiser
 Le bouton **Actualiser** relance l'analyse du projet. L'analyse peut prendre
 quelques secondes sur les gros projets (parcours du répertoire + Git).
+
+Le tableau de bord se **rafraîchit automatiquement** tant que son onglet est
+actif : par défaut toutes les **10 secondes**. Vous pouvez désactiver ce
+comportement ou modifier l'intervalle dans **Paramètres → Général** (« Activer
+le rafraîchissement automatique du tableau de bord » + durée en secondes).
+
+### Suivi multi-projets
+Quand plusieurs projets sont ouverts, une section **Suivi multi-projets**
+apparaît en tête du tableau de bord : un tableau récapitulatif (projet, client,
+statut, tâches ouvertes/total, agent occupé ou prêt, dernière session). Le
+projet actif est mis en évidence (📍). Cela permet de superviser d'un coup
+ d'œil tous les projets en cours et l'activité de leurs agents respectifs.
+
+### Afficher le Tableau de bord systématiquement
+Dans **Paramètres → Général**, l'option **« Afficher le Tableau de bord
+systématiquement »** (désactivée par défaut) permet d'ouvrir automatiquement
+l'onglet **📊** au démarrage de Pilot, **uniquement si un projet est ouvert**
+(le tableau de bord est lié au projet actif). Quand elle est activée, l'onglet
+**📊** est **verrouillé en position** dans la barre d'onglets : juste après
+l'onglet **🧭 Assistant** et avant le bouton **＋** d'ajout d'agents, et il n'est
+plus déplaçable au glisser-déposer. Désactivez l'option pour retrouver le
+comportement normal (onglet déplaçable, ouvert via le bouton **📊** de la barre
+latérale).
+
+L'onglet **📊** n'est **pas fermé** quand on ferme le projet actif : il reste
+affiche dans la barre d'onglets (à côté de l'onglet **🧭 Assistant**) et bascule
+automatiquement sur le volet Assistant seul. Il se rafraîchit au changement de
+projet (ouverture, fermeture, bascule).
 
 ---
 

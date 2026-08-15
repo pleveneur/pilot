@@ -9,7 +9,7 @@ import { exportMarkdownToHtml } from "./html-export.js";
 import { convertPdfToMd } from "./pdf-to-markdown.js";
 import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
 import { openGitDiffModal } from "./diff-view.js";
-import { restoreTabs, saveTabSession, cancelScheduleSave } from "./session-persistence.js";
+import { restoreTabs, saveTabSession } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
@@ -1221,7 +1221,7 @@ class Sidebar {
         // Multi-projets : « parker » la session de l'agent du projet courant
         // (garder le processus pi vivant en arrière-plan) avant de fermer ses
         // onglets. La fermeture de l'onglet agent appelle stop_agent_session,
-        // qui devient un no-op car rpc_state est déjà vide après le parking.
+        // qui devient un no-op car la session est déjà parkée (plus active) après le parking.
         const hasAgent = this.tabs.tabs.some((t) => t.mode === "agent");
         if (hasAgent) {
           await invoke("park_agent_session").catch(() => {});
@@ -1321,16 +1321,7 @@ class Sidebar {
    * Retourne true si un onglet agent était ouvert (pour le rouvrir ensuite).
    */
   async _closeAllTabs(parked = false) {
-    // Suspendre les sauvegardes debounce pendant la fermeture des onglets : le
-    // debounce global (unique) ne doit pas se déclencher dans la fenêtre entre le
-    // changement de projet actif et `restoreTabs`, sinon il réécrirait la session
-    // du projet entrant avec des onglets vides (perte du flag `hadAgent`). Les
-    // sessions sortantes sont déjà sauvées explicitement (`saveTabSession`) avant
-    // `_closeAllTabs` par chaque chemin de bascule/fermeture.
-    window._pilotSuppressSave = true;
-    cancelScheduleSave();
-    try {
-      const hadAgentTab = this.tabs.tabs.some((t) => t.mode === "agent");
+    const hadAgentTab = this.tabs.tabs.some((t) => t.mode === "agent");
       // ATTEND la fin de la fermeture de CHAQUE onglet : `closeTab` est async et
       // retarde le retrait de `this.tabs` (await de confirmation/sauvegarde/stop).
       // Sans `await`, la bascule de projet lançait `restoreTabs` (qui rouvre l'onglet
@@ -1344,17 +1335,18 @@ class Sidebar {
       // l'agent parké ne doit pas être arrêté.
       // L'onglet Super-agent (🧭) est GLOBAL (multi-projets) : il n'est PAS fermé ici,
       // il persiste à travers les bascules et fermetures de projets.
+      // L'onglet Tableau de bord (📊) est aussi conservé : il devient la « page
+      // d'accueil » et reste affiché même quand aucun projet n'est ouvert (volet
+      // Assistant uniquement). Il se rafraîchit au changement de projet via
+      // `dashboardRefresh` (appelé dans switchTab).
       await Promise.all(
         this.tabs.tabs
-          .filter((t) => t.mode !== "superagent")
+          .filter((t) => t.mode !== "superagent" && t.mode !== "dashboard")
           .map((tab) =>
             this.tabs.closeTab(tab.id, { skipConfirm: true, skipAgentStop: !!parked }).catch(() => {})
           )
       );
-      return hadAgentTab;
-    } finally {
-      window._pilotSuppressSave = false;
-    }
+    return hadAgentTab;
   }
 
   /**

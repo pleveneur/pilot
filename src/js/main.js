@@ -806,6 +806,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       // ouvert, basculer dessus (l'assistant est activé).
       switchToSuperAgent();
     }
+    // Évolution « Tableau de bord systématique » : si l'option est activée ET
+    // qu'un projet est chargé (le dashboard est project-only), ouvrir l'onglet
+    // 📊 Tableau de bord au démarrage, après l'onglet 🧭 Assistant.
+    if (cfg.dashboard_auto_open === true && window._pilotProjectPath) {
+      await tabs.openFile("Tableau de bord", "dashboard");
+    }
   } catch (_) {}
 
   // 8. Écouter le drag & drop natif Tauri (images dans l'éditeur + fichiers dans l'arborescence)

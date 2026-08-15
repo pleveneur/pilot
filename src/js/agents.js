@@ -8,14 +8,15 @@ const CALL_RE = /\[\[CALL:([a-z0-9_-]+)\]\]([\s\S]*?)\[\[\/CALL\]\]/i;
 const PARALLEL_RE = /\[\[PARALLEL\]\]([\s\S]*?)\[\[\/PARALLEL\]\]/i;
 const DEFAULT_MAX_RESULT_TOKENS = 4000;
 
-/** Charge le registre d'agents global (~/.pilot/agents.json). */
+/** Charge le registre d'agents global (table `agents`, pilot.db). */
 export async function loadAgentRegistry() {
-  return await invoke("load_agent_registry");
+  return await invoke("list_agents");
 }
 
-/** Sauvegarde le registre d'agents global. */
+/** Sauvegarde le registre d'agents global (remplace les agents globaux en base). */
 export async function saveAgentRegistry(registry) {
-  return await invoke("save_agent_registry", { registry });
+  const agents = Array.isArray(registry.agents) ? registry.agents : [];
+  return await invoke("replace_agents", { agents });
 }
 
 /** Applique les valeurs par défaut manquantes sur un agent. */

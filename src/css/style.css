@@ -40,6 +40,9 @@
 @keyframes boot-spin {
   to { transform: rotate(360deg); }
 }
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 /* --- Reset & Base --- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -3519,6 +3522,38 @@ body.zen-mode #action-panel {
   border-radius: 4px;
 }
 
+/* Bandeau de statut de l'agent invisible (évolution 64) : affiché dans le chat
+   de l'Assistant quand une délégation s'exécute en arrière-plan sans onglet. */
+.agent-invisible-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color, #444);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.agent-invisible-label {
+  flex: 1;
+  color: var(--text-muted);
+}
+.agent-invisible-stop {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--danger, #f87171);
+  color: var(--danger, #f87171);
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.agent-invisible-stop:hover {
+  background: var(--danger, #f87171);
+  color: #fff;
+}
+
 .agent-choice-message {
   font-size: 12px;
   color: var(--text-muted);
@@ -6719,9 +6754,150 @@ body.pilot-loading *::after {
   background: var(--surface-2, #1e2128);
   border-radius: 8px;
   padding: 8px 10px;
-  white-space: pre-wrap;
   max-height: 180px;
   overflow-y: auto;
+  line-height: 1.5;
+}
+.dash-readme h1, .dash-readme h2, .dash-readme h3, .dash-readme h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary, #e6e8ee);
+  margin: 8px 0 4px;
+}
+.dash-readme h1:first-child, .dash-readme h2:first-child, .dash-readme h3:first-child, .dash-readme h4:first-child {
+  margin-top: 0;
+}
+.dash-readme p {
+  margin: 4px 0;
+}
+.dash-readme ul, .dash-readme ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.dash-readme li {
+  margin: 2px 0;
+}
+.dash-readme code {
+  background: var(--surface-3, #262a33);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--accent, #6b8cff);
+}
+.dash-readme pre {
+  background: var(--surface-3, #262a33);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.dash-readme pre code {
+  background: none;
+  padding: 0;
+  color: var(--text-secondary, #a0a6b4);
+}
+.dash-readme a {
+  color: var(--accent, #6b8cff);
+  text-decoration: none;
+}
+.dash-readme a:hover {
+  text-decoration: underline;
+}
+.dash-readme blockquote {
+  border-left: 3px solid var(--border-subtle, rgba(255,255,255,0.12));
+  margin: 6px 0;
+  padding-left: 10px;
+  color: var(--text-muted, #6b7280);
+}
+.dash-readme table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  width: 100%;
+}
+.dash-readme th, .dash-readme td {
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  padding: 3px 6px;
+  text-align: left;
+}
+.dash-readme th {
+  background: var(--surface-3, #262a33);
+  color: var(--text-primary, #e6e8ee);
+}
+.dash-readme hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  margin: 8px 0;
+}
+.dash-donut {
+  flex-shrink: 0;
+}
+.dash-barchart {
+  display: block;
+}
+.dash-chart-label {
+  font-size: 9px;
+  fill: var(--text-muted, #6b7280);
+}
+.dash-chart-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dash-chart-box {
+  flex: 1;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dash-chart-caption {
+  font-size: 10px;
+  text-align: center;
+  color: var(--text-muted, #6b7280);
+}
+.dash-donut-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dash-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 120px;
+}
+.dash-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, #a0a6b4);
+}
+.dash-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.dash-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary, #a0a6b4);
+  background: color-mix(in srgb, var(--accent, #6b8cff) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #6b8cff) 25%, transparent);
+  border-radius: 8px;
+  padding: 6px 8px;
+  line-height: 1.4;
+}
+.dash-insight i {
+  color: var(--accent, #6b8cff);
+  margin-top: 1px;
+  flex-shrink: 0;
 }
 .dash-muted {
   font-size: 12px;
@@ -6740,6 +6916,66 @@ body.pilot-loading *::after {
   color: var(--danger, #f87171);
   padding: 40px;
   font-size: 13px;
+}
+
+/* Suivi multi-projets (get_project_tracking) */
+.dash-tracking-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.dash-tracking-row {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr 0.7fr 0.5fr 0.7fr 0.8fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.dash-tracking-row:nth-child(odd):not(.dash-tracking-head) {
+  background: color-mix(in srgb, var(--surface-2, #1c2029) 60%, transparent);
+}
+.dash-tracking-head {
+  font-weight: 600;
+  color: var(--text-secondary, #a0a6b4);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: 0;
+  padding-bottom: 6px;
+}
+.dash-tracking-active {
+  box-shadow: inset 2px 0 0 var(--accent, #6b8cff);
+}
+.dash-tracking-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-weight: 600;
+  color: var(--text-primary, #e6e8ee);
+}
+.dash-tracking-path {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dash-tracking-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+}
+.dash-tracking-agent.busy {
+  color: var(--accent, #6b8cff);
+}
+.dash-tracking-agent.busy i {
+  animation: spin 1.2s linear infinite;
 }
 
 /* ── Coffre fort de mots de passe (issue #52) ── */

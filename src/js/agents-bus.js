@@ -16,14 +16,22 @@ import {
   aggregateParallelResults,
   buildDefaultCoordinator,
 } from "./agents.js";
-import { detectRepeatedBlock, detectRepeatedWord } from "./loop-detection.js";
+import {
+  detectRepeatedBlock,
+  detectRepeatedWord,
+  detectSemanticLoop,
+  findRepeatedTail,
+  buildLoopCorrectionPrompt,
+  MAX_LOOP_ESCALATION,
+} from "./loop-detection.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
 const DEFAULT_TIMEOUT_MS = 300000; // 5 min d'inactivité (le codeur fait des outils longs)
 
 // Issue #37 : détection de boucle dans la réflexion des sous-agents.
-const MAX_AGENT_LOOP_CORRECTIONS = 2; // max par agent et par run
+// Escalade adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies par agent et par
+// run, puis abandon (voir loop-detection.js).
 const AGENT_LOOP_CHECK_INTERVAL_MS = 500; // throttle du streaming
 const AGENT_LOOP_BUFFER_MIN = 200; // taille min de texte avant test
 
@@ -48,7 +56,8 @@ let busState = {
   isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
   // Issue #37 : état de détection de boucle par agent.
   loopCorrectionPending: {}, // agentId → true (arrêt en cours, correction à l'agent_end)
-  loopCorrectionCount: {}, // agentId → nb de corrections déjà faites
+  loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
+  loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
   loopLastChecked: {}, // agentId → timestamp du dernier test
   config: null,
   callbacks: {},
@@ -69,6 +78,7 @@ function resetBusState() {
   busState.isCompacting = false;
   busState.loopCorrectionPending = {};
   busState.loopCorrectionCount = {};
+  busState.loopAbandoned = {};
   busState.loopLastChecked = {};
 }
 
@@ -179,7 +189,7 @@ const MAX_PI_TURNS_PER_AGENT = 40;
 function maybeDetectAgentLoop(agentId) {
   if (busState.runState !== "running") return;
   if (busState.loopCorrectionPending[agentId]) return; // déjà en cours
-  if ((busState.loopCorrectionCount[agentId] || 0) >= MAX_AGENT_LOOP_CORRECTIONS) return;
+  if (busState.loopAbandoned[agentId]) return; // déjà abandonné
 
   const now = Date.now();
   if (now - (busState.loopLastChecked[agentId] || 0) < AGENT_LOOP_CHECK_INTERVAL_MS) return;
@@ -188,7 +198,11 @@ function maybeDetectAgentLoop(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   if (text.length < AGENT_LOOP_BUFFER_MIN) return;
 
-  if (detectRepeatedBlock(text) || detectRepeatedWord(text)) {
+  if (
+    detectRepeatedBlock(text) ||
+    detectRepeatedWord(text) ||
+    detectSemanticLoop(text)
+  ) {
     busState.loopCorrectionPending[agentId] = true;
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle détectée", agentId);
@@ -269,17 +283,28 @@ function handleAgentEvent(ev) {
     handleExtensionUiRequest(agentId, event);
   } else if (type === "agent_end") {
     // Issue #37 : si cet agent a été arrêté pour boucle, on le relance avec une
-    // demande de correction au lieu de terminer son tour (reste actif).
+    // demande de correction au lieu de terminer son tour (reste actif). Escalade
+    // adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies, puis abandon.
     if (busState.loopCorrectionPending[agentId]) {
       busState.loopCorrectionPending[agentId] = false;
+      const streamed = busState.streamingTextByAgent[agentId] || "";
       busState.streamingTextByAgent[agentId] = "";
       piTurnCount = 0; // c'est une continuation du tour, pas un nouveau tour
       resetTimeout();
-      const correction = "Tu tournes en boucle : tu répètes à l'identique le même bloc de texte. Arrête-toi, corrige-toi, et poursuis ta tâche de façon progressive, sans répéter le même contenu.";
-      sendPromptToAgent(agentId, correction).catch((e) => {
-        console.error("[agents-bus] erreur envoi correction boucle", agentId, e);
-        failAgentTurn(agentId, String(e));
-      });
+      const count = busState.loopCorrectionCount[agentId] || 0;
+      if (count < MAX_LOOP_ESCALATION) {
+        const level = count; // 1..MAX_LOOP_ESCALATION (déjà incrémenté à la détection)
+        const repeatedTail = findRepeatedTail(streamed);
+        const correction = buildLoopCorrectionPrompt(level, { repeatedTail });
+        sendPromptToAgent(agentId, correction).catch((e) => {
+          console.error("[agents-bus] erreur envoi correction boucle", agentId, e);
+          failAgentTurn(agentId, String(e));
+        });
+      } else {
+        busState.loopAbandoned[agentId] = true;
+        emit("notify", { agentId, message: `⚠️ L'agent ${agentId} a tourné en boucle plusieurs fois. Tâche abandonnée.` });
+        failAgentTurn(agentId, "Boucle de réflexion persistante (toutes les stratégies d'escalade épuisées).");
+      }
       return;
     }
     turnCount++;
@@ -523,6 +548,43 @@ export async function startParallelRun(assignments, projectContext = "") {
     const aggregated = aggregateParallelResults(results);
     emit("parallelDone", { results });
     emit("done", { agentId: "parallel", text: aggregated });
+  });
+}
+
+/**
+ * Lance une run sur des agents sélectionnés (coordinateur assistant) et retourne
+ * une Promise résolue avec le résultat agrégé (texte) ou rejetée en cas d'erreur.
+ * Utilisé par l'outil `run_agents` de l'assistant (spec_super_agent.md) :
+ * l'assistant choisit quels agents utiliser et reçoit le résultat pour continuer
+ * son raisonnement. Les agents sélectionnés tournent en parallèle (feuilles).
+ * @param {Array<{agentId:string, brief:string}>} assignments
+ * @returns {Promise<string>}
+ */
+export async function runAgentsForAssistant(assignments) {
+  if (!busState.coordinator) {
+    await initAgentsBus(busState.callbacks);
+  }
+  return new Promise((resolve, reject) => {
+    const prevCallbacks = busState.callbacks;
+    busState.callbacks = {
+      ...prevCallbacks,
+      done: ({ text }) => {
+        busState.callbacks = prevCallbacks;
+        resolve(text || "");
+      },
+      error: ({ message }) => {
+        busState.callbacks = prevCallbacks;
+        reject(new Error(message || "Erreur de la run agents."));
+      },
+      stop: () => {
+        busState.callbacks = prevCallbacks;
+        reject(new Error("Run agents arrêtée."));
+      },
+    };
+    startParallelRun(assignments).catch((e) => {
+      busState.callbacks = prevCallbacks;
+      reject(e);
+    });
   });
 }
 

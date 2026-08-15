@@ -53,6 +53,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Agent Pi / RPC | `spec_rpc.md` |
 | Multi-projets (gestionnaire de projets) | `spec_multiprojects.md` |
 | Discussion inter-projets (liens + dépôt de tâche) | `spec_interproject.md` |
+| Sous-projets liés (ouverture groupée, local-first + GDS) | `spec_subprojects.md` |
 | Conversion PDF → MD | `spec_pdf2md.md` |
 | Mode Orchestration | `spec_orchestration.md` + `spec_orchestration_observability.md` + `spec_orchestration_autotest.md` + `spec_orchestration_snapshots.md` + `spec_orchestration_reviewer.md` |
 | Accès distant web | `spec_web_remote.md` |
@@ -72,6 +73,8 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Assistant (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
 | Tableau de bord projet (métriques, Git, langages) | `spec_dashboard.md` |
 | Coffre fort de mots de passe (chiffré) | `spec_vault.md` |
+| GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) |
+| Composant web de discussion (issue #56) | `spec_web_component.md` (spec détaillée, phase D) |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |
 
@@ -122,6 +125,9 @@ pilot/
 ├── spec_super_agent.md       # Spécifications Assistant (suivi multi-projets, lecture seule)
 ├── spec_dashboard.md         # Spécifications Tableau de bord projet (issue #51)
 ├── spec_vault.md             # Spécifications Coffre fort de mots de passe (issue #52)
+├── plan_gds.md               # ROADMAP GDS (gestionnaire de sources) — plan validé
+├── spec_gds.md               # Spec GDS : sources centralisées + suivi fusionné PostgreSQL (phases A→B→C)
+├── spec_web_component.md     # Spec composant web (issue #56) : widget marque blanche (phase D)
 ├── plan_dev.md                # Plan de développement (résumé, ce qui reste)
 ├── idees_evolutions.md        # Idées d'évolutions futures
 ├── README.md                  # Documentation utilisateur
@@ -195,7 +201,7 @@ pilot/
     │   ├── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
     │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
     │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)
-    │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder (actions Pilot via sentinel)
+    │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder / purge_agent_conversation (actions Pilot via sentinel)
     │   ├── pilot-assistant-db.ts # 🧭 : db_query / db_execute (accès contrôlé à la base de suivi de l'assistant)
     │   └── pilot-assistant-prompt.ts # 🧭 : update_my_prompt (auto-adaptation du prompt personnalisé)
     ├── vendor/                # wry 0.55.1 patché (handler micro WebView2) — dictée vocale desktop
@@ -203,6 +209,8 @@ pilot/
     └── src/
         ├── main.rs            # Point d'entrée Rust
         ├── lib.rs             # Commandes Tauri, watcher, config, PTY, RPC (cœur restant, en cours de découpage)
+        ├── agent_service.rs   # AgentService : propriétaire unique des sessions (clé composite (projet, agent), pointeur actif, parking, reviewer orch-reviewer, superagent ""), registre agents (Phase 1)
+        ├── agent.rs           # Agent/AgentProcessState (registre persistant, agents multi-rôles H2 V2)
         ├── git.rs            # Git intégré (C1) : status, diff visuel, snapshots/annulation (A1)
         ├── terminal.rs       # Terminal intégré (portable-pty)
         ├── files.rs          # Opérations fichiers pures (I/O, encodage, mtime)
@@ -214,7 +222,8 @@ pilot/
         ├── session_history.rs # H9 : historique de sessions searchable
         ├── tabs.rs           # Persistance des onglets d'édition
         ├── web_commands.rs   # Mode remote : commandes desktop de pilotage
-        ├── rpc.rs            # Agent RPC pi : sessions, prompts, reviewer, sonde backend, relais choix → send_agent_command_to (tâche #22)
+        ├── rpc.rs            # Agent RPC pi : prompts, reviewer, sonde backend (sessions dans l'AgentService)
+        ├── agents.rs         # Commandes agents multi-rôles H2 V2 → délèguent à AgentService.start/send/stop
         ├── agents_md.rs      # Génération / mise à jour d'AGENTS.md par l'IA
         ├── help.rs           # Aide intégrée : handbook (include_str) + ask_help (pi temporaire cadré)
         ├── review.rs         # Revue de code (H5) : ask_review (pi temporaire cadré sur diff Git)

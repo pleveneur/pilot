@@ -26,11 +26,17 @@ persistance, contexte jetable), géré indépendamment de la session principale.
 
 | Aspect | Session principale (`main`) | Session reviewer |
 |---|---|---|
-| État backend | `AppState.rpc_state` (inchangé) | `AppState.rpc_reviewer` (nouveau) |
+| État backend | AgentService — clé composite `(project, agent)` | AgentService — id dédié `orch-reviewer` |
 | Persistance | `--session-dir` (si configuré) | `--no-session` (jetable) |
 | Canal événements | `rpc-event` (inchangé) | `rpc-event-reviewer` (nouveau, séparé) |
 | Modèle | orchestrateur / codeur (bascule) | modèle reviewer dédié (fallback orchestrateur) |
 | Cycle de vie | lancée au démarrage agent | **lazy** : lancée au 1er besoin, recyclée (`new_session` avant chaque review) |
+
+Le reviewer vit dans le **registre unique de l'AgentService** (`agent_service.rs`)
+sous l'id dédié `orch-reviewer`, distinct de l'agent multi-rôles `reviewer`
+(H2 V2) pour éviter toute collision de session dans la map (conflit n°2). Il est
+démarré/arrêté via `AgentService.start_reviewer` / `AgentService.stop_reviewer`, et
+le canal dédié `rpc-event-reviewer` préserve son isolation.
 
 Le reviewer n'est pas lancé au démarrage de l'agent (économie de ressources). Il
 est démarré à la 1re tâche nécessitant une review, puis conservé entre les
@@ -141,17 +147,23 @@ démarrage du plan.
 
 ## 8. Commandes Tauri (lib.rs)
 
-Nouvelles commandes dédiées (ne touchent pas à `rpc_state`) :
+Nouvelles commandes dédiées (ne touchent pas à `rpc_state` ; elles délèguent à
+l'AgentService, id dédié `orch-reviewer`) :
 
 | Commande | Rôle |
 |---|---|
-| `start_reviewer_session(app)` | spawn `pi --no-session` dans `rpc_reviewer` si absent (lazy) |
+| `start_reviewer_session(app)` | spawn `pi --no-session` (id `orch-reviewer`) si absent (lazy) |
 | `stop_reviewer_session(state)` | arrête proprement le reviewer |
 | `send_reviewer_prompt(state, message)` | envoie un prompt au reviewer |
 | `new_reviewer_session(state)` | `new_session` (contexte vierge avant chaque review) |
 | `set_reviewer_model(state, provider, modelId)` | bascule le modèle du reviewer |
 | `abort_reviewer(state)` | abort le tour reviewer en cours |
 | `get_reviewer_state(state)` | état streaming reviewer |
+
+Le reviewer est stocké dans le registre unique de l'AgentService sous l'id
+dédié `orch-reviewer` (`AgentService.start_reviewer` / `stop_reviewer` /
+`send_reviewer[_sync][_timeout]`). Le champ `rpc_reviewer` d'`AppState` a été
+retiré en phase 2.
 
 Réutilise `rpc_manager::spawn_and_start` avec `no_session=true`, mais émet sur
 le canal `rpc-event-reviewer`. Pour cela, `spawn_and_start` prend un paramètre
@@ -222,8 +234,10 @@ Nouveau bloc « Reviewer » dans la section Orchestration :
 
 ## 12. Compatibilité / anti-régression
 
-- **Session principale inchangée** : `rpc_state`, `handleRpcEvent`, toutes les
-  commandes existantes — aucune modification. Le reviewer vit à côté.
+- **Session principale inchangée** : la session principale vit dans le registre
+  de l'AgentService (clé composite `(project, agent)`), `handleRpcEvent`, toutes les
+  commandes existantes — aucune modification frontend. Le reviewer vit à côté,
+  sous l'id dédié `orch-reviewer`.
 - **SELF_FIX, E2, A1, linting, batch mode, escalade, subdivision** : intacts. La
   porte review s'insère après E2 et avant validation ; si non activée, zéro effet.
 - **Canal séparé** : aucun risque de pollution croisée codeur/reviewer.
@@ -234,7 +248,8 @@ Nouveau bloc « Reviewer » dans la section Orchestration :
 
 | Fichier | Changement |
 |---|---|
-| `src-tauri/src/lib.rs` | 5 champs `AppConfig` + `rpc_reviewer` state + 7 commandes + enregistrement `generate_handler!` |
+| `src-tauri/src/agent_service.rs` | id dédié `orch-reviewer` + `start_reviewer` / `stop_reviewer` / `send_reviewer*` (session reviewer) |
+| `src-tauri/src/lib.rs` | 5 champs `AppConfig` + 7 commandes + enregistrement `generate_handler!` (le champ `rpc_reviewer` est retiré — remplacé par l'AgentService) |
 | `src-tauri/src/rpc_manager.rs` | `spawn_and_start` prend `event_channel: &str` |
 | `src/js/orchestration.js` | `buildReviewPrompt`, `parseReviewResult`, `buildReviewCorrectionPrompt`, `createAttemptLog.reviewResult`, helper de glob matching |
 | `src/js/agent-pi.js` | `runReviewGate`, `handleReviewerEvent`, listener `rpc-event-reviewer`, state (`isReviewerStreaming`, `reviewAttempts`, config), insertion dans `handleOrchestrationAgentEnd`, badges, resets |

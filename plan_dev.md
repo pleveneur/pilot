@@ -137,7 +137,7 @@ Au-delà de l'éditeur de texte mono-projet actuel, Pilot vise à terme deux pil
 | Mémoire de projet (H3 V1) | [`spec_project_memory.md`](spec_project_memory.md) | ✅ Implémenté — `PROJECT_MEMORY.md` tenu par l'agent (conventions, pièges, décisions), injecté avant chaque tâche (orchestration) et 1er prompt (chat), extraction auto opt-in après tâche d'orchestration, bouton 📝 |
 | Git intégré (C1) | [`spec_review.md`](spec_review.md) | ✅ Implémenté (2026-07-29) — badges de statut Git dans l'explorateur (CLI `git status --porcelain`) + diff visuel read-only (`git_diff_file`, réutilise `diff-view.js`) |
 | Health check pi (E4) | — | ✅ Implémenté (2026-07-29) — sonde `--version` au démarrage + gate gracieuse dans l'onglet agent (écran « π indisponible ») + toast |
-| Historique de sessions (H9) | [`spec_session_history.md`](spec_session_history.md) | ✅ Implémenté (2026-08-01) — onglet 📜 : index local `.pilot/sessions.jsonl` (append) + tags `.pilot/sessions-tags.json`, recherche full-text/regex + filtres tag/file/kind, détail (relecture JSONL pi), tags éditables, rétro-indexation auto à la 1re ouverture (lecture du dossier de sessions pi), capture live à l'agent_end (chat standard). 6 commandes Tauri (`index_sessions`, `search_sessions`, `get_session_detail`, `set_session_tags`, `list_session_tags`, `record_session_entry`). Ne dépend pas de pi (consultable hors-ligne). Complément de H3 (faits) et H1 (contexte) |
+| Historique de sessions (H9) | [`spec_session_history.md`](spec_session_history.md) | ✅ Implémenté (2026-08-01) — onglet 📜 : index local `.pilot/sessions.jsonl` (append) + tags `.pilot/sessions-tags.json`, recherche full-text/regex + filtres tag/file/kind, détail (relecture JSONL pi), tags éditables, rétro-indexation auto à la 1re ouverture (lecture du dossier de sessions pi), capture live à l'agent_end (chat standard). 7 commandes Tauri (`index_sessions`, `search_sessions`, `get_session_detail`, `set_session_tags`, `list_session_tags`, `record_session_entry`, `get_agent_sessions`). Ne dépend pas de pi (consultable hors-ligne). Complément de H3 (faits) et H1 (contexte) |
 | Revue de code assistée (H5) | [`spec_review.md`](spec_review.md) | ✅ Implémenté (2026-07-29) — onglet 🔍 Review : second reviewer sur `git diff` (working tree / dernier commit), pi temporaire cadré lecture seule, revue structurée + questions de suivi |
 
 ## Roadmap retenue (décision 2026-07-30, mise à jour 2026-08)
@@ -184,6 +184,9 @@ Pôle **agent IA** consolidé en priorité. H6 (routing) et H10 (MCP) reportés.
 
 | Domaine | Fichier |
 |---|---|
+| GDS (gestionnaire de sources) | [`spec_gds.md`](spec_gds.md) — plan validé, phases A→B→C (fondations serveur → sync/verrous → suivi fusionné + assistant de groupe). Prérequis au composant web |
+| Sous-projets liés (ouverture groupée) | [`spec_subprojects.md`](spec_subprojects.md) — chantier SÉPARÉ de la refonte agents (R1-R8). Local-first (`.pilot/subprojects.json`), proposition d'ouverture non forcée, pont GDS optionnel (rattaché au volet GDS) |
+| Composant web (issue #56) | [`spec_web_component.md`](spec_web_component.md) — widget marque blanche `<iframe>`, phase D (après GDS stable) |
 | Agent Pi (RPC) | [`spec_rpc.md`](spec_rpc.md) — section « Reste à faire » |
 | Conversion PDF → MD | [`spec_pdf2md.md`](spec_pdf2md.md) |
 | Idées complètes (avec verdicts) | [`idees_evolutions.md`](idees_evolutions.md) |

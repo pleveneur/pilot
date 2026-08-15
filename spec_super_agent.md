@@ -58,14 +58,15 @@ apprend et répond.
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
-### Purge de la conversation de l'agent (Évolution 63)
-- **Paramètres ⚙️ → onglet « Assistant » → « Purger la conversation de l'agent
-  avant chaque demande de l'Assistant »** : quand l'Assistant délègue une demande
-  à l'agent d'un projet (`delegate_to_coder`), la conversation de l'agent est
-  **purgée** avant d'appliquer la nouvelle demande — équivalent au clic sur
-  « + » de l'onglet agent (départ d'une conversation vierge).
-- **Activé par défaut**. Si désactivé, la conversation de l'agent est
-  **conservée** (comportement historique).
+### Purge de la conversation de l'agent (à la demande)
+- La conversation de l'agent d'un projet est **conservée** entre les demandes
+  déléguées par l'Assistant : chaque délégation s'appuie sur l'historique
+  existant de l'agent.
+- L'Assistant peut **purger à la demande** la conversation de l'agent (outil
+  `purge_agent_conversation`) — équivalent au clic sur « + » de l'onglet agent
+  (départ d'une conversation vierge). Il l'utilise **au début d'une
+  conversation** ou **quand il faut arrêter l'agent**, pas avant chaque
+  demande.
 - Le modèle actif de l'agent est **préservé** lors de la purge (le mécanisme
   `new_session` réinitialise le modèle par défaut de pi ; Pilot le ré-applique).
 
@@ -120,6 +121,24 @@ apprend et répond.
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
+
+### L'Assistant, coordinateur de la redistribution des tâches
+L'Assistant est le **coordinateur** de la redistribution des tâches entre les
+agents du registre (`~/.pilot/agents.json`). Il peut :
+
+1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
+   agents disponibles ne conviennent pas à la tâche : il définit lui-même le
+   rôle (system prompt), le nom, l'icône, la description, les modèles (pi/plh),
+   la lecture seule, le budget et la profondeur. L'agent est ajouté au registre
+   global et devient aussitôt sélectionnable.
+2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
+   agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
+   confie une tâche. Pilot les lance (en parallèle si plusieurs) et renvoie le
+   résultat agrégé à l'Assistant, qui continue son raisonnement.
+
+Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
+l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un
+agent qu'il a lui-même créé).
 
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
@@ -203,7 +222,8 @@ apprend et répond.
 
 ### Détection de boucle (issue #55)
 - Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
-  réponse), Pilot **arrête la génération** et affiche un message :
+  réponse) **ou les mêmes appels d'outils** (ex: la même commande bash enchaînée
+  sans avancer), Pilot **arrête la génération** et affiche un message :
   « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
 - Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
   pas un codeur. Reformulez simplement votre question pour relancer.
@@ -263,8 +283,15 @@ Sessions d'agents (chat / orchestration)
   au besoin). L'extension `pilot-choices` fournit les outils de question
   (ask_choice, ask_confirm, ask_input, ask_multi_choice). L'extension
   `pilot-assistant-actions` fournit les outils `open_project` (ouvrir un projet
-  pour le rendre actif) et `delegate_to_coder` (déléguer une demande de code à
-  l'agent standard du projet). La demande déléguée est affichée dans la
+  pour le rendre actif), `delegate_to_coder` (déléguer une demande de code à
+  l'agent standard du projet), `purge_agent_conversation` (purger à la demande
+  la conversation de l'agent, en préservant le modèle actif), `stop_agent`
+  (arrêter immédiatement l'agent du projet actif — coupe la session en cours,
+  visible ou en arrière-plan / « agent invisible »), `create_agent`
+  (créer un agent sur mesure dans le registre global `~/.pilot/agents.json`
+  quand les agents disponibles ne conviennent pas) et `run_agents` (choisir
+  quels agents disponibles utiliser et lancer une tâche sur eux, en parallèle,
+  en renvoyant le résultat agrégé à l'Assistant). La demande déléguée est affichée dans la
   discussion de l'agent du projet (à droite, comme un message utilisateur, mais
   en violet pour montrer qu'elle provient de l'Assistant — issue #45). La
   délégation ne bascule PAS sur l'onglet de l'agent (issue #49) : l'utilisateur
@@ -290,7 +317,10 @@ Sessions d'agents (chat / orchestration)
 - **Détection de boucle (issue #55)** : le flux de l'Assistant (text_delta +
   thinking_delta) est accumulé dans un buffer et analysé par
   `detectRepeatedBlock` (loop-detection.js, issue #37), comme pour l'agent
-  standard. Contrairement à l'agent (qui se relance avec une correction),
+  standard. Les **appels d'outils** (ex: commandes bash) sont aussi accumulés
+  (empreinte `tool::nom::args`) et détectés par `detectRepeatedToolCalls` : un
+  agent qui enchaîne le même outil en boucle sans streamer de texte est donc
+  arrêté. Contrairement à l'agent (qui se relance avec une correction),
   l'Assistant **s'arrête** sur boucle : `abort_super_agent` est appelé et un
   message clair est affiché (« ⚠️ L'assistant a tourné en boucle… Veuillez
   reformuler votre demande. »). Pas de reprise automatique : l'Assistant est un
@@ -307,13 +337,16 @@ Sessions d'agents (chat / orchestration)
   L'utilisateur peut **annoter / modifier / valider** sa réponse (champ de
   précision + bouton de validation, validation utilisateur avant transmission).
   La réponse est routée vers **LA bonne session agent** via la commande Rust
-  `send_agent_command_to(project_path, agent_id, command)` (priorité à la
-  session active, sinon session parkée `projects[path].rpc[agent_id]`, sinon
-  `agent_sessions`) → chaque agent est identifié, les réponses ne sont jamais
-  mélangées (multi-agents).
+  `send_agent_command_to(project_path, agent_id, command)`, effondrée en une
+  **consultation unique** du registre de l'AgentService (`AgentService.send`,
+  clé composite `(projet, agent)`) → chaque agent est identifié, les réponses ne
+  sont jamais mélangées (multi-agents).
 - **Chat sur session persistante** : le chat de l'onglet 🧭 utilise la session
-  persistante `rpc_superagent` (streaming + mémoire de conversation), ce qui
-  permet de charger les extensions et de poser des questions.
+  du super-agent, stockée dans le **registre unique de l'AgentService** sous
+  l'id dédié `superagent` avec un **projet pseudo-global `""`** (globale
+  multi-projets, insensible à la fermeture de projet). Streaming + mémoire de
+  conversation, canal isolé `rpc-event-superagent`, ce qui permet de charger les
+  extensions et de poser des questions.
 
 ## 4. Données
 
@@ -417,9 +450,13 @@ Tables (V1) :
   saisie) via `pilot-choices`, rendues en boutons inline dans le chat.
 - **Actions sur les projets (TÂCHE 2)** : l'extension `pilot-assistant-actions`
   fournit `open_project` (ouvrir un projet → le rendre actif via
-  `openProjectByPath`) et `delegate_to_coder` (déléguer une demande de code à
+  `openProjectByPath`), `delegate_to_coder` (déléguer une demande de code à
   l'agent standard du projet → ouvrir son onglet via `tabs.openFile("", "agent")`
-  puis envoyer la demande via `send_agent_prompt`). Ces actions sont exécutées
+  puis envoyer la demande via `send_agent_prompt`), `purge_agent_conversation`
+  (purger à la demande la conversation de l'agent via la commande Rust
+  `purge_agent_conversation`, en préservant le modèle actif) et `stop_agent`
+  (arrêter l'agent du projet actif via `stop_agent_session` + nettoyage du
+  suivi de l'agent invisible). Ces actions sont exécutées
   par Pilot (pas par l'agent), donc compatibles avec la lecture seule stricte.
 - **Accès à la base de suivi (responsabilité de l'assistant)** : l'extension
   `pilot-assistant-db` fournit `db_query` (SELECT) et `db_execute` (CREATE/INSERT/
@@ -435,11 +472,13 @@ Tables (V1) :
 - **Installation d'outils (validation utilisateur)** : si l'assistant a besoin
   d'installer des outils pour gérer certaines tâches, il **demande d'abord** à
   l'utilisateur, qui doit valider (via `ask_confirm` / `ask_choice`).
-- **Isolation** : canal d'événements séparé, session dédiée, arrêt propre à la
-  fermeture de l'onglet / du projet / de l'application.
-- **Anti-régression** : ne pas toucher à `rpc_state`, `rpc_reviewer`,
-  `agent-pi.js`, `orchestration.js`, `agents.js`. `ask_pi_caged_timed`
-  (partagé par help/review/agents_md) n'est pas modifié.
+- **Isolation** : canal d'événements séparé (`rpc-event-superagent`), session
+  dédiée `superagent` dans le registre de l'AgentService (projet pseudo-global
+  `""`), arrêt propre à la fermeture de l'onglet / du projet / de l'application.
+- **Anti-régression** : ne pas toucher à `agent-pi.js`, `orchestration.js`,
+  `agents.js`. `ask_pi_caged_timed` (partagé par help/review/agents_md) n'est
+  pas modifié. Toutes les sessions passent par l'AgentService (le champ
+  `rpc_superagent` d'`AppState` a été retiré en phase 2).
 
 ## 9. Perspective — lien futur avec un serveur de sources
 
@@ -456,7 +495,8 @@ Tables (V1) :
 - `super_agent.rs` : session dédiée, injection de résumés, commandes de base.
 - Extensions pi : `pilot-assistant-files.ts` (espace d'écriture restreint
   `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
-  `pilot-assistant-actions.ts` (open_project / delegate_to_coder),
+  `pilot-assistant-actions.ts` (open_project / delegate_to_coder /
+  purge_agent_conversation / create_agent / run_agents),
   `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi) et
   `pilot-assistant-prompt.ts` (update_my_prompt), chargées dans la session
   super-agent dès que le backend supporte `--extension`.

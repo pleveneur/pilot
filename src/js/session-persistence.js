@@ -3,6 +3,12 @@
 // Sauvegarde l'état des onglets (chemin, mode, curseur, scroll) dans
 // app_data_dir/sessions/<hash>.json à chaque changement.
 // Restaure les onglets au chargement d'un projet.
+//
+// 5.2 (cahier) : la survie de l'agent n'est PLUS portée par la session JSON
+// (`hadAgent`/`agentIndex`/`agents`). Elle est garantie par la table `agents` ;
+// la barre d'onglets agents est reconstruite à l'identique depuis la table
+// `agent_views` (vue dissociée de l'objet). Les gardes anti-course
+// (`_pilotSuppressSave`, `_restoring`, `cancelScheduleSave`) sont supprimées.
 
 import { invoke } from "@tauri-apps/api/core";
 import { agentDisplayLabel } from "./backend-info.js";
@@ -65,34 +71,30 @@ export async function saveTabSession(tabs, projectPath) {
   const activeTab = tabs.getActiveTab();
   const activePath = activeTab?.path || null;
 
-  // Multi-projets : l'onglet agent n'a pas de path et est ignoré du tableau
-  // `serializable` ; on suit son état (ouvert/fermé) via un flag dédié pour le
-  // restaurer au retour sur ce projet (et au démarrage).
-  // `agentIndex` : position de l'onglet agent dans `tabs.tabs` (-1 si absent),
-  // pour restaurer l'ordre original des onglets (ex: agent en premier) — sinon
-  // l'agent était toujours rouvert en dernier.
-  // `agents` (multi-onglets, issue #35) : liste complète des onglets agents
-  // ouverts (id + nom, y compris renommés) avec leur position, pour restaurer
-  // TOUS les agents d'un projet (config `.pilot/agents.json` + renommages
-  // manuels qui priment) au démarrage.
-  const agents = [];
-  tabs.tabs.forEach((t, idx) => {
-    if (t.mode === "agent") {
-      agents.push({ id: t.agentId || "default", name: t.name, index: idx });
-    }
-  });
-  const hadAgent = agents.length > 0;
-  const agentIndex = agents.length ? agents[0].index : -1;
-
   const data = JSON.stringify({
     activePath,
     tabs: serializable,
-    hadAgent,
-    agentIndex,
-    agents,
   });
 
   await invoke("save_tab_session", { projectPath, data }).catch(() => {});
+
+  // 5.2 : persister les vues d'onglets agents (table `agent_views`) pour
+  // reconstruire la barre d'onglets à l'identique. La survie de l'agent est
+  // garantie par la table `agents` ; `agent_views` ne stocke que la vue
+  // (position, nom renommé, onglet actif).
+  const views = [];
+  tabs.tabs.forEach((t, idx) => {
+    if (t.mode === "agent") {
+      views.push({
+        agent_id: t.agentId || "default",
+        project_path: projectPath,
+        order_index: idx,
+        name_override: t.name || null,
+        active: t.id === activeTab?.id,
+      });
+    }
+  });
+  await invoke("save_agent_views", { projectPath, views }).catch(() => {});
 }
 
 /**
@@ -103,44 +105,16 @@ export async function saveTabSession(tabs, projectPath) {
  */
 let saveTimeout = null;
 
-/**
- * Annule une sauvegarde debounce en attente (utilisé au début d'une bascule
- * de projet : le debounce global ne doit pas se déclencher pendant qu'on
- * change de projet, sinon il réécrit la session du projet entrant avec les
- * onglets vides de la bascule).
- */
-export function cancelScheduleSave() {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout);
-    saveTimeout = null;
-  }
-}
-
 export function scheduleSave(tabs, projectPath) {
   if (!projectPath) return;
-  // Pendant une bascule de projet (`_closeAllTabs`), on annule tout debounce
-  // en attente et on n'en programme pas de nouveau : les sessions sortantes
-  // sont déjà sauvées explicitement (`saveTabSession`) avant la bascule, et le
-  // projet entrant sera sauvé par les actions suivantes de l'utilisateur. Sans
-  // ce garde-fou, le debounce unique se déclenchait dans la fenêtre entre le
-  // changement de `window._pilotProjectPath` et `restoreTabs` (qui pose
-  // `_restoring`), écrivant la session du projet entrant avec `hadAgent:false`.
-  if (window._pilotSuppressSave) {
-    cancelScheduleSave();
-    return;
-  }
-  if (tabs._restoring) return; // Ne pas sauvegarder pendant une restauration
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     saveTimeout = null;
-    if (tabs._restoring) return; // restauration toujours en cours → on attend le prochain
-    // Multi-projets : sauvegarder le projet ACTIF au moment du déclenchement, pas
-    // le `projectPath` capturé à la planification. Ce debounce est global (un seul
-    // timeout) : si l'utilisateur a changé de projet entre-temps (ex. il ouvre
-    // l'onglet agent de A puis bascule sur B rapidement), l'ancien projet doit
-    // garder sa session telle qu'elle a été sauvée par `saveTabSession` lors de la
-    // bascule. Sans cela, on réécrivait la session de A avec les onglets de B — et
-    // on écrasait son flag `hadAgent` → l'onglet agent de A disparaissait au retour.
+    // Sauvegarder le projet ACTIF au moment du déclenchement, pas le
+    // `projectPath` capturé à la planification. Ce debounce est global (un seul
+    // timeout) : si l'utilisateur a changé de projet entre-temps, l'ancien projet
+    // garde sa session telle qu'elle a été sauvée par `saveTabSession` lors de la
+    // bascule.
     const active = window._pilotProjectPath;
     if (!active) return;
     saveTabSession(tabs, active);
@@ -171,31 +145,17 @@ export async function loadTabSession(projectPath) {
  */
 export async function restoreTabs(tabs, projectPath, onProgress) {
   const session = await loadTabSession(projectPath);
-  if (!session) return;
+  const hasTabs = session && Array.isArray(session.tabs) && session.tabs.length > 0;
 
-  const hasTabs = Array.isArray(session.tabs) && session.tabs.length > 0;
-  const hasAgent = session.hadAgent === true;
-  // Multi-onglets agents (issue #35) : détecter le multi-onglets et lire la
-  // config `.pilot/agents.json` AVANT le early return, pour restaurer les agents
-  // paramétrés même si la session ne contient ni onglet d'édition ni onglet
-  // agent (ex: l'agent standard n'a jamais été ouvert, seule la config existe).
-  let multiAgentEnabled = tabs._multiAgentEnabled;
-  try {
-    const cfg = await invoke("get_config");
-    multiAgentEnabled = cfg.multi_agent_tabs === true;
-  } catch (_) {}
-  const cfgAgents = multiAgentEnabled
-    ? await invoke("read_project_agents", { projectPath }).catch(() => [])
-    : [];
-  const hasConfigAgents = cfgAgents.length > 0;
-  // Rien à restaurer : ni onglets d'édition, ni onglet agent, ni agent configuré.
-  // Il ne faut PAS retourner quand `hasAgent` est vrai même si `tabs` est vide
-  // (projet qui n'a QUE son onglet agent ouvert) — sinon l'onglet agent ne serait
-  // jamais rouvert au retour sur ce projet. De même, ne pas retourner quand une
-  // config d'agents existe (issue #35).
-  if (!hasTabs && !hasAgent && !hasConfigAgents) return;
+  // 5.2 : reconstruire la barre d'onglets agents depuis la table `agent_views`
+  // (la survie de l'agent est garantie par la table `agents`). Lue AVANT le
+  // early return pour couvrir le cas où la session ne contient aucun onglet
+  // d'édition mais des vues agents existent.
+  const views = await invoke("list_agent_views", { projectPath }).catch(() => []);
+  const hasViews = views.length > 0;
 
-  tabs._restoring = true;
+  // Rien à restaurer : ni onglets d'édition, ni vue agent.
+  if (!hasTabs && !hasViews) return;
 
   const restoredTabs = [];
   if (hasTabs) {
@@ -258,87 +218,21 @@ export async function restoreTabs(tabs, projectPath, onProgress) {
     }, 200);
   } // fin hasTabs
 
-  // Multi-projets : rouvrir l'onglet agent de CE projet si la session persistée en
-  // avait un. L'onglet agent étant exclu de `serializable`, c'est le seul moyen de
-  // le retrouver au retour (le process pi parké reprend alors la session via
-  // start_agent_session → renderMessageHistory réaffiche la conversation). Sans
-  // cela, un chat lancé sur un projet puis quitté n'était plus affiché au retour
-  // (impression que l'agent s'est « arrêté »).
-  // Multi-onglets agents (issue #35) : config `.pilot/agents.json` (nombre +
-  // noms par défaut) + état de la session (agents ouverts, y compris renommés
-  // — le renommage manuel prime sur le nom configuré). Au démarrage du projet,
-  // les agents paramétrés sont rechargés ; les agents ajoutés via « + » au-delà
-  // de la config et présents dans la session sont conservés.
-  // Lecture directe de la config (pas `tabs._multiAgentEnabled`, défini en async
-  // dans le constructeur) pour éviter toute course avec l'ouverture du projet.
-  // → `multiAgentEnabled` et `cfgAgents` sont lus en tête de `restoreTabs` (avant
-  // le early return) pour couvrir le cas où la config existe sans session.
-  if (multiAgentEnabled) {
-    // Rétrocompatibilité : les sessions antérieures n'ont pas `agents` mais un
-    // simple flag `hadAgent` → on ne restaure que l'agent principal.
-    const sessionAgents =
-      session.agents && Array.isArray(session.agents)
-        ? session.agents
-        : hasAgent
-          ? [{ id: "default", name: agentDisplayLabel(), index: session.agentIndex }]
-          : [];
-    // Fusion : agent principal, puis agents configurés (nom renommé de la
-    // session si présent, sinon nom configuré), puis agents de la session
-    // absents de la config.
-    const toOpen = [];
-    const seen = new Set();
-    const pushAgent = (a) => {
-      if (seen.has(a.id)) return;
-      seen.add(a.id);
-      toOpen.push(a);
-    };
-    const sessionDefault = sessionAgents.find((a) => a.id === "default");
-    if (sessionDefault) pushAgent(sessionDefault);
-    for (const cfg of cfgAgents) {
-      if (seen.has(cfg.id)) continue;
-      const sess = sessionAgents.find((a) => a.id === cfg.id);
-      pushAgent({ id: cfg.id, name: sess ? sess.name : cfg.name, index: sess ? sess.index : -1 });
-    }
-    for (const sa of sessionAgents) pushAgent(sa);
-    // Ouvrir chaque agent (chaque onglet démarre/reprent sa propre session).
-    for (const a of toOpen) {
-      try {
-        await tabs._openAgent(a.name || agentDisplayLabel(), a.id);
-      } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
-    }
-    // Restaurer l'ordre des onglets agents (positions persistées).
-    for (const a of toOpen) {
-      if (typeof a.index === "number" && a.index >= 0) {
-        const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === a.id);
-        if (t) {
-          const cur = tabs.tabs.indexOf(t);
-          if (cur !== -1 && cur !== a.index) tabs._moveTabToIndex(t.id, a.index);
-        }
-      }
-    }
-  } else if (hasAgent) {
-    // Multi-onglets désactivé : comportement historique — restaurer uniquement
-    // l'agent principal.
+  // 5.2 : reconstruire la barre d'onglets agents depuis `agent_views` (vue
+  // dissociée de l'objet). Chaque onglet démarre/reprent sa propre session.
+  for (const v of views) {
     try {
-      await tabs.openFile(agentDisplayLabel(), "agent");
-      // Restaurer la position originale de l'onglet agent (index persisté) pour
-      // conserver l'ordre des onglets (ex: agent en premier). Les sessions
-      // antérieures n'ont pas d'`agentIndex` → on ignore (agent en dernier).
-      const agentIdx = session.agentIndex;
-      if (typeof agentIdx === "number" && agentIdx >= 0) {
-        const agentTab = tabs.tabs.find((t) => t.mode === "agent");
-        if (agentTab) {
-          const currentIdx = tabs.tabs.indexOf(agentTab);
-          if (currentIdx !== -1 && currentIdx !== agentIdx) {
-            tabs._moveTabToIndex(agentTab.id, agentIdx);
-          }
-        }
+      await tabs._openAgent(v.name_override || agentDisplayLabel(), v.agent_id);
+    } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+  }
+  // Restaurer l'ordre des onglets agents (positions persistées).
+  for (const v of views) {
+    if (typeof v.order_index === "number" && v.order_index >= 0) {
+      const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === v.agent_id);
+      if (t) {
+        const cur = tabs.tabs.indexOf(t);
+        if (cur !== -1 && cur !== v.order_index) tabs._moveTabToIndex(t.id, v.order_index);
       }
-    } catch (_) {
-      /* agent indisponible (gate health E4) → on ignore */
     }
   }
-
-  tabs._restoring = false;
 }
-

@@ -829,6 +829,16 @@ document.getElementById('prompt-form').addEventListener('submit', async (e) => {
   }
 });
 
+// Saisie web-remote comme la saisie agent : Entrée (sans Shift) valide/envoie,
+// Shift+Entrée insère un retour à la ligne. Les gardes (saisie vide,
+// state.isStreaming, readonly) sont déjà gérées par le submit du formulaire.
+document.getElementById('prompt-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    document.getElementById('prompt-form').requestSubmit();
+  }
+});
+
 document.getElementById('btn-abort').addEventListener('click', async () => {
   try { await apiJson('/api/agent/abort', { method: 'POST' }); } catch (e) { appendSystem('❌ ' + e.message); }
 });

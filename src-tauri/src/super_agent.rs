@@ -11,12 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
-use crate::rpc_manager;
-use crate::rpc::probe_extension_support;
 use crate::AppState;
-
-/// Canal d'événements dédié au super-agent (ne pollue pas les canaux existants).
-const SUPERAGENT_CHANNEL: &str = "rpc-event-superagent";
 
 // ── Base SQLite ──
 
@@ -29,7 +24,7 @@ fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("super-agent.db"))
 }
 
-fn open_db(app: &AppHandle) -> Result<Connection, String> {
+pub(crate) fn open_db(app: &AppHandle) -> Result<Connection, String> {
     let path = db_path(app)?;
     let conn = Connection::open(&path).map_err(|e| format!("Erreur ouverture base: {}", e))?;
     init_db(&conn)?;
@@ -89,16 +84,14 @@ fn init_db(conn: &Connection) -> Result<(), String> {
 
 // ── Session RPC dédiée ──
 
-/// Démarre (lazy) la session super-agent. Lecture seule stricte sur les projets :
-/// l'extension `pilot-assistant-files` bloque techniquement toute écriture hors de
-/// `~/.pilot/assistant/` (espace d'écriture dédié de l'assistant), et
-/// `pilot-choices` fournit les outils de question (ask_choice, ask_input,
-/// ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
+/// Démarre (lazy) la session super-agent. La session vit désormais dans le
+/// registre unique de l'AgentService (id `superagent`, canal `rpc-event-superagent`
+/// isolé). Lecture seule stricte sur les
+/// projets : l'extension `pilot-assistant-files` bloque techniquement toute
+/// écriture hors de `~/.pilot/assistant/` (espace d'écriture dédié de
+/// l'assistant), et `pilot-choices` fournit les outils de question (ask_choice,
+/// ask_input, ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
 pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    if rpc.is_some() {
-        return Ok(()); // déjà lancé (idempotent)
-    }
     let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
     let cwd = state
         .project_path
@@ -106,56 +99,10 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
         .unwrap()
         .clone()
         .unwrap_or_default();
-    // Extensions pi : pilot-assistant-files (espace d'écriture restreint
-    // `~/.pilot/assistant/` — garantie lecture seule sur les projets),
-    // pilot-choices (boutons de question) et pilot-assistant-actions (outils
-    // open_project / delegate_to_coder — TÂCHE 2). Chargées dès que
-    // `--extension` est supporté par le backend.
-    let mut extensions: Vec<String> = Vec::new();
-    if probe_extension_support(state, &pi_path) {
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            let dir = data_dir.join("extensions");
-            if std::fs::create_dir_all(&dir).is_ok() {
-                let files = dir.join("pilot-assistant-files.ts");
-                if std::fs::write(&files, include_str!("../extensions/pilot-assistant-files.ts")).is_ok() {
-                    extensions.push(files.to_string_lossy().to_string());
-                }
-                let choices = dir.join("pilot-choices.ts");
-                if std::fs::write(&choices, include_str!("../extensions/pilot-choices.ts")).is_ok() {
-                    extensions.push(choices.to_string_lossy().to_string());
-                }
-                let actions = dir.join("pilot-assistant-actions.ts");
-                if std::fs::write(&actions, include_str!("../extensions/pilot-assistant-actions.ts")).is_ok() {
-                    extensions.push(actions.to_string_lossy().to_string());
-                }
-                let db = dir.join("pilot-assistant-db.ts");
-                if std::fs::write(&db, include_str!("../extensions/pilot-assistant-db.ts")).is_ok() {
-                    extensions.push(db.to_string_lossy().to_string());
-                }
-                let prompt = dir.join("pilot-assistant-prompt.ts");
-                if std::fs::write(&prompt, include_str!("../extensions/pilot-assistant-prompt.ts")).is_ok() {
-                    extensions.push(prompt.to_string_lossy().to_string());
-                }
-            }
-        }
-    }
-    let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, extensions, app.clone(), state.event_tx.clone(),
-        SUPERAGENT_CHANNEL, None, None, Some("superagent".to_string()),
-    )
-        .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
-    *rpc = Some(session);
-    if let Some(sess) = rpc.as_mut() {
-        let cmd = serde_json::json!({"type": "new_session"});
-        rpc_manager::send_command_sync(sess, cmd).ok();
-        // Appliquer le modèle par défaut (registre global) pour que la session
-        // puisse répondre dès le premier prompt.
-        if let Some((provider, model_id)) = default_model_from_config(&pi_path) {
-            let cmd = serde_json::json!({"type": "set_model", "provider": provider, "modelId": model_id});
-            rpc_manager::send_command_sync(sess, cmd).ok();
-        }
-    }
-    Ok(())
+    let default_model = default_model_from_config(&pi_path);
+    state
+        .agent_service
+        .start_superagent(app, &cwd, &pi_path, default_model)
 }
 
 /// Résout le modèle par défaut du backend actif depuis `model-switch.json`
@@ -224,11 +171,7 @@ pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Resu
 
 #[tauri::command]
 pub fn stop_super_agent_session(state: State<AppState>) -> Result<(), String> {
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    if let Some(mut session) = rpc.take() {
-        rpc_manager::stop_session(&mut session);
-    }
-    Ok(())
+    state.agent_service.stop_superagent()
 }
 
 /// Construit la consigne « réponses courtes » à injecter dans le prompt système
@@ -312,11 +255,9 @@ pub(crate) fn do_send_super_agent_prompt(
     }
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let full_message = format!("{}\n\n{}", full_system, message);
     let cmd = serde_json::json!({"type": "prompt", "message": full_message});
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.send_superagent(cmd)
 }
 
 #[tauri::command]
@@ -499,19 +440,15 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 #[tauri::command]
 pub fn new_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "new_session"});
-    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    state.agent_service.send_superagent_sync(cmd).map(|_| ())
 }
 
 #[tauri::command]
 pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: String, model_id: String) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "set_model", "provider": provider, "modelId": model_id});
-    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    let resp = state.agent_service.send_superagent_sync(cmd)?;
     // Vérifier le champ success : un set_model qui échoue (provider/modèle
     // introuvable) répond {success: false, error: "..."}.
     if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
@@ -526,7 +463,6 @@ pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: S
         ));
     }
     // Persister le modèle actif pour l'appel bloquant `ask_super_agent`.
-    drop(rpc);
     let mut cfg = state.config.lock().unwrap();
     cfg.super_agent_model = format!("{}/{}", provider, model_id);
     crate::save_config_disk(&app, &cfg).ok();
@@ -539,27 +475,21 @@ pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: S
 #[tauri::command]
 pub fn send_super_agent_command(state: State<AppState>, app: AppHandle, command: Value) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
-    rpc_manager::send_command(session, &command)
+    state.agent_service.send_superagent(command)
 }
 
 #[tauri::command]
 pub fn abort_super_agent(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "abort"});
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.send_superagent(cmd)
 }
 
 #[tauri::command]
 pub fn get_super_agent_state(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "get_state"});
-    rpc_manager::send_command_sync_timeout(session, cmd, 8)
+    state.agent_service.send_superagent_sync_timeout(cmd, 8)
 }
 
 // ── Config (nom, clients, association projet → client) ──
@@ -574,6 +504,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "prompt": cfg.super_agent_prompt,
         "show_thinking": cfg.super_agent_show_thinking,
         "show_tools": cfg.super_agent_show_tools,
+        "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
     }))
 }
 
@@ -774,15 +705,14 @@ pub fn inject_session_summary(
     drop(conn);
 
     // Injecter au super-agent s'il est démarré.
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    if let Some(sess) = rpc.as_mut() {
+    if state.agent_service.superagent_alive() {
         let msg = format!(
             "[Résumé de session] Projet: {}\n{}\n\nIntègre ces informations dans ton suivi (tâches, décisions, état d'avancement).",
             project_path.unwrap_or_default(),
             summary
         );
         let cmd = serde_json::json!({"type": "prompt", "message": msg});
-        rpc_manager::send_command(sess, &cmd).ok();
+        state.agent_service.send_superagent(cmd).ok();
     }
     Ok(())
 }
@@ -811,16 +741,12 @@ pub fn initialize_super_agent(
     // S'assurer que la session est démarrée.
     do_start_super_agent_session(state.inner(), &app)?;
 
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    if let Some(sess) = rpc.as_mut() {
-        let msg = format!(
-            "Tu es l'assistant de suivi du projet « {} ». Analyse ce projet (structure, documentation, historique) puis pose les questions nécessaires à ton fonctionnement : contexte, objectifs, client, jalons, état d'avancement. Tu es en lecture seule : ne modifie aucun fichier du projet.",
-            project_path
-        );
-        let cmd = serde_json::json!({"type": "prompt", "message": msg});
-        rpc_manager::send_command(sess, &cmd)?;
-    }
-    Ok(())
+    let msg = format!(
+        "Tu es l'assistant de suivi du projet « {} ». Analyse ce projet (structure, documentation, historique) puis pose les questions nécessaires à ton fonctionnement : contexte, objectifs, client, jalons, état d'avancement. Tu es en lecture seule : ne modifie aucun fichier du projet.",
+        project_path
+    );
+    let cmd = serde_json::json!({"type": "prompt", "message": msg});
+    state.agent_service.send_superagent(cmd)
 }
 
 // ── Question sur tous les projets ──
@@ -829,10 +755,8 @@ pub fn initialize_super_agent(
 #[tauri::command]
 pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: String) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
-    let mut rpc = state.rpc_superagent.lock().unwrap();
-    let session = rpc.as_mut().ok_or("Aucune session super-agent active")?;
     let cmd = serde_json::json!({"type": "prompt", "message": question});
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.send_superagent(cmd)
 }
 
 #[cfg(test)]

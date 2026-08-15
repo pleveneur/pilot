@@ -301,6 +301,18 @@
               <input type="checkbox" id="setting-multi-agent-tabs" />
               <label for="setting-multi-agent-tabs" title="Permet d'ouvrir plusieurs onglets agent indépendants sur le même projet (bouton « + » dans la barre d'onglets). Chaque agent a sa propre conversation persistée.">Multi-onglets agents (plusieurs agents indépendants sur le même projet)</label>
             </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-dashboard-auto-open" />
+              <label for="setting-dashboard-auto-open" title="Ouvre automatiquement l'onglet 📊 Tableau de bord au démarrage (si un projet est chargé) et le verrouille en position dans la barre d'onglets, juste après l'onglet 🧭 Assistant.">Afficher le Tableau de bord systématiquement</label>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-dashboard-auto-refresh" />
+              <label for="setting-dashboard-auto-refresh" title="Recharge automatiquement les données du Tableau de bord toutes les X secondes tant que l'onglet 📊 est visible/actif. Activé par défaut.">Activer le rafraîchissement automatique du tableau de bord</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-dashboard-auto-refresh-seconds" title="Durée (en secondes) entre deux rechargements automatiques du Tableau de bord.">Rafraîchissement auto (secondes) :</label>
+              <input type="number" id="setting-dashboard-auto-refresh-seconds" min="2" max="3600" step="1" value="10" />
+            </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-rpc-session-dir">Dossier des sessions :</label>
               <input type="text" id="setting-rpc-session-dir" placeholder="~/.pi/agent/sessions" />
@@ -708,10 +720,6 @@
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-block-agent-input" />
               <label for="setting-superagent-block-agent-input" title="Quand l'onglet 🧭 Assistant est ouvert, désactiver la saisie de l'agent (éviter de répondre à l'agent au lieu de l'assistant). Désactivé par défaut.">Bloquer la saisie de l'agent quand l'onglet Assistant est ouvert</label>
-            </div>
-            <div class="setting-row setting-row-checkbox setting-row-indent">
-              <input type="checkbox" id="setting-superagent-purge-agent-conversation" />
-              <label for="setting-superagent-purge-agent-conversation" title="Quand l'Assistant délègue une demande à l'agent, purger la conversation de l'agent avant d'appliquer la nouvelle demande (équivalent au clic sur « + » de l'onglet agent). Activé par défaut.">Purger la conversation de l'agent avant chaque demande de l'Assistant</label>
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-invisible-agent" />

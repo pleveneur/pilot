@@ -1,10 +1,11 @@
 [package]
 name = "pilot"
-version = "0.2.61"
+version = "0.2.62"
 edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+embed-resource = "3"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
@@ -34,6 +35,7 @@ sha2 = "0.10"
 include_dir = "0.7"
 qrcode = "0.14"
 
+# ── GDS (Gestionnaire de Sources, spec_gds.md) : PostgreSQL ──
 # ── Context Engine V2 (RAG embeddings) ──
 rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

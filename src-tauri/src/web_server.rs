@@ -1005,14 +1005,16 @@ async fn project_open(
     let res = tokio::task::spawn_blocking(move || {
         let state = app2.state::<AppState>();
         // Capturer AVANT la bascule : `open_project_shared` parke la session du
-        // projet précédent (rpc_state vidé), donc `is_some()` après serait faux
-        // même si une session était active. On mémorise l'état pour savoir si on
-        // doit (re)lancer l'agent sur le nouveau projet (spec_web_remote.md §3).
-        let was_active = state.rpc_state.lock().unwrap().is_some();
+        // projet précédent (pointeur actif de l'AgentService remis à None), donc
+        // `is_some()` après serait faux même si une session était active. On
+        // mémorise l'état pour savoir si on doit (re)lancer l'agent sur le nouveau
+        // projet (spec_web_remote.md §3).
+        let was_active = state.agent_service.active_agent().is_some();
         let node = open_project_shared(&app2, &path2)?;
         if was_active {
-            // Stopper le reviewer global de l'ancien projet (rpc_state est déjà
-            // vidé par le parking ; ne tue pas la session parkée du projet préc.).
+            // Stopper le reviewer global de l'ancien projet (la session active est
+            // déjà parkée par le parking ; ne tue pas la session parkée du projet
+            // précédent).
             do_stop_agent_session(&state, None);
             if let Err(e) = do_start_agent_session(&state, &app2, None) {
                 eprintln!("[web] Redémarrage agent après changement de projet échoué : {}", e);
@@ -1059,9 +1061,10 @@ async fn project_select(
     let res = tokio::task::spawn_blocking(move || {
         let state = app2.state::<AppState>();
         // Capturer AVANT : `do_set_active_project` parke la session du projet
-        // précédent (rpc_state vidé). On mémorise l'état pour relancer l'agent
-        // sur le nouveau projet si une session était active.
-        let was_active = state.rpc_state.lock().unwrap().is_some();
+        // précédent (pointeur actif de l'AgentService remis à None). On mémorise
+        // l'état pour relancer l'agent sur le nouveau projet si une session était
+        // active.
+        let was_active = state.agent_service.active_agent().is_some();
         do_set_active_project(&state, &app2, &path2)?;
         if was_active {
             do_stop_agent_session(&state, None);

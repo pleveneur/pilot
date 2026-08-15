@@ -8,8 +8,8 @@
 // Cette commande lance un process pi **temporaire cadré** (`pi --mode rpc
 // --no-session`) avec `cwd = projectPath` : pi a donc accès à ses outils
 // (ls, read, write, edit) pour **analyser le projet** puis **créer ou mettre à
-// jour** `AGENTS.md` à la racine. La session de coding principale (rpc_state
-// dans `lib.rs`) n'est jamais touchée → aucune pollution. On réutilise
+// jour** `AGENTS.md` à la racine. La session de coding principale (AgentService)
+// n'est jamais touchée → aucune pollution. On réutilise
 // `help::ask_pi_caged_timed` (mêmes garanties que l'aide intégrée et la revue).
 //
 // Le modèle est fourni par le frontend (modèle actif du chat, format

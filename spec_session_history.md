@@ -83,6 +83,7 @@ Commandes Tauri :
 | `set_session_tags` | sync | Persiste les tags d'une session dans `.pilot/sessions-tags.json`. |
 | `list_session_tags` | sync | Liste tous les tags utilisés (pour l'autocomplétion). |
 | `record_session_entry` | async | Écrit/met à jour une entrée de session dans l'index (live, appelé par le frontend à l'`agent_end` / fermeture). Append : si une entrée avec le même `id` existe déjà, on la retire puis on réécrit (réécriture atomique du fichier). |
+| `get_agent_sessions` | sync | Indexe (rétro-indexation) puis retourne les sessions d'agent d'un projet — ou de tous les projets ouverts si aucun chemin n'est fourni et qu'aucun projet n'est actif. Params optionnels : `project_path` (cibler un projet), `limit` (nb max de sessions, les plus récentes d'abord ; 0 = illimité). Retourne `{ sessions: […], indexed: N }`. Garantit un index à jour avant lecture (réanalyse le dossier de sessions pi et réécrit `.pilot/sessions.jsonl`). Utilisé par le tableau de bord (suivi multi-projets) et l'assistant. |
 
 Réutilisation : le listing du dossier de sessions réutilise la même logique
 que `list_sessions` (`resolve_agent_home` + `project_to_session_folder`).

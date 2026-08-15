@@ -91,6 +91,12 @@ class Tab {
     this.projectCommandId = null;
     // Scratchpad : pas de fichier associé
     this.isScratchpad = false;
+    // 3.1 : identifiant d'agent résolu depuis la base (`get_agent`/`list_agents`),
+    // jamais dérivé d'un compteur volatil. L'état logique (loaded/state/busy)
+    // vit sur l'objet Agent (table `agents`) ; l'onglet ne porte que l'état de
+    // VUE (agentReady / agentElements / unlistenRpc / view), plus d'état de
+    // session.
+    this.agentId = null;
   }
 }
 
@@ -117,8 +123,13 @@ class TabsManager {
     // Multi-onglets agents (spec_multi_agents) : si true, on peut ouvrir
     // plusieurs onglets agent indépendants sur le même projet (bouton « + »).
     this._multiAgentEnabled = false;
-    // Id de l'agent dont la session est actuellement active (rpc_state).
-    this._activeAgentId = null;
+    // Évolution « Tableau de bord systématique » : si true, l'onglet 📊 Tableau
+    // de bord est verrouillé en position (juste après l'onglet 🧭 Assistant,
+    // avant le bouton « + ») et n'est pas déplaçable au drag.
+    this._dashboardAutoOpen = false;
+    // 3.1 : plus d'état de session sur le gestionnaire. L'agent actif se lit
+    // depuis l'objet (AgentService.get_state / get_agent) ; l'idempotence est
+    // gérée par le service, pas par un pointeur volatil local.
 
     // Charger la config auto-save au démarrage
     invoke("get_config").then((config) => {
@@ -126,6 +137,7 @@ class TabsManager {
       this._autoSaveDelay = config.auto_save_delay || 3000;
       this._multiAgentEnabled = config.multi_agent_tabs === true;
       this._updateMultiAgentButton();
+      this._dashboardAutoOpen = config.dashboard_auto_open === true;
       this._wordWrapEnabled = config.word_wrap || false;
       this._updateAutoSaveStatus();
       // Appliquer le word wrap sur les onglets déjà ouverts
@@ -143,6 +155,13 @@ class TabsManager {
       if (newMulti !== this._multiAgentEnabled) {
         this._multiAgentEnabled = newMulti;
         this._updateMultiAgentButton();
+      }
+      // Tableau de bord systématique : mettre à jour le verrouillage de position
+      // de l'onglet 📊 (re-positionnement dans la barre).
+      const newDash = config.dashboard_auto_open === true;
+      if (newDash !== this._dashboardAutoOpen) {
+        this._dashboardAutoOpen = newDash;
+        this._repositionDashboardTab();
       }
       // Word wrap
       const newWrap = config.word_wrap || false;
@@ -417,27 +436,38 @@ class TabsManager {
 
   /**
    * Ouvre l'onglet Agent Pi (RPC) avec l'interface de chat.
-   * Multi-onglets agents : `agentId` identifie l'agent ("default" = agent par
-   * défaut, "agent-N" = onglets supplémentaires). Chaque agent a sa propre
-   * session/conversation indépendante.
+   * 3.2 : ouvre une VUE sur l'objet Agent (table `agents`). Ne démarre la
+   * session que si l'objet n'est pas chargé (loaded == false) ; sinon pose
+   * visible=1 et reprend la vue. L'idempotence est gérée par l'AgentService :
+   * jamais d'erreur « session déjà active ».
    */
   async _openAgent(label, agentId = "default", runDefault = false, switchTo = true) {
-    // Vérifier si un onglet agent avec CET id est déjà ouvert.
+    const projectPath = window._pilotProjectPath || null;
+
+    // 3.2.1 : résoudre l'agent depuis la base. L'état logique (loaded/state)
+    // vit sur l'objet, pas sur l'onglet. Si l'objet n'existe pas encore en base
+    // (ex: agent par défaut non seedé), on le traite comme non chargé : la
+    // session sera démarrée au besoin, sans vue d'erreur.
+    let agentLoaded = false;
+    try {
+      const agent = await invoke("get_agent", { agentId, projectPath });
+      if (agent) agentLoaded = !!agent.loaded;
+    } catch (_) {
+      // get_agent peut échouer (agent introuvable) → considéré non chargé.
+    }
+
+    // Vérifier si un onglet agent avec CET id est déjà ouvert (entrée agent_views).
     const existing = this.tabs.find((t) => t.mode === "agent" && t.agentId === agentId);
     if (existing) {
+      // 3.2 : on ne démarre/parke rien — l'AgentService gère l'idempotence. On
+      // pose simplement visible=1 sur l'objet et on reprend la vue.
+      try { await invoke("set_agent_visible", { agentId, projectPath, visible: true }); } catch (_) {}
       if (switchTo) {
         this.switchTab(existing.id);
       } else {
         // Issue #49 : ouvrir en arrière-plan SANS basculer sur l'onglet agent
-        // (l'assistant reste sur son onglet pour attendre le retour). Reprendre
-        // la session si elle est parkée pour que send_agent_prompt fonctionne.
-        if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
-          try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
-        }
-        if (existing.agentReady) {
-          try { await invoke("start_agent_session", { agentId }); } catch (_) {}
-        }
-        this._activeAgentId = agentId;
+        // (l'assistant reste sur son onglet pour attendre le retour).
+        if (existing.agentElements) activateAgentTab(existing.agentElements);
       }
       return existing;
     }
@@ -445,24 +475,6 @@ class TabsManager {
     const id = ++tabIdCounter;
     const tab = new Tab(id, "", label || agentDisplayLabel(), "agent");
     tab.agentId = agentId;
-
-    // Attendre que les syncs d'onglets agents en attente (ex: bascule vers le
-    // super-agent 🧭) soient drainées AVANT de démarrer la session. Sans cela,
-    // une sync périmée (parking de l'agent précédent) peut s'exécuter pendant
-    // `start_agent_session` ci-dessous et parker la session qu'on vient de créer
-    // → `rpc_state` vide → erreur « Aucune session agent active » dans
-    // createAgentPi (new_session / loadCommands) quand le super-agent ouvre un
-    // projet (open_project → openProjectByPath → restoreTabs → _openAgent).
-    await this._awaitAgentSync();
-
-    // Multi-onglets agents : parker la session de l'agent précédemment actif
-    // AVANT de rendre cet onglet actif. Sans cela, `switchTab` (ci-dessous)
-    // déclencherait `_syncAgentSession` qui tenterait de reprendre une session
-    // pas encore démarrée (erreur « session déjà active »).
-    if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
-      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
-    }
-    this._activeAgentId = agentId;
 
     tab.wrapper = document.createElement("div");
     tab.wrapper.className = "editor-wrapper";
@@ -475,12 +487,10 @@ class TabsManager {
     // la session en arrière-plan SANS rendre l'onglet agent actif — l'utilisateur
     // reste sur l'onglet Assistant pour attendre le retour de l'agent.
     if (switchTo) this.switchTab(id);
-    // Persister immédiatement `hadAgent` pour ce projet : sans cela, ouvrir
-    // l'onglet agent ne déclenchait aucune sauvegarde et le flag n'était mis à
+    // Persister immédiatement la vue agent pour ce projet : sans cela, ouvrir
+    // l'onglet agent ne déclenchait aucune sauvegarde et la vue n'était mise à
     // jour que si une autre sauvegarde survenait avant de quitter le projet →
     // un projet quitté après avoir ouvert l'agent perdait son onglet au retour.
-    // (bloqué pendant restoreTabs par `_restoring` ; safe ici car tab déjà
-    // poussé dans this.tabs.)
     this._scheduleSave();
 
     // ── E4 : health check de l'agent avant de tenter start_agent_session ──
@@ -513,7 +523,11 @@ class TabsManager {
       return;
     }
 
-    // Lancer la session RPC
+    // 3.2 : démarrer la session UNIQUEMENT si l'objet n'est pas chargé. Si
+    // l'objet est déjà chargé (processus vivant), on pose visible=1 et on
+    // reprend la vue : createAgentPi relit l'historique depuis la session
+    // vivante. Aucun start superflu → jamais d'erreur « session déjà active ».
+    const shouldStart = !agentLoaded;
     showLoading(`Démarrage de ${label || agentDisplayLabel()}…`);
     try {
       // Issue #26 : vérifier (en arrière-plan) si une mise à jour de Pi est
@@ -521,14 +535,15 @@ class TabsManager {
       // « Ne plus demander » activé, ou déjà en cours.
       window._pilotCheckPiUpdate?.();
 
-      // Multi-onglets agents : la session de l'agent précédent a déjà été
-      // parkée avant le switchTab (voir plus haut). On démarre CET agent.
+      // start_agent_session délègue à AgentService::start (idempotent).
+      // Retourne true si la session a été reprise, false si nouvelle.
+      let resumed = false;
+      if (shouldStart) {
+        resumed = await invoke("start_agent_session", { agentId });
+      }
 
-      // start_agent_session retourne true si la session a été reprise depuis un
-      // parking (pi vivant en arrière-plan), false si nouvelle.
-      const resumed = await invoke("start_agent_session", { agentId });
-
-      // Créer l'interface de chat
+      // Créer l'interface de chat (vue). Si l'objet était déjà chargé, la
+      // conversation est relue depuis la session vivante (renderMessageHistory).
       const result = await createAgentPi(tab.wrapper, resumed === true, agentId);
       tab.view = result.wrapper;
       tab.unlistenRpc = result.unlisten;
@@ -539,6 +554,9 @@ class TabsManager {
       // pas (l'onglet Assistant reste actif — ses globals d'autocomplétion ne
       // doivent pas être écrasés). Ils seront activés au prochain switchTab.
       if (switchTo) activateAgentTab(result.elements);
+
+      // 3.2 : rendre l'objet visible (visible=1) après création de la vue.
+      try { await invoke("set_agent_visible", { agentId, projectPath, visible: true }); } catch (_) {}
 
       // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
       // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
@@ -568,20 +586,19 @@ class TabsManager {
   }
 
   /**
-   * Évolution 64 : démarre la session agent en arrière-plan SANS créer d'onglet
-   * (agent invisible). Utilisé par l'Assistant (🧭) quand l'option « agent
+   * Évolution 64 : agit sur l'OBJET Agent pour le rendre « invisible » — aucun
+   * onglet (Tab) créé. Utilisé par l'Assistant (🧭) quand l'option « agent
    * invisible » est activée : la délégation s'exécute sans aucun onglet agent
-   * visible. Reprend la logique essentielle de `_openAgent` (drain des syncs,
-   * parking de l'agent précédent, start_agent_session) sans créer de Tab ni
-   * d'UI de chat. Retourne `true` si la session a été reprise depuis un parking.
+   * visible. 3.3 : pose `visible=0` sur l'objet puis démarre la session
+   * (AgentService::start). L'objet porte visible=0, loaded=true, state=Running.
    * @param {string} [agentId] — id de l'agent (défaut "default").
    */
   async startAgentInvisible(agentId = "default") {
-    await this._awaitAgentSync();
-    if (this._multiAgentEnabled && this._activeAgentId && this._activeAgentId !== agentId) {
-      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
-    }
-    this._activeAgentId = agentId;
+    const projectPath = window._pilotProjectPath || null;
+    // 3.3 : rendre l'objet invisible AVANT de démarrer (visible=0).
+    try { await invoke("set_agent_visible", { agentId, projectPath, visible: false }); } catch (_) {}
+    // Démarre/reprend la session (AgentService::start, idempotent). Aucun Tab
+    // créé : la vue n'existe pas, mais l'objet porte loaded=true.
     return await invoke("start_agent_session", { agentId });
   }
 
@@ -941,6 +958,8 @@ class TabsManager {
       const result = createDashboard(tab.wrapper);
       tab.view = result.wrapper;
       tab.unlistenDashboard = result.unlisten;
+      tab.dashboardRefresh = result.refresh;
+      tab.dashboardSetActive = result.setActive;
     } catch (e) {
       console.error("Erreur onglet Tableau de bord:", e);
       tab.wrapper.innerHTML = `
@@ -1554,18 +1573,17 @@ class TabsManager {
         tab.unlistenDragDrop();
         tab.unlistenDragDrop = null;
       }
-      // Multi-onglets agents : si on ferme l'agent actif, oublier son id.
-      if (this._activeAgentId === (tab.agentId || "default")) {
-        this._activeAgentId = null;
-      }
-      // `skipAgentStop` (bascule de projet) : l'agent a déjà été « parké »
-      // (processus pi vivant rangé dans ProjectState.rpc), on ne doit PAS appeler
-      // stop_agent_session — sinon on émettrait une commande qui, traitée après le
-      // start_agent_session du projet suivant, tuerait la session parkée venue
-      // d'être reprise. Dans le cas normal (fermeture d'onglet), on arrête bien.
-      if (!options.skipAgentStop) {
-        invoke("stop_agent_session", { agentId: tab.agentId || "default" }).catch(() => {});
-      }
+      // 3.4 : fermer la VUE ne doit PAS tuer l'objet Agent. On supprime l'entrée
+      // `agent_views` (l'onglet est retiré ci-dessous via this.tabs.splice) et on
+      // pose visible=0 sur l'objet. L'objet reste `loaded` et le processus reste
+      // Running/Paused. Arrêt réel UNIQUEMENT via une action explicite (« Arrêter »).
+      try {
+        await invoke("set_agent_visible", {
+          agentId: tab.agentId || "default",
+          projectPath: window._pilotProjectPath || null,
+          visible: false,
+        });
+      } catch (_) {}
     }
     // Nettoyage super-agent (spec_super_agent.md) : arrêter la session dédiée.
     if (tab.mode === "superagent") {
@@ -1612,6 +1630,11 @@ class TabsManager {
     if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {
       tab.unlistenCodeGraph();
       tab.unlistenCodeGraph = null;
+    }
+    // Nettoyage onglet Tableau de bord (📊) — spec_dashboard.md
+    if (tab.mode === "dashboard" && tab.unlistenDashboard) {
+      tab.unlistenDashboard();
+      tab.unlistenDashboard = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -1674,7 +1697,13 @@ class TabsManager {
         tab.unlistenDragDrop();
         tab.unlistenDragDrop = null;
       }
-      invoke("stop_agent_session").catch(() => {});
+      // 3.4 : fermer la vue préserve l'objet — on pose visible=0, on n'arrête pas
+      // le processus. Arrêt réel uniquement via une action explicite.
+      invoke("set_agent_visible", {
+        agentId: tab.agentId || "default",
+        projectPath: window._pilotProjectPath || null,
+        visible: false,
+      }).catch(() => {});
     }
     // Nettoyage super-agent (spec_super_agent.md)
     if (tab.mode === "superagent") {
@@ -1722,6 +1751,11 @@ class TabsManager {
     if (tab.mode === "code-graph" && tab.unlistenCodeGraph) {
       tab.unlistenCodeGraph();
       tab.unlistenCodeGraph = null;
+    }
+    // Nettoyage onglet Tableau de bord (📊) — spec_dashboard.md
+    if (tab.mode === "dashboard" && tab.unlistenDashboard) {
+      tab.unlistenDashboard();
+      tab.unlistenDashboard = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -1813,6 +1847,10 @@ class TabsManager {
         `[data-tab-id="${this.activeTabId}"]`
       );
       if (oldBtn) oldBtn.classList.remove("active");
+      // Tableau de bord : signaler la désactivation (stop auto-refresh).
+      if (old && old.mode === "dashboard" && old.dashboardSetActive) {
+        old.dashboardSetActive(false);
+      }
     }
 
     // Afficher le nouveau
@@ -1856,79 +1894,15 @@ class TabsManager {
     // Mettre à jour l'outline quand on change d'onglet
     scheduleOutlineUpdate();
 
-    // Multi-onglets agents : synchroniser la session agent active (parking/
-    // reprise) quand on bascule vers/depuis un onglet agent.
-    this._syncAgentSession(tab);
-  }
+    // 3.5 : plus de parking/reprise à la bascule — l'AgentService gère
+    // l'idempotence. On réactive simplement les globals d'UI de l'onglet agent.
+    if (tab.mode === "agent" && tab.agentElements) activateAgentTab(tab.agentElements);
 
-  /**
-   * Multi-onglets agents : synchronise la session RPC active avec l'onglet
-   * affiché. À la bascule vers un onglet agent, on parke la session de l'agent
-   * précédent et on reprend celle de l'agent ciblé (processus pi vivant). À la
-   * bascule vers un onglet non-agent, on parke l'agent actif. No-op si l'option
-   * multi-onglets est désactivée (comportement historique : un seul agent).
-   * Les syncs sont sérialisées (chaîne de promesses) pour éviter les courses
-   * lors de bascules rapides entre onglets agent.
-   */
-  _syncAgentSession(tab) {
-    if (!this._multiAgentEnabled) return;
-    if (!tab) return;
-    this._agentSyncChain = (this._agentSyncChain || Promise.resolve())
-      .then(() => this._doSyncAgentSession(tab))
-      .catch(() => {});
-  }
-
-  /**
-   * Retourne la chaîne de syncs d'onglets agents en cours (ou une promesse
-   * résolue si aucune). Permet d'attendre que les syncs périmées (parking de
-   * l'agent précédent, ex: bascule vers le super-agent) soient drainées avant
-   * de démarrer une nouvelle session, pour éviter qu'elles ne parkent la
-   * session qu'on vient de créer (course → « Aucune session agent active »).
-   */
-  _awaitAgentSync() {
-    return this._agentSyncChain || Promise.resolve();
-  }
-
-  async _doSyncAgentSession(tab) {
-    if (tab.mode !== "agent") {
-      // Bascule vers un onglet non-agent → parker l'agent actif.
-      if (this._activeAgentId) {
-        try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
-        this._activeAgentId = null;
-      }
-      return;
-    }
-    // Bascule vers un onglet agent.
-    const agentId = tab.agentId || "default";
-    if (this._activeAgentId === agentId) {
-      // Déjà actif : réactiver les globals d'UI de cet onglet.
-      if (tab.agentElements) activateAgentTab(tab.agentElements);
-      return;
-    }
-    // Onglet agent dont la session n'a jamais démarré (health check échoué) :
-    // on ne lance pas de session, on réactive juste l'UI (écran d'erreur).
-    if (!tab.agentReady) {
-      if (tab.agentElements) activateAgentTab(tab.agentElements);
-      return;
-    }
-    // Parker l'agent précédent.
-    if (this._activeAgentId) {
-      try { await invoke("park_agent_session", { agentId: this._activeAgentId }); } catch (_) {}
-    }
-    // Reprendre l'agent ciblé.
-    const resumed = await invoke("start_agent_session", { agentId }).catch(() => false);
-    this._activeAgentId = agentId;
-    if (tab.agentElements) activateAgentTab(tab.agentElements);
-    // Re-rendre l'historique si la session a été reprise (conversation existante).
-    if (resumed === true && tab.view) {
-      const msgContainer = tab.view.querySelector(".agent-chat-messages");
-      if (msgContainer) {
-        for (let i = 0; i < 10; i++) {
-          const n = await renderMessageHistory(msgContainer);
-          if (n !== -1) break;
-          if (i < 9) await new Promise((r) => setTimeout(r, 300));
-        }
-      }
+    // Tableau de bord : recharger les données si le projet actif a changé
+    // depuis le dernier affichage (bascule de projet, ouverture/fermeture).
+    if (tab.mode === "dashboard") {
+      if (tab.dashboardRefresh) tab.dashboardRefresh();
+      if (tab.dashboardSetActive) tab.dashboardSetActive(true);
     }
   }
 
@@ -2629,8 +2603,8 @@ class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent"].includes(tab.mode);
-    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}`;
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard"].includes(tab.mode);
+    btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 
     const icon = tab.mode === "preview" ? "👁️ " : tab.mode === "pdf" ? "📕 " : tab.mode === "image" ? "🖼️ " : tab.mode === "csv" ? "📊 " : tab.mode === "terminal" ? (tab.isAgentTerminal ? "π " : (tab.projectCommandId ? "▶ " : "🖥️ ")) : tab.mode === "agent" ? "π " : tab.mode === "superagent" ? "🧭 " : tab.mode === "history" ? "📜 " : tab.isScratchpad ? "" : tab.mode === "prompt-builder" ? "🧩 " : "";
@@ -2677,15 +2651,43 @@ class TabsManager {
       const addBtn = this.tabBar.querySelector(".tab-add-agent");
       if (addBtn) this.tabBar.insertBefore(btn, addBtn);
       else this.tabBar.prepend(btn);
+    } else if (tab.mode === "dashboard" && this._dashboardAutoOpen) {
+      // Évolution « Tableau de bord systématique » : quand l'option est activée,
+      // l'onglet 📊 est verrouillé juste après l'onglet 🧭 Assistant (`.tab-superagent`)
+      // et avant le bouton « + » (`.tab-add-agent`). Ordre visé : 🧭 → 📊 → ＋ → π.
+      const superBtn = this.tabBar.querySelector(".tab-superagent");
+      const addBtn = this.tabBar.querySelector(".tab-add-agent");
+      if (superBtn && superBtn.nextSibling) this.tabBar.insertBefore(btn, superBtn.nextSibling);
+      else if (addBtn) this.tabBar.insertBefore(btn, addBtn);
+      else this.tabBar.appendChild(btn);
     } else {
       this.tabBar.appendChild(btn);
     }
 
     // Drag & drop pour réorganiser les onglets (sauf le Super-agent, qui doit
-    // rester TOUJOURS le plus à gauche).
-    if (tab.mode !== "superagent") {
+    // rester TOUJOURS le plus à gauche, et le Tableau de bord quand l'option
+    // « Tableau de bord systématique » est activée, qui est verrouillé en position).
+    if (tab.mode !== "superagent" && !(tab.mode === "dashboard" && this._dashboardAutoOpen)) {
       this._initTabDragHandlers(btn, tab);
     }
+  }
+
+  /**
+   * Évolution « Tableau de bord systématique » : re-positionne l'onglet 📊 dans
+   * la barre d'onglets quand l'option `dashboard_auto_open` change. Quand elle
+   * est activée, l'onglet est inséré après l'onglet 🧭 Assistant et avant le
+   * bouton « + » ; quand elle est désactivée, il redevient un onglet normal
+   * (déplaçable, en fin de barre).
+   */
+  _repositionDashboardTab() {
+    const tab = this.tabs.find((t) => t.mode === "dashboard");
+    if (!tab) return;
+    const btn = this.tabBar.querySelector(`[data-tab-id="${tab.id}"]`);
+    if (!btn) return;
+    // Retirer le bouton puis le re-rendre pour appliquer la nouvelle position
+    // et le nouveau comportement de drag.
+    btn.remove();
+    this._renderTabButton(tab);
   }
 
   /**
@@ -2790,8 +2792,7 @@ class TabsManager {
   /**
    * Déplace un onglet à un index précis dans `tabs.tabs` + la barre d'onglets
    * (utilisé par restoreTabs pour rétablir la position persistée de l'onglet
-   * agent). Pas de sauvegarde : pendant la restauration elle est déjà supprimée
-   * par `_pilotSuppressSave`.
+   * agent).
    */
   _moveTabToIndex(tabId, targetIndex) {
     const sourceIdx = this.tabs.findIndex((t) => String(t.id) === String(tabId));

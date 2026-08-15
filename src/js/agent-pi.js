@@ -56,7 +56,14 @@ import {
   matchesGlob, matchesAnyCritical,
   buildReviewPrompt, parseReviewResult, buildReviewCorrectionPrompt,
 } from "./orchestration-reviewer.js";
-import { detectRepeatedBlock, detectRepeatedWord } from "./loop-detection.js";
+import {
+  detectRepeatedBlock,
+  detectRepeatedWord,
+  detectSemanticLoop,
+  findRepeatedTail,
+  buildLoopCorrectionPrompt,
+  MAX_LOOP_ESCALATION,
+} from "./loop-detection.js";
 
 // ── État global de l'autocomplétion ──
 let allCommands = [];
@@ -350,7 +357,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     loopBuffer: "",            // buffer de la réflexion/texte streamé du tour courant
     loopLastChecked: 0,        // timestamp du dernier test (throttle du streaming)
     loopCorrectionPending: false, // true entre l'arrêt (abort) et l'envoi du prompt de correction
-    loopCorrectionCount: 0,    // nb de corrections de boucle déjà faites (max 2)
+    loopCorrectionCount: 0,    // nb de stratégies d'escalade déjà appliquées (max MAX_LOOP_ESCALATION)
+    loopAbandoned: false,      // true après abandon (toutes les stratégies épuisées)
     // ── Erreurs de connexion (chat standard) ──
     // pi émet auto_retry_start puis un message error à chaque retry. Sans
     // dé-duplication, l'UI empile « ❌ Erreur de connexion » 3-4× d'affilée,
@@ -5297,9 +5305,8 @@ function toRelPath(abs) {
 
 // ── Détection de boucle dans la réflexion (issue #37) ──
 // Nombre maximal de corrections de boucle par session (évite une boucle sans fin
-// de détection/correction). Après 2 corrections, on laisse l'agent terminer et
-// on prévient l'utilisateur.
-const MAX_LOOP_CORRECTIONS = 2;
+// de détection/correction). Après MAX_LOOP_ESCALATION stratégies, on abandonne
+// et on prévient l'utilisateur (voir loop-detection.js).
 // Intervalle minimal entre deux tests de boucle pendant le streaming (ms).
 const LOOP_CHECK_INTERVAL_MS = 500;
 // Taille minimale du buffer de réflexion avant de tester (évite les faux positifs
@@ -5318,7 +5325,7 @@ const LOOP_BUFFER_MIN = 200;
 function maybeDetectReflectionLoop(state, messagesEl) {
   if (!state || state.orchestrationRunning) return;
   if (state.loopCorrectionPending) return; // déjà en cours de correction
-  if (state.loopCorrectionCount >= MAX_LOOP_CORRECTIONS) return;
+  if (state.loopAbandoned) return; // déjà abandonné (toutes les stratégies épuisées)
   if (!state.isStreaming) return;
 
   // Throttle : ne tester qu'une fois toutes les LOOP_CHECK_INTERVAL_MS.
@@ -5329,10 +5336,14 @@ function maybeDetectReflectionLoop(state, messagesEl) {
   const buffer = state.loopBuffer || "";
   if (buffer.length < LOOP_BUFFER_MIN) return;
 
-  if (detectRepeatedBlock(buffer) || detectRepeatedWord(buffer)) {
+  if (
+    detectRepeatedBlock(buffer) ||
+    detectRepeatedWord(buffer) ||
+    detectSemanticLoop(buffer)
+  ) {
     state.loopCorrectionPending = true;
     console.warn("[loop-detection] boucle détectée, arrêt de l'agent pour correction");
-    appendSystemMessage(messagesEl, "🔁 Boucle détectée dans la réflexion : le modèle répète le même bloc de texte. Arrêt de l'agent pour correction…");
+    appendSystemMessage(messagesEl, "🔁 Boucle détectée dans la réflexion : le modèle répète le même contenu. Arrêt de l'agent pour correction…");
     invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (loop):", e));
   }
 }
@@ -5497,20 +5508,29 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       // Issue #37 : reprise après arrêt pour boucle de réflexion. L'agent a été
       // arrêté (abort) quand une boucle a été détectée ; on lui renvoie ici une
-      // demande de correction dans la même session pour qu'il reprenne (max 2).
+      // demande de correction dans la même session, avec escalade adaptative :
+      // on applique jusqu'à MAX_LOOP_ESCALATION stratégies (troncature + pilotage,
+      // pénalité/température, déterministe, élagage du contexte) puis, en dernier
+      // recours, on abandonne avec le message clair actuel.
       if (state.loopCorrectionPending) {
         state.loopCorrectionPending = false;
         state.loopBuffer = "";
-        if (state.loopCorrectionCount < MAX_LOOP_CORRECTIONS) {
+        if (state.loopCorrectionCount < MAX_LOOP_ESCALATION) {
           state.loopCorrectionCount++;
-          appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle (${state.loopCorrectionCount}/${MAX_LOOP_CORRECTIONS})…`);
+          const level = state.loopCorrectionCount; // 1..MAX_LOOP_ESCALATION
+          // Niveau 1 : troncature de la queue répétée (le modèle ne repart pas du
+          // texte bouclé). On calcule la queue répétée sur le texte streamé.
+          const repeatedTail = findRepeatedTail(state.lastAssistantRawText || "");
+          const correction = buildLoopCorrectionPrompt(level, { repeatedTail });
+          appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle (stratégie ${level}/${MAX_LOOP_ESCALATION})…`);
           invoke("send_agent_prompt", {
-            message: "Tu tournes en boucle : tu répètes à l'identique le même bloc de texte. Arrête-toi, corrige-toi, et poursuis ta réponse de façon progressive, sans répéter le même contenu.",
+            message: correction,
           }).catch((e) => {
             console.error("Erreur envoi correction boucle:", e);
             appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de boucle : ${e}`);
           });
         } else {
+          state.loopAbandoned = true;
           appendSystemMessage(messagesEl, "⚠️ L'agent a tourné en boucle plusieurs fois. Veuillez reformuler votre demande ou changer de modèle.");
         }
       }
@@ -6746,7 +6766,7 @@ export async function renderMessageHistory(container) {
     raw = await invoke("get_agent_messages");
   } catch (_) {
     // Issue #48 : la session RPC peut être indisponible (session parkée morte,
-    // rpc_state vide). Au lieu de retourner -1 (→ boucle de retry qui abandonne
+    // aucune session active dans l'AgentService). Au lieu de retourner -1 (→ boucle de retry qui abandonne
     // → discussion vide), on retombe sur la lecture directe du fichier de
     // session pi le plus récent pour reconstruire la discussion. Si le fichier
     // est introuvable, on retourne -1 (session pas encore prête, à réessayer).

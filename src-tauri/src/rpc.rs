@@ -8,10 +8,10 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
+use crate::agent_service::SpawnMode;
 use crate::rpc_manager;
 
 /// Multi-projets (spec_multiprojects.md §3) : canal d'événements Tauri dédié à
@@ -65,7 +65,6 @@ pub fn get_agent_event_channel(state: State<AppState>, agent_id: Option<String>)
         .ok_or("Aucun projet ouvert")?;
     Ok(agent_event_channel(&project, &normalize_agent_id(agent_id.as_deref())))
 }
-use crate::session_history;
 use crate::AppState;
 
 #[cfg(windows)]
@@ -177,7 +176,7 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
 /// activité RPC, même après un `agent_settled`. Évite que la pastille n'oscille
 /// en « en attente » entre deux sous-tâches d'un même plan d'orchestration
 /// (chaque `agent_settled` termine une exécution, mais le plan global continue).
-const ACTIVITY_GRACE_SECS: u64 = 15;
+pub(crate) const ACTIVITY_GRACE_SECS: u64 = 15;
 
 /// Événements RPC considérés comme une activité de l'agent (maintiennent le
 /// projet « occupé »). `agent_start`/`agent_settled` basculent le drapeau busy ;
@@ -203,7 +202,7 @@ const ACTIVITY_EVENTS: &[&str] = &[
 /// projet (issue #13). Sur `agent_start` → busy=true ; sur `agent_settled` →
 /// busy=false (fin définitive d'une exécution, après retries/compaction).
 /// `ACTIVITY_EVENTS` rafraîchit `updated` (base de la fenêtre de grâce anti-flicker).
-fn make_project_activity_observer(
+pub(crate) fn make_project_activity_observer(
     map: &Arc<Mutex<HashMap<String, crate::SessionActivity>>>,
     project_key: &str,
 ) -> rpc_manager::EventObserver {
@@ -276,158 +275,32 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
         .clone();
     drop(project);
 
-    // Multi-projets (spec_multiprojects.md §3) : reprendre une session parkée du
-    // projet actif si elle existe (vrai multi-agent) au lieu d'en relancer une.
-    // Multi-onglets agents (spec_multi_agents) : la session parkée est indexée
-    // par id d'agent dans `ProjectState.rpc` (processus pi toujours vivant) ; on
-    // la remonte dans `rpc_state` pour reprendre exactement là où on en était.
-    let resumed = {
-        let mut projects = state.projects.lock().unwrap();
-        projects
-            .get_mut(&cwd)
-            .and_then(|ps| ps.rpc.remove(&agent_id))
-    };
-    if let Some(mut session) = resumed {
-        // Issue #48 : vérifier que le processus pi de la session parkée est
-        // TOUJOURS vivant avant de la reprendre. Si le pi est mort pendant le
-        // parking (crash, kill, redémarrage), reprendre la session donne une
-        // session morte : `get_agent_messages` échoue (pipe fermé) → discussion
-        // vide, aucun événement RPC reçu (agent_end jamais reçu → sessions non
-        // persistées), et le statut reste bloqué en « streaming ». On jette la
-        // session morte et on en démarre une nouvelle (l'historique pi reste
-        // récupérable via list_sessions / index_sessions).
-        let alive = session
-            .child
-            .try_wait()
-            .map(|s| s.is_none())
-            .unwrap_or(false);
-        if alive {
-            *state.rpc_state.lock().unwrap() = Some(session);
-            *state.active_agent_id.lock().unwrap() = Some(agent_id);
-            // Reprendre la session : pas de `new_session` (on garde l'historique).
-            return Ok(true);
-        }
-        // Session morte : on la laisse tomber (try_wait a déjà récolté le
-        // processus) et on démarre une nouvelle session ci-dessous.
-        drop(session);
-    }
-
-    let mut rpc = state.rpc_state.lock().unwrap();
-    if rpc.is_some() {
+    if state.agent_service.active_agent().is_some() {
         return Err("Une session agent est déjà active".to_string());
     }
 
-    let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits) = {
+    // Déléguer le démarrage/reprise à l'AgentService (session principale,
+    // canal projet). Le registre unique (clé composite
+    // (projet, agent)) est la source de vérité des sessions : si une session
+    // parkée vivante existe pour (cwd, agent_id) — multi-projets / multi-onglets
+    // agents — elle est reprise (processus pi toujours vivant, pas de relance,
+    // l'historique est conservé) et la méthode retourne `true` ; sinon un
+    // nouveau processus pi est lancé (`false`). Le spawn (config, skill
+    // quality-gate, extensions pi, observateur d'activité) est géré par
+    // `AgentService::spawn_session` ; le pointeur `active` du service devient la
+    // source de vérité de l'agent affiché.
+    let (pi_path, no_session) = {
         let config = state.config.lock().unwrap();
-        (
-            config.rpc_pi_path.clone(),
-            config.rpc_no_session,
-            config.rpc_session_dir.clone(),
-            config.quality_gate_enabled,
-            config.confirm_file_edits,
-        )
+        (config.rpc_pi_path.clone(), config.rpc_no_session)
     };
-
-    // Construire le répertoire de session avec le sous-dossier projet. Multi-
-    // onglets agents : chaque agent a SON propre sous-dossier (`agent-<id>`) pour
-    // une conversation indépendante ; l'agent par défaut garde le chemin hérité.
-    let mut session_dir_resolved = if session_dir.is_empty() {
-        resolve_agent_home(&pi_path)?.join("agent").join("sessions")
-            .join(session_history::project_to_session_folder(&cwd))
-    } else {
-        std::path::PathBuf::from(&session_dir)
-            .join(session_history::project_to_session_folder(&cwd))
-    };
-    if agent_id != DEFAULT_AGENT_ID {
-        session_dir_resolved = session_dir_resolved.join(&agent_id);
-    }
-    let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
-
-    // Quality-gate interne (Évolution 7) : si activé, écrire le SKILL.md embarqué
-    // par Pilot dans le dossier data, puis le passer à pi via --skill.
-    let skill_path: Option<String> = if qg_enabled {
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            let skill_file = data_dir.join("skills").join("quality-gate").join("SKILL.md");
-            if fs::create_dir_all(skill_file.parent().unwrap_or(&data_dir)).is_ok() {
-                let content: &str = include_str!("../skills/quality-gate/SKILL.md");
-                if fs::write(&skill_file, content).is_ok() {
-                    Some(skill_file.to_string_lossy().to_string())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Extensions pi : pilot-edit-gate (porte pré-écriture A4 V2), pilot-context
-    // (injection contexte/mémoire dans le system prompt — spec_context_engine /
-    // spec_project_memory) et pilot-choices (boutons de choix/confirmation/saisie
-    // — issue #30). `--extension` accepte plusieurs valeurs. Écrites dans le
-    // dossier data depuis include_str! (imports type-only, effacés par jiti —
-    // aucune dépendance npm).
-    // - pilot-edit-gate : chargée UNIQUEMENT si `confirm_file_edits` est activé ET
-    //   si le backend supporte `--extension`. Quand désactivé (défaut) ou non
-    //   supporté (ex: plh sans le flag), elle n'est pas chargée → aucun surcharge,
-    //   aucun blocage, l'agent écrit librement.
-    // - pilot-context : chargée dès que `--extension` est supporté (indépendante
-    //   de confirm_file_edits). No-op si Pilot n'écrit pas de fichier de handoff.
-    // - pilot-choices : chargée dès que `--extension` est supporté (indépendante
-    //   de confirm_file_edits). Enregistre des outils (ask_choice, ask_confirm,
-    //   ask_input, ask_multi_choice) que le LLM peut appeler pour demander une
-    //   interaction à l'utilisateur via des boutons rendus par Pilot.
-    let ext_supported = probe_extension_support(state, &pi_path);
-    let mut extensions: Vec<String> = Vec::new();
-    if ext_supported {
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            let dir = data_dir.join("extensions");
-            if fs::create_dir_all(&dir).is_ok() {
-                if confirm_file_edits {
-                    let ext_file = dir.join("pilot-edit-gate.ts");
-                    if fs::write(&ext_file, include_str!("../extensions/pilot-edit-gate.ts")).is_ok() {
-                        extensions.push(ext_file.to_string_lossy().to_string());
-                    }
-                }
-                let ctx_file = dir.join("pilot-context.ts");
-                if fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
-                    extensions.push(ctx_file.to_string_lossy().to_string());
-                }
-                let choices_file = dir.join("pilot-choices.ts");
-                if fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
-                    extensions.push(choices_file.to_string_lossy().to_string());
-                }
-            }
-        }
-    }
-
-    let channel = agent_event_channel(&cwd, &agent_id);
-    let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, skill_path.as_deref(), extensions, app.clone(), state.event_tx.clone(), &channel, None,
-        // Issue #13 : observateur d'activité → map par projet (agent_start/settled).
-        Some(make_project_activity_observer(&state.agent_activity, &cwd)),
-        None,
-    )
-        .map_err(|e| {
-            if pi_path.is_empty() {
-                format!("{}. Installez pi (https://pi.dev) ou configurez le chemin dans les paramètres.", e)
-            } else {
-                format!("{}. Vérifiez le chemin dans les paramètres (Gestion RPC).", e)
-            }
-        })?;
-    *rpc = Some(session);
-    *state.active_agent_id.lock().unwrap() = Some(agent_id);
-
-    // Démarrer une nouvelle session
-    if let Some(sess) = rpc.as_mut() {
-        let cmd = serde_json::json!({"type": "new_session"});
-        rpc_manager::send_command_sync(sess, cmd).ok();
-    }
-
+    state.agent_service.start(
+        app,
+        &cwd,
+        &agent_id,
+        &pi_path,
+        no_session,
+        SpawnMode::MainSession,
+    )?;
     Ok(false)
 }
 
@@ -437,35 +310,30 @@ pub fn start_agent_session(state: State<AppState>, app: AppHandle, agent_id: Opt
 }
 
 /// Multi-projets (spec_multiprojects.md §3) : « parke » la session agent du
-/// projet actif dans `ProjectState.rpc` SANS tuer le processus pi (vrai
-/// multi-agent en arrière-plan). À la bascule, `do_start_agent_session`
-/// reprend la session parkée au lieu d'en relancer une. Idempotent : no-op si
-/// aucune session active ou si le projet actif est inconnu.
+/// projet actif SANS tuer le processus pi (vrai multi-agent en arrière-plan).
+/// À la bascule, `do_start_agent_session` reprend la session parkée au lieu
+/// d'en relancer une. Idempotent : no-op si aucune session active ou si le
+/// projet actif est inconnu.
 /// Multi-onglets agents (spec_multi_agents) : `agent_id` indexe la session
-/// parkée dans la map du projet (None/vide → agent par défaut).
+/// parkée (None/vide → agent par défaut).
+/// Le parking vit dans l'AgentService (registre unique, clé composite
+/// (projet, agent)) — la session reste dans le registre, marquée Parked,
+/// processus pi vivant conservé.
 pub(crate) fn do_park_agent_session(state: &AppState, agent_id: Option<&str>) -> Result<(), String> {
     // None → parker l'agent actif (rétrocompat des appelants existants).
     let agent_id = match agent_id {
         Some(a) => normalize_agent_id(Some(a)),
-        None => state.active_agent_id.lock().unwrap().clone()
+        None => state.agent_service.active_agent()
             .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
     };
     let active = state.active_project.lock().unwrap().clone();
-    let session = state.rpc_state.lock().unwrap().take();
-    let Some(session) = session else {
-        return Ok(()); // aucune session active
+    let Some(active_path) = active else {
+        return Ok(()); // aucun projet actif
     };
-    if let Some(ref active_path) = active {
-        let mut projects = state.projects.lock().unwrap();
-        if let Some(ps) = projects.get_mut(active_path) {
-            ps.rpc.insert(agent_id, session);
-            *state.active_agent_id.lock().unwrap() = None;
-            return Ok(());
-        }
-        // Projet actif inconnu dans la collection → tuer pour éviter une fuite.
-    }
-    let mut session = session;
-    rpc_manager::stop_session(&mut session);
+    // Marquer la session (projet, agent) comme Parkée dans l'AgentService ; le
+    // pointeur actif est remis à None si c'était l'agent affiché. No-op si la
+    // session n'existe pas (rien à parker).
+    let _ = state.agent_service.pause(&active_path, &agent_id);
     Ok(())
 }
 
@@ -476,47 +344,34 @@ pub fn park_agent_session(state: State<AppState>, agent_id: Option<String>) -> R
 
 /// Arrête l'agent pi en cours (s'il existe) et libère la session. Idempotent : no-op
 /// si aucune session n'est active. Multi-onglets agents : `agent_id` cible l'agent
-/// à arrêter (None/vide → agent par défaut). Si l'agent ciblé n'est pas l'actif,
-/// on arrête sa session parkée dans `ProjectState.rpc`.
+/// à arrêter (None/vide → agent par défaut). L'agent ciblé (actif ou parké) est
+/// retiré du registre unique de l'AgentService et son processus pi est tué.
 pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
     // None → arrêter l'agent actif (rétrocompat des appelants existants).
     let agent_id = match agent_id {
         Some(a) => normalize_agent_id(Some(a)),
-        None => state.active_agent_id.lock().unwrap().clone()
+        None => state.agent_service.active_agent()
             .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
     };
-    let active = state.active_agent_id.lock().unwrap().clone();
+    let active = state.agent_service.active_agent();
+    let project = state.project_path.lock().unwrap().clone();
     if active.as_deref() == Some(agent_id.as_str()) {
-        let mut rpc = state.rpc_state.lock().unwrap();
-        if let Some(mut session) = rpc.take() {
-            // Issue #13 : remettre le projet actif à « libre » UNIQUEMENT quand une
-            // session a réellement été arrêtée. Dans le cas d'un parking (multi-
-            // projets, session déjà déplacée dans `ProjectState.rpc`), `rpc_state`
-            // est vide : le processus pi continue de travailler en arrière-plan et on
-            // ne doit PAS éteindre sa pastille d'activité (issue #13 — indicateur sur
-            // un projet non au premier plan).
-            if let Some(p) = state.project_path.lock().unwrap().clone() {
-                reset_project_activity(state, &p);
-            }
-            rpc_manager::stop_session(&mut session);
-        }
-        *state.active_agent_id.lock().unwrap() = None;
-    } else {
-        // Agent non actif → arrêter sa session parkée dans CE projet.
-        let cwd = state.project_path.lock().unwrap().clone();
-        if let Some(cwd) = cwd {
-            let mut projects = state.projects.lock().unwrap();
-            if let Some(ps) = projects.get_mut(&cwd) {
-                if let Some(mut session) = ps.rpc.remove(&agent_id) {
-                    rpc_manager::stop_session(&mut session);
-                }
-            }
+        // Issue #13 : remettre le projet actif à « libre » quand une session
+        // est réellement arrêtée (pas lors d'un parking, où le processus pi
+        // continue de travailler en arrière-plan).
+        if let Some(project) = &project {
+            reset_project_activity(state, project);
         }
     }
+    // La session (active ou parkée) vit dans le registre unique de
+    // l'AgentService (clé composite (projet, agent)). `stop` la retire et tue
+    // le processus pi ; no-op si aucune session pour (projet, agent).
+    if let Some(project) = project {
+        let _ = state.agent_service.stop(&project, &agent_id);
+    }
     // H2 V1 : arrêter aussi le reviewer (cycle de vie lié à la session principale).
-    let mut rev = state.rpc_reviewer.lock().unwrap();
-    if let Some(mut session) = rev.take() {
-        rpc_manager::stop_session(&mut session);
+    if let Some(project) = state.project_path.lock().unwrap().clone() {
+        state.agent_service.stop_reviewer(&project);
     }
 }
 
@@ -531,59 +386,36 @@ pub fn stop_agent_session(state: State<AppState>, agent_id: Option<String>) -> R
 /// sur Windows un processus enfant ne meurt pas automatiquement quand son
 /// parent meurt, il faut donc tuer explicitement chaque session encore
 /// vivante. Couvre :
-///  - la session principale (`rpc_state`, potentiellement plh),
-///  - la session reviewer (`rpc_reviewer`),
-///  - les sessions « parkées » par projet (`projects[*].rpc`, multi-projets),
-///  - les sessions des agents multi-rôles (`agent_sessions`, H2 V2).
+///  - la session principale (chat Agent Pi),
+///  - la session reviewer (`orch-reviewer`),
+///  - les sessions « parkées » par projet / par onglet agent (clé composite
+///    (projet, agent), multi-projets / multi-onglets),
+///  - les sessions des agents multi-rôles (H2 V2),
+///  - la session super-agent (Assistant, id `superagent`).
 pub(crate) fn do_shutdown_all_sessions(state: &AppState) {
-    // Session principale + reviewer.
-    {
-        let mut rpc = state.rpc_state.lock().unwrap();
-        if let Some(mut session) = rpc.take() {
-            rpc_manager::stop_session(&mut session);
-        }
-        let mut rev = state.rpc_reviewer.lock().unwrap();
-        if let Some(mut session) = rev.take() {
-            rpc_manager::stop_session(&mut session);
-        }
-    }
-    // Sessions parkées par projet (multi-projets / multi-onglets agents).
-    {
-        let mut projects = state.projects.lock().unwrap();
-        for (_, ps) in projects.iter_mut() {
-            for (_, mut session) in ps.rpc.drain() {
-                rpc_manager::stop_session(&mut session);
-            }
-        }
-    }
-    // Sessions agents multi-rôles (H2 V2).
-    crate::agents::do_stop_all_agent_processes(state);
-    // Session super-agent (spec_super_agent.md).
-    {
-        let mut sa = state.rpc_superagent.lock().unwrap();
-        if let Some(mut session) = sa.take() {
-            rpc_manager::stop_session(&mut session);
-        }
-    }
+    // `shutdown_all` arrête TOUTES les sessions du registre unique de
+    // l'AgentService et réinitialise le pointeur actif : session active du chat
+    // Agent Pi + agents multi-rôles (H2 V2) + sessions parkées par projet / par
+    // onglet agent (clé composite (projet, agent)) + reviewer (orch-reviewer)
+    // + super-agent (id `superagent`).
+    state.agent_service.shutdown_all();
 }
 
 #[tauri::command]
 pub fn send_rpc_command(state: State<AppState>, command: Value) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
-    rpc_manager::send_command(session, &command)
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command(session, &command)
+    })?
 }
 
 /// Relais des choix d'agent via l'assistant (tâche de suivi #22).
 ///
 /// Envoie une commande (ex: `extension_ui_response`) à la session agent d'un
-/// projet donné, identifiée par (project_path, agent_id). Priorité à la session
-/// active (`rpc_state`) si elle correspond au couple projet/agent visé, sinon à
-/// la session parkée du projet (`projects[path].rpc[agent_id]`, multi-onglets
-/// agents — processus pi vivant en arrière-plan), sinon aux sessions des agents
-/// multi-rôles (`agent_sessions`, H2 V2).
+/// projet donné, identifiée par (project_path, agent_id). L'AgentService étant
+/// la source unique de vérité des sessions (clé composite (projet, agent)), le
+/// routage se réduit à une consultation directe de son registre
+/// (`AgentService.send`).
 ///
 /// Permet de répondre à un bouton de question rendu dans le chat de l'assistant
 /// en routant la réponse vers LE bon agent, sans mélanger les réponses quand
@@ -596,50 +428,27 @@ pub fn send_agent_command_to(
     command: Value,
 ) -> Result<(), String> {
     let agent_id = normalize_agent_id(agent_id.as_deref());
-    let proj = project_path.filter(|p| !p.trim().is_empty());
-
-    // 1) Session active si elle correspond au (projet, agent) ciblé.
-    {
-        let active_proj = state.active_project.lock().unwrap().clone();
-        let active_agent = state.active_agent_id.lock().unwrap().clone()
-            .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string());
-        let proj_matches = match &proj {
-            Some(p) => active_proj.as_deref() == Some(p.as_str()),
-            None => true, // projet non précisé → session active
-        };
-        if proj_matches && active_agent == agent_id {
-            let mut rpc = state.rpc_state.lock().unwrap();
-            if let Some(session) = rpc.as_mut() {
-                return rpc_manager::send_command(session, &command);
-            }
-        }
-    }
-    // 2) Session parkée du projet ciblé (multi-onglets agents).
-    if let Some(p) = &proj {
-        let mut projects = state.projects.lock().unwrap();
-        if let Some(ps) = projects.get_mut(p) {
-            if let Some(session) = ps.rpc.get_mut(&agent_id) {
-                return rpc_manager::send_command(session, &command);
-            }
-        }
-    }
-    // 3) Session des agents multi-rôles (H2 V2).
-    {
-        let mut agents = state.agent_sessions.lock().unwrap();
-        if let Some(session) = agents.get_mut(&agent_id) {
-            return rpc_manager::send_command(session, &command);
-        }
-    }
-    Err("Aucune session agent trouvée pour relayer la réponse".to_string())
+    // Résoudre le projet : explicitement fourni, sinon le projet actif (les
+    // sessions agents vivent toutes dans le registre unique, clé (projet, agent)
+    // — `active_project` et `project_path` sont maintenus synchronisés).
+    let project = match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => p,
+        None => state
+            .active_project
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?,
+    };
+    state.agent_service.send(&project, &agent_id, command)
 }
 
 pub(crate) fn do_get_agent_state(state: &AppState) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "get_state" });
-    rpc_manager::send_command_sync_timeout(session, cmd, 8)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync_timeout(session, cmd, 8)
+    })?
 }
 
 #[tauri::command]
@@ -653,12 +462,11 @@ pub fn get_session_stats(state: State<AppState>) -> Result<Value, String> {
 }
 
 pub(crate) fn do_get_session_stats(state: &AppState) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "get_session_stats" });
-    rpc_manager::send_command_sync(session, cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })?
 }
 
 /// Résout le répertoire home du programme RPC (pi, plh, ...) à partir du chemin
@@ -708,10 +516,7 @@ pub(crate) fn do_send_agent_prompt(
     message: String,
     images: Option<Vec<Value>>,
 ) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let mut cmd = serde_json::json!({
         "type": "prompt",
         "message": message
@@ -721,7 +526,9 @@ pub(crate) fn do_send_agent_prompt(
             cmd["images"] = Value::Array(imgs.clone());
         }
     }
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command(session, &cmd)
+    })?
 }
 
 #[tauri::command]
@@ -772,24 +579,22 @@ fn strip_context_preamble(message: &str) -> String {
 /// via le flag global `window._pilotInlineComplete.isRequesting()`.
 #[tauri::command]
 pub fn send_inline_prompt(state: State<AppState>, message: String) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({
         "type": "prompt",
         "message": message
     });
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command(session, &cmd)
+    })?
 }
 
 pub(crate) fn do_abort_agent(state: &AppState) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "abort" });
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command(session, &cmd)
+    })?
 }
 
 #[tauri::command]
@@ -798,16 +603,15 @@ pub fn abort_agent(state: State<AppState>) -> Result<(), String> {
 }
 
 pub(crate) fn do_new_agent_session(state: &AppState) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "new_session" });
     // SYNCHRONE : on attend que pi ait terminé le new_session avant de retourner.
     // new_session réinitialise le modèle au modèle par défaut de pi — si on ne l'attend
     // pas, un set_model suivant peut être appliqué AVANT le reset, puis annulé par le
     // new_session traité tardivement (bascule orchestrateur/codeur perdu).
-    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    })?
 }
 
 #[tauri::command]
@@ -815,10 +619,10 @@ pub fn new_agent_session(state: State<AppState>) -> Result<(), String> {
     do_new_agent_session(state.inner())
 }
 
-/// Évolution 63 : purge la conversation de l'agent (équivalent au clic sur
-/// « + » de l'onglet agent) en préservant le modèle actif. Utilisé par
-/// l'Assistant (🧭) avant de déléguer une demande à l'agent, quand l'option
-/// `super_agent_purge_agent_conversation` est activée.
+/// Purge la conversation de l'agent (équivalent au clic sur « + » de l'onglet
+/// agent) en préservant le modèle actif. Utilisé par l'Assistant (🧭) à la
+/// demande via l'outil `purge_agent_conversation` (début de conversation ou
+/// arrêt de l'agent).
 ///
 /// `new_session` réinitialise le modèle au modèle par défaut de pi — on capture
 /// donc le modèle actif (get_state) avant la purge et on le ré-applique après,
@@ -829,22 +633,21 @@ pub fn purge_agent_conversation(state: State<AppState>) -> Result<(), String> {
 }
 
 pub(crate) fn do_purge_agent_conversation(state: &AppState) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
-    let model = get_current_model(session);
-    let cmd = serde_json::json!({ "type": "new_session" });
-    rpc_manager::send_command_sync(session, cmd).ok();
-    if let Some((provider, model_id)) = model {
-        let set_cmd = serde_json::json!({
-            "type": "set_model",
-            "provider": provider,
-            "modelId": model_id
-        });
-        rpc_manager::send_command_sync(session, set_cmd).ok();
-    }
-    Ok(())
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    state.agent_service.with_active_session(&project, |session| {
+        let model = get_current_model(session);
+        let cmd = serde_json::json!({ "type": "new_session" });
+        rpc_manager::send_command_sync(session, cmd).ok();
+        if let Some((provider, model_id)) = model {
+            let set_cmd = serde_json::json!({
+                "type": "set_model",
+                "provider": provider,
+                "modelId": model_id
+            });
+            rpc_manager::send_command_sync(session, set_cmd).ok();
+        }
+        Ok(())
+    })?
 }
 
 /// Lit le modèle actuellement actif (provider/id) de la session pi via
@@ -872,12 +675,11 @@ fn get_current_model(session: &mut rpc_manager::RpcSession) -> Option<(String, S
 }
 
 pub(crate) fn do_get_agent_messages(state: &AppState) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "get_messages" });
-    rpc_manager::send_command_sync(session, cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })?
 }
 
 #[tauri::command]
@@ -890,16 +692,15 @@ pub(crate) fn do_set_agent_model(
     provider: String,
     model_id: String,
 ) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({
         "type": "set_model",
         "provider": provider,
         "modelId": model_id
     });
-    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    let resp = state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })??;
     // Vérifier le champ success de la réponse pi : un set_model qui échoue
     // (provider/modèle introuvable) répond {success: false, error: "..."}.
     // Sans cette vérification, l'échec passait inaperçu et le modèle restait le
@@ -929,12 +730,11 @@ pub fn set_agent_model(
 }
 
 pub(crate) fn do_list_agent_models(state: &AppState) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({"type": "get_available_models"});
-    rpc_manager::send_command_sync_timeout(session, cmd, 12)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync_timeout(session, cmd, 12)
+    })?
 }
 
 #[tauri::command]
@@ -944,12 +744,11 @@ pub fn list_agent_models(state: State<AppState>) -> Result<Value, String> {
 
 #[tauri::command]
 pub fn list_agent_commands(state: State<AppState>) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({"type": "get_commands"});
-    rpc_manager::send_command_sync(session, cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })?
 }
 
 // ── H2 V1 : session reviewer dédiée (canal rpc-event-reviewer) ──────────────
@@ -967,23 +766,7 @@ pub(crate) fn do_start_reviewer_session(state: &AppState, app: &AppHandle) -> Re
 
     let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
 
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    if rpc.is_some() {
-        return Ok(()); // déjà lancé (idempotent)
-    }
-
-    let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, true, "", None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-reviewer", None, None, None,
-    )
-        .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
-    *rpc = Some(session);
-
-    // Démarrer une nouvelle session (contexte vierge)
-    if let Some(sess) = rpc.as_mut() {
-        let cmd = serde_json::json!({"type": "new_session"});
-        rpc_manager::send_command_sync(sess, cmd).ok();
-    }
-    Ok(())
+    state.agent_service.start_reviewer(app, &cwd, &pi_path)
 }
 
 #[tauri::command]
@@ -993,20 +776,15 @@ pub fn start_reviewer_session(state: State<AppState>, app: AppHandle) -> Result<
 
 #[tauri::command]
 pub fn stop_reviewer_session(state: State<AppState>) -> Result<(), String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    if let Some(mut session) = rpc.take() {
-        rpc_manager::stop_session(&mut session);
-    }
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    state.agent_service.stop_reviewer(&project);
     Ok(())
 }
 
 pub(crate) fn do_send_reviewer_prompt(state: &AppState, message: String) -> Result<(), String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session reviewer active")?;
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "prompt", "message": message });
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.send_reviewer(&project, cmd)
 }
 
 #[tauri::command]
@@ -1016,22 +794,16 @@ pub fn send_reviewer_prompt(state: State<AppState>, message: String) -> Result<(
 
 #[tauri::command]
 pub fn new_reviewer_session(state: State<AppState>) -> Result<(), String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session reviewer active")?;
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({"type": "new_session"});
-    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    state.agent_service.send_reviewer_sync(&project, cmd).map(|_| ())
 }
 
 #[tauri::command]
 pub fn set_reviewer_model(state: State<AppState>, provider: String, model_id: String) -> Result<(), String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session reviewer active")?;
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
-    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    let resp = state.agent_service.send_reviewer_sync(&project, cmd)?;
     if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
         let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_model a échoué").to_string();
         return Err(format!("pi a refusé set_model (reviewer) : {}", err));
@@ -1041,21 +813,15 @@ pub fn set_reviewer_model(state: State<AppState>, provider: String, model_id: St
 
 #[tauri::command]
 pub fn abort_reviewer(state: State<AppState>) -> Result<(), String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session reviewer active")?;
-    rpc_manager::send_command(session, &serde_json::json!({"type": "abort"}))
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    state.agent_service.send_reviewer(&project, serde_json::json!({"type": "abort"}))
 }
 
 #[tauri::command]
 pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
-    let mut rpc = state.rpc_reviewer.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session reviewer active")?;
+    let project = state.project_path.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "get_state" });
-    rpc_manager::send_command_sync_timeout(session, cmd, 8)
+    state.agent_service.send_reviewer_sync_timeout(&project, cmd, 8)
 }
 
 #[cfg(test)]

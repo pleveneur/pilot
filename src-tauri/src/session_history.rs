@@ -345,20 +345,17 @@ fn write_session_tags(project_path: &str, tags: &HashMap<String, Vec<String>>) -
     Ok(())
 }
 
-/// (Re)construit l'index depuis le dossier de sessions pi du projet.
-#[tauri::command]
-pub fn index_sessions(state: State<AppState>) -> Result<usize, String> {
-    let project_path = state
-        .project_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Aucun projet ouvert")?;
-    let config = state.config.lock().unwrap();
-    let session_dir = project_sessions_dir(&config);
-    let folder_name = project_to_session_folder(&project_path);
+/// (Re)construit l'index depuis le dossier de sessions pi du projet donné.
+/// Retourne les entrées indexées (triées par timestamp décroissant) et écrit
+/// l'index `.pilot/sessions.jsonl`. Utilitaire partagé par `index_sessions`
+/// (projet actif) et `get_agent_sessions` (projet arbitraire / multi-projets).
+pub(crate) fn index_project_sessions(
+    project_path: &str,
+    config: &AppConfig,
+) -> Result<Vec<Value>, String> {
+    let session_dir = project_sessions_dir(config);
+    let folder_name = project_to_session_folder(project_path);
     let project_dir = session_dir.join(&folder_name);
-    drop(config);
 
     let mut entries: Vec<Value> = Vec::new();
     if project_dir.exists() {
@@ -373,7 +370,7 @@ pub fn index_sessions(state: State<AppState>) -> Result<usize, String> {
             if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                 continue;
             }
-            if let Some(e) = parse_session_file(&path, &project_path) {
+            if let Some(e) = parse_session_file(&path, project_path) {
                 entries.push(e);
             }
         }
@@ -383,9 +380,85 @@ pub fn index_sessions(state: State<AppState>) -> Result<usize, String> {
         let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
         tb.cmp(ta)
     });
-    let n = entries.len();
-    write_session_index(&project_path, &entries)?;
-    Ok(n)
+    write_session_index(project_path, &entries)?;
+    Ok(entries)
+}
+
+/// (Re)construit l'index depuis le dossier de sessions pi du projet actif.
+#[tauri::command]
+pub fn index_sessions(state: State<AppState>) -> Result<usize, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    let config = state.config.lock().unwrap();
+    let entries = index_project_sessions(&project_path, &config)?;
+    Ok(entries.len())
+}
+
+/// Paramètres optionnels de `get_agent_sessions`.
+#[derive(Deserialize)]
+pub struct AgentSessionsParams {
+    /// Chemin du projet ciblé. Si absent : projet actif, sinon tous les projets
+    /// ouverts (agrégation multi-projets, utile au tableau de bord / assistant).
+    project_path: Option<String>,
+    /// Nombre maximum de sessions à retourner (les plus récentes d'abord).
+    limit: Option<usize>,
+}
+
+/// Indexe (rétro-indexation) puis retourne les sessions d'agent d'un projet —
+/// ou de tous les projets ouverts si aucun chemin n'est fourni et qu'aucun
+/// projet n'est actif. Garantit un index à jour avant lecture (réanalyse le
+/// dossier de sessions pi et réécrit `.pilot/sessions.jsonl`). Utilisé par le
+/// tableau de bord (suivi multi-projets) et l'assistant pour consulter les
+/// sessions sans dépendre d'une indexation préalable.
+#[tauri::command]
+pub fn get_agent_sessions(
+    state: State<AppState>,
+    params: Option<AgentSessionsParams>,
+) -> Result<Value, String> {
+    let p = params.unwrap_or(AgentSessionsParams { project_path: None, limit: None });
+    let limit = p.limit.unwrap_or(0); // 0 = illimité
+
+    // Déterminer la liste des projets à indexer.
+    let mut projects: Vec<String> = Vec::new();
+    if let Some(path) = p.project_path {
+        projects.push(path);
+    } else if let Some(active) = state.project_path.lock().unwrap().clone() {
+        projects.push(active);
+    } else {
+        projects = state.config.lock().unwrap().open_projects.clone();
+    }
+    if projects.is_empty() {
+        return Ok(serde_json::json!({ "sessions": [], "indexed": 0 }));
+    }
+
+    let config = state.config.lock().unwrap();
+    let mut all: Vec<Value> = Vec::new();
+    for project_path in &projects {
+        match index_project_sessions(project_path, &config) {
+            Ok(mut entries) => all.append(&mut entries),
+            Err(_) => {
+                // Échec d'indexation d'un projet : retomber sur l'index existant.
+                all.extend(read_session_index(project_path));
+            }
+        }
+    }
+    drop(config);
+
+    // Tri global par timestamp décroissant.
+    all.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    let indexed = all.len();
+    if limit > 0 && all.len() > limit {
+        all.truncate(limit);
+    }
+    Ok(serde_json::json!({ "sessions": all, "indexed": indexed }))
 }
 
 #[derive(Deserialize)]
@@ -918,15 +991,14 @@ pub(crate) fn project_to_session_folder(path: &str) -> String {
 
 #[tauri::command]
 pub fn resume_agent_session(state: State<AppState>, session_file: String) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({
         "type": "switch_session",
         "sessionPath": session_file
     });
-    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    let resp = state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })??;
     // Vérifier que pi a RÉELLEMENT basculé : le switch peut être annulé par un
     // handler d'extension `session_before_switch` (champ data.cancelled) ou
     // échouer. Pilot ne doit pas afficher « Session chargée » ni reconstruire

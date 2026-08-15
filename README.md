@@ -1,6 +1,12 @@
-# Pilot — Éditeur de texte pour Agents IA
+# Pilot — IDE pour Agents IA
 
-**Pilot** est un éditeur de texte et prévisualiseur multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) conçu pour accompagner l'agent IA en ligne de commande — **pi** et **plh**. Au-delà de l'édition temps réel, il intègre un **chat agent** (RPC), le **Mode Orchestration**, la **conversion PDF → Markdown**, la **dictée vocale** et l'**accès distant web**.
+**Pilot** est un **environnement de développement intégré (IDE)** multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) dont le cœur est constitué des agents IA de codage **pi** et **plh**. Au-delà de l'édition temps réel, il intègre un **chat agent** (RPC), le **Mode Orchestration**, la **conversion PDF → Markdown**, la **dictée vocale** et l'**accès distant web**.
+
+Les **fournisseurs et modèles LLM sont paramétrables** : vous pouvez configurer d'autres providers et modèles d'API pour les LLM. Certains de ces modèles peuvent ne pas être testés (manque de moyens financiers du développeur) — des évolutions peuvent donc être demandées.
+
+Pilot porte la **vision particulière de son développeur (Patrick Leveneur)**, potentiellement différente des autres solutions existantes, avec une **intégration maximale de l'IA** — à la fois pour ses propres développements et pour des développements réalisés à la demande du développeur via l'outil.
+
+Le but final de Pilot est d'être un **assistant de codage** mais aussi un **assistant de suivi de dossiers** : grâce à l'IA et aux agents, suivre une activité de façon très efficace et faire des propositions et ajustements très élaborés.
 
 Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieurs projets simultanément, chacun avec son propre agent dédié en arrière-plan, ses onglets et sa discussion — le tout complété par le multi-agents, la mémoire de projet, l'historique de sessions, le super-agent de suivi et un système de tests anti-régression.
 
@@ -229,7 +235,7 @@ d'exploitation. Aucune donnée n'est transmise sans ton action.
 │  ─────────────────────── │──────────────────────────────────────────┤
 │  MonProjet               │                                          │
 │                           │  # Pilot                                │
-│  ▶ 📁 src                 │  Éditeur de texte pour Agents IA         │
+│  ▶ 📁 src                 │  IDE pour Agents IA                        │
 │    ▶ 📁 js               │                                          │
 │      📝 main.js          │  Fonctionnalités :                       │
 │      📝 editor.js        │  - Explorateur en temps réel             │

@@ -118,6 +118,9 @@ export async function initSettings() {
   const chkRpcNoSession = document.getElementById("setting-rpc-no-session");
   const inputRpcSessionDir = document.getElementById("setting-rpc-session-dir");
   const chkMultiAgentTabs = document.getElementById("setting-multi-agent-tabs");
+  const chkDashboardAutoOpen = document.getElementById("setting-dashboard-auto-open");
+  const chkDashboardAutoRefresh = document.getElementById("setting-dashboard-auto-refresh");
+  const inputDashboardAutoRefreshSeconds = document.getElementById("setting-dashboard-auto-refresh-seconds");
   const inputSessionRetention = document.getElementById("setting-session-retention");
   const chkShowThinking = document.getElementById("setting-show-thinking");
   const chkShowTools = document.getElementById("setting-show-tools");
@@ -189,7 +192,6 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentNotifyDone = document.getElementById("setting-superagent-notify-done");
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
-  const chkSuperAgentPurgeAgentConversation = document.getElementById("setting-superagent-purge-agent-conversation");
   const chkSuperAgentInvisibleAgent = document.getElementById("setting-superagent-invisible-agent");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
@@ -419,6 +421,9 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
     chkRpcNoSession.checked = currentConfig.rpc_no_session || false;
     inputRpcSessionDir.value = currentConfig.rpc_session_dir || "";
     if (chkMultiAgentTabs) chkMultiAgentTabs.checked = currentConfig.multi_agent_tabs === true;
+    if (chkDashboardAutoOpen) chkDashboardAutoOpen.checked = currentConfig.dashboard_auto_open === true;
+    if (chkDashboardAutoRefresh) chkDashboardAutoRefresh.checked = currentConfig.dashboard_auto_refresh !== false;
+    if (inputDashboardAutoRefreshSeconds) inputDashboardAutoRefreshSeconds.value = currentConfig.dashboard_auto_refresh_seconds ?? 10;
     if (inputSessionRetention) inputSessionRetention.value = currentConfig.session_retention_days ?? 15;
     chkShowThinking.checked = currentConfig.show_thinking !== false;
     chkShowTools.checked = currentConfig.show_tools || false;
@@ -508,7 +513,6 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   if (chkSuperAgentNotifyDone) chkSuperAgentNotifyDone.checked = currentConfig.notify_super_agent_done === true;
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
-  if (chkSuperAgentPurgeAgentConversation) chkSuperAgentPurgeAgentConversation.checked = currentConfig.super_agent_purge_agent_conversation !== false;
   if (chkSuperAgentInvisibleAgent) chkSuperAgentInvisibleAgent.checked = currentConfig.super_agent_invisible_agent !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
@@ -638,6 +642,9 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         rpc_no_session: chkRpcNoSession.checked,
         rpc_session_dir: inputRpcSessionDir.value.trim(),
         multi_agent_tabs: chkMultiAgentTabs ? chkMultiAgentTabs.checked : false,
+        dashboard_auto_open: chkDashboardAutoOpen ? chkDashboardAutoOpen.checked : false,
+        dashboard_auto_refresh: chkDashboardAutoRefresh ? chkDashboardAutoRefresh.checked : true,
+        dashboard_auto_refresh_seconds: inputDashboardAutoRefreshSeconds ? (parseInt(inputDashboardAutoRefreshSeconds.value, 10) || 10) : 10,
         session_retention_days: inputSessionRetention ? (parseInt(inputSessionRetention.value, 10) || 15) : 15,
         quality_gate_enabled: currentConfig?.quality_gate_enabled || false,
         show_thinking: chkShowThinking.checked,
@@ -725,7 +732,6 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,
-        super_agent_purge_agent_conversation: chkSuperAgentPurgeAgentConversation ? chkSuperAgentPurgeAgentConversation.checked !== false : true,
         super_agent_invisible_agent: chkSuperAgentInvisibleAgent ? chkSuperAgentInvisibleAgent.checked !== false : true,
       };
     try {

@@ -74,6 +74,16 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> **Propriétaire unique des sessions (phase 2)** : la session du chat Agent Pi
+> (comme le reviewer `orch-reviewer`, les agents multi-rôles H2 V2 et le
+> super-agent) vit dans le **registre unique de l'AgentService**
+> (`agent_service.rs`), indexé par clé composite `(projet, agent)`. Le pointeur
+> `active` est la source de vérité de l'agent affiché ; le parking
+> multi-projets/multi-onglets est un état (`Active`/`Parked`) du registre. Les
+> commandes Tauri exposées au frontend (`start_agent_session`, …) gardent leurs
+> signatures : elles délèguent à `AgentService.start/pause/stop/send` — aucun
+> changement frontend.
+
 ---
 
 ## 4. Paramètres utilisateur
@@ -254,7 +264,8 @@ coche ✓ incluse. Applicable aussi aux choix relayés via l'assistant (tâche #
 | Fichier | Rôle |
 |---------|------|
 | `src-tauri/src/rpc_manager.rs` | Module Rust : spawn, JSONL parser, threads, événements |
-| `src-tauri/src/lib.rs` | Commandes Tauri (15), AppConfig, AppState, cycle de vie |
+| `src-tauri/src/agent_service.rs` | **Propriétaire unique des sessions** (clé composite `(projet, agent)`, pointeur `active`, parking, reviewer `orch-reviewer`, super-agent `superagent`) |
+| `src-tauri/src/lib.rs` | Commandes Tauri (15), AppConfig, AppState (champs de sessions retirés en phase 2), cycle de vie |
 | `src/js/agent-pi.js` | Module frontend complet : chat UI, streaming, reconnexion |
 | `src/js/tabs.js` | Mode `agent`, `_openAgent()`, nettoyage `closeTab`/`closeTabByPath` |
 | `src/js/main.js` | Conditionnement RPC (bouton π, démarrage auto) |

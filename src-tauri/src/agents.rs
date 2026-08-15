@@ -11,20 +11,8 @@
 
 use serde_json::Value;
 use tauri::{AppHandle, State};
-use std::fs;
 
-use crate::{config_path, resolve_agent_home, rpc_manager, AppConfig, AppState};
-
-fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
-    Ok(std::path::PathBuf::from(home).join(".pilot"))
-}
-
-fn agents_registry_path() -> Result<std::path::PathBuf, String> {
-    Ok(pilot_user_dir()?.join("agents.json"))
-}
+use crate::{resolve_agent_home, rpc_manager, AppConfig, AppState};
 
 fn build_default_agent_registry(config: &AppConfig) -> Value {
     let orch = if !config.orchestrator_provider.is_empty() && !config.orchestrator_model_id.is_empty() {
@@ -125,78 +113,31 @@ fn build_default_agent_registry(config: &AppConfig) -> Value {
     })
 }
 
+/// Réinitialise le registre d'agents avec les 6 agents par défaut.
+/// Reconstruit le registre par défaut à partir de la config courante (modèles
+/// orchestrateur/codeur) puis l'écrit en base. Retourne le registre généré pour
+/// que le frontend puisse rafraîchir l'UI sans relecture base.
 #[tauri::command]
-pub fn load_agent_registry(state: State<AppState>) -> Result<Value, String> {
-    let path = agents_registry_path()?;
-    if !path.exists() {
-        let config = state.config.lock().unwrap().clone();
-        let default = build_default_agent_registry(&config);
-        let dir = path.parent().ok_or("Chemin agents.json invalide")?;
-        fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
-        let json = serde_json::to_string_pretty(&default)
-            .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
-        fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))?;
-        return Ok(default);
-    }
-    let content = fs::read_to_string(&path).map_err(|e| format!("Erreur lecture agents.json: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("JSON invalide dans agents.json: {}", e))
-}
-
-#[tauri::command]
-pub fn save_agent_registry(registry: Value) -> Result<(), String> {
-    let path = agents_registry_path()?;
-    let dir = path.parent().ok_or("Chemin agents.json invalide")?;
-    fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
-    let backup = path.with_extension("json.bak");
-    if path.exists() {
-        let _ = fs::copy(&path, &backup);
-    }
-    let mut with_meta = registry.clone();
-    with_meta["updated_at"] = Value::String(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let json = serde_json::to_string_pretty(&with_meta)
-        .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))
-}
-
-/// Réinitialise ~/.pilot/agents.json avec les 6 agents par défaut.
-/// Contrairement à save_agent_registry({agents:[]}) qui viderait tout, cette
-/// commande reconstruit le registre par défaut à partir de la config courante
-/// (modèles orchestrateur/codeur) puis l'écrit sur disque. Retourne le registre
-/// généré pour que le frontend puisse rafraîchir l'UI sans relecture disque.
-#[tauri::command]
-pub fn reset_agent_registry(state: State<AppState>) -> Result<Value, String> {
-    let path = agents_registry_path()?;
-    let dir = path.parent().ok_or("Chemin agents.json invalide")?;
-    fs::create_dir_all(dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
-    // Sauvegarde du fichier courant avant écrasement (récupération possible).
-    let backup = path.with_extension("json.bak");
-    if path.exists() {
-        let _ = fs::copy(&path, &backup);
-    }
+pub fn reset_agent_registry(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let config = state.config.lock().unwrap().clone();
     let default = build_default_agent_registry(&config);
-    let json = serde_json::to_string_pretty(&default)
-        .map_err(|e| format!("Erreur sérialisation registry: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Erreur écriture agents.json: {}", e))?;
-    Ok(default)
+    let agents_val = default.get("agents").cloned().unwrap_or(Value::Array(vec![]));
+    let agents: Vec<crate::agent::Agent> = serde_json::from_value(agents_val)
+        .map_err(|e| format!("Erreur désérialisation agents par défaut: {}", e))?;
+    state.agent_service.replace_agents(&app, None, &agents)?;
+    Ok(serde_json::json!({ "version": 1, "agents": agents }))
 }
 
 pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    if sessions.contains_key(&agent_id) {
-        return Ok(()); // idempotent
-    }
-    let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
-        cfg_path.with_file_name("agent").join("sessions").join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
-    } else {
-        pilot_user_dir()?.join("agent").join("sessions").join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
-    };
-    let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
-    let session = rpc_manager::spawn_and_start(
-        &cwd, &pi_path, no_session, &session_dir_str, None, Vec::new(), app.clone(), state.event_tx.clone(), "rpc-event-agents", Some(&agent_id), None, None,
-    ).map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
-    sessions.insert(agent_id, session);
-    Ok(())
+    state.agent_service.start(
+        app,
+        &cwd,
+        &agent_id,
+        &pi_path,
+        no_session,
+        crate::agent_service::SpawnMode::AgentProcess,
+    )
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -205,9 +146,9 @@ pub fn start_agent_process(state: State<AppState>, app: AppHandle, agent_id: Str
 }
 
 pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String) {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    if let Some(mut session) = sessions.remove(&agent_id) {
-        rpc_manager::stop_session(&mut session);
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+    if !project.is_empty() {
+        let _ = state.agent_service.stop(&project, &agent_id);
     }
 }
 
@@ -218,10 +159,7 @@ pub fn stop_agent_process(state: State<AppState>, agent_id: String) -> Result<()
 }
 
 pub(crate) fn do_stop_all_agent_processes(state: &AppState) {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    for (_, mut session) in sessions.drain() {
-        rpc_manager::stop_session(&mut session);
-    }
+    state.agent_service.stop_all_agent_processes();
 }
 
 #[tauri::command]
@@ -231,12 +169,9 @@ pub fn stop_all_agent_processes(state: State<AppState>) -> Result<(), String> {
 }
 
 pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
     let cmd = serde_json::json!({ "type": "prompt", "message": message });
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.send(&project, &agent_id, cmd)
 }
 
 #[tauri::command]
@@ -245,12 +180,9 @@ pub fn send_agent_process_prompt(state: State<AppState>, agent_id: String, messa
 }
 
 pub(crate) fn do_new_agent_process_session(state: &AppState, agent_id: String) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
-    let cmd = serde_json::json!({"type": "new_session"});
-    rpc_manager::send_command_sync(session, cmd).map(|_| ())
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+    let cmd = serde_json::json!({ "type": "new_session" });
+    state.agent_service.send_sync(&project, &agent_id, cmd).map(|_| ())
 }
 
 #[tauri::command]
@@ -259,12 +191,9 @@ pub fn new_agent_process_session(state: State<AppState>, agent_id: String) -> Re
 }
 
 pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, provider: String, model_id: String) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
     let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
-    let resp = rpc_manager::send_command_sync(session, cmd)?;
+    let resp = state.agent_service.send_sync(&project, &agent_id, cmd)?;
     if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
         let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_model a échoué").to_string();
         return Err(format!("pi a refusé set_model (agent {}) : {}", agent_id, err));
@@ -278,11 +207,8 @@ pub fn set_agent_process_model(state: State<AppState>, agent_id: String, provide
 }
 
 pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
-    rpc_manager::send_command(session, &serde_json::json!({"type": "abort"}))
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+    state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}))
 }
 
 #[tauri::command]
@@ -292,11 +218,8 @@ pub fn abort_agent_process(state: State<AppState>, agent_id: String) -> Result<(
 
 /// Envoie une commande arbitraire (ex: extension_ui_response) au processus pi d'un agent.
 pub(crate) fn do_send_agent_process_command(state: &AppState, agent_id: String, command: Value) -> Result<(), String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
-    rpc_manager::send_command(session, &command)
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+    state.agent_service.send(&project, &agent_id, command)
 }
 
 #[tauri::command]
@@ -305,12 +228,9 @@ pub fn send_agent_process_command(state: State<AppState>, agent_id: String, comm
 }
 
 pub(crate) fn do_get_agent_process_state(state: &AppState, agent_id: String) -> Result<Value, String> {
-    let mut sessions = state.agent_sessions.lock().unwrap();
-    let session = sessions
-        .get_mut(&agent_id)
-        .ok_or(format!("Agent {} inconnu ou non démarré", agent_id))?;
+    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
     let cmd = serde_json::json!({ "type": "get_state" });
-    rpc_manager::send_command_sync_timeout(session, cmd, 8)
+    state.agent_service.send_sync_timeout(&project, &agent_id, cmd, 8)
 }
 
 #[tauri::command]
@@ -411,24 +331,22 @@ pub async fn check_model_reachable(url: String) -> Result<Value, String> {
 
 #[tauri::command]
 pub fn execute_agent_bash(state: State<AppState>, command: String) -> Result<Value, String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({
         "type": "bash",
         "command": command
     });
-    rpc_manager::send_command_sync(session, cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command_sync(session, cmd)
+    })?
 }
 
 pub(crate) fn do_compact_agent_context(state: &AppState) -> Result<(), String> {
-    let mut rpc = state.rpc_state.lock().unwrap();
-    let session = rpc
-        .as_mut()
-        .ok_or("Aucune session agent active")?;
+    let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
     let cmd = serde_json::json!({ "type": "compact" });
-    rpc_manager::send_command(session, &cmd)
+    state.agent_service.with_active_session(&project, |session| {
+        rpc_manager::send_command(session, &cmd)
+    })?
 }
 
 #[tauri::command]

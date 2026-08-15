@@ -77,7 +77,7 @@ Pilot renvoie le résultat à l'appelant
 
 - **Une session `pi --mode rpc` par agent** (généralisation du reviewer H2 V1).
 - Canal d'événements unique `rpc-event-agents` avec enveloppe `{agent_id, event}`.
-- `rpc_state` (chat Agent Pi) et `rpc_reviewer` (reviewer orchestration) restent intacts.
+- Toutes les sessions vivent dans le **registre unique de l'AgentService** (`agent_service.rs`), indexé par clé composite `(projet, agent)`. Les agents multi-rôles H2 V2 y sont stockés avec un `SpawnMode::AgentProcess` (canal `rpc-event-agents`), distincts de la session principale (`MainSession`).
 
 ## 3. Données
 
@@ -184,13 +184,41 @@ Dans l'onglet 🎭 Agents, le bouton **⚡ Mode parallèle** (icône `layers`) p
 tous **simultanément**, sans coordinateur. Chaque agent stream dans sa propre
 bulle de réflexion ; les résultats sont affichés agrégés à la fin.
 
+### L'Assistant comme coordinateur (spec_super_agent.md)
+
+L'**Assistant** (onglet 🧭) est le **coordinateur de la redistribution des
+tâches** entre les agents du registre. Via les outils `create_agent` et
+`run_agents` (extension `pilot-assistant-actions`), il peut :
+
+1. **Créer un agent sur mesure** dans `~/.pilot/agents.json` s'il estime que les
+   agents disponibles ne conviennent pas (rôle construit selon son besoin).
+2. **Choisir quels agents utiliser** (sélection par id) et lancer une tâche sur
+   eux (en parallèle), en recevant le résultat agrégé pour continuer son
+   raisonnement.
+
+Le bus d'agents expose `runAgentsForAssistant(assignments)` (Promise résolue
+avec le résultat agrégé) pour ce cas d'usage, distinct de l'UI de l'onglet 🎭.
+
 ## 5. Backend Rust
 
-### AppState
+### AgentService (propriétaire unique des sessions)
+
+Les sessions des agents multi-rôles H2 V2 vivent dans le **registre unique de
+l'AgentService** (`agent_service.rs`), indexé par clé composite `(project, agent)`,
+au même titre que la session principale (chat Agent Pi), le reviewer
+`orch-reviewer` et le super-agent `superagent`. Elles y sont marquées
+`SpawnMode::AgentProcess` (canal `rpc-event-agents`) pour être arrêtées par
+`stop_all_agent_processes` et distinctes des sessions `MainSession`.
 
 ```rust
-agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>,
+// agent_service.rs
+sessions: Mutex<HashMap<String, SessionEntry>>,  // clé composite (project, agent)
+active:   Mutex<Option<String>>,                 // agent_id actuellement affiché
 ```
+
+Les commandes `agents.rs` (`do_start_agent_process`, …) délèguent à
+`AgentService.start` / `AgentService.send` / `AgentService.stop` au lieu de
+toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 
 ### Commandes Tauri
 
@@ -240,7 +268,8 @@ agent_sessions: Mutex<HashMap<String, rpc_manager::RpcSession>>,
 
 ## 8. Anti-régression
 
-- Ne pas toucher à `rpc_state`, `rpc_reviewer`, `agent-pi.js`, `orchestration.js`.
+- Ne pas toucher à `agent-pi.js`, `orchestration.js`, `agents-bus.js` (logique d'orchestration frontend).
+- Toutes les sessions passent par l'AgentService (une seule indirection `send`), jamais par un accès direct à une map dans `AppState`.
 - Utiliser un canal séparé `rpc-event-agents` pour ne pas polluer les canaux existants.
 - Tous les agents sont lazy et arrêtés proprement.
 
