@@ -159,6 +159,15 @@ function createSuperAgentBlock(messagesEl) {
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
+  // Badge projet : indique de quel projet parle l'assistant (ajouté UNE fois,
+  // car ce bloc est créé une seule fois par message au message_start).
+  const projectName = getSuperActiveProjectName();
+  if (projectName) {
+    const badge = document.createElement("div");
+    badge.className = "agent-project-badge";
+    badge.textContent = "📁 " + projectName;
+    bubble.appendChild(badge);
+  }
   const flow = document.createElement("div");
   flow.className = "agent-stream-flow";
   bubble.appendChild(flow);
@@ -166,6 +175,14 @@ function createSuperAgentBlock(messagesEl) {
   messagesEl.appendChild(el);
   scrollSuperToBottom(messagesEl);
   return el;
+}
+
+/** Retourne le nom du projet actif (dérivé de window._pilotProjectPath), ou null. */
+function getSuperActiveProjectName() {
+  const path = window._pilotProjectPath;
+  if (!path) return null;
+  const parts = String(path).split(/[\\/]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : null;
 }
 
 /** Ajoute (ou réutilise) une section texte rendue en Markdown. */
