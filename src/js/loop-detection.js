@@ -158,6 +158,29 @@ export function detectRepeatedToolCalls(fingerprints, options = {}) {
 }
 
 /**
+ * Construit une empreinte compacte d'un tool call pour la détection de boucle
+ * (issue #55 / #10). Pour bash, la commande est l'essentiel ; sinon on sérialise
+ * les arguments de façon stable. Partagé entre super-agent.js et agents-bus.js
+ * pour que les requêtes DB (db_query/db_execute) produisent la même empreinte
+ * quel que soit le canal qui les transporte.
+ * @param {string} toolName
+ * @param {object} args
+ * @returns {string}
+ */
+export function buildToolLoopFingerprint(toolName, args) {
+  const a = args || {};
+  const command = a.command || a.cmd || "";
+  if (command) return "tool::" + toolName + "::" + command;
+  const path = a.path || a.file || "";
+  if (path) return "tool::" + toolName + "::" + path;
+  try {
+    return "tool::" + toolName + "::" + JSON.stringify(a);
+  } catch (_) {
+    return "tool::" + toolName;
+  }
+}
+
+/**
  * Retourne le plus petit motif (période) tel que `str` soit une répétition
  * exacte de ce motif, ou 0 si `str` n'est pas périodique.
  * @param {string} str

@@ -20,6 +20,8 @@ import {
   detectRepeatedBlock,
   detectRepeatedWord,
   detectSemanticLoop,
+  detectRepeatedToolCalls,
+  buildToolLoopFingerprint,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
@@ -51,6 +53,10 @@ let busState = {
   // H2 V2 parallèle : ensemble des agents en train de streamer + buffers par agent.
   activeAgents: new Set(),
   streamingTextByAgent: {},
+  // Issue #10 : empreintes des derniers tool calls par agent (ex: requêtes DB
+  // db_query/db_execute) pour détecter une boucle d'OUTILS identiques, même
+  // sans texte streamé répété.
+  toolCallsByAgent: {},
   parallelGroup: null, // { assignments, pending, results, onComplete }
   pendingPromise: null,
   isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
@@ -73,6 +79,7 @@ function resetBusState() {
   busState.currentAgentId = null;
   busState.activeAgents = new Set();
   busState.streamingTextByAgent = {};
+  busState.toolCallsByAgent = {};
   busState.parallelGroup = null;
   busState.pendingPromise = null;
   busState.isCompacting = false;
@@ -230,6 +237,20 @@ function maybeDetectAgentLoop(agentId) {
   if (now - (busState.loopLastChecked[agentId] || 0) < AGENT_LOOP_CHECK_INTERVAL_MS) return;
   busState.loopLastChecked[agentId] = now;
 
+  // Issue #10 : la détection d'une boucle d'OUTILS (detectRepeatedToolCalls) est
+  // indépendante de la longueur du buffer texte. Un agent qui répète la même
+  // requête DB (db_query/db_execute) sans streamer de texte ne remplit pas
+  // forcément AGENT_LOOP_BUFFER_MIN → on vérifie les tool calls AVANT le garde
+  // de longueur du buffer texte, sinon la boucle d'outils n'est jamais détectée.
+  if (detectRepeatedToolCalls(busState.toolCallsByAgent[agentId])) {
+    busState.loopCorrectionPending[agentId] = true;
+    busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
+    console.warn("[agents-bus] boucle d'outils détectée", agentId);
+    emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
+    invoke("abort_agent_process", { agentId }).catch(() => {});
+    return;
+  }
+
   const text = busState.streamingTextByAgent[agentId] || "";
   if (text.length < AGENT_LOOP_BUFFER_MIN) return;
 
@@ -310,10 +331,19 @@ function handleAgentEvent(ev) {
     console.log("[agents-bus] compaction_end", agentId);
     busState.isCompacting = false;
     busState.streamingTextByAgent[agentId] = "";
+    busState.toolCallsByAgent[agentId] = [];
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
     emit("toolStart", { agentId, toolName });
+    // Issue #10 : accumuler une empreinte du tool call (ex: requête DB) pour
+    // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
+    const fp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
+    const arr = (busState.toolCallsByAgent[agentId] = busState.toolCallsByAgent[agentId] || []);
+    // Déduplication des empreintes consécutives identiques (un même outil peut
+    // être émis plusieurs fois par événement) pour ne pas déclencher trop tôt.
+    if (arr[arr.length - 1] !== fp) arr.push(fp);
+    maybeDetectAgentLoop(agentId);
   } else if (type === "extension_ui_request") {
     handleExtensionUiRequest(agentId, event);
   } else if (type === "agent_end") {
@@ -324,6 +354,7 @@ function handleAgentEvent(ev) {
       busState.loopCorrectionPending[agentId] = false;
       const streamed = busState.streamingTextByAgent[agentId] || "";
       busState.streamingTextByAgent[agentId] = "";
+      busState.toolCallsByAgent[agentId] = [];
       piTurnCount = 0; // c'est une continuation du tour, pas un nouveau tour
       resetTimeout();
       const count = busState.loopCorrectionCount[agentId] || 0;
@@ -423,6 +454,7 @@ async function handleExtensionUiRequest(agentId, event) {
 async function finishAgentTurn(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   busState.streamingTextByAgent[agentId] = "";
+  busState.toolCallsByAgent[agentId] = [];
   busState.activeAgents.delete(agentId);
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
@@ -514,6 +546,7 @@ async function finishAgentTurn(agentId) {
 
 async function failAgentTurn(agentId, reason) {
   busState.streamingTextByAgent[agentId] = "";
+  busState.toolCallsByAgent[agentId] = [];
   busState.activeAgents.delete(agentId);
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).

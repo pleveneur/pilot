@@ -664,12 +664,28 @@ function maybeDetectSuperAgentLoop(messagesEl) {
   const now = Date.now();
   if (now - superLoopLastChecked < SUPER_LOOP_CHECK_INTERVAL_MS) return;
   superLoopLastChecked = now;
+  // Issue #10 : la détection d'une boucle d'OUTILS (detectRepeatedToolCalls) est
+  // indépendante de la longueur du buffer texte. Un agent qui répète la même
+  // requête DB (db_query/db_execute) sans streamer de texte ne remplit pas
+  // forcément SUPER_LOOP_BUFFER_MIN → on vérifie les tool calls AVANT le garde
+  // de longueur du buffer texte, sinon la boucle d'outils n'est jamais détectée.
+  if (detectRepeatedToolCalls(superLoopToolCalls)) {
+    superLoopStopped = true;
+    console.warn("[loop-detection] boucle d'outils détectée sur l'assistant, arrêt");
+    appendSystemMessage(
+      messagesEl,
+      "⚠️ L'assistant a tourné en boucle (répétition du même texte ou des mêmes appels d'outils). Génération arrêtée. Veuillez reformuler votre demande."
+    );
+    invoke("abort_super_agent").catch((e) =>
+      console.error("Erreur abort_super_agent (loop):", e)
+    );
+    return;
+  }
   if (superLoopBuffer.length < SUPER_LOOP_BUFFER_MIN) return;
   if (
     detectRepeatedBlock(superLoopBuffer) ||
     detectRepeatedWord(superLoopBuffer) ||
-    detectSemanticLoop(superLoopBuffer) ||
-    detectRepeatedToolCalls(superLoopToolCalls)
+    detectSemanticLoop(superLoopBuffer)
   ) {
     superLoopStopped = true;
     console.warn("[loop-detection] boucle détectée sur l'assistant, arrêt");
@@ -721,11 +737,18 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
     // Les requêtes DB arrivent via un sentinel dans le titre : le SQL répété est
     // la signature de la boucle. On le capture tel quel pour la détection.
     const title = payload.title || "";
-    if (
-      title.startsWith("PILOT_ASSISTANT_DB_QUERY::") ||
-      title.startsWith("PILOT_ASSISTANT_DB_EXEC::")
-    ) {
-      fingerprint = "db::" + title;
+    if (title.startsWith("PILOT_ASSISTANT_DB_QUERY::")) {
+      // Issue #10 : on réutilise buildToolLoopFingerprint pour produire la MÊME
+      // empreinte que tool_execution_start (db_query) → la détection d'outils
+      // (detectRepeatedToolCalls) voit les requêtes DB répétées, que
+      // tool_execution_start soit émis ou non, sans doublon ni format divergent.
+      fingerprint = buildToolLoopFingerprint("db_query", {
+        sql: title.slice("PILOT_ASSISTANT_DB_QUERY::".length),
+      });
+    } else if (title.startsWith("PILOT_ASSISTANT_DB_EXEC::")) {
+      fingerprint = buildToolLoopFingerprint("db_execute", {
+        sql: title.slice("PILOT_ASSISTANT_DB_EXEC::".length),
+      });
     } else {
       fingerprint = "input::" + title;
     }
@@ -733,6 +756,14 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
     fingerprint = method + "::" + (payload.title || "");
   }
   superLoopBuffer += fingerprint + "\n";
+  // Issue #10 : alimenter aussi le détecteur d'outils pour que les requêtes DB
+  // répétées soient détectées même si le buffer texte est court. On déduplique
+  // les empreintes consécutives identiques pour éviter qu'un même outil émis à
+  // la fois par tool_execution_start ET par extension_ui_request ne fasse
+  // déclencher la boucle trop tôt (2 requêtes au lieu de 3).
+  if (superLoopToolCalls[superLoopToolCalls.length - 1] !== fingerprint) {
+    superLoopToolCalls.push(fingerprint);
+  }
   maybeDetectSuperAgentLoop(messagesEl);
 }
 

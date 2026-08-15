@@ -6,6 +6,7 @@ import {
   detectSemanticLoop,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
+  buildToolLoopFingerprint,
   MAX_LOOP_ESCALATION,
   LOOP_ESCALATION_LEVELS,
   normalizeLoopLine,
@@ -206,6 +207,55 @@ describe("detectRepeatedToolCalls", () => {
   it("detecte une boucle de 4 tool calls identiques", () => {
     const fp = "tool::bash::ls -la src-tauri/target/debug/deps";
     expect(detectRepeatedToolCalls([fp, fp, fp, fp])).toBe(true);
+  });
+
+  it("detecte une boucle de requêtes DB identiques (issue #10)", () => {
+    // Empreinte produite par buildToolLoopFingerprint("db_query", {sql}) — le
+    // format utilisé à la fois par tool_execution_start et par
+    // accumulateSuperLoopToolResponse pour les requêtes DB de l'assistant.
+    const fp = 'tool::db_query::{"sql":"SELECT * FROM projects"}';
+    expect(detectRepeatedToolCalls([fp, fp, fp])).toBe(true);
+  });
+
+  it("detecte une boucle de requêtes DB même avec un SQL court (issue #10)", () => {
+    // Un SQL court produit une empreinte courte : le détecteur d'outils doit la
+    // repérer indépendamment de la longueur du buffer texte (qui resterait sous
+    // SUPER_LOOP_BUFFER_MIN).
+    const fp = 'tool::db_query::{"sql":"SELECT 1"}';
+    expect(detectRepeatedToolCalls([fp, fp, fp])).toBe(true);
+  });
+
+  it("false si les requêtes DB diffèrent (pas une boucle)", () => {
+    const fps = [
+      'tool::db_query::{"sql":"SELECT * FROM projects"}',
+      'tool::db_query::{"sql":"SELECT * FROM tasks"}',
+      'tool::db_query::{"sql":"SELECT * FROM projects"}',
+    ];
+    expect(detectRepeatedToolCalls(fps)).toBe(false);
+  });
+});
+
+describe("buildToolLoopFingerprint", () => {
+  it("sérialise les arguments de façon stable", () => {
+    expect(buildToolLoopFingerprint("db_query", { sql: "SELECT * FROM projects" })).toBe(
+      'tool::db_query::{"sql":"SELECT * FROM projects"}'
+    );
+  });
+
+  it("priorise la commande bash", () => {
+    expect(buildToolLoopFingerprint("bash", { command: "cargo test --lib" })).toBe(
+      "tool::bash::cargo test --lib"
+    );
+  });
+
+  it("priorise le chemin de fichier", () => {
+    expect(buildToolLoopFingerprint("read_file", { path: "src/main.rs" })).toBe(
+      "tool::read_file::src/main.rs"
+    );
+  });
+
+  it("retombe sur la sérialisation vide si args absent", () => {
+    expect(buildToolLoopFingerprint("db_query", null)).toBe("tool::db_query::{}");
   });
 });
 
