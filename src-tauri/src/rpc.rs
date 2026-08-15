@@ -275,7 +275,17 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
         .clone();
     drop(project);
 
-    if state.agent_service.active_agent().is_some() {
+    // Garde-fou anti-orphan : un pointeur `active` peut subsister alors que la
+    // session pointée est morte (ex: délégation ayant spawné un agent puis dont
+    // la session a disparu sans nettoyer le pointeur). Sans vérification de
+    // vivacité, TOUTE délégation suivante échouerait silencieusement avec
+    // « Une session agent est déjà active » (aucun commit, aucune session
+    // visible). On délègue à `clear_active_if_dead` : si la session pointée est
+    // morte/absente, le pointeur est nettoyé et on continue (débloque les
+    // délégations) ; si elle est vivante, on conserve l'erreur « déjà active ».
+    if state.agent_service.active_agent().is_some()
+        && !state.agent_service.clear_active_if_dead(&cwd)
+    {
         return Err("Une session agent est déjà active".to_string());
     }
 

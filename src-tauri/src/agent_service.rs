@@ -513,6 +513,49 @@ impl AgentService {
         self.active.lock().unwrap().clone()
     }
 
+    /// Indique si la session d'un agent (projet, agent) est vivante : présente
+    /// dans le registre ET processus enfant non terminé (`try_wait` → None).
+    /// Utilisé par le garde-fou de `do_start_agent_session` pour distinguer un
+    /// pointeur `active` légitime (session vivante) d'un pointeur orphelin
+    /// (session morte ou absente du registre).
+    pub fn agent_alive(&self, project: &str, agent_id: &str) -> bool {
+        let key = Self::session_key(project, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Réinitialise explicitement le pointeur actif (nettoyage d'orphelin).
+    /// Utilisé par `do_start_agent_session` quand la session pointée est morte :
+    /// on libère le pointeur pour débloquer les délégations suivantes au lieu
+    /// d'errer silencieusement « Une session agent est déjà active ».
+    pub fn clear_active(&self) {
+        *self.active.lock().unwrap() = None;
+    }
+
+    /// Garde-fou anti-orphan : si le pointeur actif pointe vers une session
+    /// morte (ou absente) pour le projet donné, le réinitialise. Retourne
+    /// `true` si un orphelin a été nettoyé. Utilisé défensivement avant un
+    /// démarrage pour ne jamais laisser un pointeur `active` bloquer les
+    /// délégations quand la session sous-jacente a disparu.
+    pub fn clear_active_if_dead(&self, project: &str) -> bool {
+        let active_id = self.active.lock().unwrap().clone();
+        if let Some(id) = active_id {
+            if !self.agent_alive(project, &id) {
+                self.clear_active();
+                return true;
+            }
+        }
+        false
+    }
+
     /// Exécute une closure sur la session active (agent affiché). Retourne
     /// `Err` si aucune session active n'existe pour le projet donné.
     pub fn with_active_session<R>(
@@ -1515,5 +1558,87 @@ mod tests {
             )
             .expect("name");
         assert_eq!(name, "Analyseur v2", "le second upsert a bien mis à jour la ligne");
+    }
+
+    /// `agent_alive` distingue une session vivante d'une session absente ou
+    /// morte. Base du garde-fou anti-orphan de `do_start_agent_session`.
+    #[test]
+    fn agent_alive_detects_live_dead_and_missing_sessions() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Aucune session en registre → pas vivante.
+        assert!(!svc.agent_alive(proj, "default"), "session absente → pas vivante");
+        // Session vivante → vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        assert!(svc.agent_alive(proj, "default"), "session vivante détectée");
+        // Tuer le processus enfant → session morte → pas vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&AgentService::session_key(proj, "default")) {
+                let _ = entry.session.child.kill();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!svc.agent_alive(proj, "default"), "session tuée → pas vivante");
+    }
+
+    /// `clear_active_if_dead` réinitialise un pointeur `active` orphelin
+    /// (session pointée morte/absente) mais conserve un pointeur légitime
+    /// (session vivante). C'est le cœur du fix anti-orphan : il débloque les
+    /// délégations sans jamais tuer une session réellement active.
+    #[test]
+    fn clear_active_if_dead_clears_orphan_keeps_alive() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Pointeur actif orphelin : aucune session pour (proj, "default").
+        *svc.active.lock().unwrap() = Some("default".to_string());
+        assert!(svc.clear_active_if_dead(proj), "orphelin détecté et nettoyé");
+        assert_eq!(svc.active_agent(), None, "pointeur orphelin réinitialisé");
+        // Session vivante → pointeur conservé (pas nettoyé).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        *svc.active.lock().unwrap() = Some("default".to_string());
+        assert!(!svc.clear_active_if_dead(proj), "session vivante → pas nettoyé");
+        assert_eq!(
+            svc.active_agent(),
+            Some("default".to_string()),
+            "pointeur conservé (session vivante)"
+        );
+    }
+
+    /// `stop` réinitialise toujours le pointeur `active` quand l'agent arrêté
+    /// est l'agent actif, même si la session est introuvable dans le registre
+    /// (pointeur orphelin). Évite qu'un arrêt laisse un pointeur orphelin qui
+    /// bloquerait ensuite toutes les délégations via le garde-fou de
+    /// `do_start_agent_session`.
+    #[test]
+    fn stop_clears_active_even_if_session_missing() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Pointeur actif mais AUCUNE session en registre (orphelin pur).
+        *svc.active.lock().unwrap() = Some("default".to_string());
+        svc.stop(proj, "default").unwrap();
+        assert_eq!(svc.active_agent(), None, "stop nettoie le pointeur même sans session");
     }
 }
