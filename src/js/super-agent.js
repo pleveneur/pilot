@@ -271,14 +271,18 @@ export async function createSuperAgent(container) {
   await refreshSuperAgentConfig();
 
   // Rafraîchir le nom de l'onglet quand la config change (paramètres ⚙️).
-  window.addEventListener("pilot-config-changed", () => {
+  // Issue #12 : le handler est stocké pour être retiré dans `unlisten` (sinon
+  // chaque recréation de l'onglet 🧭 accumule un listener → N appels par
+  // changement de config et références à window._pilotTabs après teardown).
+  const onConfigChanged = () => {
     refreshSuperAgentConfig().then(() => {
       const tabs = window._pilotTabs;
       if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
         tabs.updateSuperAgentLabel(superAgentDisplayLabel());
       }
     });
-  });
+  };
+  window.addEventListener("pilot-config-changed", onConfigChanged);
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container superagent-wrapper";
@@ -643,6 +647,7 @@ export async function createSuperAgent(container) {
       origUnlisten();
       unlistenStateChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
+      window.removeEventListener("pilot-config-changed", onConfigChanged);
       window._pilotSuperAgentOpen = false;
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
