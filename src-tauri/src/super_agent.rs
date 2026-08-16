@@ -77,7 +77,20 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             summary TEXT NOT NULL,
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(project_id) REFERENCES projects(id)
-        );",
+        );
+        -- Chantier #13 : planification d'actions récurrentes de l'assistant.
+        -- `every` = intervalle en secondes (>= 60). `last_run_at` = dernière
+        -- exécution (formule datetime('now') UTC), NULL si jamais exécuté.
+        CREATE TABLE IF NOT EXISTS assistant_schedules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            prompt TEXT NOT NULL,
+            every INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_run_at TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
     )
     .map_err(|e| format!("Erreur init base: {}", e))
 }
@@ -472,6 +485,198 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
     let conn = open_db(&app)?;
     conn.execute_batch(&sql).map_err(|e| format!("Erreur SQL : {}", e))?;
     Ok(serde_json::json!({ "ok": true }))
+}
+
+// ── Planification d'actions récurrentes de l'assistant (chantier #13) ──
+//
+// L'assistant (onglet 🧭) peut créer des `assistant_schedules` : des actions
+// récurrentes (prompt) déclenchées périodiquement (intervalle `every` >= 60s)
+// par le ticker du frontend (super-agent.js, toutes les 10 s). Garde-fous :
+//   - `every` >= 60 s (borne minimale, évite le spam),
+//   - max 20 planifications en parallèle,
+//   - 1 exécution max par planification et par tick (last_run_at marqué
+//     atomiquement lors de l'émission),
+//   - session super-agent morte = pas de tick (super_agent_schedule_tick).
+
+pub(crate) const SCHEDULE_MIN_EVERY_SECS: i64 = 60;
+pub(crate) const SCHEDULE_MAX: i64 = 20;
+
+/// Planification telle que renvoyée au frontend / à l'assistant.
+struct DueSchedule {
+    id: i64,
+    name: String,
+    prompt: String,
+    every: i64,
+}
+
+impl DueSchedule {
+    fn to_json(&self) -> Value {
+        serde_json::json!({ "id": self.id, "name": self.name, "prompt": self.prompt, "every": self.every })
+    }
+}
+
+/// Insère une planification. Valide les garde-fous (every >= 60s, nom/prompt
+/// non vides, max 20). Retourne l'id créé. Fonction pure sur `Connection` pour
+/// être testable (in-memory en test, open_db en production).
+pub(crate) fn schedule_insert(
+    conn: &Connection,
+    name: &str,
+    prompt: &str,
+    every: i64,
+) -> Result<i64, String> {
+    let name = name.trim();
+    let prompt = prompt.trim();
+    if name.is_empty() {
+        return Err("schedule : un nom est requis".to_string());
+    }
+    if prompt.is_empty() {
+        return Err("schedule : un prompt est requis".to_string());
+    }
+    if every < SCHEDULE_MIN_EVERY_SECS {
+        return Err(format!(
+            "schedule : l'intervalle doit être >= {} s (reçu {} s)",
+            SCHEDULE_MIN_EVERY_SECS, every
+        ));
+    }
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM assistant_schedules", [], |r| r.get(0))
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    if count >= SCHEDULE_MAX {
+        return Err(format!(
+            "schedule : maximum {} planifications atteint",
+            SCHEDULE_MAX
+        ));
+    }
+    conn.execute(
+        "INSERT INTO assistant_schedules (name, prompt, every) VALUES (?1, ?2, ?3)",
+        rusqlite::params![name, prompt, every],
+    )
+    .map_err(|e| {
+        if e.to_string().contains("UNIQUE") {
+            "schedule : ce nom existe déjà".to_string()
+        } else {
+            format!("Erreur SQL : {}", e)
+        }
+    })?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Supprime une planification par id.
+pub(crate) fn schedule_delete(conn: &Connection, id: i64) -> Result<bool, String> {
+    let n = conn
+        .execute("DELETE FROM assistant_schedules WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(n > 0)
+}
+
+/// Liste toutes les planifications.
+pub(crate) fn schedule_list(conn: &Connection) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, prompt, every, enabled, last_run_at FROM assistant_schedules ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "name": r.get::<_, String>(1)?,
+                "prompt": r.get::<_, String>(2)?,
+                "every": r.get::<_, i64>(3)?,
+                "enabled": r.get::<_, i64>(4)? != 0,
+                "last_run_at": r.get::<_, Option<String>>(5)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| format!("Erreur SQL : {}", e))?);
+    }
+    Ok(result)
+}
+
+/// Retourne les planifications dues à `now` (format datetime('now') UTC) et les
+/// marque comme exécutées (last_run_at = now) : 1 exécution max par
+/// planification et par tick — un second appel dans la même fenêtre ne renvoie
+/// plus rien pour ces planifications.
+pub(crate) fn schedule_due_and_mark(conn: &Connection, now: &str) -> Result<Vec<DueSchedule>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, name, prompt, every FROM assistant_schedules \
+             WHERE enabled = 1 AND (last_run_at IS NULL \
+               OR last_run_at <= datetime(?1, '-' || CAST(every AS TEXT) || ' seconds')) \
+             ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let rows = stmt
+        .query_map([now], |r| {
+            Ok(DueSchedule {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                prompt: r.get(2)?,
+                every: r.get(3)?,
+            })
+        })
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let mut due = Vec::new();
+    for row in rows {
+        let d = row.map_err(|e| format!("Erreur SQL : {}", e))?;
+        conn.execute(
+            "UPDATE assistant_schedules SET last_run_at = ?1, updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, d.id],
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+        due.push(d);
+    }
+    Ok(due)
+}
+
+// ── Commandes Tauri (appelées depuis super-agent.js / l'extension) ──
+
+/// Crée une planification d'action récurrente pour l'assistant.
+#[tauri::command]
+pub fn super_agent_schedule_create(
+    app: AppHandle,
+    name: String,
+    prompt: String,
+    every: i64,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let id = schedule_insert(&conn, &name, &prompt, every)?;
+    Ok(serde_json::json!({ "ok": true, "id": id }))
+}
+
+/// Supprime une planification d'action récurrente.
+#[tauri::command]
+pub fn super_agent_schedule_delete(app: AppHandle, id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let removed = schedule_delete(&conn, id)?;
+    Ok(serde_json::json!({ "ok": removed, "id": id }))
+}
+
+/// Liste les planifications d'actions récurrentes.
+#[tauri::command]
+pub fn super_agent_schedule_list(app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let rows = schedule_list(&conn)?;
+    Ok(serde_json::json!({ "schedules": rows, "count": rows.len() }))
+}
+
+/// Tick du ticker frontend (toutes les 10 s). Retourne les planifications dues
+/// (au plus 1 par planification et par tick, marquées atomiquement) uniquement
+/// si la session super-agent est vivante — session morte = pas de tick.
+#[tauri::command]
+pub fn super_agent_schedule_tick(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    if !state.agent_service.superagent_alive() {
+        return Ok(serde_json::json!({ "alive": false, "due": [], "count": 0 }));
+    }
+    let conn = open_db(&app)?;
+    let now: String = conn
+        .query_row("SELECT datetime('now')", [], |r| r.get(0))
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let due = schedule_due_and_mark(&conn, &now)?;
+    let due_json: Vec<Value> = due.iter().map(|d| d.to_json()).collect();
+    Ok(serde_json::json!({ "alive": true, "due": due_json, "count": due_json.len() }))
 }
 
 #[tauri::command]
@@ -921,7 +1126,68 @@ pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::build_project_context;
+    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list, DueSchedule};
+    use rusqlite::Connection;
+
+    fn mem_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn schedule_rejects_every_below_60() {
+        let conn = mem_conn();
+        let err = schedule_insert(&conn, "trop rapide", "prompt", 59).unwrap_err();
+        assert!(err.contains(">= 60"));
+        // 60 est accepté.
+        assert!(schedule_insert(&conn, "ok", "prompt", 60).is_ok());
+    }
+
+    #[test]
+    fn schedule_rejects_empty_name_or_prompt_and_duplicate_name() {
+        let conn = mem_conn();
+        assert!(schedule_insert(&conn, "  ", "prompt", 120).is_err());
+        assert!(schedule_insert(&conn, "nom", "  ", 120).is_err());
+        assert!(schedule_insert(&conn, "même nom", "a", 120).is_ok());
+        assert!(schedule_insert(&conn, "même nom", "b", 120).is_err());
+    }
+
+    #[test]
+    fn schedule_caps_at_20() {
+        let conn = mem_conn();
+        for i in 0..20 {
+            schedule_insert(&conn, &format!("s{}", i), "prompt", 120).unwrap();
+        }
+        assert!(schedule_insert(&conn, "s21", "prompt", 120).is_err());
+    }
+
+    #[test]
+    fn schedule_due_marks_and_returns_at_most_once_per_tick() {
+        let conn = mem_conn();
+        schedule_insert(&conn, "s1", "prompt", 60).unwrap();
+        // Premier tick : jamais exécutée → due.
+        let due = schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap();
+        assert_eq!(due.len(), 1);
+        // Second tick immédiat : marquée → plus due.
+        let due2 = schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap();
+        assert!(due2.is_empty());
+        // Avance de 61 s → due à nouveau.
+        let due3 = schedule_due_and_mark(&conn, "2025-01-01 00:01:01").unwrap();
+        assert_eq!(due3.len(), 1);
+        // Marquer avec une date dans le futur ne renvoie rien non plus.
+        assert!(schedule_due_and_mark(&conn, "2025-01-01 00:00:30").unwrap().is_empty());
+    }
+
+    #[test]
+    fn schedule_delete_and_list() {
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "s1", "prompt", 120).unwrap();
+        assert_eq!(schedule_list(&conn).unwrap().len(), 1);
+        assert!(schedule_delete(&conn, id).unwrap());
+        assert!(!schedule_delete(&conn, id).unwrap());
+        assert!(schedule_list(&conn).unwrap().is_empty());
+    }
 
     #[test]
     fn active_project_is_always_the_default_target() {
