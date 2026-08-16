@@ -1241,7 +1241,12 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      appendSystemMessage(messagesEl, "🤖 Je lance l'agent du projet et lui transmets la demande…");
+      // A13 (assistant headless multi-projets) : un `project` explicite permet
+      // de déléguer à un projet NON actif. Son agent est démarré en arrière-plan
+      // (invisible) sans ouvrir le projet ni l'onglet. Sinon, on retombe sur le
+      // projet actif (comportement historique).
+      const projectPath = info.project || window._pilotProjectPath || null;
+      appendSystemMessage(messagesEl, `🤖 Je lance l'agent du projet et lui transmets la demande…`);
       const tabs = window._pilotTabs;
       if (!tabs) {
         appendSystemMessage(messagesEl, "❌ Impossible d'ouvrir l'agent du projet (gestionnaire d'onglets indisponible).");
@@ -1252,7 +1257,6 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // persisté (get_agent) — jamais le littéral "default". Toute la délégation
       // (start invisible, canal d'événements, envoi, arrêt) cible cet id résolu,
       // aligné sur la vue affichée (règle de cohérence ecrans.md).
-      const projectPath = window._pilotProjectPath || null;
       const agentId = await resolveDelegationAgentId(projectPath);
       if (!agentId) {
         appendSystemMessage(messagesEl, "❌ Impossible de résoudre l'agent cible de la délégation.");
@@ -1267,12 +1271,15 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // accéder à sa discussion.
       // P6 : le paramètre `background` de l'outil delegate_to_coder (si fourni)
       // force le mode invisible, sinon on retombe sur la config utilisateur.
+      // A13 : pour un projet NON actif, on force le mode invisible (headless) —
+      // on ne peut pas ouvrir l'onglet d'un projet non affiché.
       const invisible = (typeof info.background === "boolean")
         ? info.background
         : (configCache.super_agent_invisible_agent !== false);
-      if (invisible) {
+      const forceInvisible = !!info.project && projectPath !== (window._pilotProjectPath || null);
+      if (invisible || forceInvisible) {
         // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
-        await tabs.startAgentInvisible(agentId);
+        await tabs.startAgentInvisible(agentId, projectPath);
         // Mettre en place le suivi de l'agent invisible (bouton Arrêter,
         // détection de boucle, notification de fin de tâche).
         startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request);
@@ -1349,9 +1356,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // retombe sur l'agent standard du projet. Réutilise le nettoyage du suivi
       // de l'agent invisible s'il était actif.
       try {
-        const projectPath = window._pilotProjectPath || null;
+        const projectPath = info.project || window._pilotProjectPath || null;
         const targetAgentId = info.agentId || await resolveDelegationAgentId(projectPath);
-        await invoke("stop_agent_session", { agentId: targetAgentId || null }).catch(() => {});
+        await invoke("stop_agent_session", { agentId: targetAgentId || null, projectPath }).catch(() => {});
         // Nettoyer aussi le suivi de l'agent invisible (bandeau + écouteur).
         if (typeof stopInvisibleAgentMonitoring === "function") {
           stopInvisibleAgentMonitoring();
@@ -1467,7 +1474,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
   // en utilisant l'id RÉSOLU (4.1).
   let channel = "rpc-event";
   try {
-    channel = await invoke("get_agent_event_channel", { agentId });
+    channel = await invoke("get_agent_event_channel", { agentId, projectPath });
   } catch (_) {}
   const unlisten = await listen(channel, (event) => {
     try {
@@ -1581,8 +1588,9 @@ function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId) {
 function stopInvisibleAgent() {
   const t = invisibleAgent;
   const agentId = t ? t.agentId : null;
+  const projectPath = t ? t.projectPath : null;
   const messagesEl = t ? t.messagesEl : null;
-  invoke("stop_agent_session", { agentId: agentId || null }).catch((e) =>
+  invoke("stop_agent_session", { agentId: agentId || null, projectPath }).catch((e) =>
     console.error("Erreur stop_agent_session (agent invisible):", e)
   );
   stopInvisibleAgentMonitoring();

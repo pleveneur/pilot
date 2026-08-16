@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-15 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
+<!-- PILOT-HELP generated=2026-08-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -875,6 +875,15 @@ apprend et répond.
 - Il **apprend où se trouvent les projets** au fil des discussions et des
   sessions d'agents (liste des projets connus injectée à chaque tour).
 
+### Obtenir un état structuré d'un projet (outil `project_snapshot`)
+- L'Assistant peut obtenir une **vue d'ensemble structurée (lecture seule)**
+  d'un projet via l'outil `project_snapshot(project)` : liste des
+  fichiers/dossiers principaux, langages détectés, état Git (branche, derniers
+  commits) et métriques de base (taille, lignes, fonctions, classes,
+  TODO/FIXME).
+- Il l'utilise pour **comprendre rapidement un projet** (structure, langages,
+  santé Git) avant de répondre ou de planifier. **Ne modifie aucun fichier.**
+
 ### Déléguer le code à l'agent du projet
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
@@ -883,6 +892,13 @@ apprend et répond.
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
+- **A13 — Assistant headless multi-projets** : l'Assistant peut déléguer à
+  **n'importe quel projet**, même s'il n'est **pas actif** (outil
+  `delegate_to_coder` avec le paramètre `project`). L'agent de ce projet est
+  alors **démarré en arrière-plan (invisible)** automatiquement, **sans ouvrir
+  le projet ni l'onglet**. Le suivi (bouton Arrêter, détection de boucle,
+  notification de fin) et l'arrêt ciblent ce projet précis (canal d'événements
+  et `stop_agent_session` routés par chemin de projet).
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les

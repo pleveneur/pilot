@@ -232,10 +232,11 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       agentId: Type.Optional(Type.String({ description: "Identifiant de l'agent à arrêter. Si omis, arrête l'agent standard du projet actif." })),
+      project: Type.Optional(Type.String({ description: "Chemin absolu du projet dont l'agent doit être arrêté. Si omis, utilise le projet actif." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ action: "stop_agent", agentId: params.agentId || null });
+      const payload = JSON.stringify({ action: "stop_agent", agentId: params.agentId || null, project: params.project || null });
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
       if (ok) {
         const target = params.agentId ? `L'agent « ${params.agentId} »` : "L'agent du projet actif";
@@ -249,23 +250,26 @@ export default function (pi: ExtensionAPI) {
     name: "delegate_to_coder",
     label: "Delegate to Coder",
     description:
-      "Déléguer une demande de modification de code à l'agent standard du projet actif (pi/plh de coding). Par défaut, ouvre son onglet (le rend visible) et lui envoie la demande dans sa session de discussion. Si `background=true`, démarre l'agent en mode invisible (en arrière-plan, sans ouvrir d'onglet). À utiliser quand l'utilisateur demande une modification de code sur le projet actif. Bloque jusqu'à ce que Pilot ait transmis la demande.",
-    promptSnippet: "delegate_to_coder: déléguer une demande de code à l'agent du projet actif",
+      "Déléguer une demande de modification de code à l'agent standard d'un projet (pi/plh de coding). Par défaut, délègue au projet actif et ouvre son onglet (le rend visible) en lui envoyant la demande dans sa session de discussion. Si `background=true`, démarre l'agent en mode invisible (en arrière-plan, sans ouvrir d'onglet). Si `project` est fourni, délègue à CE projet (même s'il n'est pas actif) : son agent est démarré en arrière-plan (invisible) automatiquement, sans ouvrir le projet ni l'onglet. À utiliser quand l'utilisateur demande une modification de code sur un projet. Bloque jusqu'à ce que Pilot ait transmis la demande.",
+    promptSnippet: "delegate_to_coder: déléguer une demande de code à l'agent d'un projet",
     promptGuidelines: [
-      "Use delegate_to_coder when the user asks for a code modification on the active project. The request is sent to the project's coding agent (pi/plh), which opens its tab and receives the request in its discussion. Only delegate actual code work — for simple questions about how something works, answer directly.",
+      "Use delegate_to_coder when the user asks for a code modification on a project. The request is sent to the project's coding agent (pi/plh), which opens its tab and receives the request in its discussion. Only delegate actual code work — for simple questions about how something works, answer directly.",
       "Set background=true to start the agent in invisible mode (background, without opening a tab). This is useful when you want the agent to work without disturbing the user's current view.",
+      "Pass `project` (absolute path) to delegate to a specific project even if it is not the active one. Its agent is started in the background (invisible) automatically, without opening the project or its tab.",
     ],
     parameters: Type.Object({
       request: Type.String({ description: "La demande de code à transmettre à l'agent du projet" }),
+      project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible. Si omis, délègue au projet actif." })),
       background: Type.Optional(Type.Boolean({ description: "true → démarrer l'agent en mode invisible (arrière-plan, sans ouvrir d'onglet). Défaut : false (onglet ouvert)." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, background: params.background === true });
+      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, project: params.project || null, background: params.background === true });
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
       if (ok) {
         const mode = params.background === true ? "en arrière-plan (agent invisible)" : "(son onglet est ouvert)";
-        return { content: [{ type: "text", text: `La demande a été transmise à l'agent du projet ${mode}.` }] };
+        const target = params.project ? `du projet « ${params.project} »` : "du projet actif";
+        return { content: [{ type: "text", text: `La demande a été transmise à l'agent ${target} ${mode}.` }] };
       }
       return { content: [{ type: "text", text: "Échec de la transmission de la demande à l'agent du projet." }] };
     },

@@ -130,6 +130,13 @@ apprend et répond.
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
   déléguée est visible dans la conversation de l'agent quand vous y basculez).
+- **A13 — Assistant headless multi-projets** : l'Assistant peut déléguer à
+  **n'importe quel projet**, même s'il n'est **pas actif** (outil
+  `delegate_to_coder` avec le paramètre `project`). L'agent de ce projet est
+  alors **démarré en arrière-plan (invisible)** automatiquement, **sans ouvrir
+  le projet ni l'onglet**. Le suivi (bouton Arrêter, détection de boucle,
+  notification de fin) et l'arrêt ciblent ce projet précis (canal d'événements
+  et `stop_agent_session` routés par chemin de projet).
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les

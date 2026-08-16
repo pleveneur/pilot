@@ -55,14 +55,20 @@ pub(crate) fn agent_event_channel(path: &str, agent_id: &str) -> String {
 /// Multi-projets : retourne le canal d'événements de la session du projet actif,
 /// pour que le frontend écoute le bon canal lors de la création de l'onglet agent.
 /// `agent_id` : id de l'agent (None/vide → agent par défaut).
+/// A13 (assistant headless multi-projets) : un `project_path` explicite permet
+/// d'écouter le canal d'un projet NON actif (délégation headless). Sinon, on
+/// retombe sur le projet actif.
 #[tauri::command]
-pub fn get_agent_event_channel(state: State<AppState>, agent_id: Option<String>) -> Result<String, String> {
-    let project = state
-        .project_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Aucun projet ouvert")?;
+pub fn get_agent_event_channel(state: State<AppState>, agent_id: Option<String>, project_path: Option<String>) -> Result<String, String> {
+    let project = match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => p,
+        None => state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?,
+    };
     Ok(agent_event_channel(&project, &normalize_agent_id(agent_id.as_deref())))
 }
 use crate::AppState;
@@ -266,14 +272,20 @@ pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String>
     Ok(Value::Object(map))
 }
 
-pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id: Option<&str>) -> Result<bool, String> {
+pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id: Option<&str>, project_path: Option<&str>) -> Result<bool, String> {
     let agent_id = normalize_agent_id(agent_id);
-    let project = state.project_path.lock().unwrap();
-    let cwd = project
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-    drop(project);
+    // A13 (assistant headless multi-projets) : un `project_path` explicite
+    // permet de démarrer l'agent d'un projet NON actif en arrière-plan (sans
+    // ouvrir le projet ni l'onglet). Sinon, on retombe sur le projet actif.
+    let cwd = match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => p.to_string(),
+        None => state
+            .project_path
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?,
+    };
 
     // Garde-fou anti-orphan : un pointeur `active` peut subsister alors que la
     // session pointée est morte (ex: délégation ayant spawné un agent puis dont
@@ -283,7 +295,15 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
     // visible). On délègue à `clear_active_if_dead` : si la session pointée est
     // morte/absente, le pointeur est nettoyé et on continue (débloque les
     // délégations) ; si elle est vivante, on conserve l'erreur « déjà active ».
-    if state.agent_service.active_agent().is_some()
+    // A13 : ce garde-fou ne concerne QUE le projet actif (le pointeur `active`
+    // ne désigne que l'agent affiché du projet actif). Pour un projet non actif
+    // (délégation headless), on ne touche pas au pointeur actif.
+    let is_active_project = {
+        let active = state.project_path.lock().unwrap().clone();
+        active.as_deref() == Some(cwd.as_str())
+    };
+    if is_active_project
+        && state.agent_service.active_agent().is_some()
         && !state.agent_service.clear_active_if_dead(&cwd)
     {
         return Err("Une session agent est déjà active".to_string());
@@ -315,8 +335,8 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
 }
 
 #[tauri::command]
-pub fn start_agent_session(state: State<AppState>, app: AppHandle, agent_id: Option<String>) -> Result<bool, String> {
-    do_start_agent_session(state.inner(), &app, agent_id.as_deref())
+pub fn start_agent_session(state: State<AppState>, app: AppHandle, agent_id: Option<String>, project_path: Option<String>) -> Result<bool, String> {
+    do_start_agent_session(state.inner(), &app, agent_id.as_deref(), project_path.as_deref())
 }
 
 /// Multi-projets (spec_multiprojects.md §3) : « parke » la session agent du
@@ -356,7 +376,10 @@ pub fn park_agent_session(state: State<AppState>, agent_id: Option<String>) -> R
 /// si aucune session n'est active. Multi-onglets agents : `agent_id` cible l'agent
 /// à arrêter (None/vide → agent par défaut). L'agent ciblé (actif ou parké) est
 /// retiré du registre unique de l'AgentService et son processus pi est tué.
-pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
+/// A13 (assistant headless multi-projets) : un `project_path` explicite permet
+/// d'arrêter l'agent d'un projet NON actif (délégation headless). Sinon, on
+/// retombe sur le projet actif.
+pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>, project_path: Option<&str>) {
     // None → arrêter l'agent actif (rétrocompat des appelants existants).
     let agent_id = match agent_id {
         Some(a) => normalize_agent_id(Some(a)),
@@ -364,7 +387,10 @@ pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
             .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
     };
     let active = state.agent_service.active_agent();
-    let project = state.project_path.lock().unwrap().clone();
+    let project = match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => Some(p.to_string()),
+        None => state.project_path.lock().unwrap().clone(),
+    };
     if active.as_deref() == Some(agent_id.as_str()) {
         // Issue #13 : remettre le projet actif à « libre » quand une session
         // est réellement arrêtée (pas lors d'un parking, où le processus pi
@@ -386,8 +412,8 @@ pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>) {
 }
 
 #[tauri::command]
-pub fn stop_agent_session(state: State<AppState>, agent_id: Option<String>) -> Result<(), String> {
-    do_stop_agent_session(state.inner(), agent_id.as_deref());
+pub fn stop_agent_session(state: State<AppState>, agent_id: Option<String>, project_path: Option<String>) -> Result<(), String> {
+    do_stop_agent_session(state.inner(), agent_id.as_deref(), project_path.as_deref());
     Ok(())
 }
 

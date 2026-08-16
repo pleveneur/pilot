@@ -591,15 +591,19 @@ class TabsManager {
    * invisible » est activée : la délégation s'exécute sans aucun onglet agent
    * visible. 3.3 : pose `visible=0` sur l'objet puis démarre la session
    * (AgentService::start). L'objet porte visible=0, loaded=true, state=Running.
+   * A13 (assistant headless multi-projets) : un `projectPath` explicite permet
+   * de démarrer l'agent d'un projet NON actif en arrière-plan (sans ouvrir le
+   * projet ni l'onglet). Sinon, on retombe sur le projet actif.
    * @param {string} [agentId] — id de l'agent (défaut "default").
+   * @param {string|null} [projectPath] — chemin du projet cible (défaut : projet actif).
    */
-  async startAgentInvisible(agentId = "default") {
-    const projectPath = window._pilotProjectPath || null;
+  async startAgentInvisible(agentId = "default", projectPath = null) {
+    const target = projectPath || window._pilotProjectPath || null;
     // 3.3 : rendre l'objet invisible AVANT de démarrer (visible=0).
-    try { await invoke("set_agent_visible", { agentId, projectPath, visible: false }); } catch (_) {}
+    try { await invoke("set_agent_visible", { agentId, projectPath: target, visible: false }); } catch (_) {}
     // Démarre/reprend la session (AgentService::start, idempotent). Aucun Tab
     // créé : la vue n'existe pas, mais l'objet porte loaded=true.
-    return await invoke("start_agent_session", { agentId });
+    return await invoke("start_agent_session", { agentId, projectPath: target });
   }
 
   /**

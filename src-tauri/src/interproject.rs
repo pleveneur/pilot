@@ -137,7 +137,7 @@ pub fn interproject_handoff(
     }
 
     // 3. Lancer / reprendre l'agent de la cible (session active).
-    rpc::do_start_agent_session(state.inner(), &app, None)?;
+    rpc::do_start_agent_session(state.inner(), &app, None, None)?;
 
     // 4. Envoyer le prompt de traitement du handoff.
     let prompt = format!(
