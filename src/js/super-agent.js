@@ -1047,6 +1047,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const PROMPT_SENTINEL = "PILOT_ASSISTANT_PROMPT::";
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
+    const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1122,6 +1123,21 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       // résultat (JSON) comme `value` de la réponse.
       try {
         const result = await invoke("list_agent_sessions");
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(DELEGATION_SENTINEL)) {
+      // Outil get_delegation_result (P5) : l'assistant récupère le résultat
+      // d'une délégation. Le titre contient un JSON {project, session_id}.
+      try {
+        const info = JSON.parse(title.slice(DELEGATION_SENTINEL.length));
+        const result = await invoke("get_delegation_result", {
+          project: String(info.project || ""),
+          sessionId: String(info.session_id || ""),
+        });
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
@@ -1270,19 +1286,22 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
       }
     } else if (action === "stop_agent") {
-      // Arrêter l'agent du projet actif (coupe la session en cours, visible ou
-      // invisible). 4.1 : cible l'agent RÉSOLU (pas un littéral) via
-      // `stop_agent_session` (qui route vers AgentService.stop). Réutilise le
-      // nettoyage du suivi de l'agent invisible s'il était actif.
+      // Arrêter un agent (coupe la session en cours, visible ou invisible).
+      // 4.1 : cible l'agent RÉSOLU (pas un littéral) via `stop_agent_session`
+      // (qui route vers AgentService.stop). Issue #23/#22 : si l'assistant
+      // fournit un `agentId` cible (agent secondaire/spécialisé/spécifique créé
+      // à la volée et lancé via run_agents), on l'arrête précisément ; sinon on
+      // retombe sur l'agent standard du projet. Réutilise le nettoyage du suivi
+      // de l'agent invisible s'il était actif.
       try {
         const projectPath = window._pilotProjectPath || null;
-        const agentId = await resolveDelegationAgentId(projectPath);
-        await invoke("stop_agent_session", { agentId: agentId || null }).catch(() => {});
+        const targetAgentId = info.agentId || await resolveDelegationAgentId(projectPath);
+        await invoke("stop_agent_session", { agentId: targetAgentId || null }).catch(() => {});
         // Nettoyer aussi le suivi de l'agent invisible (bandeau + écouteur).
         if (typeof stopInvisibleAgentMonitoring === "function") {
           stopInvisibleAgentMonitoring();
         }
-        appendSystemMessage(messagesEl, "🛑 Agent du projet arrêté.");
+        appendSystemMessage(messagesEl, `🛑 Agent ${targetAgentId ? `« ${targetAgentId} »` : "du projet"} arrêté.`);
         await respondSuperAgentAction(id, true);
       } catch (e) {
         console.error("Erreur stop_agent (assistant):", e);

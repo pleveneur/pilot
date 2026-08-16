@@ -2042,6 +2042,7 @@ pub fn run() {
             session_history::get_agent_sessions,
             session_history::search_sessions,
             session_history::get_session_detail,
+            session_history::get_delegation_result,
             session_history::set_session_tags,
             session_history::list_session_tags,
             session_history::record_session_entry,

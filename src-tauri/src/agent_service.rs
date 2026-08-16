@@ -878,6 +878,10 @@ impl AgentService {
                     if std::fs::write(&sessions, include_str!("../extensions/pilot-assistant-sessions.ts")).is_ok() {
                         extensions.push(sessions.to_string_lossy().to_string());
                     }
+                    let delegation = dir.join("pilot-assistant-delegation.ts");
+                    if std::fs::write(&delegation, include_str!("../extensions/pilot-assistant-delegation.ts")).is_ok() {
+                        extensions.push(delegation.to_string_lossy().to_string());
+                    }
                 }
             }
         }

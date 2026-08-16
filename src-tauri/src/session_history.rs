@@ -675,6 +675,102 @@ pub fn get_session_detail(state: State<AppState>, id: String) -> Result<Value, S
     }))
 }
 
+/// Retourne le résultat d'une délégation pour une session d'agent donnée : le
+/// dernier message de type « résultat de délégation » (marqueur
+/// `[Tâche déléguée terminée]`, sinon le dernier message de l'agent) + les N
+/// derniers messages de la session (N=20). Retourne `{ project, session_id,
+/// result, history }`. Utilisé par l'assistant (outil get_delegation_result).
+#[tauri::command]
+pub fn get_delegation_result(
+    state: State<AppState>,
+    project: String,
+    session_id: String,
+) -> Result<Value, String> {
+    const HISTORY_LIMIT: usize = 20;
+    const DONE_MARKER: &str = "[Tâche déléguée terminée]";
+
+    let config = state.config.lock().unwrap();
+    let session_dir = project_sessions_dir(&config);
+    let folder_name = project_to_session_folder(&project);
+    let project_dir = session_dir.join(&folder_name);
+    drop(config);
+
+    // Messages simplifiés (role + text) dans l'ordre chronologique.
+    let mut messages: Vec<Value> = Vec::new();
+    if project_dir.exists() {
+        for entry_it in fs::read_dir(&project_dir).map_err(|e| format!("Lecture sessions: {}", e))? {
+            let entry_it = match entry_it {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry_it.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            if !stem.ends_with(&format!("_{}", session_id)) {
+                continue;
+            }
+            let content = fs::read_to_string(&path).unwrap_or_default();
+            for line in content.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let v: Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if v.get("type").and_then(|x| x.as_str()) != Some("message") {
+                    continue;
+                }
+                if let Some(msg) = v.get("message") {
+                    let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let text = extract_message_text(msg);
+                    if !text.is_empty() {
+                        messages.push(serde_json::json!({
+                            "role": role,
+                            "text": text
+                        }));
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    // Dernier message de type « résultat de délégation » : on cherche le marqueur
+    // `[Tâche déléguée terminée]` dans le texte ; sinon on retombe sur le dernier
+    // message de l'agent (role assistant).
+    let mut result: Option<Value> = None;
+    for m in messages.iter().rev() {
+        let text = m.get("text").and_then(|x| x.as_str()).unwrap_or("");
+        if text.contains(DONE_MARKER) {
+            result = Some(m.clone());
+            break;
+        }
+    }
+    if result.is_none() {
+        for m in messages.iter().rev() {
+            if m.get("role").and_then(|x| x.as_str()) == Some("assistant") {
+                result = Some(m.clone());
+                break;
+            }
+        }
+    }
+
+    // Historique récent : les N derniers messages.
+    let start = messages.len().saturating_sub(HISTORY_LIMIT);
+    let history: Vec<Value> = messages[start..].to_vec();
+
+    Ok(serde_json::json!({
+        "project": project,
+        "session_id": session_id,
+        "result": result.unwrap_or(Value::Null),
+        "history": history
+    }))
+}
+
 /// Persiste les tags d'une session (fichier séparé, ne touche pas l'index).
 #[tauri::command]
 pub fn set_session_tags(state: State<AppState>, id: String, tags: Vec<String>) -> Result<(), String> {
