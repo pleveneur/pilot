@@ -191,6 +191,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentTools = document.getElementById("setting-superagent-tools");
   const chkSuperAgentNotifyDone = document.getElementById("setting-superagent-notify-done");
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
+  const chkSuperAgentUserFriendly = document.getElementById("setting-superagent-user-friendly");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
   const chkSuperAgentInvisibleAgent = document.getElementById("setting-superagent-invisible-agent");
   const chkSuperAgentQualityGate = document.getElementById("setting-superagent-quality-gate");
@@ -514,6 +515,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
   if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
   if (chkSuperAgentNotifyDone) chkSuperAgentNotifyDone.checked = currentConfig.notify_super_agent_done === true;
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
+  if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
   if (chkSuperAgentInvisibleAgent) chkSuperAgentInvisibleAgent.checked = currentConfig.super_agent_invisible_agent !== false;
   if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
@@ -735,6 +737,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         super_agent_show_tools: chkSuperAgentTools ? chkSuperAgentTools.checked === true : false,
         notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
+        super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,
         super_agent_invisible_agent: chkSuperAgentInvisibleAgent ? chkSuperAgentInvisibleAgent.checked !== false : true,
         super_agent_quality_gate: chkSuperAgentQualityGate ? chkSuperAgentQualityGate.checked !== false : true,

@@ -68,6 +68,14 @@ apprend et répond.
   ce qui se fait, **sauf si vous lui demandez explicitement** de détailler.
 - **Désactivé par défaut**.
 
+### Mode user-friendly (langage simple)
+- **Paramètres ⚙️ → onglet « Assistant » → « Mode user-friendly (langage simple,
+  non technique, sauf demande explicite) »** : quand activé, l'Assistant répond
+  en **langage simple et non technique** — il évite le jargon et explique les
+  concepts de façon accessible pour un non-spécialiste, **sauf si vous lui
+  demandez explicitement** du technique.
+- **Désactivé par défaut**.
+
 ### Purge de la conversation de l'agent (à la demande)
 - La conversation de l'agent d'un projet est **conservée** entre les demandes
   déléguées par l'Assistant : chaque délégation s'appuie sur l'historique

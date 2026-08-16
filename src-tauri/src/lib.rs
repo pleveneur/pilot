@@ -482,6 +482,11 @@ struct AppConfig {
     // en plus de leur rôle propre (concaténation).
     #[serde(default)]
     super_agent_inherit_context: bool,
+    // Issue #16 : mode « user-friendly ». Quand activé (défaut false), l'assistant
+    // répond en langage simple, non technique, sauf si l'utilisateur demande
+    // explicitement du technique. Injecté dans le prompt système.
+    #[serde(default)]
+    super_agent_user_friendly: bool,
 }
 
 fn default_true() -> bool { true }
@@ -685,6 +690,7 @@ impl Default for AppConfig {
             super_agent_invisible_agent: true,
             super_agent_quality_gate: true,
             super_agent_inherit_context: false,
+            super_agent_user_friendly: false,
         }
     }
 }

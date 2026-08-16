@@ -196,6 +196,17 @@ fn concise_guideline(enabled: bool) -> String {
     "\n\nRègle de style : réponds de façon concise. Informe l'utilisateur et prends des décisions, mais ne détaille pas tout ce qui se fait, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
 }
 
+/// Construit la consigne « mode user-friendly » (issue #16) à injecter dans le
+/// prompt système du super-agent. Quand activé, l'assistant répond en langage
+/// simple, non technique, sauf si l'utilisateur demande explicitement du
+/// technique. Retourne une chaîne vide si le mode est désactivé.
+fn user_friendly_guideline(enabled: bool) -> String {
+    if !enabled {
+        return String::new();
+    }
+    "\n\nRègle de style : réponds en langage simple et non technique, sauf si l'utilisateur demande explicitement du technique. Évite le jargon, explique les concepts de façon accessible et privilégie des explications claires pour un non-spécialiste.".to_string()
+}
+
 /// Construit la consigne « personnalité adaptée à l'utilisateur » (A18) à
 /// injecter dans le prompt système du super-agent. S'appuie sur la personnalité
 /// déduite en arrière-plan de la conversation (persistée dans la config).
@@ -259,9 +270,9 @@ pub(crate) fn do_send_super_agent_prompt(
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt, concise, user_memory, adaptive_personality, personality) = {
+    let (name, system_prompt, concise, user_memory, adaptive_personality, personality, user_friendly) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone())
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let mut full_system = format!(
@@ -297,6 +308,8 @@ pub(crate) fn do_send_super_agent_prompt(
     );
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
+    // Issue #16 : mode « user-friendly » (désactivé par défaut).
+    full_system.push_str(&user_friendly_guideline(user_friendly));
     let full_message = format!("{}\n\n{}", full_system, message);
     let cmd = serde_json::json!({"type": "prompt", "message": full_message});
     state.agent_service.send_superagent(cmd)
@@ -330,7 +343,7 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise, user_memory, adaptive_personality, personality) = {
+    let (pi_path, mut model, system_prompt, concise, user_memory, adaptive_personality, personality, user_friendly) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
@@ -340,6 +353,7 @@ pub async fn ask_super_agent(
             cfg.super_agent_user_memory.clone(),
             cfg.super_agent_adaptive_personality,
             cfg.super_agent_personality.clone(),
+            cfg.super_agent_user_friendly,
         )
     };
 
@@ -376,6 +390,8 @@ pub async fn ask_super_agent(
     prompt.push_str(&personality_guideline(adaptive_personality, &personality));
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     prompt.push_str(&concise_guideline(concise));
+    // Issue #16 : mode « user-friendly » (désactivé par défaut).
+    prompt.push_str(&user_friendly_guideline(user_friendly));
     for turn in &history {
         let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
         prompt.push_str(&format!("{} : {}\n\n", role, turn.content));
@@ -753,6 +769,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
         "super_agent_quality_gate": cfg.super_agent_quality_gate,
         "super_agent_inherit_context": cfg.super_agent_inherit_context,
+        "super_agent_user_friendly": cfg.super_agent_user_friendly,
         "adaptive_personality": cfg.super_agent_adaptive_personality,
         "personality": cfg.super_agent_personality,
     }))
@@ -771,6 +788,7 @@ pub fn set_super_agent_config(
     adaptive_personality: Option<bool>,
     super_agent_quality_gate: Option<bool>,
     super_agent_inherit_context: Option<bool>,
+    super_agent_user_friendly: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -799,6 +817,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = super_agent_inherit_context {
         cfg.super_agent_inherit_context = v;
+    }
+    if let Some(v) = super_agent_user_friendly {
+        cfg.super_agent_user_friendly = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
