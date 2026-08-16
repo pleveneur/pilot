@@ -729,6 +729,10 @@
               <input type="checkbox" id="setting-superagent-quality-gate" />
               <label for="setting-superagent-quality-gate" title="Quand l'Assistant délègue une demande à un agent (delegate_to_coder / run_agents), l'agent intègre le protocole quality-gate dans son prompt (consigne « Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier » + « Lance cargo test --lib avant de committer »). Activé par défaut.">Quality-gate pour les agents appelés (protocole anti-régression dans leur prompt)</label>
             </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-superagent-inherit-context" />
+              <label for="setting-superagent-inherit-context" title="Quand l'Assistant utilise un agent spécifique (run_agents), cet agent hérite du contexte de l'agent standard du projet (rôle + RAG/Context Engine + mémoire projet + Code Graph), en plus de son rôle propre (concaténation). Désactivé par défaut.">Héritage du contexte projet pour les agents spécifiques (rôle + RAG + mémoire + Code Graph)</label>
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

@@ -156,6 +156,27 @@ Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
 l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un
 agent qu'il a lui-même créé).
 
+### Héritage du contexte projet pour les agents spécifiques (#21)
+Quand le paramètre **« Héritage du contexte projet pour les agents
+spécifiques »** est activé (Paramètres → section Assistant, désactivé par
+défaut), les agents spécifiques que l'Assistant utilise (outil `run_agents`)
+héritent du contexte que reçoit l'agent standard du projet : le rôle/prompt ET
+les activations de contexte (RAG / Context Engine, mémoire projet
+`PROJECT_MEMORY.md`, Code Graph). L'héritage se fait **en plus** du rôle propre
+de l'agent cible (concaténation). Désactivé, l'agent spécifique ne reçoit que
+son rôle propre (comportement actuel).
+
+<!-- HELP:super-agent-inherit-context -->
+### Hériter du contexte projet pour les agents spécifiques
+Dans **Paramètres → section Assistant**, l'option **« Héritage du contexte
+projet pour les agents spécifiques »** (désactivée par défaut) fait hériter
+aux agents spécifiques que l'Assistant utilise (outil `run_agents`) du contexte
+que reçoit l'agent standard du projet : le rôle/prompt, le RAG / Context
+Engine, la mémoire projet (`PROJECT_MEMORY.md`) et le Code Graph. L'héritage
+s'ajoute au rôle propre de l'agent cible (concaténation). Désactivée, l'agent
+spécifique ne reçoit que son rôle propre.
+<!-- /HELP:super-agent-inherit-context -->
+
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
   de votre part pendant son travail (choix d'une approche, confirmation,

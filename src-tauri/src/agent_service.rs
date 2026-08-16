@@ -923,6 +923,23 @@ impl AgentService {
         no_session: bool,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
+        // #21 : quand l'assistant active l'héritage de contexte, les agents
+        // spécifiques qu'il utilise (run_agents) chargent l'extension
+        // pilot-context.ts (comme l'agent standard) pour hériter du contexte
+        // projet (RAG/Context Engine + mémoire + Code Graph) en plus de leur rôle.
+        let inherit_context = state.config.lock().unwrap().super_agent_inherit_context;
+        let mut extensions: Vec<String> = Vec::new();
+        if inherit_context && probe_extension_support(&state, pi_path) {
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let dir = data_dir.join("extensions");
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    let ctx_file = dir.join("pilot-context.ts");
+                    if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
+                        extensions.push(ctx_file.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
         let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
             cfg_path
                 .with_file_name("agent")
@@ -941,7 +958,7 @@ impl AgentService {
             no_session,
             &session_dir_str,
             None,
-            Vec::new(),
+            extensions,
             app.clone(),
             state.event_tx.clone(),
             "rpc-event-agents",

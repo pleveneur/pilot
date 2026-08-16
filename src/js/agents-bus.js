@@ -5,6 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { backendKind } from "./backend-info.js";
 import { notifyAgentDone } from "./desktop-notify.js";
+import { buildProjectContext } from "./context-engine.js";
+import { buildMemoryBlock } from "./project-memory.js";
+import { buildGraphBlock } from "./code-graph.js";
 import {
   loadAgentRegistry,
   normalizeAgent,
@@ -723,6 +726,55 @@ async function runAgentTurn(agent, brief, projectContext = "") {
   emit("agentStart", { agentId: agent.id, model });
 
   try {
+    // #21 : héritage de contexte pour les agents spécifiques de l'assistant.
+    // Quand le paramètre est activé, on écrit le handoff de contexte (comme
+    // l'agent standard) pour que l'extension pilot-context.ts l'injecte en
+    // plus du rôle propre de l'agent cible (concaténation).
+    if (cfg.super_agent_inherit_context === true) {
+      try {
+        const config = await invoke("get_config");
+        let handoffBlocks = "";
+        if (config) {
+          if (config.project_memory_enabled !== false) {
+            const memBlock = await buildMemoryBlock(cwd);
+            if (memBlock) handoffBlocks += memBlock;
+          }
+          if (config.context_engine_enabled !== false) {
+            const ctxOpts = {
+              enabled: true,
+              budgetTokens: config.context_budget_tokens || 8000,
+              includeImports: config.context_include_imports !== false,
+              includeSpecs: config.context_include_specs !== false,
+              includeRecents: config.context_include_recents !== false,
+              ragEnabled: config.context_rag_enabled === true,
+              ragEndpoint: config.context_rag_endpoint || "http://127.0.0.1:11434",
+              ragModel: config.context_rag_model || "nomic-embed-text",
+              prompt: brief,
+            };
+            const ctxBlock = await Promise.race([
+              buildProjectContext(cwd, null, [], ctxOpts),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("context-engine timeout (8s)")), 8000)),
+            ]).catch((e) => { console.warn("[agents-bus] contexte abandonné:", e); return null; });
+            if (ctxBlock) handoffBlocks += ctxBlock;
+          }
+          if (config.code_graph_enabled !== false) {
+            const graphBlock = await buildGraphBlock(cwd, brief, {
+              enabled: true,
+              injectModeA: config.graph_inject_mode_a !== false,
+              budgetTokens: config.graph_budget_tokens || 4000,
+              injectModeB: config.graph_inject_mode_b !== false,
+            });
+            if (graphBlock) handoffBlocks += graphBlock;
+          }
+        }
+        if (handoffBlocks) {
+          await invoke("write_context_handoff", { projectPath: cwd, content: handoffBlocks });
+        }
+      } catch (e) {
+        console.warn("[agents-bus] échec écriture handoff contexte:", e);
+      }
+    }
+
     await invoke("start_agent_process", {
       agentId: agent.id,
       cwd,

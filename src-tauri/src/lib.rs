@@ -476,6 +476,12 @@ struct AppConfig {
     // quality-gate dans son prompt (consigne + cargo test --lib).
     #[serde(default = "default_true")]
     super_agent_quality_gate: bool,
+    // Paramètre assistant : quand activé (défaut false), les agents spécifiques
+    // utilisés par l'assistant (run_agents) héritent du contexte de l'agent
+    // standard du projet (rôle + RAG/Context Engine + mémoire + Code Graph),
+    // en plus de leur rôle propre (concaténation).
+    #[serde(default)]
+    super_agent_inherit_context: bool,
 }
 
 fn default_true() -> bool { true }
@@ -678,6 +684,7 @@ impl Default for AppConfig {
             super_agent_block_agent_input: false,
             super_agent_invisible_agent: true,
             super_agent_quality_gate: true,
+            super_agent_inherit_context: false,
         }
     }
 }
