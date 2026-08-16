@@ -61,6 +61,21 @@ let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: 
 // son suivi et décide des prochaines étapes. Puis on vide le tracker.
 let pendingDelegation = null;
 
+// A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
+// l'assistant quand le mode « Assistant Only » immersif est actif et que le
+// toggle « synthèse » est activé. Module-scope car handleSuperAgentEvent y
+// accède (agent_end).
+let speakEnabled = false;
+function speak(text) {
+  if (!text || !("speechSynthesis" in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "fr-FR";
+    window.speechSynthesis.speak(u);
+  } catch (_) {}
+}
+
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
@@ -296,6 +311,7 @@ export async function createSuperAgent(container) {
   const toolbar = document.createElement("div");
   toolbar.className = "agent-chat-toolbar superagent-toolbar";
   toolbar.innerHTML = `
+    <button class="agent-btn" data-action="immersive" title="Mode Assistant Only (immersif) : tout masquer sauf le chat"><i data-lucide="maximize-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="abort" title="Arrêter"><i data-lucide="square" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="new-session" title="Nouvelle session"><i data-lucide="plus" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
@@ -543,12 +559,76 @@ export async function createSuperAgent(container) {
     }
   });
 
+  // ── Mode « Assistant Only » immersif (A19) ──
+  // Overlay plein écran : tout est masqué sauf le chat + une barre minimale
+  // (bouton retour + statut) + logo agrandi + toggles voix (dictée + synthèse).
+  // Réutilise les éléments existants (messagesEl, inputBar, statusEl) en les
+  // DÉPLAÇANT dans l'overlay — aucun rendu dupliqué, la dictée vocale et le
+  // rendu du chat restent ceux de l'onglet normal. Le dernier mode choisi est
+  // mémorisé (localStorage) et restauré à la réouverture de l'onglet.
+  const IMMERSIVE_KEY = "pilot_superagent_immersive";
+  let immersiveOverlay = null;
+
+  function buildImmersiveOverlay() {
+    const ov = document.createElement("div");
+    ov.className = "superagent-immersive";
+    ov.innerHTML = `
+      <div class="sa-immersive-top">
+        <button class="agent-btn sa-immersive-back" data-imm="back" title="Retour au mode normal"><i data-lucide="arrow-left" class="icon"></i></button>
+        <img class="sa-immersive-logo" src="images/logo_pilot_vector.svg" alt="Pilot" />
+        <span class="sa-immersive-title">${superAgentDisplayLabel()}</span>
+        <span class="agent-status" id="sa-immersive-status">Prêt</span>
+        <div class="sa-immersive-voice">
+          <button class="agent-btn" data-imm="voice" title="Dictée vocale"><i data-lucide="mic" class="icon"></i></button>
+          <button class="agent-btn" data-imm="speak" title="Synthèse vocale (lire les réponses)"><i data-lucide="volume-2" class="icon"></i></button>
+        </div>
+      </div>
+      <div class="sa-immersive-messages"></div>
+      <div class="sa-immersive-input"></div>
+    `;
+    ov.querySelector('[data-imm="back"]').addEventListener("click", exitImmersive);
+    ov.querySelector('[data-imm="voice"]').addEventListener("click", toggleVoiceInput);
+    ov.querySelector('[data-imm="speak"]').addEventListener("click", () => {
+      speakEnabled = !speakEnabled;
+      const btn = ov.querySelector('[data-imm="speak"]');
+      btn.classList.toggle("active", speakEnabled);
+      btn.title = speakEnabled ? "Synthèse vocale activée" : "Synthèse vocale (lire les réponses)";
+      if (!speakEnabled) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+    });
+    return ov;
+  }
+
+  function enterImmersive() {
+    if (immersiveOverlay) return;
+    immersiveOverlay = buildImmersiveOverlay();
+    immersiveOverlay.querySelector(".sa-immersive-messages").appendChild(messagesEl);
+    immersiveOverlay.querySelector(".sa-immersive-input").appendChild(inputBar);
+    immersiveOverlay.querySelector(".sa-immersive-top").appendChild(statusEl);
+    document.body.appendChild(immersiveOverlay);
+    document.body.classList.add("superagent-immersive-active");
+    refreshIcons(immersiveOverlay);
+    localStorage.setItem(IMMERSIVE_KEY, "1");
+  }
+
+  function exitImmersive() {
+    if (!immersiveOverlay) return;
+    wrapper.appendChild(messagesEl);
+    wrapper.appendChild(inputBar);
+    toolbar.appendChild(statusEl);
+    immersiveOverlay.remove();
+    immersiveOverlay = null;
+    document.body.classList.remove("superagent-immersive-active");
+    localStorage.setItem(IMMERSIVE_KEY, "0");
+  }
+
   // ── Actions ──
   toolbar.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-action]");
     if (!btn) return;
     const action = btn.dataset.action;
-    if (action === "abort") {
+    if (action === "immersive") {
+      enterImmersive();
+    } else if (action === "abort") {
       await invoke("abort_super_agent").catch(() => {});
     } else if (action === "new-session") {
       await invoke("new_super_agent_session").catch(() => {});
@@ -670,10 +750,19 @@ export async function createSuperAgent(container) {
     } catch (_) { /* ignore */ }
   }, 2000);
 
+  // A19 : restaurer le dernier mode choisi (immersif ou normal) à la réouverture
+  // de l'onglet Assistant.
+  if (localStorage.getItem(IMMERSIVE_KEY) === "1") {
+    enterImmersive();
+  }
+
   return {
     wrapper,
     unlisten: () => {
       clearInterval(superStatusPoll);
+      // A19 : si l'onglet est fermé en mode immersif, remettre les éléments
+      // dans le wrapper et retirer l'overlay (évite des éléments orphelins).
+      if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
@@ -988,6 +1077,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
     onEnd();
+    // A19 : synthèse vocale — lire la réponse complète si activée.
+    if (speakEnabled) speak(lastAssistantRawText);
     return;
   }
   if (type === "extension_ui_request") {

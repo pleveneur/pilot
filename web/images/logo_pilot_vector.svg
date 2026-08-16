@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="224" height="225" viewBox="0 0 224 225" fill="none">
+<defs>
+  <linearGradient id="gMain" x1="45" y1="20" x2="164" y2="137" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#55D9D3"/>
+    <stop offset="0.38" stop-color="#19B9E8"/>
+    <stop offset="0.72" stop-color="#4A8CEB"/>
+    <stop offset="1" stop-color="#6654E9"/>
+  </linearGradient>
+  <linearGradient id="gUpper" x1="37" y1="31" x2="98" y2="82" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5DE0D6"/>
+    <stop offset="0.55" stop-color="#16BCE9"/>
+    <stop offset="1" stop-color="#315CF1"/>
+  </linearGradient>
+  <linearGradient id="gSmall" x1="49" y1="73" x2="94" y2="101" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#27BCEB"/>
+    <stop offset="0.55" stop-color="#3867F1"/>
+    <stop offset="1" stop-color="#7848E8"/>
+  </linearGradient>
+  <linearGradient id="gTail" x1="96" y1="99" x2="62" y2="210" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#4E9AF0"/>
+    <stop offset="0.45" stop-color="#6767EC"/>
+    <stop offset="0.78" stop-color="#7653E8"/>
+    <stop offset="1" stop-color="#8A45E5"/>
+  </linearGradient>
+  <linearGradient id="gTailFold" x1="94" y1="151" x2="66" y2="207" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#6557E8"/>
+    <stop offset="1" stop-color="#8A45E5"/>
+  </linearGradient>
+  <mask id="headCut" maskUnits="userSpaceOnUse" x="0" y="0" width="224" height="225">
+    <rect width="224" height="225" fill="white"/>
+    <path d="M99 63C105 57 110 54 118 54C127 54 133 58 139 63C144 67 151 67 160 67L177 67C166 70 154 71 143 71C134 71 129 75 126 83C122 94 120 107 114 117C110 124 105 130 98 135C105 123 111 111 112 98C113 81 107 70 99 63Z" fill="black"/>
+  </mask>
+</defs>
+
+<!-- Main wing/body -->
+<path d="M30 16H130C164 16 188 40 188 72C188 107 166 135 130 135H98C106 126 112 113 112 97C112 78 105 66 92 58C79 50 66 48 55 43C43 38 36 31 34 23C33 20 31 18 30 16Z"
+      fill="url(#gMain)" mask="url(#headCut)"/>
+
+<!-- Upper swept feather -->
+<path d="M35 32C43 42 55 47 72 51C86 55 96 59 100 68C103 75 101 82 96 87C82 84 68 79 57 70C46 60 38 46 35 32Z"
+      fill="url(#gUpper)"/>
+
+<!-- Lower left feather -->
+<path d="M48 72C60 77 78 80 96 86C92 96 86 102 77 102C64 100 53 91 48 72Z"
+      fill="url(#gSmall)"/>
+
+<!-- Flowing tail -->
+<path d="M98 98C98 110 91 115 82 122C68 133 61 140 61 151V210C76 202 87 191 93 178C99 165 98 151 98 136C108 127 112 113 112 98C108 101 103 103 98 98Z"
+      fill="url(#gTail)"/>
+
+<!-- Subtle inner fold on tail -->
+<path d="M97 137C97 151 97 164 91 176C85 189 76 199 62 208V183C72 173 80 162 84 150C88 142 93 138 97 137Z"
+      fill="url(#gTailFold)" opacity=".48"/>
+
+<!-- Reassert clean silhouette around lower body -->
+<path d="M98 135C106 126 112 113 112 97C112 78 105 66 92 58C79 50 66 48 55 43C43 38 36 31 34 23C33 20 31 18 30 16"
+      fill="none" stroke="none"/>
+</svg>

@@ -1006,6 +1006,17 @@ agent qu'il a lui-même créé).
 - Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
   pas un codeur. Reformulez simplement votre question pour relancer.
 
+### Mode « Assistant Only » immersif (A19)
+- Le bouton **⛶ (maximize-2)** en haut à gauche de l'onglet 🧭 bascule en mode
+  **immersif « Assistant Only »** : tout est masqué sauf le chat de l'assistant
+  et une **barre minimale** (bouton retour + statut), avec le **logo agrandi**.
+- La barre minimale offre deux **toggles voix** : **🎙️ dictée vocale** et
+  **🔊 synthèse vocale** (lire les réponses de l'assistant à voix haute).
+- Le bouton **← (retour)** revient au mode normal. Le **dernier mode choisi est
+  mémorisé** et restauré à la réouverture de l'onglet.
+- **Identique sur l'accès distant web** : en mode « 🧭 Assistant », le bouton
+  **⛶** en haut de l'interface web ouvre le même mode immersif.
+
 ---
 
 ## Aide utilisateur — Tableau de bord

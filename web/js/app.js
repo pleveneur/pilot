@@ -206,6 +206,8 @@ function enterApp() {
   // puis appliquer l'interface avant de connecter le WS.
   loadWebMode().then(() => {
     applyMode();
+    // A19 : restaurer le dernier mode « Assistant Only » immersif choisi.
+    if (localStorage.getItem(WEB_IMMERSIVE_KEY) === '1') enterWebImmersive();
     connectWs();
     resyncAll();
     loadFiles();
@@ -450,12 +452,16 @@ function handleWsEvent(payload) {
       break;
 
     case 'agent_end':
+      // A19 : capturer la réponse avant que finalizeText ne vide pendingText.
+      const lastAssistantText = state.pendingText;
       finalizeText();
       state.isStreaming = false;
       state.currentAssistantBlock = null;
       state.currentTextBlock = null;
       state.currentThinkingBlock = null;
       updateStatusUi();
+      // A19 : synthèse vocale — lire la dernière réponse si activée.
+      if (webSpeakEnabled && lastAssistantText) webSpeak(lastAssistantText);
       break;
 
     case 'message_start': {
@@ -1006,6 +1012,9 @@ function applyMode() {
   });
   const modelBar = document.getElementById('chat-model-bar');
   if (modelBar) modelBar.hidden = isAssistant;
+  // A19 : bouton « Assistant Only » immersif visible uniquement en mode assistant.
+  const immBtn = document.getElementById('btn-immersive');
+  if (immBtn) immBtn.hidden = !isAssistant;
   ['btn-new', 'btn-abort', 'btn-compact', 'btn-load-history'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.style.display = isAssistant ? 'none' : '';
@@ -1045,6 +1054,86 @@ document.querySelectorAll('#web-mode-toggle .mode-btn').forEach((btn) => {
     applyMode();
   });
 });
+
+// ── A19 : mode « Assistant Only » immersif (web-remote) ──
+// Overlay plein écran : tout est masqué sauf le chat + une barre minimale
+// (bouton retour + statut) + logo agrandi + toggles voix (dictée + synthèse).
+// Réutilise les éléments existants (#chat-messages, #prompt-form, #agent-status)
+// en les DÉPLAÇANT dans l'overlay — aucun rendu dupliqué. Le dernier mode choisi
+// est mémorisé (localStorage) et restauré à la reconnexion.
+const WEB_IMMERSIVE_KEY = 'pilot_web_immersive';
+let webImmersiveOverlay = null;
+let webSpeakEnabled = false;
+
+function webSpeak(text) {
+  if (!text || !('speechSynthesis' in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'fr-FR';
+    window.speechSynthesis.speak(u);
+  } catch (_) {}
+}
+
+function buildWebImmersiveOverlay() {
+  const ov = document.createElement('div');
+  ov.className = 'web-immersive';
+  ov.innerHTML = `
+    <div class="wi-top">
+      <button class="wi-back" data-wi="back" title="Retour au mode normal">←</button>
+      <img class="wi-logo" src="/images/logo_pilot_vector.svg" alt="Pilot" />
+      <span class="wi-title">🧭 Assistant</span>
+      <span class="status idle" id="wi-status">Prêt</span>
+      <div class="wi-voice">
+        <button class="wi-btn" data-wi="voice" title="Dictée vocale">🎙️</button>
+        <button class="wi-btn" data-wi="speak" title="Synthèse vocale (lire les réponses)">🔊</button>
+      </div>
+    </div>
+    <div class="wi-messages"></div>
+    <div class="wi-input"></div>
+  `;
+  ov.querySelector('[data-wi="back"]').addEventListener('click', exitWebImmersive);
+  ov.querySelector('[data-wi="voice"]').addEventListener('click', toggleVoiceInput);
+  ov.querySelector('[data-wi="speak"]').addEventListener('click', () => {
+    webSpeakEnabled = !webSpeakEnabled;
+    const btn = ov.querySelector('[data-wi="speak"]');
+    btn.classList.toggle('active', webSpeakEnabled);
+    btn.title = webSpeakEnabled ? 'Synthèse vocale activée' : 'Synthèse vocale (lire les réponses)';
+    if (!webSpeakEnabled) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+  });
+  return ov;
+}
+
+function enterWebImmersive() {
+  if (webImmersiveOverlay) return;
+  webImmersiveOverlay = buildWebImmersiveOverlay();
+  const chatMessages = document.getElementById('chat-messages');
+  const promptForm = document.getElementById('prompt-form');
+  const status = document.getElementById('agent-status');
+  if (chatMessages) webImmersiveOverlay.querySelector('.wi-messages').appendChild(chatMessages);
+  if (promptForm) webImmersiveOverlay.querySelector('.wi-input').appendChild(promptForm);
+  if (status) webImmersiveOverlay.querySelector('.wi-top').appendChild(status);
+  document.body.appendChild(webImmersiveOverlay);
+  document.body.classList.add('web-immersive-active');
+  localStorage.setItem(WEB_IMMERSIVE_KEY, '1');
+}
+
+function exitWebImmersive() {
+  if (!webImmersiveOverlay) return;
+  const chatMessages = document.getElementById('chat-messages');
+  const promptForm = document.getElementById('prompt-form');
+  const status = document.getElementById('agent-status');
+  const viewChat = document.getElementById('view-chat');
+  if (chatMessages) viewChat.insertBefore(chatMessages, document.getElementById('chat-controls'));
+  if (promptForm) viewChat.appendChild(promptForm);
+  if (status) document.getElementById('chat-model-bar').appendChild(status);
+  webImmersiveOverlay.remove();
+  webImmersiveOverlay = null;
+  document.body.classList.remove('web-immersive-active');
+  localStorage.setItem(WEB_IMMERSIVE_KEY, '0');
+}
+
+document.getElementById('btn-immersive').addEventListener('click', enterWebImmersive);
 
 // ── Fichiers (arborescence + visionneuse) ──
 

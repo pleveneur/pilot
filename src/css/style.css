@@ -7247,3 +7247,76 @@ body.pilot-loading *::after {
   color: var(--text-primary, #e6e8ee);
   border-color: var(--border-hover, rgba(255,255,255,0.12));
 }
+
+/* ================================================================
+   A19 — Mode « Assistant Only » immersif (super-agent)
+   Overlay plein écran : tout est masqué sauf le chat + barre minimale
+   (bouton retour + statut) + logo agrandi + toggles voix.
+   ================================================================ */
+.superagent-immersive {
+  position: fixed;
+  inset: 0;
+  z-index: 99990;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+.superagent-immersive-active {
+  overflow: hidden;
+}
+.sa-immersive-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+.sa-immersive-back {
+  flex-shrink: 0;
+}
+.sa-immersive-logo {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+.sa-immersive-title {
+  font-size: var(--font-lg);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sa-immersive-top .agent-status {
+  margin-left: auto;
+}
+.sa-immersive-voice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.sa-immersive-voice .agent-btn.active {
+  color: var(--superagent-accent);
+  border-color: var(--superagent-accent);
+  background: color-mix(in srgb, var(--superagent-accent) 12%, transparent);
+}
+.sa-immersive-messages {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sa-immersive-messages .agent-chat-messages {
+  flex: 1;
+  min-height: 0;
+}
+.sa-immersive-input {
+  flex-shrink: 0;
+}
+.sa-immersive-input .agent-chat-input-bar {
+  background: var(--surface-1);
+}
