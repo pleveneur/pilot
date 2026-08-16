@@ -5590,8 +5590,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         // consommera correctement la délégation.
         if (!state.isCompacting) {
           const saSummary = [
-            state.lastUserPrompt ? `Demande: ${state.lastUserPrompt.slice(0, 500)}` : "",
-            state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText.slice(0, 800)}` : "",
+            state.lastUserPrompt ? `Demande: ${state.lastUserPrompt}` : "",
+            state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText}` : "",
           ].filter(Boolean).join("\n");
           if (saSummary) {
             injectSessionSummaryToSuperAgent(saSummary, window._pilotProjectPath).catch(() => {});

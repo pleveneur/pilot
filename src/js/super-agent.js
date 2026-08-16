@@ -1225,7 +1225,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // pour que l'assistant mette à jour son suivi et décide des prochaines
       // étapes (boucle de feedback agent → assistant).
       pendingDelegation = {
-        request: String(request).slice(0, 500),
+        request: String(request),
         projectPath,
       };
       // Envoyer la demande à l'agent standard (session active du projet).
@@ -1889,7 +1889,7 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
     await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
-      summary: finalSummary.slice(0, 2000),
+      summary: finalSummary,
     });
   } catch (_) {
     // Silencieux : le super-agent n'est pas indispensable au chat.
