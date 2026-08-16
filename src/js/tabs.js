@@ -459,6 +459,17 @@ class TabsManager {
     // Vérifier si un onglet agent avec CET id est déjà ouvert (entrée agent_views).
     const existing = this.tabs.find((t) => t.mode === "agent" && t.agentId === agentId);
     if (existing) {
+      // Issue #65 : après un stop_agent, la session RPC est détruite mais
+      // l'onglet peut rester ouvert (closeTab est asynchrone fire-and-forget,
+      // ou l'onglet appartient à un agent secondaire non fermé par l'assistant).
+      // L'ancien chemin « onglet existant » ne relançait PAS la session → la
+      // délégation suivante échouait (« Échec de la transmission ») et purge /
+      // open_project ne recréaient rien. On relance donc la session si l'objet
+      // n'est plus chargé (loaded=false après arrêt) : start_agent_session est
+      // idempotent (reprend si vivante, relance si morte).
+      if (!agentLoaded) {
+        try { await invoke("start_agent_session", { agentId, projectPath }); } catch (_) {}
+      }
       // 3.2 : on ne démarre/parke rien — l'AgentService gère l'idempotence. On
       // pose simplement visible=1 sur l'objet et on reprend la vue.
       try { await invoke("set_agent_visible", { agentId, projectPath, visible: true }); } catch (_) {}

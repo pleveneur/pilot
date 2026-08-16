@@ -699,13 +699,25 @@ pub fn new_agent_session(state: State<AppState>) -> Result<(), String> {
 /// `new_session` réinitialise le modèle au modèle par défaut de pi — on capture
 /// donc le modèle actif (get_state) avant la purge et on le ré-applique après,
 /// pour ne pas perdre le choix de modèle de l'utilisateur.
+///
+/// Issue #65 : après un `stop_agent`, la session active n'existe plus. Sans
+/// auto-réparation, la purge échouait (« Aucune session agent active ») et
+/// l'assistant devait redémarrer Pilot. On recrée la session si nécessaire
+/// (démarrage idempotent) avant de purger — la purge refonctionne sans
+/// redémarrage.
 #[tauri::command]
-pub fn purge_agent_conversation(state: State<AppState>) -> Result<(), String> {
-    do_purge_agent_conversation(state.inner())
+pub fn purge_agent_conversation(state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    do_purge_agent_conversation(state.inner(), &app)
 }
 
-pub(crate) fn do_purge_agent_conversation(state: &AppState) -> Result<(), String> {
+pub(crate) fn do_purge_agent_conversation(state: &AppState, app: &AppHandle) -> Result<(), String> {
     let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
+    // Issue #65 : auto-réparation — si aucune session active n'existe (ex: après
+    // stop_agent), on en recrée une avant de purger. `do_start_agent_session` est
+    // idempotent (reprend une session vivante ou en relance une morte).
+    if state.agent_service.active_agent().is_none() {
+        do_start_agent_session(state, app, None, None)?;
+    }
     state.agent_service.with_active_session(&project, |session| {
         let model = get_current_model(session);
         let cmd = serde_json::json!({ "type": "new_session" });
