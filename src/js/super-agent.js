@@ -1483,7 +1483,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         ? info.background
         : (configCache.super_agent_invisible_agent !== false);
       const forceInvisible = !!info.project && projectPath !== (window._pilotProjectPath || null);
-      if (invisible || forceInvisible) {
+      // #11 : si l'onglet agent du projet cible n'est PAS ouvert, on délègue en
+      // arrière-plan (startAgentInvisible) même si background=false — on ne peut
+      // pas ouvrir l'onglet d'un agent fermé. Si l'onglet est déjà ouvert, on
+      // garde le comportement actuel (openFile). Le paramètre `background`
+      // existant reste inchangé (il force toujours l'invisible).
+      const agentTabOpen = !!(tabs.tabs && tabs.tabs.find((t) => t.mode === "agent" && t.agentId === agentId));
+      if (invisible || forceInvisible || !agentTabOpen) {
         // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
         await tabs.startAgentInvisible(agentId, projectPath);
         // Mettre en place le suivi de l'agent invisible (bouton Arrêter,
