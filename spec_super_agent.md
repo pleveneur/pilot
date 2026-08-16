@@ -10,6 +10,9 @@
 L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
 (organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
 apprend et répond.
+- **#30 — Restauration au démarrage** : si l'onglet 🧭 était **ouvert à la
+  fermeture** de Pilot, il est **rouvert automatiquement au redémarrage**
+  (état global persisté dans la config, pas par projet).
 
 ### Donner un nom à votre assistant
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant

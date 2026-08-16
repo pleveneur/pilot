@@ -669,7 +669,14 @@ class TabsManager {
     this.switchTab(id);
     // L'onglet Super-agent est GLOBAL : on persiste son état d'ouverture dans la
     // config (pas par projet) pour le rouvrir au démarrage de Pilot.
-    invoke("set_super_agent_open", { open: true }).catch(() => {});
+    // #30 : await + gestion d'erreur pour garantir que la config est bien écrite
+    // (un fire-and-forget avalé pouvait laisser super_agent_open=False au
+    // redémarrage, l'onglet n'étant alors pas restauré).
+    try {
+      await invoke("set_super_agent_open", { open: true });
+    } catch (e) {
+      console.error("Erreur persistance ouverture onglet Assistant:", e);
+    }
 
     try {
       const result = await createSuperAgent(tab.wrapper);
