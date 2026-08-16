@@ -2987,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "pilot"
-version = "0.2.65"
+version = "0.2.66"
 dependencies = [
  "aes-gcm",
  "argon2",
