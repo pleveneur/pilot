@@ -41,6 +41,10 @@ apprend et répond.
 - **Paramétrer** : **Paramètres ⚙️ → onglet « Assistant »** → cochez/décochez
   « Afficher la réflexion de l'Assistant » et « Afficher les outils de
   l'Assistant » pour masquer (ou montrer) ces blocs.
+- **Ordre chronologique** : les **messages d'info** de l'Assistant (ex: « ✅
+  Tâche terminée… », « ⚠️ Connexion perdue… ») sont affichés **dans l'ordre
+  de leur émission** grâce à un buffer d'ordonnancement + compteur de
+  séquence (#20), même s'ils arrivent hors ordre (sources asynchrones).
 
 ### Notifications natives
 - **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a

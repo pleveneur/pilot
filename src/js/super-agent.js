@@ -44,6 +44,14 @@ const md = markdownit({
 // écrit (issue #60).
 const SUPER_SCROLL_BOTTOM_THRESHOLD = 60;
 
+// Ordonnancement chronologique des messages d'info de l'assistant (#20).
+// Chaque message d'info reçoit un `seq` unique à l'émission ; les messages
+// arrivés hors ordre sont mis en attente dans `pendingInfo` jusqu'à ce que
+// leur séquence soit atteinte, garantissant un affichage chronologique.
+let infoSeq = 0;
+const pendingInfo = {};
+let nextInfoSeq = 0;
+
 /** Scroll intelligent : ne force le bas que si l'utilisateur est déjà en bas. */
 function scrollSuperToBottom(messagesEl) {
   if (!messagesEl) return;
@@ -282,11 +290,23 @@ function appendMessage(messagesEl, role, text) {
 }
 
 function appendSystemMessage(messagesEl, text) {
-  const el = document.createElement("div");
-  el.className = "agent-message agent-message-system";
-  el.textContent = text;
-  messagesEl.appendChild(el);
-  scrollSuperToBottom(messagesEl);
+  const seq = infoSeq++;
+  pendingInfo[seq] = { messagesEl, text };
+  flushPendingInfo();
+}
+
+/** Affiche les messages d'info en attente dans l'ordre de leur séquence. */
+function flushPendingInfo() {
+  while (pendingInfo[nextInfoSeq]) {
+    const { messagesEl, text } = pendingInfo[nextInfoSeq];
+    delete pendingInfo[nextInfoSeq];
+    nextInfoSeq++;
+    const el = document.createElement("div");
+    el.className = "agent-message agent-message-system";
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    scrollSuperToBottom(messagesEl);
+  }
 }
 
 // ── Création de l'interface ──
