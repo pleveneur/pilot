@@ -141,6 +141,11 @@ apprend et répond.
   le projet ni l'onglet**. Le suivi (bouton Arrêter, détection de boucle,
   notification de fin) et l'arrêt ciblent ce projet précis (canal d'événements
   et `stop_agent_session` routés par chemin de projet).
+- **#28 — Fermeture de l'onglet** : quand l'Assistant **arrête l'agent standard
+  du projet actif** (`stop_agent`), l'onglet de cet agent est **fermé
+  automatiquement** s'il était ouvert (évite un onglet fantôme alors que
+  l'agent n'est plus fonctionnel). Les onglets des agents
+  secondaires/spécialisés et les onglets d'édition ne sont **pas** fermés.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les

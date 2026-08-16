@@ -1595,6 +1595,20 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         if (typeof stopInvisibleAgentMonitoring === "function") {
           stopInvisibleAgentMonitoring();
         }
+        // #28 : si l'agent arrêté est l'agent standard du projet actif
+        // (`default`), fermer son onglet s'il est ouvert (évite un onglet
+        // fantôme alors que l'agent n'est plus fonctionnel). Ne touche pas aux
+        // onglets des agents secondaires/spécialisés ni aux onglets d'édition.
+        const isStandardAgent = !targetAgentId || targetAgentId === "default";
+        if (isStandardAgent) {
+          const tabManager = window._pilotTabs;
+          const defaultAgentTab = tabManager && Array.isArray(tabManager.tabs)
+            ? tabManager.tabs.find((t) => t && t.mode === "agent" && t.agentId === "default")
+            : null;
+          if (defaultAgentTab && typeof tabManager.closeTab === "function") {
+            tabManager.closeTab(defaultAgentTab.id, { skipConfirm: true }).catch(() => {});
+          }
+        }
         appendSystemMessage(messagesEl, `🛑 Agent ${targetAgentId ? `« ${targetAgentId} »` : "du projet"} arrêté.`);
         await respondSuperAgentAction(id, true);
       } catch (e) {
