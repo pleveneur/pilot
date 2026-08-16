@@ -1048,6 +1048,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
+    const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1137,6 +1138,22 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const result = await invoke("get_delegation_result", {
           project: String(info.project || ""),
           sessionId: String(info.session_id || ""),
+        });
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(PROJECT_SNAPSHOT_SENTINEL)) {
+      // Outil project_snapshot (A1) : l'assistant demande un état structuré d'un
+      // projet (fichiers, langages, Git, métriques). Le titre contient un JSON
+      // {project}. On exécute la commande Rust (lecture seule) et on renvoie le
+      // résultat (JSON) comme `value` de la réponse.
+      try {
+        const info = JSON.parse(title.slice(PROJECT_SNAPSHOT_SENTINEL.length));
+        const result = await invoke("project_snapshot", {
+          project: String(info.project || ""),
         });
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {

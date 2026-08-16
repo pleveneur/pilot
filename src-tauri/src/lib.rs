@@ -63,6 +63,7 @@ mod rpc;
 mod interproject;
 mod super_agent;
 mod dashboard;
+mod project_snapshot;
 mod vault;
 mod pi_update;
 mod project_agents;
@@ -2083,6 +2084,8 @@ pub fn run() {
             dashboard::get_project_dashboard,
             dashboard::get_project_tracking,
             dashboard::get_agent_supervision,
+            // ── Snapshot structuré d'un projet (A1, outil assistant) ──
+            project_snapshot::project_snapshot,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
             vault::vault_unlock,

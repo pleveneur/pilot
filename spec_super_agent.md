@@ -113,6 +113,15 @@ apprend et répond.
 - Il **apprend où se trouvent les projets** au fil des discussions et des
   sessions d'agents (liste des projets connus injectée à chaque tour).
 
+### Obtenir un état structuré d'un projet (outil `project_snapshot`)
+- L'Assistant peut obtenir une **vue d'ensemble structurée (lecture seule)**
+  d'un projet via l'outil `project_snapshot(project)` : liste des
+  fichiers/dossiers principaux, langages détectés, état Git (branche, derniers
+  commits) et métriques de base (taille, lignes, fonctions, classes,
+  TODO/FIXME).
+- Il l'utilise pour **comprendre rapidement un projet** (structure, langages,
+  santé Git) avant de répondre ou de planifier. **Ne modifie aucun fichier.**
+
 ### Déléguer le code à l'agent du projet
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
   lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
@@ -286,8 +295,11 @@ Sessions d'agents (chat / orchestration)
   pour le rendre actif), `delegate_to_coder` (déléguer une demande de code à
   l'agent standard du projet), `purge_agent_conversation` (purger à la demande
   la conversation de l'agent, en préservant le modèle actif), `stop_agent`
-  (arrêter immédiatement l'agent du projet actif — coupe la session en cours,
-  visible ou en arrière-plan / « agent invisible »), `create_agent`
+  (arrêter immédiatement un agent — coupe la session en cours, visible ou en
+  arrière-plan / « agent invisible » ; accepte un `agentId` cible pour arrêter
+  précisément un agent secondaire/spécialisé/spécifique créé à la volée et
+  lancé via `run_agents`, sinon arrête l'agent standard du projet actif),
+  `create_agent`
   (créer un agent sur mesure dans le registre global `~/.pilot/agents.json`
   quand les agents disponibles ne conviennent pas) et `run_agents` (choisir
   quels agents disponibles utiliser et lancer une tâche sur eux, en parallèle,
@@ -455,8 +467,10 @@ Tables (V1) :
   puis envoyer la demande via `send_agent_prompt`), `purge_agent_conversation`
   (purger à la demande la conversation de l'agent via la commande Rust
   `purge_agent_conversation`, en préservant le modèle actif) et `stop_agent`
-  (arrêter l'agent du projet actif via `stop_agent_session` + nettoyage du
-  suivi de l'agent invisible). Ces actions sont exécutées
+  (arrêter un agent via `stop_agent_session` + nettoyage du suivi de l'agent
+  invisible ; si un `agentId` cible est fourni, il est arrêté précisément —
+  standard, spécialisé, secondaire ou spécifique lancé via `run_agents` —
+  sinon l'agent standard du projet actif). Ces actions sont exécutées
   par Pilot (pas par l'agent), donc compatibles avec la lecture seule stricte.
 - **Accès à la base de suivi (responsabilité de l'assistant)** : l'extension
   `pilot-assistant-db` fournit `db_query` (SELECT) et `db_execute` (CREATE/INSERT/

@@ -24,6 +24,10 @@ const ACTION_SENTINEL = "PILOT_ASSISTANT_ACTION::";
 // lance la run sur les agents sélectionnés et renvoie le résultat agrégé comme
 // `value` de la réponse (l'outil le retourne au LLM).
 const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
+// Sentinel préfixant le titre d'un `input` d'outil project_snapshot. Pilot le
+// détecte, exécute la commande Rust `project_snapshot` (lecture seule) et renvoie
+// l'état structuré du projet (JSON) comme `value` de la réponse.
+const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -131,6 +135,30 @@ export default function (pi: ExtensionAPI) {
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "project_snapshot",
+    label: "Project Snapshot",
+    description:
+      "Obtenir un état structuré (lecture seule) d'un projet : liste des fichiers/dossiers principaux, langages détectés, état Git (branche, derniers commits) et métriques de base (taille, lignes, fonctions, classes, TODO/FIXME). À utiliser quand tu as besoin d'une vue d'ensemble rapide d'un projet (structure, langages, santé Git) avant de répondre ou de planifier. Ne modifie aucun fichier.",
+    promptSnippet: "project_snapshot: obtenir un état structuré d'un projet (fichiers, langages, Git, métriques)",
+    promptGuidelines: [
+      "Use project_snapshot when you need a quick structured overview of a project: main files/directories, detected languages, Git state (branch, last commits) and basic metrics (size, lines, functions, classes, TODO/FIXME). It is read-only and never modifies any file.",
+      "Pass the absolute path of the project. If you are unsure about the path, ask the user first (ask_input / ask_choice).",
+    ],
+    parameters: Type.Object({
+      project: Type.String({ description: "Chemin absolu du projet à analyser" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ project: params.project });
+      const result = await ctx.ui.input(PROJECT_SNAPSHOT_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Analyse du projet annulée." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

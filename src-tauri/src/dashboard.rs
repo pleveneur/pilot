@@ -21,7 +21,7 @@ use tauri::{AppHandle, State};
 use crate::{run_captured, AppState};
 
 /// Dossiers/dépendances/caches exclus du « poids du code source pur ».
-const EXCLUDED_DIRS: &[&str] = &[
+pub(crate) const EXCLUDED_DIRS: &[&str] = &[
     "node_modules", "target", ".git", "dist", "build", "out", ".venv", "venv",
     "__pycache__", ".pilot", ".idea", ".vscode", "coverage", ".next", ".nuxt",
     "vendor", ".cache", ".gradle", ".tox", ".mypy_cache", ".pytest_cache",
@@ -30,7 +30,7 @@ const EXCLUDED_DIRS: &[&str] = &[
 
 /// Extension → langage (pour la répartition). Retourne None pour les fichiers
 /// non-code (binaires, images, etc.).
-fn lang_for_ext(ext: &str) -> Option<&'static str> {
+pub(crate) fn lang_for_ext(ext: &str) -> Option<&'static str> {
     Some(match ext {
         "js" | "mjs" | "cjs" => "JavaScript",
         "jsx" => "JavaScript (React)",
@@ -84,7 +84,7 @@ fn lang_for_ext(ext: &str) -> Option<&'static str> {
 }
 
 /// Détecte l'écosystème de dépendances du projet (fichiers de manifest présents).
-fn detect_dependencies(root: &Path) -> Vec<String> {
+pub(crate) fn detect_dependencies(root: &Path) -> Vec<String> {
     let mut deps: Vec<String> = Vec::new();
     let mut push = |name: &str, present: bool| {
         if present && !deps.contains(&name.to_string()) {
@@ -165,7 +165,7 @@ fn count_todos(content: &str) -> (u64, u64) {
 /// total_classes, total_todos, total_fixmes, files_modified_7d).
 /// `files_modified_7d` est une liste de (chemin, taille, mtime_epoch_secs).
 #[allow(clippy::too_many_arguments)]
-fn scan_project(
+pub(crate) fn scan_project(
     root: &Path,
 ) -> (
     u64, u64, u64, u64, u64,
@@ -284,7 +284,7 @@ fn scan_project(
 }
 
 /// État Git : branche active, fichiers modifiés / non suivis / prêts à commiter.
-fn git_state(cwd: &str) -> Value {
+pub(crate) fn git_state(cwd: &str) -> Value {
     let check = run_captured("git", &["-C", cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
     if !check.trim().eq_ignore_ascii_case("true") {
         return serde_json::json!({ "is_repo": false });
@@ -611,7 +611,7 @@ fn build_alerts(
     alerts
 }
 
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
