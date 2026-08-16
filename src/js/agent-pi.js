@@ -5377,7 +5377,7 @@ function maybeDetectReflectionLoop(state, messagesEl) {
 // Taille de la fenêtre d'historique des actions (dernières actions analysées).
 const ACTION_LOOP_WINDOW = 20;
 // Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
-const ACTION_LOOP_MIN_REPEAT = 3;
+const ACTION_LOOP_MIN_REPEAT = 5;
 
 /**
  * Détecte une boucle d'ACTIONS de l'agent standard (relire le même fichier,

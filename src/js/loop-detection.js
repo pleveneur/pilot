@@ -171,12 +171,12 @@ export function detectRepeatedToolCalls(fingerprints, options = {}) {
  * @param {string[]} fingerprints - historique des dernières actions (empreintes)
  * @param {object} [options]
  * @param {number} [options.windowSize=20] - taille de la fenêtre analysée (dernières actions)
- * @param {number} [options.minRepeat=3] - nb d'occurrences d'une même action déclenchant la boucle
+ * @param {number} [options.minRepeat=5] - nb d'occurrences d'une même action déclenchant la boucle
  * @returns {boolean} true si une action est répétée minRepeat fois dans la fenêtre
  */
 export function detectRepeatedActions(fingerprints, options = {}) {
   const windowSize = options.windowSize ?? 20;
-  const minRepeat = options.minRepeat ?? 3;
+  const minRepeat = options.minRepeat ?? 5;
   if (!Array.isArray(fingerprints) || fingerprints.length < minRepeat) return false;
   const window = fingerprints.slice(-windowSize);
   const counts = new Map();
