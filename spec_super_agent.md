@@ -193,6 +193,19 @@ agent qu'il a lui-même créé).
 - S'il a besoin d'**installer des outils** pour gérer au mieux certaines tâches,
   il vous **demande d'abord** (validation utilisateur requise).
 
+### Programmer des relances (outil `schedule`)
+- L'Assistant peut **programmer des rappels** qui reviennent dans sa conversation
+  à l'échéance : relance différée (« recheck dans 10 min ») ou périodique
+  (« point toutes les 5 min tant que le codeur tourne »).
+- Outils : **`schedule_create`** (créer une relance périodique, `everySeconds`
+  ≥ 60), **`schedule_list`** (lister), **`schedule_delete`** (supprimer).
+- Garde-fous : `every` ≥ 60 s, **max 20** planifications actives, **1 fire** par
+  planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
+  morte — les rappels `every` accumulent un retard, repris à la reprise).
+- Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
+  Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
+  notification OS).
+
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**
   (ex: « Où en est le projet X pour le client Y ? », « Quelles tâches sont en

@@ -20,6 +20,7 @@ import {
 import { notifySuperAgentDone } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
 import { runAgentsForAssistant } from "./agents-bus.js";
+import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -758,6 +759,9 @@ export async function createSuperAgent(container) {
     } catch (_) { /* ignore */ }
   }, 2000);
 
+  // Chantier #13 : ticker des relances programmées (toutes les 10 s).
+  startScheduleTicker();
+
   // A19 : restaurer le dernier mode choisi (immersif ou normal) à la réouverture
   // de l'onglet Assistant.
   if (localStorage.getItem(IMMERSIVE_KEY) === "1") {
@@ -768,6 +772,9 @@ export async function createSuperAgent(container) {
     wrapper,
     unlisten: () => {
       clearInterval(superStatusPoll);
+      // Chantier #13 : arrêter le ticker des relances programmées (évite la
+      // même fuite que `pilot-config-changed` — cf. problème #12).
+      stopScheduleTicker();
       // A19 : si l'onglet est fermé en mode immersif, remettre les éléments
       // dans le wrapper et retirer l'overlay (évite des éléments orphelins).
       if (immersiveOverlay) exitImmersive();
@@ -780,6 +787,41 @@ export async function createSuperAgent(container) {
       window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
     },
   };
+}
+
+// Chantier #13 : ticker des relances programmées de l'assistant. Appelé toutes
+// les 10 s. Ne tick que si l'onglet 🧭 est ouvert (session vivante) ; sinon on
+// ne fait rien (les schedules `every` accumulent un retard, repris à la reprise).
+// Les rappels dus sont injectés dans la conversation via `send_super_agent_command`
+// (raw `send_superagent`, sans réinjecter tout le système).
+const SCHEDULE_TICK_INTERVAL_MS = 10000;
+let scheduleTicker = null;
+
+async function scheduleTick() {
+  if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
+  try {
+    const res = await invoke("super_agent_schedule_tick");
+    const due = (res && res.due) || [];
+    for (const d of due) {
+      try {
+        await invoke("send_super_agent_command", {
+          command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
+        });
+      } catch (_) { /* un rappel qui échoue ne bloque pas les suivants */ }
+    }
+  } catch (_) { return; }
+}
+
+function startScheduleTicker() {
+  if (scheduleTicker) return;
+  scheduleTicker = setInterval(scheduleTick, SCHEDULE_TICK_INTERVAL_MS);
+}
+
+function stopScheduleTicker() {
+  if (scheduleTicker) {
+    clearInterval(scheduleTicker);
+    scheduleTicker = null;
+  }
 }
 
 // ── Traitement des événements RPC ──
@@ -1180,6 +1222,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
     const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
+    const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1319,6 +1362,39 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const result = await invoke("git_log_project", {
           project: String(info.project || ""),
         });
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(SCHEDULE_SENTINEL)) {
+      // Outil schedule (chantier #13) : l'assistant programme des relances
+      // différées/périodiques. Le titre contient un JSON {op, name, prompt,
+      // everySeconds, id}. On exécute la commande Rust et on renvoie le
+      // résultat (JSON) comme `value` de la réponse.
+      let req;
+      try {
+        req = JSON.parse(title.slice(SCHEDULE_SENTINEL.length));
+      } catch (_) {
+        await respondSuperAgent(id, JSON.stringify({ error: "Payload schedule invalide." }), false);
+        return;
+      }
+      try {
+        let result;
+        if (req.op === "create") {
+          result = await invoke("super_agent_schedule_create", {
+            name: String(req.name || ""),
+            prompt: String(req.prompt || ""),
+            every: Number(req.everySeconds || 0),
+          });
+        } else if (req.op === "list") {
+          result = await invoke("super_agent_schedule_list");
+        } else if (req.op === "delete") {
+          result = await invoke("super_agent_schedule_delete", { id: Number(req.id) });
+        } else {
+          result = { error: `Opération schedule inconnue : ${req.op}` };
+        }
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);

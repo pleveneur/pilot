@@ -291,6 +291,10 @@ pub(crate) fn do_send_super_agent_prompt(
     // A18 : personnalité adaptée à l'utilisateur (déduite en arrière-plan de la
     // conversation). Injectée comme la mémoire utilisateur A17.
     full_system.push_str(&personality_guideline(adaptive_personality, &personality));
+    // Chantier #13 : documenter l'outil schedule (relances différées/périodiques).
+    full_system.push_str(
+        "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs.",
+    );
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
     let full_message = format!("{}\n\n{}", full_system, message);
