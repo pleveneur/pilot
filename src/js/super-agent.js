@@ -1214,7 +1214,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // détection de boucle, notification de fin). Sinon, comportement actuel :
       // on ouvre l'onglet agent en arrière-plan (openFile sans bascule) pour
       // accéder à sa discussion.
-      const invisible = configCache.super_agent_invisible_agent !== false;
+      // P6 : le paramètre `background` de l'outil delegate_to_coder (si fourni)
+      // force le mode invisible, sinon on retombe sur la config utilisateur.
+      const invisible = (typeof info.background === "boolean")
+        ? info.background
+        : (configCache.super_agent_invisible_agent !== false);
       if (invisible) {
         // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
         await tabs.startAgentInvisible(agentId);

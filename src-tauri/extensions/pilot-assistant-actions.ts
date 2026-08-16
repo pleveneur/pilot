@@ -140,20 +140,24 @@ export default function (pi: ExtensionAPI) {
     name: "stop_agent",
     label: "Stop Agent",
     description:
-      "Arrêter immédiatement l'agent du projet actif (coupe la session en cours, qu'elle soit visible ou en arrière-plan / « agent invisible »). À utiliser quand l'utilisateur demande d'arrêter le travail en cours, ou quand vous détectez que l'agent s'égare et qu'il faut l'interrompre. Bloque jusqu'à ce que Pilot ait arrêté l'agent.",
-    promptSnippet: "stop_agent: arrêter l'agent du projet actif (coupe la session en cours)",
+      "Arrêter immédiatement un agent (coupe la session en cours, qu'elle soit visible, en arrière-plan / « agent invisible », ou un agent secondaire/spécialisé/spécifique lancé via run_agents). Par défaut, arrête l'agent standard du projet actif. Si vous fournissez `agentId`, arrête précisément cet agent (standard, spécialisé, secondaire ou spécifique créé à la volée). À utiliser quand l'utilisateur demande d'arrêter le travail en cours, ou quand vous détectez qu'un agent s'égare ou reste bloqué en fin de run et qu'il faut l'interrompre. Bloque jusqu'à ce que Pilot ait arrêté l'agent.",
+    promptSnippet: "stop_agent: arrêter un agent (standard par défaut, ou un agentId cible)",
     promptGuidelines: [
-      "Use stop_agent when the user asks to stop the current work, or when you detect the agent is going off track and must be interrupted. This cuts the running agent session immediately (visible tab or invisible background agent).",
+      "Use stop_agent when the user asks to stop the current work, or when you detect an agent is going off track or is stuck at the end of a run and must be interrupted. This cuts the running agent session immediately (visible tab, invisible background agent, or a secondary/specialized/custom agent launched via run_agents).",
+      "If you know the id of the specific agent to stop (e.g. a tester, a codeur-plh, or a custom agent you created and launched via run_agents), pass it in `agentId`. If you omit `agentId`, the standard agent of the active project is stopped.",
     ],
-    parameters: Type.Object({}),
+    parameters: Type.Object({
+      agentId: Type.Optional(Type.String({ description: "Identifiant de l'agent à arrêter. Si omis, arrête l'agent standard du projet actif." })),
+    }),
     executionMode: "sequential",
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ action: "stop_agent" });
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ action: "stop_agent", agentId: params.agentId || null });
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
       if (ok) {
-        return { content: [{ type: "text", text: "L'agent du projet actif a été arrêté." }] };
+        const target = params.agentId ? `L'agent « ${params.agentId} »` : "L'agent du projet actif";
+        return { content: [{ type: "text", text: `${target} a été arrêté.` }] };
       }
-      return { content: [{ type: "text", text: "Échec de l'arrêt de l'agent du projet." }] };
+      return { content: [{ type: "text", text: "Échec de l'arrêt de l'agent." }] };
     },
   });
 
@@ -161,20 +165,23 @@ export default function (pi: ExtensionAPI) {
     name: "delegate_to_coder",
     label: "Delegate to Coder",
     description:
-      "Déléguer une demande de modification de code à l'agent standard du projet actif (pi/plh de coding). Ouvre son onglet (le rend visible) et lui envoie la demande dans sa session de discussion. À utiliser quand l'utilisateur demande une modification de code sur le projet actif. Bloque jusqu'à ce que Pilot ait transmis la demande.",
+      "Déléguer une demande de modification de code à l'agent standard du projet actif (pi/plh de coding). Par défaut, ouvre son onglet (le rend visible) et lui envoie la demande dans sa session de discussion. Si `background=true`, démarre l'agent en mode invisible (en arrière-plan, sans ouvrir d'onglet). À utiliser quand l'utilisateur demande une modification de code sur le projet actif. Bloque jusqu'à ce que Pilot ait transmis la demande.",
     promptSnippet: "delegate_to_coder: déléguer une demande de code à l'agent du projet actif",
     promptGuidelines: [
       "Use delegate_to_coder when the user asks for a code modification on the active project. The request is sent to the project's coding agent (pi/plh), which opens its tab and receives the request in its discussion. Only delegate actual code work — for simple questions about how something works, answer directly.",
+      "Set background=true to start the agent in invisible mode (background, without opening a tab). This is useful when you want the agent to work without disturbing the user's current view.",
     ],
     parameters: Type.Object({
       request: Type.String({ description: "La demande de code à transmettre à l'agent du projet" }),
+      background: Type.Optional(Type.Boolean({ description: "true → démarrer l'agent en mode invisible (arrière-plan, sans ouvrir d'onglet). Défaut : false (onglet ouvert)." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request });
+      const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, background: params.background === true });
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
       if (ok) {
-        return { content: [{ type: "text", text: "La demande a été transmise à l'agent du projet (son onglet est ouvert)." }] };
+        const mode = params.background === true ? "en arrière-plan (agent invisible)" : "(son onglet est ouvert)";
+        return { content: [{ type: "text", text: `La demande a été transmise à l'agent du projet ${mode}.` }] };
       }
       return { content: [{ type: "text", text: "Échec de la transmission de la demande à l'agent du projet." }] };
     },
