@@ -1,0 +1,2 @@
+{"models":[{"name":"kimi-k3:cloud","model":"kimi-k3:cloud","remote_model":"kimi-k3","remote_host":"https://ollama.com:443","modified_at":"2026-07-27T21:03:40.6284261+04:00","size":382,"digest":"a399e41d21c0be33e4b6256b591f0c9676079877446379fb6b17d3e99740d28c","details":{"parent_model":"","format":"","family":"kimik3","families":["kimik3"],"parameter_size":"2.8T","quantization_level":"MXFP4","context_length":1048576,"embedding_length":7168},"capabilities":["completion","tools","thinking","vision"... (4676 bytes total)
+[full output: ~/AppData\Local\rtk\tee\1786815308_curl.log]
