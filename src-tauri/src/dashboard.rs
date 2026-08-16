@@ -896,6 +896,87 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
     Ok(serde_json::json!({ "projects": out, "active": active }))
 }
 
+/// Supervision multi-projets (P8) : vue agrégée des agents en cours sur TOUS
+/// les projets, par projet, avec leur état (running / paused / stopped).
+/// Réutilise le mécanisme existant `AgentService::list_agent_sessions` (P2) —
+/// ne réinvente pas la supervision. Lecture seule.
+///
+/// Mapping d'état depuis la machine à états du registre :
+/// - vivant + actif  → "running"
+/// - vivant + parké  → "paused"
+/// - processus mort  → "stopped"
+/// (l'état "compacting" n'existe pas encore dans le registre ; le frontend
+/// l'affiche tel quel s'il apparaît un jour.)
+#[tauri::command]
+pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    let sessions = state.agent_service.list_agent_sessions(&app)?;
+    let sessions = sessions
+        .get("sessions")
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Agrégation par projet : (projet, agent, état, mode, vivant, visible, actif).
+    let mut by_project: Vec<(String, Vec<Value>)> = Vec::new();
+    for s in sessions {
+        let project = s.get("project").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let agent = s.get("agent").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let state = s.get("state").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let alive = s.get("alive").and_then(|x| x.as_bool()).unwrap_or(false);
+        let mode = s.get("mode").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let visible = s.get("visible").and_then(|x| x.as_bool()).unwrap_or(false);
+        let active = s.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+
+        let status = if !alive {
+            "stopped"
+        } else if state == "active" {
+            "running"
+        } else {
+            "paused"
+        };
+
+        let entry = serde_json::json!({
+            "agent": agent,
+            "mode": mode,
+            "state": status,
+            "alive": alive,
+            "visible": visible,
+            "active": active,
+        });
+
+        if let Some((_, list)) = by_project.iter_mut().find(|(p, _)| *p == project) {
+            list.push(entry);
+        } else {
+            by_project.push((project, vec![entry]));
+        }
+    }
+
+    // Tri par projet (nom), puis par agent.
+    by_project.sort_by(|a, b| a.0.cmp(&b.0));
+    for (_, list) in by_project.iter_mut() {
+        list.sort_by(|a, b| {
+            a.get("agent")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .cmp(b.get("agent").and_then(|x| x.as_str()).unwrap_or(""))
+        });
+    }
+
+    let projects: Vec<Value> = by_project
+        .into_iter()
+        .map(|(project, agents)| {
+            let name = Path::new(&project)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&project)
+                .to_string();
+            serde_json::json!({ "path": project, "name": name, "agents": agents })
+        })
+        .collect();
+
+    Ok(serde_json::json!({ "projects": projects }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

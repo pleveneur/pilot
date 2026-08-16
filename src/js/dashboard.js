@@ -210,11 +210,12 @@ export function createDashboard(container) {
     refreshStatusEl.textContent = "⏳ Analyse…";
     refreshBtn.disabled = true;
     try {
-      const [data, tracking] = await Promise.all([
+      const [data, tracking, supervision] = await Promise.all([
         invoke("get_project_dashboard"),
         invoke("get_project_tracking").catch(() => ({ projects: [] })),
+        invoke("get_agent_supervision").catch(() => ({ projects: [] })),
       ]);
-      render(data, tracking);
+      render(data, tracking, supervision);
       refreshStatusEl.textContent = `✓ ${data.project?.refreshed_at || ""}`;
     } catch (e) {
       contentEl.innerHTML = `<div class="dash-error">❌ ${e}</div>`;
@@ -242,7 +243,7 @@ export function createDashboard(container) {
   const onProjectSensitivity = () => refreshIfProjectChanged();
   document.addEventListener("pilot-project-sensitivity", onProjectSensitivity);
 
-  function render(data, tracking) {
+  function render(data, tracking, supervision) {
     const hasProject = data.has_project !== false;
     const p = data.project || {};
     subtitleEl.textContent = hasProject
@@ -393,6 +394,58 @@ export function createDashboard(container) {
       const busyCount = trackingProjects.filter((p) => p.agent_busy).length;
       tr.body.appendChild(insight(`${trackingProjects.length} projet(s) suivi(s) — ${openCount} tâche(s) ouverte(s), ${busyCount} agent(s) actif(s).`));
       grid.insertBefore(tr.el, grid.firstChild);
+    }
+
+    // ── Supervision des agents (P8) : vue agrégée des agents en cours sur
+    // tous les projets, par projet, avec leur état (running / paused /
+    // compacting / stopped). Réutilise la commande Rust get_agent_supervision
+    // qui s'appuie sur AgentService::list_agent_sessions (P2).
+    const supProjects = (supervision && supervision.projects) || [];
+    if (supProjects.length > 0) {
+      const sup = card("Supervision des agents", "activity");
+      sup.el.classList.add("dash-card-wide");
+      const supTbl = document.createElement("div");
+      supTbl.className = "dash-tracking-table";
+      const supHead = document.createElement("div");
+      supHead.className = "dash-tracking-row dash-tracking-head";
+      supHead.innerHTML = `<span>Projet</span><span>Agent</span><span>État</span><span>Mode</span>`;
+      supTbl.appendChild(supHead);
+      for (const proj of supProjects) {
+        const agents = proj.agents || [];
+        if (agents.length === 0) continue;
+        for (const ag of agents) {
+          const row = document.createElement("div");
+          row.className = "dash-tracking-row";
+          const projCell = document.createElement("span");
+          projCell.className = "dash-tracking-name";
+          projCell.innerHTML = `${proj.name || ""}<span class="dash-tracking-path" title="${proj.path || ""}">${proj.path || ""}</span>`;
+          const agentCell = document.createElement("span");
+          agentCell.textContent = ag.agent || "—";
+          const stateCell = document.createElement("span");
+          stateCell.className = "dash-chip";
+          const st = ag.state || "stopped";
+          stateCell.textContent = st;
+          if (st === "running") stateCell.classList.add("dash-chip-running");
+          else if (st === "paused") stateCell.classList.add("dash-chip-paused");
+          else if (st === "compacting") stateCell.classList.add("dash-chip-compacting");
+          else stateCell.classList.add("dash-chip-stopped");
+          const modeCell = document.createElement("span");
+          modeCell.className = "dash-muted";
+          modeCell.textContent = ag.mode || "—";
+          row.appendChild(projCell);
+          row.appendChild(agentCell);
+          row.appendChild(stateCell);
+          row.appendChild(modeCell);
+          supTbl.appendChild(row);
+        }
+      }
+      sup.body.appendChild(supTbl);
+      const runningCount = supProjects.reduce(
+        (s, p) => s + (p.agents || []).filter((a) => a.state === "running").length,
+        0
+      );
+      sup.body.appendChild(insight(`${runningCount} agent(s) en cours d'exécution sur ${supProjects.length} projet(s).`));
+      grid.appendChild(sup.el);
     }
 
     // ── Partie projet (visible seulement quand un projet est ouvert) ──

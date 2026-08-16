@@ -2082,6 +2082,7 @@ pub fn run() {
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
             dashboard::get_project_tracking,
+            dashboard::get_agent_supervision,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
             vault::vault_unlock,

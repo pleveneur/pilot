@@ -151,6 +151,24 @@ projet (ouverture, fermeture, bascule).
 - **Réutilisabilité** : `super_agent::open_db` est `pub(crate)` ;
   `rpc::ACTIVITY_GRACE_SECS` est `pub(crate)` (partagé avec le tableau de bord).
 
+## Supervision des agents (P8)
+
+- **Commande Rust** `get_agent_supervision` (`src-tauri/src/dashboard.rs`) :
+  vue agrégée des agents en cours sur **tous les projets**, par projet, avec
+  leur état. **Réutilise** `AgentService::list_agent_sessions` (P2) — ne
+  réinvente pas la supervision. Mapping d'état depuis la machine à états du
+  registre : vivant + actif → `running`, vivant + parké → `paused`, processus
+  mort → `stopped` (l'état `compacting` n'existe pas encore dans le registre ;
+  le frontend l'affiche tel quel s'il apparaît). Retourne `{ projects: […] }`
+  avec, par projet : `path`, `name` et `agents` (agent, mode, état, vivant,
+  visible, actif).
+- **Frontend** (`src/js/dashboard.js`) : carte « Supervision des agents »
+  rendue dans la grille dès qu'au moins une session d'agent existe. Tableau
+  (projet, agent, état, mode) + ligne d'insight (nombre d'agents en cours).
+  États colorés via `.dash-chip-running/-paused/-compacting/-stopped` dans
+  `src/css/style.css`.
+- **Enregistrement** : commande ajoutée dans `lib.rs` (bloc Tableau de bord).
+
 ## Sections & sources de données
 
 | Section | Source |
