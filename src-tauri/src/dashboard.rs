@@ -18,6 +18,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
+use crate::agent_service::SUPERAGENT_ID;
 use crate::{run_captured, AppState};
 
 /// Dossiers/dépendances/caches exclus du « poids du code source pur ».
@@ -901,6 +902,9 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
 /// Réutilise le mécanisme existant `AgentService::list_agent_sessions` (P2) —
 /// ne réinvente pas la supervision. Lecture seule.
 ///
+/// L'état de l'assistant (super-agent, projet pseudo-global "") est inclus
+/// dans la même vue, libellé « Assistant (Magnus) » (A14).
+///
 /// Mapping d'état depuis la machine à états du registre :
 /// - vivant + actif  → "running"
 /// - vivant + parké  → "paused"
@@ -935,8 +939,16 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             "paused"
         };
 
+        // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
+        // un projet pseudo-global "" : on lui donne un libellé lisible.
+        let agent_label = if agent == SUPERAGENT_ID {
+            "Assistant (Magnus)".to_string()
+        } else {
+            agent
+        };
+
         let entry = serde_json::json!({
-            "agent": agent,
+            "agent": agent_label,
             "mode": mode,
             "state": status,
             "alive": alive,
@@ -965,11 +977,16 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
     let projects: Vec<Value> = by_project
         .into_iter()
         .map(|(project, agents)| {
-            let name = Path::new(&project)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&project)
-                .to_string();
+            // Projet pseudo-global "" = assistant (super-agent).
+            let name = if project.is_empty() {
+                "Assistant (Magnus)".to_string()
+            } else {
+                Path::new(&project)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&project)
+                    .to_string()
+            };
             serde_json::json!({ "path": project, "name": name, "agents": agents })
         })
         .collect();
