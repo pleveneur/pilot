@@ -654,7 +654,13 @@ export async function createSuperAgent(container) {
       const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
       const processing = agent && (agent.state === "running" || agent.state === "compacting");
       const isStreaming = statusEl.classList.contains("agent-status-streaming");
-      if (processing && !isStreaming && statusEl.classList.contains("agent-status-idle")) {
+      const isError = statusEl.classList.contains("agent-status-error");
+      // A15 : bascule vers « Réfléchit… » dès que l'assistant traite, même si
+      // l'élément est encore dans son état initial (classe agent-status seule,
+      // sans agent-status-idle). L'ancienne condition exigeait la classe idle,
+      // absente à la création de l'onglet → le statut restait « Prêt » pendant
+      // tout le travail. On protège uniquement les états d'erreur.
+      if (processing && !isStreaming && !isError) {
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
       } else if (!processing && isStreaming) {
