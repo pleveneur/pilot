@@ -691,10 +691,13 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // on ne touche pas à state.isStreaming (l'état réel est géré par le backend).
   (async () => {
     try {
-      const states = await invoke("get_project_agent_states");
-      if (!states) return;
+      const sup = await invoke("get_agent_supervision");
+      if (!sup || !sup.projects) return;
       const key = (window._pilotProjectPath || "").replace(/\\/g, "/");
-      if (key && states[key] && states[key].busy) {
+      const proj = sup.projects.find((p) => (p.path || "").replace(/\\/g, "/") === key);
+      const agent = proj && (proj.agents || []).find((a) => a.active);
+      const processing = agent && (agent.state === "running" || agent.state === "compacting");
+      if (processing) {
         statusEl.textContent = "🤔 Réflexion...";
         statusEl.className = "agent-status agent-status-streaming";
       }
@@ -702,16 +705,24 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   })();
   // Issue #48 : poll périodique de l'activité de l'agent pour ne pas laisser le
   // statut bloqué en « streaming » (clignotant) si l'agent_end n'a pas été reçu
-  // (événements RPC manqués). Si l'agent n'est plus occupé, on repasse à « Prêt ».
-  // N'interfère pas avec le streaming normal : tant que busy=true, on ne touche
-  // pas au statut (déjà géré par les événements).
+  // (événements RPC manqués). A15 : l'état réel vient de la machine à états
+  // AgentService (via get_agent_supervision) — running/compacting = en
+  // traitement, paused/stopped = en attente. On corrige le statut dans les deux
+  // sens (Prêt→Réflexion si l'agent traite, Réflexion→Prêt s'il est en attente),
+  // sans toucher aux états d'erreur.
   const statusPoll = setInterval(async () => {
     try {
-      const states = await invoke("get_project_agent_states");
-      if (!states) return;
+      const sup = await invoke("get_agent_supervision");
+      if (!sup || !sup.projects) return;
       const key = (window._pilotProjectPath || "").replace(/\\/g, "/");
-      const busy = key && states[key] && states[key].busy;
-      if (!busy && statusEl.classList.contains("agent-status-streaming")) {
+      const proj = sup.projects.find((p) => (p.path || "").replace(/\\/g, "/") === key);
+      const agent = proj && (proj.agents || []).find((a) => a.active);
+      const processing = agent && (agent.state === "running" || agent.state === "compacting");
+      const isStreaming = statusEl.classList.contains("agent-status-streaming");
+      if (processing && !isStreaming && statusEl.classList.contains("agent-status-idle")) {
+        statusEl.textContent = "🤔 Réflexion...";
+        statusEl.className = "agent-status agent-status-streaming";
+      } else if (!processing && isStreaming) {
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
       }

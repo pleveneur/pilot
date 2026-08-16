@@ -641,9 +641,33 @@ export async function createSuperAgent(container) {
 
   const origUnlisten = unlisten;
 
+  // A15 : le statut « Prêt » de l'assistant reflète l'état réel de la machine à
+  // états AgentService (via get_agent_supervision). L'assistant est le projet
+  // pseudo-global "" (agent superagent, libellé « Assistant (Magnus) »).
+  // running/compacting = en traitement ; paused/stopped = en attente. On corrige
+  // le statut dans les deux sens, sans toucher aux états d'erreur/déconnecté.
+  const superStatusPoll = setInterval(async () => {
+    try {
+      const sup = await invoke("get_agent_supervision");
+      if (!sup || !sup.projects) return;
+      const proj = sup.projects.find((p) => !(p.path || ""));
+      const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
+      const processing = agent && (agent.state === "running" || agent.state === "compacting");
+      const isStreaming = statusEl.classList.contains("agent-status-streaming");
+      if (processing && !isStreaming && statusEl.classList.contains("agent-status-idle")) {
+        statusEl.textContent = "Réfléchit…";
+        statusEl.className = "agent-status agent-status-streaming";
+      } else if (!processing && isStreaming) {
+        statusEl.textContent = "Prêt";
+        statusEl.className = "agent-status agent-status-idle";
+      }
+    } catch (_) { /* ignore */ }
+  }, 2000);
+
   return {
     wrapper,
     unlisten: () => {
+      clearInterval(superStatusPoll);
       origUnlisten();
       unlistenStateChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);

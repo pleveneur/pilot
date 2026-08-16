@@ -214,8 +214,9 @@ class Sidebar {
     });
 
     // Issue #13 : indicateur d'activité par projet (barre « Projets en cours »).
-    // Poll léger toutes les 2s de `get_project_agent_states` ; ne met à jour les
-    // pastilles que si la barre est visible. Ne touche pas aux agents (lecture seule).
+    // Poll léger toutes les 2s de `get_agent_supervision` (A15 : état réel de la
+    // machine à états AgentService) ; ne met à jour les pastilles que si la barre
+    // est visible. Ne touche pas aux agents (lecture seule).
     setInterval(() => this._pollProjectActivities(), 2000);
   }
 
@@ -1253,14 +1254,25 @@ class Sidebar {
   // (sessions parkées) s'animent aussi quand leur agent travaille en arrière-plan.
   async _pollProjectActivities() {
     try {
-      const st = await invoke("get_project_agent_states");
-      if (!st) return;
+      const sup = await invoke("get_agent_supervision");
+      if (!sup || !sup.projects) return;
       const bar = this.openProjectsBar;
       if (!bar || bar.classList.contains("hidden")) return;
+      // A15 : l'état réel vient de la machine à états AgentService (via
+      // get_agent_supervision). Un projet est « en cours » si au moins un de
+      // ses agents est running/compacting ; paused/stopped = en attente.
+      const busyByPath = new Map();
+      for (const proj of sup.projects) {
+        const norm = (proj.path || "").replace(/\\/g, "/");
+        const busy = (proj.agents || []).some(
+          (a) => a.state === "running" || a.state === "compacting"
+        );
+        busyByPath.set(norm, busy);
+      }
       bar.querySelectorAll(".open-project-status").forEach((dot) => {
-        const p = dot.dataset.path;
-        const busy = st[p] && st[p].busy;
-        dot.classList.toggle("busy", !!busy);
+        const p = (dot.dataset.path || "").replace(/\\/g, "/");
+        const busy = busyByPath.get(p) || false;
+        dot.classList.toggle("busy", busy);
         dot.title = busy ? "En cours" : "En attente";
       });
     } catch (_) { /* ignore : pas de mise à jour */ }
