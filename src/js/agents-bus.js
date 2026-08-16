@@ -33,7 +33,7 @@ import {
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
-const DEFAULT_TIMEOUT_MS = 300000; // 5 min d'inactivité (le codeur fait des outils longs)
+const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des outils longs)
 
 // Issue #37 : détection de boucle dans la réflexion des sous-agents.
 // Escalade adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies par agent et par

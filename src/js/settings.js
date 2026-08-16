@@ -527,7 +527,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
   // ── Gestion d'agents multi-rôles (H2 V2) ──
   if (inputAgentMaxDepth) inputAgentMaxDepth.value = currentConfig.agent_max_call_depth || 3;
   if (inputAgentMaxTotalCalls) inputAgentMaxTotalCalls.value = currentConfig.agent_max_total_calls || 30;
-  if (inputAgentTimeoutMs) inputAgentTimeoutMs.value = currentConfig.agent_timeout_ms || 300000;
+  if (inputAgentTimeoutMs) inputAgentTimeoutMs.value = currentConfig.agent_timeout_ms || 600000;
   if (inputAgentMaxResultTokens) inputAgentMaxResultTokens.value = currentConfig.agent_max_result_tokens || 4000;
     webNetChanged = false;
     tailscaleChanged = false;
@@ -723,7 +723,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         // ── Gestion d'agents multi-rôles (H2 V2) ──
         agent_max_call_depth: parseInt(inputAgentMaxDepth.value, 10) || 3,
         agent_max_total_calls: parseInt(inputAgentMaxTotalCalls.value, 10) || 30,
-        agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 300000,
+        agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 600000,
         agent_max_result_tokens: parseInt(inputAgentMaxResultTokens.value, 10) || 4000,
         // ── Super-agent (spec_super_agent.md) ──
         super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Assistant").trim() || "Assistant",
