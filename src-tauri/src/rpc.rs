@@ -38,6 +38,26 @@ pub(crate) fn normalize_agent_id(agent_id: Option<&str>) -> String {
     if a.is_empty() { DEFAULT_AGENT_ID.to_string() } else { a.to_string() }
 }
 
+/// Décision du garde-fou de `do_start_agent_session` (pur, testable) : retourne
+/// `true` s'il faut BLOQUER le démarrage parce qu'une session d'un AUTRE agent
+/// est déjà active et vivante.
+///
+/// - `active_id` : agent actuellement actif (None si rien d'affiché).
+/// - `agent_id` : agent qu'on veut démarrer/reprendre.
+/// - `active_alive` : l'agent actif est-il vivant ? (sinon c'est un orphelin à
+///   nettoyer, on ne bloque pas).
+///
+/// Règle (issue #64) : on bloque UNIQUEMENT si un agent DIFFÉRENT est actif ET
+/// vivant. Le MÊME agent (reprise idempotente par `AgentService::start`) ou un
+/// agent mort (orphelin nettoyé par `clear_active_if_dead`) ne bloquent pas —
+/// sinon l'agent invisible devenait injoignable tant que sa 1ʳᵉ session vivait.
+fn should_block_start(active_id: Option<&str>, agent_id: &str, active_alive: bool) -> bool {
+    match active_id {
+        Some(a) => a != agent_id && active_alive,
+        None => false,
+    }
+}
+
 /// Multi-onglets agents (spec_multi_agents) : canal d'événements d'une session
 /// agent d'un projet. L'agent par défaut conserve le canal hérité
 /// `rpc-event-<hash>` (rétrocompat) ; les onglets supplémentaires utilisent
@@ -292,21 +312,37 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
     // la session a disparu sans nettoyer le pointeur). Sans vérification de
     // vivacité, TOUTE délégation suivante échouerait silencieusement avec
     // « Une session agent est déjà active » (aucun commit, aucune session
-    // visible). On délègue à `clear_active_if_dead` : si la session pointée est
-    // morte/absente, le pointeur est nettoyé et on continue (débloque les
-    // délégations) ; si elle est vivante, on conserve l'erreur « déjà active ».
+    // visible). Si l'agent actif est mort/absent, on nettoie le pointeur et on
+    // continue (débloque les délégations) ; s'il est vivant, on conserve
+    // l'erreur « déjà active ».
     // A13 : ce garde-fou ne concerne QUE le projet actif (le pointeur `active`
     // ne désigne que l'agent affiché du projet actif). Pour un projet non actif
     // (délégation headless), on ne touche pas au pointeur actif.
+    //
+    // Issue #64 (agent invisible) : on ne bloque PAS la reprise du MÊME agent.
+    // Quand l'assistant délègue à nouveau à l'agent invisible déjà vivant, le
+    // pointeur `active` désigne ce même agent et sa session est vivante : il
+    // faut LA REPRENDRE (envoyer le nouveau prompt), pas errorer « déjà active ».
+    // `AgentService::start` est idempotent (reprend la session vivante) — on ne
+    // bloque donc que si un agent DIFFÉRENT est actif et vivant.
     let is_active_project = {
         let active = state.project_path.lock().unwrap().clone();
         active.as_deref() == Some(cwd.as_str())
     };
-    if is_active_project
-        && state.agent_service.active_agent().is_some()
-        && !state.agent_service.clear_active_if_dead(&cwd)
-    {
-        return Err("Une session agent est déjà active".to_string());
+    if is_active_project {
+        if let Some(active_id) = state.agent_service.active_agent() {
+            // Agent actif DIFFÉRENT de celui qu'on veut démarrer : nettoyer
+            // l'orphelin s'il est mort, sinon bloquer (vraie session concurrente).
+            let active_alive = state.agent_service.agent_alive(&cwd, &active_id);
+            if should_block_start(Some(&active_id), &agent_id, active_alive) {
+                return Err("Une session agent est déjà active".to_string());
+            }
+            // Orphelin (agent actif mort) : nettoyer le pointeur pour débloquer.
+            if !active_alive {
+                state.agent_service.clear_active();
+            }
+            // Même agent vivant : on tombe à `start` qui reprend la session (idempotent).
+        }
     }
 
     // Déléguer le démarrage/reprise à l'AgentService (session principale,
@@ -862,7 +898,7 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::kind_from_version_output;
+    use super::{kind_from_version_output, should_block_start};
 
     #[test]
     fn kind_pi_version() {
@@ -902,5 +938,26 @@ mod tests {
         assert_eq!(kind_from_version_output("0.9.2\n"), "pi");
         // Un mot en tête qui ne commence pas par un chiffre → unknown
         assert_eq!(kind_from_version_output("version 0.9.2"), "unknown");
+    }
+
+    // Issue #64 : le garde-fou de `do_start_agent_session` ne doit PAS bloquer
+    // la reprise du MÊME agent (agent invisible déjà vivant). Il ne bloque que
+    // si un agent DIFFÉRENT est actif et vivant.
+    #[test]
+    fn should_block_start_allows_same_agent_resume() {
+        // Même agent, vivant → ne PAS bloquer (reprise idempotente).
+        assert!(!should_block_start(Some("default"), "default", true));
+        // Même agent, mort → ne PAS bloquer (orphelin à nettoyer).
+        assert!(!should_block_start(Some("default"), "default", false));
+        // Aucun agent actif → ne PAS bloquer.
+        assert!(!should_block_start(None, "default", false));
+    }
+
+    #[test]
+    fn should_block_start_blocks_different_alive_agent() {
+        // Agent différent vivant → bloquer (vraie session concurrente).
+        assert!(should_block_start(Some("codeur"), "default", true));
+        // Agent différent mort → ne PAS bloquer (orphelin à nettoyer).
+        assert!(!should_block_start(Some("codeur"), "default", false));
     }
 }

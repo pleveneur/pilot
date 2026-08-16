@@ -545,6 +545,7 @@ impl AgentService {
     /// `true` si un orphelin a été nettoyé. Utilisé défensivement avant un
     /// démarrage pour ne jamais laisser un pointeur `active` bloquer les
     /// délégations quand la session sous-jacente a disparu.
+    #[allow(dead_code)]
     pub fn clear_active_if_dead(&self, project: &str) -> bool {
         let active_id = self.active.lock().unwrap().clone();
         if let Some(id) = active_id {
