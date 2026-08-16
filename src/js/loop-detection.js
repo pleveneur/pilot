@@ -158,6 +158,37 @@ export function detectRepeatedToolCalls(fingerprints, options = {}) {
 }
 
 /**
+ * Détecte une boucle d'ACTIONS de l'agent standard (lectures de fichiers,
+ * recherches, commandes bash) : un agent qui répète la même action (relire le
+ * même fichier, refaire la même recherche, relancer la même commande) avec un
+ * texte différent. Complète les détecteurs de texte (detectRepeatedBlock /
+ * detectRepeatedWord / detectSemanticLoop) et le détecteur de tool calls
+ * CONSÉCUTIFS (detectRepeatedToolCalls) : ici on compte les occurrences de
+ * chaque action dans une fenêtre glissante, sans exiger qu'elles soient
+ * consécutives — l'agent peut intercaler d'autres actions entre deux répétitions
+ * de la même action.
+ *
+ * @param {string[]} fingerprints - historique des dernières actions (empreintes)
+ * @param {object} [options]
+ * @param {number} [options.windowSize=20] - taille de la fenêtre analysée (dernières actions)
+ * @param {number} [options.minRepeat=3] - nb d'occurrences d'une même action déclenchant la boucle
+ * @returns {boolean} true si une action est répétée minRepeat fois dans la fenêtre
+ */
+export function detectRepeatedActions(fingerprints, options = {}) {
+  const windowSize = options.windowSize ?? 20;
+  const minRepeat = options.minRepeat ?? 3;
+  if (!Array.isArray(fingerprints) || fingerprints.length < minRepeat) return false;
+  const window = fingerprints.slice(-windowSize);
+  const counts = new Map();
+  for (const fp of window) {
+    const c = (counts.get(fp) || 0) + 1;
+    if (c >= minRepeat) return true;
+    counts.set(fp, c);
+  }
+  return false;
+}
+
+/**
  * Construit une empreinte compacte d'un tool call pour la détection de boucle
  * (issue #55 / #10). Pour bash, la commande est l'essentiel ; sinon on sérialise
  * les arguments de façon stable. Partagé entre super-agent.js et agents-bus.js

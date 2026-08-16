@@ -60,6 +60,8 @@ import {
   detectRepeatedBlock,
   detectRepeatedWord,
   detectSemanticLoop,
+  detectRepeatedActions,
+  buildToolLoopFingerprint,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
@@ -359,6 +361,13 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     loopCorrectionPending: false, // true entre l'arrêt (abort) et l'envoi du prompt de correction
     loopCorrectionCount: 0,    // nb de stratégies d'escalade déjà appliquées (max MAX_LOOP_ESCALATION)
     loopAbandoned: false,      // true après abandon (toutes les stratégies épuisées)
+    // ── Détection de boucle d'actions (agent standard) ──
+    // Un agent peut boucler en répétant les MÊMES actions (relire le même
+    // fichier, refaire la même recherche, relancer la même commande) avec un
+    // texte différent. On garde un historique des dernières actions (empreintes)
+    // et on détecte les répétitions dans cette fenêtre (voir loop-detection.js).
+    actionHistory: [],         // empreintes des dernières actions (fenêtre glissante)
+    actionLoopStopped: false,  // true après arrêt pour boucle d'actions (évite re-déclenchement)
     // ── Erreurs de connexion (chat standard) ──
     // pi émet auto_retry_start puis un message error à chaque retry. Sans
     // dé-duplication, l'UI empile « ❌ Erreur de connexion » 3-4× d'affilée,
@@ -5365,6 +5374,36 @@ function maybeDetectReflectionLoop(state, messagesEl) {
   }
 }
 
+// Taille de la fenêtre d'historique des actions (dernières actions analysées).
+const ACTION_LOOP_WINDOW = 20;
+// Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
+const ACTION_LOOP_MIN_REPEAT = 3;
+
+/**
+ * Détecte une boucle d'ACTIONS de l'agent standard (relire le même fichier,
+ * refaire la même recherche, relancer la même commande bash) avec un texte
+ * différent. Réutilise le mécanisme d'arrêt/notification de P10 (abort_agent +
+ * appendSystemMessage) — on ajoute seulement la détection d'actions en plus de
+ * la détection de texte. Mode Orchestration exclu (cycle Réfléchir/Faire/
+ * Contrôler inchangé).
+ * @param {object} state
+ * @param {Element} messagesEl
+ */
+function maybeDetectActionLoop(state, messagesEl) {
+  if (!state || state.orchestrationRunning) return;
+  if (state.actionLoopStopped) return; // déjà arrêté pour boucle d'actions
+  if (!state.isStreaming) return;
+  if (detectRepeatedActions(state.actionHistory, {
+    windowSize: ACTION_LOOP_WINDOW,
+    minRepeat: ACTION_LOOP_MIN_REPEAT,
+  })) {
+    state.actionLoopStopped = true;
+    console.warn("[loop-detection] boucle d'actions détectée, arrêt de l'agent");
+    appendSystemMessage(messagesEl, "🔁 Boucle d'actions détectée : l'agent répète les mêmes actions (lectures, recherches, commandes) sans progresser. Arrêt de l'agent.");
+    invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (action loop):", e));
+  }
+}
+
 async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn, orchFns) {
   const type = payload.type;
 
@@ -5926,6 +5965,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         state.lastAssistantRawText = "";
         // Issue #37 : nouveau message → reset du buffer de détection de boucle.
         state.loopBuffer = "";
+        // Reset de l'historique d'actions et du flag d'arrêt pour boucle d'actions.
+        state.actionHistory = [];
+        state.actionLoopStopped = false;
       }
       break;
     }
@@ -6236,6 +6278,15 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           args: toolArgs,
           timestamp: Date.now(),
         });
+      }
+      // Détection de boucle d'actions (agent standard) : on enregistre l'action
+      // dans l'historique (fenêtre glissante) puis on teste la répétition.
+      if (toolName) {
+        state.actionHistory.push(buildToolLoopFingerprint(toolName, toolArgs));
+        if (state.actionHistory.length > ACTION_LOOP_WINDOW) {
+          state.actionHistory.shift();
+        }
+        maybeDetectActionLoop(state, messagesEl);
       }
       break;
     }

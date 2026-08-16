@@ -3,6 +3,7 @@ import {
   detectRepeatedBlock,
   detectRepeatedWord,
   detectRepeatedToolCalls,
+  detectRepeatedActions,
   detectSemanticLoop,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
@@ -232,6 +233,40 @@ describe("detectRepeatedToolCalls", () => {
       'tool::db_query::{"sql":"SELECT * FROM projects"}',
     ];
     expect(detectRepeatedToolCalls(fps)).toBe(false);
+  });
+});
+
+describe("detectRepeatedActions", () => {
+  it("false sur entrée vide / invalide", () => {
+    expect(detectRepeatedActions([])).toBe(false);
+    expect(detectRepeatedActions(null)).toBe(false);
+    expect(detectRepeatedActions(undefined)).toBe(false);
+    expect(detectRepeatedActions("x")).toBe(false);
+  });
+
+  it("false si moins de minRepeat actions", () => {
+    expect(detectRepeatedActions(["a", "b"])).toBe(false);
+  });
+
+  it("détecte une même action répétée minRepeat fois dans la fenêtre", () => {
+    expect(detectRepeatedActions(["a", "a", "a"])).toBe(true);
+    expect(detectRepeatedActions(["a", "b", "a", "b", "a"])).toBe(true);
+  });
+
+  it("ne déclenche pas si l'action n'apparaît pas assez souvent", () => {
+    expect(detectRepeatedActions(["a", "b", "a", "b"])).toBe(false);
+  });
+
+  it("respecte la fenêtre glissante (windowSize)", () => {
+    // 3 occurrences de "a" mais la 1ère sort de la fenêtre de 2.
+    expect(detectRepeatedActions(["a", "b", "c"], { windowSize: 2, minRepeat: 3 })).toBe(false);
+    // 3 occurrences de "a" dans la fenêtre de 5.
+    expect(detectRepeatedActions(["a", "b", "c", "a", "a"], { windowSize: 5, minRepeat: 3 })).toBe(true);
+  });
+
+  it("respecte minRepeat personnalisé", () => {
+    expect(detectRepeatedActions(["a", "a"], { minRepeat: 2 })).toBe(true);
+    expect(detectRepeatedActions(["a", "a"], { minRepeat: 3 })).toBe(false);
   });
 });
 
