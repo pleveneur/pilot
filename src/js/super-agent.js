@@ -70,6 +70,18 @@ let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: 
 // son suivi et décide des prochaines étapes. Puis on vide le tracker.
 let pendingDelegation = null;
 
+// Issue #66 : file d'attente des délégations. Quand l'assistant délègue une
+// nouvelle demande (delegate_to_coder) à un agent qui n'a pas fini sa tâche
+// précédente, la demande était PERDUE (pi ne traite pas un 2ᵉ prompt pendant
+// qu'il travaille — il l'ignore silencieusement). On met maintenant la demande
+// en file et on la transmet à la fin de la tâche en cours (agent_end).
+// `delegationBusy` suit si l'agent travaille sur une délégation ; la file
+// `delegationQueue` conserve les demandes en attente. Vidée sur agent_end
+// (visible via injectSessionSummaryToSuperAgent, invisible via
+// finalizeInvisibleAgent — les deux appellent flushDelegationQueue).
+let delegationBusy = false;
+let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
+
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
 // l'assistant quand le mode « Assistant Only » immersif est actif et que le
 // toggle « synthèse » est activé. Module-scope car handleSuperAgentEvent y
@@ -1579,48 +1591,27 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // garde le comportement actuel (openFile). Le paramètre `background`
       // existant reste inchangé (il force toujours l'invisible).
       const agentTabOpen = !!(tabs.tabs && tabs.tabs.find((t) => t.mode === "agent" && t.agentId === agentId));
-      if (invisible || forceInvisible || !agentTabOpen) {
-        // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
-        await tabs.startAgentInvisible(agentId, projectPath);
-        // Mettre en place le suivi de l'agent invisible (bouton Arrêter,
-        // détection de boucle, notification de fin de tâche).
-        startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request);
-      } else {
-        // Issue #49 : ouvrir/démarrer l'agent du projet SANS basculer sur son
-        // onglet — on reste sur l'onglet Assistant pour attendre le retour de
-        // l'agent (feedback de tâche déléguée, issue #47). `openFile(..., false)`
-        // démarre la session en arrière-plan et retourne l'onglet agent (créé ou
-        // existant) pour accéder à sa discussion.
-        const agentTab = await tabs.openFile("", "agent", false, false);
-        // Issue #45 : afficher la demande déléguée dans la discussion de l'agent
-        // (à droite, comme un message utilisateur, mais en violet pour montrer
-        // qu'elle provient de l'Assistant).
-        const agentMessagesEl = agentTab && agentTab.agentElements ? agentTab.agentElements.messagesEl : null;
-        if (agentMessagesEl) {
-          appendDelegatedMessage(agentMessagesEl, request);
-        }
+
+      // Issue #66 : si l'agent travaille déjà (sur une délégation précédente ou
+      // un prompt manuel), on NE perd PAS la demande — on la met en file
+      // (traitée à la fin de la tâche en cours via flushDelegationQueue).
+      // `delegationBusy` couvre les délégations consécutives ; `isProjectBusy`
+      // couvre le cas où l'agent est occupé par un prompt manuel (onglet visible).
+      const busy = delegationBusy || await isProjectAgentBusy(projectPath);
+      if (busy) {
+        delegationQueue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
+        appendSystemMessage(messagesEl, "📋 L'agent travaille déjà sur une tâche. Demande mise en file (elle sera transmise à la fin de la tâche en cours).");
+        await respondSuperAgentAction(id, true);
+        return;
       }
-      // Issue #47 : mémoriser la délégation en attente. À l'agent_end, le résumé
-      // injecté au super-agent inclura cette demande + le résultat de l'agent,
-      // pour que l'assistant mette à jour son suivi et décide des prochaines
-      // étapes (boucle de feedback agent → assistant).
-      pendingDelegation = {
-        request: String(request),
-        projectPath,
-      };
-      // Envoyer la demande à l'agent standard (session active du projet).
-      // La conversation de l'agent est CONSERVÉE entre les demandes : la purge
-      // n'est plus systématique avant chaque délégation. L'Assistant peut purger
-      // à la demande via l'outil `purge_agent_conversation` (début de
-      // conversation ou arrêt de l'agent).
-      // 4.1 : router la demande vers la session de L'agent résolu (équivalent
-      // AgentService.send(agent_id, prompt) via send_agent_command_to, une seule
-      // indirection par agent_id — plus de dépendance à la session « active »).
-      await invoke("send_agent_command_to", {
-        project_path: projectPath,
-        agentId,
-        command: { type: "prompt", message: request },
-      });
+
+      delegationBusy = true;
+      const ok = await transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen });
+      if (!ok) {
+        delegationBusy = false;
+        await respondSuperAgentAction(id, false);
+        return;
+      }
       appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (il travaille en arrière-plan, je reste ici pour son retour).");
       await respondSuperAgentAction(id, true);
     } else if (action === "purge_agent_conversation") {
@@ -1665,6 +1656,14 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         if (typeof stopInvisibleAgentMonitoring === "function") {
           stopInvisibleAgentMonitoring();
         }
+        // Issue #66 : l'arrêt annule les délégations en file d'attente — on ne
+        // veut pas qu'elles soient (re)transmises automatiquement après un arrêt
+        // explicite (l'utilisateur/assistant a décidé d'interrompre le travail).
+        if (delegationQueue.length > 0) {
+          appendSystemMessage(messagesEl, `📋 ${delegationQueue.length} demande(s) en file d'attente annulée(s) par l'arrêt de l'agent.`);
+        }
+        delegationQueue = [];
+        delegationBusy = false;
         // #28 : si l'agent arrêté est l'agent standard du projet actif
         // (`default`), fermer son onglet s'il est ouvert (évite un onglet
         // fantôme alors que l'agent n'est plus fonctionnel). Ne touche pas aux
@@ -1737,6 +1736,119 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
     appendSystemMessage(messagesEl, `❌ Action échouée : ${e}`);
     await respondSuperAgentAction(id, false);
   }
+}
+
+// ── Issue #66 : file d'attente des délégations ──
+//
+// `transmitDelegationToAgent` démarre/reprend la session de l'agent cible et
+// lui envoie la demande. `isProjectAgentBusy` sonde l'activité (busy) de
+// l'agent du projet. `flushDelegationQueue` est appelée à l'agent_end pour
+// envoyer la délégation suivante mise en file.
+
+/**
+ * Démarre/reprend la session de l'agent cible et lui transmet la demande.
+ * Gère les deux chemins : invisible (startAgentInvisible + suivi) et visible
+ * (openFile en arrière-plan + affichage de la demande déléguée).
+ * @returns {Promise<boolean>} true si la demande a été transmise.
+ */
+async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen }) {
+  try {
+    if (invisible || forceInvisible || !agentTabOpen) {
+      // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
+      await tabs.startAgentInvisible(agentId, projectPath);
+      // Mettre en place le suivi de l'agent invisible (bouton Arrêter,
+      // détection de boucle, notification de fin de tâche).
+      startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request);
+    } else {
+      // Issue #49 : ouvrir/démarrer l'agent du projet SANS basculer sur son
+      // onglet — on reste sur l'onglet Assistant pour attendre le retour.
+      const agentTab = await tabs.openFile("", "agent", false, false);
+      // Issue #45 : afficher la demande déléguée dans la discussion de l'agent.
+      const agentMessagesEl = agentTab && agentTab.agentElements ? agentTab.agentElements.messagesEl : null;
+      if (agentMessagesEl) {
+        appendDelegatedMessage(agentMessagesEl, request);
+      }
+    }
+    // Issue #47 : mémoriser la délégation en attente (consommée à l'agent_end
+    // pour injecter le feedback au super-agent).
+    pendingDelegation = {
+      request: String(request),
+      projectPath,
+    };
+    // Envoyer la demande à l'agent (session du projet, agent résolu).
+    await invoke("send_agent_command_to", {
+      project_path: projectPath,
+      agentId,
+      command: { type: "prompt", message: request },
+    });
+    return true;
+  } catch (e) {
+    console.error("Erreur transmission délégation:", e);
+    appendSystemMessage(messagesEl, `❌ Échec de la transmission de la demande à l'agent : ${e}`);
+    return false;
+  }
+}
+
+/**
+ * Indique si l'agent d'un projet est actuellement occupé (travaille sur une
+ * tâche). Sonde l'activité RPC du projet via `get_project_agent_states` (pour
+ * le projet actif / un projet ouvert avec un onglet visible). Pour un projet
+ * headless non ouvert, retombe sur `delegationBusy` (les agents headless ne
+ * sont pilotés QUE par délégation, donc `delegationBusy` les couvre).
+ * @param {string|null} projectPath
+ * @returns {Promise<boolean>}
+ */
+async function isProjectAgentBusy(projectPath) {
+  try {
+    const states = await invoke("get_project_agent_states");
+    const key = projectPath || window._pilotProjectPath || null;
+    if (key && states && states[key]) {
+      return !!states[key].busy;
+    }
+  } catch (_) {}
+  // Projet non listé (headless non ouvert) : on ne sait pas — on retombe sur
+  // delegationBusy (géré par l'appelant via le `||`).
+  return false;
+}
+
+/**
+ * Vide la file des délégations en attente : marque l'agent comme libre, puis
+ * s'il reste une demande en file, la transmet (et remet l'agent occupé).
+ * Appelée à l'agent_end (visible via injectSessionSummaryToSuperAgent,
+ * invisible via finalizeInvisibleAgent).
+ */
+function flushDelegationQueue() {
+  delegationBusy = false;
+  if (delegationQueue.length === 0) return;
+  const next = delegationQueue.shift();
+  const tabs = window._pilotTabs;
+  if (!tabs) {
+    // Gestionnaire d'onglets indisponible : on perd la file (ne devrait pas
+    // arriver). On consomme quand même pour ne pas boucler sur un item mort.
+    console.warn("[delegation-queue] tabs indisponibles, demande perdue");
+    return;
+  }
+  delegationBusy = true;
+  // Transmettre la demande suivante (fire-and-forget : le résultat sera
+  // reporté dans le chat via transmitDelegationToAgent).
+  transmitDelegationToAgent({
+    request: next.request,
+    projectPath: next.projectPath,
+    agentId: next.agentId,
+    messagesEl: next.messagesEl,
+    tabs,
+    invisible: next.invisible,
+    forceInvisible: next.forceInvisible,
+    agentTabOpen: next.agentTabOpen,
+  }).then((ok) => {
+    if (ok) {
+      appendSystemMessage(next.messagesEl, "📋 Demande mise en file transmise à l'agent (la tâche précédente est terminée).");
+    } else {
+      // Échec de la transmission : on libère et on essaie la suite.
+      delegationBusy = false;
+      flushDelegationQueue();
+    }
+  });
 }
 
 // ── Agent invisible : suivi en arrière-plan (évolution 64) ──
@@ -2292,6 +2404,11 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
   } catch (_) {
     // Silencieux : le super-agent n'est pas indispensable au chat.
   }
+  // Issue #66 : l'agent a terminé sa tâche — vider la file des délégations
+  // en attente (transmettre la demande suivante mise en file, s'il y en a).
+  // Appelé aussi bien pour l'agent_end visible (agent-pi.js) que pour l'agent
+  // invisible (finalizeInvisibleAgent appelle cette même fonction).
+  flushDelegationQueue();
 }
 
 export async function initializeSuperAgent(messagesEl) {

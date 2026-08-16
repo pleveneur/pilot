@@ -922,6 +922,16 @@ apprend et répond.
   automatiquement** s'il était ouvert (évite un onglet fantôme alors que
   l'agent n'est plus fonctionnel). Les onglets des agents
   secondaires/spécialisés et les onglets d'édition ne sont **pas** fermés.
+- **#66 — Mise en file des délégations** : si vous déléguez une nouvelle
+  demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
+  elle est **mise en file** et transmise automatiquement dès la fin de la
+  tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
+  **recréé automatiquement** à la prochaine délégation (ou purge) — plus
+  besoin de redémarrer Pilot pour redéleguer.
+- **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
+  actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
+  de l'arrêter entre deux demandes).
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les

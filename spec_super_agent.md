@@ -160,6 +160,16 @@ apprend et répond.
   automatiquement** s'il était ouvert (évite un onglet fantôme alors que
   l'agent n'est plus fonctionnel). Les onglets des agents
   secondaires/spécialisés et les onglets d'édition ne sont **pas** fermés.
+- **#66 — Mise en file des délégations** : si vous déléguez une nouvelle
+  demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
+  elle est **mise en file** et transmise automatiquement dès la fin de la
+  tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
+  **recréé automatiquement** à la prochaine délégation (ou purge) — plus
+  besoin de redémarrer Pilot pour redéleguer.
+- **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
+  actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
+  de l'arrêter entre deux demandes).
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
@@ -389,6 +399,16 @@ Sessions d'agents (chat / orchestration)
   `[Tâche déléguée terminée]` avec la demande transmise, pour que l'Assistant
   mette à jour son suivi (tâches, décisions) et décide des prochaines étapes
   (boucle de feedback agent → assistant).
+  **File d'attente des délégations (issue #66)** : une délégation envoyée
+  pendant que l'agent travaille n'est plus perdue — elle est mise en file et
+  transmise automatiquement à la fin de la tâche en cours (à l'`agent_end`).
+  L'arrêt explicite (`stop_agent`) annule la file. **Reprise après arrêt
+  (issue #65)** : après un `stop_agent`, la session de l'agent du projet est
+  recréée automatiquement à la prochaine délégation (et `purge_agent_conversation`
+  se répare seul en recréant la session si nécessaire) — plus besoin de
+  redémarrer Pilot. **Agent invisible joignable (issue #64)** : une nouvelle
+  délégation à un agent invisible déjà vivant reprend sa session au lieu
+  d'errer « déjà active ».
   **Garde anti-compaction (issue #54)** : pendant une compaction de fond, pi
   peut émettre un `agent_end` parasite (le tour réel n'est pas fini). Ce
   `agent_end` ne consomme PAS la délégation en attente (`pendingDelegation`) :
