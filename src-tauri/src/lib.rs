@@ -471,6 +471,11 @@ struct AppConfig {
     // défaut. Désactivé → comportement actuel (l'onglet agent s'ouvre).
     #[serde(default = "default_true")]
     super_agent_invisible_agent: bool,
+    // Paramètre assistant : quand activé (défaut), chaque agent appelé par
+    // l'assistant (delegate_to_coder / run_agents) intègre le protocole
+    // quality-gate dans son prompt (consigne + cargo test --lib).
+    #[serde(default = "default_true")]
+    super_agent_quality_gate: bool,
 }
 
 fn default_true() -> bool { true }
@@ -672,6 +677,7 @@ impl Default for AppConfig {
             super_agent_user_memory: String::new(),
             super_agent_block_agent_input: false,
             super_agent_invisible_agent: true,
+            super_agent_quality_gate: true,
         }
     }
 }

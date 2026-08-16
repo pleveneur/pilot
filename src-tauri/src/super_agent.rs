@@ -747,6 +747,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "show_thinking": cfg.super_agent_show_thinking,
         "show_tools": cfg.super_agent_show_tools,
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
+        "super_agent_quality_gate": cfg.super_agent_quality_gate,
         "adaptive_personality": cfg.super_agent_adaptive_personality,
         "personality": cfg.super_agent_personality,
     }))
@@ -763,6 +764,7 @@ pub fn set_super_agent_config(
     show_thinking: Option<bool>,
     show_tools: Option<bool>,
     adaptive_personality: Option<bool>,
+    super_agent_quality_gate: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -785,6 +787,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = adaptive_personality {
         cfg.super_agent_adaptive_personality = v;
+    }
+    if let Some(v) = super_agent_quality_gate {
+        cfg.super_agent_quality_gate = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())

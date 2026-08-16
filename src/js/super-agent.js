@@ -52,7 +52,7 @@ function scrollSuperToBottom(messagesEl) {
 }
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
-let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
+let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true };
 
 // Issue #47 : délégation en attente de feedback. Quand l'assistant délègue une
 // tâche à l'agent d'un projet (delegate_to_coder), on mémorise la demande ici.
@@ -74,6 +74,14 @@ function speak(text) {
     u.lang = "fr-FR";
     window.speechSynthesis.speak(u);
   } catch (_) {}
+}
+
+/** Consigne quality-gate à préfixer aux prompts des agents appelés par
+ * l'assistant (delegate_to_coder / run_agents). Vide si le paramètre
+ * `super_agent_quality_gate` est désactivé. */
+function qualityGateInstruction() {
+  if (configCache.super_agent_quality_gate === false) return "";
+  return "Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier. Lance cargo test --lib avant de committer.\n\n";
 }
 
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
@@ -1230,7 +1238,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief: task }));
+        const brief = qualityGateInstruction() + task;
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief }));
         const result = await runAgentsForAssistant(assignments);
         appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
         await respondSuperAgent(id, JSON.stringify({ ok: true, result }), false);
@@ -1357,11 +1366,11 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       appendSystemMessage(messagesEl, `✅ Projet « ${path} » ouvert et rendu actif.`);
       await respondSuperAgentAction(id, true);
     } else if (action === "delegate_to_coder") {
-      const request = info.request;
-      if (!request) {
+      if (!info.request) {
         await respondSuperAgentAction(id, false);
         return;
       }
+      const request = qualityGateInstruction() + info.request;
       // A13 (assistant headless multi-projets) : un `project` explicite permet
       // de déléguer à un projet NON actif. Son agent est démarré en arrière-plan
       // (invisible) sans ouvrir le projet ni l'onglet. Sinon, on retombe sur le

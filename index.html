@@ -725,6 +725,10 @@
               <input type="checkbox" id="setting-superagent-invisible-agent" />
               <label for="setting-superagent-invisible-agent" title="Quand l'Assistant délègue une demande à l'agent, l'agent s'exécute en arrière-plan SANS créer d'onglet agent visible (aucun onglet créé du tout). Un bouton « Arrêter » dans le chat de l'Assistant permet de tuer l'agent à tout moment. Activé par défaut.">Agent invisible (l'agent s'exécute en arrière-plan sans ouvrir d'onglet)</label>
             </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-superagent-quality-gate" />
+              <label for="setting-superagent-quality-gate" title="Quand l'Assistant délègue une demande à un agent (delegate_to_coder / run_agents), l'agent intègre le protocole quality-gate dans son prompt (consigne « Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier » + « Lance cargo test --lib avant de committer »). Activé par défaut.">Quality-gate pour les agents appelés (protocole anti-régression dans leur prompt)</label>
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

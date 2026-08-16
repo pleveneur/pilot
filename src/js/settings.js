@@ -193,6 +193,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
   const chkSuperAgentInvisibleAgent = document.getElementById("setting-superagent-invisible-agent");
+  const chkSuperAgentQualityGate = document.getElementById("setting-superagent-quality-gate");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -514,6 +515,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
   if (chkSuperAgentInvisibleAgent) chkSuperAgentInvisibleAgent.checked = currentConfig.super_agent_invisible_agent !== false;
+  if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -733,6 +735,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,
         super_agent_invisible_agent: chkSuperAgentInvisibleAgent ? chkSuperAgentInvisibleAgent.checked !== false : true,
+        super_agent_quality_gate: chkSuperAgentQualityGate ? chkSuperAgentQualityGate.checked !== false : true,
       };
     try {
       await invoke("save_config", { config });
