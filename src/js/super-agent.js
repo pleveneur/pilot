@@ -290,9 +290,24 @@ function appendMessage(messagesEl, role, text) {
 }
 
 function appendSystemMessage(messagesEl, text) {
+  const trimmed = String(text || "").trim();
+  // #31 : ne jamais afficher de bulle vide ou qui ne contient qu'un chemin de
+  // projet (sans contexte). Un message d'info doit toujours porter un libellé
+  // utile (ex: « Projet ouvert : X ») ; sinon on ne l'affiche pas.
+  if (!trimmed || isBareProjectPath(trimmed)) return;
   const seq = infoSeq++;
-  pendingInfo[seq] = { messagesEl, text };
+  pendingInfo[seq] = { messagesEl, text: trimmed };
   flushPendingInfo();
+}
+
+/**
+ * Détecte un texte qui n'est qu'un chemin de projet (sans libellé/contexte).
+ * Chemin Windows (C:\...) ou POSIX (/... ou ~/...), sans espace.
+ * @param {string} s
+ * @returns {boolean}
+ */
+function isBareProjectPath(s) {
+  return /^[A-Za-z]:[\\/]/.test(s) || /^[~/]/.test(s);
 }
 
 /** Affiche les messages d'info en attente dans l'ordre de leur séquence. */

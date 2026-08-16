@@ -48,6 +48,9 @@ apprend et répond.
   Tâche terminée… », « ⚠️ Connexion perdue… ») sont affichés **dans l'ordre
   de leur émission** grâce à un buffer d'ordonnancement + compteur de
   séquence (#20), même s'ils arrivent hors ordre (sources asynchrones).
+- **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
+  **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
+  chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
 
 ### Notifications natives
 - **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
