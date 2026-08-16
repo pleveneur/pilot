@@ -224,11 +224,12 @@ export default function (pi: ExtensionAPI) {
     name: "stop_agent",
     label: "Stop Agent",
     description:
-      "Arrêter immédiatement un agent (coupe la session en cours, qu'elle soit visible, en arrière-plan / « agent invisible », ou un agent secondaire/spécialisé/spécifique lancé via run_agents). Par défaut, arrête l'agent standard du projet actif. Si vous fournissez `agentId`, arrête précisément cet agent (standard, spécialisé, secondaire ou spécifique créé à la volée). À utiliser quand l'utilisateur demande d'arrêter le travail en cours, ou quand vous détectez qu'un agent s'égare ou reste bloqué en fin de run et qu'il faut l'interrompre. Bloque jusqu'à ce que Pilot ait arrêté l'agent.",
+      "Arrêter immédiatement un agent (coupe la session en cours, qu'elle soit visible, en arrière-plan / « agent invisible », ou un agent secondaire/spécialisé/spécifique lancé via run_agents). Par défaut, arrête l'agent standard du projet actif. Si vous fournissez `agentId`, arrête précisément cet agent (standard, spécialisé, secondaire ou spécifique créé à la volée). Pour connaître l'`agentId` exact d'un agent secondaire à arrêter, appelez d'abord `list_agent_sessions` (il retourne la liste des sessions avec leur `agent`/`agentId` et `project`). À utiliser quand l'utilisateur demande d'arrêter le travail en cours, ou quand vous détectez qu'un agent s'égare ou reste bloqué en fin de run et qu'il faut l'interrompre. Bloque jusqu'à ce que Pilot ait arrêté l'agent.",
     promptSnippet: "stop_agent: arrêter un agent (standard par défaut, ou un agentId cible)",
     promptGuidelines: [
       "Use stop_agent when the user asks to stop the current work, or when you detect an agent is going off track or is stuck at the end of a run and must be interrupted. This cuts the running agent session immediately (visible tab, invisible background agent, or a secondary/specialized/custom agent launched via run_agents).",
       "If you know the id of the specific agent to stop (e.g. a tester, a codeur-plh, or a custom agent you created and launched via run_agents), pass it in `agentId`. If you omit `agentId`, the standard agent of the active project is stopped.",
+      "To find the exact `agentId` of a secondary agent to stop, call `list_agent_sessions` first: it returns the list of all agent sessions with their `agent`/`agentId` and `project`. Then pass that `agentId` (and optionally `project`) to stop_agent to target precisely that secondary agent.",
     ],
     parameters: Type.Object({
       agentId: Type.Optional(Type.String({ description: "Identifiant de l'agent à arrêter. Si omis, arrête l'agent standard du projet actif." })),
