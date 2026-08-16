@@ -28,6 +28,14 @@ const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
 // détecte, exécute la commande Rust `project_snapshot` (lecture seule) et renvoie
 // l'état structuré du projet (JSON) comme `value` de la réponse.
 const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
+// Sentinel préfixant le titre d'un `input` d'outil git_status. Pilot le détecte,
+// exécute la commande Rust `git_status_project` (lecture seule) et renvoie l'état
+// Git du projet (JSON) comme `value` de la réponse.
+const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
+// Sentinel préfixant le titre d'un `input` d'outil git_log. Pilot le détecte,
+// exécute la commande Rust `git_log_project` (lecture seule) et renvoie
+// l'historique des commits (JSON) comme `value` de la réponse.
+const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -159,6 +167,54 @@ export default function (pi: ExtensionAPI) {
       const result = await ctx.ui.input(PROJECT_SNAPSHOT_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Analyse du projet annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "git_status",
+    label: "Git Status",
+    description:
+      "Obtenir l'état Git (lecture seule) d'un projet : branche active, fichiers modifiés, ajoutés, supprimés, non suivis et en attente (staged). À utiliser quand tu as besoin de connaître la santé Git d'un projet (travail en cours, éléments non commités) avant de répondre ou de planifier. Ne modifie aucun fichier.",
+    promptSnippet: "git_status: obtenir l'état Git d'un projet (branche, fichiers modifiés/ajoutés/supprimés, en attente)",
+    promptGuidelines: [
+      "Use git_status when you need the Git state of a project: active branch, modified/added/deleted/untracked files and pending (staged) items. It is read-only and never modifies any file.",
+      "Pass the absolute path of the project. If you are unsure about the path, ask the user first (ask_input / ask_choice).",
+    ],
+    parameters: Type.Object({
+      project: Type.String({ description: "Chemin absolu du projet à analyser" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ project: params.project });
+      const result = await ctx.ui.input(GIT_STATUS_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Analyse Git annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "git_log",
+    label: "Git Log",
+    description:
+      "Obtenir l'historique des commits (lecture seule) d'un projet : les 20 derniers commits avec hash court, message, auteur et date. À utiliser quand tu as besoin de comprendre l'historique récent d'un projet (évolution, jalons, derniers changements) avant de répondre ou de planifier. Ne modifie aucun fichier.",
+    promptSnippet: "git_log: obtenir l'historique des commits d'un projet (20 derniers, message, auteur, date)",
+    promptGuidelines: [
+      "Use git_log when you need the recent commit history of a project: the last 20 commits with short hash, message, author and date. It is read-only and never modifies any file.",
+      "Pass the absolute path of the project. If you are unsure about the path, ask the user first (ask_input / ask_choice).",
+    ],
+    parameters: Type.Object({
+      project: Type.String({ description: "Chemin absolu du projet à analyser" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ project: params.project });
+      const result = await ctx.ui.input(GIT_LOG_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Analyse Git annulée." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

@@ -2086,6 +2086,9 @@ pub fn run() {
             dashboard::get_agent_supervision,
             // ── Snapshot structuré d'un projet (A1, outil assistant) ──
             project_snapshot::project_snapshot,
+            // ── Outils Git assistant (A2, lecture seule) ──
+            git::git_status_project,
+            git::git_log_project,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
             vault::vault_unlock,

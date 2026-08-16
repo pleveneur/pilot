@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
+use serde_json::Value;
 use tauri::State;
 
 use crate::{run_captured, AppState};
@@ -170,6 +171,112 @@ pub fn git_diff_file(state: State<AppState>, path: String) -> Result<GitFileDiff
     // Version commitée. Échoue (stdout vide) si staged-new jamais commité → before "".
     let before = run_captured("git", &["-C", &cwd, "show", &format!("HEAD:{}", rel)], Duration::from_secs(5));
     Ok(GitFileDiff { is_repo: true, tracked: true, before, after })
+}
+
+/// État Git d'un projet (outil assistant, lecture seule). `project` = chemin
+/// absolu. Retourne la branche, les fichiers modifiés/ajoutés/supprimés et le
+/// nombre d'éléments en attente (staged). Réutilise `run_captured` (helper
+/// process partagé) et le format porcelain v1 de `git status`.
+#[tauri::command]
+pub fn git_status_project(project: String) -> Result<Value, String> {
+    use std::time::Duration;
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("Chemin de projet vide".to_string());
+    }
+    let check = run_captured("git", &["-C", &project, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        return Ok(serde_json::json!({ "is_repo": false }));
+    }
+    let branch = run_captured("git", &["-C", &project, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3));
+    let branch = branch.trim().to_string();
+    let out = run_captured(
+        "git",
+        &["-C", &project, "status", "--porcelain", "-uall", "--no-renames"],
+        Duration::from_secs(8),
+    );
+    let mut modified = Vec::new();
+    let mut added = Vec::new();
+    let mut deleted = Vec::new();
+    let mut untracked = Vec::new();
+    let mut staged = Vec::new();
+    for line in out.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let code = line[..2].to_string();
+        let mut path = line[3..].to_string();
+        if path.starts_with('"') && path.ends_with('"') && path.len() >= 2 {
+            path = path[1..path.len() - 1].to_string();
+            path = path.replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        let x = code.chars().next().unwrap_or(' ');
+        let y = code.chars().nth(1).unwrap_or(' ');
+        if x == '?' && y == '?' {
+            untracked.push(path);
+        } else if x != ' ' {
+            staged.push(path.clone());
+            if y == 'D' || x == 'D' {
+                deleted.push(path);
+            } else if x == 'A' {
+                added.push(path);
+            } else {
+                modified.push(path);
+            }
+        } else if y != ' ' {
+            if y == 'D' {
+                deleted.push(path);
+            } else if y == 'A' {
+                added.push(path);
+            } else {
+                modified.push(path);
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "is_repo": true,
+        "branch": branch,
+        "modified": modified,
+        "added": added,
+        "deleted": deleted,
+        "untracked": untracked,
+        "staged": staged,
+        "pending": modified.len() + added.len() + deleted.len() + untracked.len() + staged.len(),
+    }))
+}
+
+/// Historique des commits d'un projet (outil assistant, lecture seule).
+/// `project` = chemin absolu. Retourne les N derniers commits (N=20) avec
+/// hash court, message, auteur et date. Réutilise `run_captured`.
+#[tauri::command]
+pub fn git_log_project(project: String) -> Result<Value, String> {
+    use std::time::Duration;
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("Chemin de projet vide".to_string());
+    }
+    let check = run_captured("git", &["-C", &project, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    if !check.trim().eq_ignore_ascii_case("true") {
+        return Ok(serde_json::json!({ "is_repo": false, "commits": [] }));
+    }
+    let out = run_captured(
+        "git",
+        &["-C", &project, "log", "-n", "20", "--format=%h|%an|%ad|%s", "--date=short"],
+        Duration::from_secs(5),
+    );
+    let commits: Vec<Value> = out
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let mut parts = l.splitn(4, '|');
+            let hash = parts.next().unwrap_or("").to_string();
+            let author = parts.next().unwrap_or("").to_string();
+            let date = parts.next().unwrap_or("").to_string();
+            let subject = parts.next().unwrap_or("").to_string();
+            serde_json::json!({ "hash": hash, "author": author, "date": date, "subject": subject })
+        })
+        .collect();
+    Ok(serde_json::json!({ "is_repo": true, "commits": commits }))
 }
 
 /// Résultat de `git_create_snapshot` :

@@ -1049,6 +1049,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
+    const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
+    const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1153,6 +1155,38 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       try {
         const info = JSON.parse(title.slice(PROJECT_SNAPSHOT_SENTINEL.length));
         const result = await invoke("project_snapshot", {
+          project: String(info.project || ""),
+        });
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(GIT_STATUS_SENTINEL)) {
+      // Outil git_status (A2) : l'assistant demande l'état Git d'un projet
+      // (branche, fichiers modifiés/ajoutés/supprimés, en attente). Le titre
+      // contient un JSON {project}. On exécute la commande Rust (lecture seule)
+      // et on renvoie le résultat (JSON) comme `value` de la réponse.
+      try {
+        const info = JSON.parse(title.slice(GIT_STATUS_SENTINEL.length));
+        const result = await invoke("git_status_project", {
+          project: String(info.project || ""),
+        });
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(GIT_LOG_SENTINEL)) {
+      // Outil git_log (A2) : l'assistant demande l'historique des commits d'un
+      // projet (20 derniers, message, auteur, date). Le titre contient un JSON
+      // {project}. On exécute la commande Rust (lecture seule) et on renvoie le
+      // résultat (JSON) comme `value` de la réponse.
+      try {
+        const info = JSON.parse(title.slice(GIT_LOG_SENTINEL.length));
+        const result = await invoke("git_log_project", {
           project: String(info.project || ""),
         });
         await respondSuperAgent(id, JSON.stringify(result), false);
