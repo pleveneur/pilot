@@ -377,6 +377,61 @@ export async function createSuperAgent(container) {
   wrapper.appendChild(inputBar);
 
   container.appendChild(wrapper);
+
+  // Tableau de bord de suivi multi-projets (get_project_tracking).
+  const trackingEl = document.createElement("div");
+  trackingEl.id = "super-tracking";
+  trackingEl.className = "super-tracking";
+  container.appendChild(trackingEl);
+
+  // Rendu du tableau de bord de suivi multi-projets.
+  async function loadSuperTracking() {
+    if (!trackingEl) return;
+    trackingEl.innerHTML = `<div class="dash-loading">Chargement du suivi…</div>`;
+    try {
+      const data = await invoke("get_super_agent_tracking");
+      const clients = (data && data.clients) || [];
+      if (!clients.length) {
+        trackingEl.innerHTML = `<div class="dash-muted">Aucun client suivi pour l'instant. Utilisez « Initialiser » ou « Projets & clients » pour démarrer le suivi.</div>`;
+        return;
+      }
+      let html = "";
+      for (const client of clients) {
+        const projects = (client.projects || [])
+          .map(
+            (p) =>
+              `<div class="super-tracking-project">
+                 <span class="super-tracking-project-name">${escapeHtmlForSuper(p.name || p.path || "")}</span>
+                 <span class="dash-muted">${p.tasks_en_cours ?? 0} en cours · ${p.tasks_terminees ?? 0} terminées</span>
+               </div>`
+          )
+          .join("");
+        const decisions = (client.decisions_recentes || [])
+          .map((d) => `<li>${escapeHtmlForSuper(d)}</li>`)
+          .join("");
+        const sessions = (client.sessions_recentes || [])
+          .map((s) => `<li>${escapeHtmlForSuper(s)}</li>`)
+          .join("");
+        html += `<div class="super-tracking-client dash-card">
+          <div class="dash-card-head"><i data-lucide="building-2" class="icon-sm"></i> ${escapeHtmlForSuper(client.name || "")}</div>
+          <div class="dash-card-body">
+            <div class="super-tracking-projects">${projects || `<div class="dash-muted">Aucun projet</div>`}</div>
+            <div class="super-tracking-section"><strong>Décisions récentes</strong><ul>${decisions || `<li class="dash-muted">Aucune</li>`}</ul></div>
+            <div class="super-tracking-section"><strong>Sessions récentes</strong><ul>${sessions || `<li class="dash-muted">Aucune</li>`}</ul></div>
+          </div>
+        </div>`;
+      }
+      trackingEl.innerHTML = html;
+      refreshIcons(trackingEl);
+    } catch (err) {
+      console.error("Erreur get_project_tracking:", err);
+      trackingEl.innerHTML = `<div class="dash-error">Erreur de chargement du suivi : ${escapeHtmlForSuper(String(err))}</div>`;
+    }
+  }
+
+  // Recharger le suivi quand l'onglet Assistant devient actif (hook exposé
+  // via le retour de createSuperAgent, appelé par tabs.js switchTab).
+
   refreshIcons(wrapper);
 
   const statusEl = toolbar.querySelector("#superagent-status");
@@ -805,6 +860,7 @@ export async function createSuperAgent(container) {
 
   return {
     wrapper,
+    superTrackingRefresh: loadSuperTracking,
     unlisten: () => {
       clearInterval(superStatusPoll);
       // Chantier #13 : arrêter le ticker des relances programmées (évite la

@@ -681,6 +681,7 @@ class TabsManager {
     try {
       const result = await createSuperAgent(tab.wrapper);
       tab.view = result.wrapper;
+      tab.superTrackingRefresh = result.superTrackingRefresh;
       tab.unlistenSuperAgent = result.unlisten;
     } catch (e) {
       console.error("Erreur onglet Assistant:", e);
@@ -1914,6 +1915,12 @@ class TabsManager {
     if (tab.mode === "dashboard") {
       if (tab.dashboardRefresh) tab.dashboardRefresh();
       if (tab.dashboardSetActive) tab.dashboardSetActive(true);
+    }
+
+    // Tableau de bord de suivi multi-projets (Assistant 🧭) : recharger à
+    // chaque activation de l'onglet.
+    if (tab.mode === "superagent" && tab.superTrackingRefresh) {
+      tab.superTrackingRefresh();
     }
   }
 

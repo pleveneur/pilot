@@ -6655,6 +6655,48 @@ body.pilot-loading *::after {
   flex-direction: column;
   gap: 10px;
 }
+
+/* Tableau de bord de suivi multi-projets (Assistant 🧭) */
+.super-tracking {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.super-tracking-client {
+  margin-bottom: 4px;
+}
+.super-tracking-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.super-tracking-project {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.super-tracking-project-name {
+  font-weight: 500;
+  color: var(--text-primary, #e6e8ee);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.super-tracking-section {
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+}
+.super-tracking-section ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.super-tracking-section li {
+  margin-bottom: 2px;
+}
 .dash-metrics-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));

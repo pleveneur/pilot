@@ -1066,6 +1066,121 @@ pub fn list_super_agent_projects(state: State<AppState>, app: AppHandle) -> Resu
     Ok(serde_json::json!({"projects": projects}))
 }
 
+// ── Tableau de bord de suivi multi-projets ──
+
+/// Renvoie un tableau de bord structuré de suivi multi-projets : clients,
+/// projets (avec compteurs de tâches), décisions récentes et sessions récentes.
+/// Lecture seule de la base de suivi de l'assistant (~/.pilot/super-agent.db).
+#[tauri::command]
+pub fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+
+    // Clients (depuis la table clients).
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM clients ORDER BY name")
+        .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+    let client_rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+    let mut clients: Vec<(i64, String)> = Vec::new();
+    for row in client_rows {
+        if let Ok((id, name)) = row {
+            clients.push((id, name));
+        }
+    }
+    drop(stmt);
+
+    let mut result_clients: Vec<Value> = Vec::new();
+    for (client_id, client_name) in clients {
+        // Projets du client avec compteurs de tâches.
+        let mut stmt = conn
+            .prepare("SELECT id, name, path FROM projects WHERE client_id = ?1 ORDER BY name")
+            .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+        let project_rows = stmt
+            .query_map(rusqlite::params![client_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+        let mut projects: Vec<Value> = Vec::new();
+        for row in project_rows {
+            if let Ok((pid, pname, ppath)) = row {
+                let tasks_en_cours: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('terminee','livree','annulee')",
+                        rusqlite::params![pid],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let tasks_terminees: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status IN ('terminee','livree')",
+                        rusqlite::params![pid],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                projects.push(serde_json::json!({
+                    "name": pname,
+                    "path": ppath,
+                    "tasks_en_cours": tasks_en_cours,
+                    "tasks_terminees": tasks_terminees,
+                }));
+            }
+        }
+        drop(stmt);
+
+        // Décisions récentes du client (via ses projets).
+        let mut stmt = conn
+            .prepare(
+                "SELECT d.summary FROM decisions d
+                 JOIN projects p ON p.id = d.project_id
+                 WHERE p.client_id = ?1
+                 ORDER BY d.created_at DESC LIMIT 10",
+            )
+            .map_err(|e| format!("Erreur lecture décisions: {}", e))?;
+        let decision_rows = stmt
+            .query_map(rusqlite::params![client_id], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("Erreur lecture décisions: {}", e))?;
+        let mut decisions: Vec<String> = Vec::new();
+        for row in decision_rows {
+            if let Ok(s) = row {
+                decisions.push(s);
+            }
+        }
+        drop(stmt);
+
+        // Sessions récentes du client (via ses projets).
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.name, s.summary FROM session_summaries s
+                 JOIN projects p ON p.id = s.project_id
+                 WHERE p.client_id = ?1
+                 ORDER BY s.created_at DESC LIMIT 10",
+            )
+            .map_err(|e| format!("Erreur lecture sessions: {}", e))?;
+        let session_rows = stmt
+            .query_map(rusqlite::params![client_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("Erreur lecture sessions: {}", e))?;
+        let mut sessions: Vec<String> = Vec::new();
+        for row in session_rows {
+            if let Ok((pname, summary)) = row {
+                sessions.push(format!("{}: {}", pname, summary));
+            }
+        }
+        drop(stmt);
+
+        result_clients.push(serde_json::json!({
+            "name": client_name,
+            "projects": projects,
+            "decisions_recentes": decisions,
+            "sessions_recentes": sessions,
+        }));
+    }
+
+    Ok(serde_json::json!({ "clients": result_clients }))
+}
+
 // ── Apprentissage : injection de résumé de session ──
 
 /// Enregistre un résumé de session dans la base et l'injecte au super-agent

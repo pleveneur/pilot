@@ -2098,6 +2098,7 @@ pub fn run() {
             super_agent::rename_client,
             super_agent::set_project_client,
             super_agent::list_super_agent_projects,
+            super_agent::get_super_agent_tracking,
             super_agent::query_super_agent,
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
