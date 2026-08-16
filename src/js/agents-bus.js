@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { backendKind } from "./backend-info.js";
+import { notifyAgentDone } from "./desktop-notify.js";
 import {
   loadAgentRegistry,
   normalizeAgent,
@@ -112,7 +113,13 @@ function resetTimeout() {
     // Timeout d'inactivité : on signale l'erreur puis on arrête la run SANS
     // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
     // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
-    emit("error", { message: `Timeout d'inactivité pour ${busState.currentAgentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).` });
+    const agentId = busState.currentAgentId;
+    emit("error", { message: `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).` });
+    // P7 : notification desktop à l'arrêt auto (réutilise desktop-notify.js).
+    notifyAgentDone({
+      title: "Pilot — Agent en timeout",
+      body: `⏱️ L'agent ${agentId} est resté inactif (${Math.round(busState.timeoutMs / 1000)} s). La run a été arrêtée automatiquement.`,
+    }).catch(() => {});
     stopAgentsRun({ silent: true });
   }, busState.timeoutMs);
 }
