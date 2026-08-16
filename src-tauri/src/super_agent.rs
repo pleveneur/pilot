@@ -90,7 +90,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             last_run_at TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
-        );
+        );",
     )
     .map_err(|e| format!("Erreur init base: {}", e))
 }
@@ -502,7 +502,7 @@ pub(crate) const SCHEDULE_MIN_EVERY_SECS: i64 = 60;
 pub(crate) const SCHEDULE_MAX: i64 = 20;
 
 /// Planification telle que renvoyée au frontend / à l'assistant.
-struct DueSchedule {
+pub(crate) struct DueSchedule {
     id: i64,
     name: String,
     prompt: String,
@@ -1126,7 +1126,7 @@ pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list, DueSchedule};
+    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list};
     use rusqlite::Connection;
 
     fn mem_conn() -> Connection {
