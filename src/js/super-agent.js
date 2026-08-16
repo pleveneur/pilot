@@ -1120,8 +1120,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       const flow = currentBody.querySelector(".agent-stream-flow");
       const hasChildren = flow && flow.children.length > 0;
       const hasChoices = currentBody.querySelector(".agent-choice");
-      const bubble = currentBody.querySelector(".agent-bubble-assistant");
-      const hasText = bubble && bubble.textContent && bubble.textContent.trim().length > 0;
+      const hasText = flow && flow.textContent && flow.textContent.trim().length > 0;
       if (!hasChildren && !hasChoices && !hasText) {
         currentBody.remove();
       }
