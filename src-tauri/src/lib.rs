@@ -2104,6 +2104,8 @@ pub fn run() {
             dashboard::get_project_dashboard,
             dashboard::get_project_tracking,
             dashboard::get_agent_supervision,
+            dashboard::list_purgeable_items,
+            dashboard::purge_project_items,
             // ── Snapshot structuré d'un projet (A1, outil assistant) ──
             project_snapshot::project_snapshot,
             // ── Outils Git assistant (A2, lecture seule) ──

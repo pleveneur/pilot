@@ -149,6 +149,39 @@ function fmt(n) {
   return (n ?? 0).toLocaleString("fr-FR");
 }
 
+/** Affiche une boîte de dialogue de confirmation personnalisée (Promise<bool>). */
+function confirmDialog(title, bodyHtml) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const dlg = document.createElement("div");
+    dlg.className = "modal-dialog";
+    dlg.innerHTML = `
+      <div class="modal-title">${title}</div>
+      <div class="modal-body">${bodyHtml}</div>
+      <div class="modal-actions">
+        <button class="web-btn" data-act="cancel">Annuler</button>
+        <button class="web-btn web-btn-danger" data-act="ok">Confirmer</button>
+      </div>`;
+    overlay.appendChild(dlg);
+    document.body.appendChild(overlay);
+    const close = (val) => { overlay.remove(); resolve(val); };
+    dlg.querySelector('[data-act="cancel"]').addEventListener("click", () => close(false));
+    dlg.querySelector('[data-act="ok"]').addEventListener("click", () => close(true));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(false); });
+  });
+}
+
+/** Formate une taille en octets en libellé lisible (o / Ko / Mo / Go). */
+function humanSize(bytes) {
+  const b = Number(bytes || 0);
+  const KB = 1024, MB = KB * 1024, GB = MB * 1024;
+  if (b >= GB) return (b / GB).toFixed(1) + " Go";
+  if (b >= MB) return (b / MB).toFixed(1) + " Mo";
+  if (b >= KB) return (b / KB).toFixed(1) + " Ko";
+  return b + " o";
+}
+
 /** Crée une carte (section) du tableau de bord. */
 function card(title, icon) {
   const el = document.createElement("div");
@@ -223,6 +256,108 @@ export function createDashboard(container) {
     } finally {
       refreshBtn.disabled = false;
     }
+  }
+
+  // ── Purge des fichiers inutiles : charge la liste des éléments purgeables,
+  // affiche les checkboxes + bouton, gère la confirmation et le feedback. ──
+  async function loadPurgeable(purgeBody, purgeCard, projectPath) {
+    if (!projectPath) { purgeCard.style.display = "none"; return; }
+    let items = [];
+    try {
+      items = await invoke("list_purgeable_items", { projectPath });
+    } catch (e) {
+      purgeCard.style.display = "none";
+      return;
+    }
+    if (!items || items.length === 0) {
+      purgeCard.style.display = "none";
+      return;
+    }
+    purgeCard.style.display = "";
+    purgeBody.innerHTML = "";
+
+    const intro = document.createElement("div");
+    intro.className = "dash-muted";
+    intro.textContent = "Éléments détectés comme purgeables (dépendances, caches, artefacts de build, fichiers temporaires). Cochez les éléments à supprimer, puis cliquez « Purger la sélection ».";
+    purgeBody.appendChild(intro);
+
+    const list = document.createElement("div");
+    list.className = "dash-purge-list";
+    const checkboxes = [];
+    for (const it of items) {
+      const row = document.createElement("label");
+      row.className = "dash-purge-row" + (it.category === "git_gc" ? " dash-purge-gc" : "");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.item = JSON.stringify(it);
+      const label = document.createElement("span");
+      label.className = "dash-purge-label";
+      const rel = String(it.path || "").replace(projectPath, "").replace(/^[\\\\/]+/, "");
+      label.innerHTML = `<strong>${it.name}</strong> <span class="dash-muted">${rel}</span>`;
+      const size = document.createElement("span");
+      size.className = "dash-list-val";
+      size.textContent = it.size_h || humanSize(it.size);
+      row.appendChild(cb);
+      row.appendChild(label);
+      row.appendChild(size);
+      list.appendChild(row);
+      checkboxes.push(cb);
+    }
+    purgeBody.appendChild(list);
+
+    const actions = document.createElement("div");
+    actions.className = "dash-purge-actions";
+    const btn = document.createElement("button");
+    btn.className = "web-btn web-btn-danger";
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="trash-2" class="icon-sm"></i> Purger la sélection';
+    const feedback = document.createElement("div");
+    feedback.className = "dash-purge-feedback";
+    actions.appendChild(btn);
+    actions.appendChild(feedback);
+    purgeBody.appendChild(actions);
+
+    const updateBtn = () => {
+      const checked = checkboxes.filter((c) => c.checked);
+      btn.disabled = checked.length === 0;
+    };
+    checkboxes.forEach((c) => c.addEventListener("change", updateBtn));
+
+    btn.addEventListener("click", async () => {
+      const checked = checkboxes.filter((c) => c.checked);
+      if (!checked.length) return;
+      const selected = checked.map((c) => JSON.parse(c.dataset.item));
+      const totalBytes = selected.reduce((s, it) => s + (Number(it.size) || 0), 0);
+      const isGcOnly = selected.length === 1 && selected[0].category === "git_gc";
+      const summary = selected
+        .map((it) => `<li>${it.name} ${it.category !== "git_gc" ? `<span class=\"dash-muted\">(${it.size_h || humanSize(it.size)})</span>` : ""}</li>`)
+        .join("");
+      const body = isGcOnly
+        ? `<p>Voulez-vous compacter le dépôt Git (git gc) ?</p><p class="dash-muted">L'historique n'est pas supprimé.</p>`
+        : `<p>Voulez-vous vraiment supprimer ces éléments ?</p><ul>${summary}</ul><p><strong>${humanSize(totalBytes)} seront libérés.</strong> Cette action est irréversible.</p>`;
+      const ok = await confirmDialog("Confirmer la purge", body);
+      if (!ok) return;
+      btn.disabled = true;
+      feedback.textContent = "Purge en cours…";
+      try {
+        const res = await invoke("purge_project_items", { projectPath, items: selected });
+        const details = res.details || [];
+        const okCount = details.filter((d) => d.ok).length;
+        const failCount = details.length - okCount;
+        feedback.innerHTML = `<strong>${res.freed_h || humanSize(res.freed)} libérés</strong> — ${okCount} réussite(s)${failCount ? `, ${failCount} échec(s)` : ""}.`;
+        if (failCount) {
+          const errs = details.filter((d) => !d.ok).map((d) => `${d.name}: ${d.error}`).join("\n");
+          feedback.innerHTML += `<div class="dash-muted" style="white-space:pre-wrap;margin-top:4px">${errs}</div>`;
+        }
+        // Rafraîchir le dashboard (métriques + purge) après purge.
+        await load();
+      } catch (e) {
+        feedback.innerHTML = `<span class="dash-error">❌ ${e}</span>`;
+        btn.disabled = false;
+      }
+    });
+
+    refreshIcons(purgeBody);
   }
 
   // Recharge le tableau de bord uniquement si le projet actif a changé depuis
@@ -455,7 +590,8 @@ export function createDashboard(container) {
       const storage = card("Stockage & Poids", "database");
       const sRow = document.createElement("div");
       sRow.className = "dash-metrics-row";
-      sRow.appendChild(metric("Taille totale", s.total_size_h || "—"));
+      sRow.appendChild(metric("Taille totale (hors exclus)", s.total_size_h || "—"));
+      sRow.appendChild(metric("Taille réelle sur disque", s.disk_size_h || "—", "tout compris"));
       sRow.appendChild(metric("Fichiers", fmt(s.file_count)));
       sRow.appendChild(metric("Dossiers", fmt(s.dir_count)));
       sRow.appendChild(metric("Code source", s.code_size_h || "—", `${fmt(s.code_file_count)} fichiers`));
@@ -496,6 +632,16 @@ export function createDashboard(container) {
         storage.body.appendChild(list);
       }
       grid.appendChild(storage.el);
+
+      // ── Purge des fichiers inutiles (visible si éléments purgeables) ──
+      const purge = card("Purge des fichiers inutiles", "trash-2");
+      purge.el.classList.add("dash-card-wide");
+      purge.el.style.display = "none";
+      const purgeBody = purge.body;
+      purgeBody.innerHTML = '<div class="dash-muted">Analyse des éléments purgeables…</div>';
+      grid.appendChild(purge.el);
+      // Chargement asynchrone des éléments purgeables (non bloquant).
+      loadPurgeable(purgeBody, purge.el, p.path || "");
 
       // ── État Git ──
       const g = data.git || {};

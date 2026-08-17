@@ -27,7 +27,8 @@ d'onglets.
   l'onglet 🧭 Assistant) et horodatage du dernier rafraîchissement.
 - **Stockage & Poids** : taille totale du répertoire, nombre de fichiers et de
   dossiers, poids du **code source pur** (hors dépendances/caches comme
-  `node_modules`, `target`, `.git`…) et les fichiers les plus lourds.
+  `node_modules`, `target`, `.git`…) et les fichiers les plus lourds. Une **taille réelle sur disque** (tout compris, y compris `node_modules`/`target`/`.git`) est affichée à côté du donut, pour connaître la vraie empreinte du projet.
+- **Purge des fichiers inutiles** : le tableau de bord détecte automatiquement les éléments purgeables selon le type de projet (dépendances, caches, sorties de build…). Cochez ce que vous voulez supprimer, confirmez, et l'espace est libéré. Le dossier `.git` n'est jamais supprimé (seule une compaction `git gc` est proposée, qui ne touche pas à l'historique).
 - **État Git** : branche active, fichiers modifiés, non suivis (untracked) et
   prêts à être commités (staged).
 - **Analyse du Code & Langages** : répartition des langages en % (camembert + barres),
@@ -174,13 +175,43 @@ projet (ouverture, fermeture, bascule).
 | Section | Source |
 |---|---|
 | En-tête (nom, chemin, client, rafraîchissement) | `state.project_path` + config `super_agent_project_client` + horodatage local |
-| Stockage & Poids | Scan récursif du répertoire (exclusion des dossiers de dépendances/caches) + donut code vs non-code |
+| Stockage & Poids | Scan récursif du répertoire (exclusion des dossiers de dépendances/caches) + donut code vs non-code + **taille réelle sur disque** (`disk_total_size`, tout compris) |
+| Purge des fichiers inutiles | `list_purgeable_items` (détection par écosystème + taille) / `purge_project_items` (suppression validée, .git protégé) |
 | État Git | `git rev-parse` / `git status --porcelain` (via `run_captured`) |
 | Analyse Code & Langages | Scan des fichiers code (extension → langage), comptage lignes/fonctions/classes, TODO/FIXME, détection des manifests de dépendances + donut de répartition |
 | Activité Agent | Index `.pilot/sessions.jsonl` (sessions, tokens 7 j, messages) + scan des fichiers de session pi (actions d'outils) + barres tokens/messages par jour + donut des actions |
 | Évolution & Vélocité | `git log --since=7 days ago` (commits) + fichiers modifiés sur 7 j (mtime) + barres commits/fichiers par jour |
 | Contexte & Documentation | README (extrait, rendu Markdown), fichiers mémoire/décisions, derniers fichiers modifiés |
 | Alertes & Suggestions | Règles : fichiers volumineux, éléments non commités, langage principal, taille globale |
+
+## Purge des fichiers inutiles
+
+Le tableau de bord propose une **purge des fichiers inutiles**, par projet, pour libérer de l'espace disque.
+
+### Détection automatique par écosystème
+La commande `list_purgeable_items(project_path)` détecte les éléments purgeables selon l'écosystème du projet (réutilise la détection des manifests) :
+- **Node.js** → `node_modules`
+- **Rust** → `target`
+- **Python** → `__pycache__`, `.venv`, `venv`
+- **Tous** → `dist`, `build`, `out`, `logs`, `.cache`, caches éditeurs (`.idea/caches`, `.vscode/.tmp`), fichiers `*.log`, `*.tmp`
+- **Git** → option `git gc` (compaction, ne supprime PAS l'historique)
+
+Chaque élément retourné porte `{ name, path, size, category }` (taille calculée par parcours récursif léger).
+
+### Suppression sécurisée
+La commande `purge_project_items(project_path, items)` retourne `{ freed, details }` :
+- **Sécurité** : chaque chemin est validé (résolu dans le projet ET dans la liste autorisée). Tout le reste est refusé avec une erreur explicite.
+- **`.git` est JAMAIS supprimé** (seul `git gc` est proposé, catégorie `git_gc`, exécuté via `run_captured`).
+- Suppression par `fs::remove_dir_all` / `fs::remove_file`, avec gestion d'erreur par item (un échec n'arrête pas les autres).
+- Retourne la taille libérée et le détail par item (succès/échec + taille).
+
+### Frontend
+- Section « Purge des fichiers inutiles » dans la carte Stockage, visible si au moins un élément purgeable est détecté.
+- Checkbox + libellé (nom + chemin relatif) + taille pour chaque élément. L'item `git_gc` est affiché à part (« Compacter le dépôt Git (git gc) — ne supprime pas l'historique »).
+- Bouton « Purger la sélection » (désactivé si rien coché) → dialogue de confirmation avec récap (liste + taille totale à libérer, action irréversible) → au confirm, `purge_project_items` → feedback « X libérés » + détail → rafraîchissement du dashboard.
+
+### Enregistrement
+Commandes `list_purgeable_items` et `purge_project_items` enregistrées dans `src-tauri/src/lib.rs` (bloc Tableau de bord).
 
 ## Graphiques (camemberts & barres)
 

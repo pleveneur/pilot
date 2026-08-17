@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -282,6 +282,260 @@ pub(crate) fn scan_project(
         heaviest, lang_map, ext_map, total_lines, total_functions,
         total_classes, total_todos, total_fixmes, files_modified_7d,
     )
+}
+
+/// Calcule la taille réelle sur disque du projet (tout compris, y compris les
+/// dossiers exclus comme node_modules, target, .git…). Parcours récursif
+/// léger : somme des `fs::metadata::len()`, sans lecture de contenu.
+/// Raisonnble même sur les gros projets (une syscall `stat` par entrée).
+pub(crate) fn disk_total_size(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let meta = match fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.is_dir() {
+                stack.push(path);
+            }
+            total += meta.len();
+        }
+    }
+    total
+}
+
+/// Noms de dossiers purgeables (supprimables en toute sécurité : dépendances,
+/// artefacts de build, caches, environnements virtuels).
+const PURGE_DIR_NAMES: &[&str] = &[
+    "node_modules", "target", "__pycache__", ".venv", "venv",
+    "dist", "build", "out", "logs", ".cache",
+];
+
+/// Sous-dossiers de caches éditeurs purgeables (chemins relatifs au projet).
+const PURGE_EDITOR_CACHES: &[&str] = &[".idea/caches", ".vscode/.tmp"];
+
+/// Extension de fichiers purgeables (fichiers temporaires / journaux).
+const PURGE_FILE_EXTS: &[&str] = &["log", "tmp"];
+
+/// Calcule la taille d'un dossier ou fichier (récursif pour les dossiers).
+fn item_size(path: &Path) -> u64 {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return 0,
+    };
+    if meta.is_file() {
+        return meta.len();
+    }
+    let mut total = meta.len();
+    let mut stack: Vec<PathBuf> = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let m = match fs::metadata(&p) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if m.is_dir() {
+                stack.push(p);
+            }
+            total += m.len();
+        }
+    }
+    total
+}
+
+/// Détecte les éléments purgeables du projet selon son écosystème. Retourne
+/// une liste d'objets `{name, path, size, size_h, category}`.
+///
+/// Le parcours entre dans tous les dossiers sauf `.git` (jamais touché). Quand
+/// un dossier purgeable est trouvé, il est enregistré et on ne descend pas
+/// dedans (il sera supprimé en entier). Les fichiers `*.log` / `*.tmp` sont
+/// détectés en passant. L'option `git_gc` (compaction, ne supprime pas
+/// l'historique) est ajoutée si le projet est un dépôt Git.
+fn find_purgeable(root: &Path) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            // .git n'est jamais parcouru ni proposé à la suppression.
+            if name == ".git" {
+                continue;
+            }
+
+            if path.is_dir() {
+                // Dossiers purgeables nommés : enregistrer + ne pas descendre.
+                if PURGE_DIR_NAMES.contains(&name.as_str()) {
+                    if seen.insert(path.clone()) {
+                        let size = item_size(&path);
+                        out.push(serde_json::json!({
+                            "name": name,
+                            "path": path.to_string_lossy(),
+                            "size": size,
+                            "size_h": human_size(size),
+                            "category": name,
+                        }));
+                    }
+                    continue;
+                }
+                // Caches éditeurs : sous-dossiers spécifiques.
+                if name == ".idea" || name == ".vscode" {
+                    let subname = if name == ".idea" { "caches" } else { ".tmp" };
+                    let child = path.join(subname);
+                    if child.exists() && child.is_dir() {
+                        if seen.insert(child.clone()) {
+                            let size = item_size(&child);
+                            out.push(serde_json::json!({
+                                "name": format!("{}/{}", name, subname),
+                                "path": child.to_string_lossy(),
+                                "size": size,
+                                "size_h": human_size(size),
+                                "category": "editor_cache",
+                            }));
+                        }
+                    }
+                }
+                stack.push(path);
+            } else {
+                // Fichiers *.log / *.tmp.
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if PURGE_FILE_EXTS.contains(&ext.as_str()) {
+                    if seen.insert(path.clone()) {
+                        let size = item_size(&path);
+                        out.push(serde_json::json!({
+                            "name": name,
+                            "path": path.to_string_lossy(),
+                            "size": size,
+                            "size_h": human_size(size),
+                            "category": ext,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // Option git_gc (compaction) si le projet est un dépôt Git.
+    let check = run_captured(
+        "git",
+        &["-C", &root.to_string_lossy(), "rev-parse", "--is-inside-work-tree"],
+        Duration::from_secs(3),
+    );
+    if check.trim().eq_ignore_ascii_case("true") {
+        out.push(serde_json::json!({
+            "name": "Compacter le dépôt Git (git gc)",
+            "path": root.join(".git").to_string_lossy(),
+            "size": 0,
+            "size_h": "—",
+            "category": "git_gc",
+        }));
+    }
+
+    out
+}
+
+/// Vérifie qu'un item de purge est autorisé : (a) le chemin résolu est DANS le
+/// projet (canonicalize + starts_with) ET (b) le nom/chemin correspond à un
+/// élément autorisé (dossier purgeable, cache éditeur, fichier .log/.tmp) ou
+/// à la catégorie `git_gc`. Refuse tout chemin touchant `.git` (sauf git_gc
+/// qui ne supprime rien). Retourne `Ok(category)` ou `Err(message)`.
+pub(crate) fn validate_purge_item(project: &Path, item: &Value) -> Result<String, String> {
+    let category = item
+        .get("category")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let path_str = item
+        .get("path")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Catégorie git_gc : pas de suppression, exécute `git gc`. Le chemin
+    // n'est pas supprimé ; on valide juste la catégorie.
+    if category == "git_gc" {
+        return Ok(category);
+    }
+
+    if path_str.is_empty() {
+        return Err("chemin vide".to_string());
+    }
+    let item_path = Path::new(&path_str);
+
+    // Refuser tout ce qui touche .git (protection absolue).
+    if item_path
+        .components()
+        .any(|c| c.as_os_str() == ".git")
+    {
+        return Err(format!(".git est protégé : {}", path_str));
+    }
+
+    // Canonicaliser le projet et l'item (résout les symlinks / .. ).
+    let project_canon =
+        fs::canonicalize(project).map_err(|e| format!("projet invalide : {}", e))?;
+    let item_canon = fs::canonicalize(item_path)
+        .map_err(|e| format!("chemin invalide : {} : {}", path_str, e))?;
+
+    // (a) L'item doit être dans le projet.
+    if !item_canon.starts_with(&project_canon) {
+        return Err(format!("chemin hors projet : {}", path_str));
+    }
+
+    // (b) Vérifier que l'item correspond à un élément autorisé.
+    let rel = item_canon
+        .strip_prefix(&project_canon)
+        .map_err(|_| format!("chemin hors projet : {}", path_str))?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    let base = item_canon
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Dossier purgeable nommé.
+    if PURGE_DIR_NAMES.contains(&base.as_str()) && item_canon.is_dir() {
+        return Ok(category);
+    }
+    // Cache éditeur (sous-dossier spécifique).
+    if PURGE_EDITOR_CACHES.contains(&rel_str.as_str()) && item_canon.is_dir() {
+        return Ok(category);
+    }
+    // Fichier *.log / *.tmp.
+    if item_canon.is_file() {
+        let ext = item_canon
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if PURGE_FILE_EXTS.contains(&ext.as_str()) {
+            return Ok(category);
+        }
+    }
+
+    Err(format!("élément non autorisé : {}", path_str))
 }
 
 /// État Git : branche active, fichiers modifiés / non suivis / prêts à commiter.
@@ -678,6 +932,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
         heaviest, lang_map, ext_map, total_lines, total_functions,
         total_classes, total_todos, total_fixmes, files_modified_7d,
     ) = scan_project(root);
+    let disk_size = disk_total_size(root);
 
     // ── État Git ──
     let git = git_state(&project_path);
@@ -756,6 +1011,8 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
         "storage": {
             "total_size": total_size,
             "total_size_h": human_size(total_size),
+            "disk_size": disk_size,
+            "disk_size_h": human_size(disk_size),
             "file_count": file_count,
             "dir_count": dir_count,
             "code_size": code_size,
@@ -994,6 +1251,128 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
     Ok(serde_json::json!({ "projects": projects }))
 }
 
+/// Liste les éléments purgeables du projet (dépendances, caches, artefacts de
+/// build, fichiers temporaires) selon son écosystème. Retourne une liste
+/// d'objets `{name, path, size, size_h, category}`. Lecture seule — ne
+/// supprime rien. L'option `git_gc` (compaction du dépôt) est incluse si le
+/// projet est un dépôt Git.
+#[tauri::command]
+pub fn list_purgeable_items(project_path: String) -> Result<Vec<Value>, String> {
+    let root = Path::new(&project_path);
+    if !root.exists() {
+        return Err(format!("Le projet « {} » n'existe pas.", project_path));
+    }
+    Ok(find_purgeable(root))
+}
+
+/// Supprime les éléments purgeables sélectionnés. SÉCURITÉ : chaque item est
+/// validé (`validate_purge_item`) — chemin dans le projet + élément autorisé
+/// + `.git` jamais supprimé. La catégorie `git_gc` exécute `git gc` (compaction,
+/// ne supprime pas l'historique). Les erreurs par item n'arrêtent pas les
+/// autres : retourne `{freed, details:[{name, ok, freed, error}]}`.
+#[tauri::command]
+pub fn purge_project_items(
+    project_path: String,
+    items: Vec<Value>,
+) -> Result<Value, String> {
+    let root = Path::new(&project_path);
+    if !root.exists() {
+        return Err(format!("Le projet « {} » n'existe pas.", project_path));
+    }
+
+    let mut freed_total = 0u64;
+    let mut details: Vec<Value> = Vec::new();
+
+    for item in &items {
+        let name = item
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let category = item
+            .get("category")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let path_str = item
+            .get("path")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Validation de sécurité.
+        if let Err(e) = validate_purge_item(root, item) {
+            details.push(serde_json::json!({
+                "name": name,
+                "ok": false,
+                "freed": 0,
+                "error": e,
+            }));
+            continue;
+        }
+
+        // git_gc : compaction, pas de suppression.
+        if category == "git_gc" {
+            let out = run_captured(
+                "git",
+                &["-C", &project_path, "gc", "--prune=now"],
+                Duration::from_secs(120),
+            );
+            // `git gc` ne retourne pas d'erreur fiable via stdout ; on
+            // considère l'opération réussie si la commande s'exécute.
+            let ok = !out.contains("fatal:");
+            details.push(serde_json::json!({
+                "name": name,
+                "ok": ok,
+                "freed": 0,
+                "error": if ok { "".to_string() } else { out.trim().to_string() },
+            }));
+            continue;
+        }
+
+        let item_path = Path::new(&path_str);
+        // Calculer la taille avant suppression (pour le bilan).
+        let size_before = item_size(item_path);
+
+        let res = if item_path.is_dir() {
+            fs::remove_dir_all(item_path)
+        } else if item_path.is_file() {
+            fs::remove_file(item_path)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "élément introuvable",
+            ))
+        };
+
+        match res {
+            Ok(()) => {
+                freed_total += size_before;
+                details.push(serde_json::json!({
+                    "name": name,
+                    "ok": true,
+                    "freed": size_before,
+                    "error": "",
+                }));
+            }
+            Err(e) => {
+                details.push(serde_json::json!({
+                    "name": name,
+                    "ok": false,
+                    "freed": 0,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "freed": freed_total,
+        "freed_h": human_size(freed_total),
+        "details": details,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,6 +1429,72 @@ mod tests {
         fs::write(tmp.join("package.json"), "{}").unwrap();
         let deps = detect_dependencies(&tmp);
         assert!(deps.contains(&"Node.js".to_string()));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn disk_total_size_includes_excluded() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_disk_{}", std::process::id()));
+        let _ = fs::create_dir_all(tmp.join("node_modules"));
+        fs::write(tmp.join("node_modules/big.bin"), vec![0u8; 4096]).unwrap();
+        fs::write(tmp.join("src.rs"), "fn main() {}").unwrap();
+        let size = disk_total_size(&tmp);
+        assert!(size >= 4096, "disk_size should include excluded dirs");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validate_purge_refuses_out_of_project() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_v1_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        // Un chemin hors projet (canonicalizé) doit être refusé.
+        let outside = std::env::temp_dir().join("pilot_dash_outside_target");
+        let _ = fs::create_dir_all(&outside);
+        let item = serde_json::json!({
+            "name": "target",
+            "path": outside.to_string_lossy(),
+            "category": "target",
+        });
+        let res = validate_purge_item(&tmp, &item);
+        assert!(res.is_err(), "out-of-project path must be refused");
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn validate_purge_refuses_git() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_v2_{}", std::process::id()));
+        let _ = fs::create_dir_all(tmp.join(".git"));
+        // Un item pointant vers .git doit être refusé.
+        let item = serde_json::json!({
+            "name": ".git",
+            "path": tmp.join(".git").to_string_lossy(),
+            "category": "git",
+        });
+        let res = validate_purge_item(&tmp, &item);
+        assert!(res.is_err(), ".git must be refused");
+        // git_gc est autorisé (pas de suppression).
+        let gc = serde_json::json!({
+            "name": "git gc",
+            "path": tmp.join(".git").to_string_lossy(),
+            "category": "git_gc",
+        });
+        let res2 = validate_purge_item(&tmp, &gc);
+        assert!(res2.is_ok(), "git_gc must be allowed");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validate_purge_accepts_node_modules() {
+        let tmp = std::env::temp_dir().join(format!("pilot_dash_v3_{}", std::process::id()));
+        let _ = fs::create_dir_all(tmp.join("node_modules"));
+        let item = serde_json::json!({
+            "name": "node_modules",
+            "path": tmp.join("node_modules").to_string_lossy(),
+            "category": "node_modules",
+        });
+        let res = validate_purge_item(&tmp, &item);
+        assert!(res.is_ok(), "node_modules in project must be allowed");
         let _ = fs::remove_dir_all(&tmp);
     }
 }
