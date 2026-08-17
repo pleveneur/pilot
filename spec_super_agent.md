@@ -160,8 +160,19 @@ apprend et répond.
 
 ### Déléguer le code à l'agent du projet
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
-  lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
-  coding).
+  lui-même : il **délègue la demande à un agent du projet**.
+- **Méthode par défaut — agents spécifiques** : l'Assistant exécute le travail
+  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou
+  `create_agent` pour un agent sur mesure), **pas** via l'agent standard du
+  projet. Avant de déléguer, il **reformule/affine la demande** et, si elle est
+  floue ou imprécise, **pose des questions** (`ask_input` / `ask_multi_choice`)
+  pour obtenir le contexte nécessaire. Il construit une demande **claire et
+  structurée** (contexte, objectif, contraintes, format de sortie attendu) et
+  **affiche la demande finale** qu'il va envoyer avant de lancer l'agent.
+- **`delegate_to_coder` est une EXCEPTION** : à n'utiliser que pour une tâche
+  simple d'écriture directe sur le projet actif, quand aucun agent spécifique
+  ne convient ET que la création d'un nouvel agent n'est pas justifiée. L'
+  Assistant indique pourquoi il dérive dans ce cas.
 - Il **démarre l'agent en arrière-plan** et lui **envoie la demande dans sa
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
@@ -329,13 +340,29 @@ spécifique ne reçoit que son rôle propre.
 - Cette garantie est **technique** (extension qui bloque toute écriture hors
   de l'espace dédié), pas seulement une consigne système.
 
-### Détection de boucle (issue #55)
+### Relance automatique (anti-blocage)
+- L'Assistant **ne s'arrête pas au premier obstacle**. Si une tâche déléguée ou
+  une action échoue, il **relance au moins une fois par lui-même** en changeant
+  d'approche (autre agent, autre formulation, autre méthode, autre découpage),
+  sans solliciter l'utilisateur.
+- Après **2 tentatives consécutives** toujours sans avancée, il prévient l'
+  utilisateur avec un **point clair** (ce qui a été tenté, pourquoi ça bloque,
+  options proposées).
+- Ce comportement est **volontaire et varié** : relancer en changeant
+  d'approche n'est PAS une répétition en boucle.
+
+### Détection de boucle (issue #55) — filet de sécurité technique
+- La **détection de boucle** (issue #55) reste un **filet de sécurité
+  technique** distinct de la relance automatique : elle cible les
+  **répétitions exactes** (même texte ou mêmes appels d'outils répétés en
+  boucle sans avancer), pas les relances variées.
 - Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
   réponse) **ou les mêmes appels d'outils** (ex: la même commande bash enchaînée
   sans avancer), Pilot **arrête la génération** et affiche un message :
   « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
-- Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
-  pas un codeur. Reformulez simplement votre question pour relancer.
+- Il n'y a **pas de reprise automatique** pour ce cas-là : l'Assistant est un
+  outil de suivi, pas un codeur. Reformulez simplement votre question pour
+  relancer.
 
 ### Mode « Assistant Only » immersif (A19)
 - Le bouton **⛶ (maximize-2)** en haut à gauche de l'onglet 🧭 bascule en mode
