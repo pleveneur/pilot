@@ -520,6 +520,21 @@ Tables (V1) :
   sait ainsi quel projet est en cours de discussion, ne confond pas les projets
   quand l'utilisateur en change, et apprend où se trouvent les projets au fil
   des discussions.
+- **Agents du registre + outils d'agents** : le prompt système injecte
+  dynamiquement la **liste des agents disponibles** dans le registre global
+  (`~/.pilot/agents.json` / base SQLite), sous forme d'un résumé compact
+  (`id`, icône, description courte) — l'Assistant sait ainsi quels agents il
+  peut piloter via `run_agents`. Il documente aussi les outils à sa disposition :
+  `run_agents`, `create_agent`, `delegate_to_coder`, `ask_multi_choice`,
+  `ask_confirm`, `ask_input`.
+- **Flux « plan-maker »** : le prompt système décrit la procédure de
+  planification avant délégation au codeur — pour les demandes importantes,
+  appeler `run_agents(["plan-maker"], …)` pour obtenir un plan JSON (tâches,
+  fichiers, coût estimé, contraintes), le présenter à l'utilisateur
+  (`ask_multi_choice` pour cocher les tâches + `ask_confirm` pour valider),
+  puis déléguer au codeur via `delegate_to_coder` avec le plan approuvé. Les
+  demandes simples peuvent être déléguées directement sans plan-maker. Voir
+  aussi la section « Déléguer le code à l'agent du projet » (plan-maker).
 
 ## 6. Initialisation d'un projet existant
 

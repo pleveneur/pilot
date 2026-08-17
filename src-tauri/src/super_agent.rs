@@ -177,6 +177,43 @@ fn known_projects_context(app: &AppHandle) -> String {
     }
 }
 
+/// Liste les agents disponibles dans le registre global (base SQLite,
+/// alimentée par `~/.pilot/agents.json`) et produit un résumé compact
+/// (id, icône, description courte) injecté dans le prompt système de
+/// l'assistant pour qu'il sache quels agents il peut piloter via `run_agents`.
+/// Garde-fou : retourne une chaîne vide si le registre est vide ou illisible
+/// (ne plante jamais).
+fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
+    let agents = match state.agent_service.list_agents(app, None) {
+        Ok(a) => a,
+        Err(_) => return String::new(),
+    };
+    if agents.is_empty() {
+        return String::new();
+    }
+    let items: Vec<String> = agents
+        .iter()
+        .map(|a| {
+            let desc = a.description.trim();
+            if desc.is_empty() {
+                format!("- {} ({})", a.id, a.icon)
+            } else {
+                format!("- {} ({}) : {}", a.id, a.icon, desc)
+            }
+        })
+        .collect();
+    format!(
+        "\n\nAgents disponibles dans le registre (utilisables via `run_agents`) :\n{}",
+        items.join("\n")
+    )
+}
+
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : décrit
+/// les outils d'agents (`run_agents`, `create_agent`, `delegate_to_coder`,
+/// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le flux « plan-maker »
+/// pour les demandes de code importantes (plan → validation → délégation).
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes des outils suivants :\n- `run_agents(agent_ids, task)` : lance une tâche sur un ou plusieurs agents du registre (en parallèle si plusieurs). Retourne le résultat agrégé.\n- `create_agent(...)` : crée un agent sur mesure si aucun agent existant ne convient.\n- `delegate_to_coder(request, project?)` : délègue une demande de code à l'agent standard d'un projet.\n- `ask_multi_choice(title, options)` : demande à l'utilisateur de cocher une ou plusieurs options.\n- `ask_confirm(title, message)` : demande une validation Oui/Non.\n- `ask_input(title)` : demande une saisie libre.\n\n## Flux « plan-maker » pour les demandes importantes\nPour une demande de code importante (plusieurs fichiers, plusieurs étapes), utilise le flux suivant :\n1. Appelle `run_agents([\"plan-maker\"], \"<la demande>\")` pour obtenir un plan structuré (JSON : tâches + fichiers + coût estimé + contraintes suggérées).\n2. Présente le plan à l'utilisateur : affiche les tâches, puis demande via `ask_multi_choice` quelles tâches lancer (cases à cocher), et via `ask_confirm` s'il valide.\n3. Si l'utilisateur ajoute des contraintes ou modifie le plan, en tiens compte.\n4. Délègue au codeur via `delegate_to_coder` avec le plan approuvé (tâches sélectionnées + contraintes).\n5. Surveille le résultat (get_delegation_result) et informe l'utilisateur.\n\nPour les demandes simples (1 fichier, < 50 lignes), tu peux déléguer directement au codeur sans plan-maker.\n";
+
 #[tauri::command]
 pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)
@@ -288,6 +325,11 @@ pub(crate) fn do_send_super_agent_prompt(
     // Apprendre où se trouvent les projets : injecter la liste des projets
     // connus de la base (s'enrichit au fil des discussions / sessions).
     full_system.push_str(&known_projects_context(app));
+    // Agents du registre + outils d'agents + flux « plan-maker » : l'assistant
+    // doit connaître les agents disponibles et la procédure de planification
+    // avant délégation au codeur.
+    full_system.push_str(&available_agents_context(state, app));
+    full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
     if !system_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());
