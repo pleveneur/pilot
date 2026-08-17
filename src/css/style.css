@@ -1218,7 +1218,10 @@ body.theme-light.theme-tokyo-day {
   background: color-mix(in srgb, var(--surface-2) 92%, var(--superagent-accent) 8%);
   color: var(--text-primary);
 }
-/* Badge projet : indique de quel projet parle l'assistant (en haut du message). */
+/* Badge projet : indique de quel projet parle l'assistant (en haut du message).
+   Couleur par projet (Règle 3) appliquée en inline (background + texte blanc) :
+   les styles ci-dessous ne s'appliquent que si aucune couleur inline n'est
+   définie (projet inconnu → accent de l'assistant). */
 .superagent-wrapper .agent-project-badge {
   display: inline-block;
   align-self: flex-start;
@@ -1226,11 +1229,11 @@ body.theme-light.theme-tokyo-day {
   padding: 2px 8px;
   font-size: 11px;
   line-height: 1.4;
-  border-radius: 10px;
+  border-radius: 4px;
   color: var(--superagent-accent);
   background: color-mix(in srgb, var(--superagent-accent) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--superagent-accent) 30%, transparent);
-  font-weight: var(--fw-medium);
+  font-weight: 600;
   white-space: nowrap;
   max-width: 100%;
   overflow: hidden;

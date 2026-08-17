@@ -51,6 +51,24 @@ apprend et répond.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
+- **Une bulle par tour d'agent par projet** : un « tour » = depuis que
+  l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
+  l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
+  plusieurs messages (texte → appel d'outil → texte → appel d'outil → texte) :
+  tout reste dans la **MÊME bulle**. On ne crée PAS de nouvelle bulle à chaque
+  `message_end` intermédiaire ; le reset de la bulle courante se fait
+  uniquement à `agent_end` ou quand l'utilisateur envoie un nouveau message.
+- **Nouvelle bulle si changement de projet** : si le projet actif change
+  pendant un tour (ex: l'Assistant exécute `open_project`), la prochaine bulle
+  est **nouvelle** (le projet de la bulle courante est suivi dans
+  `currentBubbleProject`).
+- **Couleur par projet** : chaque projet reçoit une **couleur stable**
+  déterminée par un hash de son nom → palette de ~10 couleurs lisibles en thème
+  dark ET light. La couleur est appliquée à la bulle (**bordure gauche**
+  colorée) et au **badge projet** (fond coloré + texte blanc). La couleur est
+  **identique** pour un même projet d'une session à l'autre.
+- Les **bulles système** (messages d'info `appendSystemMessage`) ne portent
+  **aucune couleur de projet**.
 
 ### Notifications natives
 - **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a

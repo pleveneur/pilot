@@ -142,12 +142,30 @@ export function switchToSuperAgent() {
   }
 }
 
+// Palette de couleurs par projet : ~10 teintes lisibles en thème dark ET
+// light. La couleur est STABLE pour un même projet (hash du nom → palette).
+const PROJECT_COLOR_PALETTE = [
+  "#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
+  "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6",
+];
+function projectColor(projectName) {
+  if (!projectName) return null;
+  let hash = 0;
+  for (let i = 0; i < projectName.length; i++) {
+    hash = ((hash << 5) - hash + projectName.charCodeAt(i)) | 0;
+  }
+  return PROJECT_COLOR_PALETTE[Math.abs(hash) % PROJECT_COLOR_PALETTE.length];
+}
+
 // État de streaming partagé entre createSuperAgent et handleSuperAgentEvent
 // (module scope : handleSuperAgentEvent y accède directement). Même structure
 // de rendu que l'agent standard (agent-pi.js) : bloc assistant + flux
 // chronologique (sections texte / pensée / outils) — voir issue #43.
 let currentBody = null;      // élément `.agent-message-assistant` du tour courant
 let currentFlow = null;      // sous-élément `.agent-stream-flow`
+// Projet associé à la bulle courante (Règle 2 : nouvelle bulle si le projet
+// actif change pendant un tour). Null tant qu'aucune bulle n'est ouverte.
+let currentBubbleProject = null;
 let currentTextSection = null; // section texte non fermée
 let currentThinkingBlock = null; // bloc pensée courant
 let pendingText = "";
@@ -197,20 +215,38 @@ function refreshSuperRenderOptions() {
 
 // ── Rendu de messages (même structure DOM que l'agent standard agent-pi.js) ──
 
-/** Crée un bloc message assistant avec flux chronologique (comme agent-pi). */
+/** Crée un bloc message assistant avec flux chronologique (comme agent-pi).
+ * Une seule bulle par tour d'agent par projet (Règle 1) : on ne crée pas de
+ * nouvelle bulle à chaque `message_end` intermédiaire, seulement à `agent_end`
+ * ou si le projet actif change (Règle 2). La bulle porte la couleur du projet
+ * (Règle 3 : hash du nom → palette). */
 function createSuperAgentBlock(messagesEl) {
   const el = document.createElement("div");
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
-  // Badge projet : indique de quel projet parle l'assistant (ajouté UNE fois,
-  // car ce bloc est créé une seule fois par message au message_start).
+  // Badge projet + couleur par projet (Règle 3). Le projet suivi est celui
+  // actif au moment de la création de la bulle ; il ne change plus jusqu'à
+  // la fin du tour (sauf open_project pendant le tour → nouvelle bulle).
   const projectName = getSuperActiveProjectName();
+  currentBubbleProject = projectName;
+  const color = projectColor(projectName);
   if (projectName) {
     const badge = document.createElement("div");
     badge.className = "agent-project-badge";
     badge.textContent = "📁 " + projectName;
+    if (color) {
+      badge.style.background = color;
+      badge.style.color = "#ffffff";
+      badge.style.borderColor = color;
+    }
     bubble.appendChild(badge);
+  }
+  if (color) {
+    // Border-left coloré par projet (Règle 3). Inline style pour primer sur
+    // la règle `.superagent-wrapper .agent-bubble-assistant` qui force
+    // `border-left: 3px solid var(--superagent-accent)`.
+    bubble.style.borderLeftColor = color;
   }
   const flow = document.createElement("div");
   flow.className = "agent-stream-flow";
@@ -660,6 +696,8 @@ export async function createSuperAgent(container) {
         pendingRender = false;
         lastAssistantRawText = "";
         state.currentAssistantBlock = null;
+        // Règle 1 : fin de tour (agent_end) → reset du projet de la bulle.
+        currentBubbleProject = null;
         // Issue #55 : fin de tour → reset du buffer de détection de boucle.
         superLoopBuffer = "";
         superLoopToolCalls = [];
@@ -744,6 +782,15 @@ export async function createSuperAgent(container) {
     } else if (action === "new-session") {
       await invoke("new_super_agent_session").catch(() => {});
       messagesEl.innerHTML = "";
+      // Reset de l'état de streaming : les bulles sont supprimées du DOM.
+      currentBody = null;
+      currentFlow = null;
+      currentTextSection = null;
+      currentThinkingBlock = null;
+      pendingText = "";
+      pendingRender = false;
+      lastAssistantRawText = "";
+      currentBubbleProject = null;
       appendSystemMessage(messagesEl, "🆕 Nouvelle session.");
     } else if (action === "initialize") {
       await initializeSuperAgent(messagesEl);
@@ -764,6 +811,17 @@ export async function createSuperAgent(container) {
     inputEl.value = "";
     inputEl.style.height = "auto";
     appendMessage(messagesEl, "user", text);
+    // Règle 1 : nouveau tour utilisateur → fermer la bulle assistant en cours
+    // (reset complet, y compris le projet de la bulle) pour qu'un nouveau
+    // tour démarre dans une NOUVELLE bulle.
+    currentBody = null;
+    currentFlow = null;
+    currentTextSection = null;
+    currentThinkingBlock = null;
+    pendingText = "";
+    pendingRender = false;
+    lastAssistantRawText = "";
+    currentBubbleProject = null;
     isStreaming = true;
     statusEl.textContent = "Réfléchit…";
     try {
@@ -1049,7 +1107,22 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "message_start") {
     const msg = payload.message;
     if (msg && msg.role === "assistant") {
+      // Règle 2 : si le projet actif a changé depuis la création de la bulle
+      // courante (ex: open_project pendant le tour), on ferme la bulle en cours
+      // et on en crée une NOUVELLE (couleur du nouveau projet).
+      const activeProject = getSuperActiveProjectName();
+      if (currentBody && currentBubbleProject !== activeProject) {
+        currentBody = null;
+        currentFlow = null;
+        currentTextSection = null;
+        currentThinkingBlock = null;
+        pendingText = "";
+        pendingRender = false;
+      }
       // Début d'un message assistant streamé : créer un bloc avec flux.
+      // Règle 1 : on réutilise la bulle courante si elle existe déjà (tour en
+      // cours) → les messages intermédiaires (texte → outil → texte) restent
+      // dans la MÊME bulle, on ne crée pas de nouvelle bulle à chaque message.
       if (!currentBody) {
         currentBody = createSuperAgentBlock(messagesEl);
         currentFlow = currentBody.querySelector(".agent-stream-flow");
@@ -1191,9 +1264,19 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       const hasText = flow && flow.textContent && flow.textContent.trim().length > 0;
       if (!hasChildren && !hasChoices && !hasText) {
         currentBody.remove();
+        // Bulle vide retirée : libérer les refs pour que le prochain
+        // message_start crée une NOUVELLE bulle (sinon on réutiliserait un
+        // nœud détaché et le contenu suivant serait invisible).
+        currentBody = null;
+        currentFlow = null;
+        currentTextSection = null;
+        currentThinkingBlock = null;
       }
     }
-    onEnd();
+    // Règle 1 : on NE reset PAS currentBody ici. Un tour d'agent peut contenir
+    // plusieurs messages (texte → outil → texte) ; tout doit rester dans la
+    // MÊME bulle. Le reset complet se fait à `agent_end` (onEnd) ou quand
+    // l'utilisateur envoie un nouveau message.
     return;
   }
   if (type === "message") {
