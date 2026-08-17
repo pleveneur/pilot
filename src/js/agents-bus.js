@@ -641,6 +641,28 @@ export async function startParallelRun(assignments, projectContext = "") {
   }
 }
 
+// Lance la run d'agents et route le résultat vers `onDone` / `onError`.
+// Cœur commun des deux variantes (bloquante et non bloquante).
+function _runAgentsForAssistant(assignments, onDone, onError) {
+  const prevCallbacks = busState.callbacks;
+  // Bug #9 : garde anti double-résolution — le callback ne doit être appelé
+  // qu'une seule fois (done/error/stop/échec de startParallelRun).
+  let settled = false;
+  const finish = (fn, value) => {
+    if (settled) return;
+    settled = true;
+    busState.callbacks = prevCallbacks;
+    fn(value);
+  };
+  busState.callbacks = {
+    ...prevCallbacks,
+    done: ({ text }) => finish(onDone, text || ""),
+    error: ({ message }) => finish(onError, new Error(message || "Erreur de la run agents.")),
+    stop: () => finish(onError, new Error("Run agents arrêtée.")),
+  };
+  startParallelRun(assignments).catch((e) => finish(onError, e));
+}
+
 /**
  * Lance une run sur des agents sélectionnés (coordinateur assistant) et retourne
  * une Promise résolue avec le résultat agrégé (texte) ou rejetée en cas d'erreur.
@@ -658,24 +680,23 @@ export async function runAgentsForAssistant(assignments) {
   // qu'un agent créé entre-temps (create_agent) soit visible/sélectionnable.
   await reloadAgentsRegistry();
   return new Promise((resolve, reject) => {
-    const prevCallbacks = busState.callbacks;
-    // Bug #9 : garde anti double-résolution — la Promise ne doit se régler
-    // qu'une seule fois (done/error/stop/échec de startParallelRun).
-    let settled = false;
-    const finish = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      busState.callbacks = prevCallbacks;
-      fn(value);
-    };
-    busState.callbacks = {
-      ...prevCallbacks,
-      done: ({ text }) => finish(resolve, text || ""),
-      error: ({ message }) => finish(reject, new Error(message || "Erreur de la run agents.")),
-      stop: () => finish(reject, new Error("Run agents arrêtée.")),
-    };
-    startParallelRun(assignments).catch((e) => finish(reject, e));
+    _runAgentsForAssistant(assignments, resolve, reject);
   });
+}
+
+/**
+ * Variante NON bloquante de `runAgentsForAssistant` : lance la run en
+ * arrière-plan et retourne immédiatement. Le résultat est délivré via les
+ * callbacks `onDone(text)` / `onError(err)` à la fin de la run. Utilisée par
+ * l'assistant (outil `run_agents`) pour ne pas bloquer son tour (et donc
+ * l'input utilisateur) pendant que les agents travaillent.
+ */
+export async function runAgentsForAssistantAsync(assignments, onDone, onError) {
+  if (!busState.coordinator) {
+    await initAgentsBus(busState.callbacks);
+  }
+  await reloadAgentsRegistry();
+  _runAgentsForAssistant(assignments, onDone, onError);
 }
 
 export function stopAgentsRun(options = {}) {

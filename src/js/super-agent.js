@@ -19,7 +19,7 @@ import {
 } from "./loop-detection.js";
 import { notifySuperAgentDone } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
-import { runAgentsForAssistant } from "./agents-bus.js";
+import { runAgentsForAssistantAsync } from "./agents-bus.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -1442,8 +1442,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     if (title.startsWith(RUN_AGENTS_SENTINEL)) {
       // Outil run_agents (coordinateur assistant) : l'assistant choisit quels
       // agents utiliser et confie une tâche. Pilot lance la run sur les agents
-      // sélectionnés (en parallèle) et renvoie le résultat agrégé comme `value`
-      // de la réponse, pour que l'assistant continue son raisonnement.
+      // sélectionnés (en parallèle) en ARRIÈRE-PLAN (non bloquant) et renvoie
+      // « ok » immédiatement pour que l'assistant finisse son tour (l'input
+      // utilisateur reste débloqué pendant que les agents travaillent). Le
+      // résultat agrégé est injecté à l'assistant à la fin de la run via
+      // inject_session_summary.
       let info;
       try {
         info = JSON.parse(title.slice(RUN_AGENTS_SENTINEL.length));
@@ -1468,9 +1471,29 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
         const brief = qualityGateInstruction() + task;
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief }));
-        const result = await runAgentsForAssistant(assignments);
-        appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
-        await respondSuperAgent(id, JSON.stringify({ ok: true, result }), false);
+        const projectPath = window._pilotProjectPath || null;
+        // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
+        // immédiatement. Le résultat est injecté à l'assistant à la fin.
+        runAgentsForAssistantAsync(
+          assignments,
+          (result) => {
+            appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
+            injectRunAgentsResultToSuperAgent(result, projectPath);
+          },
+          (err) => {
+            const msg = err && err.message ? err.message : String(err);
+            appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
+            injectRunAgentsResultToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath);
+          }
+        ).catch((e) => {
+          // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
+          // run n'a pas pu démarrer. On le signale à l'utilisateur et à
+          // l'assistant (le try/catch ne couvre plus ce chemin non bloquant).
+          console.error("Erreur préparation run_agents (assistant):", e);
+          appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
+          injectRunAgentsResultToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath);
+        });
+        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);
@@ -2492,6 +2515,27 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
   // Appelé aussi bien pour l'agent_end visible (agent-pi.js) que pour l'agent
   // invisible (finalizeInvisibleAgent appelle cette même fonction).
   flushDelegationQueue();
+}
+
+/**
+ * Injecte le résultat d'une run d'agents (`run_agents`) à l'assistant, à la fin
+ * de la run (non bloquante). Distinct de `injectSessionSummaryToSuperAgent` :
+ * pas de marqueur de délégation ni de flush de la file — c'est un retour de
+ * run d'agents, pas une délégation `delegate_to_coder`.
+ * @param {string} result - texte agrégé de la run (ou message d'échec).
+ * @param {string|null} projectPath - chemin du projet actif.
+ */
+async function injectRunAgentsResultToSuperAgent(result, projectPath) {
+  const summary = `[Tâche run_agents terminée] Résultat de la run d'agents :\n${String(result || "")}`;
+  try {
+    await invoke("inject_session_summary", {
+      projectPath: projectPath || null,
+      sessionId: null,
+      summary,
+    });
+  } catch (_) {
+    // Silencieux : le super-agent n'est pas indispensable au chat.
+  }
 }
 
 export async function initializeSuperAgent(messagesEl) {

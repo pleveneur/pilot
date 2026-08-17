@@ -193,6 +193,12 @@ apprend et répond.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **`run_agents` non bloquant** : quand l'Assistant lance une run d'agents
+  (`run_agents`), la run est lancée **en arrière-plan** et l'Assistant **finit
+  son tour immédiatement** — vous pouvez **continuer à lui parler** pendant que
+  les agents travaillent (la zone de saisie reste active, plus de blocage). Le
+  **résultat agrégé** est injecté à l'Assistant à la fin de la run, qui vous en
+  fait le compte-rendu.
 - **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
   **recréé automatiquement** à la prochaine délégation (ou purge) — plus
   besoin de redémarrer Pilot pour redéleguer.
