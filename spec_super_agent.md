@@ -170,6 +170,14 @@ apprend et répond.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **Plan structuré avant délégation (plan-maker)** : pour les demandes
+  importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
+  `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
+  coût estimé en tokens, contraintes suggérées). Il **présente ce plan à
+  l'utilisateur** (via `ask_multi_choice` pour cocher les tâches à exécuter, puis
+  `ask_confirm` pour valider), puis **délègue au codeur** avec le plan approuvé
+  et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
+  modifie aucun code ; il ne fait que produire le plan JSON.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les

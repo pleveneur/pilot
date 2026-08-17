@@ -517,10 +517,10 @@ export async function createAgents(container) {
   // ── Boutons globaux ──
   addBtn.addEventListener("click", () => openEditor(""));
   resetBtn.addEventListener("click", async () => {
-    if (!confirm("Réinitialiser les 6 agents par défaut ? Cela écrase ~/.pilot/agents.json.")) return;
+    if (!confirm("Réinitialiser les 7 agents par défaut ? Cela écrase ~/.pilot/agents.json.")) return;
     try {
-      // On appelle reset_agent_registry côté Rust : reconstruit les 6 agents
-      // par défaut (coordinateur + 5 spécialistes) à partir de la config courante
+      // On appelle reset_agent_registry côté Rust : reconstruit les 7 agents
+      // par défaut (coordinateur + 6 spécialistes, dont plan-maker) à partir de la config courante
       // et l'écrit sur disque. L'ancien comportement sauvegardait un registre
       // vide ({agents:[]}) ce qui supprimait tous les agents (bug #4).
       registry = await invoke("reset_agent_registry");

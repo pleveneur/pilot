@@ -5,7 +5,7 @@
 <!-- HELP:agents -->
 ## Aide utilisateur — Mode Agents
 
-L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur) sur une demande.
+L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker) sur une demande.
 
 ### Comment ça marche
 1. Cliquez sur **🎭 Agents** dans le panneau d'actions (bouton visible dès qu'un projet est ouvert).
@@ -38,7 +38,7 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 ### Gérer les agents
 - Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
 - Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
-- Le bouton **Réinitialiser** recrée les 6 agents par défaut.
+- Le bouton **Réinitialiser** recrée les 7 agents par défaut.
 
 ### Garde-fous
 - Profondeur max d'appel, budget total et par agent, détection de cycle, timeout d'inactivité, bouton **⏹ Arrêter**.
@@ -49,6 +49,29 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
 - Si une run dérape, cliquez sur **Arrêter** : tous les processus agents seront stoppés.
 <!-- /HELP:agents -->
+
+### Agent `plan-maker` (planificateur)
+
+Le `plan-maker` est un agent **lecture seule** qui ne modifie jamais le code : il
+analyse une demande et produit un **plan structuré en JSON** (tâches + fichiers
+concernés + coût estimé en tokens + contraintes suggérées + dépendances).
+
+- **Rôle** : découper la demande en micro-tâches (1 à 3 fichiers par tâche),
+  estimer le coût en tokens de chaque tâche, et proposer des contraintes
+  (ex : « ne pas modifier `lib.rs` », « budget max 2000 tokens »).
+- **Format de sortie** : un JSON valide
+  ```json
+  {"plan": [{"id": 1, "title": "...", "description": "...",
+            "files": ["..."], "estimated_tokens": 0,
+            "suggested_constraints": ["..."], "depends_on": []}]}
+  ```
+- **Quand l'utiliser** : pour les demandes importantes nécessitant un découpage
+  et une validation avant délégation au codeur.
+- **Utilisation par l'Assistant (Magnus)** : l'Assistant peut appeler le
+  `plan-maker` via `run_agents` (extension `pilot-assistant-actions`) pour
+  obtenir un plan structuré, le présenter à l'utilisateur (via `ask_multi_choice`
+  pour cocher les tâches à exécuter + `ask_confirm` pour valider), puis déléguer
+  au codeur avec le plan approuvé et les contraintes.
 
 ---
 

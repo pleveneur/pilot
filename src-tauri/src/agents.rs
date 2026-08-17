@@ -108,15 +108,30 @@ fn build_default_agent_registry(config: &AppConfig) -> Value {
                 "keep_context": false,
                 "max_calls_per_run": 5,
                 "call_depth": 1
+            },
+            {
+                "id": "plan-maker",
+                "name": "Plan Maker",
+                "icon": "📋",
+                "description": "Analyse une demande et propose un plan structuré avec tâches, fichiers concernés, coût estimé par tâche et contraintes suggérées. Ne modifie aucun code.",
+                "role": "Tu es un planificateur logiciel. Tu reçois une demande de modification et tu produis un PLAN STRUCTURÉ en JSON. Tu ne modifies JAMAIS le code. Tu analyses la demande, tu identifies les fichiers concernés (en lisant l'arborescence du projet), tu découpes en micro-tâches, tu estimes le coût en tokens de chaque tâche, et tu proposes des contraintes (ex: « ne pas modifier lib.rs »). Réponds UNIQUEMENT par un JSON valide au format suivant :\n\n{\"plan\": [{\"id\": 1, \"title\": \"...\", \"description\": \"...\", \"files\": [\"...\"], \"estimated_tokens\": 0, \"suggested_constraints\": [\"...\"], \"depends_on\": []}]}\n\nRègles :\n- Découpe en micro-tâches (1 à 3 fichiers par tâche).\n- `estimated_tokens` : estimation approximative du coût en tokens de la tâche.\n- `suggested_constraints` : contraintes suggérées pour cette tâche (ex: « ne pas modifier lib.rs », « budget max 2000 tokens »).\n- `depends_on` : IDs des tâches qui doivent être terminées avant celle-ci.\n- Si la demande est simple (1 fichier, < 50 lignes), produis une seule tâche.\n- Ne produit PAS de JSON vide. Minimum 1 tâche.",
+                "models": models_orch.clone(),
+                "capabilities": ["plan"],
+                "readonly": true,
+                "keep_context": false,
+                "max_calls_per_run": 3,
+                "call_depth": 1
             }
         ]
     })
 }
 
-/// Réinitialise le registre d'agents avec les 6 agents par défaut.
+/// Réinitialise le registre d'agents avec les 7 agents par défaut.
 /// Reconstruit le registre par défaut à partir de la config courante (modèles
 /// orchestrateur/codeur) puis l'écrit en base. Retourne le registre généré pour
 /// que le frontend puisse rafraîchir l'UI sans relecture base.
+/// Le registre par défaut contient 7 agents : coordinateur, architecte, codeur,
+/// reviewer, testeur, documenteur et plan-maker.
 #[tauri::command]
 pub fn reset_agent_registry(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let config = state.config.lock().unwrap().clone();
