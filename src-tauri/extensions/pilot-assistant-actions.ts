@@ -132,14 +132,16 @@ export default function (pi: ExtensionAPI) {
       "Provide a clear, atomic task description. If you select multiple agents, they run in parallel and you receive the aggregated results.",
       "Prefer selecting the most appropriate agents rather than delegating everything to the standard coder. You are the coordinator: you choose the team.",
       "If no suitable agent exists, create one first with create_agent, then run_agents.",
+      "Pass the absolute path of the target project in `project` when the work must be done on a project that differs from the active one (e.g. the user is on 'pilot' but asks for changes on 'PLh'). If omitted, the active project is used.",
     ],
     parameters: Type.Object({
       agent_ids: Type.Array(Type.String({ description: "Identifiants des agents à utiliser (au moins un)" })),
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
+      project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible (optionnel, défaut = projet actif)" })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, project: params.project || null });
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé." }] };

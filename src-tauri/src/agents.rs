@@ -160,16 +160,16 @@ pub fn start_agent_process(state: State<AppState>, app: AppHandle, agent_id: Str
     do_start_agent_process(state.inner(), &app, agent_id, cwd, pi_path, no_session)
 }
 
-pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String) {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String, project: Option<String>) {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     if !project.is_empty() {
         let _ = state.agent_service.stop(&project, &agent_id);
     }
 }
 
 #[tauri::command]
-pub fn stop_agent_process(state: State<AppState>, agent_id: String) -> Result<(), String> {
-    do_stop_agent_process(state.inner(), agent_id);
+pub fn stop_agent_process(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
+    do_stop_agent_process(state.inner(), agent_id, project);
     Ok(())
 }
 
@@ -183,30 +183,30 @@ pub fn stop_all_agent_processes(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "prompt", "message": message });
     state.agent_service.send(&project, &agent_id, cmd)
 }
 
 #[tauri::command]
-pub fn send_agent_process_prompt(state: State<AppState>, agent_id: String, message: String) -> Result<(), String> {
-    do_send_agent_process_prompt(state.inner(), agent_id, message)
+pub fn send_agent_process_prompt(state: State<AppState>, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
+    do_send_agent_process_prompt(state.inner(), agent_id, message, project)
 }
 
-pub(crate) fn do_new_agent_process_session(state: &AppState, agent_id: String) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_new_agent_process_session(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "new_session" });
     state.agent_service.send_sync(&project, &agent_id, cmd).map(|_| ())
 }
 
 #[tauri::command]
-pub fn new_agent_process_session(state: State<AppState>, agent_id: String) -> Result<(), String> {
-    do_new_agent_process_session(state.inner(), agent_id)
+pub fn new_agent_process_session(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
+    do_new_agent_process_session(state.inner(), agent_id, project)
 }
 
-pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, provider: String, model_id: String) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, provider: String, model_id: String, project: Option<String>) -> Result<(), String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
     let resp = state.agent_service.send_sync(&project, &agent_id, cmd)?;
     if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
@@ -217,40 +217,40 @@ pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, pro
 }
 
 #[tauri::command]
-pub fn set_agent_process_model(state: State<AppState>, agent_id: String, provider: String, model_id: String) -> Result<(), String> {
-    do_set_agent_process_model(state.inner(), agent_id, provider, model_id)
+pub fn set_agent_process_model(state: State<AppState>, agent_id: String, provider: String, model_id: String, project: Option<String>) -> Result<(), String> {
+    do_set_agent_process_model(state.inner(), agent_id, provider, model_id, project)
 }
 
-pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}))
 }
 
 #[tauri::command]
-pub fn abort_agent_process(state: State<AppState>, agent_id: String) -> Result<(), String> {
-    do_abort_agent_process(state.inner(), agent_id)
+pub fn abort_agent_process(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
+    do_abort_agent_process(state.inner(), agent_id, project)
 }
 
 /// Envoie une commande arbitraire (ex: extension_ui_response) au processus pi d'un agent.
-pub(crate) fn do_send_agent_process_command(state: &AppState, agent_id: String, command: Value) -> Result<(), String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_send_agent_process_command(state: &AppState, agent_id: String, command: Value, project: Option<String>) -> Result<(), String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     state.agent_service.send(&project, &agent_id, command)
 }
 
 #[tauri::command]
-pub fn send_agent_process_command(state: State<AppState>, agent_id: String, command: Value) -> Result<(), String> {
-    do_send_agent_process_command(state.inner(), agent_id, command)
+pub fn send_agent_process_command(state: State<AppState>, agent_id: String, command: Value, project: Option<String>) -> Result<(), String> {
+    do_send_agent_process_command(state.inner(), agent_id, command, project)
 }
 
-pub(crate) fn do_get_agent_process_state(state: &AppState, agent_id: String) -> Result<Value, String> {
-    let project = state.project_path.lock().unwrap().clone().unwrap_or_default();
+pub(crate) fn do_get_agent_process_state(state: &AppState, agent_id: String, project: Option<String>) -> Result<Value, String> {
+    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "get_state" });
     state.agent_service.send_sync_timeout(&project, &agent_id, cmd, 8)
 }
 
 #[tauri::command]
-pub fn get_agent_process_state(state: State<AppState>, agent_id: String) -> Result<Value, String> {
-    do_get_agent_process_state(state.inner(), agent_id)
+pub fn get_agent_process_state(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<Value, String> {
+    do_get_agent_process_state(state.inner(), agent_id, project)
 }
 
 /// Extrait (host, port) d'une URL http(s)://host[:port]/...

@@ -69,6 +69,10 @@ let busState = {
   loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
   loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
   loopLastChecked: {}, // agentId → timestamp du dernier test
+  // Ciblage de projet (run_agents) : agentId → cwd du projet cible (défaut =
+  // projet actif). Utilisé pour router les commandes (abort/command/prompt)
+  // vers la bonne session quand l'agent tourne sur un projet non actif.
+  agentProject: {},
   config: null,
   callbacks: {},
 };
@@ -91,6 +95,7 @@ function resetBusState() {
   busState.loopCorrectionCount = {};
   busState.loopAbandoned = {};
   busState.loopLastChecked = {};
+  busState.agentProject = {};
 }
 
 // Bug #9 : watchdog de sécurité du verrou de run. Si la run est marquée
@@ -257,7 +262,7 @@ function maybeDetectAgentLoop(agentId) {
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle d'outils détectée", agentId);
     emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
-    invoke("abort_agent_process", { agentId }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
     return;
   }
 
@@ -273,7 +278,7 @@ function maybeDetectAgentLoop(agentId) {
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle détectée", agentId);
     emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
-    invoke("abort_agent_process", { agentId }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
   }
 }
 
@@ -454,7 +459,7 @@ async function handleExtensionUiRequest(agentId, event) {
   }
 
   try {
-    await invoke("send_agent_process_command", { agentId, command });
+    await invoke("send_agent_process_command", { agentId, command, project: busState.agentProject[agentId] || null });
     console.log("[agents-bus] ext_ui_response sent", agentId, "method=" + method, "id=" + id);
   } catch (err) {
     console.error("[agents-bus] extension_ui_response error", agentId, err);
@@ -466,6 +471,7 @@ async function finishAgentTurn(agentId) {
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
   busState.activeAgents.delete(agentId);
+  delete busState.agentProject[agentId];
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
@@ -558,6 +564,7 @@ async function failAgentTurn(agentId, reason) {
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
   busState.activeAgents.delete(agentId);
+  delete busState.agentProject[agentId];
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
   if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
@@ -704,7 +711,7 @@ export function stopAgentsRun(options = {}) {
   busState.runState = "stopping";
   // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
   for (const agentId of busState.activeAgents) {
-    invoke("abort_agent_process", { agentId }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
   }
   // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
   // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
@@ -719,7 +726,7 @@ export async function stopAllAgentProcesses() {
   await invoke("stop_all_agent_processes").catch(() => {});
 }
 
-async function runAgentTurn(agent, brief, projectContext = "") {
+async function runAgentTurn(agent, brief, projectContext = "", project = null) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
     resetBusState();
@@ -737,7 +744,11 @@ async function runAgentTurn(agent, brief, projectContext = "") {
   const [provider, ...rest] = model.split("/");
   const modelId = rest.join("/");
 
-  const cwd = window._pilotProjectPath || ".";
+  // Ciblage de projet (run_agents) : cwd = projet cible si fourni, sinon projet
+  // actif (rétrocompatible). Mémorisé pour router les commandes (abort/command/
+  // prompt) vers la bonne session pendant le tour.
+  const cwd = project || window._pilotProjectPath || ".";
+  busState.agentProject[agent.id] = cwd;
   const cfg = busState.config || {};
   const piPath = cfg.rpc_pi_path || "";
   const noSession = !agent.keep_context;
@@ -804,7 +815,7 @@ async function runAgentTurn(agent, brief, projectContext = "") {
     });
 
     if (!agent.keep_context) {
-      await invoke("new_agent_process_session", { agentId: agent.id });
+      await invoke("new_agent_process_session", { agentId: agent.id, project: cwd });
     }
 
     if (provider && modelId) {
@@ -812,6 +823,7 @@ async function runAgentTurn(agent, brief, projectContext = "") {
         agentId: agent.id,
         provider,
         modelId,
+        project: cwd,
       });
     }
 
@@ -825,7 +837,7 @@ async function runAgentTurn(agent, brief, projectContext = "") {
 }
 
 async function sendPromptToAgent(agentId, message) {
-  await invoke("send_agent_process_prompt", { agentId, message });
+  await invoke("send_agent_process_prompt", { agentId, message, project: busState.agentProject[agentId] || null });
 }
 
 /**
@@ -856,7 +868,7 @@ async function dispatchParallel(assignments, onComplete) {
       continue;
     }
     consumeBudget(a.agentId);
-    await runAgentTurn(agent, a.brief);
+    await runAgentTurn(agent, a.brief, "", a.project);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.

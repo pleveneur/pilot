@@ -1456,11 +1456,22 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       }
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
+      // Ciblage de projet (run_agents) : chemin absolu du projet cible, ou null
+      // → projet actif par défaut (rétrocompatible).
+      const targetProject = (info.project && String(info.project).trim()) || null;
       if (agentIds.length === 0 || !task) {
         await respondSuperAgent(id, JSON.stringify({ error: "run_agents : au moins un agent et une tâche requis." }), false);
         return;
       }
       try {
+        // Valider que le projet cible existe avant de lancer (sinon erreur claire).
+        if (targetProject) {
+          const exists = await invoke("file_exists", { path: targetProject });
+          if (!exists) {
+            await respondSuperAgent(id, JSON.stringify({ error: `run_agents : le projet cible « ${targetProject} » n'existe pas.` }), false);
+            return;
+          }
+        }
         const registry = await loadAgentRegistry();
         const known = new Set((registry.agents || []).map((a) => a && a.id));
         const missing = agentIds.filter((aid) => !known.has(aid));
@@ -1470,7 +1481,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
         const brief = qualityGateInstruction() + task;
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief }));
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject }));
         const projectPath = window._pilotProjectPath || null;
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
         // immédiatement. Le résultat est injecté à l'assistant à la fin.
