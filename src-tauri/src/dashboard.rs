@@ -1122,6 +1122,11 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
         }
     }
 
+    // Base de suivi de l'assistant pour les décisions/sessions récentes par
+    // projet (tables `decisions` et `session_summaries`, reliées via
+    // `projects.id`). Ouverte une fois pour toute la boucle (lecture seule).
+    let tracking_db = crate::super_agent::open_db(&app).ok();
+
     let mut out: Vec<Value> = Vec::new();
     for path in &projects {
         let name = Path::new(path)
@@ -1138,6 +1143,36 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
             .into_iter()
             .filter_map(|e| e.get("timestamp").and_then(|x| x.as_str()).map(String::from))
             .max();
+        // Décisions et sessions récentes pour ce projet (base de l'assistant).
+        // On retrouve le `project_id` par le chemin, puis on lit les 5 entrées
+        // les plus récentes de chaque table. Projet absent de la base → vide.
+        let (decisions_recentes, sessions_recentes): (Vec<String>, Vec<String>) =
+            if let Some(ref conn) = tracking_db {
+                match conn.query_row(
+                    "SELECT id FROM projects WHERE path = ?1",
+                    rusqlite::params![path],
+                    |r| r.get::<_, i64>(0),
+                ) {
+                    Ok(pid) => {
+                        let dec = recent_summaries(
+                            conn,
+                            "SELECT summary FROM decisions WHERE project_id = ?1 \
+                             ORDER BY created_at DESC LIMIT 5",
+                            pid,
+                        );
+                        let ses = recent_summaries(
+                            conn,
+                            "SELECT summary FROM session_summaries WHERE project_id = ?1 \
+                             ORDER BY created_at DESC LIMIT 5",
+                            pid,
+                        );
+                        (dec, ses)
+                    }
+                    Err(_) => (Vec::new(), Vec::new()),
+                }
+            } else {
+                (Vec::new(), Vec::new())
+            };
         out.push(serde_json::json!({
             "path": path,
             "name": name,
@@ -1148,10 +1183,31 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
             "open_tasks": open_tasks,
             "status": status,
             "last_session": last_session.unwrap_or_default(),
+            "decisions_recentes": decisions_recentes,
+            "sessions_recentes": sessions_recentes,
         }));
     }
 
     Ok(serde_json::json!({ "projects": out, "active": active }))
+}
+
+/// Helper pour `get_project_tracking` : lit la colonne `summary` des N entrées
+/// les plus récentes d'une table de suivi (décisions ou sessions), filtrées par
+/// `project_id`. Tolérant aux erreurs SQL (retourne un vecteur vide si la
+/// requête échoue, ex: table absente sur une base non initialisée).
+fn recent_summaries(conn: &rusqlite::Connection, sql: &str, project_id: i64) -> Vec<String> {
+    let mut stmt = match conn.prepare(sql) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0));
+    let mut out: Vec<String> = Vec::new();
+    if let Ok(rows) = rows {
+        for row in rows.flatten() {
+            out.push(row);
+        }
+    }
+    out
 }
 
 /// Supervision multi-projets (P8) : vue agrégée des agents en cours sur TOUS

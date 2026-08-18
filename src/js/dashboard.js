@@ -523,6 +523,46 @@ export function createDashboard(container) {
         row.appendChild(agentCell);
         row.appendChild(lastCell);
         tbl.appendChild(row);
+        // Détail : décisions et sessions récentes du projet (base de
+        // l'assistant). Affiché uniquement si au moins un élément est
+        // présent. Ligne pleine largeur sous la ligne du projet.
+        const dec = Array.isArray(p.decisions_recentes) ? p.decisions_recentes : [];
+        const ses = Array.isArray(p.sessions_recentes) ? p.sessions_recentes : [];
+        if (dec.length || ses.length) {
+          const detail = document.createElement("div");
+          detail.className = "dash-tracking-detail";
+          detail.style.cssText =
+            "padding:4px 8px 8px;border-radius:6px;" +
+            "background:color-mix(in srgb,var(--surface-2,#1c2029) 40%,transparent);" +
+            "font-size:11px;color:var(--text-secondary,#a0a6b4);";
+          const mkBlock = (label, items) => {
+            if (!items.length) return null;
+            const wrap = document.createElement("div");
+            wrap.style.cssText = "margin-top:4px;";
+            const t = document.createElement("div");
+            t.style.cssText =
+              "font-weight:600;color:var(--text-muted,#6b7280);text-transform:uppercase;" +
+              "letter-spacing:0.03em;font-size:10px;";
+            t.textContent = label;
+            wrap.appendChild(t);
+            const ul = document.createElement("ul");
+            ul.style.cssText = "margin:2px 0 0;padding-left:16px;line-height:1.4;";
+            for (const it of items) {
+              const li = document.createElement("li");
+              const txt = String(it || "");
+              // Tronquer les résumés trop longs (max ~140 caractères).
+              li.textContent = txt.length > 140 ? txt.slice(0, 137) + "…" : txt;
+              ul.appendChild(li);
+            }
+            wrap.appendChild(ul);
+            return wrap;
+          };
+          const dBlock = mkBlock("Décisions", dec);
+          const sBlock = mkBlock("Sessions", ses);
+          if (dBlock) detail.appendChild(dBlock);
+          if (sBlock) detail.appendChild(sBlock);
+          tbl.appendChild(detail);
+        }
       }
       tr.body.appendChild(tbl);
       const openCount = trackingProjects.reduce((s, p) => s + (p.open_tasks || 0), 0);
@@ -839,7 +879,7 @@ export function createDashboard(container) {
   // `dashboard_auto_refresh_seconds`) et n'est actif que quand l'onglet est
   // l'onglet courant (pas de travail en arrière-plan inutile).
   let autoTimer = null;
-  let autoConfig = { enabled: true, seconds: 10 };
+  let autoConfig = { enabled: true, seconds: 120 };
   let isActiveTab = true; // supposé actif à l'ouverture
 
   async function loadAutoConfig() {
@@ -847,7 +887,7 @@ export function createDashboard(container) {
       const cfg = await invoke("get_config");
       autoConfig.enabled = cfg.dashboard_auto_refresh !== false;
       const s = parseInt(cfg.dashboard_auto_refresh_seconds, 10);
-      autoConfig.seconds = Number.isFinite(s) && s >= 2 ? s : 10;
+      autoConfig.seconds = Number.isFinite(s) && s >= 2 ? s : 120;
     } catch (_) {
       /* config indisponible : on garde les défauts */
     }

@@ -528,7 +528,7 @@ fn default_web_port() -> u32 { 8787 }
 fn default_web_bind() -> String { "127.0.0.1".to_string() }
 fn default_web_mode() -> String { "assistant".to_string() }
 fn default_session_retention_days() -> u32 { 15 }
-fn default_dashboard_refresh_seconds() -> u32 { 10 }
+fn default_dashboard_refresh_seconds() -> u32 { 120 }
 
 /// Port web effectif. En build dev (`debug_assertions`), on décale le port
 /// configuré de +1 pour permettre à la version installée et à la version dev

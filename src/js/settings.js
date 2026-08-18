@@ -434,7 +434,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
     if (chkMultiAgentTabs) chkMultiAgentTabs.checked = currentConfig.multi_agent_tabs === true;
     if (chkDashboardAutoOpen) chkDashboardAutoOpen.checked = currentConfig.dashboard_auto_open === true;
     if (chkDashboardAutoRefresh) chkDashboardAutoRefresh.checked = currentConfig.dashboard_auto_refresh !== false;
-    if (inputDashboardAutoRefreshSeconds) inputDashboardAutoRefreshSeconds.value = currentConfig.dashboard_auto_refresh_seconds ?? 10;
+    if (inputDashboardAutoRefreshSeconds) inputDashboardAutoRefreshSeconds.value = currentConfig.dashboard_auto_refresh_seconds ?? 120;
     if (inputSessionRetention) inputSessionRetention.value = currentConfig.session_retention_days ?? 15;
     chkShowThinking.checked = currentConfig.show_thinking !== false;
     chkShowTools.checked = currentConfig.show_tools || false;
@@ -687,7 +687,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         multi_agent_tabs: chkMultiAgentTabs ? chkMultiAgentTabs.checked : false,
         dashboard_auto_open: chkDashboardAutoOpen ? chkDashboardAutoOpen.checked : false,
         dashboard_auto_refresh: chkDashboardAutoRefresh ? chkDashboardAutoRefresh.checked : true,
-        dashboard_auto_refresh_seconds: inputDashboardAutoRefreshSeconds ? (parseInt(inputDashboardAutoRefreshSeconds.value, 10) || 10) : 10,
+        dashboard_auto_refresh_seconds: inputDashboardAutoRefreshSeconds ? (parseInt(inputDashboardAutoRefreshSeconds.value, 10) || 120) : 120,
         session_retention_days: inputSessionRetention ? (parseInt(inputSessionRetention.value, 10) || 15) : 15,
         quality_gate_enabled: currentConfig?.quality_gate_enabled || false,
         show_thinking: chkShowThinking.checked,
