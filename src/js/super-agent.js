@@ -17,7 +17,7 @@ import {
   detectRepeatedToolCalls,
   detectSemanticLoop,
 } from "./loop-detection.js";
-import { notifySuperAgentDone } from "./desktop-notify.js";
+import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
 import { runAgentsForAssistantAsync } from "./agents-bus.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
@@ -1325,6 +1325,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
     // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
     notifySuperAgentDone({ title: "Pilot — Assistant", body: "⚠️ Connexion au super-agent perdue." }).catch(() => {});
+    // Son « point » : point important / anomalie (si le son est activé).
+    playAssistantSound("point").catch(() => {});
     onEnd();
     return;
   }
@@ -1368,6 +1370,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       handleSuperAgentAction(id, rawMsg.slice(ACTION_SENTINEL.length), messagesEl);
       return;
     }
+    // Son « attention » : l'assistant pose une question (si le son est activé).
+    playAssistantSound("attention").catch(() => {});
     renderSuperAgentConfirm(messagesEl, state, id, payload.title || "Confirmation", payload.message || "");
   } else if (method === "select") {
     const options = payload.options || [];
@@ -1392,6 +1396,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     if (confirm) {
       renderSuperAgentConfirm(messagesEl, state, id, title, confirmMessage);
     } else {
+      // Son « attention » : l'assistant pose une question (si le son est activé).
+      playAssistantSound("attention").catch(() => {});
       renderSuperAgentChoice(messagesEl, state, id, title, options, multi);
     }
   } else if (method === "input") {
@@ -1620,6 +1626,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       }
       return;
     }
+    // Son « attention » : l'assistant pose une question (si le son est activé).
+    playAssistantSound("attention").catch(() => {});
     renderSuperAgentInput(messagesEl, state, id, title, payload.placeholder || "");
   }
 }
@@ -2511,6 +2519,8 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
       title: "Pilot — Assistant",
       body: `✅ Tâche déléguée terminée (projet « ${del.projectPath || "inconnu"} »). L'agent a répondu à la demande transmise.`,
     }).catch(() => {});
+    // Son « fin » : tâche d'agent terminée (si le son est activé).
+    playAssistantSound("fin").catch(() => {});
   }
   try {
     await invoke("inject_session_summary", {

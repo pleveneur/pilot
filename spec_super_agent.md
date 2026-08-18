@@ -79,6 +79,17 @@ apprend et répond.
 - **Désactivé par défaut** pour éviter la sur-notification : les réponses
   banales de l'Assistant ne déclenchent **aucune** notification.
 
+### Son de notification
+- **Paramètres ⚙️ → onglet « Assistant » → « Jouer un son de notification »** :
+  l'Assistant joue un **son** (via le script `~/.pilot/assistant/notify.ps1`)
+  aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
+  « fin »), **point important / anomalie** (son « point »), **question posée**
+  (son « attention »).
+- **Volume réglable (0-100 %, défaut 100 %)** : appliqué à **tous** les types de
+  sons. Un bouton **« Tester »** joue immédiatement le son « point » pour
+  vérifier le réglage.
+- **Désactivé par défaut** (opt-in).
+
 ### Réponses courtes
 - **Paramètres ⚙️ → onglet « Assistant » → « Réponses courtes (informer sans
   détailler, sauf demande explicite) »** : quand activé, l'Assistant répond de

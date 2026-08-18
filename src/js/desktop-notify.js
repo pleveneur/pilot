@@ -140,3 +140,27 @@ export async function notifyAnomaly(opts = {}) {
     console.warn("[desktop-notify] échec envoi notification anomalie:", e);
   }
 }
+
+/**
+ * Joue le son de notification de l'Assistant (🧭, super-agent) via le script
+ * PowerShell `~/.pilot/assistant/notify.ps1`. `soundType` : "attention" |
+ * "point" | "fin". Consulte le réglage `assistant_sound_enabled` (défaut off,
+ * spec_super_agent.md) : si désactivé, on n'émet rien. Défensif (ne lève jamais
+ * d'erreur).
+ * @param {string} soundType - type de son ("attention" | "point" | "fin").
+ * @param {number} [volume] - volume 0-100 (défaut 100).
+ */
+export async function playAssistantSound(soundType, volume) {
+  try {
+    const cfg = await invoke("get_config");
+    if (!cfg || cfg.assistant_sound_enabled !== true) return;
+  } catch (_) {
+    return;
+  }
+  const vol = (typeof volume === "number" && volume >= 0) ? Math.min(100, Math.round(volume)) : 100;
+  try {
+    await invoke("play_assistant_sound", { soundType: soundType || "point", volume: vol });
+  } catch (e) {
+    console.warn("[desktop-notify] échec son assistant:", e);
+  }
+}

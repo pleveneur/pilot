@@ -722,6 +722,16 @@
               <label for="setting-superagent-notify-done" title="Envoyer une notification native quand l'Assistant signale un événement important : tâche déléguée à un agent terminée, ou anomalie (connexion perdue). Désactivé par défaut.">Notifier quand l'Assistant a terminé une tâche déléguée ou signale une anomalie</label>
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-assistant-sound-enabled" />
+              <label for="setting-assistant-sound-enabled" title="Jouer un son quand l'Assistant notifie l'utilisateur : fin de tâche d'agent, point important, question posée. Désactivé par défaut.">Jouer un son de notification (fin de tâche, point important, question posée)</label>
+            </div>
+            <div class="setting-row" id="assistant-sound-volume-row" style="display:none;">
+              <label for="setting-assistant-sound-volume" title="Volume du son de notification de l'Assistant, appliqué à tous les types de sons (0-100 %).">Volume du son :</label>
+              <input type="range" id="setting-assistant-sound-volume" min="0" max="100" step="1" value="100" style="flex:1;max-width:200px;" />
+              <span id="assistant-sound-volume-label" style="min-width:40px;text-align:right;font-size:12px;">100 %</span>
+              <button type="button" id="btn-assistant-sound-test" class="web-btn" title="Jouer immédiatement le son « point » pour vérifier le réglage.">Tester</button>
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-concise" />
               <label for="setting-superagent-concise" title="Réponses courtes : l'Assistant informe et décide sans détailler tout ce qui se fait, sauf si vous le demandez explicitement.">Réponses courtes (informer sans détailler, sauf demande explicite)</label>
             </div>

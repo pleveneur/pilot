@@ -193,6 +193,11 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   const chkSuperAgentTools = document.getElementById("setting-superagent-tools");
   const chkSuperAgentNotifyDone = document.getElementById("setting-superagent-notify-done");
+  const chkAssistantSoundEnabled = document.getElementById("setting-assistant-sound-enabled");
+  const inputAssistantSoundVolume = document.getElementById("setting-assistant-sound-volume");
+  const assistantSoundVolumeRow = document.getElementById("assistant-sound-volume-row");
+  const assistantSoundVolumeLabel = document.getElementById("assistant-sound-volume-label");
+  const btnAssistantSoundTest = document.getElementById("btn-assistant-sound-test");
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
   const chkSuperAgentUserFriendly = document.getElementById("setting-superagent-user-friendly");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
@@ -520,6 +525,10 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
   if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
   if (chkSuperAgentNotifyDone) chkSuperAgentNotifyDone.checked = currentConfig.notify_super_agent_done === true;
+  if (chkAssistantSoundEnabled) chkAssistantSoundEnabled.checked = currentConfig.assistant_sound_enabled === true;
+  if (inputAssistantSoundVolume) inputAssistantSoundVolume.value = currentConfig.assistant_sound_volume ?? 100;
+  if (assistantSoundVolumeRow) assistantSoundVolumeRow.style.display = (chkAssistantSoundEnabled && chkAssistantSoundEnabled.checked) ? "" : "none";
+  if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume ? inputAssistantSoundVolume.value : 100} %`;
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
   if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
@@ -588,6 +597,28 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
       } catch (e) {
         ragTestStatus.textContent = `❌ ${e}`;
         ragTestStatus.style.color = "var(--danger, #f87171)";
+      }
+    });
+  }
+
+  // ── Son de notification de l'Assistant (spec_super_agent.md) ──
+  if (chkAssistantSoundEnabled) {
+    chkAssistantSoundEnabled.addEventListener("change", () => {
+      if (assistantSoundVolumeRow) assistantSoundVolumeRow.style.display = chkAssistantSoundEnabled.checked ? "" : "none";
+    });
+  }
+  if (inputAssistantSoundVolume) {
+    inputAssistantSoundVolume.addEventListener("input", () => {
+      if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume.value} %`;
+    });
+  }
+  if (btnAssistantSoundTest) {
+    btnAssistantSoundTest.addEventListener("click", async () => {
+      const vol = inputAssistantSoundVolume ? (parseInt(inputAssistantSoundVolume.value, 10) || 100) : 100;
+      try {
+        await invoke("play_assistant_sound", { soundType: "point", volume: vol });
+      } catch (e) {
+        showToast(`Son : ${e}`);
       }
     });
   }
@@ -745,6 +776,8 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         super_agent_show_thinking: chkSuperAgentThinking ? chkSuperAgentThinking.checked !== false : true,
         super_agent_show_tools: chkSuperAgentTools ? chkSuperAgentTools.checked === true : false,
         notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
+        assistant_sound_enabled: chkAssistantSoundEnabled ? chkAssistantSoundEnabled.checked === true : false,
+        assistant_sound_volume: inputAssistantSoundVolume ? (parseInt(inputAssistantSoundVolume.value, 10) || 100) : 100,
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,

@@ -449,6 +449,14 @@ struct AppConfig {
     // suivi). Défaut off (désactivé), même principe que notify_agent_done.
     #[serde(default)]
     notify_super_agent_done: bool,
+    // Son de notification de l'assistant (Magnus) : activé/désactivé + volume
+    // (0-100). Le son est joué via le script PowerShell `~/.pilot/assistant/notify.ps1`
+    // aux moments où l'assistant notifie l'utilisateur (fin de tâche d'agent,
+    // point important, question posée). Défaut : désactivé, volume 100.
+    #[serde(default)]
+    assistant_sound_enabled: bool,
+    #[serde(default = "default_assistant_sound_volume")]
+    assistant_sound_volume: u32,
     // Évolution 3 : assistant « réponses courtes » — quand activé, l'assistant
     // informe et décide sans détailler tout ce qui se fait, sauf demande
     // explicite. Défaut off. Injecté dans le prompt système.
@@ -503,6 +511,7 @@ struct AppConfig {
 
 fn default_true() -> bool { true }
 fn default_anomaly_timeout_minutes() -> u32 { 30 }
+fn default_assistant_sound_volume() -> u32 { 100 }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
@@ -695,6 +704,8 @@ impl Default for AppConfig {
             super_agent_show_thinking: true,
             super_agent_show_tools: false,
             notify_super_agent_done: false,
+            assistant_sound_enabled: false,
+            assistant_sound_volume: default_assistant_sound_volume(),
             super_agent_concise: false,
             super_agent_adaptive_personality: false,
             super_agent_personality: String::new(),
@@ -1245,6 +1256,35 @@ fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, S
         error: String::new(),
         path: pi_path,
     })
+}
+
+/// Joue le son de notification de l'assistant (Magnus) via le script PowerShell
+/// `~/.pilot/assistant/notify.ps1`. `sound_type` : "attention" | "point" | "fin".
+/// `volume` : 0-100 (appliqué à l'amplitude des notes par le script). Le process
+/// est détaché (fire-and-forget) : on ne bloque pas l'UI.
+#[tauri::command]
+fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+    let script = std::path::PathBuf::from(&home)
+        .join(".pilot")
+        .join("assistant")
+        .join("notify.ps1");
+    if !script.exists() {
+        return Err(format!("Script de notification introuvable: {}", script.display()));
+    }
+    let vol = volume.min(100);
+    let _ = std::process::Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&script)
+        .arg(&sound_type)
+        .arg(vol.to_string())
+        .spawn();
+    Ok(())
 }
 
 #[tauri::command]
@@ -1939,6 +1979,7 @@ pub fn run() {
             get_config,
             save_config,
             set_sidebar_width,
+            play_assistant_sound,
             set_window_title,
             get_recent_projects,
             close_project,
