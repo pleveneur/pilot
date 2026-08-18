@@ -287,6 +287,13 @@ const SUPER_AGENT_AGENTSMD_PROMPT: &str = "\n\n## Règle par défaut — fichier
 /// boucle technique (issue #55) qui reste un filet de sécurité.
 const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_agents`\nQuand tu délègues via `run_agents`, construis une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, fichiers concernés, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. Une délégation bien formulée vaut mieux que plusieurs tentatives répétées : prends le temps de bien formuler avant de lancer.\n\nNe relance JAMAIS la même tâche à l'identique :\n- Si une run échoue ou renvoie un résultat inutile, ne ré-émets pas le même `run_agents` avec la même tâche.\n- Change d'approche (autre agent, autre formulation, autre découpage) ou interroge l'utilisateur (`ask_input` / `ask_multi_choice`) pour clarifier.\n- Si tu as déjà lancé une tâche et reçu son résultat, passe à la suite : ne refais pas la même délégation.\n";
 
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : usage de
+/// l'outil `list_agent_sessions` et de la dernière activité (`lastActivity` /
+/// `lastActivityRelative` / `lastEvent`) pour juger si un agent progresse
+/// réellement avant de décider de l'arrêter. Un agent avec une dernière activité
+/// récente travaille encore, même sans sortie visible immédiate.
+const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nL'outil `list_agent_sessions` te donne la vue d'ensemble des sessions d'agents (projet, agent, mode, état, vivacité, visibilité, actif) et, quand une activité a été enregistrée, la dernière activité de chaque agent : `lastActivity` (timestamp ISO), `lastActivityRelative` (« il y a X min ») et `lastEvent` (type du dernier événement RPC).\n\nAvant de décider d'arrêter un agent, utilise `lastActivity` / `lastActivityRelative` pour juger s'il progresse réellement :\n- Un agent avec une dernière activité RÉCENTE travaille encore, même s'il n'a pas streamé de sortie visible depuis un moment. Ne l'arrête pas sur la seule absence de progression visible.\n- Ne considère l'arrêt que pour un agent réellement inactif (dernière activité ancienne, `lastActivityRelative` indiquant un long silence).\n- `lastEvent` t'indique le type de la dernière action (ex: `tool_execution_end`) pour comprendre ce que l'agent faisait.\n";
+
 #[tauri::command]
 pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)
@@ -413,6 +420,9 @@ pub(crate) fn do_send_super_agent_prompt(
     // Règle anti-boucle `run_agents` : prompts structurés + ne jamais relancer
     // la même tâche à l'identique (cause racine des boucles de run_agents).
     full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
+    // Supervision des agents : juger la progression via la dernière activité
+    // (lastActivity) avant de décider d'arrêter un agent.
+    full_system.push_str(SUPER_AGENT_SESSIONS_PROMPT);
     if !system_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());

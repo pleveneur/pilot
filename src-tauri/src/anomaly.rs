@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -31,6 +31,10 @@ use crate::{AppState, SessionActivity};
 pub struct AgentAnomalyState {
     /// Dernier événement RPC d'activité (base du calcul d'inactivité).
     pub last_activity: Instant,
+    /// Horodatage wall-clock (SystemTime) du dernier événement RPC d'activité.
+    /// `Instant` est monotone (pas un horodatage réel) : ce champ permet de
+    /// produire un timestamp ISO lisible pour l'assistant (list_agent_sessions).
+    pub last_activity_wall: Option<SystemTime>,
     /// Type du dernier événement RPC (ex: "tool_execution_end").
     pub last_event: String,
     /// L'agent est-il en cours d'exécution (agent_start → true, agent_settled → false).
@@ -99,6 +103,7 @@ pub fn make_observer(
             let mut m = anomaly_map.lock().unwrap();
             let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
                 last_activity: now,
+                last_activity_wall: Some(SystemTime::now()),
                 last_event: t.to_string(),
                 busy: false,
                 blocked_reported: false,
@@ -112,9 +117,34 @@ pub fn make_observer(
                 entry.blocked_reported = false;
             }
             entry.last_activity = now;
+            entry.last_activity_wall = Some(SystemTime::now());
             entry.last_event = t.to_string();
         }
     })
+}
+
+/// Formate la dernière activité d'un agent en (timestamp ISO 8601 UTC, relatif
+/// « il y a X min »). `last_activity` (Instant, monotone) sert au relatif ;
+/// `last_activity_wall` (SystemTime, wall-clock) sert à l'ISO. Retourne
+/// `(None, None)` si aucune activité n'a été enregistrée (champ optionnel).
+pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<String>) {
+    let iso = state.last_activity_wall.map(|t| {
+        let dt: chrono::DateTime<chrono::Utc> = t.into();
+        dt.to_rfc3339()
+    });
+    let relative = {
+        let secs = state.last_activity.elapsed().as_secs();
+        if secs < 60 {
+            Some(format!("il y a {} s", secs))
+        } else if secs < 3600 {
+            Some(format!("il y a {} min", secs / 60))
+        } else if secs < 86400 {
+            Some(format!("il y a {} h", secs / 3600))
+        } else {
+            Some(format!("il y a {} j", secs / 86400))
+        }
+    };
+    (iso, relative)
 }
 
 /// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8).
@@ -310,5 +340,38 @@ mod tests {
         assert!(p.contains("42"));
         assert!(p.contains("AUCUNE action automatique"));
         assert!(p.contains("DONE:"));
+    }
+
+    /// `last_activity_info` produit un timestamp ISO (wall-clock) et un relatif
+    /// « il y a X min » à partir de l'état d'anomalie. Sans activité wall-clock
+    /// enregistrée, l'ISO est absent (champ optionnel).
+    #[test]
+    fn last_activity_info_formats_iso_and_relative() {
+        let state = AgentAnomalyState {
+            last_activity: Instant::now(),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_end".to_string(),
+            busy: true,
+            blocked_reported: false,
+        };
+        let (iso, relative) = last_activity_info(&state);
+        // ISO présent et au format RFC3339 (ex: 2024-01-15T10:30:00+00:00).
+        let iso = iso.expect("ISO présent quand une activité wall-clock est enregistrée");
+        assert!(iso.contains('T'), "ISO 8601 contient un séparateur T");
+        // Relatif présent et commence par « il y a ».
+        let relative = relative.expect("relatif toujours présent");
+        assert!(relative.starts_with("il y a "), "relatif commence par 'il y a'");
+
+        // Sans activité wall-clock → ISO absent, relatif toujours présent.
+        let no_wall = AgentAnomalyState {
+            last_activity: Instant::now(),
+            last_activity_wall: None,
+            last_event: "agent_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+        };
+        let (iso2, relative2) = last_activity_info(&no_wall);
+        assert!(iso2.is_none(), "ISO absent sans activité wall-clock");
+        assert!(relative2.is_some(), "relatif présent même sans wall-clock");
     }
 }

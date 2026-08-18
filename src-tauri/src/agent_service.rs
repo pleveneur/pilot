@@ -678,9 +678,11 @@ impl AgentService {
     /// Vue d'ensemble de TOUTES les sessions d'agents du registre (P2).
     /// Retourne une liste JSON avec, pour chaque session : projet, agent, mode
     /// (main/agent_process), état (active/parked), vivacité du processus,
-    /// visibilité (table agents) et pointeur actif (chat principal).
+    /// visibilité (table agents), pointeur actif (chat principal) et, si une
+    /// activité a été enregistrée, la dernière activité (lastActivity ISO,
+    /// lastActivityRelative « il y a X min » et lastEvent).
     /// Consommé par l'assistant (super-agent) via l'outil `list_agent_sessions`
-    /// pour superviser l'état des agents.
+    /// pour superviser l'état des agents et juger leur progression.
     pub fn list_agent_sessions(&self, app: &AppHandle) -> Result<Value, String> {
         let active = self.active.lock().unwrap().clone();
         // Collecte sous le verrou, puis libération avant les accès DB (visible).
@@ -688,6 +690,9 @@ impl AgentService {
             let mut sessions = self.sessions.lock().unwrap();
             collect_session_states(&mut sessions, &active)
         };
+        // Source de vérité de la dernière activité : map d'anomalie (tâche 8),
+        // clé composite `project\u{1f}agent`. Alimentée par l'observateur RPC.
+        let anomaly_map = app.state::<AppState>().agent_anomaly.clone();
         let mut out = Vec::new();
         for (project, agent_id, state, mode, alive, is_active) in raw {
             // Visibilité depuis la table agents (projet porté par la session).
@@ -697,7 +702,18 @@ impl AgentService {
                 .flatten()
                 .map(|a| a.visible)
                 .unwrap_or(false);
-            out.push(serde_json::json!({
+            // Dernière activité depuis la map d'anomalie (champs optionnels).
+            let (last_activity, last_activity_relative, last_event) = {
+                let m = anomaly_map.lock().unwrap();
+                match m.get(&format!("{}\u{1f}{}", project, agent_id)) {
+                    Some(a) => {
+                        let (iso, rel) = anomaly::last_activity_info(a);
+                        (iso, rel, Some(a.last_event.clone()))
+                    }
+                    None => (None, None, None),
+                }
+            };
+            let mut entry = serde_json::json!({
                 "project": project,
                 "agent": agent_id,
                 "mode": mode,
@@ -705,7 +721,18 @@ impl AgentService {
                 "alive": alive,
                 "visible": visible,
                 "active": is_active,
-            }));
+            });
+            // Champs optionnels : absents si aucune activité enregistrée.
+            if let Some(la) = last_activity {
+                entry["lastActivity"] = serde_json::Value::String(la);
+            }
+            if let Some(lar) = last_activity_relative {
+                entry["lastActivityRelative"] = serde_json::Value::String(lar);
+            }
+            if let Some(le) = last_event {
+                entry["lastEvent"] = serde_json::Value::String(le);
+            }
+            out.push(entry);
         }
         Ok(serde_json::json!({ "sessions": out }))
     }

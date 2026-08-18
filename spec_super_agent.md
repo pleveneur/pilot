@@ -690,8 +690,12 @@ Tables (V1) :
   la vue d'ensemble de toutes les sessions d'agents (projet, agent, mode
   main/agent_process, état active/parked, vivacité du processus, visibilité et
   pointeur actif), via la commande Rust `list_agent_sessions` (AgentService).
-  L'assistant l'utilise pour superviser quels agents tournent avant de déléguer
-  ou d'arrêter.
+  Quand une activité a été enregistrée, chaque session expose aussi sa dernière
+  activité : `lastActivity` (timestamp ISO), `lastActivityRelative` (« il y a X
+  min ») et `lastEvent` (type du dernier événement RPC), dérivés de la map
+  d'anomalie (`agent_anomaly`, tâche 8). L'assistant l'utilise pour superviser
+  quels agents tournent et pour juger si un agent progresse réellement (dernière
+  activité récente) avant de déléguer ou d'arrêter.
 - **Auto-adaptation du prompt** : l'extension `pilot-assistant-prompt` fournit
   l'outil `update_my_prompt` qui remplace le prompt personnalisé de l'assistant
   (commande Rust `set_super_agent_prompt`, persistée dans la config + historique
