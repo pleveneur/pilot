@@ -60,6 +60,12 @@ function scrollSuperToBottom(messagesEl) {
   }
 }
 
+/** Scroll forcé : descend toujours en bas (pour montrer un élément interactif). */
+function forceScrollSuperToBottom(messagesEl) {
+  if (!messagesEl) return;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
 let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true };
 
@@ -2406,7 +2412,7 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, re
   }
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  scrollSuperToBottom(messagesEl);
+  forceScrollSuperToBottom(messagesEl);
 }
 
 /** Rend des boutons Oui / Non inline.
@@ -2452,7 +2458,7 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
   buttons.appendChild(no);
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  scrollSuperToBottom(messagesEl);
+  forceScrollSuperToBottom(messagesEl);
 }
 
 /** Rend un champ de saisie inline.
@@ -2496,7 +2502,7 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder, respon
     if (e.key === "Escape") respond(null, true);
   });
   setTimeout(() => input.focus(), 0);
-  scrollSuperToBottom(messagesEl);
+  forceScrollSuperToBottom(messagesEl);
 }
 
 // ── Initialisation du suivi du projet actif ──
