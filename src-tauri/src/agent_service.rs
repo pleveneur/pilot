@@ -949,6 +949,10 @@ impl AgentService {
                     {
                         extensions.push(schedule.to_string_lossy().to_string());
                     }
+                    let tools = dir.join("pilot-assistant-tools.ts");
+                    if std::fs::write(&tools, include_str!("../extensions/pilot-assistant-tools.ts")).is_ok() {
+                        extensions.push(tools.to_string_lossy().to_string());
+                    }
                 }
             }
         }

@@ -90,9 +90,57 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             last_run_at TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
-        );",
+        );
+        -- A7 : suivi temporel (jalons). Un jalon marque une étape du projet
+        -- (release, milestone, objectif de date). `due_date` au format ISO.
+        -- `status` : 'planifie' | 'atteint' | 'annule'.
+        CREATE TABLE IF NOT EXISTS milestones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            due_date TEXT,
+            status TEXT DEFAULT 'planifie',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+        );
+        "
     )
-    .map_err(|e| format!("Erreur init base: {}", e))
+    .map_err(|e| format!("Erreur init base: {}", e))?;
+    // Migrations : colonnes ajoutées après le schéma initial. SQLite n'a pas
+    // `ADD COLUMN IF NOT EXISTS` avant 3.35, on vérifie via PRAGMA table_info.
+    ensure_column(conn, "tasks", "deadline", "TEXT")?;
+    ensure_column(conn, "tasks", "blocker_reason", "TEXT")?;
+    ensure_column(conn, "tasks", "source_task_id", "INTEGER")?;
+    Ok(())
+}
+
+/// Ajoute une colonne à une table si elle n'existe pas déjà (migration
+/// idempotente). SQLite ne supporte pas `ADD COLUMN IF NOT EXISTS` avant 3.35,
+/// on inspecte donc `PRAGMA table_info` avant d'altérer.
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<(), String> {
+    let mut present = false;
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| format!("Erreur PRAGMA: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(1))
+        .map_err(|e| format!("Erreur PRAGMA: {}", e))?;
+    for row in rows {
+        if row.map(|name| name == column).unwrap_or(false) {
+            present = true;
+            break;
+        }
+    }
+    drop(stmt);
+    if !present {
+        conn.execute(
+            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, decl),
+            [],
+        )
+        .map_err(|e| format!("Erreur ALTER TABLE {}.{}: {}", table, column, e))?;
+    }
+    Ok(())
 }
 
 // ── Session RPC dédiée ──
@@ -1349,6 +1397,562 @@ pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: Strin
     do_start_super_agent_session(state.inner(), &app)?;
     let cmd = serde_json::json!({"type": "prompt", "message": question});
     state.agent_service.send_superagent(cmd)
+}
+
+// ── A4/A5/A6/A7/A8/A9/A3 : API typée de suivi de l'assistant ──
+//
+// Commandes typées (au lieu de SQL brut via db_query/db_execute) pour les
+// opérations courantes de suivi : tâches, décisions, jalons, échéances,
+// blocages, handoff inter-projets, lecture cadrée de fichiers, suivi temporel,
+// vue d'ensemble, santé projet et recherche de sessions. Lecture/écriture sur
+// la base de suivi (sauf read_project_file / search_project / search_sessions
+// qui lisent les fichiers/index du projet en lecture seule stricte).
+
+/// Résout l'id d'un projet dans la base (upsert si nécessaire) et le retourne.
+/// Helper partagé par les commandes typées de suivi.
+fn resolve_project_id(conn: &Connection, project_path: &str) -> Result<i64, String> {
+    conn.execute(
+        "INSERT INTO projects (path, name) VALUES (?1, ?2)\n         ON CONFLICT(path) DO UPDATE SET updated_at = datetime('now')",
+        rusqlite::params![project_path, project_path],
+    )
+    .map_err(|e| format!("Erreur enregistrement projet: {}", e))?;
+    conn.query_row(
+        "SELECT id FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("Projet introuvable après upsert: {}", e))
+}
+
+/// A4 — Crée une tâche dans un projet. Retourne `{ ok, task_id }`.
+#[tauri::command]
+pub fn super_agent_create_task(
+    app: AppHandle,
+    project_path: String,
+    title: String,
+    description: Option<String>,
+    deadline: Option<String>,
+) -> Result<Value, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("create_task : un titre est requis".to_string());
+    }
+    let conn = open_db(&app)?;
+    let project_id = resolve_project_id(&conn, &project_path)?;
+    conn.execute(
+        "INSERT INTO tasks (project_id, title, description, deadline) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![project_id, title, description.unwrap_or_default(), deadline],
+    )
+    .map_err(|e| format!("Erreur création tâche: {}", e))?;
+    Ok(serde_json::json!({ "ok": true, "task_id": conn.last_insert_rowid() }))
+}
+
+/// A4 — Met à jour le statut d'une tâche. Retourne `{ ok, task_id, status }`.
+#[tauri::command]
+pub fn super_agent_update_task_status(
+    app: AppHandle,
+    task_id: i64,
+    status: String,
+) -> Result<Value, String> {
+    let status = status.trim();
+    if status.is_empty() {
+        return Err("update_task_status : un statut est requis".to_string());
+    }
+    let conn = open_db(&app)?;
+    let n = conn
+        .execute(
+            "UPDATE tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![status, task_id],
+        )
+        .map_err(|e| format!("Erreur mise à jour statut: {}", e))?;
+    if n == 0 {
+        return Err(format!("Tâche {} introuvable", task_id));
+    }
+    Ok(serde_json::json!({ "ok": true, "task_id": task_id, "status": status }))
+}
+
+/// A5 — Ajoute une décision à un projet (optionnellement liée à une tâche).
+/// Retourne `{ ok, decision_id }`.
+#[tauri::command]
+pub fn super_agent_add_decision(
+    app: AppHandle,
+    project_path: String,
+    summary: String,
+    task_id: Option<i64>,
+) -> Result<Value, String> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err("add_decision : un résumé est requis".to_string());
+    }
+    let conn = open_db(&app)?;
+    let project_id = resolve_project_id(&conn, &project_path)?;
+    conn.execute(
+        "INSERT INTO decisions (project_id, task_id, summary) VALUES (?1, ?2, ?3)",
+        rusqlite::params![project_id, task_id, summary],
+    )
+    .map_err(|e| format!("Erreur ajout décision: {}", e))?;
+    Ok(serde_json::json!({ "ok": true, "decision_id": conn.last_insert_rowid() }))
+}
+
+/// A6 — Ajoute un jalon à un projet. Retourne `{ ok, milestone_id }`.
+#[tauri::command]
+pub fn super_agent_add_milestone(
+    app: AppHandle,
+    project_path: String,
+    title: String,
+    due_date: Option<String>,
+) -> Result<Value, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("add_milestone : un titre est requis".to_string());
+    }
+    let conn = open_db(&app)?;
+    let project_id = resolve_project_id(&conn, &project_path)?;
+    conn.execute(
+        "INSERT INTO milestones (project_id, title, due_date) VALUES (?1, ?2, ?3)",
+        rusqlite::params![project_id, title, due_date],
+    )
+    .map_err(|e| format!("Erreur ajout jalon: {}", e))?;
+    Ok(serde_json::json!({ "ok": true, "milestone_id": conn.last_insert_rowid() }))
+}
+
+/// A7 — Fixe (ou efface) l'échéance d'une tâche. Retourne `{ ok, task_id, deadline }`.
+#[tauri::command]
+pub fn super_agent_set_deadline(
+    app: AppHandle,
+    task_id: i64,
+    deadline: Option<String>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let n = conn
+        .execute(
+            "UPDATE tasks SET deadline = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![deadline, task_id],
+        )
+        .map_err(|e| format!("Erreur mise à jour échéance: {}", e))?;
+    if n == 0 {
+        return Err(format!("Tâche {} introuvable", task_id));
+    }
+    Ok(serde_json::json!({ "ok": true, "task_id": task_id, "deadline": deadline }))
+}
+
+/// A8 — Marque une tâche comme bloquée avec une raison. Retourne `{ ok, task_id }`.
+#[tauri::command]
+pub fn super_agent_flag_blocker(
+    app: AppHandle,
+    task_id: i64,
+    reason: String,
+) -> Result<Value, String> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return Err("flag_blocker : une raison est requise".to_string());
+    }
+    let conn = open_db(&app)?;
+    let n = conn
+        .execute(
+            "UPDATE tasks SET blocker_reason = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![reason, task_id],
+        )
+        .map_err(|e| format!("Erreur marquage blocage: {}", e))?;
+    if n == 0 {
+        return Err(format!("Tâche {} introuvable", task_id));
+    }
+    Ok(serde_json::json!({ "ok": true, "task_id": task_id, "blocker_reason": reason }))
+}
+
+/// A7 — Retourne la timeline d'un projet : jalons + tâches avec échéances.
+/// Une tâche est `overdue` si son échéance est passée et qu'elle n'est pas
+/// terminée (statut hors terminee/livree/annulee). Utilise `resolve_project_id`.
+#[tauri::command]
+pub fn super_agent_get_project_timeline(
+    app: AppHandle,
+    project_path: String,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let project_id = resolve_project_id(&conn, &project_path)?;
+
+    let mut milestones = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, due_date, status FROM milestones WHERE project_id = ?1 ORDER BY due_date ASC",
+            )
+            .map_err(|e| format!("Erreur lecture jalons: {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture jalons: {}", e))?;
+        for row in rows {
+            if let Ok((id, title, due_date, status)) = row {
+                milestones.push(serde_json::json!({
+                    "id": id, "title": title, "due_date": due_date, "status": status
+                }));
+            }
+        }
+    }
+
+    let mut tasks = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, status, deadline, blocker_reason,\n                       (deadline < date('now') AND status NOT IN ('terminee','livree','annulee')) AS overdue\n                 FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL ORDER BY deadline ASC",
+            )
+            .map_err(|e| format!("Erreur lecture tâches: {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture tâches: {}", e))?;
+        for row in rows {
+            if let Ok((id, title, status, deadline, blocker_reason, overdue)) = row {
+                tasks.push(serde_json::json!({
+                    "id": id, "title": title, "status": status, "deadline": deadline,
+                    "blocker_reason": blocker_reason, "overdue": overdue != 0
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "project_path": project_path,
+        "milestones": milestones,
+        "tasks": tasks,
+    }))
+}
+
+/// A9 — Crée une tâche dans le projet cible en référençant la tâche source
+/// (handoff inter-projets). Retourne `{ ok, task_id, source_task_id }`.
+#[tauri::command]
+pub fn super_agent_handoff_to_project(
+    app: AppHandle,
+    source_path: String,
+    target_path: String,
+    task_id: i64,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    // Lire la tâche source pour la dupliquer dans le projet cible.
+    let (title, description, deadline): (String, String, Option<String>) = conn
+        .query_row(
+            "SELECT title, description, deadline FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| format!("Tâche source {} introuvable: {}", task_id, e))?;
+    let target_project_id = resolve_project_id(&conn, &target_path)?;
+    conn.execute(
+        "INSERT INTO tasks (project_id, title, description, deadline, source_task_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![target_project_id, title, description, deadline, task_id],
+    )
+    .map_err(|e| format!("Erreur handoff: {}", e))?;
+    let new_id = conn.last_insert_rowid();
+    Ok(serde_json::json!({
+        "ok": true, "task_id": new_id, "source_task_id": task_id,
+        "source_path": source_path, "target_path": target_path,
+    }))
+}
+
+/// A3 — Lit un fichier du projet en lecture seule. Le chemin relatif est résolu
+/// sous le projet ; tout chemin absolu, remontant (`..`) ou sortant du projet est
+/// refusé. Retourne `{ path, content }`.
+#[tauri::command]
+pub fn super_agent_read_project_file(
+    app: AppHandle,
+    project_path: String,
+    rel_path: String,
+) -> Result<Value, String> {
+    let _ = app;
+    let rel = std::path::Path::new(&rel_path);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("read_project_file : chemin hors du projet refusé".to_string());
+    }
+    let project = std::path::Path::new(&project_path);
+    let canonical_project = project
+        .canonicalize()
+        .map_err(|e| format!("Projet introuvable: {}", e))?;
+    let full = project.join(rel);
+    let canonical_full = full
+        .canonicalize()
+        .map_err(|e| format!("Fichier introuvable: {}", e))?;
+    if !canonical_full.starts_with(&canonical_project) {
+        return Err("read_project_file : chemin hors du projet refusé".to_string());
+    }
+    let content = std::fs::read_to_string(&canonical_full)
+        .map_err(|e| format!("Erreur lecture fichier: {}", e))?;
+    Ok(serde_json::json!({ "path": rel_path, "content": content }))
+}
+
+/// A3 — Recherche un motif dans les fichiers d'un projet (lecture seule).
+/// Délègue à `search::search_project_dir` (déjà refactoré).
+#[tauri::command]
+pub fn super_agent_search_project(
+    app: AppHandle,
+    project_path: String,
+    query: String,
+    use_regex: bool,
+    extensions: String,
+    max_results: Option<usize>,
+) -> Result<Value, String> {
+    let _ = app;
+    let results = crate::search::search_project_dir(
+        &project_path,
+        query,
+        use_regex,
+        extensions,
+        max_results,
+    )?;
+    serde_json::to_value(results).map_err(|e| format!("Erreur sérialisation: {}", e))
+}
+
+/// A9 — Vue d'ensemble multi-projets agrégée par client : nombre de projets,
+/// tâches ouvertes/terminées, décisions récentes, sessions récentes et jalons à
+/// venir. Retourne un JSON structuré.
+#[tauri::command]
+pub fn super_agent_project_overview(app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+
+    let mut clients = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT c.id, c.name FROM clients c ORDER BY c.name")
+            .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+        for row in rows {
+            if let Ok((cid, cname)) = row {
+                let mut projects = Vec::new();
+                {
+                    let mut pstmt = conn
+                        .prepare("SELECT id, path, name FROM projects WHERE client_id = ?1 ORDER BY name")
+                        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+                    let prows = pstmt
+                        .query_map(rusqlite::params![cid], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                        })
+                        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+                    for prow in prows {
+                        if let Ok((pid, ppath, pname)) = prow {
+                            let open: i64 = conn
+                                .query_row(
+                                    "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('terminee','livree','annulee')",
+                                    rusqlite::params![pid],
+                                    |r| r.get(0),
+                                )
+                                .unwrap_or(0);
+                            let done: i64 = conn
+                                .query_row(
+                                    "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status IN ('terminee','livree')",
+                                    rusqlite::params![pid],
+                                    |r| r.get(0),
+                                )
+                                .unwrap_or(0);
+                            projects.push(serde_json::json!({
+                                "id": pid, "path": ppath, "name": pname,
+                                "tasks_open": open, "tasks_done": done,
+                            }));
+                        }
+                    }
+                }
+                clients.push(serde_json::json!({
+                    "id": cid, "name": cname, "projects": projects,
+                }));
+            }
+        }
+    }
+
+    // Décisions récentes (globales, toutes projets confondus).
+    let mut recent_decisions = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT d.summary, d.created_at, p.path FROM decisions d LEFT JOIN projects p ON p.id = d.project_id ORDER BY d.created_at DESC LIMIT 10",
+            )
+            .map_err(|e| format!("Erreur lecture décisions: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture décisions: {}", e))?;
+        for row in rows {
+            if let Ok((summary, created_at, path)) = row {
+                recent_decisions.push(serde_json::json!({
+                    "summary": summary, "created_at": created_at, "project_path": path,
+                }));
+            }
+        }
+    }
+
+    // Jalons à venir (planifiés, échéance future ou nulle).
+    let mut upcoming_milestones = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.title, m.due_date, p.path FROM milestones m JOIN projects p ON p.id = m.project_id WHERE m.status = 'planifie' AND m.due_date IS NOT NULL AND m.due_date >= date('now') ORDER BY m.due_date ASC LIMIT 10",
+            )
+            .map_err(|e| format!("Erreur lecture jalons: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture jalons: {}", e))?;
+        for row in rows {
+            if let Ok((title, due_date, path)) = row {
+                upcoming_milestones.push(serde_json::json!({
+                    "title": title, "due_date": due_date, "project_path": path,
+                }));
+            }
+        }
+    }
+
+    // Sessions récentes : scanne l'index de sessions de chaque projet connu.
+    let mut recent_sessions = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT path FROM projects")
+            .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+        for row in rows {
+            if let Ok(path) = row {
+                for e in crate::session_history::read_session_index(&path) {
+                    let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+                    let summary = e.get("summary").and_then(|x| x.as_str()).unwrap_or("");
+                    recent_sessions.push(serde_json::json!({
+                        "project_path": path, "timestamp": ts, "summary": summary,
+                    }));
+                }
+            }
+        }
+    }
+    recent_sessions.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        tb.cmp(ta)
+    });
+    recent_sessions.truncate(10);
+
+    Ok(serde_json::json!({
+        "clients": clients,
+        "recent_decisions": recent_decisions,
+        "recent_sessions": recent_sessions,
+        "upcoming_milestones": upcoming_milestones,
+    }))
+}
+
+/// A8 — Détecte proactivement les problèmes d'un projet : tâches bloquées
+/// (blocker_reason non vide), tâches en retard, jalons dépassés. Retourne un
+/// rapport JSON.
+#[tauri::command]
+pub fn super_agent_check_project_health(
+    app: AppHandle,
+    project_path: String,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let project_id = resolve_project_id(&conn, &project_path)?;
+
+    let mut blocked = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, blocker_reason FROM tasks WHERE project_id = ?1 AND blocker_reason IS NOT NULL AND blocker_reason != ''",
+            )
+            .map_err(|e| format!("Erreur lecture tâches bloquées: {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .map_err(|e| format!("Erreur lecture tâches bloquées: {}", e))?;
+        for row in rows {
+            if let Ok((id, title, reason)) = row {
+                blocked.push(serde_json::json!({"id": id, "title": title, "reason": reason}));
+            }
+        }
+    }
+
+    let mut overdue = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, deadline FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL AND deadline < date('now') AND status NOT IN ('terminee','livree','annulee')",
+            )
+            .map_err(|e| format!("Erreur lecture tâches en retard: {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .map_err(|e| format!("Erreur lecture tâches en retard: {}", e))?;
+        for row in rows {
+            if let Ok((id, title, deadline)) = row {
+                overdue.push(serde_json::json!({"id": id, "title": title, "deadline": deadline}));
+            }
+        }
+    }
+
+    let mut missed_milestones = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, title, due_date FROM milestones WHERE project_id = ?1 AND status = 'planifie' AND due_date IS NOT NULL AND due_date < date('now')",
+            )
+            .map_err(|e| format!("Erreur lecture jalons dépassés: {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })
+            .map_err(|e| format!("Erreur lecture jalons dépassés: {}", e))?;
+        for row in rows {
+            if let Ok((id, title, due_date)) = row {
+                missed_milestones.push(serde_json::json!({"id": id, "title": title, "due_date": due_date}));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "project_path": project_path,
+        "blocked_tasks": blocked,
+        "overdue_tasks": overdue,
+        "missed_milestones": missed_milestones,
+    }))
+}
+
+/// A3 — Recherche dans l'index de sessions d'un projet (lecture seule).
+/// Délègue à `session_history::search_sessions_in` (déjà refactoré).
+#[tauri::command]
+pub fn super_agent_search_sessions(
+    app: AppHandle,
+    project_path: String,
+    params: Value,
+) -> Result<Value, String> {
+    let _ = app;
+    let params: crate::session_history::SearchParams =
+        serde_json::from_value(params).map_err(|e| format!("Paramètres invalides: {}", e))?;
+    crate::session_history::search_sessions_in(&project_path, params)
 }
 
 #[cfg(test)]

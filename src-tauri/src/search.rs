@@ -22,21 +22,18 @@ pub struct SearchResult {
     text: String,
 }
 
-#[tauri::command]
-pub fn search_in_files(
-    state: State<AppState>,
+/// Cœur de recherche réutilisable : parcourt l'arborescence d'un projet
+/// arbitraire (chemin absolu) pour chercher un motif (regex ou littéral). Ne
+/// dépend pas de `AppState` : utilisable depuis la commande Tauri
+/// `search_in_files` (projet actif) et depuis les outils de l'assistant
+/// (super_agent::search_project, projet arbitraire, lecture seule).
+pub fn search_project_dir(
+    project: &str,
     query: String,
     use_regex: bool,
     extensions: String,
     max_results: Option<usize>,
 ) -> Result<Vec<SearchResult>, String> {
-    let project_path = state.project_path.lock().unwrap();
-    let project = project_path
-        .as_ref()
-        .ok_or("Aucun projet ouvert")?
-        .clone();
-    drop(project_path);
-
     // Compiler le pattern (regex ou texte littéral)
     let pattern: regex::Regex = if use_regex {
         regex::Regex::new(&query)
@@ -154,7 +151,7 @@ pub fn search_in_files(
     }
 
     walk_dir(
-        std::path::Path::new(&project),
+        std::path::Path::new(project),
         &pattern,
         &ext_filter,
         &ignore_dirs,
@@ -164,6 +161,23 @@ pub fn search_in_files(
     )?;
 
     Ok(results)
+}
+
+#[tauri::command]
+pub fn search_in_files(
+    state: State<AppState>,
+    query: String,
+    use_regex: bool,
+    extensions: String,
+    max_results: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+    let project_path = state.project_path.lock().unwrap();
+    let project = project_path
+        .as_ref()
+        .ok_or("Aucun projet ouvert")?
+        .clone();
+    drop(project_path);
+    search_project_dir(&project, query, use_regex, extensions, max_results)
 }
 
 // ── Remplacement global dans les fichiers (B3 — Find & Replace) ──

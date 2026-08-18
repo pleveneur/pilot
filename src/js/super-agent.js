@@ -1420,6 +1420,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
     const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
     const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
+    const TOOLS_SENTINEL = "PILOT_ASSISTANT_TOOLS::";
     const title = payload.title || "";
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
@@ -1630,6 +1631,119 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           });
         } else {
           result = { error: `Opération schedule inconnue : ${req.op}` };
+        }
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(TOOLS_SENTINEL)) {
+      // Outils de suivi multi-projets de l'assistant (pilot-assistant-tools, Phase 2).
+      // Le titre est préfixé par le sentinel commun + le nom d'outil + le payload
+      // JSON : PILOT_ASSISTANT_TOOLS::<toolName>::<JSON>. On exécute la commande
+      // Rust correspondante et on renvoie le résultat (JSON) comme `value` de la
+      // réponse, au lieu d'afficher un champ de saisie.
+      const rest = title.slice(TOOLS_SENTINEL.length);
+      const sep = rest.indexOf("::");
+      if (sep < 0) {
+        await respondSuperAgent(id, JSON.stringify({ error: "Payload tools invalide." }), false);
+        return;
+      }
+      const toolName = rest.slice(0, sep);
+      let params;
+      try {
+        params = JSON.parse(rest.slice(sep + 2));
+      } catch (_) {
+        await respondSuperAgent(id, JSON.stringify({ error: "Payload tools invalide." }), false);
+        return;
+      }
+      try {
+        let result;
+        switch (toolName) {
+          case "create_task":
+            result = await invoke("super_agent_create_task", {
+              projectPath: String(params.projectPath || ""),
+              title: String(params.title || ""),
+              description: params.description != null ? String(params.description) : null,
+              deadline: params.deadline != null ? String(params.deadline) : null,
+            });
+            break;
+          case "update_task_status":
+            result = await invoke("super_agent_update_task_status", {
+              taskId: Number(params.taskId),
+              status: String(params.status || ""),
+            });
+            break;
+          case "add_decision":
+            result = await invoke("super_agent_add_decision", {
+              projectPath: String(params.projectPath || ""),
+              summary: String(params.summary || ""),
+              taskId: params.taskId != null ? Number(params.taskId) : null,
+            });
+            break;
+          case "add_milestone":
+            result = await invoke("super_agent_add_milestone", {
+              projectPath: String(params.projectPath || ""),
+              title: String(params.title || ""),
+              dueDate: params.dueDate != null ? String(params.dueDate) : null,
+            });
+            break;
+          case "set_deadline":
+            result = await invoke("super_agent_set_deadline", {
+              taskId: Number(params.taskId),
+              deadline: params.deadline != null ? String(params.deadline) : null,
+            });
+            break;
+          case "flag_blocker":
+            result = await invoke("super_agent_flag_blocker", {
+              taskId: Number(params.taskId),
+              reason: String(params.reason || ""),
+            });
+            break;
+          case "get_project_timeline":
+            result = await invoke("super_agent_get_project_timeline", {
+              projectPath: String(params.projectPath || ""),
+            });
+            break;
+          case "handoff_to_project":
+            result = await invoke("super_agent_handoff_to_project", {
+              sourcePath: String(params.sourcePath || ""),
+              targetPath: String(params.targetPath || ""),
+              taskId: Number(params.taskId),
+            });
+            break;
+          case "read_project_file":
+            result = await invoke("super_agent_read_project_file", {
+              projectPath: String(params.projectPath || ""),
+              relPath: String(params.relPath || ""),
+            });
+            break;
+          case "search_project":
+            result = await invoke("super_agent_search_project", {
+              projectPath: String(params.projectPath || ""),
+              query: String(params.query || ""),
+              useRegex: Boolean(params.useRegex),
+              extensions: params.extensions != null ? String(params.extensions) : "",
+              maxResults: params.maxResults != null ? Number(params.maxResults) : null,
+            });
+            break;
+          case "project_overview":
+            result = await invoke("super_agent_project_overview");
+            break;
+          case "check_project_health":
+            result = await invoke("super_agent_check_project_health", {
+              projectPath: String(params.projectPath || ""),
+            });
+            break;
+          case "search_sessions":
+            result = await invoke("super_agent_search_sessions", {
+              projectPath: String(params.projectPath || ""),
+              params: params.params || {},
+            });
+            break;
+          default:
+            result = { error: `Outil assistant inconnu : ${toolName}` };
         }
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {

@@ -470,19 +470,13 @@ pub struct SearchParams {
     limit: Option<usize>,
 }
 
-/// Recherche dans l'index. Full-text (substring insensible à la casse, ou
-/// regex si la chaîne commence par `/`), filtres tag/file/kind. Tri décroissant
-/// par timestamp. Tags fusionnés depuis le fichier de tags.
-#[tauri::command]
-pub fn search_sessions(state: State<AppState>, params: SearchParams) -> Result<Value, String> {
-    let project_path = state
-        .project_path
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("Aucun projet ouvert")?;
-    let mut entries = read_session_index(&project_path);
-    let tags_map = read_session_tags(&project_path);
+/// Cœur de recherche réutilisable : effectue la recherche dans l'index d'un
+/// projet arbitraire (chemin absolu). Ne dépend pas de `AppState` : utilisé par
+/// la commande Tauri `search_sessions` (projet actif) et par l'outil assistant
+/// `super_agent_search_sessions` (projet arbitraire, lecture seule).
+pub fn search_sessions_in(project_path: &str, params: SearchParams) -> Result<Value, String> {
+    let mut entries = read_session_index(project_path);
+    let tags_map = read_session_tags(project_path);
 
     // Fusion des tags dans chaque entrée (par id).
     for e in entries.iter_mut() {
@@ -574,8 +568,22 @@ pub fn search_sessions(state: State<AppState>, params: SearchParams) -> Result<V
         let tb = b.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
         tb.cmp(ta)
     });
-    let indexed = sessions_index_path(&project_path).exists();
+    let indexed = sessions_index_path(project_path).exists();
     Ok(serde_json::json!({ "entries": results, "total": results.len(), "indexed": indexed }))
+}
+
+/// Recherche dans l'index. Full-text (substring insensible à la casse, ou
+/// regex si la chaîne commence par `/`), filtres tag/file/kind. Tri décroissant
+/// par timestamp. Tags fusionnés depuis le fichier de tags.
+#[tauri::command]
+pub fn search_sessions(state: State<AppState>, params: SearchParams) -> Result<Value, String> {
+    let project_path = state
+        .project_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Aucun projet ouvert")?;
+    search_sessions_in(&project_path, params)
 }
 
 /// Retourne le détail d'une session : entrée indexée + contenu complet du
