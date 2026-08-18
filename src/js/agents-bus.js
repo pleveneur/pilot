@@ -75,6 +75,10 @@ let busState = {
   agentProject: {},
   config: null,
   callbacks: {},
+  // Bug #9 : horodatage de la dernière activité réelle (événement agent reçu).
+  // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
+  // verrou est "running" sans activité depuis trop longtemps, on le libère.
+  lastActivityAt: null,
 };
 
 function resetBusState() {
@@ -96,16 +100,79 @@ function resetBusState() {
   busState.loopAbandoned = {};
   busState.loopLastChecked = {};
   busState.agentProject = {};
+  busState.lastActivityAt = null;
 }
 
 // Bug #9 : watchdog de sécurité du verrou de run. Si la run est marquée
-// "running" mais qu'aucun agent n'est actif et qu'aucun groupe parallèle n'est
-// en cours, le verrou est bloqué (fin normale/erreur sans libération). On force
-// la libération pour ne pas bloquer les appels suivants à run_agents.
-function releaseStuckRunLock() {
-  if (busState.runState === "running" && busState.activeAgents.size === 0 && !busState.parallelGroup) {
-    console.warn("[agents-bus] watchdog : verrou de run bloqué, libération forcée.");
+// "running" mais qu'aucun agent n'est réellement en train de streamer, le
+// verrou est bloqué (fin normale/erreur sans libération, fermeture de projet
+// qui tue les processus sans événement agent_end/process_exit, groupe parallèle
+// résiduel, agents fantômes). On force la libération pour ne pas bloquer les
+// appels suivants à run_agents. Détecte TOUS les états bloqués, pas seulement
+// le cas nominal.
+async function releaseStuckRunLock() {
+  if (busState.runState !== "running") return;
+
+  // 1. Cas nominal : aucun agent actif et aucun groupe parallèle en cours →
+  //    verrou bloqué (fin normale/erreur sans libération).
+  const noActive = busState.activeAgents.size === 0;
+  const noParallel = !busState.parallelGroup || busState.parallelGroup.pending <= 0;
+  if (noActive && noParallel) {
+    console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
     resetBusState();
+    return;
+  }
+
+  // 2. Groupe parallèle résiduel : objet non nul mais pending <= 0 (tous les
+  //    agents ont terminé/échoué sans que onComplete n'ait libéré le verrou).
+  if (busState.parallelGroup && busState.parallelGroup.pending <= 0) {
+    console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
+    resetBusState();
+    return;
+  }
+
+  // 3. Agents fantômes : activeAgents non vide mais aucun processus réellement
+  //    vivant (sessions supprimées à la fermeture du projet / arrêt des
+  //    processus sans événement agent_end/process_exit).
+  if (busState.activeAgents.size > 0) {
+    const alive = await anyActiveAgentAlive();
+    if (!alive) {
+      console.warn("[agents-bus] watchdog : agents fantômes (aucun processus vivant), libération forcée.");
+      resetBusState();
+      return;
+    }
+  }
+
+  // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
+  //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
+  if (busState.lastActivityAt && Date.now() - busState.lastActivityAt > busState.timeoutMs) {
+    console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
+    resetBusState();
+  }
+}
+
+// Sonde de vivacité : retourne true si au moins un agent actif du bus a une
+// session de processus réellement vivante (list_agent_sessions). Utilisée par
+// releaseStuckRunLock pour distinguer un agent fantôme (processus tué à la
+// fermeture du projet, session retirée du registre) d'un agent qui stream
+// encore. En cas d'erreur de sonde, on retourne true (prudence : ne pas libérer
+// un verrou potentiellement légitime).
+async function anyActiveAgentAlive() {
+  try {
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    for (const agentId of busState.activeAgents) {
+      const project = busState.agentProject[agentId] || null;
+      // Préférer une correspondance (agent, projet) ; sinon n'importe quelle
+      // session vivante de cet agent (prudence).
+      const byProject = sessions.find((s) => s.agent === agentId && s.alive && (project === null || s.project === project));
+      if (byProject) return true;
+      const byAgent = sessions.find((s) => s.agent === agentId && s.alive);
+      if (byAgent) return true;
+    }
+    return false;
+  } catch (e) {
+    return true;
   }
 }
 
@@ -115,6 +182,7 @@ function emit(event, data) {
 }
 
 function resetTimeout() {
+  busState.lastActivityAt = Date.now();
   if (busState.timeoutId) clearTimeout(busState.timeoutId);
   if (busState.runState !== "running") return;
   busState.timeoutId = setTimeout(() => {
@@ -589,7 +657,7 @@ async function failAgentTurn(agentId, reason) {
 }
 
 export async function startAgentsRun(userPrompt, projectContext = "") {
-  releaseStuckRunLock();
+  await releaseStuckRunLock();
   if (busState.runState === "running") {
     throw new Error("Une run est déjà en cours.");
   }
@@ -616,8 +684,8 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
  * émet `parallelDone` puis `done` avec le résultat agrégé.
  * `assignments` : [{ agentId, brief }].
  */
-export async function startParallelRun(assignments, projectContext = "") {
-  releaseStuckRunLock();
+export async function startParallelRun(assignments, projectContext = "", options) {
+  await releaseStuckRunLock();
   if (busState.runState === "running") {
     throw new Error("Une run est déjà en cours.");
   }
@@ -640,7 +708,7 @@ export async function startParallelRun(assignments, projectContext = "") {
       // de la run parallèle. Sans ce reset, runState restait "running" et les
       // appels suivants à run_agents échouaient avec « Une run est déjà en cours ».
       resetBusState();
-    });
+    }, options);
   } catch (e) {
     // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
     resetBusState();
@@ -650,7 +718,9 @@ export async function startParallelRun(assignments, projectContext = "") {
 
 // Lance la run d'agents et route le résultat vers `onDone` / `onError`.
 // Cœur commun des deux variantes (bloquante et non bloquante).
-function _runAgentsForAssistant(assignments, onDone, onError) {
+// `options.purge` : si vrai, purge la conversation de chaque agent avant la
+// run (contexte vierge, comme le mode manuel) — utilisé par `run_agents`.
+function _runAgentsForAssistant(assignments, onDone, onError, options) {
   const prevCallbacks = busState.callbacks;
   // Bug #9 : garde anti double-résolution — le callback ne doit être appelé
   // qu'une seule fois (done/error/stop/échec de startParallelRun).
@@ -667,7 +737,7 @@ function _runAgentsForAssistant(assignments, onDone, onError) {
     error: ({ message }) => finish(onError, new Error(message || "Erreur de la run agents.")),
     stop: () => finish(onError, new Error("Run agents arrêtée.")),
   };
-  startParallelRun(assignments).catch((e) => finish(onError, e));
+  startParallelRun(assignments, "", options).catch((e) => finish(onError, e));
 }
 
 /**
@@ -679,7 +749,7 @@ function _runAgentsForAssistant(assignments, onDone, onError) {
  * @param {Array<{agentId:string, brief:string}>} assignments
  * @returns {Promise<string>}
  */
-export async function runAgentsForAssistant(assignments) {
+export async function runAgentsForAssistant(assignments, options) {
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
@@ -687,7 +757,7 @@ export async function runAgentsForAssistant(assignments) {
   // qu'un agent créé entre-temps (create_agent) soit visible/sélectionnable.
   await reloadAgentsRegistry();
   return new Promise((resolve, reject) => {
-    _runAgentsForAssistant(assignments, resolve, reject);
+    _runAgentsForAssistant(assignments, resolve, reject, options);
   });
 }
 
@@ -698,12 +768,12 @@ export async function runAgentsForAssistant(assignments) {
  * l'assistant (outil `run_agents`) pour ne pas bloquer son tour (et donc
  * l'input utilisateur) pendant que les agents travaillent.
  */
-export async function runAgentsForAssistantAsync(assignments, onDone, onError) {
+export async function runAgentsForAssistantAsync(assignments, onDone, onError, options) {
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
   await reloadAgentsRegistry();
-  _runAgentsForAssistant(assignments, onDone, onError);
+  _runAgentsForAssistant(assignments, onDone, onError, options);
 }
 
 export function stopAgentsRun(options = {}) {
@@ -726,7 +796,7 @@ export async function stopAllAgentProcesses() {
   await invoke("stop_all_agent_processes").catch(() => {});
 }
 
-async function runAgentTurn(agent, brief, projectContext = "", project = null) {
+async function runAgentTurn(agent, brief, projectContext = "", project = null, options) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
     resetBusState();
@@ -814,7 +884,12 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null) {
       noSession,
     });
 
-    if (!agent.keep_context) {
+    // Anti-boucle (run_agents) : si `options.purge` est vrai, on purge la
+    // conversation de l'agent AVANT la tâche (contexte vierge, comme le mode
+    // manuel) — indépendamment de `keep_context`. Sinon, on conserve le
+    // comportement historique : nouvelle session uniquement pour les agents
+    // sans `keep_context`.
+    if ((options && options.purge) || !agent.keep_context) {
       await invoke("new_agent_process_session", { agentId: agent.id, project: cwd });
     }
 
@@ -847,7 +922,7 @@ async function sendPromptToAgent(agentId, message) {
  * Les agents parallèles sont des agents « feuille » : ils exécutent leur brief
  * et retournent leur résultat (pas de délégation [[CALL]] imbriquée en V1).
  */
-async function dispatchParallel(assignments, onComplete) {
+async function dispatchParallel(assignments, onComplete, options) {
   busState.parallelGroup = {
     assignments,
     pending: assignments.length,
@@ -868,7 +943,7 @@ async function dispatchParallel(assignments, onComplete) {
       continue;
     }
     consumeBudget(a.agentId);
-    await runAgentTurn(agent, a.brief, "", a.project);
+    await runAgentTurn(agent, a.brief, "", a.project, options);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.

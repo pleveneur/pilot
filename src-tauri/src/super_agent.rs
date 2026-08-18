@@ -269,6 +269,24 @@ const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes des 
 /// (issue #55) qui reste un filet de sécurité contre les répétitions exactes.
 const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Règle de résilience — ne jamais s'arrêter au premier obstacle\nSi une tâche déléguée ou une action échoue, ne t'arrête pas immédiatement et ne demande pas tout de suite à l'utilisateur. Relance AU MOINS UNE FOIS par toi-même en changeant d'approche entre les tentatives : autre agent, autre formulation de la demande, autre méthode, autre découpage de la tâche.\n\nRègle :\n- 1er échec → relance en changeant d'approche (n'indique à l'utilisateur que tu reprends qu'en bref).\n- 2e échec consécutif sur la même tâche, même après changement d'approche → préviens l'utilisateur avec un point clair (ce qui a été tenté, pourquoi ça bloque, options proposées).\n\nImportant : relancer en changeant d'approche n'est PAS une répétition en boucle. La détection de boucle technique (répétitions exactes de mêmes outils/textes) reste un filet de sécurité distinct ; ton comportement de relance est volontaire et varié.\n";
 
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
+/// par défaut sur le fichier AGENTS.md des projets. Quand l'assistant travaille
+/// sur un projet qui n'a pas de fichier AGENTS.md (ou dont le contenu est
+/// incomplet pour guider un agent), il doit le signaler à l'utilisateur,
+/// programmer un rappel (`schedule_create`) pour revenir dessus, et ne pas
+/// laisser ce point tomber dans l'oubli jusqu'à ce que le AGENTS.md soit créé.
+/// Une fois créé, il désactive le rappel (`schedule_set_enabled`).
+const SUPER_AGENT_AGENTSMD_PROMPT: &str = "\n\n## Règle par défaut — fichier AGENTS.md des projets\nQuand tu travailles sur un projet qui n'a pas de fichier AGENTS.md (ou dont le contenu est incomplet pour guider un agent), signale-le à l'utilisateur et programme un rappel (`schedule_create`) pour revenir dessus. Ne laisse pas ce point tomber dans l'oubli tant que le AGENTS.md n'est pas créé : relance le rappel si nécessaire. Une fois le AGENTS.md créé (ou complété), désactive le rappel correspondant (`schedule_set_enabled`).\n";
+
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
+/// anti-boucle pour l'outil `run_agents`. L'assistant doit construire des
+/// prompts STRUCTURÉS (comme le mode manuel : contexte, objectif, contraintes,
+/// fichiers, vérifications, ce qu'il ne faut PAS faire) pour que l'agent
+/// réussisse du premier coup, et ne JAMAIS relancer la même tâche à l'identique
+/// (cause racine des boucles de `run_agents`). Distinct de la détection de
+/// boucle technique (issue #55) qui reste un filet de sécurité.
+const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_agents`\nQuand tu délègues via `run_agents`, construis une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, fichiers concernés, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. Une délégation bien formulée vaut mieux que plusieurs tentatives répétées : prends le temps de bien formuler avant de lancer.\n\nNe relance JAMAIS la même tâche à l'identique :\n- Si une run échoue ou renvoie un résultat inutile, ne ré-émets pas le même `run_agents` avec la même tâche.\n- Change d'approche (autre agent, autre formulation, autre découpage) ou interroge l'utilisateur (`ask_input` / `ask_multi_choice`) pour clarifier.\n- Si tu as déjà lancé une tâche et reçu son résultat, passe à la suite : ne refais pas la même délégation.\n";
+
 #[tauri::command]
 pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)
@@ -389,6 +407,12 @@ pub(crate) fn do_send_super_agent_prompt(
     // moins une fois en changeant d'approche avant de solliciter l'utilisateur.
     // Distinct de la détection de boucle technique (issue #55).
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
+    // Règle par défaut sur le fichier AGENTS.md des projets : signaler à
+    // l'utilisateur + programmer un rappel tant que le AGENTS.md n'est pas créé.
+    full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
+    // Règle anti-boucle `run_agents` : prompts structurés + ne jamais relancer
+    // la même tâche à l'identique (cause racine des boucles de run_agents).
+    full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
     if !system_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());

@@ -210,6 +210,18 @@ apprend et répond.
   les agents travaillent (la zone de saisie reste active, plus de blocage). Le
   **résultat agrégé** est injecté à l'Assistant à la fin de la run, qui vous en
   fait le compte-rendu.
+- **Anti-boucle `run_agents`** : pour fiabiliser les relances, chaque
+  délégation `run_agents` est **purifiée** comme le mode manuel :
+  - **Brief structuré** : la tâche est enveloppée dans un prompt structuré
+    (contexte, objectif, consignes, ce qu'il ne faut PAS faire) pour que
+    l'agent réussisse du premier coup.
+  - **Purge de la conversation** : la conversation de chaque agent est purgée
+    avant la run (contexte vierge), indépendamment de `keep_context`.
+  - **Détection de boucle** : les appels `run_agents` identiques répétés sont
+    détectés (empreinte `agent_ids` + tâche) et arrêtent l'Assistant.
+  - **Consigne système** : l'Assistant est invité à construire des prompts
+    structurés et à **ne jamais relancer la même tâche à l'identique** — en
+    cas d'échec, il change d'approche ou interroge l'utilisateur.
 - **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
   **recréé automatiquement** à la prochaine délégation (ou purge) — plus
   besoin de redémarrer Pilot pour redéleguer.
@@ -318,6 +330,16 @@ spécifique ne reçoit que son rôle propre.
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
   notification OS).
+
+### Règle par défaut — fichier AGENTS.md des projets
+- Quand l'Assistant travaille sur un projet qui **n'a pas de fichier AGENTS.md**
+  (ou dont le contenu est **incomplet** pour guider un agent), il le **signale à
+  l'utilisateur** et **programme un rappel** (`schedule_create`) pour revenir
+  dessus.
+- Il **ne laisse pas ce point tomber dans l'oubli** tant que le AGENTS.md n'est
+  pas créé : il relance le rappel si nécessaire.
+- Une fois le AGENTS.md **créé (ou complété)**, il **désactive le rappel**
+  correspondant (`schedule_set_enabled`).
 
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**

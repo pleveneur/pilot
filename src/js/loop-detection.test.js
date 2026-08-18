@@ -293,6 +293,34 @@ describe("buildToolLoopFingerprint", () => {
   it("retombe sur la sérialisation vide si args absent", () => {
     expect(buildToolLoopFingerprint("db_query", null)).toBe("tool::db_query::{}");
   });
+
+  it("produit une empreinte stable pour run_agents (anti-boucle)", () => {
+    // L'assistant relance la même délégation run_agents à l'identique : même
+    // agents + même tâche → même empreinte → detectRepeatedToolCalls la détecte.
+    const fp1 = buildToolLoopFingerprint("run_agents", {
+      agent_ids: "codeur,testeur",
+      task: "Corriger le bug de parsing du plan",
+    });
+    const fp2 = buildToolLoopFingerprint("run_agents", {
+      agent_ids: "codeur,testeur",
+      task: "Corriger le bug de parsing du plan",
+    });
+    expect(fp1).toBe(fp2);
+    expect(detectRepeatedToolCalls([fp1, fp2, fp1])).toBe(true);
+  });
+
+  it("distingue deux run_agents différents (pas une boucle)", () => {
+    const fp1 = buildToolLoopFingerprint("run_agents", {
+      agent_ids: "codeur",
+      task: "Corriger le bug A",
+    });
+    const fp2 = buildToolLoopFingerprint("run_agents", {
+      agent_ids: "codeur",
+      task: "Corriger le bug B",
+    });
+    expect(fp1).not.toBe(fp2);
+    expect(detectRepeatedToolCalls([fp1, fp2, fp1])).toBe(false);
+  });
 });
 
 describe("detectSemanticLoop", () => {

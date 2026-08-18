@@ -111,6 +111,39 @@ function qualityGateInstruction() {
   return "Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier. Lance cargo test --lib avant de committer.\n\n";
 }
 
+/**
+ * Construit un brief STRUCTURÉ pour les agents lancés via `run_agents`
+ * (anti-boucle). Le mode manuel fonctionne bien car il fournit un prompt
+ * structuré (contexte, objectif, contraintes, fichiers, vérifications, ce
+ * qu'il ne faut PAS faire) + une purge de la conversation avant chaque tâche.
+ * On reproduit ici cette structure pour que l'agent réussisse du premier coup
+ * (au lieu de mal comprendre et d'obliger l'assistant à relancer → boucle).
+ * @param {string} task - tâche brute fournie par l'assistant.
+ * @returns {string} brief structuré à envoyer à l'agent.
+ */
+function buildStructuredAgentBrief(task) {
+  const qg = qualityGateInstruction();
+  const t = String(task || "").trim();
+  return (
+    qg +
+    "## Contexte\n" +
+    "Tu es un agent du registre de Pilot, lancé par l'assistant de suivi multi-projets. " +
+    "Exécute la tâche suivante de façon autonome et complète, dans le projet de travail indiqué.\n\n" +
+    "## Objectif\n" +
+    (t || "(tâche non précisée)") +
+    "\n\n" +
+    "## Consignes\n" +
+    "- Analyse le projet avant d'agir : lis les fichiers concernés et l'arborescence.\n" +
+    "- Modifie UNIQUEMENT ce qui est nécessaire à l'objectif.\n" +
+    "- Vérifie ton travail : compile (cargo test --lib si Rust) et tests avant de conclure.\n" +
+    "- Termine par un résumé concis de ce que tu as fait (DONE: ...).\n\n" +
+    "## Ce qu'il ne faut PAS faire\n" +
+    "- Ne pas modifier des fichiers hors de l'objectif.\n" +
+    "- Ne pas répéter des actions identiques en boucle : si une action échoue, change d'approche.\n" +
+    "- Ne pas inventer de résultats : si tu ne peux pas vérifier, dis-le clairement.\n"
+  );
+}
+
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
   try {
@@ -1090,6 +1123,22 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
       fingerprint = buildToolLoopFingerprint("db_execute", {
         sql: title.slice("PILOT_ASSISTANT_DB_EXEC::".length),
       });
+    } else if (title.startsWith("PILOT_ASSISTANT_RUN_AGENTS::")) {
+      // Anti-boucle run_agents : l'assistant relance la même délégation à
+      // l'identique (mêmes agents + même tâche). On construit une empreinte
+      // STABLE (agent_ids + tâche normalisée) pour que detectRepeatedToolCalls
+      // attrape les run_agents identiques répétés, même si le JSON brut diffère
+      // (ordre des champs, espaces). On alimente aussi le buffer texte avec la
+      // tâche pour la détection sémantique (run_agents avec des tâches
+      // légèrement reformulées mais mêmes idées).
+      let raInfo = {};
+      try {
+        raInfo = JSON.parse(title.slice("PILOT_ASSISTANT_RUN_AGENTS::".length));
+      } catch (_) {}
+      const raIds = (Array.isArray(raInfo.agent_ids) ? raInfo.agent_ids.map(String) : []).join(",");
+      const raTask = String(raInfo.task || "").trim();
+      fingerprint = buildToolLoopFingerprint("run_agents", { agent_ids: raIds, task: raTask });
+      superLoopBuffer += "run_agents task: " + raTask + "\n";
     } else {
       fingerprint = "input::" + title;
     }
@@ -1493,7 +1542,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
-        const brief = qualityGateInstruction() + task;
+        // Anti-boucle : brief STRUCTURÉ (comme le mode manuel) + purge de la
+        // conversation de chaque agent avant la run (contexte vierge).
+        const brief = buildStructuredAgentBrief(task);
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject }));
         const projectPath = window._pilotProjectPath || null;
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
@@ -1508,7 +1559,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             const msg = err && err.message ? err.message : String(err);
             appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
             injectRunAgentsResultToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath);
-          }
+          },
+          { purge: true }
         ).catch((e) => {
           // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
           // run n'a pas pu démarrer. On le signale à l'utilisateur et à
