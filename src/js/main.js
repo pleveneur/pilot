@@ -10,6 +10,7 @@ import { openRecentPopover } from "./recent-files.js";
 import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
+import { initAnomalyDetection } from "./anomaly.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
@@ -276,6 +277,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3d. Initialiser les toasts
   initToasts();
+
+  // 3d-bis. Détection d'anomalies des agents (tâche 8) : écoute les événements
+  // `agent-anomaly` (moniteur Rust) et la sortie de l'agent de diagnostic.
+  initAnomalyDetection();
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
   initUpdater();

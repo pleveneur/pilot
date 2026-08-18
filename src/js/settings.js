@@ -125,6 +125,9 @@ export async function initSettings() {
   const chkShowThinking = document.getElementById("setting-show-thinking");
   const chkShowTools = document.getElementById("setting-show-tools");
   const chkNotifyAgentDone = document.getElementById("setting-notify-agent-done");
+  // ── Détection d'anomalies (tâche 8) ──
+  const chkAnomalyEnabled = document.getElementById("setting-anomaly-enabled");
+  const inputAnomalyTimeout = document.getElementById("setting-anomaly-timeout");
   const inputPdfMdModel = document.getElementById("setting-pdf-md-model");
   const chkAutoSave = document.getElementById("setting-auto-save");
   const inputAutoSaveDelay = document.getElementById("setting-auto-save-delay");
@@ -431,6 +434,9 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
     chkShowThinking.checked = currentConfig.show_thinking !== false;
     chkShowTools.checked = currentConfig.show_tools || false;
     if (chkNotifyAgentDone) chkNotifyAgentDone.checked = currentConfig.notify_agent_done === true;
+    // ── Détection d'anomalies (tâche 8) ──
+    if (chkAnomalyEnabled) chkAnomalyEnabled.checked = currentConfig.anomaly_detection_enabled !== false;
+    if (inputAnomalyTimeout) inputAnomalyTimeout.value = currentConfig.anomaly_timeout_minutes ?? 30;
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
@@ -656,6 +662,9 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         show_thinking: chkShowThinking.checked,
         show_tools: chkShowTools.checked,
         notify_agent_done: chkNotifyAgentDone ? chkNotifyAgentDone.checked : false,
+        // ── Détection d'anomalies (tâche 8) ──
+        anomaly_detection_enabled: chkAnomalyEnabled ? chkAnomalyEnabled.checked !== false : true,
+        anomaly_timeout_minutes: inputAnomalyTimeout ? (parseInt(inputAnomalyTimeout.value, 10) || 30) : 30,
         pdf_md_model: inputPdfMdModel.value.trim(),
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,

@@ -111,3 +111,32 @@ export async function notifySuperAgentDone(opts = {}) {
     console.warn("[desktop-notify] échec envoi notification assistant:", e);
   }
 }
+
+/**
+ * Notifie l'utilisateur quand une ANOMALIE d'agent est détectée (tâche 8 :
+ * agent actif mais sans progression depuis le seuil). Consulte le réglage
+ * `anomaly_detection_enabled` (défaut on) : si la surveillance est désactivée,
+ * on n'émet rien. Défensif (ne lève jamais d'erreur).
+ * @param {object} [opts] — { title?: string, body?: string }
+ */
+export async function notifyAnomaly(opts = {}) {
+  try {
+    const cfg = await invoke("get_config");
+    if (!cfg || cfg.anomaly_detection_enabled === false) return;
+  } catch (_) {
+    return;
+  }
+  const title = opts.title || "Pilot — Anomalie détectée";
+  const body = opts.body || "⚠️ Un agent semble bloqué (actif sans progression).";
+  try {
+    const mod = await import("@tauri-apps/plugin-notification");
+    let granted = _granted;
+    if (!granted) granted = await ensurePermission();
+    if (!granted) return;
+    if (typeof mod.sendNotification === "function") {
+      await mod.sendNotification({ title, body });
+    }
+  } catch (e) {
+    console.warn("[desktop-notify] échec envoi notification anomalie:", e);
+  }
+}

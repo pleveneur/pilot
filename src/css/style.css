@@ -7365,3 +7365,58 @@ body.pilot-loading *::after {
 .sa-immersive-input .agent-chat-input-bar {
   background: var(--surface-1);
 }
+
+/* --- Détection d'anomalies (tâche 8) --- */
+.anomaly-banner {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 420px;
+  padding: 12px 14px;
+  background: var(--surface-floating);
+  border: 1px solid var(--danger, #e5484d);
+  border-left: 4px solid var(--danger, #e5484d);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  animation: modal-pop-in var(--transition-smooth);
+}
+.anomaly-banner-icon { font-size: 20px; line-height: 1.2; }
+.anomaly-banner-body { flex: 1; min-width: 0; }
+.anomaly-banner-title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.anomaly-banner-text { font-size: 12px; color: var(--text-secondary); word-break: break-word; }
+.anomaly-banner-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.anomaly-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.anomaly-btn:hover { filter: brightness(1.1); }
+.anomaly-btn-primary { background: var(--accent, #4a9eff); color: #fff; }
+.anomaly-btn-close { background: none; color: var(--text-muted); padding: 4px 6px; }
+.anomaly-btn-close:hover { color: var(--text-primary); }
+.anomaly-modal-content { width: 640px; max-width: 95vw; max-height: 80vh; display: flex; flex-direction: column; }
+.anomaly-modal-content .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.anomaly-modal-content .modal-header h3 { margin: 0; font-size: 15px; }
+.anomaly-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  min-height: 120px;
+}
+.anomaly-modal-content .modal-actions { margin-top: 12px; display: flex; justify-content: flex-end; }

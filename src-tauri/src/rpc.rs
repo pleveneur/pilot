@@ -7,8 +7,6 @@
 // lib.rs pour les autres modules).
 
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
 use crate::agent_service::SpawnMode;
@@ -203,56 +201,6 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
 /// en « en attente » entre deux sous-tâches d'un même plan d'orchestration
 /// (chaque `agent_settled` termine une exécution, mais le plan global continue).
 pub(crate) const ACTIVITY_GRACE_SECS: u64 = 15;
-
-/// Événements RPC considérés comme une activité de l'agent (maintiennent le
-/// projet « occupé »). `agent_start`/`agent_settled` basculent le drapeau busy ;
-/// tous rafraîchissent `updated` pour la fenêtre de grâce anti-flicker.
-const ACTIVITY_EVENTS: &[&str] = &[
-    "agent_start",
-    "agent_end",
-    "agent_settled",
-    "turn_start",
-    "message_start",
-    "message_update",
-    "message_end",
-    "tool_execution_start",
-    "tool_execution_update",
-    "tool_execution_end",
-    "compaction_start",
-    "compaction_end",
-    "auto_retry_start",
-    "auto_retry_end",
-];
-
-/// Construit l'observateur d'événements RPC qui alimente la map d'activité par
-/// projet (issue #13). Sur `agent_start` → busy=true ; sur `agent_settled` →
-/// busy=false (fin définitive d'une exécution, après retries/compaction).
-/// `ACTIVITY_EVENTS` rafraîchit `updated` (base de la fenêtre de grâce anti-flicker).
-pub(crate) fn make_project_activity_observer(
-    map: &Arc<Mutex<HashMap<String, crate::SessionActivity>>>,
-    project_key: &str,
-) -> rpc_manager::EventObserver {
-    let map = map.clone();
-    let key = project_key.to_string();
-    Arc::new(move |value: &Value| {
-        let t = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if !ACTIVITY_EVENTS.contains(&t) {
-            return;
-        }
-        let mut m = map.lock().unwrap();
-        let now = std::time::Instant::now();
-        let entry = m.entry(key.clone()).or_insert(crate::SessionActivity {
-            busy: false,
-            updated: now,
-        });
-        if t == "agent_start" {
-            entry.busy = true;
-        } else if t == "agent_settled" {
-            entry.busy = false;
-        }
-        entry.updated = now;
-    })
-}
 
 /// Réinitialise le drapeau d'activité d'un projet (arrêt de session / fermeture).
 pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {

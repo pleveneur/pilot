@@ -70,6 +70,7 @@ mod project_agents;
 mod db;
 mod agent;
 mod agent_service;
+mod anomaly;
 
 // ── État global de l'application ──
 
@@ -125,6 +126,9 @@ struct AppState {
     /// Issue #13 : activité de l'agent par projet (path normalisé → SessionActivity).
     /// Mise à jour en arrière-plan par l'observateur RPC de chaque session projet.
     agent_activity: Arc<Mutex<HashMap<String, SessionActivity>>>,
+    /// Tâche 8 : surveillance d'anomalie par agent (clé composite `project\u{1f}agent`
+    /// → AgentAnomalyState). Alimentée par l'observateur RPC combiné de chaque session.
+    agent_anomaly: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
     /// Issue #27 : commandes projet en cours d'exécution via le web-remote.
     /// Map run_id → processus enfant (permet l'arrêt `command_stop`). Vide si
     /// aucune commande ne tourne.
@@ -487,9 +491,18 @@ struct AppConfig {
     // explicitement du technique. Injecté dans le prompt système.
     #[serde(default)]
     super_agent_user_friendly: bool,
+    // ── Détection d'anomalies (tâche 8) ──
+    // Surveillance arrière-plan des agents bloqués (actifs sans progression).
+    // Défaut activé, seuil 30 min. Aucune action automatique : l'utilisateur est
+    // notifié et peut lancer un agent de diagnostic qui PROPOSE des évolutions.
+    #[serde(default = "default_true")]
+    anomaly_detection_enabled: bool,
+    #[serde(default = "default_anomaly_timeout_minutes")]
+    anomaly_timeout_minutes: u32,
 }
 
 fn default_true() -> bool { true }
+fn default_anomaly_timeout_minutes() -> u32 { 30 }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
 fn default_rag_endpoint() -> String { "http://127.0.0.1:11434".to_string() }
@@ -691,6 +704,8 @@ impl Default for AppConfig {
             super_agent_quality_gate: true,
             super_agent_inherit_context: false,
             super_agent_user_friendly: false,
+            anomaly_detection_enabled: true,
+            anomaly_timeout_minutes: default_anomaly_timeout_minutes(),
         }
     }
 }
@@ -1843,6 +1858,9 @@ pub fn run() {
             // les sessions pi plus anciennes que le délai de rétention configuré
             // (session_retention_days, défaut 15) pour tous les projets ouverts.
             session_history::start_session_purge(handle.clone());
+            // Tâche 8 : surveillance arrière-plan des anomalies d'agents (bloqués
+            // sans progression). Thread autonome, sans LLM, ne bloque pas l'interface.
+            anomaly::start_monitor(handle.clone(), state.agent_anomaly.clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1894,6 +1912,7 @@ pub fn run() {
                 web_shutdown: std::sync::Mutex::new(None),
                 ext_gate_cache: std::sync::Mutex::new(None),
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
+                agent_anomaly: Arc::new(Mutex::new(HashMap::new())),
                 web_runs: Mutex::new(HashMap::new()),
                 working_project: Mutex::new(None),
                 vault_key: Mutex::new(None),
@@ -2028,6 +2047,7 @@ pub fn run() {
             agents::abort_agent_process,
             agents::send_agent_process_command,
             agents::get_agent_process_state,
+            anomaly::start_diagnostic_agent,
             web_commands::set_web_password,
             web_commands::web_kick_remote,
             web_commands::web_active_count,

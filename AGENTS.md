@@ -63,6 +63,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Context Engine (auto-contexte agent) | `spec_context_engine.md` |
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
+| Détection d'anomalies (agents bloqués) | `spec_anomaly.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |

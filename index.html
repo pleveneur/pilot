@@ -334,6 +334,14 @@
               <label for="setting-notify-agent-done" title="Envoyer une notification native Windows (ou OS) quand l'agent a fini sa tâche, même pour un chat local (pas seulement à distance).">Notifier quand l'agent a terminé (tâche locale)</label>
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-anomaly-enabled" />
+              <label for="setting-anomaly-enabled" title="Surveiller en arrière-plan les agents bloqués (actifs mais sans progression depuis le seuil). Aucune action automatique : vous êtes notifié et pouvez lancer un agent de diagnostic qui propose des évolutions.">Détection d'anomalies (agents bloqués)</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-anomaly-timeout" title="Durée sans progression (en minutes) au-delà de laquelle un agent actif est signalé comme bloqué.">Seuil de blocage (minutes) :</label>
+              <input type="number" id="setting-anomaly-timeout" min="1" max="600" step="1" value="30" />
+            </div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-context-engine" />
               <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session"><i data-lucide="layers" class="icon-sm"></i> Context Engine (auto-contexte agent)</label>
             </div>

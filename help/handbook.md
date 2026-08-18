@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault -->
+<!-- PILOT-HELP generated=2026-08-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -654,7 +654,7 @@ des sessions (jours)** (0 = désactivé).
 
 ## Aide utilisateur — Mode Agents
 
-L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur) sur une demande.
+L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker) sur une demande.
 
 ### Comment ça marche
 1. Cliquez sur **🎭 Agents** dans le panneau d'actions (bouton visible dès qu'un projet est ouvert).
@@ -687,7 +687,7 @@ L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (co
 ### Gérer les agents
 - Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
 - Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
-- Le bouton **Réinitialiser** recrée les 6 agents par défaut.
+- Le bouton **Réinitialiser** recrée les 7 agents par défaut.
 
 ### Garde-fous
 - Profondeur max d'appel, budget total et par agent, détection de cycle, timeout d'inactivité, bouton **⏹ Arrêter**.
@@ -813,6 +813,24 @@ apprend et répond.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
+- **Une bulle par tour d'agent par projet** : un « tour » = depuis que
+  l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
+  l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
+  plusieurs messages (texte → appel d'outil → texte → appel d'outil → texte) :
+  tout reste dans la **MÊME bulle**. On ne crée PAS de nouvelle bulle à chaque
+  `message_end` intermédiaire ; le reset de la bulle courante se fait
+  uniquement à `agent_end` ou quand l'utilisateur envoie un nouveau message.
+- **Nouvelle bulle si changement de projet** : si le projet actif change
+  pendant un tour (ex: l'Assistant exécute `open_project`), la prochaine bulle
+  est **nouvelle** (le projet de la bulle courante est suivi dans
+  `currentBubbleProject`).
+- **Couleur par projet** : chaque projet reçoit une **couleur stable**
+  déterminée par un hash de son nom → palette de ~10 couleurs lisibles en thème
+  dark ET light. La couleur est appliquée à la bulle (**bordure gauche**
+  colorée) et au **badge projet** (fond coloré + texte blanc). La couleur est
+  **identique** pour un même projet d'une session à l'autre.
+- Les **bulles système** (messages d'info `appendSystemMessage`) ne portent
+  **aucune couleur de projet**.
 
 ### Notifications natives
 - **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a
@@ -904,8 +922,19 @@ apprend et répond.
 
 ### Déléguer le code à l'agent du projet
 - Si vous demandez une **modification de code**, l'Assistant **ne modifie pas**
-  lui-même : il **délègue la demande à l'agent standard du projet** (pi/plh de
-  coding).
+  lui-même : il **délègue la demande à un agent du projet**.
+- **Méthode par défaut — agents spécifiques** : l'Assistant exécute le travail
+  via des **agents spécifiques** (`run_agents` sur un agent du registre, ou
+  `create_agent` pour un agent sur mesure), **pas** via l'agent standard du
+  projet. Avant de déléguer, il **reformule/affine la demande** et, si elle est
+  floue ou imprécise, **pose des questions** (`ask_input` / `ask_multi_choice`)
+  pour obtenir le contexte nécessaire. Il construit une demande **claire et
+  structurée** (contexte, objectif, contraintes, format de sortie attendu) et
+  **affiche la demande finale** qu'il va envoyer avant de lancer l'agent.
+- **`delegate_to_coder` est une EXCEPTION** : à n'utiliser que pour une tâche
+  simple d'écriture directe sur le projet actif, quand aucun agent spécifique
+  ne convient ET que la création d'un nouvel agent n'est pas justifiée. L'
+  Assistant indique pourquoi il dérive dans ce cas.
 - Il **démarre l'agent en arrière-plan** et lui **envoie la demande dans sa
   session de discussion**, en précisant qu'elle vient de l'Assistant projets.
   Vous **restez sur l'onglet Assistant** pour attendre son retour (la demande
@@ -926,12 +955,26 @@ apprend et répond.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **`run_agents` non bloquant** : quand l'Assistant lance une run d'agents
+  (`run_agents`), la run est lancée **en arrière-plan** et l'Assistant **finit
+  son tour immédiatement** — vous pouvez **continuer à lui parler** pendant que
+  les agents travaillent (la zone de saisie reste active, plus de blocage). Le
+  **résultat agrégé** est injecté à l'Assistant à la fin de la run, qui vous en
+  fait le compte-rendu.
 - **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
   **recréé automatiquement** à la prochaine délégation (ou purge) — plus
   besoin de redémarrer Pilot pour redéleguer.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **Plan structuré avant délégation (plan-maker)** : pour les demandes
+  importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
+  `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
+  coût estimé en tokens, contraintes suggérées). Il **présente ce plan à
+  l'utilisateur** (via `ask_multi_choice` pour cocher les tâches à exécuter, puis
+  `ask_confirm` pour valider), puis **délègue au codeur** avec le plan approuvé
+  et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
+  modifie aucun code ; il ne fait que produire le plan JSON.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
@@ -1065,13 +1108,29 @@ spécifique ne reçoit que son rôle propre.
 - Cette garantie est **technique** (extension qui bloque toute écriture hors
   de l'espace dédié), pas seulement une consigne système.
 
-### Détection de boucle (issue #55)
+### Relance automatique (anti-blocage)
+- L'Assistant **ne s'arrête pas au premier obstacle**. Si une tâche déléguée ou
+  une action échoue, il **relance au moins une fois par lui-même** en changeant
+  d'approche (autre agent, autre formulation, autre méthode, autre découpage),
+  sans solliciter l'utilisateur.
+- Après **2 tentatives consécutives** toujours sans avancée, il prévient l'
+  utilisateur avec un **point clair** (ce qui a été tenté, pourquoi ça bloque,
+  options proposées).
+- Ce comportement est **volontaire et varié** : relancer en changeant
+  d'approche n'est PAS une répétition en boucle.
+
+### Détection de boucle (issue #55) — filet de sécurité technique
+- La **détection de boucle** (issue #55) reste un **filet de sécurité
+  technique** distinct de la relance automatique : elle cible les
+  **répétitions exactes** (même texte ou mêmes appels d'outils répétés en
+  boucle sans avancer), pas les relances variées.
 - Si l'Assistant se met à **répéter en boucle** le même texte (réflexion ou
   réponse) **ou les mêmes appels d'outils** (ex: la même commande bash enchaînée
   sans avancer), Pilot **arrête la génération** et affiche un message :
   « ⚠️ L'assistant a tourné en boucle… Veuillez reformuler votre demande. »
-- Il n'y a **pas de reprise automatique** : l'Assistant est un outil de suivi,
-  pas un codeur. Reformulez simplement votre question pour relancer.
+- Il n'y a **pas de reprise automatique** pour ce cas-là : l'Assistant est un
+  outil de suivi, pas un codeur. Reformulez simplement votre question pour
+  relancer.
 
 ### Mode « Assistant Only » immersif (A19)
 - Le bouton **⛶ (maximize-2)** en haut à gauche de l'onglet 🧭 bascule en mode
@@ -1107,7 +1166,8 @@ d'onglets.
   l'onglet 🧭 Assistant) et horodatage du dernier rafraîchissement.
 - **Stockage & Poids** : taille totale du répertoire, nombre de fichiers et de
   dossiers, poids du **code source pur** (hors dépendances/caches comme
-  `node_modules`, `target`, `.git`…) et les fichiers les plus lourds.
+  `node_modules`, `target`, `.git`…) et les fichiers les plus lourds. Une **taille réelle sur disque** (tout compris, y compris `node_modules`/`target`/`.git`) est affichée à côté du donut, pour connaître la vraie empreinte du projet.
+- **Purge des fichiers inutiles** : le tableau de bord détecte automatiquement les éléments purgeables selon le type de projet (dépendances, caches, sorties de build…). Cochez ce que vous voulez supprimer, confirmez, et l'espace est libéré. Le dossier `.git` n'est jamais supprimé (seule une compaction `git gc` est proposée, qui ne touche pas à l'historique).
 - **État Git** : branche active, fichiers modifiés, non suivis (untracked) et
   prêts à être commités (staged).
 - **Analyse du Code & Langages** : répartition des langages en % (camembert + barres),
@@ -1192,3 +1252,27 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
   bouton **œil** les révèle temporairement.
 - **Modifier / Supprimer** : boutons d'édition et de suppression sur chaque
   entrée, depuis la vue globale.
+
+---
+
+## Aide utilisateur — Détection d'anomalies
+
+Pilot surveille en arrière-plan l'activité de ses agents (codeur, agents du
+registre, reviewer, assistant). Si un agent est **actif mais sans progression**
+depuis un certain temps (seuil par défaut : **30 minutes**), Pilot vous en
+avertit.
+
+- **Notification** : une alerte s'affiche (bandeau + notification native) quand
+  un agent est détecté comme bloqué.
+- **Agent de diagnostic** : le bandeau propose un bouton **🔍 Diagnostiquer**.
+  Il lance un agent dédié qui **analyse la situation** (lit les fichiers
+  concernés) et **propose des évolutions** pour débloquer ou prévenir ce type de
+  blocage. L'agent de diagnostic **ne fait aucune action automatique** : vous
+  validez vous-même les évolutions proposées.
+- **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
+  la **Détection d'anomalies** et régler le **seuil de blocage** (en minutes).
+  Désactivée par défaut ? Non — **activée par défaut**, seuil 30 min.
+- **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
+  n'est jamais signalé. Seul un agent actif **sans aucun événement** depuis le
+  seuil déclenche l'alerte, une seule fois par blocage (réarmé à la prochaine
+  exécution).

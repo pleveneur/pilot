@@ -17,8 +17,9 @@ use std::sync::MutexGuard;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::agent::{Agent, AgentProcessState, AgentView};
+use crate::anomaly;
 use crate::db;
-use crate::rpc::{agent_event_channel, make_project_activity_observer, probe_extension_support};
+use crate::rpc::{agent_event_channel, probe_extension_support};
 use crate::rpc_manager;
 use crate::session_history;
 use crate::{config_path, resolve_agent_home, AppState};
@@ -695,7 +696,13 @@ impl AgentService {
             state.event_tx.clone(),
             "rpc-event-reviewer",
             None,
-            None,
+            // Tâche 8 : observateur combiné → surveillance d'anomalie par agent.
+            Some(anomaly::make_observer(
+                &state.agent_activity,
+                &state.agent_anomaly,
+                project,
+                &format!("{}\u{1f}{}", project, ORCH_REVIEWER_ID),
+            )),
             None,
         )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
@@ -906,7 +913,13 @@ impl AgentService {
             state.event_tx.clone(),
             SUPERAGENT_CHANNEL,
             None,
-            None,
+            // Tâche 8 : observateur combiné → surveillance d'anomalie par agent.
+            Some(anomaly::make_observer(
+                &state.agent_activity,
+                &state.agent_anomaly,
+                "",
+                &format!("\u{1f}{}", SUPERAGENT_ID),
+            )),
             Some(SUPERAGENT_ID.to_string()),
         )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
@@ -964,7 +977,13 @@ impl AgentService {
             state.event_tx.clone(),
             "rpc-event-agents",
             Some(agent_id),
-            None,
+            // Tâche 8 : observateur combiné → surveillance d'anomalie par agent.
+            Some(anomaly::make_observer(
+                &state.agent_activity,
+                &state.agent_anomaly,
+                project,
+                &format!("{}\u{1f}{}", project, agent_id),
+            )),
             None,
         )
         .map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
@@ -1061,7 +1080,14 @@ impl AgentService {
             &channel,
             None,
             // Issue #13 : observateur d'activité → map par projet (agent_start/settled).
-            Some(make_project_activity_observer(&state.agent_activity, project)),
+            // Tâche 8 : observateur combiné → map d'activité par projet + surveillance
+            // d'anomalie par agent (bloqué sans progression).
+            Some(anomaly::make_observer(
+                &state.agent_activity,
+                &state.agent_anomaly,
+                project,
+                &format!("{}\u{1f}{}", project, agent_id),
+            )),
             None,
         )
         .map_err(|e| {
