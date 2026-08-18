@@ -416,10 +416,12 @@ impl AgentService {
     /// None : la session n'est plus affichée, elle reste vivante en arrière-plan.
     pub fn pause(&self, project: &str, agent_id: &str) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
+        let mut paused_mode: Option<SpawnMode> = None;
         {
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(entry) = sessions.get_mut(&key) {
                 entry.state = SessionState::Parked;
+                paused_mode = Some(entry.mode);
             }
         }
         let mut active = self.active.lock().unwrap();
@@ -430,15 +432,23 @@ impl AgentService {
         if let Some(app) = self.app.lock().unwrap().clone() {
             self.set_state(&app, agent_id, Some(project), true, false, &AgentProcessState::Paused).ok();
         }
+        // Indexation auto (fire-and-forget) de l'index `.pilot/sessions.jsonl`
+        // du projet après le parking d'un agent délégué (run_agents), pour que
+        // l'onglet 📜 soit à jour sans action manuelle.
+        if let Some(mode) = paused_mode {
+            self.maybe_index_agent_sessions(project, mode);
+        }
         Ok(())
     }
 
     /// Arrête la session d'un agent (état Stopped) et tue le processus pi.
     pub fn stop(&self, project: &str, agent_id: &str) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
+        let mut stopped_mode: Option<SpawnMode> = None;
         {
             let mut sessions = self.sessions.lock().unwrap();
             if let Some(mut entry) = sessions.remove(&key) {
+                stopped_mode = Some(entry.mode);
                 rpc_manager::stop_session(&mut entry.session);
             }
         }
@@ -451,7 +461,47 @@ impl AgentService {
         if let Some(app) = self.app.lock().unwrap().clone() {
             self.set_state(&app, agent_id, Some(project), false, false, &AgentProcessState::Stopped).ok();
         }
+        // Indexation auto (fire-and-forget) de l'index `.pilot/sessions.jsonl`
+        // du projet après l'arrêt d'un agent délégué (run_agents), pour que
+        // l'onglet 📜 reflète la session terminée sans action manuelle.
+        if let Some(mode) = stopped_mode {
+            self.maybe_index_agent_sessions(project, mode);
+        }
         Ok(())
+    }
+
+    /// Indexe (fire-and-forget) l'index des sessions du projet concerné après la
+    /// fin d'une session d'agent délégué (mode `AgentProcess`, lancé via
+    /// `run_agents`). Tolère les erreurs : n'échoue jamais et ne bloque pas
+    /// l'appelant (thread détaché). Ne s'applique qu'aux agents délégués :
+    ///   - la session principale du chat est indexée par le frontend
+    ///     (`captureSessionHistory` à l'`agent_end`),
+    ///   - le reviewer d'orchestration et le super-agent utilisent `--no-session`
+    ///     (aucun JSONL à indexer),
+    ///   - le super-agent vit sous un projet pseudo-global `""` (ignoré).
+    /// Évite la sur-indexation et les boucles (déclenché uniquement sur stop/pause).
+    fn maybe_index_agent_sessions(&self, project: &str, mode: SpawnMode) {
+        if mode != SpawnMode::AgentProcess || project.is_empty() {
+            return;
+        }
+        let app = match self.app.lock().unwrap().clone() {
+            Some(a) => a,
+            None => return,
+        };
+        let project = project.to_string();
+        std::thread::Builder::new()
+            .name("pilot-agent-session-index".into())
+            .spawn(move || {
+                let state = app.state::<AppState>();
+                let config = state.config.lock().unwrap().clone();
+                if let Err(e) = session_history::index_project_sessions(&project, &config) {
+                    eprintln!(
+                        "[sessions] Indexation auto après fin d'agent délégué échouée pour {} : {}",
+                        project, e
+                    );
+                }
+            })
+            .ok();
     }
 
     /// Route une commande vers la session d'un agent (une seule indirection).
