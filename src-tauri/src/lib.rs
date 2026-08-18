@@ -2140,6 +2140,7 @@ pub fn run() {
             super_agent::super_agent_db_execute,
             super_agent::super_agent_schedule_create,
             super_agent::super_agent_schedule_delete,
+            super_agent::super_agent_schedule_set_enabled,
             super_agent::super_agent_schedule_list,
             super_agent::super_agent_schedule_tick,
             super_agent::abort_super_agent,

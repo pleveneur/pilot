@@ -1617,6 +1617,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           result = await invoke("super_agent_schedule_list");
         } else if (req.op === "delete") {
           result = await invoke("super_agent_schedule_delete", { id: Number(req.id) });
+        } else if (req.op === "set_enabled") {
+          result = await invoke("super_agent_schedule_set_enabled", {
+            id: Number(req.id),
+            enabled: Boolean(req.enabled),
+          });
         } else {
           result = { error: `Opération schedule inconnue : ${req.op}` };
         }

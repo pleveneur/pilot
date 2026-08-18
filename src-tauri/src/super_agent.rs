@@ -357,7 +357,7 @@ pub(crate) fn do_send_super_agent_prompt(
     full_system.push_str(&personality_guideline(adaptive_personality, &personality));
     // Chantier #13 : documenter l'outil schedule (relances différées/périodiques).
     full_system.push_str(
-        "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs.",
+        "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs. Désactive automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au lieu de le supprimer, et réactive-le si le besoin revient.",
     );
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
@@ -611,8 +611,11 @@ pub(crate) fn schedule_insert(
             SCHEDULE_MIN_EVERY_SECS, every
         ));
     }
+    // Seuls les rappels ACTIFS (enabled = 1) comptent dans la limite : un rappel
+    // désactivé libère sa place et peut être réactivé plus tard sans bloquer la
+    // création de nouveaux rappels.
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM assistant_schedules", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM assistant_schedules WHERE enabled = 1", [], |r| r.get(0))
         .map_err(|e| format!("Erreur SQL : {}", e))?;
     if count >= SCHEDULE_MAX {
         return Err(format!(
@@ -638,6 +641,19 @@ pub(crate) fn schedule_insert(
 pub(crate) fn schedule_delete(conn: &Connection, id: i64) -> Result<bool, String> {
     let n = conn
         .execute("DELETE FROM assistant_schedules WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(n > 0)
+}
+
+/// Active/désactive une planification par id (sans la supprimer, pour pouvoir
+/// la réactiver plus tard). Retourne false si l'id n'existe pas. Fonction pure
+/// sur `Connection` pour être testable.
+pub(crate) fn schedule_set_enabled(conn: &Connection, id: i64, enabled: bool) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE assistant_schedules SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![if enabled { 1 } else { 0 }, id],
+        )
         .map_err(|e| format!("Erreur SQL : {}", e))?;
     Ok(n > 0)
 }
@@ -725,6 +741,14 @@ pub fn super_agent_schedule_delete(app: AppHandle, id: i64) -> Result<Value, Str
     let conn = open_db(&app)?;
     let removed = schedule_delete(&conn, id)?;
     Ok(serde_json::json!({ "ok": removed, "id": id }))
+}
+
+/// Active/désactive une planification d'action récurrente (sans la supprimer).
+#[tauri::command]
+pub fn super_agent_schedule_set_enabled(app: AppHandle, id: i64, enabled: bool) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let updated = schedule_set_enabled(&conn, id, enabled)?;
+    Ok(serde_json::json!({ "ok": updated, "id": id, "enabled": enabled }))
 }
 
 /// Liste les planifications d'actions récurrentes.
@@ -1329,7 +1353,7 @@ pub fn query_super_agent(state: State<AppState>, app: AppHandle, question: Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list};
+    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list, schedule_set_enabled};
     use rusqlite::Connection;
 
     fn mem_conn() -> Connection {
@@ -1390,6 +1414,35 @@ mod tests {
         assert!(schedule_delete(&conn, id).unwrap());
         assert!(!schedule_delete(&conn, id).unwrap());
         assert!(schedule_list(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn schedule_set_enabled_toggles_and_ignores_unknown_id() {
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "s1", "prompt", 120).unwrap();
+        // Désactivation : le rappel n'est plus dû (enabled = 0).
+        assert!(schedule_set_enabled(&conn, id, false).unwrap());
+        assert!(schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap().is_empty());
+        // Réactivation : le rappel redevient dû.
+        assert!(schedule_set_enabled(&conn, id, true).unwrap());
+        assert_eq!(schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap().len(), 1);
+        // Id inexistant : retourne false, pas d'erreur.
+        assert!(!schedule_set_enabled(&conn, 9999, false).unwrap());
+    }
+
+    #[test]
+    fn schedule_max_counts_only_enabled() {
+        let conn = mem_conn();
+        // Remplit la limite avec des rappels actifs.
+        for i in 0..20 {
+            schedule_insert(&conn, &format!("s{}", i), "prompt", 120).unwrap();
+        }
+        assert!(schedule_insert(&conn, "s21", "prompt", 120).is_err());
+        // Désactiver un rappel libère une place : on peut en créer un nouveau.
+        let first = schedule_list(&conn).unwrap();
+        let first_id = first[0]["id"].as_i64().unwrap();
+        assert!(schedule_set_enabled(&conn, first_id, false).unwrap());
+        assert!(schedule_insert(&conn, "s21", "prompt", 120).is_ok());
     }
 
     #[test]

@@ -20,3 +20,17 @@ export function parseScheduleEvery(value) {
   }
   return null;
 }
+
+// Validation miroir de l'opération Rust schedule_set_enabled (désactivation /
+// réactivation d'un rappel sans le supprimer). Retourne null si valide, sinon
+// un message d'erreur. `id` doit être un entier positif, `enabled` un booléen.
+export function parseScheduleSetEnabled(id, enabled) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || Number.isNaN(n) || n <= 0) {
+    return "L'id du rappel doit être un entier positif.";
+  }
+  if (typeof enabled !== "boolean") {
+    return "enabled doit être un booléen.";
+  }
+  return null;
+}

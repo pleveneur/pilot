@@ -306,8 +306,13 @@ spécifique ne reçoit que son rôle propre.
   à l'échéance : relance différée (« recheck dans 10 min ») ou périodique
   (« point toutes les 5 min tant que le codeur tourne »).
 - Outils : **`schedule_create`** (créer une relance périodique, `everySeconds`
-  ≥ 60), **`schedule_list`** (lister), **`schedule_delete`** (supprimer).
-- Garde-fous : `every` ≥ 60 s, **max 20** planifications actives, **1 fire** par
+  ≥ 60), **`schedule_list`** (lister), **`schedule_delete`** (supprimer),
+  **`schedule_set_enabled`** (désactiver/réactiver un rappel sans le supprimer).
+- L'Assistant **désactive automatiquement** un rappel devenu inutile (ne détecte
+  plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au
+  lieu de le supprimer, et le **réactive** si le besoin revient.
+- Garde-fous : `every` ≥ 60 s, **max 20** planifications **actives** (un rappel
+  désactivé ne compte pas et libère sa place), **1 fire** par
   planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
   morte — les rappels `every` accumulent un retard, repris à la reprise).
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.

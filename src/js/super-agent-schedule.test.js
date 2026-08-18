@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, parseScheduleSetEnabled } from "./super-agent-schedule.js";
 
 describe("shouldScheduleTick (garde-fou 4 : pas de tick si session morte)", () => {
   it("false si l'onglet 🧭 est fermé (session morte)", () => {
@@ -30,5 +30,26 @@ describe("parseScheduleEvery (validation miroir de la borne Rust >= 60)", () => 
     expect(parseScheduleEvery(1.5)).toContain("entier");
     expect(parseScheduleEvery(NaN)).toContain("entier");
     expect(parseScheduleEvery(undefined)).toContain("entier");
+  });
+});
+
+describe("parseScheduleSetEnabled (validation miroir de schedule_set_enabled)", () => {
+  it("accepte un id entier positif et un booléen", () => {
+    expect(parseScheduleSetEnabled(1, true)).toBeNull();
+    expect(parseScheduleSetEnabled(42, false)).toBeNull();
+  });
+
+  it("rejette un id invalide (désactivation impossible)", () => {
+    expect(parseScheduleSetEnabled(0, false)).toContain("entier positif");
+    expect(parseScheduleSetEnabled(-3, false)).toContain("entier positif");
+    expect(parseScheduleSetEnabled("abc", false)).toContain("entier positif");
+    expect(parseScheduleSetEnabled(1.5, false)).toContain("entier positif");
+    expect(parseScheduleSetEnabled(undefined, false)).toContain("entier positif");
+  });
+
+  it("rejette un enabled non booléen", () => {
+    expect(parseScheduleSetEnabled(1, "true")).toContain("booléen");
+    expect(parseScheduleSetEnabled(1, 1)).toContain("booléen");
+    expect(parseScheduleSetEnabled(1, undefined)).toContain("booléen");
   });
 });

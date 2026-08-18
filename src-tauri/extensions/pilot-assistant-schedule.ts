@@ -7,6 +7,8 @@
 //     (everySeconds >= 60). Retourne { id, nextFireAt }.
 //   - schedule_list() → liste les planifications actives.
 //   - schedule_delete(id) → supprime une planification.
+//   - schedule_set_enabled(id, enabled) → désactive/réactive une planification
+//     sans la supprimer (pour la réactiver plus tard).
 //
 // Garde-fous (côté Rust, super_agent.rs) : every >= 60 s, max 20 planifications,
 // 1 fire par planification et par tick, pas de tick si la session super-agent est
@@ -75,6 +77,30 @@ export default function (pi: ExtensionAPI) {
       const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Liste annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "schedule_set_enabled",
+    label: "Schedule Set Enabled",
+    description:
+      "Désactiver ou réactiver une planification par son id (sans la supprimer). Retourne { ok, id, enabled }. À utiliser pour désactiver automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) au lieu de le supprimer, et le réactiver si le besoin revient.",
+    promptSnippet: "schedule_set_enabled: désactiver/réactiver une relance sans la supprimer",
+    promptGuidelines: [
+      "Use schedule_set_enabled to disable a schedule that is no longer useful (nothing detected, task done, condition met) instead of deleting it, and re-enable it if the need returns. Get the id from schedule_list or schedule_create.",
+    ],
+    parameters: Type.Object({
+      id: Type.Integer({ description: "Id de la planification à désactiver/réactiver" }),
+      enabled: Type.Boolean({ description: "true pour réactiver, false pour désactiver" }),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const req = JSON.stringify({ op: "set_enabled", id: params.id, enabled: params.enabled });
+      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Modification de planification annulée." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
