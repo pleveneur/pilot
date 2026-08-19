@@ -285,7 +285,7 @@ const SUPER_AGENT_AGENTSMD_PROMPT: &str = "\n\n## Règle par défaut — fichier
 /// réussisse du premier coup, et ne JAMAIS relancer la même tâche à l'identique
 /// (cause racine des boucles de `run_agents`). Distinct de la détection de
 /// boucle technique (issue #55) qui reste un filet de sécurité.
-const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_agents`\nQuand tu délègues via `run_agents`, construis une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, fichiers concernés, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. Une délégation bien formulée vaut mieux que plusieurs tentatives répétées : prends le temps de bien formuler avant de lancer.\n\nNe relance JAMAIS la même tâche à l'identique :\n- Si une run échoue ou renvoie un résultat inutile, ne ré-émets pas le même `run_agents` avec la même tâche.\n- Change d'approche (autre agent, autre formulation, autre découpage) ou interroge l'utilisateur (`ask_input` / `ask_multi_choice`) pour clarifier.\n- Si tu as déjà lancé une tâche et reçu son résultat, passe à la suite : ne refais pas la même délégation.\n";
+const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_agents`\nQuand tu délègues via `run_agents`, construis une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, fichiers concernés, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. Une délégation bien formulée vaut mieux que plusieurs tentatives répétées : prends le temps de bien formuler avant de lancer.\n\nL'enveloppe de brief structuré (sections « ## Contexte », « ## Objectif », « ## Consignes », « ## Ce qu'il ne faut PAS faire ») est appliquée MÉCANIQUEMENT côté Pilot (super-agent.js) à chaque délégation : n'insère PAS toi-même ces sections d'en-tête dans ta tâche (Pilot les ajoute et les dédoublonnerait). Rédige le CONTENU de la tâche (ce que l'agent doit faire, ses contraintes, les vérifications attendues).\n\nNe relance JAMAIS la même tâche à l'identique :\n- Si une run échoue ou renvoie un résultat inutile, ne ré-émets pas le même `run_agents` avec la même tâche.\n- Change d'approche (autre agent, autre formulation, autre découpage) ou interroge l'utilisateur (`ask_input` / `ask_multi_choice`) pour clarifier.\n- Si tu as déjà lancé une tâche et reçu son résultat, passe à la suite : ne refais pas la même délégation.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : usage de
 /// l'outil `list_agent_sessions` et de la dernière activité (`lastActivity` /
@@ -927,6 +927,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "show_tools": cfg.super_agent_show_tools,
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
         "super_agent_quality_gate": cfg.super_agent_quality_gate,
+        "super_agent_force_structured_brief": cfg.super_agent_force_structured_brief,
         "super_agent_inherit_context": cfg.super_agent_inherit_context,
         "super_agent_user_friendly": cfg.super_agent_user_friendly,
         "adaptive_personality": cfg.super_agent_adaptive_personality,
@@ -946,6 +947,7 @@ pub fn set_super_agent_config(
     show_tools: Option<bool>,
     adaptive_personality: Option<bool>,
     super_agent_quality_gate: Option<bool>,
+    super_agent_force_structured_brief: Option<bool>,
     super_agent_inherit_context: Option<bool>,
     super_agent_user_friendly: Option<bool>,
 ) -> Result<(), String> {
@@ -973,6 +975,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = super_agent_quality_gate {
         cfg.super_agent_quality_gate = v;
+    }
+    if let Some(v) = super_agent_force_structured_brief {
+        cfg.super_agent_force_structured_brief = v;
     }
     if let Some(v) = super_agent_inherit_context {
         cfg.super_agent_inherit_context = v;

@@ -488,6 +488,13 @@ struct AppConfig {
     // quality-gate dans son prompt (consigne + cargo test --lib).
     #[serde(default = "default_true")]
     super_agent_quality_gate: bool,
+    // Paramètre assistant : quand activé (défaut), l'enveloppe de brief
+    // STRUCTURÉ (contexte/objectif/consignes/ce qu'il ne faut PAS faire) est
+    // appliquée mécaniquement par super-agent.js (applyAssistantBriefEnvelope)
+    // aux tâches déléguées via delegate_to_coder / run_agents. Quand désactivé,
+    // seule la consigne quality-gate est préfixée (pas de structuration).
+    #[serde(default = "default_true")]
+    super_agent_force_structured_brief: bool,
     // Paramètre assistant : quand activé (défaut false), les agents spécifiques
     // utilisés par l'assistant (run_agents) héritent du contexte de l'agent
     // standard du projet (rôle + RAG/Context Engine + mémoire + Code Graph),
@@ -713,6 +720,7 @@ impl Default for AppConfig {
             super_agent_block_agent_input: false,
             super_agent_invisible_agent: true,
             super_agent_quality_gate: true,
+            super_agent_force_structured_brief: true,
             super_agent_inherit_context: false,
             super_agent_user_friendly: false,
             anomaly_detection_enabled: true,

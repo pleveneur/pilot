@@ -20,6 +20,7 @@ import {
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
 import { runAgentsForAssistantAsync, setBusNotifyCallback } from "./agents-bus.js";
+import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -103,46 +104,13 @@ function speak(text) {
   } catch (_) {}
 }
 
-/** Consigne quality-gate à préfixer aux prompts des agents appelés par
- * l'assistant (delegate_to_coder / run_agents). Vide si le paramètre
- * `super_agent_quality_gate` est désactivé. */
-function qualityGateInstruction() {
-  if (configCache.super_agent_quality_gate === false) return "";
-  return "Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier. Lance cargo test --lib avant de committer.\n\n";
-}
-
-/**
- * Construit un brief STRUCTURÉ pour les agents lancés via `run_agents`
- * (anti-boucle). Le mode manuel fonctionne bien car il fournit un prompt
- * structuré (contexte, objectif, contraintes, fichiers, vérifications, ce
- * qu'il ne faut PAS faire) + une purge de la conversation avant chaque tâche.
- * On reproduit ici cette structure pour que l'agent réussisse du premier coup
- * (au lieu de mal comprendre et d'obliger l'assistant à relancer → boucle).
- * @param {string} task - tâche brute fournie par l'assistant.
- * @returns {string} brief structuré à envoyer à l'agent.
- */
-function buildStructuredAgentBrief(task) {
-  const qg = qualityGateInstruction();
-  const t = String(task || "").trim();
-  return (
-    qg +
-    "## Contexte\n" +
-    "Tu es un agent du registre de Pilot, lancé par l'assistant de suivi multi-projets. " +
-    "Exécute la tâche suivante de façon autonome et complète, dans le projet de travail indiqué.\n\n" +
-    "## Objectif\n" +
-    (t || "(tâche non précisée)") +
-    "\n\n" +
-    "## Consignes\n" +
-    "- Analyse le projet avant d'agir : lis les fichiers concernés et l'arborescence.\n" +
-    "- Modifie UNIQUEMENT ce qui est nécessaire à l'objectif.\n" +
-    "- Vérifie ton travail : compile (cargo test --lib si Rust) et tests avant de conclure.\n" +
-    "- Termine par un résumé concis de ce que tu as fait (DONE: ...).\n\n" +
-    "## Ce qu'il ne faut PAS faire\n" +
-    "- Ne pas modifier des fichiers hors de l'objectif.\n" +
-    "- Ne pas répéter des actions identiques en boucle : si une action échoue, change d'approche.\n" +
-    "- Ne pas inventer de résultats : si tu ne peux pas vérifier, dis-le clairement.\n"
-  );
-}
+/** Enveloppe de brief structuré (TÂCHE T1) : déléguée au module pur
+ * structured-brief.js et appliquée MÉCANIQUEMENT ici (super-agent.js) sur les
+ * deux chemins de délégation : `run_agents` ET `delegate_to_coder`. La consigne
+ * quality-gate et l'enveloppe (contexte/objectif/consignes/ce qu'il ne faut
+ * PAS faire) ne sont plus reconstruites localement. NB : le bus d'agents
+ * (agents-bus.js) ne construit PAS l'enveloppe — il reçoit le brief déjà
+ * enveloppé. */
 
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
@@ -1542,9 +1510,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           return;
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche sur les agents : ${agentIds.join(", ")}…`);
-        // Anti-boucle : brief STRUCTURÉ (comme le mode manuel) + purge de la
-        // conversation de chaque agent avant la run (contexte vierge).
-        const brief = buildStructuredAgentBrief(task);
+        // Anti-boucle : l'enveloppe de brief STRUCTURÉ (contexte/objectif/
+        // consignes/ce qu'il ne faut PAS faire) est appliquée ICI, côté
+        // super-agent.js, via applyAssistantBriefEnvelope (elle garantit aussi
+        // la consigne quality-gate). Le bus d'agents (agents-bus.js) passe le
+        // brief tel quel à l'agent — c'est donc ce module qui construit
+        // l'enveloppe, pas le bus. + purge de la conversation de chaque agent
+        // avant la run (contexte vierge).
+        const brief = applyAssistantBriefEnvelope(task, {
+          forceStructured: configCache.super_agent_force_structured_brief !== false,
+          qualityGate: configCache.super_agent_quality_gate !== false,
+        });
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject }));
         const projectPath = window._pilotProjectPath || null;
         // T5 : exclusivité des spécialités par projet. Si un agent demandé est
@@ -1877,7 +1853,14 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      const request = qualityGateInstruction() + info.request;
+      // TÂCHE T1 : l'enveloppe de brief structuré (contexte/objectif/consignes/
+      // ce qu'il ne faut PAS faire) est appliquée mécaniquement à la demande
+      // déléguée, en plus de la consigne quality-gate (config). Ne duplique pas
+      // les sections que l'assistant aurait déjà rédigées.
+      const request = applyAssistantBriefEnvelope(info.request, {
+        forceStructured: configCache.super_agent_force_structured_brief !== false,
+        qualityGate: configCache.super_agent_quality_gate !== false,
+      });
       // A13 (assistant headless multi-projets) : un `project` explicite permet
       // de déléguer à un projet NON actif. Son agent est démarré en arrière-plan
       // (invisible) sans ouvrir le projet ni l'onglet. Sinon, on retombe sur le
