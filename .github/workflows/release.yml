@@ -41,9 +41,16 @@ jobs:
             /etc/apt/sources.list 2>/dev/null || true
       - name: Install Linux dependencies (Tauri)
         if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # Forcer IPv4 + timeouts/retries : évite le blocage du miroir Ubuntu
+          # (le job restait suspendu indéfiniment sur apt-get).
+          export APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+            -o Acquire::http::ConnectionAttemptTimeout=10"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
@@ -126,9 +133,16 @@ jobs:
             /etc/apt/sources.list 2>/dev/null || true
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          # Forcer IPv4 + timeouts/retries : évite le blocage du miroir Ubuntu
+          # (le job restait suspendu indéfiniment sur apt-get).
+          export APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 \
+            -o Acquire::http::ConnectionAttemptTimeout=10"
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
