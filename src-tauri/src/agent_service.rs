@@ -309,6 +309,19 @@ impl AgentService {
         mode: SpawnMode,
     ) -> Result<bool, String> {
         let key = Self::session_key(project, agent_id);
+        // T4 : exclusivité des spécialités par projet. Un seul agent de chaque
+        // spécialité (agent_id) par projet à la fois. Ne s'applique qu'aux
+        // agents multi-rôles H2 V2 (mode AgentProcess) : la session principale,
+        // le reviewer d'orchestration et le super-agent ne sont pas concernés.
+        // Le frontend met la demande en file d'attente (T5) ; ce garde-fou Rust
+        // garantit l'invariant en cas de course (refus explicite au lieu d'un
+        // double démarrage concurrent).
+        if mode == SpawnMode::AgentProcess && self.agent_process_alive(project, agent_id) {
+            return Err(format!(
+                "Un agent « {} » est déjà actif sur ce projet (exclusivité des spécialités).",
+                agent_id
+            ));
+        }
         // Seed : si l'agent n'existe pas en base (ex: agent `default` du chat
         // principal jamais créé automatiquement), le créer AVANT de lancer la
         // session pour que `set_state`/`set_visible` (UPDATE) fonctionnent.
@@ -580,6 +593,27 @@ impl AgentService {
                 .map(|s| s.is_none())
                 .unwrap_or(false),
             None => false,
+        }
+    }
+
+    /// Indique si un agent multi-rôles H2 V2 (mode `AgentProcess`) est déjà
+    /// vivant pour (project, agent_id). Base de l'exclusivité des spécialités
+    /// par projet (T4) : un seul agent de chaque spécialité (agent_id) par
+    /// projet à la fois. Ne concerne QUE les agents multi-rôles H2 V2 : la
+    /// session principale, le reviewer d'orchestration et le super-agent ne
+    /// sont pas concernés (une session `MainSession` du même agent_id n'est
+    /// pas comptée).
+    pub fn agent_process_alive(&self, project: &str, agent_id: &str) -> bool {
+        let key = Self::session_key(project, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) if e.mode == SpawnMode::AgentProcess => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false),
+            _ => false,
         }
     }
 
@@ -1024,13 +1058,26 @@ impl AgentService {
         // projet (RAG/Context Engine + mémoire + Code Graph) en plus de leur rôle.
         let inherit_context = state.config.lock().unwrap().super_agent_inherit_context;
         let mut extensions: Vec<String> = Vec::new();
-        if inherit_context && probe_extension_support(&state, pi_path) {
+        if probe_extension_support(&state, pi_path) {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("extensions");
                 if std::fs::create_dir_all(&dir).is_ok() {
-                    let ctx_file = dir.join("pilot-context.ts");
-                    if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
-                        extensions.push(ctx_file.to_string_lossy().to_string());
+                    // Porte pré-écriture (Phase 0 orchestration multi-agents) :
+                    // bloque les écritures sur les fichiers réservés au codeur pour
+                    // les autres spécialistes (pilot-reserve-gate). Le codeur n'est
+                    // pas bloqué (l'extension compare l'agent_id via PILOT_AGENT_ID).
+                    let gate_file = dir.join("pilot-reserve-gate.ts");
+                    if std::fs::write(&gate_file, include_str!("../extensions/pilot-reserve-gate.ts")).is_ok() {
+                        extensions.push(gate_file.to_string_lossy().to_string());
+                    }
+                    // #21 : quand l'assistant active l'héritage de contexte, les
+                    // agents spécifiques chargent aussi pilot-context.ts (comme
+                    // l'agent standard) pour hériter du contexte projet.
+                    if inherit_context {
+                        let ctx_file = dir.join("pilot-context.ts");
+                        if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
+                            extensions.push(ctx_file.to_string_lossy().to_string());
+                        }
                     }
                 }
             }
@@ -1729,6 +1776,58 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!svc.agent_alive(proj, "default"), "session tuée → pas vivante");
+    }
+
+    /// T4 : `agent_process_alive` détecte une session d'agent multi-rôles H2 V2
+    /// (mode AgentProcess) vivante pour (project, agent_id). Base de
+    /// l'exclusivité des spécialités par projet : un seul agent de chaque
+    /// spécialité (agent_id) par projet à la fois. Une session `MainSession` du
+    /// même agent_id n'est PAS comptée (l'exclusivité ne concerne que les
+    /// agents multi-rôles H2 V2).
+    #[test]
+    fn agent_process_alive_detects_exclusivity() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Aucune session → pas vivante.
+        assert!(!svc.agent_process_alive(proj, "codeur"), "session absente → pas vivante");
+        // Session AgentProcess vivante → vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        assert!(svc.agent_process_alive(proj, "codeur"), "agent_process vivant détecté");
+        // Une session MainSession du même agent_id n'est PAS comptée (exclusivité
+        // réservée aux agents multi-rôles H2 V2).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        assert!(!svc.agent_process_alive(proj, "default"), "session main non concernée");
+        // Tuer le processus → plus vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&AgentService::session_key(proj, "codeur")) {
+                let _ = entry.session.child.kill();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!svc.agent_process_alive(proj, "codeur"), "processus tué → plus vivante");
     }
 
     /// `clear_active_if_dead` réinitialise un pointeur `active` orphelin

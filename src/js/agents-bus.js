@@ -30,6 +30,11 @@ import {
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
 } from "./loop-detection.js";
+import {
+  enqueueExclusivity,
+  dequeueExclusivity,
+  isAgentActiveOnProject as isAgentActiveOnProjectSessions,
+} from "./exclusivity-queue.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -79,6 +84,11 @@ let busState = {
   // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
   // verrou est "running" sans activité depuis trop longtemps, on le libère.
   lastActivityAt: null,
+  // T5 : file d'attente d'exclusivité des spécialités par projet. Clé
+  // `project\u{1f}agent_id` → file d'assignments en attente. Quand un agent de
+  // même agent_id est déjà actif sur le même projet, la demande est mise en
+  // attente et lancée automatiquement à la fin de la tâche en cours.
+  exclusivityQueue: {},
 };
 
 function resetBusState() {
@@ -101,6 +111,7 @@ function resetBusState() {
   busState.loopLastChecked = {};
   busState.agentProject = {};
   busState.lastActivityAt = null;
+  busState.exclusivityQueue = {};
 }
 
 // Bug #9 : watchdog de sécurité du verrou de run. Si la run est marquée
@@ -179,6 +190,68 @@ async function anyActiveAgentAlive() {
 function emit(event, data) {
   const cb = busState.callbacks[event];
   if (cb) cb(data);
+}
+
+/**
+ * T5 : indique si un agent multi-rôles H2 V2 est déjà actif sur un projet donné.
+ * Vérifie d'abord l'état local (agents de la run courante), puis les sessions
+ * vivantes via `list_agent_sessions` (agents de runs précédentes encore actifs).
+ * Fail-open : en cas d'erreur de sonde, on ne bloque pas (prudence).
+ * @param {string} agentId
+ * @param {string} project
+ * @returns {Promise<boolean>}
+ */
+async function isAgentActiveOnProject(agentId, project) {
+  // 1. Local : agent déjà actif dans la run courante sur ce projet.
+  if (busState.activeAgents.has(agentId)) {
+    if (busState.agentProject[agentId] === project) return true;
+  }
+  // 2. Sessions vivantes (agents de runs précédentes encore actifs).
+  try {
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    return isAgentActiveOnProjectSessions(sessions, agentId, project);
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * T5 : permet au frontend (super-agent.js) d'enregistrer un callback de
+ * notification pour informer l'assistant des événements de file d'attente
+ * (demande en attente / démarrage). Conservé par `_runAgentsForAssistant`
+ * (spread de prevCallbacks).
+ * @param {function} fn - ({ agentId, message }) => void
+ */
+export function setBusNotifyCallback(fn) {
+  busState.callbacks.notify = fn;
+}
+
+/**
+ * T5 : libère le créneau (project, agent_id) quand un agent termine (ou échoue)
+ * son tour. S'il y a une demande en file d'attente pour ce couple, on la lance
+ * immédiatement (même agent, même projet). Elle reste dans le groupe parallèle
+ * courant : `dispatchParallel` a conservé son `pending` au moment de la mise en
+ * file, donc la run ne se termine pas avant que la demande en attente ne se soit
+ * réellement exécutée. Sans ce relancement, l'item retiré par `dequeueExclusivity`
+ * était perdu et le groupe ne se terminait jamais (run bloquée).
+ */
+async function launchNextQueued(agentId, project) {
+  const next = dequeueExclusivity(busState.exclusivityQueue, agentId, project);
+  if (!next) return;
+  const id = next.agentId || agentId;
+  const agent = busState.agents.get(id);
+  if (!agent) {
+    // Agent introuvable : enregistrer un résultat d'erreur dans le groupe
+    // parallèle afin que la run ne reste pas bloquée (pending conservé).
+    if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === id)) {
+      busState.parallelGroup.results[id] = { status: "error", text: `Agent "${id}" introuvable.` };
+      busState.parallelGroup.pending--;
+    }
+    return;
+  }
+  emit("notify", { agentId: id, message: `▶️ L'agent ${id} démarre sa tâche en file d'attente sur ce projet.` });
+  await runAgentTurn(agent, next.brief, "", next.project || project, undefined);
 }
 
 function resetTimeout() {
@@ -538,8 +611,12 @@ async function finishAgentTurn(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
+  const project = busState.agentProject[agentId];
   busState.activeAgents.delete(agentId);
   delete busState.agentProject[agentId];
+  // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
+  // de la file d'attente, s'il y en a une.
+  if (project) await launchNextQueued(agentId, project);
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
@@ -631,8 +708,12 @@ async function finishAgentTurn(agentId) {
 async function failAgentTurn(agentId, reason) {
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
+  const project = busState.agentProject[agentId];
   busState.activeAgents.delete(agentId);
   delete busState.agentProject[agentId];
+  // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
+  // de la file d'attente, s'il y en a une.
+  if (project) await launchNextQueued(agentId, project);
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
   if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
@@ -943,6 +1024,21 @@ async function dispatchParallel(assignments, onComplete, options) {
       continue;
     }
     consumeBudget(a.agentId);
+    // T5 : exclusivité des spécialités par projet. Si un agent de même agent_id
+    // est déjà actif sur le même projet, mettre la demande en file d'attente au
+    // lieu de la lancer (elle se lancera automatiquement à la fin de la tâche en
+    // cours). La demande reste dans le groupe parallèle (pending conservé) pour
+    // que la run ne se termine pas avant son exécution.
+    const project = a.project || window._pilotProjectPath || ".";
+    if (await isAgentActiveOnProject(a.agentId, project)) {
+      enqueueExclusivity(busState.exclusivityQueue, a.agentId, project, a);
+      busState.parallelGroup.results[a.agentId] = {
+        status: "queued",
+        text: `⏳ Demande mise en file d'attente : l'agent ${a.agentId} est déjà actif sur ce projet. Elle se lancera automatiquement à la fin de la tâche en cours.`,
+      };
+      emit("notify", { agentId: a.agentId, message: `⏳ L'agent ${a.agentId} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.` });
+      continue;
+    }
     await runAgentTurn(agent, a.brief, "", a.project, options);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège

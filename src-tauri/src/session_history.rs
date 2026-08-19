@@ -34,6 +34,22 @@ fn sessions_tags_path(project_path: &str) -> std::path::PathBuf {
     pilot_meta_dir(project_path).join("sessions-tags.json")
 }
 
+/// Racine `.pilot/sessions/` du projet (dossier de session isolé par agent,
+/// orchestration multi-agents Phase 0). Créé à l'indexation. Les fichiers de
+/// session pi restent dans le dossier de sessions pi (isolation par agent déjà
+/// assurée par sous-dossier) et l'index H9 reste `.pilot/sessions.jsonl` : ce
+/// dossier est un espace dédié pour le suivi d'orchestration des phases suivantes.
+fn pilot_sessions_dir(project_path: &str) -> std::path::PathBuf {
+    pilot_meta_dir(project_path).join("sessions")
+}
+
+/// Garantit l'existence du dossier `.pilot/sessions/` (Phase 0). Ne déplace pas
+/// les fichiers de session pi et ne touche pas à l'index H9.
+fn ensure_pilot_sessions_dir(project_path: &str) {
+    let dir = pilot_sessions_dir(project_path);
+    let _ = fs::create_dir_all(&dir);
+}
+
 /// Dossier des sessions pi pour le projet courant (même résolution que
 /// `list_sessions` : `rpc_session_dir` si défini, sinon `~/.{stem}/agent/sessions`).
 pub(crate) fn project_sessions_dir(config: &AppConfig) -> std::path::PathBuf {
@@ -353,6 +369,9 @@ pub(crate) fn index_project_sessions(
     project_path: &str,
     config: &AppConfig,
 ) -> Result<Vec<Value>, String> {
+    // Phase 0 orchestration : garantir le dossier `.pilot/sessions/` (isolé par
+    // agent) à chaque indexation, sans déplacer les fichiers pi ni l'index H9.
+    ensure_pilot_sessions_dir(project_path);
     let session_dir = project_sessions_dir(config);
     let folder_name = project_to_session_folder(project_path);
     let project_dir = session_dir.join(&folder_name);

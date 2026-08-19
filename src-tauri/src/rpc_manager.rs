@@ -65,6 +65,12 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     for ep in extensions.iter().filter(|e| !e.is_empty()) {
         cmd.args(["--extension", ep]);
     }
+    // Identité de l'agent pour les extensions (ex: pilot-reserve-gate Phase 0) :
+    // expose l'agent_id courant au processus pi via une variable d'environnement.
+    // Sans effet pour les sessions sans agent_id (session principale, reviewer).
+    if let Some(aid) = agent_id {
+        cmd.env("PILOT_AGENT_ID", aid);
+    }
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);

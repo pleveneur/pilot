@@ -67,6 +67,25 @@ export function buildCoordinatorManifest(agents) {
   return `Agents disponibles :\n${lines.join("\n")}`;
 }
 
+/**
+ * Classe un agent : codeur (peut modifier les fichiers) vs spécialiste.
+ * Un agent est codeur si ses capabilities contiennent `write` ou `edit` ET
+ * qu'il n'est pas en lecture seule (readonly=false). Sinon c'est un spécialiste
+ * (lecture seule ou autre rôle). Réutilisable par le bus d'agents et l'assistant
+ * (orchestration multi-agents, Phase 0).
+ * @param {object} agent
+ * @returns {{ isCoder: boolean, isReadonly: boolean, capabilities: string[] }}
+ */
+export function classifyAgent(agent) {
+  const capabilities = Array.isArray(agent && agent.capabilities)
+    ? agent.capabilities.map(String)
+    : [];
+  const isReadonly = !!(agent && agent.readonly);
+  const canWrite = capabilities.includes("write") || capabilities.includes("edit");
+  const isCoder = canWrite && !isReadonly;
+  return { isCoder, isReadonly, capabilities };
+}
+
 /** Construit le prompt complet envoyé à un agent cible. */
 export function buildAgentPrompt(agent, brief, projectContext, backend, fallbackModel) {
   const model = resolveAgentModel(agent, backend, fallbackModel);
@@ -79,11 +98,20 @@ export function buildAgentPrompt(agent, brief, projectContext, backend, fallback
   const noToolsNote = agent.call_depth === 0
     ? "\n\n🚫 N'UTILISE AUCUN OUTIL (pas de read, ls, write, bash, etc.). Tu ne fais QUE analyser la demande et déléguer par texte. Réponds directement avec [[CALL:...]] ou DONE:."
     : "";
+  // Spécialité + rôle (orchestration multi-agents, Phase 0) : rappelle le role et
+  // les capabilities de l'agent, et précise s'il est codeur (peut modifier les
+  // fichiers) ou spécialiste (lecture seule sur les fichiers réservés au codeur).
+  const { isCoder, capabilities } = classifyAgent(agent);
+  const caps = capabilities.length > 0 ? capabilities.join(", ") : "(aucune)";
+  const specialtyBlock = `\n\n=== SPÉCIALITÉ ===\nRôle : ${agent.role || "(non défini)"}\nCapacités : ${caps}`;
+  const roleBlock = isCoder
+    ? "\n\n=== RÔLE ===\nTu es le CODEUR (agent principal) de ce projet : tu es autorisé à MODIFIER les fichiers de code."
+    : "\n\n=== RÔLE ===\nTu es un SPÉCIALISTE : tu peux LIRE et analyser les fichiers du projet, mais tu ne dois PAS modifier les fichiers réservés au codeur (les fichiers de code que l'agent principal modifie).";
   const ctx = projectContext ? `\n\n=== CONTEXTE PROJET ===\n${projectContext}\n=== FIN CONTEXTE ===` : "";
   const taskBlock = typeof brief === "string"
     ? brief
     : JSON.stringify(brief, null, 2);
-  return `${agent.role}${readonlyNote}${noToolsNote}${ctx}\n\n=== MISSION ===\n${taskBlock}\n\n=== PROTOCOLE ===\nTermine ta réponse par EXACTEMENT l'un de ces marqueurs :\n- DONE: <résumé concis> quand tu as terminé.\n- NEED_HELP: <question> si tu es bloqué.\n\nSi tu dois déléguer une sous-tâche à un autre agent, termine ta réponse par :\n[[CALL:<agent_id>]]\n{ "task": "...", "files": [...], "context": "..." }\n[[/CALL]]`;
+  return `${agent.role}${specialtyBlock}${roleBlock}${readonlyNote}${noToolsNote}${ctx}\n\n=== MISSION ===\n${taskBlock}\n\n=== PROTOCOLE ===\nTermine ta réponse par EXACTEMENT l'un de ces marqueurs :\n- DONE: <résumé concis> quand tu as terminé.\n- NEED_HELP: <question> si tu es bloqué.\n\nSi tu dois déléguer une sous-tâche à un autre agent, termine ta réponse par :\n[[CALL:<agent_id>]]\n{ "task": "...", "files": [...], "context": "..." }\n[[/CALL]]`;
 }
 
 /** Formate le résultat retourné à l'agent appelant. */

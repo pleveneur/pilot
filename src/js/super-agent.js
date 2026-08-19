@@ -19,7 +19,7 @@ import {
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
-import { runAgentsForAssistantAsync } from "./agents-bus.js";
+import { runAgentsForAssistantAsync, setBusNotifyCallback } from "./agents-bus.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -1547,6 +1547,33 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         const brief = buildStructuredAgentBrief(task);
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject }));
         const projectPath = window._pilotProjectPath || null;
+        // T5 : exclusivité des spécialités par projet. Si un agent demandé est
+        // déjà actif sur le projet cible, la demande sera mise en file d'attente
+        // (elle se lancera à la fin de la tâche en cours). On prévient
+        // l'assistant immédiatement pour qu'il sache que la demande n'est pas
+        // perdue mais différée.
+        const target = targetProject || window._pilotProjectPath || ".";
+        try {
+          const sessionsRes = await invoke("list_agent_sessions");
+          const sessions = (sessionsRes && sessionsRes.sessions) || [];
+          const queuedIds = agentIds.filter((aid) =>
+            sessions.some((s) => s.agent === aid && s.alive && s.mode === "agent_process" && s.project === target)
+          );
+          if (queuedIds.length > 0) {
+            const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.`;
+            appendSystemMessage(messagesEl, msg);
+            injectRunAgentsResultToSuperAgent(`[Info run_agents] ${msg}`, projectPath);
+          }
+        } catch (_) {
+          // Sonde indisponible : on ne bloque pas le lancement (fail-open).
+        }
+        // T5 : informer l'assistant quand une demande en file d'attente démarre
+        // réellement (événement notify du bus d'agents).
+        setBusNotifyCallback(({ agentId, message }) => {
+          if (message && (message.startsWith("⏳") || message.startsWith("▶️"))) {
+            injectRunAgentsResultToSuperAgent(`[Info run_agents] ${message}`, projectPath);
+          }
+        });
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
         // immédiatement. Le résultat est injecté à l'assistant à la fin.
         runAgentsForAssistantAsync(
