@@ -203,7 +203,24 @@ export function buildToolLoopFingerprint(toolName, args) {
   const command = a.command || a.cmd || "";
   if (command) return "tool::" + toolName + "::" + command;
   const path = a.path || a.file || "";
-  if (path) return "tool::" + toolName + "::" + path;
+  if (path) {
+    // Issue (faux positif) : l'outil read de pi accepte `path` + `offset` (ligne
+    // de départ, 1-indexée) + `limit` pour lire un GROS fichier par morceaux à
+    // des positions successives. Si on ne clé que sur le path, deux lectures du
+    // même fichier à des offsets différents produisent la MÊME empreinte → un
+    // agent qui parcourt un gros fichier se fait détecter à tort comme une
+    // boucle d'actions. On différencie donc l'empreinte par offset (et limit si
+    // présents). Quand offset est absent (lecture simple), on garde le
+    // comportement historique (path seul) pour ne rien casser.
+    if (a.offset !== undefined && a.offset !== null) {
+      let fp = "tool::" + toolName + "::" + path + "::offset=" + a.offset;
+      if (a.limit !== undefined && a.limit !== null) {
+        fp += "::limit=" + a.limit;
+      }
+      return fp;
+    }
+    return "tool::" + toolName + "::" + path;
+  }
   try {
     return "tool::" + toolName + "::" + JSON.stringify(a);
   } catch (_) {

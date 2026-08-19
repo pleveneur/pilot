@@ -290,6 +290,31 @@ describe("buildToolLoopFingerprint", () => {
     );
   });
 
+  it("différencie deux lectures du même fichier à des offsets différents", () => {
+    // Un agent parcourant un GROS fichier par morceaux (offset successifs) ne
+    // doit PAS être détecté comme une boucle : l'empreinte doit inclure offset.
+    const fp1 = buildToolLoopFingerprint("read", { path: "src/js/super-agent.js", offset: 1, limit: 100 });
+    const fp2 = buildToolLoopFingerprint("read", { path: "src/js/super-agent.js", offset: 101, limit: 100 });
+    expect(fp1).toBe("tool::read::src/js/super-agent.js::offset=1::limit=100");
+    expect(fp2).toBe("tool::read::src/js/super-agent.js::offset=101::limit=100");
+    expect(fp1).not.toBe(fp2);
+    expect(detectRepeatedToolCalls([fp1, fp2, fp1])).toBe(false);
+  });
+
+  it("détecte une vraie boucle : relire le même fichier au même offset", () => {
+    // Relecture du MÊME fichier au MÊME offset → même empreinte → boucle.
+    const fp1 = buildToolLoopFingerprint("read", { path: "src/js/super-agent.js", offset: 1, limit: 100 });
+    const fp2 = buildToolLoopFingerprint("read", { path: "src/js/super-agent.js", offset: 1, limit: 100 });
+    expect(fp1).toBe(fp2);
+    expect(detectRepeatedToolCalls([fp1, fp2, fp1])).toBe(true);
+  });
+
+  it("garde le path seul quand offset est absent (comportement historique)", () => {
+    expect(buildToolLoopFingerprint("read", { path: "src/main.rs" })).toBe(
+      "tool::read::src/main.rs"
+    );
+  });
+
   it("retombe sur la sérialisation vide si args absent", () => {
     expect(buildToolLoopFingerprint("db_query", null)).toBe("tool::db_query::{}");
   });
