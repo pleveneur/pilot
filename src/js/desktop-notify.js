@@ -151,13 +151,17 @@ export async function notifyAnomaly(opts = {}) {
  * @param {number} [volume] - volume 0-100 (défaut 100).
  */
 export async function playAssistantSound(soundType, volume) {
+  let configVolume = 100;
   try {
     const cfg = await invoke("get_config");
     if (!cfg || cfg.assistant_sound_enabled !== true) return;
+    if (typeof cfg.assistant_sound_volume === "number") {
+      configVolume = cfg.assistant_sound_volume;
+    }
   } catch (_) {
     return;
   }
-  const vol = (typeof volume === "number" && volume >= 0) ? Math.min(100, Math.round(volume)) : 100;
+  const vol = (typeof volume === "number" && volume >= 0) ? Math.min(100, Math.round(volume)) : Math.min(100, Math.round(configVolume));
   try {
     await invoke("play_assistant_sound", { soundType: soundType || "point", volume: vol });
   } catch (e) {
