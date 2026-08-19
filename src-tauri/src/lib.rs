@@ -514,10 +514,21 @@ struct AppConfig {
     anomaly_detection_enabled: bool,
     #[serde(default = "default_anomaly_timeout_minutes")]
     anomaly_timeout_minutes: u32,
+    // ── Arrêt auto des agents délégués bloqués (T2) ──
+    // Arrêt AUTOMATIQUE d'un agent délégué (AgentProcess, run_agents) détecté
+    // bloqué (actif sans progression). Seuil DÉDIÉ (défaut 10 min), distinct
+    // d'anomaly_timeout_minutes (30). Activé par défaut, opt-out via ce réglage.
+    // Après l'arrêt, un diagnostic est PROPOSÉ automatiquement (aucune action
+    // automatique de l'agent de diagnostic : l'utilisateur valide).
+    #[serde(default = "default_true")]
+    agent_auto_stop_enabled: bool,
+    #[serde(default = "default_agent_auto_stop_minutes")]
+    agent_auto_stop_minutes: u32,
 }
 
 fn default_true() -> bool { true }
 fn default_anomaly_timeout_minutes() -> u32 { 30 }
+fn default_agent_auto_stop_minutes() -> u32 { 10 }
 fn default_assistant_sound_volume() -> u32 { 100 }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
@@ -725,6 +736,8 @@ impl Default for AppConfig {
             super_agent_user_friendly: false,
             anomaly_detection_enabled: true,
             anomaly_timeout_minutes: default_anomaly_timeout_minutes(),
+            agent_auto_stop_enabled: true,
+            agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
         }
     }
 }

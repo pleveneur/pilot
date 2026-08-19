@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { notifyAnomaly } from "./desktop-notify.js";
 
 let _unlisten = null;
+let _autoStopUnlisten = null;
 let _diagUnlisten = null;
 let _diagBuffer = "";
 let _banner = null;
@@ -27,6 +28,10 @@ export async function initAnomalyDetection() {
   if (_unlisten) return;
   _unlisten = await listen("agent-anomaly", (event) => {
     handleAnomaly(event.payload || {});
+  });
+  // T2 : arrêt automatique d'un agent délégué bloqué (émis par le moniteur Rust).
+  _autoStopUnlisten = await listen("agent-auto-stopped", (event) => {
+    handleAutoStopped(event.payload || {});
   });
   // Sortie de l'agent de diagnostic (canal unifié des agents, agent_id "diagnostic").
   _diagUnlisten = await listen("rpc-event-agents", (ev) => {
@@ -53,6 +58,26 @@ function handleAnomaly(a) {
   notifyAnomaly({ title: "Pilot — Anomalie détectée", body: msg }).catch(() => {});
   // Bandeau d'alerte persistant avec bouton de lancement de l'agent de diagnostic.
   showAnomalyBanner({ agent, project, idle, lastEvent, msg });
+}
+
+/**
+ * T2 : traite un arrêt AUTOMATIQUE d'un agent délégué bloqué (émis par le
+ * moniteur Rust). Informe l'utilisateur (notification + bandeau) et PROPOSE
+ * automatiquement le diagnostic (déjà lancé par le moniteur via
+ * `do_start_diagnostic_agent` ; la sortie arrive sur `rpc-event-agents`).
+ */
+function handleAutoStopped(a) {
+  const agent = a.agent || "agent";
+  const project = a.project || "";
+  const idle = a.idleMinutes || 0;
+  const reason = a.reason || "Agent bloqué (actif sans progression)";
+  const msg = `L'agent délégué « ${agent} » a été arrêté automatiquement : ${reason} (${idle} min sans progression).`;
+  // Notification desktop native.
+  notifyAnomaly({ title: "Pilot — Agent arrêté automatiquement", body: msg }).catch(() => {});
+  // Bandeau d'alerte avec bouton « 🔍 Diagnostiquer » (relance manuelle possible).
+  showAnomalyBanner({ agent, project, idle, lastEvent: "arrêt automatique", msg });
+  // PROPOSE automatiquement le diagnostic (moniteur Rust : déjà lancé).
+  showDiagnosticModal("🔍 Agent arrêté pour blocage.\n\nAgent de diagnostic lancé automatiquement — analyse en cours. Les évolutions proposées seront à valider par vous (aucune action automatique).");
 }
 
 /** Affiche (ou met à jour) le bandeau d'alerte d'anomalie. */

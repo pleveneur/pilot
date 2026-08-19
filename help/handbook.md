@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-08-19 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1293,24 +1293,34 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 
 ---
 
-## Aide utilisateur — Détection d'anomalies
+## Aide utilisateur — Détection d'anomalies et arrêt auto des agents bloqués
 
 Pilot surveille en arrière-plan l'activité de ses agents (codeur, agents du
-registre, reviewer, assistant). Si un agent est **actif mais sans progression**
-depuis un certain temps (seuil par défaut : **30 minutes**), Pilot vous en
-avertit.
+registre, reviewer, assistant).
 
-- **Notification** : une alerte s'affiche (bandeau + notification native) quand
-  un agent est détecté comme bloqué.
-- **Agent de diagnostic** : le bandeau propose un bouton **🔍 Diagnostiquer**.
-  Il lance un agent dédié qui **analyse la situation** (lit les fichiers
-  concernés) et **propose des évolutions** pour débloquer ou prévenir ce type de
-  blocage. L'agent de diagnostic **ne fait aucune action automatique** : vous
-  validez vous-même les évolutions proposées.
+**Détection d'anomalies** : si un agent est **actif mais sans progression**
+depuis un certain temps (seuil par défaut : **30 minutes**), Pilot vous en
+avertit (bandeau + notification native). Le bandeau propose un bouton
+**🔍 Diagnostiquer** qui lance un agent d'analyse **sans action automatique** :
+il propose des évolutions que vous validez vous-même.
+
+**Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
+run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
+depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
+
+- **Notification** : un bandeau + une notification native indiquent que l'agent
+  a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
+  agent en file d'attente sur le même rôle peut prendre le relais.
+- **Diagnostic automatique** : après l'arrêt, un **agent de diagnostic est lancé
+  automatiquement** pour **proposer** des évolutions (lecture seule, validation
+  utilisateur requise — aucune action automatique).
+- **Scope restreint** : seuls les agents délégués sont arrêtés ; le chat
+  principal, le reviewer et l'Assistant ne sont jamais arrêtés automatiquement.
 - **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
-  la **Détection d'anomalies** et régler le **seuil de blocage** (en minutes).
-  Désactivée par défaut ? Non — **activée par défaut**, seuil 30 min.
+  la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
+  délégués bloqués** (seuil 10 min). Activés par défaut.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
-  n'est jamais signalé. Seul un agent actif **sans aucun événement** depuis le
-  seuil déclenche l'alerte, une seule fois par blocage (réarmé à la prochaine
+  n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
+  le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
   exécution).

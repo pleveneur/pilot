@@ -48,6 +48,7 @@ const AGENT_LOOP_BUFFER_MIN = 200; // taille min de texte avant test
 
 let busState = {
   listeners: null,
+  autoStopListener: null,
   registry: null,
   coordinator: null,
   agents: new Map(),
@@ -330,6 +331,30 @@ export async function initAgentsBus(options = {}) {
     busState.listeners = null;
   }
   busState.listeners = await listen("rpc-event-agents", handleAgentEvent);
+
+  // T2 : écouter l'arrêt AUTOMATIQUE d'un agent délégué bloqué (émis par le
+  // moniteur Rust). `stop_session` supprime l'émission `process_exit` → sans
+  // cet événement, le créneau d'exclusivité (file d'attente, launchNextQueued)
+  // ne serait jamais libéré. On termine le tour de l'agent via failAgentTurn
+  // pour libérer le créneau et laisser un agent en attente prendre le relais.
+  if (busState.autoStopListener) {
+    busState.autoStopListener();
+    busState.autoStopListener = null;
+  }
+  busState.autoStopListener = await listen("agent-auto-stopped", (ev) => {
+    const p = ev.payload || {};
+    const agentId = p.agent;
+    if (!agentId || busState.runState !== "running") return;
+    if (!busState.activeAgents.has(agentId)) return;
+    const reason = p.reason || "arrêt automatique (bloqué sans progression)";
+    console.warn("[agents-bus] arrêt automatique de l'agent", agentId, reason);
+    emit("notify", {
+      agentId,
+      message: `⏱️ L'agent ${agentId} a été arrêté automatiquement (bloqué sans progression). Un agent en file d'attente peut prendre le relais.`,
+    });
+    // Libère le créneau d'exclusivité (launchNextQueued) et fait échouer le tour.
+    failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`);
+  });
 }
 
 /**
@@ -368,6 +393,10 @@ export function destroyAgentsBus() {
   if (busState.listeners) {
     busState.listeners();
     busState.listeners = null;
+  }
+  if (busState.autoStopListener) {
+    busState.autoStopListener();
+    busState.autoStopListener = null;
   }
   stopAllAgentProcesses();
   resetBusState();

@@ -1544,9 +1544,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // Sonde indisponible : on ne bloque pas le lancement (fail-open).
         }
         // T5 : informer l'assistant quand une demande en file d'attente démarre
-        // réellement (événement notify du bus d'agents).
+        // réellement, ou quand un agent délégué est arrêté automatiquement (T2,
+        // message ⏱️). (événement notify du bus d'agents).
         setBusNotifyCallback(({ agentId, message }) => {
-          if (message && (message.startsWith("⏳") || message.startsWith("▶️"))) {
+          if (message && (message.startsWith("⏳") || message.startsWith("▶️") || message.startsWith("⏱️"))) {
             injectRunAgentsResultToSuperAgent(`[Info run_agents] ${message}`, projectPath);
           }
         });

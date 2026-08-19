@@ -42,6 +42,11 @@ pub struct AgentAnomalyState {
     /// Une alerte de blocage a-t-elle déjà été émise pour cette exécution ?
     /// Réarmé à false au prochain `agent_start`/`agent_settled` (nouvelle exécution).
     pub blocked_reported: bool,
+    /// T2 : l'agent a-t-il déjà été arrêté AUTOMATIQUEMENT (bloqué sans
+    /// progression depuis `agent_auto_stop_minutes`) pour cette exécution ?
+    /// Réarmé à false au prochain `agent_start`/`agent_settled`. Empêche de
+    /// ré-arrêter un agent déjà arrêté dans la même exécution.
+    pub auto_stopped_reported: bool,
 }
 
 /// Événements RPC considérés comme une activité de l'agent (rafraîchissent
@@ -107,14 +112,17 @@ pub fn make_observer(
                 last_event: t.to_string(),
                 busy: false,
                 blocked_reported: false,
+                auto_stopped_reported: false,
             });
             if t == "agent_start" {
                 entry.busy = true;
-                // Nouvelle exécution : réarmer la détection de blocage.
+                // Nouvelle exécution : réarmer la détection de blocage ET l'arrêt auto.
                 entry.blocked_reported = false;
+                entry.auto_stopped_reported = false;
             } else if t == "agent_settled" {
                 entry.busy = false;
                 entry.blocked_reported = false;
+                entry.auto_stopped_reported = false;
             }
             entry.last_activity = now;
             entry.last_activity_wall = Some(SystemTime::now());
@@ -147,40 +155,76 @@ pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<
     (iso, relative)
 }
 
-/// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8).
+/// Décide si un agent doit être arrêté AUTOMATIQUEMENT (T2) : agent busy, sans
+/// progression (aucune nouvelle activité) depuis `timeout_minutes` (seuil dédié),
+/// et pas déjà arrêté pour cette exécution. Pure et testable. Le filtrage du
+/// scope (uniquement les agents délégués `AgentProcess`) est appliqué après,
+/// via `agent_service.agent_process_alive` (l'observateur de la map d'anomalie
+/// couvre aussi la session principale, le reviewer et le super-agent).
+fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u32) -> bool {
+    if !enabled || !entry.busy || entry.auto_stopped_reported {
+        return false;
+    }
+    let idle_secs = entry.last_activity.elapsed().as_secs();
+    idle_secs > (timeout_minutes.max(1) as u64) * 60
+}
+
+/// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8) ET
+/// l'arrêt AUTOMATIQUE des agents délégués bloqués (T2).
 /// Thread autonome : toutes les 30 s, vérifie si un agent actif (busy) n'a pas
-/// eu d'activité depuis `anomaly_timeout_minutes` (défaut 30). Si oui, émet
-/// l'événement `agent-anomaly` (une seule fois par blocage, réarmé au prochain
-/// `agent_start`/`agent_settled`). Ne bloque jamais l'interface (thread dédié).
-/// Respecte le réglage `anomaly_detection_enabled` (défaut activé).
+/// eu d'activité depuis le seuil. Deux comportements :
+///  1. Anomalie (lecture seule, `anomaly_timeout_minutes`, défaut 30) : émet
+///     l'événement `agent-anomaly` (une fois par blocage, réarmé au prochain
+///     `agent_start`/`agent_settled`).
+///  2. Arrêt auto (T2, `agent_auto_stop_minutes`, défaut 10) : si `busy` sans
+///     progression depuis ce seuil DÉDIÉ, et que l'agent est un agent délégué
+///     (`AgentProcess`, scope restreint), arrête le processus pi, émet
+///     l'événement `agent-auto-stopped` (UI + libération du créneau
+///     d'exclusivité par agents-bus.js) puis PROPOSE automatiquement le
+///     diagnostic (`do_start_diagnostic_agent`).
+/// Ne bloque jamais l'interface (thread dédié). Respecte les réglages
+/// `anomaly_detection_enabled` et `agent_auto_stop_enabled` (défauts activés).
 pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, AgentAnomalyState>>>) {
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<AppState>();
-            let (enabled, timeout_minutes) = {
+            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes) = {
                 let cfg = state.config.lock().unwrap();
-                (cfg.anomaly_detection_enabled, cfg.anomaly_timeout_minutes)
+                (
+                    cfg.anomaly_detection_enabled,
+                    cfg.anomaly_timeout_minutes,
+                    cfg.agent_auto_stop_enabled,
+                    cfg.agent_auto_stop_minutes,
+                )
             };
-            if !enabled {
-                continue;
-            }
-            let timeout = Duration::from_secs((timeout_minutes.max(1) as u64) * 60);
+            let anomaly_timeout_secs = (timeout_minutes.max(1) as u64) * 60;
             let now = Instant::now();
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
+            let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
             {
                 let mut m = anomaly_map.lock().unwrap();
                 for (key, entry) in m.iter_mut() {
-                    if entry.busy
+                    let mut parts = key.splitn(2, '\u{1f}');
+                    let project = parts.next().unwrap_or("").to_string();
+                    let agent = parts.next().unwrap_or("").to_string();
+                    let idle_secs = now.duration_since(entry.last_activity).as_secs();
+                    // 1. Anomalie (lecture seule, tâche 8) : agent busy sans progression.
+                    if anomaly_enabled
+                        && entry.busy
                         && !entry.blocked_reported
-                        && now.duration_since(entry.last_activity) > timeout
+                        && idle_secs > anomaly_timeout_secs
                     {
                         entry.blocked_reported = true;
-                        let mut parts = key.splitn(2, '\u{1f}');
-                        let project = parts.next().unwrap_or("").to_string();
-                        let agent = parts.next().unwrap_or("").to_string();
-                        let idle_min = now.duration_since(entry.last_activity).as_secs() / 60;
-                        alerts.push((project, agent, entry.last_event.clone(), idle_min));
+                        alerts.push((project.clone(), agent.clone(), entry.last_event.clone(), idle_secs / 60));
+                    }
+                    // 2. Arrêt auto (T2) : agent busy sans progression depuis le seuil dédié.
+                    //    Le scope (AgentProcess) est filtré après (agent_process_alive).
+                    if should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes) {
+                        entry.auto_stopped_reported = true;
+                        // Pas de double alerte (anomalie) pour un agent déjà arrêté.
+                        entry.blocked_reported = true;
+                        auto_stops.push((project, agent, idle_secs / 60));
                     }
                 }
             }
@@ -194,6 +238,37 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         "idleMinutes": idle_min,
                     }),
                 );
+            }
+            for (project, agent, idle_min) in auto_stops {
+                // Scope restreint : ne viser QUE les agents délégués (AgentProcess).
+                // Ne touche jamais le chat principal, le reviewer ni le super-agent.
+                if !state.agent_service.agent_process_alive(&project, &agent) {
+                    continue;
+                }
+                // L'agent ne tourne plus : marquer busy=false pour ne pas re-détecter.
+                {
+                    let mut m = anomaly_map.lock().unwrap();
+                    if let Some(e) = m.get_mut(&format!("{}\u{1f}{}", project, agent)) {
+                        e.busy = false;
+                    }
+                }
+                // Arrêt réel du processus pi (libère aussi le registre + la session).
+                let _ = state.agent_service.stop(&project, &agent);
+                // Événement Rust → JS : l'UI informe l'utilisateur (bandeau) et le
+                // bus d'agents libère le créneau d'exclusivité (la file d'attente).
+                let _ = app.emit(
+                    "agent-auto-stopped",
+                    serde_json::json!({
+                        "project": project,
+                        "agent": agent,
+                        "reason": "Agent délégué arrêté automatiquement : bloqué (actif sans progression).",
+                        "idleMinutes": idle_min,
+                    }),
+                );
+                // PROPOSE automatiquement le diagnostic (réutilise l'existant).
+                let anomaly_val =
+                    serde_json::json!({ "lastEvent": "arrêt automatique (bloqué)", "idleMinutes": idle_min });
+                let _ = do_start_diagnostic_agent(state.inner(), &app, &project, &agent, &anomaly_val);
             }
         }
     });
@@ -230,6 +305,40 @@ fn build_diagnostic_prompt(project: &str, agent: &str, anomaly: &Value) -> Strin
 /// Démarre un processus agent dédié (canal `rpc-event-agents`, agent_id
 /// `diagnostic`) et lui envoie un prompt d'analyse. L'agent PROPOSE des
 /// évolutions — l'utilisateur valide (aucune action automatique).
+/// Variante sans `State`/commande (appelable depuis le moniteur d'arrêt auto T2).
+pub(crate) fn do_start_diagnostic_agent(
+    state: &AppState,
+    app: &AppHandle,
+    project: &str,
+    agent: &str,
+    anomaly: &Value,
+) -> Result<(), String> {
+    let (pi_path, no_session) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.rpc_pi_path.clone(), cfg.rpc_no_session)
+    };
+    let prompt = build_diagnostic_prompt(project, agent, anomaly);
+    // Démarre (ou reprend) le processus agent dédié `diagnostic`.
+    crate::agents::do_start_agent_process(
+        state,
+        app,
+        "diagnostic".to_string(),
+        project.to_string(),
+        pi_path,
+        no_session,
+    )?;
+    // Envoie le prompt d'analyse.
+    crate::agents::do_send_agent_process_prompt(
+        state,
+        "diagnostic".to_string(),
+        prompt,
+        Some(project.to_string()),
+    )?;
+    Ok(())
+}
+
+/// Commande Tauri : lance l'agent de diagnostic dédié (`diagnostic`) pour une
+/// anomalie détectée (bouton manuel « 🔍 Diagnostiquer » du bandeau).
 #[tauri::command]
 pub fn start_diagnostic_agent(
     state: State<AppState>,
@@ -238,28 +347,7 @@ pub fn start_diagnostic_agent(
     agent: String,
     anomaly: Value,
 ) -> Result<(), String> {
-    let (pi_path, no_session) = {
-        let cfg = state.config.lock().unwrap();
-        (cfg.rpc_pi_path.clone(), cfg.rpc_no_session)
-    };
-    let prompt = build_diagnostic_prompt(&project, &agent, &anomaly);
-    // Démarre (ou reprend) le processus agent dédié `diagnostic`.
-    crate::agents::do_start_agent_process(
-        state.inner(),
-        &app,
-        "diagnostic".to_string(),
-        project.clone(),
-        pi_path,
-        no_session,
-    )?;
-    // Envoie le prompt d'analyse.
-    crate::agents::do_send_agent_process_prompt(
-        state.inner(),
-        "diagnostic".to_string(),
-        prompt,
-        Some(project),
-    )?;
-    Ok(())
+    do_start_diagnostic_agent(&state, &app, &project, &agent, &anomaly)
 }
 
 #[cfg(test)]
@@ -353,6 +441,7 @@ mod tests {
             last_event: "tool_execution_end".to_string(),
             busy: true,
             blocked_reported: false,
+            auto_stopped_reported: false,
         };
         let (iso, relative) = last_activity_info(&state);
         // ISO présent et au format RFC3339 (ex: 2024-01-15T10:30:00+00:00).
@@ -369,9 +458,50 @@ mod tests {
             last_event: "agent_start".to_string(),
             busy: true,
             blocked_reported: false,
+            auto_stopped_reported: false,
         };
         let (iso2, relative2) = last_activity_info(&no_wall);
         assert!(iso2.is_none(), "ISO absent sans activité wall-clock");
         assert!(relative2.is_some(), "relatif présent même sans wall-clock");
+    }
+
+    /// T2 : `should_auto_stop` décide l'arrêt automatique d'un agent busy sans
+    /// progression depuis le seuil dédié, non déjà arrêté. Respecte le réglage
+    /// `enabled`, l'état `busy` et le drapeau `auto_stopped_reported`.
+    #[test]
+    fn should_auto_stop_guards_enabled_busy_and_reported() {
+        // Helper : construit un état avec une dernière activité il y a `idle_secs`.
+        let state_at = |idle_secs: u64, busy: bool, reported: bool| AgentAnomalyState {
+            last_activity: Instant::now() - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy,
+            blocked_reported: false,
+            auto_stopped_reported: reported,
+        };
+
+        // Désactivé → jamais arrêté, même très inactif.
+        let e = state_at(6000, true, false); // 100 min inactif
+        assert!(!should_auto_stop(&e, false, 10));
+
+        // Actif non busy → pas d'arrêt.
+        let e = state_at(6000, false, false);
+        assert!(!should_auto_stop(&e, true, 10));
+
+        // Déjà arrêté pour cette exécution → pas de re-arrêt.
+        let e = state_at(6000, true, true);
+        assert!(!should_auto_stop(&e, true, 10));
+
+        // Inactivité < seuil → pas d'arrêt (outil long légitime).
+        let e = state_at(300, true, false); // 5 min < 10 min
+        assert!(!should_auto_stop(&e, true, 10));
+
+        // Inactivité > seuil, busy, non arrêté → arrêt.
+        let e = state_at(700, true, false); // ~11 min > 10 min
+        assert!(should_auto_stop(&e, true, 10));
+
+        // Seuil min 1 min : une inactivité > 1 min suffit.
+        let e = state_at(90, true, false);
+        assert!(should_auto_stop(&e, true, 1));
     }
 }
