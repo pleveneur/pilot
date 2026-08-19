@@ -19,6 +19,7 @@ import {
   parseParallelMarker,
   aggregateParallelResults,
   buildDefaultCoordinator,
+  classifyAgent,
 } from "./agents.js";
 import {
   detectRepeatedBlock,
@@ -36,6 +37,7 @@ import {
   dequeueExclusivity,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
 } from "./exclusivity-queue.js";
+import { isProjectReservedBy, deleteReservations } from "./reservations.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -651,11 +653,28 @@ async function handleExtensionUiRequest(agentId, event) {
   }
 }
 
+// T6 : nettoie les réservations du projet quand le CODEUR termine son tour
+// (finishAgentTurn) ou échoue (failAgentTurn), et à l'arrêt/annulation. Seul
+// le codeur QUI A RÉSERVÉ libère les réservations écrites par l'estimation
+// préalable : les spécialistes restent bloqués en écriture sur les fichiers
+// réservés tant que le codeur travaille. Sans effet si le projet n'a pas de
+// réservations actives ou si l'agent n'est pas le codeur propriétaire.
+async function cleanupReservationsForAgent(agentId, project) {
+  if (!project) return;
+  const agent = busState.agents.get(agentId);
+  const { isCoder } = classifyAgent(agent);
+  if (!isCoder) return; // seuls les codeurs libèrent les réservations
+  if (!isProjectReservedBy(project, agentId)) return; // pas son projet réservé
+  await deleteReservations(project);
+}
+
 async function finishAgentTurn(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
   const project = busState.agentProject[agentId];
+  // T6 : libérer les réservations du projet à la fin du tour du codeur.
+  await cleanupReservationsForAgent(agentId, project);
   busState.activeAgents.delete(agentId);
   delete busState.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
@@ -753,6 +772,8 @@ async function failAgentTurn(agentId, reason) {
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
   const project = busState.agentProject[agentId];
+  // T6 : libérer les réservations du projet à l'échec du tour du codeur.
+  await cleanupReservationsForAgent(agentId, project);
   busState.activeAgents.delete(agentId);
   delete busState.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante

@@ -18,8 +18,9 @@ import {
   detectSemanticLoop,
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
-import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId } from "./agents.js";
-import { runAgentsForAssistantAsync, setBusNotifyCallback } from "./agents-bus.js";
+import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
+import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback } from "./agents-bus.js";
+import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
 
@@ -53,18 +54,19 @@ let infoSeq = 0;
 const pendingInfo = {};
 let nextInfoSeq = 0;
 
+/** Décision pure (testable) : faut-il descendre en bas ? Vrai si l'utilisateur
+ * est déjà en bas (ou presque, seuil `threshold`). Ne force pas le bas si
+ * l'utilisateur a volontairement remonté pour relire (issue #60). */
+export function shouldScrollSuperToBottom(scrollTop, clientHeight, scrollHeight, threshold = SUPER_SCROLL_BOTTOM_THRESHOLD) {
+  return scrollTop + clientHeight >= scrollHeight - threshold;
+}
+
 /** Scroll intelligent : ne force le bas que si l'utilisateur est déjà en bas. */
 function scrollSuperToBottom(messagesEl) {
   if (!messagesEl) return;
-  if (messagesEl.scrollTop + messagesEl.clientHeight >= messagesEl.scrollHeight - SUPER_SCROLL_BOTTOM_THRESHOLD) {
+  if (shouldScrollSuperToBottom(messagesEl.scrollTop, messagesEl.clientHeight, messagesEl.scrollHeight)) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
-}
-
-/** Scroll forcé : descend toujours en bas (pour montrer un élément interactif). */
-function forceScrollSuperToBottom(messagesEl) {
-  if (!messagesEl) return;
-  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
@@ -597,6 +599,9 @@ export async function createSuperAgent(container) {
 
   // État de streaming
   let isStreaming = false;
+  // Bug 1 (UX) : vrai quand on a déjà informé l'utilisateur qu'il ne peut pas
+  // envoyer pendant que l'assistant est occupé (évite de répéter le message).
+  let busyNotified = false;
   // État partagé pour le rendu des questions (boutons pilot-choices).
   const state = { currentAssistantBlock: null };
 
@@ -695,6 +700,7 @@ export async function createSuperAgent(container) {
     try {
       handleSuperAgentEvent(payload, messagesEl, statusEl, state, () => {
         isStreaming = false;
+        busyNotified = false;
         currentBody = null;
         currentFlow = null;
         currentTextSection = null;
@@ -813,7 +819,18 @@ export async function createSuperAgent(container) {
   // ── Envoi (session persistante : streaming + mémoire de conversation) ──
   async function send() {
     const text = inputEl.value.trim();
-    if (!text || isStreaming) return;
+    if (!text) return;
+    if (isStreaming) {
+      // Bug 1 (UX) : pendant que l'assistant est occupé, ne pas perdre
+      // silencieusement le texte saisi. On le garde dans le champ (aucun
+      // effacement) et on informe l'utilisateur une seule fois par tour occupé.
+      if (!busyNotified) {
+        busyNotified = true;
+        statusEl.textContent = "⏳ Occupé…";
+        appendSystemMessage(messagesEl, "⏳ L'assistant est occupé — ton message est conservé dans le champ. Réappuie sur Entrée dès que la réponse est terminée.");
+      }
+      return;
+    }
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     inputEl.style.height = "auto";
@@ -1335,6 +1352,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
     onEnd();
+    // Bug 2 (UX) : à la fin de la génération, redescendre en bas si l'utilisateur
+    // était en bas (le contenu a fini de grandir). Ne force pas si l'utilisateur
+    // a volontairement remonté pour relire.
+    scrollSuperToBottom(messagesEl);
     // A19 : synthèse vocale — lire la réponse complète si activée.
     if (speakEnabled) speak(lastAssistantRawText);
     return;
@@ -1553,26 +1574,64 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         });
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
         // immédiatement. Le résultat est injecté à l'assistant à la fin.
-        runAgentsForAssistantAsync(
-          assignments,
-          (result) => {
-            appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
-            injectRunAgentsResultToSuperAgent(result, projectPath);
-          },
-          (err) => {
-            const msg = err && err.message ? err.message : String(err);
-            appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
-            injectRunAgentsResultToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath);
-          },
-          { purge: true }
-        ).catch((e) => {
-          // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
-          // run n'a pas pu démarrer. On le signale à l'utilisateur et à
-          // l'assistant (le try/catch ne couvre plus ce chemin non bloquant).
-          console.error("Erreur préparation run_agents (assistant):", e);
-          appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
-          injectRunAgentsResultToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath);
+        const launchRun = () => {
+          runAgentsForAssistantAsync(
+            assignments,
+            (result) => {
+              appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
+              injectRunAgentsResultToSuperAgent(result, projectPath);
+            },
+            (err) => {
+              const msg = err && err.message ? err.message : String(err);
+              appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
+              injectRunAgentsResultToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath);
+            },
+            { purge: true }
+          ).catch((e) => {
+            // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
+            // run n'a pas pu démarrer. On le signale à l'utilisateur et à
+            // l'assistant (le try/catch ne couvre plus ce chemin non bloquant).
+            console.error("Erreur préparation run_agents (assistant):", e);
+            appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
+            injectRunAgentsResultToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath);
+          });
+        };
+
+        // T6 : estimation préalable (fichiers réservés au codeur). Si la run
+        // contient un CODEUR, on déclenche en amont l'agent plan-maker (lecture
+        // seule) pour estimer les fichiers que le codeur va toucher, et on écrit
+        // .pilot/reservations.json du projet (les autres spécialistes seront
+        // bloqués en écriture sur ces fichiers via pilot-reserve-gate.ts).
+        // Estimation INFORMATIVE : fail-open — on ne bloque JAMAIS le lancement
+        // du codeur si l'estimation échoue (plan-maker absent, parsing, timeout).
+        const coderIds = agentIds.filter((aid) => {
+          const raw = (registry.agents || []).find((a) => a && a.id === aid);
+          return raw ? classifyAgent(normalizeAgent(raw)).isCoder : false;
         });
+        if (coderIds.length > 0 && targetProject) {
+          // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
+          // on lance d'abord plan-maker, on écrit les réservations, puis on ne
+          // lance le codeur QU'APRÈS (les réservations doivent être en place
+          // avant que les spécialistes travaillent). Fail-open : si l'estimation
+          // échoue, on lance quand même le codeur sans réservations.
+          appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
+          estimateAndReserve(targetProject, task, coderIds, {
+            runAgentsForAssistant,
+            loadAgentRegistry,
+          })
+            .then((r) => {
+              if (r.reserved && r.files.length > 0) {
+                appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
+              }
+              launchRun();
+            })
+            .catch(() => {
+              // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
+              launchRun();
+            });
+        } else {
+          launchRun();
+        }
         await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
@@ -2589,7 +2648,9 @@ function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, re
   }
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  forceScrollSuperToBottom(messagesEl);
+  // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
+  // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
+  scrollSuperToBottom(messagesEl);
 }
 
 /** Rend des boutons Oui / Non inline.
@@ -2635,7 +2696,9 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
   buttons.appendChild(no);
   wrapper.appendChild(buttons);
   target.appendChild(wrapper);
-  forceScrollSuperToBottom(messagesEl);
+  // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
+  // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
+  scrollSuperToBottom(messagesEl);
 }
 
 /** Rend un champ de saisie inline.
@@ -2679,7 +2742,9 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder, respon
     if (e.key === "Escape") respond(null, true);
   });
   setTimeout(() => input.focus(), 0);
-  forceScrollSuperToBottom(messagesEl);
+  // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
+  // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
+  scrollSuperToBottom(messagesEl);
 }
 
 // ── Initialisation du suivi du projet actif ──

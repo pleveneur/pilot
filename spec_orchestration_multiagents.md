@@ -1,6 +1,6 @@
 # Spécification — Orchestration multi-agents projets
 
-> **Statut** : Phase 0 implémentée (T1-T5) · **Module** : super-agent (onglet 🧭) + bus d'agents
+> **Statut** : Phase 0 implémentée (T1-T6) · **Module** : super-agent (onglet 🧭) + bus d'agents
 > (`agents-bus.js`) + `AgentService` (Rust)
 >
 > Cette spec formalise l'orchestration **multi-agents parallèles** que l'assistant
@@ -44,8 +44,22 @@
   en attente (⏳) et du démarrage effectif (▶️) via le callback de notification
   (`setBusNotifyCallback`, `super-agent.js`) et son prompt système l'enjoint de ne
   pas relancer une demande mise en attente.
+- **T6 — Estimation préalable (fichiers réservés au codeur, informatifs)** :
+  quand l'assistant lance un **codeur** via `run_agents` sur un projet cible
+  (`super-agent.js`), il déclenche en amont l'agent `plan-maker` (lecture seule,
+  capabilities `["plan"]`) pour estimer les fichiers que le codeur va toucher.
+  Le résultat (plan JSON) est parsé (`reservations.js` : `parsePlanFiles`),
+  dédupliqué, puis écrit dans `.pilot/reservations.json` du projet (format
+  `{ coder, files }` compatible avec le gate `pilot-reserve-gate.ts` T3). Les
+  autres spécialistes sont alors bloqués en écriture sur ces fichiers (le codeur
+  reste prioritaire). Estimation **informative / fail-open** : plan-maker absent,
+  parsing échoué ou timeout (60 s) → on n'écrit rien et on **ne bloque pas** le
+  lancement du codeur. **Durée de vie / nettoyage** : les réservations sont
+  libérées à la fin du tour du codeur (propriétaire) via `finishAgentTurn` /
+  `failAgentTurn` dans `agents-bus.js` (`cleanupReservationsForAgent` →
+  `deleteReservations`), et effacées à l'arrêt/annulation d'un agent.
 >
-> **Hors périmètre Phase 0** : estimation (T6), notification (T7), visibilité,
+> **Hors périmètre Phase 0** : notification (T7), visibilité,
 > streaming des réflexions.
 >
 > ---
