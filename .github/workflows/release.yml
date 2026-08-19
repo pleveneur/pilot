@@ -29,6 +29,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - name: Switch apt mirror (azure → archive)
+        # Le miroir par défaut des runners ubuntu-22.04 (azure.archive.ubuntu.com)
+        # est mort : apt-get update bloquait le job 2h+ (suspendu indéfiniment).
+        # On bascule vers archive.ubuntu.com avant toute opération apt.
+        if: runner.os == 'Linux'
+        run: |
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list 2>/dev/null || true
       - name: Install Linux dependencies (Tauri)
         if: runner.os == 'Linux'
         run: |
@@ -105,6 +115,15 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
+      - name: Switch apt mirror (azure → archive)
+        # Même correctif que dans la job `test` : éviter le blocage de
+        # apt-get update sur le miroir Azure mort des runners ubuntu-22.04.
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true
+          sudo sed -i 's@azure\.archive\.ubuntu\.com@archive.ubuntu.com@g' \
+            /etc/apt/sources.list 2>/dev/null || true
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
