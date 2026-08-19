@@ -954,6 +954,12 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       state.lastUserPrompt = text;
       state.lastPromptAnswered = false; // nouveau prompt en attente de réponse
       state.lastRetryImages = images ? images.map((img) => ({ ...img })) : [];
+      // Issue #35 : nouvelle tâche logique → réinitialiser la fenêtre de boucle
+      // d'actions (accumulée sur tool_execution_start, bornée à ACTION_LOOP_WINDOW)
+      // et le flag d'arrêt. Cela permet à la détection de couvrir les boucles
+      // multi-tours d'une même tâche tout en repartant proprement au prompt suivant.
+      state.actionHistory = [];
+      state.actionLoopStopped = false;
     }
 
     // Vérifier si le modèle supporte les images avant d'envoyer
@@ -5392,7 +5398,14 @@ const ACTION_LOOP_MIN_REPEAT = 5;
 function maybeDetectActionLoop(state, messagesEl) {
   if (!state || state.orchestrationRunning) return;
   if (state.actionLoopStopped) return; // déjà arrêté pour boucle d'actions
-  if (!state.isStreaming) return;
+  // Issue #35 : NE PAS dépendre de state.isStreaming ici. La détection de boucle
+  // d'actions s'appuie sur des événements discrets (tool_execution_start) qui
+  // arrivent pendant l'exécution des outils ; state.isStreaming peut être false
+  // entre deux tours pi (un agent qui répète une commande sur plusieurs tours ne
+  // garde pas isStreaming=true). Un garde `!state.isStreaming` court-circuitait la
+  // détection et laissait un agent enchaîner des dizaines de commandes identiques
+  // sans être arrêté. maybeDetectActionLoop n'est appelé que depuis
+  // tool_execution_start : il n'y a pas de risque de faux positif hors activité.
   if (detectRepeatedActions(state.actionHistory, {
     windowSize: ACTION_LOOP_WINDOW,
     minRepeat: ACTION_LOOP_MIN_REPEAT,
@@ -5965,9 +5978,15 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         state.lastAssistantRawText = "";
         // Issue #37 : nouveau message → reset du buffer de détection de boucle.
         state.loopBuffer = "";
-        // Reset de l'historique d'actions et du flag d'arrêt pour boucle d'actions.
-        state.actionHistory = [];
-        state.actionLoopStopped = false;
+        // Issue #35 : NE PLUS reset l'historique d'actions à chaque message_start.
+        // Une boucle d'actions peut s'étendre sur plusieurs tours pi (chaque tour
+        // émet son propre message_start, puis isStreaming repasse à false entre
+        // deux tours). Reset ici effaçait la fenêtre glissante → jamais 5 actions
+        // identiques accumulées → boucle jamais détectée sur un agent multi-tours.
+        // La fenêtre est bornée à ACTION_LOOP_WINDOW dans tool_execution_start ;
+        // elle n'est réinitialisée qu'à un NOUVEAU prompt utilisateur (sendPrompt),
+        // c'est-à-dire une nouvelle tâche logique. state.actionLoopStopped n'est
+        // reset que là aussi (sinon un agent arrêté pour boucle resterait bloqué).
       }
       break;
     }

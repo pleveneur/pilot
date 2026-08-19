@@ -25,6 +25,7 @@ import {
   detectRepeatedWord,
   detectSemanticLoop,
   detectRepeatedToolCalls,
+  detectRepeatedActions,
   buildToolLoopFingerprint,
   findRepeatedTail,
   buildLoopCorrectionPrompt,
@@ -427,7 +428,15 @@ function maybeDetectAgentLoop(agentId) {
   // requête DB (db_query/db_execute) sans streamer de texte ne remplit pas
   // forcément AGENT_LOOP_BUFFER_MIN → on vérifie les tool calls AVANT le garde
   // de longueur du buffer texte, sinon la boucle d'outils n'est jamais détectée.
-  if (detectRepeatedToolCalls(busState.toolCallsByAgent[agentId])) {
+  // Issue #35 : on combine detectRepeatedToolCalls (3 appels IDENTIQUES
+  // CONSÉCUTIFS) et detectRepeatedActions (fenêtre glissante : une même action
+  // répétée, pas besoin de consécutivité) pour couvrir les deux formes de boucle
+  // d'outils. Un agent qui enchaîne la même commande bash est arrêté dès 5
+  // occurrences dans les 20 dernières actions.
+  if (
+    detectRepeatedToolCalls(busState.toolCallsByAgent[agentId]) ||
+    detectRepeatedActions(busState.toolCallsByAgent[agentId])
+  ) {
     busState.loopCorrectionPending[agentId] = true;
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle d'outils détectée", agentId);
@@ -525,9 +534,15 @@ function handleAgentEvent(ev) {
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
     const fp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
     const arr = (busState.toolCallsByAgent[agentId] = busState.toolCallsByAgent[agentId] || []);
-    // Déduplication des empreintes consécutives identiques (un même outil peut
-    // être émis plusieurs fois par événement) pour ne pas déclencher trop tôt.
-    if (arr[arr.length - 1] !== fp) arr.push(fp);
+    // Issue #35 : on accumule CHAQUE empreinte (pas de déduplication des
+    // consécutives identiques). L'ancienne déduplication effondrait une séquence
+    // de N commandes bash identiques en UNE seule entrée → detectRepeatedToolCalls
+    // (3 consécutives) et detectRepeatedActions (5 dans une fenêtre) ne pouvaient
+    // JAMAIS se déclencher, laissant un agent enchaîner ~46 tours sans détection
+    // ni arrêt (incidents #4/#8/#9, issue #35). On borne la fenêtre pour éviter
+    // une croissance illimitée.
+    arr.push(fp);
+    if (arr.length > 40) arr.splice(0, arr.length - 40);
     maybeDetectAgentLoop(agentId);
   } else if (type === "extension_ui_request") {
     handleExtensionUiRequest(agentId, event);
