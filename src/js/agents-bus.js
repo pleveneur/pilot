@@ -1033,12 +1033,19 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
             if (ctxBlock) handoffBlocks += ctxBlock;
           }
           if (config.code_graph_enabled !== false) {
-            const graphBlock = await buildGraphBlock(cwd, brief, {
-              enabled: true,
-              injectModeA: config.graph_inject_mode_a !== false,
-              budgetTokens: config.graph_budget_tokens || 4000,
-              injectModeB: config.graph_inject_mode_b !== false,
-            });
+            // Timeout 8s sur le bloc graphe : si un rebuild du graphe est en
+            // cours (verrou global), on abandonne le bloc graphe (null) et on
+            // continue le lancement de l'agent — le graphe ne doit jamais
+            // bloquer indéfiniment le démarrage d'une run.
+            const graphBlock = await Promise.race([
+              buildGraphBlock(cwd, brief, {
+                enabled: true,
+                injectModeA: config.graph_inject_mode_a !== false,
+                budgetTokens: config.graph_budget_tokens || 4000,
+                injectModeB: config.graph_inject_mode_b !== false,
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("code-graph timeout (8s)")), 8000)),
+            ]).catch((e) => { console.warn("[agents-bus] bloc graphe abandonné:", e); return null; });
             if (graphBlock) handoffBlocks += graphBlock;
           }
         }

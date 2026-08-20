@@ -53,10 +53,92 @@ body {
   font-size: var(--font-base);
   line-height: 1.5;
   display: flex;
+  flex-direction: column;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 .hidden { display: none !important; }
+
+/* --- Barre de titres personnalisée (issue #74) ---
+   Remplace la barre native (decorations: false). Toute la barre est une zone
+   de glissement (data-tauri-drag-region) sauf les boutons de contrôle fenêtre. */
+#titlebar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+#tb-logo {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+#tb-appname {
+  font-size: var(--font-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--text-primary);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+#tb-project {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
+}
+.titlebar-spacer {
+  flex: 1;
+  height: 100%;
+}
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
+.tb-btn {
+  width: 44px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.tb-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+.tb-btn.tb-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* --- Corps de l'application (sous la barre de titres) --- */
+#app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
 
 /* --- Design Tokens (échelles partagées, hors thème) --- */
 :root {

@@ -121,6 +121,12 @@ let backendBusy = false;
 // l'onglet 🧭 (notification + injection du résultat).
 let runAgentsInFlight = false;
 const runAgentsQueue = []; // { launch }
+// Filet de sécurité (watchdog) : si une run ne se termine pas sous quelques
+// minutes (ex: blocage du lancement, verrou graphe), on réinitialise le flag
+// `runAgentsInFlight` et on vide la file pour empêcher le blocage permanent
+// de toutes les runs suivantes. Timer module-level, annulé dans `settleRun`.
+let runAgentsWatchdog = null;
+const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
 
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
 // l'assistant quand le mode « Assistant Only » immersif est actif et que le
@@ -1620,6 +1626,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           if (runSettled) return; // anti double-résolution (onDone + catch)
           runSettled = true;
           runAgentsInFlight = false;
+          // Annule le watchdog : la run s'est terminée normalement.
+          if (runAgentsWatchdog) {
+            clearTimeout(runAgentsWatchdog);
+            runAgentsWatchdog = null;
+          }
           // Injection + notification desktop + son (survit à la fermeture de
           // l'onglet : fonctions module-level, persistance côté Rust).
           finishRunAgentsToSuperAgent(result, projectPath, ok);
@@ -1702,6 +1713,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             return;
           }
           runAgentsInFlight = true;
+          // Filet de sécurité : si la run ne se termine pas sous 5 min (ex:
+          // blocage du lancement, verrou graphe), on réinitialise le flag et on
+          // vide la file pour ne pas bloquer définitivement les runs suivantes.
+          runAgentsWatchdog = setTimeout(() => {
+            console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et vidage de la file.");
+            runAgentsInFlight = false;
+            runAgentsWatchdog = null;
+            runAgentsQueue.length = 0;
+            appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
+          }, RUN_AGENTS_WATCHDOG_MS);
           launchWithEstimate();
         };
         startRun();

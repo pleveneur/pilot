@@ -9,12 +9,33 @@
 </head>
 <body class="theme-dark">
 
+  <!-- Barre de titres personnalisée (issue #74) : remplace la barre native.
+       Toute la barre est une zone de glissement (data-tauri-drag-region) sauf
+       les boutons de contrôle fenêtre. -->
+  <div id="titlebar" data-tauri-drag-region>
+    <div class="titlebar-left" data-tauri-drag-region>
+      <img id="tb-logo" src="images/logo_pilot_vector.svg" alt="Pilot" data-tauri-drag-region />
+      <span id="tb-appname" data-tauri-drag-region>Pilot</span>
+      <span id="tb-project" class="titlebar-project hidden" data-tauri-drag-region></span>
+    </div>
+    <div class="titlebar-spacer" data-tauri-drag-region></div>
+    <div class="titlebar-controls">
+      <button id="tb-minimize" class="tb-btn" title="Réduire"><i data-lucide="minus" class="icon-sm"></i></button>
+      <button id="tb-maximize" class="tb-btn" title="Agrandir"><i data-lucide="square" class="icon-sm" id="tb-max-icon"></i><i data-lucide="copy" class="icon-sm hidden" id="tb-restore-icon"></i></button>
+      <button id="tb-close" class="tb-btn tb-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+    </div>
+  </div>
+
   <!-- Écran de chargement (sablier) -->
   <div id="boot-overlay">
     <img id="boot-logo" src="images/logo_pilot_vector.svg" alt="Pilot" />
     <div class="boot-spinner"></div>
     <div class="boot-label">Chargement de Pilot…</div>
   </div>
+
+  <!-- Corps de l'application : barre latérale + zone de travail (sous la barre
+       de titres). Enveloppé dans #app-body pour un layout en colonne. -->
+  <div id="app-body">
 
   <!-- Barre Latérale (Gauche) -->
   <aside id="sidebar">
@@ -111,6 +132,8 @@
       <button id="btn-shortcuts" title="Raccourcis clavier"><i data-lucide="keyboard" class="icon-sm"></i></button>
     </div>
   </main>
+
+  </div><!-- /#app-body -->
 
   <!-- Modale Raccourcis clavier -->
   <div id="shortcuts-modal" class="modal hidden">
