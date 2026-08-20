@@ -276,6 +276,25 @@ s'ajoute au rôle propre de l'agent cible (concaténation). Désactivée, l'agen
 spécifique ne reçoit que son rôle propre.
 <!-- /HELP:super-agent-inherit-context -->
 
+<!-- HELP:super-agent-memory -->
+### Transférer la mémoire de votre assistant entre deux postes
+Dans **Paramètres ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
+**exporter** ou **importer** la mémoire de votre assistant (son suivi des
+projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autre.
+
+- **Exporter** : cochez les contenus à embarquer (Suivi des projets/tâches,
+  Réglages, Comportement, Apparence), puis cliquez **« Exporter la mémoire »**.
+  Un **fichier unique** est sauvegardé, que vous pouvez transférer sur l'autre
+  poste. Aucune donnée personnelle (coffre, conversations privées) ne part :
+  uniquement ce que vous cochez.
+- **Importer** : cliquez **« Importer la mémoire »**, choisissez le fichier, puis
+  **confirmez**. L'import **remplace** sur ce poste la mémoire (et les sections
+  cochées de la configuration) par celle du fichier.
+- La mémoire est relisible même sur un autre poste (format unifié et versionné) :
+  votre assistant retrouve aussitôt le suivi et les préférences que vous aviez
+  définis.
+<!-- /HELP:super-agent-memory -->
+
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
   de votre part pendant son travail (choix d'une approche, confirmation,
@@ -665,6 +684,41 @@ Tables (V1) :
 - **Prompt système** personnalisé (préfixé à chaque tour).
 - **Liste des clients** (ajout / suppression / renommage).
 - Association **projet → client**.
+
+### Transfert de mémoire (issue #69)
+
+La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
+être **exportée puis importée** via des boutons dans **Paramètres ⚙️ → section
+« Mémoire (transfert de suivi) »**, pour la transférer entre deux postes.
+
+- **Exporter** : cases à cocher pour choisir les sections à embarquer, puis un
+  **fichier JSON unifié unique** est produit (`pilot-assistant-memoire.json`).
+  Format versionné : `{ format: "pilot-assistant-memory", version: 1,
+  exported_at, sections: {...} }`.
+- **Sections disponibles** (une par case, indépendantes) :
+  - **Suivi** (`tracking`) — clients, projets, tâches, décisions, jalons,
+    résumés de session (tables de suivi de `~/.pilot/super-agent.db`).
+  - **Réglages** (`settings`) — nom, liste des clients, association
+    projet → client.
+  - **Comportement** (`behavior`) — prompt personnalisé, mémoire utilisateur,
+    personnalité, options (concis, convivial, quality-gate).
+  - **Apparence** (`ui` / `appearance`) — thème et sous-thème.
+- **Importer** : choix du fichier, **validation du format + version**
+  (`validate_export_json`), puis **confirmation avant** remplacement.
+- **Comportement de remplacement** : l'import **REMPlACE** la mémoire locale
+  (les sections cochées seulement). Le suivi est remplacé **transactionnellement**
+  (`replace_tracking` : purge puis réinsertion, réécriture des ids
+  parents → enfants, `PRAGMA foreign_keys` activé) ; la config (settings /
+  behavior / appearance) est persistée via `save_config_disk`. L'apparence
+  importée est appliquée immédiatement et la config de l'Assistant rechargée.
+- **Données personnelles exclues** : rien de personnel n'est exporté par défaut —
+  coffre (`vault`), conversations privées, tables `etat_reprise` / `magnus_*` /
+  `mes_*` ne sont **jamais** incluses. Seul ce que l'utilisateur coche part.
+- **Commandes Rust** : `export_super_agent_memory` / `import_super_agent_memory`
+  (`src-tauri/src/super_agent.rs`, registrées dans `lib.rs`) ; fonctions pures
+  testables (`validate_export_json`, `serialize_tracking`, `replace_tracking`).
+- **Handlers front** : `settings.js` (lecture des cases, dialogues fichier
+  natifs, confirmation), section « Mémoire » de `index.html`.
 
 ## 8. Garde-fous
 

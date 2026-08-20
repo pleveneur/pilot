@@ -1038,6 +1038,25 @@ s'ajoute au rôle propre de l'agent cible (concaténation). Désactivée, l'agen
 spécifique ne reçoit que son rôle propre.
 <!-- /HELP:super-agent-inherit-context -->
 
+<!-- HELP:super-agent-memory -->
+### Transférer la mémoire de votre assistant entre deux postes
+Dans **Paramètres ⚙️ → section « Mémoire (transfert de suivi) »**, vous pouvez
+**exporter** ou **importer** la mémoire de votre assistant (son suivi des
+projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autre.
+
+- **Exporter** : cochez les contenus à embarquer (Suivi des projets/tâches,
+  Réglages, Comportement, Apparence), puis cliquez **« Exporter la mémoire »**.
+  Un **fichier unique** est sauvegardé, que vous pouvez transférer sur l'autre
+  poste. Aucune donnée personnelle (coffre, conversations privées) ne part :
+  uniquement ce que vous cochez.
+- **Importer** : cliquez **« Importer la mémoire »**, choisissez le fichier, puis
+  **confirmez**. L'import **remplace** sur ce poste la mémoire (et les sections
+  cochées de la configuration) par celle du fichier.
+- La mémoire est relisible même sur un autre poste (format unifié et versionné) :
+  votre assistant retrouve aussitôt le suivi et les préférences que vous aviez
+  définis.
+<!-- /HELP:super-agent-memory -->
+
 ### Relayer les questions des agents du projet (tâche #22)
 - Quand un **agent du projet** (ex: agent de contrôle) a besoin d'une décision
   de votre part pendant son travail (choix d'une approche, confirmation,

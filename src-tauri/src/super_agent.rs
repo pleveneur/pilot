@@ -2050,15 +2050,678 @@ pub fn super_agent_search_sessions(
     crate::session_history::search_sessions_in(&project_path, params)
 }
 
+// ── Transfert de mémoire (issue #69) ──
+//
+// Export/import de la « mémoire » de l'assistant (suivi multi-projets) pour
+// transférer son suivi entre deux postes. Format unifié JSON :
+//   { format: "pilot-assistant-memory", version: 1, exported_at, sections: {...} }
+// Sections optionnelles (tracking / settings / behavior / appearance) : chaque
+// section n'est incluse que si cochée à l'export. À l'import, le fichier est
+// validé (format + version) puis REMPLACE la mémoire locale (confirmation côté
+// UI). L'import est transactionnel : purge puis réinsertion dans la même
+// transaction, avec réécriture des ids parents → enfants. Aucune donnée
+// personnelle (coffre vault, conversations privées, tables etat_reprise /
+// magnus_* / mes_*) n'est exportée.
+
+pub(crate) const MEMORY_FORMAT: &str = "pilot-assistant-memory";
+pub(crate) const MEMORY_VERSION: u64 = 1;
+
+/// Valide le format et la version d'un export JSON. Retourne la valeur parsée.
+/// Fonction pure testable.
+pub(crate) fn validate_export_json(input: &str) -> Result<Value, String> {
+    let v: Value = serde_json::from_str(input).map_err(|e| format!("Fichier invalide : {}", e))?;
+    let format = v.get("format").and_then(|x| x.as_str()).unwrap_or("");
+    if format != MEMORY_FORMAT {
+        return Err("Fichier invalide : format inconnu".to_string());
+    }
+    let version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(0);
+    if version != MEMORY_VERSION {
+        return Err(format!("Version non supportée : {}", version));
+    }
+    match v.get("sections") {
+        Some(Value::Object(_)) | None => {}
+        _ => return Err("Fichier invalide : sections mal formées".to_string()),
+    }
+    Ok(v)
+}
+
+/// Sérialise le suivi (tracking) de la base en JSON, avec les ids naturels pour
+/// que l'import puisse réécrire les relations parents → enfants. Fonction pure
+/// sur `Connection`, testable (in-memory en test, open_db en production).
+pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
+    let mut clients = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, name, notes, created_at, updated_at FROM clients ORDER BY id")
+            .map_err(|e| format!("Erreur lecture clients : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "name": r.get::<_, String>(1)?,
+                    "notes": r.get::<_, String>(2)?,
+                    "created_at": r.get::<_, String>(3)?,
+                    "updated_at": r.get::<_, String>(4)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture clients : {}", e))?;
+        for row in rows {
+            clients.push(row.map_err(|e| format!("Erreur lecture clients : {}", e))?);
+        }
+    }
+
+    let mut projects = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, client_id, path, name, status, created_at, updated_at FROM projects ORDER BY id")
+            .map_err(|e| format!("Erreur lecture projets : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "client_id": r.get::<_, Option<i64>>(1)?,
+                    "path": r.get::<_, String>(2)?,
+                    "name": r.get::<_, String>(3)?,
+                    "status": r.get::<_, String>(4)?,
+                    "created_at": r.get::<_, String>(5)?,
+                    "updated_at": r.get::<_, String>(6)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture projets : {}", e))?;
+        for row in rows {
+            projects.push(row.map_err(|e| format!("Erreur lecture projets : {}", e))?);
+        }
+    }
+
+    let mut tasks = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, created_at, updated_at FROM tasks ORDER BY id",
+            )
+            .map_err(|e| format!("Erreur lecture tâches : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "project_id": r.get::<_, i64>(1)?,
+                    "title": r.get::<_, String>(2)?,
+                    "description": r.get::<_, String>(3)?,
+                    "status": r.get::<_, String>(4)?,
+                    "deadline": r.get::<_, Option<String>>(5)?,
+                    "blocker_reason": r.get::<_, Option<String>>(6)?,
+                    "source_task_id": r.get::<_, Option<i64>>(7)?,
+                    "created_at": r.get::<_, String>(8)?,
+                    "updated_at": r.get::<_, String>(9)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture tâches : {}", e))?;
+        for row in rows {
+            tasks.push(row.map_err(|e| format!("Erreur lecture tâches : {}", e))?);
+        }
+    }
+
+    let mut decisions = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, project_id, task_id, summary, source_session, created_at FROM decisions ORDER BY id")
+            .map_err(|e| format!("Erreur lecture décisions : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "project_id": r.get::<_, Option<i64>>(1)?,
+                    "task_id": r.get::<_, Option<i64>>(2)?,
+                    "summary": r.get::<_, String>(3)?,
+                    "source_session": r.get::<_, String>(4)?,
+                    "created_at": r.get::<_, String>(5)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture décisions : {}", e))?;
+        for row in rows {
+            decisions.push(row.map_err(|e| format!("Erreur lecture décisions : {}", e))?);
+        }
+    }
+
+    let mut milestones = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, project_id, title, due_date, status, created_at, updated_at FROM milestones ORDER BY id")
+            .map_err(|e| format!("Erreur lecture jalons : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "project_id": r.get::<_, i64>(1)?,
+                    "title": r.get::<_, String>(2)?,
+                    "due_date": r.get::<_, Option<String>>(3)?,
+                    "status": r.get::<_, String>(4)?,
+                    "created_at": r.get::<_, String>(5)?,
+                    "updated_at": r.get::<_, String>(6)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture jalons : {}", e))?;
+        for row in rows {
+            milestones.push(row.map_err(|e| format!("Erreur lecture jalons : {}", e))?);
+        }
+    }
+
+    let mut session_summaries = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, project_id, session_id, summary, created_at FROM session_summaries ORDER BY id")
+            .map_err(|e| format!("Erreur lecture résumés : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "project_id": r.get::<_, Option<i64>>(1)?,
+                    "session_id": r.get::<_, String>(2)?,
+                    "summary": r.get::<_, String>(3)?,
+                    "created_at": r.get::<_, String>(4)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture résumés : {}", e))?;
+        for row in rows {
+            session_summaries.push(row.map_err(|e| format!("Erreur lecture résumés : {}", e))?);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "clients": clients,
+        "projects": projects,
+        "tasks": tasks,
+        "decisions": decisions,
+        "milestones": milestones,
+        "session_summaries": session_summaries,
+    }))
+}
+
+/// Remplace transactionnellement le suivi (tracking) par les données importées,
+/// en réécrivant les ids parents → enfants (clients → projets →
+/// tâches/décisions/jalons/résumés de session). Active l'application des clés
+/// étrangères sur la connexion pour garantir l'intégrité FK. Retourne la liste
+/// des sous-sections remplacées. Fonction pure sur `Connection`, testable.
+pub(crate) fn replace_tracking(conn: &Connection, data: &Value) -> Result<Vec<String>, String> {
+    // PRAGMA foreign_keys doit être posé HORS transaction (ignoré dedans).
+    conn.execute_batch("PRAGMA foreign_keys = ON")
+        .map_err(|e| format!("Erreur PRAGMA : {}", e))?;
+
+    let result = (|| -> Result<Vec<String>, String> {
+        conn.execute_batch("BEGIN")
+            .map_err(|e| format!("Erreur début transaction : {}", e))?;
+        // Purge dans l'ordre inverse des dépendances (enfants d'abord).
+        conn.execute_batch(
+            "DELETE FROM decisions;\n\
+             DELETE FROM session_summaries;\n\
+             DELETE FROM milestones;\n\
+             DELETE FROM tasks;\n\
+             DELETE FROM projects;\n\
+             DELETE FROM clients;",
+        )
+        .map_err(|e| format!("Erreur purge : {}", e))?;
+
+        let mut client_map: HashMap<i64, i64> = HashMap::new();
+        if let Some(clients) = data.get("clients").and_then(|x| x.as_array()) {
+            for c in clients {
+                let old = c.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+                let name = c.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if name.trim().is_empty() {
+                    continue;
+                }
+                let notes = c.get("notes").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let created = c.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                let updated = c.get("updated_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO clients (name, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![name, notes, created, updated],
+                )
+                .map_err(|e| format!("Erreur insertion client « {} » : {}", name, e))?;
+                client_map.insert(old, conn.last_insert_rowid());
+            }
+        }
+
+        let mut project_map: HashMap<i64, i64> = HashMap::new();
+        if let Some(projects) = data.get("projects").and_then(|x| x.as_array()) {
+            for p in projects {
+                let old = p.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+                let path = p.get("path").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if path.trim().is_empty() {
+                    continue;
+                }
+                let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let status = p.get("status").and_then(|x| x.as_str()).unwrap_or("suivi").to_string();
+                let client_old = p.get("client_id").and_then(|x| x.as_i64());
+                let client_new = client_old.and_then(|cid| client_map.get(&cid)).copied();
+                let created = p.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                let updated = p.get("updated_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO projects (path, name, client_id, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![path, name, client_new, status, created, updated],
+                )
+                .map_err(|e| format!("Erreur insertion projet « {} » : {}", path, e))?;
+                project_map.insert(old, conn.last_insert_rowid());
+            }
+        }
+
+        let mut task_map: HashMap<i64, i64> = HashMap::new();
+        if let Some(tasks) = data.get("tasks").and_then(|x| x.as_array()) {
+            for t in tasks {
+                let old = t.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+                let project_old = t.get("project_id").and_then(|x| x.as_i64());
+                let project_new = project_old.and_then(|pid| project_map.get(&pid)).copied();
+                let title = t.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if title.trim().is_empty() {
+                    continue;
+                }
+                let description = t.get("description").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let status = t.get("status").and_then(|x| x.as_str()).unwrap_or("demande").to_string();
+                let deadline = t.get("deadline").and_then(|x| x.as_str()).map(String::from);
+                let blocker_reason = t.get("blocker_reason").and_then(|x| x.as_str()).map(String::from);
+                let created = t.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                let updated = t.get("updated_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO tasks (project_id, title, description, status, deadline, blocker_reason, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![project_new, title, description, status, deadline, blocker_reason, created, updated],
+                )
+                .map_err(|e| format!("Erreur insertion tâche « {} » : {}", title, e))?;
+                task_map.insert(old, conn.last_insert_rowid());
+            }
+            // Second passage : source_task_id (handoff) réécrit après toutes les
+            // insertions (référence vers une tâche potentiellement plus tardive).
+            for t in tasks {
+                let old = t.get("id").and_then(|x| x.as_i64());
+                let src_old = t.get("source_task_id").and_then(|x| x.as_i64());
+                if let (Some(o), Some(so)) = (old, src_old) {
+                    if let (Some(&new_id), Some(&src_new)) = (task_map.get(&o), task_map.get(&so)) {
+                        conn.execute(
+                            "UPDATE tasks SET source_task_id = ?1 WHERE id = ?2",
+                            rusqlite::params![src_new, new_id],
+                        )
+                        .map_err(|e| format!("Erreur réécriture source_task_id : {}", e))?;
+                    }
+                }
+            }
+        }
+
+        if let Some(decisions) = data.get("decisions").and_then(|x| x.as_array()) {
+            for d in decisions {
+                let project_old = d.get("project_id").and_then(|x| x.as_i64());
+                let project_new = project_old.and_then(|p| project_map.get(&p)).copied();
+                let task_old = d.get("task_id").and_then(|x| x.as_i64());
+                let task_new = task_old.and_then(|t| task_map.get(&t)).copied();
+                let summary = d.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if summary.trim().is_empty() {
+                    continue;
+                }
+                let source_session = d.get("source_session").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let created = d.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO decisions (project_id, task_id, summary, source_session, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![project_new, task_new, summary, source_session, created],
+                )
+                .map_err(|e| format!("Erreur insertion décision : {}", e))?;
+            }
+        }
+
+        if let Some(milestones) = data.get("milestones").and_then(|x| x.as_array()) {
+            for m in milestones {
+                let project_old = m.get("project_id").and_then(|x| x.as_i64());
+                let project_new = project_old.and_then(|p| project_map.get(&p)).copied();
+                let title = m.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if title.trim().is_empty() {
+                    continue;
+                }
+                let due_date = m.get("due_date").and_then(|x| x.as_str()).map(String::from);
+                let status = m.get("status").and_then(|x| x.as_str()).unwrap_or("planifie").to_string();
+                let created = m.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                let updated = m.get("updated_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO milestones (project_id, title, due_date, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![project_new, title, due_date, status, created, updated],
+                )
+                .map_err(|e| format!("Erreur insertion jalon « {} » : {}", title, e))?;
+            }
+        }
+
+        if let Some(sums) = data.get("session_summaries").and_then(|x| x.as_array()) {
+            for s in sums {
+                let project_old = s.get("project_id").and_then(|x| x.as_i64());
+                let project_new = project_old.and_then(|p| project_map.get(&p)).copied();
+                let summary = s.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                if summary.trim().is_empty() {
+                    continue;
+                }
+                let session_id = s.get("session_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let created = s.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO session_summaries (project_id, session_id, summary, created_at) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![project_new, session_id, summary, created],
+                )
+                .map_err(|e| format!("Erreur insertion résumé de session : {}", e))?;
+            }
+        }
+
+        conn.execute_batch("COMMIT")
+            .map_err(|e| format!("Erreur commit : {}", e))?;
+        Ok(vec![
+            "clients".to_string(),
+            "projects".to_string(),
+            "tasks".to_string(),
+            "decisions".to_string(),
+            "milestones".to_string(),
+            "session_summaries".to_string(),
+        ])
+    })();
+
+    if result.is_err() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+    result
+}
+
+/// Exporte la mémoire de l'assistant. `include` = { tracking, settings, behavior,
+/// ui } (booléens). Retourne la chaîne JSON unifiée. Aucune donnée personnelle
+/// (coffre vault, conversations privées) n'est incluse.
+#[tauri::command]
+pub fn export_super_agent_memory(
+    state: State<AppState>,
+    app: AppHandle,
+    include: Value,
+) -> Result<String, String> {
+    let want = |k: &str| include.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+    let mut sections = serde_json::Map::new();
+    if want("tracking") {
+        let conn = open_db(&app)?;
+        sections.insert("tracking".to_string(), serialize_tracking(&conn)?);
+    }
+    {
+        let cfg = state.config.lock().unwrap();
+        if want("settings") {
+            sections.insert(
+                "settings".to_string(),
+                serde_json::json!({
+                    "name": cfg.super_agent_name,
+                    "clients": cfg.super_agent_clients,
+                    "project_client": cfg.super_agent_project_client,
+                }),
+            );
+        }
+        if want("behavior") {
+            sections.insert(
+                "behavior".to_string(),
+                serde_json::json!({
+                    "prompt": cfg.super_agent_prompt,
+                    "user_memory": cfg.super_agent_user_memory,
+                    "personality": cfg.super_agent_personality,
+                    "concise": cfg.super_agent_concise,
+                    "user_friendly": cfg.super_agent_user_friendly,
+                    "quality_gate": cfg.super_agent_quality_gate,
+                }),
+            );
+        }
+        if want("ui") {
+            sections.insert(
+                "appearance".to_string(),
+                serde_json::json!({
+                    "theme": cfg.theme,
+                    "subtheme": cfg.subtheme,
+                }),
+            );
+        }
+    }
+    let exported_at = chrono::Utc::now().to_rfc3339();
+    let out = serde_json::json!({
+        "format": MEMORY_FORMAT,
+        "version": MEMORY_VERSION,
+        "exported_at": exported_at,
+        "sections": sections,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| format!("Erreur sérialisation : {}", e))
+}
+
+/// Importe la mémoire de l'assistant depuis un fichier JSON unifié. Valide le
+/// format + version, puis REMPLACE (selon `sections` cochées) le suivi en base
+/// (transaction) et/ou la config (settings / behavior / appearance persistées).
+/// Retourne `{ ok, imported: [sections importées] }`.
+#[tauri::command]
+pub fn import_super_agent_memory(
+    state: State<AppState>,
+    app: AppHandle,
+    json: String,
+    sections: Value,
+) -> Result<Value, String> {
+    let v = validate_export_json(&json)?;
+    let sections_obj = v
+        .get("sections")
+        .and_then(|s| s.as_object())
+        .cloned()
+        .unwrap_or_default();
+    let want = |k: &str| sections.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+
+    let mut imported: Vec<String> = Vec::new();
+
+    if want("tracking") {
+        if let Some(tr) = sections_obj.get("tracking") {
+            let conn = open_db(&app)?;
+            replace_tracking(&conn, tr)?;
+            imported.push("tracking".to_string());
+        }
+    }
+
+    let mut config_changed = false;
+    {
+        let mut cfg = state.config.lock().unwrap();
+        if want("settings") {
+            if let Some(s) = sections_obj.get("settings") {
+                if let Some(n) = s.get("name").and_then(|x| x.as_str()) {
+                    cfg.super_agent_name = n.to_string();
+                }
+                if let Some(c) = s.get("clients").and_then(|x| x.as_array()) {
+                    cfg.super_agent_clients =
+                        c.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+                }
+                if let Some(pc) = s.get("project_client").and_then(|x| x.as_object()) {
+                    let mut m = HashMap::new();
+                    for (k, val) in pc {
+                        if let Some(pr) = val.as_str() {
+                            m.insert(k.clone(), pr.to_string());
+                        }
+                    }
+                    cfg.super_agent_project_client = m;
+                }
+                imported.push("settings".to_string());
+                config_changed = true;
+            }
+        }
+        if want("behavior") {
+            if let Some(s) = sections_obj.get("behavior") {
+                if let Some(p) = s.get("prompt").and_then(|x| x.as_str()) {
+                    cfg.super_agent_prompt = p.to_string();
+                }
+                if let Some(m) = s.get("user_memory").and_then(|x| x.as_str()) {
+                    cfg.super_agent_user_memory = m.to_string();
+                }
+                if let Some(p) = s.get("personality").and_then(|x| x.as_str()) {
+                    cfg.super_agent_personality = p.to_string();
+                }
+                if let Some(c) = s.get("concise").and_then(|x| x.as_bool()) {
+                    cfg.super_agent_concise = c;
+                }
+                if let Some(u) = s.get("user_friendly").and_then(|x| x.as_bool()) {
+                    cfg.super_agent_user_friendly = u;
+                }
+                if let Some(q) = s.get("quality_gate").and_then(|x| x.as_bool()) {
+                    cfg.super_agent_quality_gate = q;
+                }
+                imported.push("behavior".to_string());
+                config_changed = true;
+            }
+        }
+        if want("ui") {
+            if let Some(s) = sections_obj.get("appearance") {
+                if let Some(t) = s.get("theme").and_then(|x| x.as_str()) {
+                    cfg.theme = t.to_string();
+                }
+                if let Some(st) = s.get("subtheme").and_then(|x| x.as_str()) {
+                    cfg.subtheme = st.to_string();
+                }
+                imported.push("appearance".to_string());
+                config_changed = true;
+            }
+        }
+        if config_changed {
+            crate::save_config_disk(&app, &cfg)?;
+        }
+    }
+
+    Ok(serde_json::json!({ "ok": true, "imported": imported }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_project_context, init_db, schedule_delete, schedule_due_and_mark, schedule_insert, schedule_list, schedule_set_enabled};
+    use super::{
+        build_project_context, init_db, replace_tracking, schedule_delete, schedule_due_and_mark,
+        schedule_insert, schedule_list, schedule_set_enabled, serialize_tracking,
+        validate_export_json, MEMORY_FORMAT, MEMORY_VERSION,
+    };
     use rusqlite::Connection;
 
     fn mem_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn memory_validate_accepts_valid_export() {
+        let json = format!(
+            r#"{{"format": "{}", "version": {}, "exported_at": "2025-01-01", "sections": {{"tracking": {{}} }}}}"#,
+            MEMORY_FORMAT, MEMORY_VERSION
+        );
+        let v = validate_export_json(&json).unwrap();
+        assert_eq!(v["format"], MEMORY_FORMAT);
+        assert!(v["sections"].is_object());
+    }
+
+    #[test]
+    fn memory_validate_rejects_wrong_format_or_version() {
+        let bad_format = format!(
+            r#"{{"format": "autre", "version": {}, "sections": {{}}}}"#,
+            MEMORY_VERSION
+        );
+        assert!(validate_export_json(&bad_format).unwrap_err().contains("format"));
+        let bad_version =
+            format!(r#"{{"format": "{}", "version": 99, "sections": {{}}}}"#, MEMORY_FORMAT);
+        assert!(validate_export_json(&bad_version).unwrap_err().contains("Version"));
+        assert!(validate_export_json("pas du json").is_err());
+        // sections non-objet refusé.
+        let bad_sections = format!(
+            r#"{{"format": "{}", "version": {}, "sections": []}}"#,
+            MEMORY_FORMAT, MEMORY_VERSION
+        );
+        assert!(validate_export_json(&bad_sections).is_err());
+    }
+
+    #[test]
+    fn memory_serialize_and_replace_roundtrip() {
+        let conn = mem_conn();
+        // Activer les FK pour vérifier l'intégrité pendant le replace.
+        conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+        // Peupler : client → projet → tâche (+ handoff) + décision + jalon + résumé.
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'A', 1);\
+             INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche 1');\
+             INSERT INTO tasks (project_id, title, source_task_id) VALUES (1, 'Tâche 2', 1);\
+             INSERT INTO decisions (project_id, task_id, summary) VALUES (1, 1, 'Décision 1');\
+             INSERT INTO milestones (project_id, title) VALUES (1, 'Jalon 1');\
+             INSERT INTO session_summaries (project_id, summary) VALUES (1, 'Résumé 1');",
+        )
+        .unwrap();
+
+        let data = serialize_tracking(&conn).unwrap();
+        assert_eq!(data["clients"].as_array().unwrap().len(), 1);
+        assert_eq!(data["projects"].as_array().unwrap().len(), 1);
+        assert_eq!(data["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(data["decisions"].as_array().unwrap().len(), 1);
+        assert_eq!(data["milestones"].as_array().unwrap().len(), 1);
+        assert_eq!(data["session_summaries"].as_array().unwrap().len(), 1);
+
+        // Replace (idempotence : ré-appliquer ne change pas les compteurs ni le
+        // contenu, seuls les ids auto-incrémentés changent).
+        let imported = replace_tracking(&conn, &data).unwrap();
+        assert!(imported.contains(&"tasks".to_string()));
+        let data2 = serialize_tracking(&conn).unwrap();
+        // Contenu équivalent (mêmes noms/paths/titres), ids réécrits acceptés.
+        assert_eq!(data["clients"][0]["name"], data2["clients"][0]["name"]);
+        assert_eq!(data["projects"][0]["path"], data2["projects"][0]["path"]);
+        assert_eq!(data["tasks"][0]["title"], data2["tasks"][0]["title"]);
+        assert_eq!(data["tasks"][1]["title"], data2["tasks"][1]["title"]);
+        assert_eq!(data["decisions"][0]["summary"], data2["decisions"][0]["summary"]);
+        assert_eq!(data["milestones"][0]["title"], data2["milestones"][0]["title"]);
+        assert_eq!(
+            data["session_summaries"][0]["summary"],
+            data2["session_summaries"][0]["summary"]
+        );
+        // La relation parent→enfant est réécrite : le projet pointe vers le
+        // client ré-inséré (nouvel id).
+        let new_client_id = data2["clients"][0]["id"].as_i64().unwrap();
+        assert_eq!(data2["projects"][0]["client_id"].as_i64().unwrap(), new_client_id);
+
+        // Idempotence : un second replace produit le même état.
+        replace_tracking(&conn, &data2).unwrap();
+        let data3 = serialize_tracking(&conn).unwrap();
+        assert_eq!(data3["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(data3["decisions"].as_array().unwrap().len(), 1);
+
+        // Intégrité FK : les projets référencent un client existant et les
+        // tâches/décisions/jalons/résumés un projet existant.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM projects p JOIN clients c ON c.id = p.client_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let task_join: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks t JOIN projects p ON p.id = t.project_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_join, 2);
+        // source_task_id réécrit et pointe vers une tâche existante.
+        let src_ok: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks t JOIN tasks s ON s.id = t.source_task_id WHERE t.title = 'Tâche 2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(src_ok, 1);
+    }
+
+    #[test]
+    fn memory_replace_rolls_back_on_failure() {
+        let conn = mem_conn();
+        conn.execute_batch("INSERT INTO clients (name) VALUES ('Gardé')").unwrap();
+        // Données invalides : tâche référençant un projet inexistant, avec FK ON
+        // → tasks.project_id est NOT NULL et le mapping produit NULL → l'insertion
+        // échoue et la transaction doit être annulée (rollback).
+        let bad = serde_json::json!({
+            "clients": [],
+            "projects": [],
+            "tasks": [{ "id": 1, "project_id": 99, "title": "X", "description": "", "status": "demande", "deadline": null, "blocker_reason": null, "source_task_id": null, "created_at": "", "updated_at": "" }]
+        });
+        assert!(replace_tracking(&conn, &bad).is_err());
+        // Rollback : le contenu initial est conservé.
+        let names: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clients", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(names, 1);
     }
 
     #[test]

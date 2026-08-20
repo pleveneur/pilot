@@ -1,6 +1,9 @@
 // settings.js — Modale de paramètres
 
 import { invoke } from "@tauri-apps/api/core";
+// Alias dialog pour ne pas ombrer le `confirm(...)` global (fenêtre) déjà utilisé
+// ailleurs dans ce fichier (audit, mot de passe distant, déconnexion).
+import { save as dialogSave, open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
 import { applyTheme, getCurrentTheme, getCurrentSubtheme, SUBTHEMES } from "./theme.js";
 import { refreshShowThinking, refreshShowTools } from "./agent-pi.js";
 import { showToast } from "./toast.js";
@@ -208,6 +211,14 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
 const chkSuperAgentForceStructuredBrief = document.getElementById("setting-superagent-force-structured-brief");
 const chkSuperAgentInheritContext = document.getElementById("setting-superagent-inherit-context");
 const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagent-auto-check-startup");
+  // ── Mémoire (transfert de suivi, issue #69) ──
+  const chkMemTracking = document.getElementById("mem-tracking");
+  const chkMemSettings = document.getElementById("mem-settings");
+  const chkMemBehavior = document.getElementById("mem-behavior");
+  const chkMemUi = document.getElementById("mem-ui");
+  const btnMemExport = document.getElementById("btn-superagent-memory-export");
+  const btnMemImport = document.getElementById("btn-superagent-memory-import");
+  const memStatus = document.getElementById("mem-status");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -627,6 +638,85 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
         await invoke("play_assistant_sound", { soundType: "point", volume: vol });
       } catch (e) {
         showToast(`Son : ${e}`);
+      }
+    });
+  }
+
+  // ── Mémoire (transfert de suivi, issue #69) ──
+  if (btnMemExport) {
+    btnMemExport.addEventListener("click", async () => {
+      const include = {
+        tracking: chkMemTracking ? chkMemTracking.checked : true,
+        settings: chkMemSettings ? chkMemSettings.checked : true,
+        behavior: chkMemBehavior ? chkMemBehavior.checked : false,
+        ui: chkMemUi ? chkMemUi.checked : false,
+      };
+      if (!include.tracking && !include.settings && !include.behavior && !include.ui) {
+        showToast("Sélectionnez au moins un contenu à exporter.", "warning");
+        return;
+      }
+      if (memStatus) memStatus.textContent = "Export…";
+      try {
+        const json = await invoke("export_super_agent_memory", { include });
+        const outPath = await dialogSave({
+          defaultPath: "pilot-assistant-memoire.json",
+          filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!outPath) return; // annulé
+        await invoke("write_file_content", { path: outPath, content: json });
+        if (memStatus) memStatus.textContent = "✅ Mémoire exportée.";
+        showToast("Mémoire exportée : " + outPath.split(/[/\\]/).pop());
+      } catch (e) {
+        if (memStatus) memStatus.textContent = "";
+        showToast("Export : " + e, "error");
+      }
+    });
+  }
+  if (btnMemImport) {
+    btnMemImport.addEventListener("click", async () => {
+      try {
+        const inPath = await dialogOpen({
+          multiple: false,
+          filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!inPath) return; // annulé
+        const json = await invoke("read_file_content", { path: inPath });
+        const ok = await dialogConfirm(
+          "Importer cette mémoire REMPLACERA le suivi de l'Assistant sur ce poste (et les sections cochées de la config). Continuer ?",
+          { title: "Importer la mémoire de l'Assistant", kind: "warning" }
+        );
+        if (!ok) return;
+        if (memStatus) memStatus.textContent = "Import…";
+        const sections = {
+          tracking: chkMemTracking ? chkMemTracking.checked : true,
+          settings: chkMemSettings ? chkMemSettings.checked : true,
+          behavior: chkMemBehavior ? chkMemBehavior.checked : false,
+          ui: chkMemUi ? chkMemUi.checked : false,
+        };
+        const res = await invoke("import_super_agent_memory", { json, sections });
+        if (memStatus) memStatus.textContent = "✅ Importé : " + (res.imported || []).join(", ") + ".";
+        showToast("Mémoire importée.");
+        // Appliquer l'apparence importée + rafraîchir la config de l'Assistant
+        // (nom/label) via l'événement déjà écouté par super-agent.js.
+        const cfg = await invoke("get_config");
+        applyTheme(cfg.theme || "dark", cfg.subtheme || "default");
+        window.dispatchEvent(new CustomEvent("pilot-config-changed", { detail: cfg }));
+        // Recharger le panneau des réglages avec la config importée.
+        if (currentConfig) {
+          try { currentConfig = await invoke("get_config"); } catch (_) {}
+          selectTheme.value = currentConfig.theme || "dark";
+          populateSubthemeSelect(selectSubtheme, currentConfig.theme || "dark", currentConfig.subtheme || "default");
+          if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
+          if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
+            ? currentConfig.super_agent_clients.join("\n") : "";
+          if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
+          if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
+          if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
+          if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
+        }
+      } catch (e) {
+        if (memStatus) memStatus.textContent = "";
+        showToast("Import : " + e, "error");
       }
     });
   }

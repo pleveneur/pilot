@@ -2218,6 +2218,8 @@ pub fn run() {
             super_agent::set_super_agent_user_memory,
             super_agent::set_super_agent_personality,
             super_agent::analyze_super_agent_personality,
+            super_agent::export_super_agent_memory,
+            super_agent::import_super_agent_memory,
             super_agent::inject_session_summary,
             super_agent::initialize_super_agent,
             super_agent::list_clients,

@@ -788,6 +788,24 @@
               L'association projet → client se fait dans l'onglet 🧭 Assistant (bouton ⚙️) ou ici en renseignant le chemin du projet.
             </div>
           </div>
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="database" class="icon-sm"></i> Mémoire (transfert de suivi)</h3>
+            <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+              Exportez ou importez la mémoire de l'Assistant (suivi multi-projets, config, préférences) pour la transférer entre deux postes. Fichier unique JSON. Aucune donnée personnelle (coffre, conversations privées) n'est incluse.
+            </div>
+            <div class="setting-row" style="flex-wrap:wrap;gap:6px;align-items:flex-start;">
+              <span style="flex:1 1 100%;font-weight:600;">Contenu à exporter :</span>
+              <label class="setting-row-checkbox setting-row-indent" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mem-tracking" checked /> Suivi (clients, projets, tâches, décisions, jalons, résumés)</label>
+              <label class="setting-row-checkbox setting-row-indent" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mem-settings" checked /> Réglages (nom, clients, association projet → client)</label>
+              <label class="setting-row-checkbox setting-row-indent" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mem-behavior" /> Comportement (prompt, mémoire utilisateur, personnalité, options)</label>
+              <label class="setting-row-checkbox setting-row-indent" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="mem-ui" /> Apparence (thème)</label>
+            </div>
+            <div class="setting-row" style="gap:8px;margin-top:8px;">
+              <button type="button" id="btn-superagent-memory-export" class="web-btn">Exporter la mémoire</button>
+              <button type="button" id="btn-superagent-memory-import" class="web-btn">Importer la mémoire</button>
+              <span id="mem-status" style="font-size:11px;color:var(--text-muted);align-self:center;"></span>
+            </div>
+          </div>
           </div>
 
           </div>
