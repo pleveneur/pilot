@@ -9,23 +9,6 @@
 </head>
 <body class="theme-dark">
 
-  <!-- Barre de titres personnalisée (issue #74) : remplace la barre native.
-       Toute la barre est une zone de glissement (data-tauri-drag-region) sauf
-       les boutons de contrôle fenêtre. -->
-  <div id="titlebar" data-tauri-drag-region>
-    <div class="titlebar-left" data-tauri-drag-region>
-      <img id="tb-logo" src="images/logo_pilot_vector.svg" alt="Pilot" data-tauri-drag-region />
-      <span id="tb-appname" data-tauri-drag-region>Pilot</span>
-      <span id="tb-project" class="titlebar-project hidden" data-tauri-drag-region></span>
-    </div>
-    <div class="titlebar-spacer" data-tauri-drag-region></div>
-    <div class="titlebar-controls">
-      <button id="tb-minimize" class="tb-btn" title="Réduire"><i data-lucide="minus" class="icon-sm"></i></button>
-      <button id="tb-maximize" class="tb-btn" title="Agrandir"><i data-lucide="square" class="icon-sm" id="tb-max-icon"></i><i data-lucide="copy" class="icon-sm hidden" id="tb-restore-icon"></i></button>
-      <button id="tb-close" class="tb-btn tb-close" title="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
-    </div>
-  </div>
-
   <!-- Écran de chargement (sablier) -->
   <div id="boot-overlay">
     <img id="boot-logo" src="images/logo_pilot_vector.svg" alt="Pilot" />

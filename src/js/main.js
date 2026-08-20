@@ -21,7 +21,6 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { animateModalOpen } from "./modal-anim.js";
-import { initTitlebar } from "./titlebar.js";
 
 // --- Palette de commandes ---
 
@@ -240,9 +239,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
   // 1. Initialiser le thème
   initTheme();
-  // 1a. Barre de titres personnalisée (issue #74) : contrôles fenêtre + projet.
-  initTitlebar();
-  // 1b. Remplacer les balises <i data-lucide="..."> du HTML statique par des
+  // 2. Remplacer les balises <i data-lucide="..."> du HTML statique par des
   // icônes SVG Lucide. À rappeler après toute insertion dynamique d'icônes.
   refreshIcons();
 
