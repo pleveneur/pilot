@@ -5384,6 +5384,23 @@ function maybeDetectReflectionLoop(state, messagesEl) {
 const ACTION_LOOP_WINDOW = 20;
 // Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
 const ACTION_LOOP_MIN_REPEAT = 5;
+// Outils de LECTURE PURE : sans effet de bord, les répéter est de l'exploration
+// légitime (ex: lire un gros fichier en plusieurs lectures simples). Ils ne sont
+// PAS enregistrés dans l'historique d'actions (et donc PAS comptés dans la
+// détection de boucle) pour éviter les faux positifs. Seuls les outils qui
+// modifient l'état ou exécutent (bash, write, edit, db_execute, ...) restent
+// détectés.
+const READ_ONLY_TOOLS = new Set([
+  "read",
+  "search",
+  "grep",
+  "glob",
+  "list",
+  "ls",
+  "find",
+  "read_project_file",
+  "search_project",
+]);
 
 /**
  * Détecte une boucle d'ACTIONS de l'agent standard (relire le même fichier,
@@ -6299,8 +6316,11 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         });
       }
       // Détection de boucle d'actions (agent standard) : on enregistre l'action
-      // dans l'historique (fenêtre glissante) puis on teste la répétition.
-      if (toolName) {
+      // dans l'historique (fenêtre glissante) puis on teste la répétition. Les
+      // lectures pures (sans effet de bord) sont exclues : les répéter est de
+      // l'exploration légitime (gros fichier lu par morceaux) et générait un
+      // faux positif « 🔁 Boucle d'actions détectée ».
+      if (toolName && !READ_ONLY_TOOLS.has(toolName)) {
         state.actionHistory.push(buildToolLoopFingerprint(toolName, toolArgs));
         if (state.actionHistory.length > ACTION_LOOP_WINDOW) {
           state.actionHistory.shift();
