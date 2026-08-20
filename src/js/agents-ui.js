@@ -355,7 +355,7 @@ export async function createAgents(container) {
         </div>
         <div class="agent-card-actions">
           <button class="agent-btn" data-action="edit" title="Modifier"><i data-lucide="pencil" class="icon-sm"></i></button>
-          ${a.id !== "coordinateur" ? `<button class="agent-btn" data-action="delete" title="Supprimer"><i data-lucide="trash-2" class="icon-sm"></i></button>` : ""}
+          <button class="agent-btn" data-action="delete" title="Supprimer"><i data-lucide="trash-2" class="icon-sm"></i></button>
         </div>
       `;
       listEl.appendChild(card);
@@ -373,7 +373,16 @@ export async function createAgents(container) {
     if (btn.dataset.action === "edit") {
       openEditor(id);
     } else if (btn.dataset.action === "delete") {
-      if (!confirm(`Supprimer l'agent « ${agentName(id)} » ?`)) return;
+      // Garde-fou coordinateur (issue #72) : le coordinateur est un agent spécial
+      // qui pilote l'équipe. Le supprimer est sûr car le système le recrée avec sa
+      // configuration par défaut au prochain démarrage (buildDefaultCoordinator /
+      // resolveCoordinatorFallback dans agents-bus.js). On prévient l'utilisateur
+      // avec un message distinct de celui des autres agents.
+      const isCoord = id === "coordinateur";
+      const msg = isCoord
+        ? `Supprimer le coordinateur ?\n\nLe coordinateur sera recréé automatiquement avec sa configuration par défaut au prochain démarrage.`
+        : `Supprimer l'agent « ${agentName(id)} » ?`;
+      if (!confirm(msg)) return;
       registry.agents = registry.agents.filter((a) => a.id !== id);
       await persistRegistry();
     }
