@@ -416,6 +416,12 @@ function flushPendingInfo() {
 
 export async function createSuperAgent(container) {
   await refreshSuperAgentConfig();
+  // Issue #71 : refléter immédiatement le nom personnalisé de l'assistant au
+  // chargement de l'onglet (pas seulement après un changement de config).
+  const initTabs = window._pilotTabs;
+  if (initTabs && typeof initTabs.updateSuperAgentLabel === "function") {
+    initTabs.updateSuperAgentLabel(superAgentDisplayLabel());
+  }
 
   // Rafraîchir le nom de l'onglet quand la config change (paramètres ⚙️).
   // Issue #12 : le handler est stocké pour être retiré dans `unlisten` (sinon

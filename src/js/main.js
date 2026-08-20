@@ -346,6 +346,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hideEditCtxMenu();
   });
+  // Issue #73 : bloquer F5 / Ctrl+R (rafraîchissement complet de l'interface),
+  // souvent déclenchés par erreur et qui réinitialisent la vue Pilot. On
+  // capture l'événement à la racine et on l'annule.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "F5" || ((e.ctrlKey || e.metaKey) && (e.key === "r" || e.key === "R"))) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
   // Actions du menu éditeur (execCommand fonctionne sur le contenteditable/input)
   document.getElementById("ectx-cut").addEventListener("click", () => {
     hideEditCtxMenu();

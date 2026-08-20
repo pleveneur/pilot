@@ -146,9 +146,14 @@ struct AppState {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
+    // Issue #75 : `#[serde(default)]` sur TOUS les champs — un champ ABSENT d'un
+    // ancien config.json est reconstruit avec son défaut au lieu de faire échouer
+    // la désérialisation entière (ce qui écrasait toute la config via unwrap_or_default).
+    #[serde(default)]
     theme: String,
     #[serde(default)]
     subtheme: String,
+    #[serde(default)]
     default_command: String,
     #[serde(default)]
     recent_projects: Vec<String>,
@@ -162,9 +167,13 @@ struct AppConfig {
     // Conservé pour rétrocompatibilité (migration auto)
     #[serde(default)]
     last_project: Option<String>,
+    #[serde(default)]
     auto_load_last_project: bool,
+    #[serde(default)]
     auto_run_command: bool,
+    #[serde(default)]
     integrated_terminal: bool,
+    #[serde(default)]
     rpc_agent_enabled: bool,
     #[serde(default)]
     rpc_pi_path: String,
@@ -782,24 +791,36 @@ fn ensure_config_loaded(state: &AppState, app: &AppHandle) {
         && config.show_tools == default.show_tools
         && config.pdf_md_model == default.pdf_md_model
     {
-        let mut disk = load_config_disk(app);
-        disk.migrate();
-        *config = disk;
+        // Issue #75 : si la config disque est illisible/invalide, on CONSERVE la
+        // config courante en mémoire plutôt que de l'écraser par un défaut complet.
+        if let Ok(disk) = load_config_disk(app) {
+            *config = disk;
+        }
     }
 }
 
-fn load_config_disk(app: &AppHandle) -> AppConfig {
+fn load_config_disk(app: &AppHandle) -> Result<AppConfig, String> {
     let path = match config_path(app) {
         Ok(p) => p,
-        Err(_) => return AppConfig::default(),
+        Err(_) => return Ok(AppConfig::default()),
     };
     match fs::read_to_string(&path) {
         Ok(content) => {
-            let mut cfg: AppConfig = serde_json::from_str(&content).unwrap_or_default();
-            cfg.migrate();
-            cfg
+            // Issue #75 : chargement TOLÉRANT. Chaque champ porte `#[serde(default)]`
+            // : un champ ABSENT est reconstruit avec son défaut (valeurs des autres
+            // champs conservées), au lieu de faire échouer toute la désérialisation.
+            // Si le JSON est globalement invalide (champ à type incompatible), on
+            // renvoie une erreur : l'appelant conserve la config courante en mémoire
+            // au lieu de tout perdre via unwrap_or_default.
+            match serde_json::from_str::<AppConfig>(&content) {
+                Ok(mut cfg) => {
+                    cfg.migrate();
+                    Ok(cfg)
+                }
+                Err(e) => Err(format!("Config invalide: {}", e)),
+            }
         }
-        Err(_) => AppConfig::default(),
+        Err(_) => Ok(AppConfig::default()),
     }
 }
 
@@ -1891,7 +1912,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let config = load_config_disk(&handle);
+            // Au tout premier démarrage, aucune config en mémoire : un fichier
+            // invalide retombe sur le défaut (rien à préserver). En cas de mise à
+            // jour, les `#[serde(default)]` champ par champ conservent les valeurs.
+            let config = load_config_disk(&handle).unwrap_or_default();
             let state: State<'_, AppState> = app.state();
             *state.config.lock().unwrap() = config;
             // 5.1 : poser le handle d'application sur l'AgentService pour permettre

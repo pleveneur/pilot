@@ -1390,8 +1390,11 @@ class TabsManager {
       const name = document.createElement("span");
       name.className = "scratchpad-page-name";
       name.textContent = page.name || "Sans nom";
-      name.title = "Cliquer pour renommer";
-      name.addEventListener("click", (e) => {
+      // Issue #68 : un clic SIMPLE sur le nom doit OUVRIR la page (la bascule est
+      // gérée par le clic sur le conteneur el ci-dessous) ; le renommage se fait
+      // au DOUBLE-clic, comme les onglets de fichiers.
+      name.title = "Double-cliquer pour renommer";
+      name.addEventListener("dblclick", (e) => {
         e.stopPropagation();
         this._renameScratchPage(tab, pagesBar, page, name);
       });
