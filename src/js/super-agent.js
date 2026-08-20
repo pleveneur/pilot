@@ -85,7 +85,7 @@ function scrollSuperToBottom(messagesEl) {
 }
 
 /** État global de l'assistant (nom, clients, prompt, options) — cache sync. */
-let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true };
+let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true, super_agent_auto_check_startup: false };
 
 // Issue #47 : délégation en attente de feedback. Quand l'assistant délègue une
 // tâche à l'agent d'un projet (delegate_to_coder), on mémorise la demande ici.
@@ -156,7 +156,7 @@ export async function refreshSuperAgentConfig() {
   try {
     configCache = await invoke("get_super_agent_config");
   } catch (_) {
-    configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false };
+    configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true, super_agent_auto_check_startup: false };
   }
   refreshSuperRenderOptions();
   return configCache;
@@ -633,11 +633,13 @@ export async function createSuperAgent(container) {
   });
 
   // ── Démarrage de la session (lazy côté Rust, mais on l'initie ici) ──
-  try {
-    await invoke("start_super_agent_session");
-  } catch (err) {
+  // Fire-and-forget : ne PAS attendre le spawn du processus pi + handshake RPC
+  // (peut prendre plusieurs secondes). Le démarrage de l'onglet 🧭 (et donc de
+  // Pilot au démarrage) ne doit pas patienter. La session se lance en
+  // arrière-plan ; `send_super_agent_prompt` la démarre paresseusement si besoin.
+  invoke("start_super_agent_session").catch((err) => {
     console.error("Erreur démarrage session super-agent:", err);
-  }
+  });
   loadModels();
 
   // État de streaming
@@ -1043,6 +1045,10 @@ let scheduleTicker = null;
 
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
+  // Issue #77 : ne PAS lancer automatiquement un « point à faire » (rappel dû)
+  // à l'ouverture de la session, sauf si l'utilisateur a validé ce comportement
+  // (toggle « Vérifier les points à faire à l'ouverture » dans Paramètres).
+  if (configCache.super_agent_auto_check_startup !== true) return;
   try {
     const res = await invoke("super_agent_schedule_tick");
     const due = (res && res.due) || [];

@@ -207,6 +207,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentQualityGate = document.getElementById("setting-superagent-quality-gate");
 const chkSuperAgentForceStructuredBrief = document.getElementById("setting-superagent-force-structured-brief");
 const chkSuperAgentInheritContext = document.getElementById("setting-superagent-inherit-context");
+const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagent-auto-check-startup");
   const chkConfirmFileEdits = document.getElementById("setting-confirm-file-edits");
   const chkProjectMemory = document.getElementById("setting-project-memory-enabled");
   const chkProjectMemoryAuto = document.getElementById("setting-project-memory-auto-extract");
@@ -541,6 +542,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
   if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
   if (chkSuperAgentForceStructuredBrief) chkSuperAgentForceStructuredBrief.checked = currentConfig.super_agent_force_structured_brief !== false;
   if (chkSuperAgentInheritContext) chkSuperAgentInheritContext.checked = currentConfig.super_agent_inherit_context === true;
+  if (chkSuperAgentAutoCheckStartup) chkSuperAgentAutoCheckStartup.checked = currentConfig.super_agent_auto_check_startup === true;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -794,6 +796,7 @@ const chkSuperAgentInheritContext = document.getElementById("setting-superagent-
         super_agent_quality_gate: chkSuperAgentQualityGate ? chkSuperAgentQualityGate.checked !== false : true,
         super_agent_force_structured_brief: chkSuperAgentForceStructuredBrief ? chkSuperAgentForceStructuredBrief.checked !== false : true,
         super_agent_inherit_context: chkSuperAgentInheritContext ? chkSuperAgentInheritContext.checked === true : false,
+        super_agent_auto_check_startup: chkSuperAgentAutoCheckStartup ? chkSuperAgentAutoCheckStartup.checked === true : false,
       };
     try {
       await invoke("save_config", { config });

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-19 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-08-20 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1089,6 +1089,14 @@ spécifique ne reçoit que son rôle propre.
   désactivé ne compte pas et libère sa place), **1 fire** par
   planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
   morte — les rappels `every` accumulent un retard, repris à la reprise).
+- **Issue #77 — pas de lancement automatique au démarrage** : par défaut,
+  l'Assistant **ne lance pas automatiquement** un rappel dû à l'ouverture de sa
+  session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
+  **Paramètres → Assistant → « Vérifier les points à faire à l'ouverture de la
+  session (relances programmées) »** (désactivé par défaut). Tant qu'il est
+  désactivé, les rappels dus ne sont injectés que si l'utilisateur les demande
+  explicitement ; il faut valider ce réglage pour que l'Assistant les vérifie
+  automatiquement à chaque ouverture de session.
 - Stockage : table `assistant_schedules` de la base `~/.pilot/super-agent.db`.
   Le rappel est injecté dans la conversation de l'assistant à l'échéance (pas de
   notification OS).

@@ -295,7 +295,12 @@ const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_ag
 const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nL'outil `list_agent_sessions` te donne la vue d'ensemble des sessions d'agents (projet, agent, mode, état, vivacité, visibilité, actif) et, quand une activité a été enregistrée, la dernière activité de chaque agent : `lastActivity` (timestamp ISO), `lastActivityRelative` (« il y a X min ») et `lastEvent` (type du dernier événement RPC).\n\nAvant de décider d'arrêter un agent, utilise `lastActivity` / `lastActivityRelative` pour juger s'il progresse réellement :\n- Un agent avec une dernière activité RÉCENTE travaille encore, même s'il n'a pas streamé de sortie visible depuis un moment. Ne l'arrête pas sur la seule absence de progression visible.\n- Ne considère l'arrêt que pour un agent réellement inactif (dernière activité ancienne, `lastActivityRelative` indiquant un long silence).\n- `lastEvent` t'indique le type de la dernière action (ex: `tool_execution_end`) pour comprendre ce que l'agent faisait.\n";
 
 #[tauri::command]
-pub fn start_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
+pub async fn start_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    // Async : le démarrage de la session (spawn du processus pi + handshake RPC
+    // `new_session`/`set_model`) est bloquant et peut prendre plusieurs secondes
+    // (démarrage Node.js + chargement des extensions). En commande synchrone, il
+    // gelait le thread principal → tout le démarrage de Pilot attendait. En async,
+    // il s'exécute sur le runtime async, l'UI reste réactive.
     do_start_super_agent_session(state.inner(), &app)
 }
 
@@ -451,7 +456,7 @@ pub(crate) fn do_send_super_agent_prompt(
 }
 
 #[tauri::command]
-pub fn send_super_agent_prompt(state: State<AppState>, app: AppHandle, message: String) -> Result<(), String> {
+pub async fn send_super_agent_prompt(state: State<'_, AppState>, app: AppHandle, message: String) -> Result<(), String> {
     do_send_super_agent_prompt(state.inner(), &app, message)
 }
 
@@ -845,7 +850,7 @@ pub fn super_agent_schedule_list(app: AppHandle) -> Result<Value, String> {
 /// (au plus 1 par planification et par tick, marquées atomiquement) uniquement
 /// si la session super-agent est vivante — session morte = pas de tick.
 #[tauri::command]
-pub fn super_agent_schedule_tick(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
     if !state.agent_service.superagent_alive() {
         return Ok(serde_json::json!({ "alive": false, "due": [], "count": 0 }));
     }
@@ -894,13 +899,13 @@ pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: S
 /// `extension_ui_response` pour répondre aux boutons de question posés par
 /// l'assistant via pilot-choices).
 #[tauri::command]
-pub fn send_super_agent_command(state: State<AppState>, app: AppHandle, command: Value) -> Result<(), String> {
+pub async fn send_super_agent_command(state: State<'_, AppState>, app: AppHandle, command: Value) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
     state.agent_service.send_superagent(command)
 }
 
 #[tauri::command]
-pub fn abort_super_agent(state: State<AppState>, app: AppHandle) -> Result<(), String> {
+pub async fn abort_super_agent(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     do_start_super_agent_session(state.inner(), &app)?;
     let cmd = serde_json::json!({"type": "abort"});
     state.agent_service.send_superagent(cmd)
@@ -930,6 +935,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "super_agent_force_structured_brief": cfg.super_agent_force_structured_brief,
         "super_agent_inherit_context": cfg.super_agent_inherit_context,
         "super_agent_user_friendly": cfg.super_agent_user_friendly,
+        "super_agent_auto_check_startup": cfg.super_agent_auto_check_startup,
         "adaptive_personality": cfg.super_agent_adaptive_personality,
         "personality": cfg.super_agent_personality,
     }))
@@ -950,6 +956,7 @@ pub fn set_super_agent_config(
     super_agent_force_structured_brief: Option<bool>,
     super_agent_inherit_context: Option<bool>,
     super_agent_user_friendly: Option<bool>,
+    super_agent_auto_check_startup: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -984,6 +991,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = super_agent_user_friendly {
         cfg.super_agent_user_friendly = v;
+    }
+    if let Some(v) = super_agent_auto_check_startup {
+        cfg.super_agent_auto_check_startup = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
@@ -1236,7 +1246,7 @@ pub fn list_super_agent_projects(state: State<AppState>, app: AppHandle) -> Resu
 /// projets (avec compteurs de tâches), décisions récentes et sessions récentes.
 /// Lecture seule de la base de suivi de l'assistant (~/.pilot/super-agent.db).
 #[tauri::command]
-pub fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
+pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
     let conn = open_db(&app)?;
 
     // Clients (depuis la table clients).

@@ -510,6 +510,13 @@ struct AppConfig {
     // en plus de leur rôle propre (concaténation).
     #[serde(default)]
     super_agent_inherit_context: bool,
+    // Issue #77 : vérification automatique des « points à faire » (relances
+    // programmées, chantier #13) à l'ouverture de la session de l'Assistant.
+    // Quand désactivé (défaut), l'Assistant ne lance PAS automatiquement un
+    // rappel dû au démarrage : il ne le fait que si l'utilisateur a validé ce
+    // comportement (toggle dans Paramètres → Assistant).
+    #[serde(default)]
+    super_agent_auto_check_startup: bool,
     // Issue #16 : mode « user-friendly ». Quand activé (défaut false), l'assistant
     // répond en langage simple, non technique, sauf si l'utilisateur demande
     // explicitement du technique. Injecté dans le prompt système.
@@ -742,6 +749,7 @@ impl Default for AppConfig {
             super_agent_quality_gate: true,
             super_agent_force_structured_brief: true,
             super_agent_inherit_context: false,
+            super_agent_auto_check_startup: false,
             super_agent_user_friendly: false,
             anomaly_detection_enabled: true,
             anomaly_timeout_minutes: default_anomaly_timeout_minutes(),
