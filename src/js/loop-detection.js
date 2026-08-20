@@ -475,3 +475,48 @@ export function buildLoopCorrectionPrompt(level, options = {}) {
       return base + "Arrête-toi et conclus immédiatement.";
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Relance après détection d'une boucle d'ACTIONS (issue #110)
+//
+// Une boucle d'actions (relire le même fichier, relancer la même commande,
+// refaire la même recherche) est détectée par detectRepeatedActions. Au lieu
+// d'un arrêt définitif (comportement historique), on RELANCE l'agent avec un
+// message de correction qui lui ordonne explicitement de CHANGER D'APPROCHE et
+// de continuer le travail. Nombre maximal de relances : ACTION_LOOP_MAX_ESCALATION
+// (au-delà, abandon définitif). L'escalade se fait par le message (le RPC pi ne
+// permet pas de modifier les paramètres d'échantillonnage par prompt).
+
+/**
+ * Nombre maximal de relances avec correction pour une boucle d'actions.
+ * Au-delà, on abandonne définitivement l'agent (voir agent_end).
+ */
+export const ACTION_LOOP_MAX_ESCALATION = 2;
+
+/**
+ * Construit le message de correction à envoyer à l'agent après une boucle
+ * d'actions détectée. Le message ordonne de changer d'approche et de
+ * continuer le travail, et devient plus explicite à chaque niveau d'escalade.
+ *
+ * @param {number} level - niveau d'escalade (1..ACTION_LOOP_MAX_ESCALATION)
+ * @param {object} [options]
+ * @returns {string} le message de correction à envoyer
+ */
+export function buildActionLoopCorrectionPrompt(level, options = {}) {
+  const base =
+    "Tu répètes les mêmes actions sans progresser : relire les mêmes fichiers, relancer les mêmes recherches ou commandes. ";
+  switch (level) {
+    case 1:
+      return (
+        base +
+        "Arrête ce schéma immédiatement, change d'approche et continue le travail : identifie ce qui te bloque et passe à une action différente et concrète qui te fait réellement progresser vers l'objectif."
+      );
+    case 2:
+      return (
+        base +
+        "C'est la deuxième fois que tu tournes en boucle d'actions. Change radicalement d'approche : analyse le problème sous un angle différent, consulte d'autres sources, reformule ta méthode, puis continue le travail jusqu'à compléter la tâche. Ne répète plus les mêmes actions."
+      );
+    default:
+      return base + "Arrête ce schéma, change d'approche et continue le travail.";
+  }
+}

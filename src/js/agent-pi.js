@@ -65,6 +65,8 @@ import {
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   MAX_LOOP_ESCALATION,
+  buildActionLoopCorrectionPrompt,
+  ACTION_LOOP_MAX_ESCALATION,
 } from "./loop-detection.js";
 
 // ── État global de l'autocomplétion ──
@@ -367,7 +369,16 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // texte différent. On garde un historique des dernières actions (empreintes)
     // et on détecte les répétitions dans cette fenêtre (voir loop-detection.js).
     actionHistory: [],         // empreintes des dernières actions (fenêtre glissante)
-    actionLoopStopped: false,  // true après arrêt pour boucle d'actions (évite re-déclenchement)
+    actionLoopStopped: false,  // filet de sécurité : true après détection de boucle d'actions
+    // ── Relance après boucle d'actions (issue #110) ──
+    // Miroir du pattern de la boucle de réflexion (issue #37) : au lieu d'un
+    // arrêt définitif, on RELANCE l'agent avec un message lui ordonnant de
+    // changer d'approche. actionLoopCorrectionPending est true entre l'abort et
+    // l'envoi du prompt de correction (agent_end). Après ACTION_LOOP_MAX_ESCALATION
+    // relances, on abandonne définitivement (actionLoopAbandoned).
+    actionLoopCorrectionPending: false, // true entre arrêt (abort) et envoi de la correction
+    actionLoopCorrectionCount: 0,   // nb de corrections d'actions déjà envoyées (max ACTION_LOOP_MAX_ESCALATION)
+    actionLoopAbandoned: false,     // true après abandon (relances épuisées)
     // ── Erreurs de connexion (chat standard) ──
     // pi émet auto_retry_start puis un message error à chaque retry. Sans
     // dé-duplication, l'UI empile « ❌ Erreur de connexion » 3-4× d'affilée,
@@ -960,6 +971,12 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // multi-tours d'une même tâche tout en repartant proprement au prompt suivant.
       state.actionHistory = [];
       state.actionLoopStopped = false;
+      // Issue #110 : nouvelle tâche logique → repartir à zéro sur la relance de
+      // boucle d'actions (sinon un agent abandonné pour boucle resterait bloqué
+      // sur la tâche suivante).
+      state.actionLoopCorrectionPending = false;
+      state.actionLoopCorrectionCount = 0;
+      state.actionLoopAbandoned = false;
     }
 
     // Vérifier si le modèle supporte les images avant d'envoyer
@@ -5381,9 +5398,9 @@ function maybeDetectReflectionLoop(state, messagesEl) {
 }
 
 // Taille de la fenêtre d'historique des actions (dernières actions analysées).
-const ACTION_LOOP_WINDOW = 20;
+const ACTION_LOOP_WINDOW = 40;
 // Nombre d'occurrences d'une même action dans la fenêtre déclenchant la boucle.
-const ACTION_LOOP_MIN_REPEAT = 5;
+const ACTION_LOOP_MIN_REPEAT = 15;
 // Outils de LECTURE PURE : sans effet de bord, les répéter est de l'exploration
 // légitime (ex: lire un gros fichier en plusieurs lectures simples). Ils ne sont
 // PAS enregistrés dans l'historique d'actions (et donc PAS comptés dans la
@@ -5414,7 +5431,11 @@ const READ_ONLY_TOOLS = new Set([
  */
 function maybeDetectActionLoop(state, messagesEl) {
   if (!state || state.orchestrationRunning) return;
-  if (state.actionLoopStopped) return; // déjà arrêté pour boucle d'actions
+  // Issue #110 : même pattern que la boucle de réflexion (issue #37). Pendant
+  // qu'une correction d'actions est en cours (entre abort et envoi du prompt de
+  // correction), on ne redétecte pas ; de même après abandon définitif.
+  if (state.actionLoopCorrectionPending) return; // déjà en cours de correction
+  if (state.actionLoopAbandoned) return; // déjà abandonné (relances épuisées)
   // Issue #35 : NE PAS dépendre de state.isStreaming ici. La détection de boucle
   // d'actions s'appuie sur des événements discrets (tool_execution_start) qui
   // arrivent pendant l'exécution des outils ; state.isStreaming peut être false
@@ -5427,9 +5448,13 @@ function maybeDetectActionLoop(state, messagesEl) {
     windowSize: ACTION_LOOP_WINDOW,
     minRepeat: ACTION_LOOP_MIN_REPEAT,
   })) {
+    // Filet de sécurité conservé : marque la détection pour un éventuel usage
+    // externe, mais le comportement par défaut n'est plus un arrêt définitif —
+    // c'est une relance avec correction (gérée dans agent_end).
     state.actionLoopStopped = true;
-    console.warn("[loop-detection] boucle d'actions détectée, arrêt de l'agent");
-    appendSystemMessage(messagesEl, "🔁 Boucle d'actions détectée : l'agent répète les mêmes actions (lectures, recherches, commandes) sans progresser. Arrêt de l'agent.");
+    state.actionLoopCorrectionPending = true;
+    console.warn("[loop-detection] boucle d'actions détectée, arrêt pour reprise avec correction");
+    appendSystemMessage(messagesEl, "🔁 Boucle d'actions détectée : l'agent répète les mêmes actions. Reprise avec correction…");
     invoke("abort_agent").catch((e) => console.error("Erreur abort_agent (action loop):", e));
   }
 }
@@ -5618,6 +5643,30 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         } else {
           state.loopAbandoned = true;
           appendSystemMessage(messagesEl, "⚠️ L'agent a tourné en boucle plusieurs fois. Veuillez reformuler votre demande ou changer de modèle.");
+        }
+      }
+      // Issue #110 : relance après arrêt pour boucle d'ACTIONS. L'agent a été
+      // arrêté (abort) quand une répétition d'actions a été détectée ; on lui
+      // renvoie ici un message de correction lui ordonnant de CHANGER D'APPROCHE
+      // et de continuer le travail, dans la même session. Après
+      // ACTION_LOOP_MAX_ESCALATION relances, abandon définitif (au lieu de
+      // l'ancien arrêt sec immédiat).
+      if (state.actionLoopCorrectionPending) {
+        state.actionLoopCorrectionPending = false;
+        if (state.actionLoopCorrectionCount < ACTION_LOOP_MAX_ESCALATION) {
+          state.actionLoopCorrectionCount++;
+          const actionLevel = state.actionLoopCorrectionCount; // 1..ACTION_LOOP_MAX_ESCALATION
+          const actionCorrection = buildActionLoopCorrectionPrompt(actionLevel);
+          appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle d'actions (essai ${actionLevel}/${ACTION_LOOP_MAX_ESCALATION})…`);
+          invoke("send_agent_prompt", {
+            message: actionCorrection,
+          }).catch((e) => {
+            console.error("Erreur envoi correction boucle d'actions:", e);
+            appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de la boucle d'actions : ${e}`);
+          });
+        } else {
+          state.actionLoopAbandoned = true;
+          appendSystemMessage(messagesEl, "⚠️ L'agent a répété les mêmes actions plusieurs fois malgré les corrections. Arrêt définitif : veuillez reformuler votre demande ou changer de modèle.");
         }
       }
       // Finaliser le bloc assistant en cours

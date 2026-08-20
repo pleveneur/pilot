@@ -8,6 +8,8 @@ import {
   findRepeatedTail,
   buildLoopCorrectionPrompt,
   buildToolLoopFingerprint,
+  buildActionLoopCorrectionPrompt,
+  ACTION_LOOP_MAX_ESCALATION,
   MAX_LOOP_ESCALATION,
   LOOP_ESCALATION_LEVELS,
   normalizeLoopLine,
@@ -461,5 +463,39 @@ describe("buildLoopCorrectionPrompt", () => {
   it("expose les constantes d'escalade", () => {
     expect(MAX_LOOP_ESCALATION).toBe(4);
     expect(LOOP_ESCALATION_LEVELS.ABANDON).toBe(5);
+  });
+});
+
+describe("buildActionLoopCorrectionPrompt", () => {
+  it("produit un message pour chaque niveau d'escalade de la boucle d'actions", () => {
+    for (let level = 1; level <= ACTION_LOOP_MAX_ESCALATION; level++) {
+      const msg = buildActionLoopCorrectionPrompt(level);
+      expect(typeof msg).toBe("string");
+      expect(msg.length).toBeGreaterThan(50);
+    }
+  });
+
+  it("le message change selon le niveau d'escalade", () => {
+    const m1 = buildActionLoopCorrectionPrompt(1);
+    const m2 = buildActionLoopCorrectionPrompt(2);
+    expect(m1).not.toBe(m2);
+    // Le niveau 2 mentionne explicitement qu'il s'agit de la deuxième fois.
+    expect(m2).toContain("deuxième");
+  });
+
+  it("mentionne explicitement de changer d'approche", () => {
+    const m1 = buildActionLoopCorrectionPrompt(1);
+    expect(m1).toContain("change d'approche");
+    const m2 = buildActionLoopCorrectionPrompt(2);
+    expect(m2).toContain("d'approche");
+  });
+
+  it("ordonne de continuer le travail (pas un simple arrêt)", () => {
+    const msg = buildActionLoopCorrectionPrompt(1);
+    expect(msg).toContain("continue le travail");
+  });
+
+  it("expose la constante de relances max", () => {
+    expect(ACTION_LOOP_MAX_ESCALATION).toBe(2);
   });
 });
