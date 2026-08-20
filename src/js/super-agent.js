@@ -978,7 +978,13 @@ export async function createSuperAgent(container) {
       if (!sup || !sup.projects) return;
       const proj = sup.projects.find((p) => !(p.path || ""));
       const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
-      const processing = agent && (agent.state === "running" || agent.state === "compacting");
+      // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
+      // processus super-agent est RÉELLEMENT en cours de génération (état
+      // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté
+      // (process_exit reçu, session non vivante) ne doit pas verrouiller la
+      // saisie : l'utilisateur doit pouvoir resaisir.
+      const alive = !!(agent && agent.alive);
+      const processing = alive && (agent.state === "running" || agent.state === "compacting");
       const isStreaming = statusEl.classList.contains("agent-status-streaming");
       const isError = statusEl.classList.contains("agent-status-error");
       // A15 : bascule vers « Réfléchit… » dès que l'assistant traite, même si

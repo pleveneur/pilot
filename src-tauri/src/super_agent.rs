@@ -904,9 +904,19 @@ pub async fn send_super_agent_command(state: State<'_, AppState>, app: AppHandle
     state.agent_service.send_superagent(command)
 }
 
+/// Arrête la génération en cours du super-agent.
+///
+/// ⚠️ Bug de démarrage (onglet Assistant) : ne doit JAMAIS redémarrer la
+/// session. L'ancien code appelait `do_start_super_agent_session` avant d'envoyer
+/// l'abort → sur un processus mort (crash en boucle), il le relançait au lieu de
+/// l'arrêter (impossible d'arrêter un processus qui crashe en boucle). On n'envoie
+/// l'abort QUE si la session est vivante ; si elle est morte, on renvoie une
+/// erreur propre sans relancer le processus.
 #[tauri::command]
-pub async fn abort_super_agent(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    do_start_super_agent_session(state.inner(), &app)?;
+pub async fn abort_super_agent(state: State<'_, AppState>, _app: AppHandle) -> Result<(), String> {
+    if !state.agent_service.superagent_alive() {
+        return Err("Le super-agent n'est pas actif (processus arrêté ou crashé). Rien à arrêter.".to_string());
+    }
     let cmd = serde_json::json!({"type": "abort"});
     state.agent_service.send_superagent(cmd)
 }

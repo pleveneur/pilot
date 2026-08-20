@@ -12,6 +12,7 @@ use rusqlite::params;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::MutexGuard;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -37,6 +38,67 @@ pub const SUPERAGENT_ID: &str = "superagent";
 
 /// Canal d'événements dédié au super-agent (isolé des canaux projet/agents).
 const SUPERAGENT_CHANNEL: &str = "rpc-event-superagent";
+
+/// Fenêtre (s) dans laquelle la mort du processus super-agent après son
+/// démarrage est considérée comme un CRASH (mort anormale) plutôt qu'un arrêt
+/// volontaire ou une mort tardive. Anti-boucle de démarrage (bug onglet
+/// Assistant) : un processus qui meurt vite après son lancement signale un
+/// crash à répétition qu'on ne doit pas relancer en boucle.
+const SUPERAGENT_CRASH_WINDOW: Duration = Duration::from_secs(20);
+/// Nombre de crashs rapides consécutifs tolérés avant de BLOQUER le redémarrage
+/// automatique. Après ce seuil, le super-agent reste arrêté (cooldown) au lieu
+/// de relancer le processus indéfiniment.
+const SUPERAGENT_MAX_CRASHES: u32 = 3;
+/// Durée (s) de blocage du redémarrage automatique après trop de crashs
+/// consécutifs. Pendant ce délai, `start_superagent` renvoie une erreur claire
+/// (état d'erreur) au lieu de relancer le processus.
+const SUPERAGENT_RESTART_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Politique anti-boucle de redémarrage du super-agent. Logique PURE et
+/// testable : ne dépend d'aucun processus, uniquement des horodatages.
+/// - `crash_count` : crashs rapides consécutifs observés.
+/// - `blocked_until` : instant jusqu'auquel le redémarrage est bloqué (après
+///   avoir dépassé `SUPERAGENT_MAX_CRASHES`).
+#[derive(Clone, Copy, Debug)]
+struct SuperAgentCrashPolicy {
+    crash_count: u32,
+    blocked_until: Option<Instant>,
+}
+
+impl SuperAgentCrashPolicy {
+    /// Enregistre la mort du processus. `last_start` est l'instant du dernier
+    /// démarrage (None si jamais démarré). Une mort rapide après le démarrage =
+    /// crash → incrémente le compteur ; au-delà du seuil, bloque le redémarrage
+    /// pendant le cooldown. Une mort tardive (ou sans démarrage connu)
+    /// réinitialise le compteur (arrêt propre / volontaire).
+    fn record_death(&mut self, last_start: Option<Instant>, now: Instant) {
+        let crashed_quickly = match last_start {
+            Some(t) => now.duration_since(t) <= SUPERAGENT_CRASH_WINDOW,
+            None => false,
+        };
+        if !crashed_quickly {
+            self.crash_count = 0;
+            return;
+        }
+        self.crash_count += 1;
+        if self.crash_count >= SUPERAGENT_MAX_CRASHES {
+            self.blocked_until = Some(now + SUPERAGENT_RESTART_COOLDOWN);
+            self.crash_count = 0; // remet à zéro pour une future fenêtre propre
+        }
+    }
+
+    /// Secondes restantes avant la levée du blocage de redémarrage. Retourne
+    /// None si non bloqué (ou si le cooldown est expiré → lève le blocage).
+    fn blocked_remaining(&mut self, now: Instant) -> Option<u64> {
+        if let Some(t) = self.blocked_until {
+            if now < t {
+                return Some(t.duration_since(now).as_secs());
+            }
+            self.blocked_until = None; // cooldown expiré → autorise à nouveau
+        }
+        None
+    }
+}
 
 /// Mode de démarrage d'une session : session principale (chat Agent Pi /
 /// multi-onglets, canal projet) ou agent multi-rôles H2 V2 (canal
@@ -73,6 +135,12 @@ pub struct AgentService {
     sessions: Mutex<HashMap<String, SessionEntry>>,
     // Pointeur actif : agent_id actuellement affiché (chat Agent Pi).
     active: Mutex<Option<String>>,
+    // Anti-boucle de redémarrage (bug démarrage Assistant) : instant du dernier
+    // démarrage du processus super-agent + politique de crash (compteur de
+    // crashs rapides consécutifs + cooldown de blocage). Empêche de relancer
+    // indéfiniment une session qui crashé en boucle au démarrage.
+    superagent_last_start: Mutex<Option<Instant>>,
+    superagent_policy: Mutex<SuperAgentCrashPolicy>,
     // 5.1 : handle d'application posé au setup, nécessaire pour émettre les
     // événements `agent-state-changed` depuis les transitions de session
     // (start/pause/stop) qui ne reçoivent pas `app` en paramètre.
@@ -85,6 +153,11 @@ impl AgentService {
             sessions: Mutex::new(HashMap::new()),
             active: Mutex::new(None),
             app: Mutex::new(None),
+            superagent_last_start: Mutex::new(None),
+            superagent_policy: Mutex::new(SuperAgentCrashPolicy {
+                crash_count: 0,
+                blocked_until: None,
+            }),
         }
     }
 
@@ -890,8 +963,29 @@ impl AgentService {
                 if alive {
                     return Ok(()); // déjà lancé (idempotent)
                 }
+                // Processus mort : enregistrer un crash éventuel (anti-boucle de
+                // redémarrage) avant de retirer l'entrée. La politique est
+                // logique pure (pas d'accès session) → pas de verrou croisé.
+                let last_start = *self.superagent_last_start.lock().unwrap();
+                let now = Instant::now();
+                let mut policy = self.superagent_policy.lock().unwrap();
+                policy.record_death(last_start, now);
+                drop(policy);
                 sessions.remove(&key);
             }
+        }
+        // Garde anti-boucle : si trop de crashs rapides consécutifs ont bloqué
+        // le redémarrage (cooldown), NE PAS relancer le processus → erreur claire
+        // (l'utilisateur sait quoi faire) au lieu de tourner en boucle.
+        let blocked_secs = {
+            let mut policy = self.superagent_policy.lock().unwrap();
+            policy.blocked_remaining(Instant::now())
+        };
+        if let Some(secs) = blocked_secs {
+            return Err(format!(
+                "Le super-agent (Assistant) a crashé plusieurs fois de suite. Redémarrage automatique bloqué pendant encore {} s pour éviter une boucle. Réessayez plus tard ou fermez/réouvrez l'onglet.",
+                secs
+            ));
         }
         let session = Self::spawn_superagent_session(app, cwd, pi_path)?;
         {
@@ -906,6 +1000,8 @@ impl AgentService {
                 },
             );
         }
+        // Enregistrer l'instant de démarrage pour la détection de crash rapide.
+        *self.superagent_last_start.lock().unwrap() = Some(Instant::now());
         // Démarrer une nouvelle session (contexte vierge) puis appliquer le
         // modèle par défaut (registre global) pour répondre au 1er prompt.
         let cmd = serde_json::json!({ "type": "new_session" });
@@ -1877,5 +1973,78 @@ mod tests {
         *svc.active.lock().unwrap() = Some("default".to_string());
         svc.stop(proj, "default").unwrap();
         assert_eq!(svc.active_agent(), None, "stop nettoie le pointeur même sans session");
+    }
+
+    /// Anti-boucle de redémarrage du super-agent (bug onglet Assistant) : une
+    /// mort rapide après le démarrage est un CRASH qui incrémente le compteur ;
+    /// au-delà du seuil, le redémarrage est BLOQUÉ (cooldown). Une mort tardive
+    /// réinitialise le compteur. Vérifie le comportement en temps simulé.
+    #[test]
+    fn superagent_crash_policy_blocks_after_repeated_crashes() {
+        let t0 = Instant::now();
+        let mut policy = SuperAgentCrashPolicy {
+            crash_count: 0,
+            blocked_until: None,
+        };
+        // Crash 1 : mort 2 s après démarrage → crash_count = 1, pas de blocage.
+        policy.record_death(Some(t0), t0 + Duration::from_secs(2));
+        assert_eq!(policy.crash_count, 1);
+        assert!(policy.blocked_remaining(t0 + Duration::from_secs(2)).is_none());
+
+        // Crash 2 : redémarrage à t+5, mort à t+7 → crash_count = 2.
+        let t1 = t0 + Duration::from_secs(5);
+        policy.record_death(Some(t1), t1 + Duration::from_secs(2));
+        assert_eq!(policy.crash_count, 2);
+
+        // Crash 3 : redémarrage à t+10, mort à t+12 → dépasse le seuil → blocage.
+        let t2 = t0 + Duration::from_secs(10);
+        policy.record_death(Some(t2), t2 + Duration::from_secs(2));
+        assert_eq!(policy.crash_count, 0, "compteur remis à zéro après blocage");
+        assert!(
+            policy.blocked_remaining(t2 + Duration::from_secs(2)).is_some(),
+            "redémarrage bloqué après {} crashs rapides consécutifs",
+            SUPERAGENT_MAX_CRASHES
+        );
+
+        // Cooldown expiré (≥ SUPERAGENT_RESTART_COOLDOWN après le crash) → levé.
+        // blocked_until = temps du crash (t2+2s) + cooldown → t_after > t2+2s+cooldown.
+        let t_after = t2 + Duration::from_secs(2) + SUPERAGENT_RESTART_COOLDOWN + Duration::from_secs(1);
+        assert!(
+            policy.blocked_remaining(t_after).is_none(),
+            "blocage levé après le cooldown"
+        );
+    }
+
+    /// Une mort TARDIVE (hors fenêtre de crash) après un démarrage n'est pas un
+    /// crash : elle réinitialise le compteur, donc ne bloque jamais le
+    /// redémarrage (arrêt propre / volontaire).
+    #[test]
+    fn superagent_crash_policy_late_death_resets_counter() {
+        let t0 = Instant::now();
+        let mut policy = SuperAgentCrashPolicy {
+            crash_count: 2,
+            blocked_until: None,
+        };
+        // Démarrage à t0, mort 60 s plus tard (largement hors fenêtre de crash).
+        policy.record_death(Some(t0), t0 + Duration::from_secs(60));
+        assert_eq!(policy.crash_count, 0, "mort tardive → compteur réinitialisé");
+        assert!(
+            policy.blocked_remaining(t0 + Duration::from_secs(60)).is_none(),
+            "aucun blocage pour une mort tardive"
+        );
+    }
+
+    /// Mort sans démarrage connu (None) : pas un crash (aucune boucle possible)
+    /// → compteur réinitialisé, jamais de blocage.
+    #[test]
+    fn superagent_crash_policy_no_last_start_resets_counter() {
+        let now = Instant::now();
+        let mut policy = SuperAgentCrashPolicy {
+            crash_count: 2,
+            blocked_until: None,
+        };
+        policy.record_death(None, now);
+        assert_eq!(policy.crash_count, 0, "mort sans démarrage connu → compteur remis à zéro");
+        assert!(policy.blocked_remaining(now).is_none());
     }
 }
