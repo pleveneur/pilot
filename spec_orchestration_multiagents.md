@@ -142,9 +142,11 @@ de :
 ### 3.6 Notification de fin (au lieu du polling)
 - L'assistant lance les agents puis **attend passivement** (pas de polling).
 - C'est **l'agent** qui **prévient l'assistant à la fin de sa tâche**.
-- À la réception : si c'est un **point d'avancement** ou une **nouveauté mise en
-  place**, l'assistant **informe l'utilisateur** (notification + son) et **consigne
-  dans son suivi** (base `clients`/`projets`/`tâches`).
+- À la réception : seules les **fins de tâche** déclenchent un **compte-rendu**
+  (notification + son) à l'utilisateur ; les **points d'avancement** sont
+  **consignés dans le suivi** (base `clients`/`projets`/`tâches`) **sans
+  notification ni son** (évite la sur-notification, cohérent avec
+  `notify_super_agent_done` défaut off).
 
 ### 3.7 Visibilité (REPORTÉ)
 - L'affichage visible/caché des agents de chantier est **différé** : il sera traité

@@ -23,6 +23,7 @@ import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
+import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -1578,22 +1579,24 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
+              // T7 : fin de tâche (succès) → compte-rendu + notification
+              // desktop + son + consignation dans le suivi.
               appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
-              injectRunAgentsResultToSuperAgent(result, projectPath);
+              finishRunAgentsToSuperAgent(result, projectPath, true);
             },
             (err) => {
               const msg = err && err.message ? err.message : String(err);
+              // T7 : fin de tâche (échec) → compte-rendu + notification + son.
               appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
-              injectRunAgentsResultToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath);
+              finishRunAgentsToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath, false);
             },
             { purge: true }
           ).catch((e) => {
             // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
-            // run n'a pas pu démarrer. On le signale à l'utilisateur et à
-            // l'assistant (le try/catch ne couvre plus ce chemin non bloquant).
+            // run n'a pas abouti. T7 : fin de tâche (échec) → notification + son.
             console.error("Erreur préparation run_agents (assistant):", e);
             appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
-            injectRunAgentsResultToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath);
+            finishRunAgentsToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath, false);
           });
         };
 
@@ -2792,24 +2795,52 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
 }
 
 /**
- * Injecte le résultat d'une run d'agents (`run_agents`) à l'assistant, à la fin
- * de la run (non bloquante). Distinct de `injectSessionSummaryToSuperAgent` :
- * pas de marqueur de délégation ni de flush de la file — c'est un retour de
- * run d'agents, pas une délégation `delegate_to_coder`.
- * @param {string} result - texte agrégé de la run (ou message d'échec).
+ * Injecte un message d'une run d'agents (`run_agents`) à l'assistant, pour
+ * consignation dans son suivi (base clients/projets/tâches) via
+ * `inject_session_summary`. Non bloquante. Distinct de
+ * `injectSessionSummaryToSuperAgent` : pas de marqueur de délégation ni de
+ * flush de la file — c'est un retour de run d'agents, pas une délégation
+ * `delegate_to_coder`.
+ *
+ * T7 : cette primitive injecte un message SANS déclencher de notification
+ * desktop ni de son (elle sert aussi bien aux POINTS D'AVANCEMENT qu'aux FINS
+ * de run — la distinction est faite à l'appel). Pour une fin de tâche (avec
+ * notification + son), utiliser `finishRunAgentsToSuperAgent`.
+ * @param {string} result - texte agrégé de la run (ou message d'échec/info).
  * @param {string|null} projectPath - chemin du projet actif.
  */
 async function injectRunAgentsResultToSuperAgent(result, projectPath) {
-  const summary = `[Tâche run_agents terminée] Résultat de la run d'agents :\n${String(result || "")}`;
   try {
     await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
-      summary,
+      summary: buildRunAgentsSummary(result),
     });
   } catch (_) {
     // Silencieux : le super-agent n'est pas indispensable au chat.
   }
+}
+
+/**
+ * Fin de tâche d'une run d'agents délégués (T7, §3.6).
+ *
+ * Quand une run se termine (succès ou échec), l'assistant est prévenu par
+ * événement : (a) compte-rendu injecté pour consignation dans son suivi,
+ * (b) notification desktop native (réglage `notify_super_agent_done`) et
+ * (c) son de fin configuré (`assistant_sound_enabled`).
+ *
+ * `ok=true` → succès ; `ok=false` → échec (la notification l'indique).
+ * @param {string} result - compte-rendu de fin (résultat ou message d'échec).
+ * @param {string|null} projectPath - chemin du projet actif.
+ * @param {boolean} ok - true si la run a abouti.
+ */
+async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
+  // (a) compte-rendu + consignation dans le suivi (inject_session_summary).
+  await injectRunAgentsResultToSuperAgent(result, projectPath);
+  // (b) notification desktop native (si activée) + (c) son de fin (si activé).
+  const { title, body } = buildRunAgentsNotification({ ok, projectPath });
+  notifySuperAgentDone({ title, body }).catch(() => {});
+  playAssistantSound("fin").catch(() => {});
 }
 
 export async function initializeSuperAgent(messagesEl) {
