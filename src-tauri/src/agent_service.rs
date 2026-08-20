@@ -141,6 +141,15 @@ pub struct AgentService {
     // indéfiniment une session qui crashé en boucle au démarrage.
     superagent_last_start: Mutex<Option<Instant>>,
     superagent_policy: Mutex<SuperAgentCrashPolicy>,
+    // Anti-course (bug onglet Assistant) : sérialise `start_superagent`. Le
+    // spawn (écriture des extensions + lancement du process pi) se fait hors du
+    // verrou `sessions` ; sans ce mutex, deux commandes concurrentes
+    // (start_super_agent_session + get_super_agent_state à l'ouverture de
+    // l'onglet) passent toutes les deux le check « aucun processus vivant »,
+    // spawnent chacune un processus, et le second écrasait le premier → le
+    // RpcSession orphelin ferme ses pipes → `process_exit` fantôme
+    // (« Connexion au super-agent perdue ») et relance en boucle.
+    superagent_start_lock: Mutex<()>,
     // 5.1 : handle d'application posé au setup, nécessaire pour émettre les
     // événements `agent-state-changed` depuis les transitions de session
     // (start/pause/stop) qui ne reçoivent pas `app` en paramètre.
@@ -158,6 +167,7 @@ impl AgentService {
                 crash_count: 0,
                 blocked_until: None,
             }),
+            superagent_start_lock: Mutex::new(()),
         }
     }
 
@@ -950,6 +960,15 @@ impl AgentService {
         pi_path: &str,
         default_model: Option<(String, String)>,
     ) -> Result<(), String> {
+        // Anti-course : sérialise le démarrage. Plusieurs commandes concurrentes
+        // (start_super_agent_session, get_super_agent_state, send_super_agent_prompt)
+        // peuvent appeler ce lazy-start au même moment à l'ouverture de l'onglet.
+        // Le spawn se fait hors du verrou `sessions` (il est lent : écriture des
+        // extensions + lancement de node) → sans sérialisation, deux appels
+        // concurrents spawnaient chacun un processus et le second orphelinait le
+        // premier (process_exit fantôme + boucle). Le garde (y compris en cas
+        // d'erreur `?`) est relâché à la fin de la fonction.
+        let _start_guard = self.superagent_start_lock.lock().unwrap();
         let key = Self::session_key("", SUPERAGENT_ID);
         {
             let mut sessions = self.sessions.lock().unwrap();

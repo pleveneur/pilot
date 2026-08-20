@@ -1226,6 +1226,10 @@ fn recent_summaries(conn: &rusqlite::Connection, sql: &str, project_id: i64) -> 
 /// l'affiche tel quel s'il apparaît un jour.)
 #[tauri::command]
 pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    // Le paramètre `state` est ré-ombragé par une variable locale dans la boucle
+    // ci-dessous ; on garde une référence vers l'AppState pour accéder aux maps
+    // d'observateur d'activité/anomalie (fix Assistant « Réfléchit… » permanent).
+    let app_state = &state;
     let sessions = state.agent_service.list_agent_sessions(&app)?;
     let sessions = sessions
         .get("sessions")
@@ -1246,6 +1250,21 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
 
         let status = if !alive {
             "stopped"
+        } else if agent == SUPERAGENT_ID {
+            // L'assistant est une session persistante TOUJOURS « active » dans
+            // le registre : « running » n'y reflète PAS une génération en cours.
+            // Sinon l'onglet 🧭 afficherait « Réfléchit… » en permanence dès que
+            // le processus est vivant (même au repos). On rapporte l'état réel
+            // via l'indicateur `busy` de l'observateur d'anomalie (agent_start →
+            // busy, agent_settled/agent_end → fin de génération).
+            let key = format!("\u{1f}{}", SUPERAGENT_ID);
+            let busy = match app_state.agent_anomaly.lock() {
+                Ok(m) => m.get(&key).map_or(false, |e| {
+                    e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"
+                }),
+                Err(_) => false,
+            };
+            if busy { "running" } else { "idle" }
         } else if state == "active" {
             "running"
         } else {
