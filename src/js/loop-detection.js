@@ -219,6 +219,15 @@ export function buildToolLoopFingerprint(toolName, args) {
       }
       return fp;
     }
+    // P0-2 (faux positifs) : pour les outils de recherche (search/grep/find…),
+    // clé sur la REQUÊTE (query/pattern/search/text) en plus du chemin : deux
+    // recherches au même endroit avec des requêtes différentes ne sont pas une
+    // boucle. Sans cela, deux recherches à la même racine produisaient la MÊME
+    // empreinte (path seul) et déclenchaient un faux positif.
+    const query = a.query || a.pattern || a.search || a.regex || "";
+    if (query) {
+      return "tool::" + toolName + "::" + path + "::query=" + query;
+    }
     return "tool::" + toolName + "::" + path;
   }
   try {

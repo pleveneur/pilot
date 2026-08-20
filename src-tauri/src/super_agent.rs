@@ -1347,6 +1347,23 @@ pub fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
 
 // ── Apprentissage : injection de résumé de session ──
 
+// P0-4 : borne de taille du résumé injecté à l'assistant. Un résumé de fin de
+// tâche (run d'agents délégués, délégation, session) trop volumineux encombre
+// le contexte de l'assistant. On tronque au-delà de cette borne et on ajoute un
+// marqueur de troncature explicite.
+const SUPER_AGENT_SUMMARY_MAX_CHARS: usize = 8000;
+const SUMMARY_TRUNCATION_MARKER: &str = "\n…[résumé tronqué : trop volumineux]";
+
+/// Tronque un résumé pour l'injection à l'assistant (borne + marqueur).
+fn truncate_summary(summary: &str) -> String {
+    if summary.len() <= SUPER_AGENT_SUMMARY_MAX_CHARS {
+        return summary.to_string();
+    }
+    let mut cut = summary.chars().take(SUPER_AGENT_SUMMARY_MAX_CHARS).collect::<String>();
+    cut.push_str(SUMMARY_TRUNCATION_MARKER);
+    cut
+}
+
 /// Enregistre un résumé de session dans la base et l'injecte au super-agent
 /// (s'il est démarré) pour qu'il apprenne en continu.
 #[tauri::command]
@@ -1357,6 +1374,10 @@ pub fn inject_session_summary(
     session_id: Option<String>,
     summary: String,
 ) -> Result<(), String> {
+    // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
+    // contexte de l'assistant. Tronqué ici à la source, le marqueur de
+    // troncature informe l'assistant que le résultat a été agrégé.
+    let summary = truncate_summary(&summary);
     // Persister dans la base.
     let conn = open_db(&app)?;
     let project_id: Option<i64> = match &project_path {

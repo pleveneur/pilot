@@ -49,6 +49,25 @@ const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des o
 const AGENT_LOOP_CHECK_INTERVAL_MS = 500; // throttle du streaming
 const AGENT_LOOP_BUFFER_MIN = 200; // taille min de texte avant test
 
+// P0-2 : outils de LECTURE PURE (sans effet de bord). Les répéter est de
+// l'exploration légitime (lire un gros fichier en plusieurs lectures, faire des
+// recherches). Ils ne sont PAS enregistrés dans l'historique de détection de
+// boucle (donc PAS comptés) pour éviter les faux positifs qui coupent des
+// sous-agents qui font des recherches/lectures légitimes. Seuls les outils qui
+// MODIFIENT réellement l'état ou exécutent (bash, write, edit, db_execute, …)
+// restent détectés. Même liste que agent-pi.js (README_READ_ONLY_TOOLS).
+const AGENT_READ_ONLY_TOOLS = new Set([
+  "read",
+  "search",
+  "grep",
+  "glob",
+  "list",
+  "ls",
+  "find",
+  "read_project_file",
+  "search_project",
+]);
+
 let busState = {
   listeners: null,
   autoStopListener: null,
@@ -534,6 +553,14 @@ function handleAgentEvent(ev) {
     emit("toolStart", { agentId, toolName });
     // Issue #10 : accumuler une empreinte du tool call (ex: requête DB) pour
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
+    // P0-2 : on exclut les outils de LECTURE PURE (read/search/grep/list/ls/
+    // find/glob…) du comptage — les répéter est de l'exploration légitime et
+    // générait des faux positifs (sous-agents coupés pendant recherche/lecture).
+    // Seules les actions qui MODIFIENT réellement sont comptées.
+    if (AGENT_READ_ONLY_TOOLS.has(toolName)) {
+      maybeDetectAgentLoop(agentId);
+      return;
+    }
     const fp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
     const arr = (busState.toolCallsByAgent[agentId] = busState.toolCallsByAgent[agentId] || []);
     // Issue #35 : on accumule CHAQUE empreinte (pas de déduplication des

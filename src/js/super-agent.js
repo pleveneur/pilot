@@ -16,6 +16,7 @@ import {
   detectRepeatedWord,
   detectRepeatedToolCalls,
   detectSemanticLoop,
+  buildToolLoopFingerprint,
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
@@ -26,6 +27,19 @@ import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.j
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
+
+// P0-4 : borne de taille du résumé injecté à l'assistant (alignée sur la borne
+// Rust `inject_session_summary`). Un résumé de fin de tâche trop volumineux
+// encombre le contexte de l'assistant : on tronque avec un marqueur explicite.
+const SUPER_AGENT_SUMMARY_MAX_CHARS = 8000;
+const SUMMARY_TRUNCATION_MARKER = "\n…[résumé tronqué : trop volumineux]";
+
+/** Tronque un résumé (borne + marqueur) pour l'injection à l'assistant. */
+export function truncateSuperAgentSummary(summary) {
+  const text = String(summary || "");
+  if (text.length <= SUPER_AGENT_SUMMARY_MAX_CHARS) return text;
+  return text.slice(0, SUPER_AGENT_SUMMARY_MAX_CHARS) + SUMMARY_TRUNCATION_MARKER;
+}
 
 // 4.1 (R3) : id de l'agent standard du projet dans le registre (base `agents`).
 // Utilisé UNIQUEMENT pour RÉSOUDRE l'objet cible d'une délégation (get_agent).
@@ -91,6 +105,22 @@ let pendingDelegation = null;
 // finalizeInvisibleAgent — les deux appellent flushDelegationQueue).
 let delegationBusy = false;
 let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
+
+// P0-1 : état RÉEL du backend super-agent (busy / libre), maintenu par
+// get_agent_supervision (poll) et les événements agent_start/agent_end. La garde
+// d'envoi de `send()` s'appuie sur ce flag (et sur isStreaming) pour ne PAS
+// accepter puis perdre une saisie envoyée à un backend occupé (l'état local
+// isStreaming peut être en retard sur le backend réel).
+let backendBusy = false;
+
+// P1-6 : suivi des run_agents lancés par l'assistant. Quand deux lancements se
+// chevauchent (le bus agents refuse « Une run est déjà en cours »), le second
+// est mis en file d'attente au lieu d'échouer brutalement, puis lancé à la fin
+// de la run en cours. P1-5 : la finalisation (settleRun) est module-level et
+// passée par inject_session_summary (Rust) → elle survit à la fermeture de
+// l'onglet 🧭 (notification + injection du résultat).
+let runAgentsInFlight = false;
+const runAgentsQueue = []; // { launch }
 
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
 // l'assistant quand le mode « Assistant Only » immersif est actif et que le
@@ -701,6 +731,7 @@ export async function createSuperAgent(container) {
     try {
       handleSuperAgentEvent(payload, messagesEl, statusEl, state, () => {
         isStreaming = false;
+        backendBusy = false;
         busyNotified = false;
         currentBody = null;
         currentFlow = null;
@@ -821,7 +852,12 @@ export async function createSuperAgent(container) {
   async function send() {
     const text = inputEl.value.trim();
     if (!text) return;
-    if (isStreaming) {
+    // P0-1 : la garde repose sur l'état RÉEL du backend (backendBusy, mis à
+    // jour par get_agent_supervision et l'événement agent_start), en plus de
+    // l'état local isStreaming. Un backend occupé en arrière-plan (prompt
+    // distant, relance programmée, compaction) ne doit pas accepter puis perdre
+    // la saisie : on la conserve dans le champ et on informe l'utilisateur.
+    if (isStreaming || backendBusy) {
       // Bug 1 (UX) : pendant que l'assistant est occupé, ne pas perdre
       // silencieusement le texte saisi. On le garde dans le champ (aucun
       // effacement) et on informe l'utilisateur une seule fois par tour occupé.
@@ -848,6 +884,7 @@ export async function createSuperAgent(container) {
     lastAssistantRawText = "";
     currentBubbleProject = null;
     isStreaming = true;
+    backendBusy = true;
     statusEl.textContent = "Réfléchit…";
     try {
       await invoke("send_super_agent_prompt", { message: text });
@@ -856,6 +893,7 @@ export async function createSuperAgent(container) {
     } catch (err) {
       appendSystemMessage(messagesEl, `❌ ${err}`);
       isStreaming = false;
+      backendBusy = false;
       statusEl.textContent = "Prêt";
     }
   }
@@ -935,11 +973,19 @@ export async function createSuperAgent(container) {
       // absente à la création de l'onglet → le statut restait « Prêt » pendant
       // tout le travail. On protège uniquement les états d'erreur.
       if (processing && !isStreaming && !isError) {
+        backendBusy = true;
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
       } else if (!processing && isStreaming) {
+        backendBusy = false;
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
+      } else if (!processing) {
+        // P0-1 : aucune session en traitement → l'assistant est libre, même
+        // après un échec d'envoi qui n'a pas passé par onEnd. Évite de laisser
+        // backendBusy verrouillé sur true (sinon les envois suivants seraient
+        // bloqués sans raison).
+        backendBusy = false;
       }
     } catch (_) { /* ignore */ }
   }, 2000);
@@ -1056,27 +1102,6 @@ function maybeDetectSuperAgentLoop(messagesEl) {
     invoke("abort_super_agent").catch((e) =>
       console.error("Erreur abort_super_agent (loop):", e)
     );
-  }
-}
-
-/**
- * Construit une empreinte compacte d'un tool call pour la détection de boucle
- * (issue #55). Pour bash, la commande est l'essentiel ; sinon on sérialise les
- * arguments de façon stable.
- * @param {string} toolName
- * @param {object} args
- * @returns {string}
- */
-function buildToolLoopFingerprint(toolName, args) {
-  const a = args || {};
-  const command = a.command || a.cmd || "";
-  if (command) return "tool::" + toolName + "::" + command;
-  const path = a.path || a.file || "";
-  if (path) return "tool::" + toolName + "::" + path;
-  try {
-    return "tool::" + toolName + "::" + JSON.stringify(a);
-  } catch (_) {
-    return "tool::" + toolName;
   }
 }
 
@@ -1347,6 +1372,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     return;
   }
   if (type === "agent_start") {
+    // P0-1 : l'événement agent_start reflète l'état RÉEL du backend — marque
+    // l'assistant occupé immédiatement (même si la garde locale isStreaming est
+    // en retard), pour que `send()` ne l'accepte puis perde une saisie.
+    backendBusy = true;
     statusEl.textContent = "Réfléchit…";
     return;
   }
@@ -1575,6 +1604,26 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         });
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
         // immédiatement. Le résultat est injecté à l'assistant à la fin.
+        // P1-5/P1-6 : la finalisation passe par `settleRun` (module-level, via
+        // inject_session_summary côté Rust) pour survivre à la fermeture de
+        // l'onglet ; et `startRun` met en file un second lancement au lieu
+        // d'échouer si une run est déjà en cours (bus agents : « Une run est
+        // déjà en cours »).
+        let runSettled = false;
+        const settleRun = (ok, result) => {
+          if (runSettled) return; // anti double-résolution (onDone + catch)
+          runSettled = true;
+          runAgentsInFlight = false;
+          // Injection + notification desktop + son (survit à la fermeture de
+          // l'onglet : fonctions module-level, persistance côté Rust).
+          finishRunAgentsToSuperAgent(result, projectPath, ok);
+          // Lancer la run suivante mise en file, s'il y en a une.
+          const next = runAgentsQueue.shift();
+          if (next) {
+            runAgentsInFlight = true;
+            next.launch();
+          }
+        };
         const launchRun = () => {
           runAgentsForAssistantAsync(
             assignments,
@@ -1582,13 +1631,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               // T7 : fin de tâche (succès) → compte-rendu + notification
               // desktop + son + consignation dans le suivi.
               appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
-              finishRunAgentsToSuperAgent(result, projectPath, true);
+              settleRun(true, result);
             },
             (err) => {
               const msg = err && err.message ? err.message : String(err);
               // T7 : fin de tâche (échec) → compte-rendu + notification + son.
               appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
-              finishRunAgentsToSuperAgent(`[Échec de la run agents] ${msg}`, projectPath, false);
+              settleRun(false, `[Échec de la run agents] ${msg}`);
             },
             { purge: true }
           ).catch((e) => {
@@ -1596,7 +1645,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // run n'a pas abouti. T7 : fin de tâche (échec) → notification + son.
             console.error("Erreur préparation run_agents (assistant):", e);
             appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
-            finishRunAgentsToSuperAgent(`[Échec de la préparation de la run agents] ${e}`, projectPath, false);
+            settleRun(false, `[Échec de la préparation de la run agents] ${e}`);
           });
         };
 
@@ -1611,30 +1660,45 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           const raw = (registry.agents || []).find((a) => a && a.id === aid);
           return raw ? classifyAgent(normalizeAgent(raw)).isCoder : false;
         });
-        if (coderIds.length > 0 && targetProject) {
-          // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
-          // on lance d'abord plan-maker, on écrit les réservations, puis on ne
-          // lance le codeur QU'APRÈS (les réservations doivent être en place
-          // avant que les spécialistes travaillent). Fail-open : si l'estimation
-          // échoue, on lance quand même le codeur sans réservations.
-          appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
-          estimateAndReserve(targetProject, task, coderIds, {
-            runAgentsForAssistant,
-            loadAgentRegistry,
-          })
-            .then((r) => {
-              if (r.reserved && r.files.length > 0) {
-                appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
-              }
-              launchRun();
+        // Étape 1 : estimation plan-maker (si codeur) puis lancement réel.
+        const launchWithEstimate = () => {
+          if (coderIds.length > 0 && targetProject) {
+            // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
+            // on lance d'abord plan-maker, on écrit les réservations, puis on ne
+            // lance le codeur QU'APRÈS (les réservations doivent être en place
+            // avant que les spécialistes travaillent). Fail-open : si l'estimation
+            // échoue, on lance quand même le codeur sans réservations.
+            appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
+            estimateAndReserve(targetProject, task, coderIds, {
+              runAgentsForAssistant,
+              loadAgentRegistry,
             })
-            .catch(() => {
-              // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
-              launchRun();
-            });
-        } else {
-          launchRun();
-        }
+              .then((r) => {
+                if (r.reserved && r.files.length > 0) {
+                  appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
+                }
+                launchRun();
+              })
+              .catch(() => {
+                // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
+                launchRun();
+              });
+          } else {
+            launchRun();
+          }
+        };
+        // Étape 2 : garde anti-chevauchement (P1-6) — met en file si une run est
+        // déjà en cours, sinon lance immédiatement.
+        const startRun = () => {
+          if (runAgentsInFlight) {
+            runAgentsQueue.push({ launch: launchWithEstimate });
+            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
+            return;
+          }
+          runAgentsInFlight = true;
+          launchWithEstimate();
+        };
+        startRun();
         await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
@@ -2763,7 +2827,9 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
   // résumé comme un feedback de tâche déléguée pour que l'assistant mette à jour
   // son suivi et décide des prochaines étapes. On consomme le tracker (une seule
   // fois) pour ne pas marquer les sessions suivantes.
-  let finalSummary = String(summary || "");
+  // P0-4 : borne la taille du résumé avant injection (ne pas encombrer le
+  // contexte de l'assistant).
+  let finalSummary = truncateSuperAgentSummary(summary);
   if (pendingDelegation) {
     const del = pendingDelegation;
     pendingDelegation = null;
@@ -2814,7 +2880,9 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath) {
     await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
-      summary: buildRunAgentsSummary(result),
+      // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le
+      // contexte de l'assistant).
+      summary: truncateSuperAgentSummary(buildRunAgentsSummary(result)),
     });
   } catch (_) {
     // Silencieux : le super-agent n'est pas indispensable au chat.

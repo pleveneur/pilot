@@ -19,6 +19,7 @@ vi.mock("./agent-pi.js", () => ({ appendDelegatedMessage: vi.fn() }));
 vi.mock("./loop-detection.js", () => ({
   detectRepeatedBlock: vi.fn(), detectRepeatedWord: vi.fn(),
   detectRepeatedToolCalls: vi.fn(), detectSemanticLoop: vi.fn(),
+  buildToolLoopFingerprint: vi.fn(),
 }));
 vi.mock("./desktop-notify.js", () => ({ notifySuperAgentDone: vi.fn(), playAssistantSound: vi.fn() }));
 vi.mock("./agents.js", () => ({
@@ -32,7 +33,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { shouldScrollSuperToBottom } = await import("./super-agent.js");
+const { shouldScrollSuperToBottom, truncateSuperAgentSummary } = await import("./super-agent.js");
 
 // Fenêtre d'exemple : scrollHeight = 1000, clientHeight = 500.
 const SCROLL_HEIGHT = 1000;
@@ -61,5 +62,27 @@ describe("shouldScrollSuperToBottom (décision de scroll intelligente)", () => {
   it("gère le cas d'un contenu qui ne déborde pas (déjà tout en bas)", () => {
     // scrollHeight == clientHeight → toujours en bas.
     expect(shouldScrollSuperToBottom(0, 500, 500)).toBe(true);
+  });
+});
+
+describe("truncateSuperAgentSummary (P0-4 : résumé de fin de tâche borné)", () => {
+  it("laisse un résumé court inchangé", () => {
+    expect(truncateSuperAgentSummary("court")).toBe("court");
+    expect(truncateSuperAgentSummary("")).toBe("");
+    expect(truncateSuperAgentSummary(null)).toBe("");
+  });
+
+  it("tronque un résumé trop volumineux avec un marqueur", () => {
+    const big = "x".repeat(20000);
+    const r = truncateSuperAgentSummary(big);
+    expect(r.length).toBeLessThan(20000);
+    expect(r.length).toBeGreaterThan(8000);
+    expect(r.endsWith("[résumé tronqué : trop volumineux]")).toBe(true);
+    expect(r.slice(0, 8000)).toBe(big.slice(0, 8000));
+  });
+
+  it("laisse un résumé à la borne tel quel", () => {
+    const big = "y".repeat(8000);
+    expect(truncateSuperAgentSummary(big)).toBe(big);
   });
 });
