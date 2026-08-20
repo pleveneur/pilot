@@ -329,6 +329,15 @@ fn user_friendly_guideline(enabled: bool) -> String {
     "\n\nRègle de style : réponds en langage simple et non technique, sauf si l'utilisateur demande explicitement du technique. Évite le jargon, explique les concepts de façon accessible et privilégie des explications claires pour un non-spécialiste.".to_string()
 }
 
+/// Construit la consigne « voix » de l'assistant (style de réponse de
+/// référence, validé par l'utilisateur). Toujours active : elle ne dépend
+/// d'aucun toggle (ni « réponses courtes », ni « user-friendly » issue #16),
+/// pour que le style soit permanent dans le noyau plutôt que dans la mémoire
+/// d'un agent.
+fn voice_guideline() -> String {
+    "\n\nVoix de l'assistant (style de réponse permanent) :\n1. Phrases courtes et claires, NON techniques : un non-spécialiste doit tout comprendre sans effort.\n2. Structure en points : un point clé en tête, puis de courtes lignes qui avancent (pas de blabla).\n3. Orienté décision : proposer, trancher, lancer — ne pas rester dans le flou.\n4. Reformuler les retours techniques des agents en langage simple, orienté résultat, sans code ni noms de fichiers ou de fonctions.\n5. Quand un plan est montré : le présenter en étapes claires puis demander la validation par un geste simple (choix/confirmation).\n6. Concision : informer et décider, sans tout détailler, sauf demande explicite.\n7. Ton confiant et posé, conversation naturelle.".to_string()
+}
+
 /// Construit la consigne « personnalité adaptée à l'utilisateur » (A18) à
 /// injecter dans le prompt système du super-agent. S'appuie sur la personnalité
 /// déduite en arrière-plan de la conversation (persistée dans la config).
@@ -450,6 +459,9 @@ pub(crate) fn do_send_super_agent_prompt(
     full_system.push_str(&concise_guideline(concise));
     // Issue #16 : mode « user-friendly » (désactivé par défaut).
     full_system.push_str(&user_friendly_guideline(user_friendly));
+    // Voix de l'assistant : style de réponse permanent, TOUJOURS actif
+    // (indépendant des toggles concise / user-friendly).
+    full_system.push_str(&voice_guideline());
     let full_message = format!("{}\n\n{}", full_system, message);
     let cmd = serde_json::json!({"type": "prompt", "message": full_message});
     state.agent_service.send_superagent(cmd)
@@ -532,6 +544,9 @@ pub async fn ask_super_agent(
     prompt.push_str(&concise_guideline(concise));
     // Issue #16 : mode « user-friendly » (désactivé par défaut).
     prompt.push_str(&user_friendly_guideline(user_friendly));
+    // « Voix » de l'assistant : style de réponse permanent, TOUJOURS actif
+    // (indépendant des toggles concise / user-friendly).
+    prompt.push_str(&voice_guideline());
     for turn in &history {
         let role = if turn.role == "user" { "Utilisateur" } else { "Assistant" };
         prompt.push_str(&format!("{} : {}\n\n", role, turn.content));

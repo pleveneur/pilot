@@ -20,7 +20,7 @@ import {
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
-import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback } from "./agents-bus.js";
+import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
@@ -1717,9 +1717,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           }
         };
         // Étape 2 : garde anti-chevauchement (P1-6) — met en file si une run est
-        // déjà en cours, sinon lance immédiatement.
+        // déjà en cours, sinon lance immédiatement. La détection s'appuie sur le
+        // flag local `runAgentsInFlight` ET sur l'état réel du bus via
+        // `isRunInProgress()` (source de vérité du verrou « Une run est déjà en
+        // cours » levé par agents-bus.js). Ce flag local peut être en retard
+        // (run lancée hors de la file de l'assistant, watchdog ayant réinitialisé
+        // le flag alors que le bus est resté occupé) : en vérifiant aussi le bus,
+        // une demande arrivant pendant une run en cours est TOUJOURS mise en
+        // file, jamais un échec brutal.
         const startRun = () => {
-          if (runAgentsInFlight) {
+          if (runAgentsInFlight || isRunInProgress()) {
             runAgentsQueue.push({ launch: launchWithEstimate });
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
             return;

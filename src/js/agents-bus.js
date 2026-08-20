@@ -949,6 +949,23 @@ export async function runAgentsForAssistantAsync(assignments, onDone, onError, o
   _runAgentsForAssistant(assignments, onDone, onError, options);
 }
 
+/**
+ * Source de vérité « une run est occupée ou non » : retourne `true` si le bus
+ * d'agents exécute actuellement une run (état réel `busState.runState ===
+ * "running"`).
+ *
+ * Utilisée par l'assistant (super-agent.js, outil `run_agents`) en plus de son
+ * flag local `runAgentsInFlight` pour détecter TOUTES les runs en cours, y
+ * compris celles lancées hors de sa file (mode manuel, run directe, bus resté
+ * bloqué en "running"). Sans cette garde, une demande arrivant pendant une run
+ * dont le flag local est faux passait la file puis échouait brutalement avec
+ * « Une run est déjà en cours » (levé par `startParallelRun`).
+ * @returns {boolean}
+ */
+export function isRunInProgress() {
+  return busState.runState === "running";
+}
+
 export function stopAgentsRun(options = {}) {
   if (busState.runState !== "running") return;
   busState.runState = "stopping";
