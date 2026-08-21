@@ -5459,6 +5459,124 @@ function maybeDetectActionLoop(state, messagesEl) {
   }
 }
 
+/**
+ * Rend des boutons de choix LOCAUX (décidés par Pilot, pas par l'agent) dans le
+ * chat. Contrairement à renderInlineChoice (issue #30, pilot-choices), ces
+ * boutons ne renvoient PAS de réponse à l'agent : ils déclenchent une action
+ * locale via le callback `onChoose(option)`. Réutilise les classes CSS
+ * `.agent-choice*` existantes.
+ */
+function renderLocalChoice(messagesEl, state, title, options, onChoose) {
+  const target = getChoiceAttachTarget(messagesEl, state);
+  const wrapper = document.createElement("div");
+  wrapper.className = "agent-choice";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-choice-title";
+  titleEl.textContent = title;
+  wrapper.appendChild(titleEl);
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+  options.forEach((opt, i) => {
+    const btn = document.createElement("button");
+    btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
+    btn.textContent = opt;
+    btn.addEventListener("click", () => {
+      buttons.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+      wrapper.classList.add("resolved");
+      onChoose(opt);
+    });
+    buttons.appendChild(btn);
+  });
+  wrapper.appendChild(buttons);
+  target.appendChild(wrapper);
+  scrollToBottom(messagesEl);
+}
+
+/**
+ * Réinitialise l'état de détection de boucle (réflexion + actions) pour une
+ * nouvelle tentative propre (option « Refaire »).
+ */
+function resetLoopState(state) {
+  state.loopCorrectionPending = false;
+  state.loopCorrectionCount = 0;
+  state.loopAbandoned = false;
+  state.loopBuffer = "";
+  state.actionLoopCorrectionPending = false;
+  state.actionLoopCorrectionCount = 0;
+  state.actionLoopAbandoned = false;
+  state.actionHistory = [];
+  state.isStreaming = false;
+  state.currentAssistantBlock = null;
+  state.currentTextBlock = null;
+  state.currentThinkingBlock = null;
+  state.pendingText = "";
+  state.pendingRender = false;
+  state.lastAssistantRawText = "";
+}
+
+/**
+ * Demande à l'utilisateur quoi faire quand l'agent a tourné en boucle plusieurs
+ * fois (réflexion ou actions). Au lieu d'abandonner définitivement, on propose
+ * « Continuer » (relance avec une nouvelle correction), « Refaire » (nouvelle
+ * session + relance du dernier prompt) ou « Arrêter » (abandon définitif).
+ * @param {Element} messagesEl
+ * @param {object} state
+ * @param {"reflection"|"action"} kind
+ */
+function renderLoopAbandonChoices(messagesEl, state, kind) {
+  const isAction = kind === "action";
+  const title = isAction
+    ? "⚠️ L'agent a répété les mêmes actions plusieurs fois malgré les corrections. Que faire ?"
+    : "⚠️ L'agent a tourné en boucle plusieurs fois. Que faire ?";
+  renderLocalChoice(messagesEl, state, title, ["Continuer", "Refaire", "Arrêter"], (choice) => {
+    if (choice === "Continuer") {
+      if (isAction) {
+        state.actionLoopCorrectionCount++;
+        const level = state.actionLoopCorrectionCount;
+        const correction = buildActionLoopCorrectionPrompt(level);
+        appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle d'actions (essai ${level})…`);
+        invoke("send_agent_prompt", { message: correction }).catch((e) => {
+          console.error("Erreur envoi correction boucle d'actions:", e);
+          appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de la boucle d'actions : ${e}`);
+        });
+      } else {
+        state.loopCorrectionCount++;
+        const level = state.loopCorrectionCount;
+        const repeatedTail = findRepeatedTail(state.lastAssistantRawText || "");
+        const correction = buildLoopCorrectionPrompt(level, { repeatedTail });
+        appendSystemMessage(messagesEl, `✍️ Reprise de l'agent avec correction de la boucle (stratégie ${level})…`);
+        invoke("send_agent_prompt", { message: correction }).catch((e) => {
+          console.error("Erreur envoi correction boucle:", e);
+          appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de boucle : ${e}`);
+        });
+      }
+    } else if (choice === "Refaire") {
+      // Repartir d'un point propre : nouvelle session + relance du dernier prompt.
+      resetLoopState(state);
+      invoke("new_agent_session").catch((e) => console.error("Erreur new_agent_session (Refaire):", e));
+      const prompt = state.lastUserPrompt || "";
+      if (prompt) {
+        appendSystemMessage(messagesEl, "🔄 Nouvelle tentative depuis un contexte propre…");
+        invoke("send_agent_prompt", { message: prompt }).catch((e) => {
+          console.error("Erreur relance après Refaire:", e);
+          appendErrorMessage(messagesEl, `❌ Erreur lors de la relance : ${e}`);
+        });
+      } else {
+        appendSystemMessage(messagesEl, "ℹ️ Aucun prompt à relancer. Veuillez reformuler votre demande.");
+      }
+    } else {
+      // Arrêter : abandon définitif (comportement actuel).
+      if (isAction) {
+        state.actionLoopAbandoned = true;
+        appendSystemMessage(messagesEl, "⚠️ L'agent a répété les mêmes actions plusieurs fois malgré les corrections. Arrêt définitif : veuillez reformuler votre demande ou changer de modèle.");
+      } else {
+        state.loopAbandoned = true;
+        appendSystemMessage(messagesEl, "⚠️ L'agent a tourné en boucle plusieurs fois. Veuillez reformuler votre demande ou changer de modèle.");
+      }
+    }
+  });
+}
+
 async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn, orchFns) {
   const type = payload.type;
 
@@ -5641,8 +5759,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de boucle : ${e}`);
           });
         } else {
-          state.loopAbandoned = true;
-          appendSystemMessage(messagesEl, "⚠️ L'agent a tourné en boucle plusieurs fois. Veuillez reformuler votre demande ou changer de modèle.");
+          // Au lieu d'abandonner définitivement, demander à l'utilisateur quoi
+          // faire (Continuer / Refaire / Arrêter).
+          renderLoopAbandonChoices(messagesEl, state, "reflection");
         }
       }
       // Issue #110 : relance après arrêt pour boucle d'ACTIONS. L'agent a été
@@ -5665,8 +5784,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             appendErrorMessage(messagesEl, `❌ Erreur lors de la correction de la boucle d'actions : ${e}`);
           });
         } else {
-          state.actionLoopAbandoned = true;
-          appendSystemMessage(messagesEl, "⚠️ L'agent a répété les mêmes actions plusieurs fois malgré les corrections. Arrêt définitif : veuillez reformuler votre demande ou changer de modèle.");
+          // Au lieu d'abandonner définitivement, demander à l'utilisateur quoi
+          // faire (Continuer / Refaire / Arrêter).
+          renderLoopAbandonChoices(messagesEl, state, "action");
         }
       }
       // Finaliser le bloc assistant en cours
