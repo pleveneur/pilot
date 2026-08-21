@@ -30,11 +30,14 @@ function esc(s) {
     .replace(/'/g, "&#39;");
 }
 
-/** Formate un timestamp en heure locale (HH:MM) ou null si absent. */
+/** Formate un timestamp en heure locale (HH:MM, 24h) ou null si absent. */
 export function formatLastActivity(ts) {
   if (!ts) return null;
   try {
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
   } catch (_) {
     return null;
   }
