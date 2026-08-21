@@ -73,6 +73,13 @@
 
   <!-- Zone de Travail (Droite) -->
   <main id="main-area">
+    <!-- Indicateur d'activité des agents (haut droite) : cercle respirant + liste
+         déroulante + fiche agent. Unique indicateur d'activité de l'interface. -->
+    <div id="agent-activity">
+      <button id="agent-activity-dot" title="Activité des agents"></button>
+      <div id="agent-activity-dropdown" class="hidden"></div>
+      <div id="agent-activity-card" class="hidden"></div>
+    </div>
     <div id="tab-bar"></div>
     <div id="main-content">
       <div id="editor-container"></div>

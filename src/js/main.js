@@ -14,6 +14,7 @@ import { initAnomalyDetection } from "./anomaly.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
+import { initAgentActivity } from "./agent-activity.js";
 import { initProjectCommands } from "./project-commands.js";
 import { refreshIcons } from "./icons.js";
 import { invoke } from "@tauri-apps/api/core";
@@ -255,6 +256,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Exposé globalement pour la prévisualisation Markdown (issue #22) :
   // le handler de clic sur les liens internes ouvre le fichier cible via tabs.openFile.
   window._pilotTabs = tabs;
+  // Indicateur d'activité des agents (haut droite) : cercle respirant + liste
+  // déroulante + fiche. Unique indicateur d'activité de l'interface. Le bouton
+  // « Afficher l'onglet » de la fiche appelle tabs._openAgent / tabs.openFile.
+  initAgentActivity(tabs);
   // Exposé pour la vérification de mise à jour de Pi à l'ouverture de l'onglet
   // agent (issue #26) : appelé depuis tabs.js _openAgent après le health check.
   window._pilotCheckPiUpdate = checkPiUpdate;

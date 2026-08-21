@@ -214,10 +214,9 @@ class Sidebar {
     });
 
     // Issue #13 : indicateur d'activité par projet (barre « Projets en cours »).
-    // Poll léger toutes les 2s de `get_agent_supervision` (A15 : état réel de la
-    // machine à états AgentService) ; ne met à jour les pastilles que si la barre
-    // est visible. Ne touche pas aux agents (lecture seule).
-    setInterval(() => this._pollProjectActivities(), 2000);
+    // SUPPRIMÉ (T6) : l'indicateur d'activité est désormais l'UNIQUE cercle en
+    // haut à droite (agent-activity.js). Le poll 2s de get_agent_supervision est
+    // géré par ce module.
   }
 
   async init() {
@@ -1190,7 +1189,6 @@ class Sidebar {
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
         item.innerHTML =
-          `<span class="open-project-status" data-path="${this._esc(p)}" title="En attente"></span>` +
           `<span class="open-project-name">${this._esc(name)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
         // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
@@ -1250,33 +1248,8 @@ class Sidebar {
   }
 
   // Issue #13 : met à jour les pastilles d'activité des agents des projets ouverts.
-  // Le projet actif peut être « busy » si son agent réfléchit ; les projets inactifs
-  // (sessions parkées) s'animent aussi quand leur agent travaille en arrière-plan.
-  async _pollProjectActivities() {
-    try {
-      const sup = await invoke("get_agent_supervision");
-      if (!sup || !sup.projects) return;
-      const bar = this.openProjectsBar;
-      if (!bar || bar.classList.contains("hidden")) return;
-      // A15 : l'état réel vient de la machine à états AgentService (via
-      // get_agent_supervision). Un projet est « en cours » si au moins un de
-      // ses agents est running/compacting ; paused/stopped = en attente.
-      const busyByPath = new Map();
-      for (const proj of sup.projects) {
-        const norm = (proj.path || "").replace(/\\/g, "/");
-        const busy = (proj.agents || []).some(
-          (a) => a.state === "running" || a.state === "compacting"
-        );
-        busyByPath.set(norm, busy);
-      }
-      bar.querySelectorAll(".open-project-status").forEach((dot) => {
-        const p = (dot.dataset.path || "").replace(/\\/g, "/");
-        const busy = busyByPath.get(p) || false;
-        dot.classList.toggle("busy", busy);
-        dot.title = busy ? "En cours" : "En attente";
-      });
-    } catch (_) { /* ignore : pas de mise à jour */ }
-  }
+  // SUPPRIMÉ (T6) : l'indicateur d'activité est désormais l'UNIQUE cercle en haut
+  // à droite (agent-activity.js). Cette méthode et son poll 2s ont été retirés.
 
   _hideProjectsDropdown() {
     this.dropdown.classList.add("hidden");
