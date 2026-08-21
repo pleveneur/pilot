@@ -3,7 +3,7 @@
 // running/idle/paused), anyBusy (true si ≥1 running), mapping état→libellé
 // travail/repos, et formatLastActivity.
 import { describe, it, expect } from "vitest";
-import { flattenAgents, anyBusy, renderCard, formatLastActivity } from "./agent-activity.js";
+import { flattenAgents, anyBusy, renderCard, renderDropdown, formatLastActivity } from "./agent-activity.js";
 
 // Supervision type retournée par get_agent_supervision (dashboard.rs).
 function makeSupervision(projects) {
@@ -110,6 +110,34 @@ describe("renderCard — mapping état → libellé travail/repos", () => {
     const html = renderCard({ label: "default", project: "a", busy: false, lastActivity: null, kind: "agent", agentId: "default" });
     expect(html).toContain("Repos");
     expect(html).not.toContain("breathing");
+  });
+
+  it("ajoute la classe superagent au rond de l'assistant", () => {
+    const html = renderCard({ label: "Assistant (Magnus)", project: "", busy: false, lastActivity: null, kind: "superagent", agentId: "superagent" });
+    expect(html).toMatch(/agent-activity-item-dot\s+superagent/);
+  });
+
+  it("n'ajoute pas la classe superagent pour un agent standard", () => {
+    const html = renderCard({ label: "default", project: "a", busy: false, lastActivity: null, kind: "agent", agentId: "default" });
+    expect(html).toContain("agent-activity-item-dot");
+    expect(html).not.toContain("superagent");
+  });
+});
+
+describe("renderDropdown — rond par agent dans la liste déroulante", () => {
+  it("ajoute la classe superagent au rond de l'assistant", () => {
+    const html = renderDropdown([
+      { agentId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+      { agentId: "default", label: "default", project: "a", busy: false, kind: "agent" },
+    ]);
+    expect(html).toMatch(/agent-activity-item-dot\s+superagent/);
+    expect(html).toContain("agent-activity-item-dot");
+  });
+
+  it("n'ajoute pas la classe superagent pour un agent standard", () => {
+    const html = renderDropdown([{ agentId: "default", label: "default", project: "a", busy: false, kind: "agent" }]);
+    expect(html).toContain("agent-activity-item-dot");
+    expect(html).not.toContain("superagent");
   });
 });
 
