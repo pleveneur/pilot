@@ -50,10 +50,10 @@ describe("enqueueExclusivity / dequeueExclusivity", () => {
 
 describe("isAgentActiveOnProject", () => {
   const sessions = [
-    { agent: "codeur", alive: true, mode: "agent_process", project: "/p/A" },
-    { agent: "reviewer", alive: true, mode: "agent_process", project: "/p/A" },
-    { agent: "codeur", alive: true, mode: "agent_process", project: "/p/B" },
-    { agent: "default", alive: true, mode: "main", project: "/p/A" },
+    { agent: "codeur", alive: true, busy: true, mode: "agent_process", project: "/p/A" },
+    { agent: "reviewer", alive: true, busy: true, mode: "agent_process", project: "/p/A" },
+    { agent: "codeur", alive: true, busy: true, mode: "agent_process", project: "/p/B" },
+    { agent: "default", alive: true, busy: true, mode: "main", project: "/p/A" },
   ];
 
   it("détecte un agent actif sur le même projet (même spécialité)", () => {
@@ -78,8 +78,16 @@ describe("isAgentActiveOnProject", () => {
   });
 
   it("une session morte (alive=false) n'est pas comptée", () => {
-    const dead = [{ agent: "codeur", alive: false, mode: "agent_process", project: "/p/A" }];
+    const dead = [{ agent: "codeur", alive: false, busy: true, mode: "agent_process", project: "/p/A" }];
     expect(isAgentActiveOnProject(dead, "codeur", "/p/A")).toBe(false);
+  });
+
+  it("une session vivante mais inactive (settled, busy=false) n'est PAS exclusive", () => {
+    // Bug : après une run terminée, la session reste vivante mais n'exécute plus
+    // de tâche (busy=false). Elle doit être réutilisable pour une nouvelle run,
+    // pas mise en file d'attente (sinon la demande reste bloquée).
+    const idle = [{ agent: "codeur", alive: true, busy: false, mode: "agent_process", project: "/p/A" }];
+    expect(isAgentActiveOnProject(idle, "codeur", "/p/A")).toBe(false);
   });
 
   it("liste vide ou null → pas de conflit", () => {

@@ -11,7 +11,7 @@
 use rusqlite::params;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::MutexGuard;
@@ -399,11 +399,14 @@ impl AgentService {
         // Le frontend met la demande en file d'attente (T5) ; ce garde-fou Rust
         // garantit l'invariant en cas de course (refus explicite au lieu d'un
         // double démarrage concurrent).
-        if mode == SpawnMode::AgentProcess && self.agent_process_alive(project, agent_id) {
-            return Err(format!(
-                "Un agent « {} » est déjà actif sur ce projet (exclusivité des spécialités).",
-                agent_id
-            ));
+        if mode == SpawnMode::AgentProcess {
+            let anomaly_map = app.state::<AppState>().agent_anomaly.clone();
+            if self.agent_process_busy(&anomaly_map, project, agent_id) {
+                return Err(format!(
+                    "Un agent « {} » est déjà actif sur ce projet (exclusivité des spécialités).",
+                    agent_id
+                ));
+            }
         }
         // Seed : si l'agent n'existe pas en base (ex: agent `default` du chat
         // principal jamais créé automatiquement), le créer AVANT de lancer la
@@ -700,6 +703,28 @@ impl AgentService {
         }
     }
 
+    /// Exclusivité des spécialités par projet (T4) : un agent multi-rôles H2 V2
+    /// est considéré « actif » (exclusif) s'il est vivant ET en train d'exécuter
+    /// une tâche (busy=true dans la map d'anomalie, posé à `agent_start` et
+    /// retiré à `agent_settled`). Une session vivante mais INACTIVE (settled,
+    /// run précédente terminée) n'est PAS exclusive : elle doit pouvoir être
+    /// réutilisée/redémarrée pour une nouvelle run (bug : run_agents sur un
+    /// agent déjà ouvert mais inactif ne démarrait pas).
+    pub fn agent_process_busy(
+        &self,
+        anomaly_map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+        project: &str,
+        agent_id: &str,
+    ) -> bool {
+        if !self.agent_process_alive(project, agent_id) {
+            return false;
+        }
+        let m = anomaly_map.lock().unwrap();
+        m.get(&format!("{}\u{1f}{}", project, agent_id))
+            .map(|a| a.busy)
+            .unwrap_or(false)
+    }
+
     /// Réinitialise explicitement le pointeur actif (nettoyage d'orphelin).
     /// Utilisé par `do_start_agent_session` quand la session pointée est morte :
     /// on libère le pointeur pour débloquer les délégations suivantes au lieu
@@ -820,14 +845,14 @@ impl AgentService {
                 .map(|a| a.visible)
                 .unwrap_or(false);
             // Dernière activité depuis la map d'anomalie (champs optionnels).
-            let (last_activity, last_activity_relative, last_event) = {
+            let (last_activity, last_activity_relative, last_event, busy) = {
                 let m = anomaly_map.lock().unwrap();
                 match m.get(&format!("{}\u{1f}{}", project, agent_id)) {
                     Some(a) => {
                         let (iso, rel) = anomaly::last_activity_info(a);
-                        (iso, rel, Some(a.last_event.clone()))
+                        (iso, rel, Some(a.last_event.clone()), Some(a.busy))
                     }
-                    None => (None, None, None),
+                    None => (None, None, None, None),
                 }
             };
             let mut entry = serde_json::json!({
@@ -848,6 +873,13 @@ impl AgentService {
             }
             if let Some(le) = last_event {
                 entry["lastEvent"] = serde_json::Value::String(le);
+            }
+            // busy : l'agent est-il en train d'exécuter une tâche (agent_start →
+            // true, agent_settled → false). Distingue « en cours de tâche » d'une
+            // session vivante mais inactive (settled) — utilisé par le frontend
+            // pour l'exclusivité des spécialités (run_agents).
+            if let Some(b) = busy {
+                entry["busy"] = serde_json::Value::Bool(b);
             }
             out.push(entry);
         }
@@ -1943,6 +1975,74 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!svc.agent_process_alive(proj, "codeur"), "processus tué → plus vivante");
+    }
+
+    /// `agent_process_busy` distingue une session vivante mais INACTIVE (settled,
+    /// run précédente terminée) d'une session réellement en train d'exécuter une
+    /// tâche (busy=true). C'est le cœur du fix : une session vivante mais inactive
+    /// doit être réutilisable pour une nouvelle run (run_agents), pas bloquée.
+    #[test]
+    fn agent_process_busy_distinguishes_running_from_idle() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Session AgentProcess vivante, aucune entrée d'anomalie → pas busy.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        assert!(
+            !svc.agent_process_busy(&anomaly_map, proj, "codeur"),
+            "vivant mais sans activité → pas busy (réutilisable)"
+        );
+        // busy=true (agent_start) → exclusif.
+        anomaly_map.lock().unwrap().insert(
+            format!("{}\u{1f}{}", proj, "codeur"),
+            anomaly::AgentAnomalyState {
+                last_activity: Instant::now(),
+                last_activity_wall: Some(std::time::SystemTime::now()),
+                last_event: "agent_start".to_string(),
+                busy: true,
+                blocked_reported: false,
+                auto_stopped_reported: false,
+            },
+        );
+        assert!(
+            svc.agent_process_busy(&anomaly_map, proj, "codeur"),
+            "busy=true → exclusif"
+        );
+        // busy=false (agent_settled) → réutilisable.
+        anomaly_map
+            .lock()
+            .unwrap()
+            .get_mut(&format!("{}\u{1f}{}", proj, "codeur"))
+            .unwrap()
+            .busy = false;
+        assert!(
+            !svc.agent_process_busy(&anomaly_map, proj, "codeur"),
+            "settled (busy=false) → réutilisable"
+        );
+        // Session morte → pas busy.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&AgentService::session_key(proj, "codeur")) {
+                let _ = entry.session.child.kill();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !svc.agent_process_busy(&anomaly_map, proj, "codeur"),
+            "processus tué → pas busy"
+        );
     }
 
     /// `clear_active_if_dead` réinitialise un pointeur `active` orphelin

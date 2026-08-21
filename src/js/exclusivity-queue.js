@@ -52,16 +52,23 @@ export function dequeueExclusivity(queue, agentId, project) {
 
 /**
  * Indique si un agent est déjà actif sur un projet, d'après une liste de
- * sessions (mode agent_process, vivante, même projet). Fonction pure.
+ * sessions (mode agent_process, en train d'exécuter une tâche, même projet).
+ * Fonction pure.
  * Deux agents de spécialités DIFFÉRENTES sur le même projet ne sont pas en
  * conflit (seule la même spécialité est exclusive).
- * @param {Array<{agent:string, alive:boolean, mode:string, project:string}>} sessions
+ *
+ * Un agent est « actif » (exclusif) s'il est `busy` (agent_start → true,
+ * agent_settled → false) ET vivant. Une session vivante mais INACTIVE (settled,
+ * run précédente terminée) n'est PAS exclusive : elle doit pouvoir être
+ * réutilisée/redémarrée pour une nouvelle run (bug : run_agents sur un agent
+ * déjà ouvert mais inactif ne démarrait pas).
+ * @param {Array<{agent:string, alive:boolean, busy:boolean, mode:string, project:string}>} sessions
  * @param {string} agentId
  * @param {string} project
  * @returns {boolean}
  */
 export function isAgentActiveOnProject(sessions, agentId, project) {
   return (sessions || []).some(
-    (s) => s.agent === agentId && s.alive && s.mode === "agent_process" && s.project === project
+    (s) => s.agent === agentId && s.busy && s.alive && s.mode === "agent_process" && s.project === project
   );
 }

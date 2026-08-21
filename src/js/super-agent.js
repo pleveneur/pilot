@@ -1682,7 +1682,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           const sessionsRes = await invoke("list_agent_sessions");
           const sessions = (sessionsRes && sessionsRes.sessions) || [];
           const queuedIds = agentIds.filter((aid) =>
-            sessions.some((s) => s.agent === aid && s.alive && s.mode === "agent_process" && s.project === target)
+            sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target)
           );
           if (queuedIds.length > 0) {
             const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.`;
