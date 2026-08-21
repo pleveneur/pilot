@@ -1265,16 +1265,27 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
                 Err(_) => false,
             };
             if busy { "running" } else { "idle" }
-        } else if state == "active" {
-            "running"
         } else {
-            "paused"
+            // Agent standard : sa session reste « active » en continu dans le
+            // registre, même au repos, donc `state == "active"` ne reflète PAS
+            // une génération en cours. On rapporte l'état réel via l'observateur
+            // d'anomalie (busy), exactement comme pour le super-agent.
+            let key = format!("\u{1f}{}", agent);
+            let busy = match app_state.agent_anomaly.lock() {
+                Ok(m) => m.get(&key).map_or(false, |e| {
+                    e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"
+                }),
+                Err(_) => false,
+            };
+            if busy { "running" } else if state == "active" { "idle" } else { "paused" }
         };
 
         // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
         // un projet pseudo-global "" : on lui donne un libellé lisible.
         let agent_label = if agent == SUPERAGENT_ID {
             "Assistant (Magnus)".to_string()
+        } else if agent == "default" {
+            "Codeur".to_string()
         } else {
             agent
         };
