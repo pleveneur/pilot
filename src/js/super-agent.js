@@ -128,6 +128,34 @@ const runAgentsQueue = []; // { launch }
 let runAgentsWatchdog = null;
 const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
 
+/**
+ * Filet de sécurité CONSCIENT DE L'ACTIVITÉ (watchdog run_agents) : détermine
+ * si une run d'agents de l'assistant est encore réellement active, pour ne
+ * JAMAIS couper une tâche légitime longue qui progresse encore.
+ *   - Source de vérité du verrou : si le bus d'agents exécute encore une run
+ *     (`isRunInProgress()`), l'agent travaille → actif.
+ *   - Sinon, on sonde la supervision (`get_agent_supervision`) : si un agent
+ *     est encore vivant (`alive`), la run est considérée active.
+ *   - Fail-open : en cas d'erreur de supervision, on renvoie `true` (actif) —
+ *     une erreur de supervision ne doit JAMAIS couper une run saine.
+ * @returns {Promise<boolean>}
+ */
+async function isRunStillActive() {
+  if (isRunInProgress()) return true;
+  try {
+    const sup = await invoke("get_agent_supervision");
+    if (!sup || !sup.projects) return false;
+    for (const proj of sup.projects) {
+      for (const agent of proj.agents || []) {
+        if (agent && agent.alive) return true;
+      }
+    }
+    return false;
+  } catch (_) {
+    return true; // fail-open : ne jamais couper une run saine par erreur
+  }
+}
+
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
 // l'assistant quand le mode « Assistant Only » immersif est actif et que le
 // toggle « synthèse » est activé. Module-scope car handleSuperAgentEvent y
@@ -1419,15 +1447,61 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     return;
   }
   if (type === "process_exit" || type === "process_error") {
-    statusEl.textContent = "Déconnecté";
-    appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
-    // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
-    notifySuperAgentDone({ title: "Pilot — Assistant", body: "⚠️ Connexion au super-agent perdue." }).catch(() => {});
-    // Son « point » : point important / anomalie (si le son est activé).
-    playAssistantSound("point").catch(() => {});
+    // Faux départ au lancement : le processus pi du super-agent meurt une fois
+    // puis est relancé automatiquement par la politique anti-boucle Rust. On
+    // réinitialise l'état immédiatement (onEnd) mais on DIFFÈRE l'affichage du
+    // message d'alerte : si la session redevient vivante dans la fenêtre de
+    // grâce, on ne montre rien ; sinon (vrai blocage) on déclenche l'alerte.
     onEnd();
+    scheduleTransientDisconnect(messagesEl, statusEl, () => {
+      appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
+      // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
+      notifySuperAgentDone({ title: "Pilot — Assistant", body: "⚠️ Connexion au super-agent perdue." }).catch(() => {});
+      // Son « point » : point important / anomalie (si le son est activé).
+      playAssistantSound("point").catch(() => {});
+    });
     return;
   }
+}
+
+/**
+ * Délai de grâce après un faux départ du super-agent (onglet 🧭 Assistant).
+ * Un `process_exit` au lancement est souvent transitoire : le processus pi meurt
+ * une fois puis est relancé automatiquement (politique anti-boucle Rust). On
+ * sonde la vivacité du super-agent via get_agent_supervision (agent
+ * « Assistant (Magnus) », champ `alive`) toutes les 500 ms pendant ~8 s :
+ *   - redevient vivant  → reconnexion : PAS d'alerte, statut remis à « Prêt »
+ *     (style idle, comme le poll de statut), trace console pour diagnostic.
+ *   - toujours mort à l'expiration → onFail() qui déclenche l'alerte (message +
+ *     notification + son) : on ne masque jamais un VRAI blocage.
+ */
+function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
+  const GRACE_WINDOW_MS = 8000;
+  const POLL_MS = 500;
+  const start = Date.now();
+  const timer = setInterval(async () => {
+    let alive = false;
+    try {
+      const sup = await invoke("get_agent_supervision");
+      const proj = sup && sup.projects && sup.projects.find((p) => !(p.path || ""));
+      const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
+      alive = !!(agent && agent.alive);
+    } catch (_) { /* ignore, on garde alive=false et on test le délai */ }
+    if (alive) {
+      // Faux départ rattrapé : le processus est de nouveau vivant.
+      clearInterval(timer);
+      statusEl.textContent = "Prêt";
+      statusEl.className = "agent-status agent-status-idle";
+      console.log("[super-agent] reconnexion après faux départ");
+      return;
+    }
+    if (Date.now() - start >= GRACE_WINDOW_MS) {
+      // Vrai blocage : la session est restée morte — ne rien masquer.
+      clearInterval(timer);
+      statusEl.textContent = "Déconnecté";
+      onFail();
+    }
+  }, POLL_MS);
 }
 
 // ── Questions posées par l'assistant (pilot-choices) ──
@@ -1732,16 +1806,34 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             return;
           }
           runAgentsInFlight = true;
-          // Filet de sécurité : si la run ne se termine pas sous 5 min (ex:
-          // blocage du lancement, verrou graphe), on réinitialise le flag et on
-          // vide la file pour ne pas bloquer définitivement les runs suivantes.
-          runAgentsWatchdog = setTimeout(() => {
+          // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine
+          // pas sous 5 min, on ne réinitialise PAS aveuglément. On vérifie
+          // d'abord si la run est encore réellement active (bus en cours, agent
+          // vivant). Une tâche légitime longue (>5 min) qui progresse encore est
+          // laissée se poursuivre : on repousse simplement l'échéance. On ne
+          // réinitialise le flag et ne vide la file QUE si la run est réellement
+          // morte/inactive (blocage du lancement, verrou graphe, agent éteint).
+          const runAgentsWatchdogHandler = async () => {
+            // Si la run s'est terminée pendant la sonde (settleRun appelé), ne
+            // rien faire : le désarmement normal a déjà eu lieu.
+            if (runSettled) return;
+            const stillActive = await isRunStillActive();
+            // La run a pu se terminer pendant la sonde : ne rien faire non plus.
+            if (runSettled) return;
+            if (stillActive) {
+              // La run progresse encore : repousser l'échéance, continuer
+              // d'attendre. Jamais de coupe artificielle d'une tâche saine.
+              runAgentsWatchdog = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
+              return;
+            }
+            // La run est réellement morte/inactive : comportement actuel.
             console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et vidage de la file.");
             runAgentsInFlight = false;
             runAgentsWatchdog = null;
             runAgentsQueue.length = 0;
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
-          }, RUN_AGENTS_WATCHDOG_MS);
+          };
+          runAgentsWatchdog = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           launchWithEstimate();
         };
         startRun();
