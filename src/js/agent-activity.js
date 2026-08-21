@@ -87,7 +87,7 @@ export function renderDropdown(list) {
     .map(
       (a) => `
     <button class="agent-activity-item" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}">
-      <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""}"></span>
+      <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-item-label">${esc(a.label)}</span>
       <span class="agent-activity-item-project">${esc(a.project)}</span>
     </button>`
@@ -100,7 +100,7 @@ export function renderCard(agent) {
   const stateLabel = agent.busy ? "Travail" : "Repos";
   return `
     <div class="agent-activity-card-head">
-      <span class="agent-activity-item-dot ${agent.busy ? "breathing" : ""}"></span>
+      <span class="agent-activity-item-dot ${agent.busy ? "breathing" : ""} ${agent.kind === "superagent" ? "superagent" : ""}"></span>
       <span class="agent-activity-card-name">${esc(agent.label)}</span>
     </div>
     <div class="agent-activity-card-row"><span>État</span><span>${stateLabel}</span></div>

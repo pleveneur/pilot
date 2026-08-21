@@ -1200,6 +1200,14 @@ body.theme-light.theme-tokyo-day {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
+.agent-activity-item-dot.superagent {
+  background: var(--superagent-accent);
+  opacity: 1;
+}
+.agent-activity-item-dot.superagent.breathing {
+  background: var(--superagent-accent);
+  box-shadow: 0 0 8px var(--superagent-accent);
+}
 .agent-activity-item-label {
   flex: 1;
   white-space: nowrap;
