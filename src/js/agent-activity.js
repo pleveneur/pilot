@@ -153,8 +153,10 @@ export function initAgentActivity(tabs) {
       dropdown.innerHTML = renderDropdown(currentList);
       dropdown.classList.remove("hidden");
       card.classList.add("hidden");
+      localStorage.setItem("agent-activity-expanded", "true");
     } else {
       dropdown.classList.add("hidden");
+      localStorage.setItem("agent-activity-expanded", "false");
     }
   }
 
@@ -212,4 +214,10 @@ export function initAgentActivity(tabs) {
   // Poll toutes les 2 s (source de vérité get_agent_supervision).
   setInterval(refresh, 2000);
   refresh();
+
+  // Restaure l'état déplié/replié persisté (localStorage).
+  if (localStorage.getItem("agent-activity-expanded") === "true") {
+    dropdown.innerHTML = renderDropdown(currentList);
+    dropdown.classList.remove("hidden");
+  }
 }

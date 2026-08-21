@@ -489,6 +489,7 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
@@ -509,12 +510,13 @@ export async function createSuperAgent(container) {
   // Tableau de bord de suivi multi-projets (get_project_tracking).
   const trackingEl = document.createElement("div");
   trackingEl.id = "super-tracking";
-  trackingEl.className = "super-tracking";
+  trackingEl.className = "super-tracking hidden";
   container.appendChild(trackingEl);
 
   // Rendu du tableau de bord de suivi multi-projets.
   async function loadSuperTracking() {
     if (!trackingEl) return;
+    if (trackingEl.classList.contains("hidden")) return;
     trackingEl.innerHTML = `<div class="dash-loading">Chargement du suivi…</div>`;
     try {
       const data = await invoke("get_super_agent_tracking");
@@ -884,6 +886,13 @@ export async function createSuperAgent(container) {
       await showProjectsPanel(messagesEl, state);
     } else if (action === "config") {
       window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
+    } else if (action === "tracking") {
+      if (trackingEl.classList.contains("hidden")) {
+        trackingEl.classList.remove("hidden");
+        loadSuperTracking();
+      } else {
+        trackingEl.classList.add("hidden");
+      }
     } else if (action === "voice") {
       toggleVoiceInput();
     }

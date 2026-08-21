@@ -1269,8 +1269,10 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             // Agent standard : sa session reste « active » en continu dans le
             // registre, même au repos, donc `state == "active"` ne reflète PAS
             // une génération en cours. On rapporte l'état réel via l'observateur
-            // d'anomalie (busy), exactement comme pour le super-agent.
-            let key = format!("\u{1f}{}", agent);
+            // d'anomalie (busy), exactement comme pour le super-agent. La clé de
+            // l'observateur d'anomalie est composite `project\u{1f}agent` (le
+            // super-agent a un projet pseudo-global "" → clé `\u{1f}superagent`).
+            let key = format!("{}\u{1f}{}", project, agent);
             let busy = match app_state.agent_anomaly.lock() {
                 Ok(m) => m.get(&key).map_or(false, |e| {
                     e.busy && e.last_event != "agent_settled" && e.last_event != "agent_end"

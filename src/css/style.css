@@ -1164,7 +1164,7 @@ body.theme-light.theme-tokyo-day {
   position: absolute;
   top: 22px;
   right: 0;
-  min-width: 220px;
+  min-width: 180px;
   background: transparent; /* sans couleur de fond */
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius-sm);
@@ -1220,7 +1220,7 @@ body.theme-light.theme-tokyo-day {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 90px;
+  max-width: 70px;
 }
 .agent-activity-empty {
   padding: 8px;
@@ -6806,6 +6806,9 @@ body.pilot-loading *::after {
   gap: 12px;
   padding: 12px 14px;
   overflow-y: auto;
+}
+.super-tracking.hidden {
+  display: none;
 }
 .super-tracking-client {
   margin-bottom: 4px;
