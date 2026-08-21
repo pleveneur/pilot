@@ -1155,8 +1155,8 @@ body.theme-light.theme-tokyo-day {
 }
 #agent-activity-dot:hover { opacity: 1; }
 #agent-activity-dot.breathing {
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
+  background: var(--superagent-accent);
+  box-shadow: 0 0 8px var(--superagent-accent);
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
@@ -1280,7 +1280,8 @@ body.theme-light.theme-tokyo-day {
    d'activité. L'élément reste dans le DOM (la logique backendBusy / blocage de
    saisie en dépend) mais n'est plus affiché. */
 .superagent-toolbar #superagent-status,
-#sa-immersive-status {
+#sa-immersive-status,
+#agent-status {
   display: none;
 }
 
