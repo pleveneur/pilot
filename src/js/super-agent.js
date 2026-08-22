@@ -931,8 +931,7 @@ export async function createSuperAgent(container) {
     ov.innerHTML = `
       <div class="sa-immersive-top">
         <button class="agent-btn sa-immersive-back" data-imm="back" title="Retour au mode normal"><i data-lucide="arrow-left" class="icon"></i></button>
-        <img class="sa-immersive-logo" src="images/logo_pilot_vector.svg" alt="Pilot" />
-        <span class="sa-immersive-title">${superAgentDisplayLabel()}</span>
+        <img class="sa-immersive-logo" src="/logo_pilot_vector.svg" alt="Pilot" />
         <div class="sa-immersive-voice">
           <button class="agent-btn" data-imm="voice" title="Dictée vocale"><i data-lucide="mic" class="icon"></i></button>
           <button class="agent-btn" data-imm="speak" title="Synthèse vocale (lire les réponses)"><i data-lucide="volume-2" class="icon"></i></button>

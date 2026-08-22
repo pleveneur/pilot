@@ -7470,14 +7470,6 @@ body.pilot-loading *::after {
   flex-shrink: 0;
   object-fit: contain;
 }
-.sa-immersive-title {
-  font-size: var(--font-lg);
-  font-weight: var(--fw-semibold);
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .sa-immersive-top .agent-status {
   margin-left: auto;
 }
