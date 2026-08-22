@@ -93,6 +93,26 @@ export function computeSuperAtBottomFlag(scrollTop, clientHeight, scrollHeight, 
   return shouldScrollSuperToBottom(scrollTop, clientHeight, scrollHeight, threshold);
 }
 
+/**
+ * Décision pure (testable) : détermine si le fond de la zone de saisie de
+ * l'assistant doit porter la teinte « réflexion » (dégradé discret basé sur
+ * --superagent-accent, même couleur que le cercle respirant) à la réception
+ * d'un événement RPC super-agent. Aligné sur le cercle respirant
+ * (agent-activity.js) et sur l'état `backendBusy` :
+ *   - agent_start → réflexion active (true)
+ *   - agent_end / process_exit / process_error → repos (false)
+ *   - autres événements → pas de changement (null) : on conserve l'état courant.
+ * Réutilise le MÊME signal d'état que le bandeau `busyHint` (pas une nouvelle
+ * source de vérité).
+ * @param {string} type
+ * @returns {boolean|null}
+ */
+export function superAgentReflectingFromEvent(type) {
+  if (type === "agent_start") return true;
+  if (type === "agent_end" || type === "process_exit" || type === "process_error") return false;
+  return null;
+}
+
 // Flag de suivi automatique du bas (ré-armé par le listener `scroll`). Module
 // scope : une seule discussion assistant à la fois. Vrai par défaut (on suit
 // le flux au démarrage) ; passe à false quand l'utilisateur remonte pour relire
@@ -606,6 +626,14 @@ export async function createSuperAgent(container) {
     <button class="agent-btn agent-send-btn" data-action="send"><i data-lucide="send-horizontal" class="icon-sm"></i></button>
   `;
   wrapper.appendChild(inputBar);
+  // Indicateur discret « assistant occupé » (Bug 1 UX) : bandeau inséré au-dessus
+  // de la barre de saisie. Visible uniquement quand l'utilisateur tente d'envoyer
+  // pendant que l'assistant est occupé ; disparaît quand le backend redevient libre.
+  const busyHint = document.createElement("div");
+  busyHint.className = "agent-busy-hint";
+  busyHint.textContent = "⏳ L'assistant travaille — ton message sera envoyé quand il est libre";
+  busyHint.hidden = true;
+  wrapper.insertBefore(busyHint, inputBar);
 
   container.appendChild(wrapper);
 
@@ -669,6 +697,22 @@ export async function createSuperAgent(container) {
   const statusEl = toolbar.querySelector("#superagent-status");
   const inputEl = inputBar.querySelector("#superagent-input");
   const modelSelect = toolbar.querySelector("#superagent-model-select");
+  // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
+  function setBusyHint(visible) {
+    if (busyHint) busyHint.hidden = !visible;
+  }
+
+  // Évolution UI : teinte « réflexion » du fond de la zone de saisie. Quand
+  // l'assistant réfléchit (agent_start → agent_end), on applique la classe
+  // `superagent-input-reflecting` au conteneur de la barre de saisie
+  // (`inputBar`) : un dégradé discret basé sur --superagent-accent (même
+  // couleur que le cercle respirant) apparaît en douceur. Disparaît au repos.
+  // Réutilise le MÊME signal d'état que `busyHint`/`backendBusy` (agent_start /
+  // agent_end), pas une nouvelle source de vérité. Ne verrouille pas la saisie
+  // (le textarea reste utilisable) et ne touche pas au contenu saisi.
+  function setReflecting(reflecting) {
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting);
+  }
 
   // ── Chargement de la liste des modèles ──
   // Source primaire : lecture fichier models.json (get_available_models_list),
@@ -895,6 +939,8 @@ export async function createSuperAgent(container) {
         isStreaming = false;
         backendBusy = false;
         busyNotified = false;
+        setBusyHint(false);
+        setReflecting(false);
         currentBody = null;
         currentFlow = null;
         currentTextSection = null;
@@ -956,7 +1002,10 @@ export async function createSuperAgent(container) {
     if (immersiveOverlay) return;
     immersiveOverlay = buildImmersiveOverlay();
     immersiveOverlay.querySelector(".sa-immersive-messages").appendChild(messagesEl);
-    immersiveOverlay.querySelector(".sa-immersive-input").appendChild(inputBar);
+    const immInput = immersiveOverlay.querySelector(".sa-immersive-input");
+    if (busyHint && busyHint.parentNode) busyHint.parentNode.removeChild(busyHint);
+    immInput.appendChild(busyHint);
+    immInput.appendChild(inputBar);
     immersiveOverlay.querySelector(".sa-immersive-top").appendChild(statusEl);
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
@@ -967,6 +1016,7 @@ export async function createSuperAgent(container) {
   function exitImmersive() {
     if (!immersiveOverlay) return;
     wrapper.appendChild(messagesEl);
+    wrapper.insertBefore(busyHint, inputBar);
     wrapper.appendChild(inputBar);
     toolbar.appendChild(statusEl);
     immersiveOverlay.remove();
@@ -1033,7 +1083,7 @@ export async function createSuperAgent(container) {
       if (!busyNotified) {
         busyNotified = true;
         statusEl.textContent = "⏳ Occupé…";
-        appendSystemMessage(messagesEl, "⏳ L'assistant est occupé — ton message est conservé dans le champ. Réappuie sur Entrée dès que la réponse est terminée.");
+        setBusyHint(true);
       }
       return;
     }
@@ -1055,6 +1105,7 @@ export async function createSuperAgent(container) {
     isStreaming = true;
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
+    setReflecting(true);
     try {
       await invoke("send_super_agent_prompt", { message: text });
       // La réponse arrive en streaming via le canal rpc-event-superagent
@@ -1064,6 +1115,7 @@ export async function createSuperAgent(container) {
       isStreaming = false;
       backendBusy = false;
       statusEl.textContent = "Prêt";
+      setReflecting(false);
     }
   }
 
@@ -1163,10 +1215,12 @@ export async function createSuperAgent(container) {
         backendBusy = true;
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
+        setReflecting(true);
       } else if (!processing && isStreaming) {
         backendBusy = false;
         statusEl.textContent = "Prêt";
         statusEl.className = "agent-status agent-status-idle";
+        setReflecting(false);
       } else if (!processing) {
         // P0-1 : aucune session en traitement → l'assistant est libre, même
         // après un échec d'envoi qui n'a pas passé par onEnd. Évite de laisser
@@ -1572,6 +1626,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // en retard), pour que `send()` ne l'accepte puis perde une saisie.
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
+    setReflecting(true);
     return;
   }
   if (type === "agent_end") {
