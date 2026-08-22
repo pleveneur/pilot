@@ -294,6 +294,12 @@ let pendingRender = false;
 let lastAssistantRawText = "";
 let superShowThinking = true; // réglage « Afficher la réflexion » (issue #43)
 let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
+// Toggles du bandeau « assistant occupé » et de la teinte « réflexion » de la
+// barre de saisie, exposés au module scope pour que handleSuperAgentEvent (qui
+// est au niveau module) puisse les appeler. Assigned dans createSuperAgent
+// (le modèle ne les a pas dans son scope, mais le handler module si).
+let superSetBusyHint = () => {};
+let superSetReflecting = () => {};
 
 // ── Détection de boucle dans la réflexion (issue #55) ──
 // Même mécanique que l'agent standard (loop-detection.js, issue #37) : on
@@ -699,8 +705,11 @@ export async function createSuperAgent(container) {
   const modelSelect = toolbar.querySelector("#superagent-model-select");
   // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
   function setBusyHint(visible) {
-    if (busyHint) busyHint.hidden = !visible;
+    superSetBusyHint(visible);
   }
+  superSetBusyHint = (visible) => {
+    if (busyHint) busyHint.hidden = !visible;
+  };
 
   // Évolution UI : teinte « réflexion » du fond de la zone de saisie. Quand
   // l'assistant réfléchit (agent_start → agent_end), on applique la classe
@@ -711,8 +720,11 @@ export async function createSuperAgent(container) {
   // agent_end), pas une nouvelle source de vérité. Ne verrouille pas la saisie
   // (le textarea reste utilisable) et ne touche pas au contenu saisi.
   function setReflecting(reflecting) {
-    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting);
+    superSetReflecting(reflecting);
   }
+  superSetReflecting = (reflecting) => {
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting);
+  };
 
   // ── Chargement de la liste des modèles ──
   // Source primaire : lecture fichier models.json (get_available_models_list),
@@ -1626,7 +1638,7 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // en retard), pour que `send()` ne l'accepte puis perde une saisie.
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
-    setReflecting(true);
+    superSetReflecting(true);
     return;
   }
   if (type === "agent_end") {

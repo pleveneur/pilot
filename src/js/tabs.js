@@ -176,20 +176,25 @@ class TabsManager {
     // Multi-onglets agents : on ne renomme que l'agent PAR DÉFAUT (les onglets
     // supplémentaires ont un nom personnalisé « Agent N »).
     window.addEventListener("pilot-backend-changed", () => {
-      const agentTab = this.tabs.find((t) => t.mode === "agent" && t.agentId === "default");
-      if (!agentTab) return;
       const newLabel = agentDisplayLabel();
-      if (agentTab.name === newLabel) return;
-      agentTab.name = newLabel;
-      const btn = this.tabBar.querySelector(`[data-tab-id="${agentTab.id}"]`);
-      if (btn) {
-        const nameSpan = btn.querySelector(".tab-name");
-        if (nameSpan) nameSpan.textContent = `π ${newLabel} (RPC)`;
+      // Agent par défaut : renommer l'onglet + barre de statut.
+      const agentTab = this.tabs.find((t) => t.mode === "agent" && t.agentId === "default");
+      if (agentTab && agentTab.name !== newLabel) {
+        agentTab.name = newLabel;
+        const btn = this.tabBar.querySelector(`[data-tab-id="${agentTab.id}"]`);
+        if (btn) {
+          const nameSpan = btn.querySelector(".tab-name");
+          if (nameSpan) nameSpan.textContent = `π ${newLabel} (RPC)`;
+        }
       }
-      // Mettre à jour la barre de statut si l'onglet agent est actif.
+      // Barre de statut de l'onglet actif. L'onglet assistant (🧭) affiche le
+      // libellé du backend actif (Agent Pi/PLh) plutôt que le nom configuré,
+      // pour refléter le moteur IA réellement en service.
       const active = this.getActiveTab();
       if (active && active.mode === "agent") {
         statusFiletype.textContent = `${active.name} (RPC)`;
+      } else if (active && active.mode === "superagent") {
+        statusFiletype.textContent = `${newLabel} (Suivi)`;
       }
     });
   }
@@ -1983,7 +1988,9 @@ class TabsManager {
       statusEol.textContent = '';
       statusAutosave.textContent = '';
     } else if (tab && tab.mode === "superagent") {
-      statusFiletype.textContent = `${superAgentDisplayLabel()} (Suivi)`;
+      // Libellé du backend actif (Agent Pi/PLh) plutôt que le nom configuré,
+      // pour refléter le moteur IA réellement en service.
+      statusFiletype.textContent = `${agentDisplayLabel()} (Suivi)`;
       statusCursor.textContent = '';
       statusStats.textContent = '';
       statusEncoding.textContent = '';
