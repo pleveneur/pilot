@@ -76,10 +76,37 @@ export function shouldScrollSuperToBottom(scrollTop, clientHeight, scrollHeight,
   return scrollTop + clientHeight >= scrollHeight - threshold;
 }
 
-/** Scroll intelligent : ne force le bas que si l'utilisateur est déjà en bas. */
+/**
+ * Calcule le nouvel état du flag de suivi automatique `superAtBottom` à partir
+ * de la position de scroll. Pur et testable. Utilisé par le listener `scroll`
+ * du conteneur de messages : quand l'utilisateur est au bas (ou proche, seuil
+ * `threshold`), le suivi est ré-armé (true) ; dès qu'il remonte au-dessus du
+ * seuil pour relire, le suivi est désactivé (false). Conserve le comportement
+ * issue #60 : on ne force pas le bas si l'utilisateur a remonté pour relire.
+ *
+ * Le flag est « ré-armé » dès que l'utilisateur redescend tout en bas avec
+ * l'ascenseur : la prochaine fois que du contenu arrive, le suivi redevient
+ * actif à 100 %. Fonction pure de la position courante (pas d'état précédent)
+ * : la position suffit à décider si l'on suit.
+ */
+export function computeSuperAtBottomFlag(scrollTop, clientHeight, scrollHeight, threshold = SUPER_SCROLL_BOTTOM_THRESHOLD) {
+  return shouldScrollSuperToBottom(scrollTop, clientHeight, scrollHeight, threshold);
+}
+
+// Flag de suivi automatique du bas (ré-armé par le listener `scroll`). Module
+// scope : une seule discussion assistant à la fois. Vrai par défaut (on suit
+// le flux au démarrage) ; passe à false quand l'utilisateur remonte pour relire
+// (issue #60) ; repasse à true dès qu'il redescend en bas (ré-armement).
+let superAtBottom = true;
+
+/** Scroll intelligent : ne force le bas que si le suivi automatique est actif
+ * (flag `superAtBottom` ré-armé par le listener `scroll`). Contrairement à un
+ * calcul ponctuel à chaque message, le flag persiste : même si le contenu
+ * grandit de plus de `threshold` px d'un coup, le suivi continue tant que
+ * l'utilisateur n'est pas remonté. */
 function scrollSuperToBottom(messagesEl) {
   if (!messagesEl) return;
-  if (shouldScrollSuperToBottom(messagesEl.scrollTop, messagesEl.clientHeight, messagesEl.scrollHeight)) {
+  if (superAtBottom) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 }
@@ -339,6 +366,43 @@ function getSuperActiveProjectName() {
   return parts.length ? parts[parts.length - 1] : null;
 }
 
+/**
+ * SOUCIS 2 : met à jour le badge « 📁 nom » + la couleur (background +
+ * border-left) de la bulle assistant COURANTE pour refléter le projet actif
+ * actuel, SANS créer de nouvelle bulle ni casser le flux en cours. Appelée
+ * après un changement de projet (open_project dans le handler d'action, et
+ * via l'événement `project_changed`). Ne fait rien si aucune bulle n'est ouverte.
+ */
+function refreshSuperBubbleProject(messagesEl) {
+  if (!currentBody) return;
+  const projectName = getSuperActiveProjectName();
+  currentBubbleProject = projectName;
+  const color = projectColor(projectName);
+  const bubble = currentBody.querySelector(".agent-bubble-assistant");
+  if (!bubble) return;
+  let badge = bubble.querySelector(".agent-project-badge");
+  if (projectName) {
+    if (!badge) {
+      badge = document.createElement("div");
+      badge.className = "agent-project-badge";
+      bubble.insertBefore(badge, bubble.firstChild);
+    }
+    badge.textContent = "📁 " + projectName;
+    if (color) {
+      badge.style.background = color;
+      badge.style.color = "#ffffff";
+      badge.style.borderColor = color;
+    }
+  } else if (badge) {
+    badge.remove();
+  }
+  if (color) {
+    bubble.style.borderLeftColor = color;
+  } else {
+    bubble.style.borderLeftColor = "";
+  }
+}
+
 /** Ajoute (ou réutilise) une section texte rendue en Markdown. */
 function appendSuperTextSection(content, reuse = true) {
   if (!currentFlow) return null;
@@ -476,8 +540,22 @@ export async function createSuperAgent(container) {
 
   // Zone des messages
   const messagesEl = document.createElement("div");
+  superWarnMessagesEl = messagesEl; // T6 : cible des alertes d'échec d'injection
   messagesEl.className = "agent-chat-messages";
   wrapper.appendChild(messagesEl);
+
+  // SOUCIS 1 (réarmement du suivi automatique) : listener `scroll` qui maintient
+  // le flag `superAtBottom`. Quand l'utilisateur remonte pour relire, le suivi
+  // est désactivé (issue #60) ; dès qu'il redescend tout en bas, le suivi est
+  // ré-armé → les prochains messages le suivront à nouveau à 100 %.
+  const onSuperScroll = () => {
+    superAtBottom = computeSuperAtBottomFlag(
+      messagesEl.scrollTop,
+      messagesEl.clientHeight,
+      messagesEl.scrollHeight
+    );
+  };
+  messagesEl.addEventListener("scroll", onSuperScroll, { passive: true });
 
   // Barre d'outils
   const toolbar = document.createElement("div");
@@ -669,6 +747,12 @@ export async function createSuperAgent(container) {
   // arrière-plan ; `send_super_agent_prompt` la démarre paresseusement si besoin.
   invoke("start_super_agent_session").catch((err) => {
     console.error("Erreur démarrage session super-agent:", err);
+  });
+  // T5 : à l'ouverture de l'onglet 🧭, rejouer les résumés en attente
+  // (comptes-rendus persistés mais jamais délivrés car session fermée/occupée).
+  // Fire-and-forget : ne bloque pas l'ouverture de l'onglet.
+  invoke("replay_superagent_summaries").catch((err) => {
+    console.error("Erreur rejeu résumés super-agent:", err);
   });
   loadModels();
 
@@ -879,6 +963,8 @@ export async function createSuperAgent(container) {
       pendingRender = false;
       lastAssistantRawText = "";
       currentBubbleProject = null;
+      // SOUCIS 1 : une nouvelle session réarme le suivi automatique du bas.
+      superAtBottom = true;
       appendSystemMessage(messagesEl, "🆕 Nouvelle session.");
     } else if (action === "initialize") {
       await initializeSuperAgent(messagesEl);
@@ -1001,6 +1087,18 @@ export async function createSuperAgent(container) {
     }
   });
 
+  // SOUCIS 2 : écouter le changement de projet (Tauri event émis par Rust sur
+  // open_project_path, desktop ET remote) pour rafraîchir le badge de la bulle
+  // courante. Robuste : couvre aussi les changements initiés à distance (web)
+  // qui ne passent pas par le handler `open_project` de l'assistant.
+  const unlistenProjectChanged = await listen("project_changed", () => {
+    try {
+      refreshSuperBubbleProject(messagesEl);
+    } catch (err) {
+      console.error("[project_changed] erreur badge:", err);
+    }
+  });
+
   const origUnlisten = unlisten;
 
   // A15 : le statut « Prêt » de l'assistant reflète l'état réel de la machine à
@@ -1060,6 +1158,9 @@ export async function createSuperAgent(container) {
     superTrackingRefresh: loadSuperTracking,
     unlisten: () => {
       clearInterval(superStatusPoll);
+      // SOUCIS 1 : retirer le listener `scroll` (évite la fuite à la recréation
+      // de l'onglet 🧭).
+      messagesEl.removeEventListener("scroll", onSuperScroll);
       // Chantier #13 : arrêter le ticker des relances programmées (évite la
       // même fuite que `pilot-config-changed` — cf. problème #12).
       stopScheduleTicker();
@@ -1068,6 +1169,7 @@ export async function createSuperAgent(container) {
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
+      unlistenProjectChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       window._pilotSuperAgentOpen = false;
@@ -2115,6 +2217,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         return;
       }
       await sidebar.openProjectByPath(path);
+      // SOUCIS 2 : mettre à jour le badge de la bulle courante pour refléter le
+      // nouveau projet actif (sans créer de nouvelle bulle).
+      refreshSuperBubbleProject(messagesEl);
       // Mémoriser le projet sur lequel l'assistant travaille (distinct du projet
       // actif) : si l'utilisateur change ensuite de projet, l'assistant saura
       // qu'il travaillait sur celui-ci et pourra continuer la discussion dessus.
@@ -2968,6 +3073,30 @@ function renderSuperAgentInput(messagesEl, state, id, title, placeholder, respon
  * @param {string} summary - résumé de la session (dernier échange).
  * @param {string} [projectPath] - chemin du projet actif.
  */
+// ── Alerte d'échec d'injection (T6) ──
+// Avertit l'utilisateur (⚠️) UNIQUEMENT en cas de statut "error" lors de
+// l'injection d'un compte-rendu à l'assistant. Les cas "queued" restent
+// silencieux : ils sont couverts par le rejeu à la réouverture de l'onglet.
+// Debounce anti-spam : au plus 1 affichage / 60 s par catégorie.
+const injectionWarnLast = {}; // catégorie → timestamp (ms)
+const INJECTION_WARN_MIN_INTERVAL = 60_000;
+let superWarnMessagesEl = null; // défini par createSuperAgent
+
+function warnInjectionFailure(status, detail, category) {
+  if (status !== "error") return;
+  const now = Date.now();
+  const last = injectionWarnLast[category] || 0;
+  if (now - last < INJECTION_WARN_MIN_INTERVAL) return;
+  injectionWarnLast[category] = now;
+  const text = `⚠️ Échec d'injection d'un compte-rendu à l'assistant : ${String(detail || "erreur inconnue")}`;
+  console.warn(text);
+  if (superWarnMessagesEl) {
+    appendSystemMessage(superWarnMessagesEl, text);
+  } else {
+    notifySuperAgentDone({ title: "Pilot — Assistant", body: text }).catch(() => {});
+  }
+}
+
 export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
   // Issue #47 : si une délégation est en attente (delegate_to_coder), marquer le
   // résumé comme un feedback de tâche déléguée pour que l'assistant mette à jour
@@ -2991,13 +3120,14 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
     playAssistantSound("fin").catch(() => {});
   }
   try {
-    await invoke("inject_session_summary", {
+    const res = await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
       summary: finalSummary,
     });
-  } catch (_) {
-    // Silencieux : le super-agent n'est pas indispensable au chat.
+    warnInjectionFailure(res && res.status, res && res.detail, "session");
+  } catch (err) {
+    warnInjectionFailure("error", err, "session");
   }
   // Issue #66 : l'agent a terminé sa tâche — vider la file des délégations
   // en attente (transmettre la demande suivante mise en file, s'il y en a).
@@ -3023,15 +3153,16 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
  */
 async function injectRunAgentsResultToSuperAgent(result, projectPath) {
   try {
-    await invoke("inject_session_summary", {
+    const res = await invoke("inject_session_summary", {
       projectPath: projectPath || null,
       sessionId: null,
       // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le
       // contexte de l'assistant).
       summary: truncateSuperAgentSummary(buildRunAgentsSummary(result)),
     });
-  } catch (_) {
-    // Silencieux : le super-agent n'est pas indispensable au chat.
+    warnInjectionFailure(res && res.status, res && res.detail, "runagents");
+  } catch (err) {
+    warnInjectionFailure("error", err, "runagents");
   }
 }
 

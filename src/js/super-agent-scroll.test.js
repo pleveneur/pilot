@@ -33,7 +33,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { shouldScrollSuperToBottom, truncateSuperAgentSummary } = await import("./super-agent.js");
+const { shouldScrollSuperToBottom, truncateSuperAgentSummary, computeSuperAtBottomFlag } = await import("./super-agent.js");
 
 // Fenêtre d'exemple : scrollHeight = 1000, clientHeight = 500.
 const SCROLL_HEIGHT = 1000;
@@ -62,6 +62,39 @@ describe("shouldScrollSuperToBottom (décision de scroll intelligente)", () => {
   it("gère le cas d'un contenu qui ne déborde pas (déjà tout en bas)", () => {
     // scrollHeight == clientHeight → toujours en bas.
     expect(shouldScrollSuperToBottom(0, 500, 500)).toBe(true);
+  });
+});
+
+describe("computeSuperAtBottomFlag (réarmement du suivi automatique, SOUCIS 1)", () => {
+  // Fenêtre : scrollHeight = 1000, clientHeight = 500, seuil = 60.
+  // "En bas" = scrollTop + clientHeight >= scrollHeight - seuil = 940.
+
+  it("(a) relire : utilisateur au-dessus du seuil → suivi désactivé (false)", () => {
+    // Utilisateur a remonté pour relire : loin du bas.
+    expect(computeSuperAtBottomFlag(0, 500, 1000)).toBe(false);
+    expect(computeSuperAtBottomFlag(200, 500, 1000)).toBe(false);
+    // Juste au-dessus du seuil (439 → 939 < 940) : encore en train de relire.
+    expect(computeSuperAtBottomFlag(439, 500, 1000)).toBe(false);
+  });
+
+  it("(b) redescendre en bas → suivi automatique ré-armé (true)", () => {
+    // Utilisateur redescend tout en bas avec l'ascenseur.
+    expect(computeSuperAtBottomFlag(500, 500, 1000)).toBe(true);
+    // Dans le seuil (460 → 960 >= 940) : ré-armé.
+    expect(computeSuperAtBottomFlag(460, 500, 1000)).toBe(true);
+    // Limite exacte du seuil : 440 → 940 >= 940 → ré-armé.
+    expect(computeSuperAtBottomFlag(440, 500, 1000)).toBe(true);
+  });
+
+  it("simule une séquence complète : relire puis redescendre → ré-armé", () => {
+    // 1. L'utilisateur remonte pour relire.
+    let flag = computeSuperAtBottomFlag(100, 500, 1000);
+    expect(flag).toBe(false);
+    // 2. Du contenu arrive : le suivi ne force PAS le bas (flag false).
+    // 3. L'utilisateur redescend tout en bas avec l'ascenseur.
+    flag = computeSuperAtBottomFlag(500, 500, 1000);
+    expect(flag).toBe(true);
+    // 4. Le suivi est ré-armé : le prochain message suivra à 100 %.
   });
 });
 
