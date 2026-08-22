@@ -89,6 +89,18 @@ let busState = {
   // db_query/db_execute) pour détecter une boucle d'OUTILS identiques, même
   // sans texte streamé répété.
   toolCallsByAgent: {},
+  // Issue : empreintes des derniers tool calls de LECTURE PURE par agent
+  // (read/search/grep/list/glob/find). Exclus du comptage principal (P0-2,
+  // faux positifs sur l'exploration légitime) mais suivis dans un historique
+  // SÉPARÉ avec un seuil plus élevé pour détecter une boucle soutenue de
+  // lectures/recherches identiques (ex: architecte qui relit le même fichier).
+  readOnlyToolCallsByAgent: {},
+  // Compteur de tours pi PAR AGENT (pas global) : en run parallèle, chaque
+  // agent a son propre budget. Un agent qui enchaîne des turn_start légitimes
+  // (ex: plusieurs tool calls) ne doit pas être coupé à cause des tours des
+  // autres agents. La vraie boucle d'outils est détectée en amont par
+  // maybeDetectAgentLoop ; ce compteur n'est qu'un filet de sécurité.
+  piTurnCountByAgent: {},
   parallelGroup: null, // { assignments, pending, results, onComplete }
   pendingPromise: null,
   isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
@@ -125,6 +137,8 @@ function resetBusState() {
   busState.activeAgents = new Set();
   busState.streamingTextByAgent = {};
   busState.toolCallsByAgent = {};
+  busState.readOnlyToolCallsByAgent = {};
+  busState.piTurnCountByAgent = {};
   busState.parallelGroup = null;
   busState.pendingPromise = null;
   busState.isCompacting = false;
@@ -425,9 +439,12 @@ export function destroyAgentsBus() {
 }
 
 let turnCount = 0;
-let piTurnCount = 0;
 const MAX_TURNS = 50;
-const MAX_PI_TURNS_PER_AGENT = 40;
+// Filet de sécurité par agent (en dernier recours) : la vraie boucle d'outils
+// est détectée en amont par maybeDetectAgentLoop. 60 tours pi par agent laisse
+// de la marge aux agents qui font beaucoup de tool calls légitimes sans les
+// couper à tort (le compteur global partagé les coupait dès 40 en run parallèle).
+const MAX_PI_TURNS_PER_AGENT = 60;
 
 /**
  * Issue #37 : détecte une boucle dans la réflexion d'un sous-agent et, le cas
@@ -456,7 +473,16 @@ function maybeDetectAgentLoop(agentId) {
   // occurrences dans les 20 dernières actions.
   if (
     detectRepeatedToolCalls(busState.toolCallsByAgent[agentId]) ||
-    detectRepeatedActions(busState.toolCallsByAgent[agentId])
+    detectRepeatedActions(busState.toolCallsByAgent[agentId]) ||
+    // Issue : boucle d'outils de LECTURE PURE (read/search/grep/list/glob/find).
+    // Ces outils sont exclus du comptage principal (P0-2, faux positifs sur
+    // l'exploration légitime), mais un agent qui répète la MÊME lecture/recherche
+    // en boucle (ex: architecte qui relit le même fichier) ne serait jamais
+    // détecté. On les suit dans un historique séparé avec un seuil PLUS ÉLEVÉ
+    // (minRepeat 8 dans une fenêtre de 20) pour ne déclencher que sur une boucle
+    // soutenue, pas sur une exploration normale (lectures à offsets différents,
+    // recherches à requêtes différentes → empreintes distinctes).
+    detectRepeatedActions(busState.readOnlyToolCallsByAgent[agentId], { minRepeat: 8 })
   ) {
     busState.loopCorrectionPending[agentId] = true;
     busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
@@ -497,10 +523,17 @@ function handleAgentEvent(ev) {
   resetTimeout();
 
   if (type === "turn_start") {
-    piTurnCount++;
-    if (piTurnCount > MAX_PI_TURNS_PER_AGENT) {
-      console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, piTurnCount);
-      emit("error", { message: `L'agent ${agentId} a fait ${piTurnCount} tours pi sans terminer (max ${MAX_PI_TURNS_PER_AGENT}). Possible boucle d'outils. Arrêt forcé.` });
+    // Compteur de tours pi PAR AGENT (pas global) : en run parallèle, chaque
+    // agent a son propre budget. Un agent qui enchaîne des turn_start légitimes
+    // (ex: plusieurs tool calls) ne doit pas être coupé à cause des tours des
+    // autres agents. La vraie boucle d'outils est détectée en amont par
+    // maybeDetectAgentLoop (detectRepeatedToolCalls / detectRepeatedActions) ;
+    // ce compteur n'est qu'un filet de sécurité en dernier recours.
+    const count = (busState.piTurnCountByAgent[agentId] || 0) + 1;
+    busState.piTurnCountByAgent[agentId] = count;
+    if (count > MAX_PI_TURNS_PER_AGENT) {
+      console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count);
+      emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${MAX_PI_TURNS_PER_AGENT}). Arrêt forcé.` });
       stopAgentsRun({ silent: true });
       return;
     }
@@ -547,6 +580,7 @@ function handleAgentEvent(ev) {
     busState.isCompacting = false;
     busState.streamingTextByAgent[agentId] = "";
     busState.toolCallsByAgent[agentId] = [];
+    busState.readOnlyToolCallsByAgent[agentId] = [];
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
@@ -558,6 +592,14 @@ function handleAgentEvent(ev) {
     // générait des faux positifs (sous-agents coupés pendant recherche/lecture).
     // Seules les actions qui MODIFIENT réellement sont comptées.
     if (AGENT_READ_ONLY_TOOLS.has(toolName)) {
+      // P0-2 : les outils de lecture pure ne sont PAS comptés dans l'historique
+      // principal (faux positifs sur l'exploration légitime). On les suit dans
+      // un historique SÉPARÉ avec un seuil plus élevé (voir maybeDetectAgentLoop)
+      // pour détecter une boucle soutenue de lectures/recherches identiques.
+      const roFp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
+      const roArr = (busState.readOnlyToolCallsByAgent[agentId] = busState.readOnlyToolCallsByAgent[agentId] || []);
+      roArr.push(roFp);
+      if (roArr.length > 40) roArr.splice(0, roArr.length - 40);
       maybeDetectAgentLoop(agentId);
       return;
     }
@@ -584,7 +626,8 @@ function handleAgentEvent(ev) {
       const streamed = busState.streamingTextByAgent[agentId] || "";
       busState.streamingTextByAgent[agentId] = "";
       busState.toolCallsByAgent[agentId] = [];
-      piTurnCount = 0; // c'est une continuation du tour, pas un nouveau tour
+      busState.readOnlyToolCallsByAgent[agentId] = [];
+      busState.piTurnCountByAgent[agentId] = 0; // c'est une continuation du tour, pas un nouveau tour
       resetTimeout();
       const count = busState.loopCorrectionCount[agentId] || 0;
       if (count < MAX_LOOP_ESCALATION) {
@@ -603,7 +646,7 @@ function handleAgentEvent(ev) {
       return;
     }
     turnCount++;
-    piTurnCount = 0;
+    busState.piTurnCountByAgent[agentId] = 0;
     console.log("[agents-bus] agent_end turn=" + turnCount, agentId);
     if (turnCount > MAX_TURNS) {
       emit("error", { message: `Boucle détectée : ${turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
@@ -699,6 +742,7 @@ async function finishAgentTurn(agentId) {
   const text = busState.streamingTextByAgent[agentId] || "";
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
+  busState.readOnlyToolCallsByAgent[agentId] = [];
   const project = busState.agentProject[agentId];
   // T6 : libérer les réservations du projet à la fin du tour du codeur.
   await cleanupReservationsForAgent(agentId, project);
@@ -798,6 +842,7 @@ async function finishAgentTurn(agentId) {
 async function failAgentTurn(agentId, reason) {
   busState.streamingTextByAgent[agentId] = "";
   busState.toolCallsByAgent[agentId] = [];
+  busState.readOnlyToolCallsByAgent[agentId] = [];
   const project = busState.agentProject[agentId];
   // T6 : libérer les réservations du projet à l'échec du tour du codeur.
   await cleanupReservationsForAgent(agentId, project);

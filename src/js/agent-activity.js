@@ -81,7 +81,9 @@ export function anyBusy(list) {
   return list.some((a) => a.busy);
 }
 
-/** Rendu HTML de la liste déroulante (fond transparent, un cercle par agent). */
+/** Rendu HTML de la liste déroulante (fond transparent, un cercle par agent).
+ * Seul le cercle (pastille) est affiché ; le nom de l'agent (et son projet)
+ * apparaît au survol via un tooltip (title) sur le bouton. */
 export function renderDropdown(list) {
   if (!list.length) {
     return '<div class="agent-activity-empty">Aucun agent actif</div>';
@@ -89,10 +91,8 @@ export function renderDropdown(list) {
   return list
     .map(
       (a) => `
-    <button class="agent-activity-item" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}">
+    <button class="agent-activity-item" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}">
       <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
-      <span class="agent-activity-item-label">${esc(a.label)}</span>
-      <span class="agent-activity-item-project">${esc(a.project)}</span>
     </button>`
     )
     .join("");

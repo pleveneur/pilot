@@ -87,7 +87,7 @@ struct ProjectState {
 
 /// État d'activité de l'agent d'un projet (issue #13, indicateur par projet).
 /// Mis à jour par l'observateur d'événements RPC : `agent_start` → busy=true,
-/// `agent_settled` → busy=false (fin définitive d'une exécution).
+/// `agent_settled`/`agent_end` → busy=false (fin d'une exécution / d'un tour).
 struct SessionActivity {
     busy: bool,
     updated: std::time::Instant,

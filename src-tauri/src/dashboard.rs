@@ -1287,7 +1287,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         let agent_label = if agent == SUPERAGENT_ID {
             "Assistant (Magnus)".to_string()
         } else if agent == "default" {
-            "Codeur".to_string()
+            "Dossier".to_string()
         } else {
             agent
         };

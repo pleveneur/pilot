@@ -37,7 +37,9 @@ pub struct AgentAnomalyState {
     pub last_activity_wall: Option<SystemTime>,
     /// Type du dernier événement RPC (ex: "tool_execution_end").
     pub last_event: String,
-    /// L'agent est-il en cours d'exécution (agent_start → true, agent_settled → false).
+    /// L'agent est-il en cours d'exécution (agent_start → true, agent_settled
+    /// ou agent_end → false). `agent_end` marque la fin d'un tour : on repasse
+    /// busy=false dès cet événement pour être robuste si `agent_settled` est perdu.
     pub busy: bool,
     /// Une alerte de blocage a-t-elle déjà été émise pour cette exécution ?
     /// Réarmé à false au prochain `agent_start`/`agent_settled` (nouvelle exécution).
@@ -98,7 +100,12 @@ pub fn make_observer(
             });
             if t == "agent_start" {
                 entry.busy = true;
-            } else if t == "agent_settled" {
+            } else if t == "agent_settled" || t == "agent_end" {
+                // `agent_end` marque la fin d'un tour (le frontend considère
+                // l'agent « au repos » dès cet événement). On repasse busy=false
+                // aussi sur `agent_end` pour être robuste si `agent_settled` est
+                // perdu : l'indicateur d'activité ne doit pas rester « occupé »
+                // alors que l'agent a fini de répondre.
                 entry.busy = false;
             }
             entry.updated = now;
@@ -119,7 +126,13 @@ pub fn make_observer(
                 // Nouvelle exécution : réarmer la détection de blocage ET l'arrêt auto.
                 entry.blocked_reported = false;
                 entry.auto_stopped_reported = false;
-            } else if t == "agent_settled" {
+            } else if t == "agent_settled" || t == "agent_end" {
+                // `agent_end` marque la fin d'un tour (le frontend considère
+                // l'agent « au repos » dès cet événement). On repasse busy=false
+                // aussi sur `agent_end` pour être robuste si `agent_settled` est
+                // perdu : l'indicateur d'activité ne doit pas rester « occupé »
+                // alors que l'agent a fini de répondre. Réarme aussi la détection
+                // de blocage / l'arrêt auto (nouvelle exécution à venir).
                 entry.busy = false;
                 entry.blocked_reported = false;
                 entry.auto_stopped_reported = false;
@@ -161,11 +174,11 @@ pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<
 /// scope (uniquement les agents délégués `AgentProcess`) est appliqué après,
 /// via `agent_service.agent_process_alive` (l'observateur de la map d'anomalie
 /// couvre aussi la session principale, le reviewer et le super-agent).
-fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u32) -> bool {
+fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u32, now: Instant) -> bool {
     if !enabled || !entry.busy || entry.auto_stopped_reported {
         return false;
     }
-    let idle_secs = entry.last_activity.elapsed().as_secs();
+    let idle_secs = now.duration_since(entry.last_activity).as_secs();
     idle_secs > (timeout_minutes.max(1) as u64) * 60
 }
 
@@ -220,7 +233,7 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     }
                     // 2. Arrêt auto (T2) : agent busy sans progression depuis le seuil dédié.
                     //    Le scope (AgentProcess) est filtré après (agent_process_alive).
-                    if should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes) {
+                    if should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes, Instant::now()) {
                         entry.auto_stopped_reported = true;
                         // Pas de double alerte (anomalie) pour un agent déjà arrêté.
                         entry.blocked_reported = true;
@@ -404,6 +417,42 @@ mod tests {
         }
     }
 
+    /// `agent_end` (fin d'un tour) repasse busy=false, même sans `agent_settled`
+    /// (robustesse : l'indicateur d'activité ne doit pas rester « occupé » si
+    /// l'événement `agent_settled` est manquant ou perdu).
+    #[test]
+    fn observer_clears_busy_on_agent_end() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        // agent_start → busy=true.
+        obs(&ev("agent_start"));
+        {
+            let a = anomaly.lock().unwrap();
+            assert!(a.get("/proj\u{1f}codeur").unwrap().busy);
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(act.get("/proj").unwrap().busy);
+        }
+
+        // agent_end (sans agent_settled) → busy=false dans les deux maps.
+        obs(&ev("agent_end"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(!s.busy);
+            assert_eq!(s.last_event, "agent_end");
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(!act.get("/proj").unwrap().busy);
+        }
+    }
+
     /// Un événement non-pertinent (ex: "unknown") ne crée pas d'entrée.
     #[test]
     fn observer_ignores_irrelevant_events() {
@@ -470,9 +519,13 @@ mod tests {
     /// `enabled`, l'état `busy` et le drapeau `auto_stopped_reported`.
     #[test]
     fn should_auto_stop_guards_enabled_busy_and_reported() {
+        // `now` synthétique (futur lointain) : on maîtrise totalement l'ancienneté
+        // des activités, sans dépendre de l'heure de boot de la machine (un simple
+        // `Instant::now() - 6000s` déborde si la machine a booté il y a < 100 min).
+        let now = Instant::now() + Duration::from_secs(100_000);
         // Helper : construit un état avec une dernière activité il y a `idle_secs`.
         let state_at = |idle_secs: u64, busy: bool, reported: bool| AgentAnomalyState {
-            last_activity: Instant::now() - Duration::from_secs(idle_secs),
+            last_activity: now - Duration::from_secs(idle_secs),
             last_activity_wall: Some(SystemTime::now()),
             last_event: "tool_execution_start".to_string(),
             busy,
@@ -482,26 +535,26 @@ mod tests {
 
         // Désactivé → jamais arrêté, même très inactif.
         let e = state_at(6000, true, false); // 100 min inactif
-        assert!(!should_auto_stop(&e, false, 10));
+        assert!(!should_auto_stop(&e, false, 10, now));
 
         // Actif non busy → pas d'arrêt.
         let e = state_at(6000, false, false);
-        assert!(!should_auto_stop(&e, true, 10));
+        assert!(!should_auto_stop(&e, true, 10, now));
 
         // Déjà arrêté pour cette exécution → pas de re-arrêt.
         let e = state_at(6000, true, true);
-        assert!(!should_auto_stop(&e, true, 10));
+        assert!(!should_auto_stop(&e, true, 10, now));
 
         // Inactivité < seuil → pas d'arrêt (outil long légitime).
         let e = state_at(300, true, false); // 5 min < 10 min
-        assert!(!should_auto_stop(&e, true, 10));
+        assert!(!should_auto_stop(&e, true, 10, now));
 
         // Inactivité > seuil, busy, non arrêté → arrêt.
         let e = state_at(700, true, false); // ~11 min > 10 min
-        assert!(should_auto_stop(&e, true, 10));
+        assert!(should_auto_stop(&e, true, 10, now));
 
         // Seuil min 1 min : une inactivité > 1 min suffit.
         let e = state_at(90, true, false);
-        assert!(should_auto_stop(&e, true, 1));
+        assert!(should_auto_stop(&e, true, 1, now));
     }
 }
