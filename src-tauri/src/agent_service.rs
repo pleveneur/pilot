@@ -1107,7 +1107,7 @@ impl AgentService {
     /// 🧭). Canal dédié `rpc-event-superagent`, `--no-session`, pas de skill,
     /// extensions assistant (pilot-assistant-files lecture seule, pilot-choices,
     /// pilot-assistant-actions, pilot-assistant-db, pilot-assistant-prompt,
-    /// pilot-assistant-sessions).
+    /// pilot-assistant-sessions, pilot-assistant-session-memory).
     /// Reproduit l'ancien `do_start_super_agent_session` (super_agent.rs).
     fn spawn_superagent_session(
         app: &AppHandle,
@@ -1160,6 +1160,10 @@ impl AgentService {
                     let tools = dir.join("pilot-assistant-tools.ts");
                     if std::fs::write(&tools, include_str!("../extensions/pilot-assistant-tools.ts")).is_ok() {
                         extensions.push(tools.to_string_lossy().to_string());
+                    }
+                    let session_memory = dir.join("pilot-assistant-session-memory.ts");
+                    if std::fs::write(&session_memory, include_str!("../extensions/pilot-assistant-session-memory.ts")).is_ok() {
+                        extensions.push(session_memory.to_string_lossy().to_string());
                     }
                 }
             }

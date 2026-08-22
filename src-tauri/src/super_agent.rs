@@ -313,6 +313,13 @@ const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_ag
 /// récente travaille encore, même sans sortie visible immédiate.
 const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nL'outil `list_agent_sessions` te donne la vue d'ensemble des sessions d'agents (projet, agent, mode, état, vivacité, visibilité, actif) et, quand une activité a été enregistrée, la dernière activité de chaque agent : `lastActivity` (timestamp ISO), `lastActivityRelative` (« il y a X min ») et `lastEvent` (type du dernier événement RPC).\n\nAvant de décider d'arrêter un agent, utilise `lastActivity` / `lastActivityRelative` pour juger s'il progresse réellement :\n- Un agent avec une dernière activité RÉCENTE travaille encore, même s'il n'a pas streamé de sortie visible depuis un moment. Ne l'arrête pas sur la seule absence de progression visible.\n- Ne considère l'arrêt que pour un agent réellement inactif (dernière activité ancienne, `lastActivityRelative` indiquant un long silence).\n- `lastEvent` t'indique le type de la dernière action (ex: `tool_execution_end`) pour comprendre ce que l'agent faisait.\n";
 
+/// Prompt guidant l'assistant sur la mémoire de session réinjectée au premier
+/// message après redémarrage. En-tête du bloc « Mémoire de session (reprise) »
+/// ajouté dans `do_send_super_agent_prompt` quand un résumé est disponible.
+const SUPER_AGENT_SESSION_MEMORY_PROMPT: &str =
+    "## Mémoire de session (reprise)\nVoici où on en était à la fin de ta dernière session. Utilise ce résumé pour reprendre naturellement la discussion et le suivi en cours, sans redemander ce que tu sais déjà :\n";
+
+
 #[tauri::command]
 pub async fn start_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     // Async : le démarrage de la session (spawn du processus pi + handshake RPC
@@ -474,6 +481,18 @@ pub(crate) fn do_send_super_agent_prompt(
     // A18 : personnalité adaptée à l'utilisateur (déduite en arrière-plan de la
     // conversation). Injectée comme la mémoire utilisateur A17.
     full_system.push_str(&personality_guideline(adaptive_personality, &personality));
+    // Mémoire de session (reprise) : après un redémarrage de Pilot, la session
+    // repart de zéro. On réinjecte le résumé de la dernière session pour que
+    // l'assistant reprenne naturellement là où on en était (sujet en cours,
+    // chantiers en cours) dès le premier message. Fail-open : sans mémoire, on
+    // n'injecte rien.
+    if let Some(session_memory) = read_session_memory(app) {
+        if !session_memory.trim().is_empty() {
+            full_system.push_str("\n\n");
+            full_system.push_str(SUPER_AGENT_SESSION_MEMORY_PROMPT);
+            full_system.push_str(&session_memory);
+        }
+    }
     // Chantier #13 : documenter l'outil schedule (relances différées/périodiques).
     full_system.push_str(
         "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs. Désactive automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au lieu de le supprimer, et réactive-le si le besoin revient.",
@@ -2229,6 +2248,135 @@ pub(crate) fn validate_export_json(input: &str) -> Result<Value, String> {
     Ok(v)
 }
 
+// ── Mémoire de session (reprise) ──
+//
+// Après un redémarrage de Pilot, la session RPC du super-agent repart de zéro
+// (--no-session) : l'assistant n'a plus aucune idée d'où on en était. On
+// persiste donc un résumé compact et versionné du sujet en cours / des chantiers
+// en cours, réinjecté automatiquement au début du premier message après
+// redémarrage. Le format est volontairement proche de l'export de mémoire :
+//   { "format": "pilot-assistant-session-memory", "version": 1,
+//     "updated_at": ISO-8601, "resume": { ... } }
+// Le `resume` est un objet JSON structuré (current_topic, active_project,
+// work_in_progress, notes). Tout est fail-open : jamais de crash, tolérant à
+// l'échec de lecture/écriture.
+
+pub(crate) const SESSION_MEMORY_FORMAT: &str = "pilot-assistant-session-memory";
+pub(crate) const SESSION_MEMORY_VERSION: u64 = 1;
+/// Borne de taille du résumé (~4000 chars) : on ne stocke jamais la
+/// conversation complète, seulement un résumé borné pour ne pas encombrer le
+/// contexte.
+pub(crate) const SESSION_MEMORY_MAX_CHARS: usize = 4000;
+const SESSION_MEMORY_TRUNCATION_MARKER: &str = "…[tronqué]";
+
+/// Chemin du fichier de mémoire de session (dans le dossier de données de
+/// Pilot, à côté de la base du super-agent).
+pub(crate) fn session_memory_path(app: &AppHandle) -> PathBuf {
+    app.path()
+        .app_data_dir()
+        .unwrap_or_default()
+        .join("session-memory.json")
+}
+
+/// Tronque une chaîne au budget donné (chars) en ajoutant un marqueur explicite.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push_str(SESSION_MEMORY_TRUNCATION_MARKER);
+    out
+}
+
+/// Borne récursivement la taille des chaînes d'un JSON pour que le résumé
+/// sérialisé reste sous la borne. Répartit le budget entre les champs texte
+/// (l'enveloppe autour est petite et fixe).
+fn bound_json_strings(v: &mut Value, budget: usize) {
+    match v {
+        Value::String(s) => *s = truncate_chars(s, budget),
+        Value::Object(map) => {
+            let strings: usize = map.values().filter(|x| x.is_string()).count();
+            let per = if strings == 0 { budget } else { budget / strings.max(1) };
+            for val in map.values_mut() {
+                bound_json_strings(val, per.max(1));
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                bound_json_strings(item, budget);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Sérialise la mémoire de session en JSON versionné compact. Le `resume` (objet
+/// JSON structuré fourni par l'outil) est borné pour ne jamais dépasser la borne.
+/// Fail-open : un resume non-JSON ou mal formé est rangé en notes libres.
+pub(crate) fn serialize_session_memory(resume: &str) -> String {
+    let parsed: Value = serde_json::from_str(resume).unwrap_or(Value::Null);
+    let mut bounded_resume = if parsed.is_object() {
+        parsed
+    } else {
+        serde_json::json!({ "notes": truncate_chars(resume, SESSION_MEMORY_MAX_CHARS) })
+    };
+    // Laisser de la place pour l'enveloppe (format/version/updated_at).
+    bound_json_strings(&mut bounded_resume, SESSION_MEMORY_MAX_CHARS - 200);
+    serde_json::json!({
+        "format": SESSION_MEMORY_FORMAT,
+        "version": SESSION_MEMORY_VERSION,
+        "updated_at": chrono::Local::now().to_rfc3339(),
+        "resume": bounded_resume,
+    })
+    .to_string()
+}
+
+/// Parse une mémoire de session (format + version) et retourne le résumé
+/// (re-sérialisaté compact). Retourne `None` en cas de fichier invalide
+/// (fail-open, jamais de crash).
+pub(crate) fn parse_session_memory(input: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(input).ok()?;
+    if v.get("format").and_then(|x| x.as_str()).unwrap_or("") != SESSION_MEMORY_FORMAT {
+        return None;
+    }
+    if v.get("version").and_then(|x| x.as_u64()).unwrap_or(0) != SESSION_MEMORY_VERSION {
+        return None;
+    }
+    match v.get("resume") {
+        Some(Value::Object(_)) => serde_json::to_string(&v["resume"]).ok(),
+        _ => None,
+    }
+}
+
+/// Lit la mémoire de session depuis le disque et retourne le résumé (si
+/// valide). Fail-open : tout échec renvoie `None`.
+pub(crate) fn read_session_memory(app: &AppHandle) -> Option<String> {
+    let raw = std::fs::read_to_string(session_memory_path(app)).ok()?;
+    parse_session_memory(&raw)
+}
+
+/// Commande Tauri : enregistre la mémoire de session (écriture fail-open).
+/// L'assistant l'appelle via l'outil `update_session_memory` (sentinel
+/// PILOT_ASSISTANT_MEMORY_SAVE:: intercepté côté UI).
+#[tauri::command]
+pub fn super_agent_save_session_memory(app: AppHandle, resume: String) -> Result<(), String> {
+    let path = session_memory_path(&app);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let json = serialize_session_memory(&resume);
+    std::fs::write(&path, json).map_err(|e| format!("Erreur écriture mémoire de session : {}", e))
+}
+
+/// Commande Tauri : lit la mémoire de session (retourne le résumé ou `None`).
+///
+/// Pilot l'utilise côté UI à l'ouverture de l'onglet 🧭 pour afficher la
+/// reprise.
+#[tauri::command]
+pub fn super_agent_load_session_memory(app: AppHandle) -> Option<String> {
+    read_session_memory(&app)
+}
+
 /// Sérialise le suivi (tracking) de la base en JSON, avec les ids naturels pour
 /// que l'import puisse réécrire les relations parents → enfants. Fonction pure
 /// sur `Connection`, testable (in-memory en test, open_db en production).
@@ -2770,9 +2918,10 @@ pub fn import_super_agent_memory(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_project_context, init_db, replace_tracking, schedule_delete, schedule_due_and_mark,
-        schedule_insert, schedule_list, schedule_set_enabled, serialize_tracking,
-        validate_export_json, MEMORY_FORMAT, MEMORY_VERSION,
+        build_project_context, init_db, parse_session_memory, replace_tracking, schedule_delete,
+        schedule_due_and_mark, schedule_insert, schedule_list, schedule_set_enabled,
+        serialize_session_memory, serialize_tracking, validate_export_json, MEMORY_FORMAT,
+        MEMORY_VERSION, SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
 
@@ -2810,6 +2959,61 @@ mod tests {
             MEMORY_FORMAT, MEMORY_VERSION
         );
         assert!(validate_export_json(&bad_sections).is_err());
+    }
+
+    #[test]
+    fn session_memory_roundtrip_serialize_parse() {
+        let resume = r##"{"current_topic": "implémenter la mémoire de session", "active_project": "/p/a", "work_in_progress": [{"project": "/p/a", "title": "Mémoire de session", "status": "en cours"}], "notes": "extension + Rust + UI"}"##;
+        let json = serialize_session_memory(resume);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["format"], SESSION_MEMORY_FORMAT);
+        assert_eq!(parsed["version"], SESSION_MEMORY_VERSION);
+        assert_eq!(parsed["resume"]["current_topic"], "implémenter la mémoire de session");
+        // Round-trip : parse_session_memory retourne le même résumé (compact).
+        let back = parse_session_memory(&json).unwrap();
+        let back_val: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(back_val["current_topic"], parsed["resume"]["current_topic"]);
+        assert_eq!(back_val["active_project"], parsed["resume"]["active_project"]);
+        assert_eq!(
+            back_val["work_in_progress"][0]["title"],
+            parsed["resume"]["work_in_progress"][0]["title"]
+        );
+    }
+
+    #[test]
+    fn session_memory_rejects_wrong_format_or_version_and_oversized() {
+        // Mauvaise version.
+        let bad = format!(
+            r##"{{"format": "{}", "version": 99, "resume": {{"notes": "x"}}}}"##,
+            SESSION_MEMORY_FORMAT
+        );
+        assert!(parse_session_memory(&bad).is_none());
+        // Mauvais format.
+        let bad2 = r##"{"format": "autre", "version": 1, "resume": {"notes": "x"}}"##;
+        assert!(parse_session_memory(bad2).is_none());
+        // Non-JSON.
+        assert!(parse_session_memory("pas du json").is_none());
+        // Résumé non-objet : refuse.
+        let bad3 = format!(
+            r##"{{"format": "{}", "version": {}, "resume": "chaîne"}}"##,
+            SESSION_MEMORY_FORMAT, SESSION_MEMORY_VERSION
+        );
+        assert!(parse_session_memory(&bad3).is_none());
+        // Le résumé sérialisé reste sous la borne + reste valide (round-trip).
+        let big = "x".repeat(SESSION_MEMORY_MAX_CHARS * 2);
+        let json = serialize_session_memory(&format!(r##"{{"notes": "{}"}}"##, big));
+        assert!(json.chars().count() < SESSION_MEMORY_MAX_CHARS + 200);
+        assert!(parse_session_memory(&json).is_some());
+    }
+
+    #[test]
+    fn session_memory_fail_open_on_bad_resume() {
+        // Un résumé non-JSON ne doit jamais crasher : rangé en notes, sérialisé
+        // valide, parseable.
+        let json = serialize_session_memory("texte libre sans structure");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["format"], SESSION_MEMORY_FORMAT);
+        assert!(parse_session_memory(&json).is_some());
     }
 
     #[test]

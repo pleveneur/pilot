@@ -652,6 +652,46 @@ Tables (V1) :
   demandes simples peuvent être déléguées directement sans plan-maker. Voir
   aussi la section « Déléguer le code à l'agent du projet » (plan-maker).
 
+### Mémoire de session (reprise)
+
+Après un **redémarrage de Pilot**, la session RPC du super-agent repart de zéro
+(`--no-session`) : l'assistant n'a plus aucune idée d'où on en était. Une
+**mémoire de session** compacte et versionnée est donc persistée sur disque
+(`app_data_dir()/session-memory.json`) et réinjectée au **début du premier
+message** après redémarrage, pour que l'assistant (et l'utilisateur) reprennent
+naturellement là où on en était.
+
+- **Outil `update_session_memory`** (extension `pilot-assistant-session-memory`) :
+  l'assistant enregistre un résumé structuré de la session en cours (sujet,
+  projet actif, chantiers en cours avec leur avancement, notes) à la fin d'un
+  chantier, à un changement de sujet, avant de reprendre une discussion
+  importante, ou sur demande explicite. Envoi via sentinel
+  `PILOT_ASSISTANT_MEMORY_SAVE::` (commande Rust `super_agent_save_session_memory`).
+- **Format compact versionné** :
+  `{ "format": "pilot-assistant-session-memory", "version": 1, "updated_at": ISO-8601,
+  "resume": { "current_topic", "active_project", "work_in_progress":[{project,title,status}], "notes" } }`.
+- **Borne de taille** : le résumé est tronqué (≈4000 chars) — on ne stocke
+  **jamais** la conversation complète, seulement un résumé borné. **Fail-open** :
+  une lecture/écriture qui échoue ne bloque ni la session ni l'UI.
+- **Injecté dans le prompt système** : à `do_send_super_agent_prompt`, si un
+  résumé existe, un bloc `## Mémoire de session (reprise)` est ajouté à
+  `full_system` (guide l'assistant pour reprendre sans redemander).
+- **Affichage UI** : à l'ouverture de l'onglet 🧭, un message système
+  « 🔁 Reprise de session — … » résume la reprise (sujet, projet actif,
+  nombre de chantiers en cours).
+
+<!-- HELP:super-agent-session-memory -->
+### Reprendre après un redémarrage de Pilot
+L'assistant 🧭 garde une **mémoire de session** : à la fin d'un chantier ou
+quand le sujet change, il enregistre un **résumé court** de la discussion en
+cours et des chantiers en cours. Après un **redémarrage de Pilot**, ce résumé
+est **réinjecté automatiquement** au début de la session : l'assistant (et vous)
+retrouvez immédiatement où on en était, sans avoir à tout ré-expliquer. À
+l'ouverture de l'onglet, un message « 🔁 Reprise de session — … » rappelle le
+contexte. Vous pouvez aussi lui demander explicitement de « retenir » ou de
+« reprendre » une discussion.
+<!-- /HELP:super-agent-session-memory -->
+
 ## 6. Initialisation d'un projet existant
 
 - Bouton **« Initialiser »** dans l'onglet 🧭 (ou par projet).

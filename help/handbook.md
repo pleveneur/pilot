@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-08-22 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1207,6 +1207,18 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   mémorisé** et restauré à la réouverture de l'onglet.
 - **Identique sur l'accès distant web** : en mode « 🧭 Assistant », le bouton
   **⛶** en haut de l'interface web ouvre le même mode immersif.
+
+---
+
+### Reprendre après un redémarrage de Pilot
+L'assistant 🧭 garde une **mémoire de session** : à la fin d'un chantier ou
+quand le sujet change, il enregistre un **résumé court** de la discussion en
+cours et des chantiers en cours. Après un **redémarrage de Pilot**, ce résumé
+est **réinjecté automatiquement** au début de la session : l'assistant (et vous)
+retrouvez immédiatement où on en était, sans avoir à tout ré-expliquer. À
+l'ouverture de l'onglet, un message « 🔁 Reprise de session — … » rappelle le
+contexte. Vous pouvez aussi lui demander explicitement de « retenir » ou de
+« reprendre » une discussion.
 
 ---
 

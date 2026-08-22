@@ -459,6 +459,30 @@ function escapeHtmlForSuper(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Résume la mémoire de session (reprise) en une courte phrase pour le message
+ * système « 🔁 Reprise de session — … ». Le résumé est un objet JSON structuré
+ * (current_topic, active_project, work_in_progress, notes). Fail-open : tout
+ * JSON invalide retombe sur le texte brut tronqué.
+ * @param {string} resume
+ * @returns {string}
+ */
+function sessionMemorySummary(resume) {
+  try {
+    const r = JSON.parse(resume);
+    const bits = [];
+    if (r.current_topic) bits.push(String(r.current_topic));
+    if (r.active_project) bits.push(String(r.active_project));
+    const wip = Array.isArray(r.work_in_progress) ? r.work_in_progress.length : 0;
+    if (wip > 0) bits.push(`${wip} chantier${wip > 1 ? "s" : ""} en cours`);
+    const summary = bits.join(" · ").trim();
+    if (summary) return summary.slice(0, 200);
+    return String(r.notes || "reprise").slice(0, 200);
+  } catch (_) {
+    return String(resume || "reprise").slice(0, 200);
+  }
+}
+
 function appendMessage(messagesEl, role, text) {
   const el = document.createElement("div");
   el.className = `agent-message agent-message-${role}`;
@@ -754,6 +778,16 @@ export async function createSuperAgent(container) {
   invoke("replay_superagent_summaries").catch((err) => {
     console.error("Erreur rejeu résumés super-agent:", err);
   });
+  // Mémoire de session (reprise) : après un redémarrage de Pilot, afficher où on
+  // en est (sujet en cours / chantiers en cours) pour que l'utilisateur reprenne
+  // la discussion. Fail-open : sans mémoire, on n'affiche rien.
+  invoke("super_agent_load_session_memory")
+    .then((resume) => {
+      if (resume) {
+        appendSystemMessage(messagesEl, `🔁 Reprise de session — ${sessionMemorySummary(resume)}`);
+      }
+    })
+    .catch(() => {});
   loadModels();
 
   // État de streaming
@@ -1691,6 +1725,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const PROMPT_SENTINEL = "PILOT_ASSISTANT_PROMPT::";
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
+    const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
@@ -1698,6 +1733,20 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
     const TOOLS_SENTINEL = "PILOT_ASSISTANT_TOOLS::";
     const title = payload.title || "";
+    if (title.startsWith(MEMORY_SAVE_SENTINEL)) {
+      // Mémoire de session (pilot-assistant-session-memory) : l'assistant
+      // enregistre un résumé compact (sujet en cours, chantiers en cours) via
+      // l'outil `update_session_memory`. On le persiste via Rust et on renvoie
+      // « ok » comme `value` de la réponse.
+      const resume = title.slice(MEMORY_SAVE_SENTINEL.length);
+      try {
+        await invoke("super_agent_save_session_memory", { resume });
+        await respondSuperAgent(id, JSON.stringify({ ok: true }), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
     if (title.startsWith(DB_QUERY_SENTINEL)) {
       const sql = title.slice(DB_QUERY_SENTINEL.length);
       try {
