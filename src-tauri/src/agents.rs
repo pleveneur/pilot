@@ -155,9 +155,25 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
     .map(|_| ())
 }
 
+/// Démarre (ou reprend) le processus pi d'un agent multi-rôles H2 V2.
+///
+/// Commande **async** : le lancement du processus pi (spawn node + écriture
+/// des extensions + démarrage des threads de lecture) peut prendre 1 à 2 s.
+/// Exécuté via `spawn_blocking` pour ne jamais bloquer le main thread de la
+/// webview (gel de l'UI observé au démarrage d'une `run_agents`). Le helper
+/// synchrone `do_start_agent_process` reste `pub(crate)` pour les appelants
+/// internes (anomaly.rs) qui disposent déjà d'un `&AppState` hors webview.
 #[tauri::command]
-pub fn start_agent_process(state: State<AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
-    do_start_agent_process(state.inner(), &app, agent_id, cwd, pi_path, no_session)
+pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_service
+            .start(&app, &cwd, &agent_id, &pi_path, no_session, crate::agent_service::SpawnMode::AgentProcess)
+            .map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) start_agent_process: {}", e))?
 }
 
 pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String, project: Option<String>) {
@@ -189,22 +205,56 @@ pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, m
     state.agent_service.send(&project, &agent_id, cmd)
 }
 
+/// Envoie un prompt à un agent multi-rôles H2 V2.
+///
+/// Commande **async** : l'écriture stdin est rapide (non bloquante), mais on
+/// déporte tout de même le travail dans `spawn_blocking` pour rester cohérent
+/// avec le reste de la chaîne de démarrage d'un agent (et ne pas occuper le
+/// main thread pendant que d'autres commandes de la chaîne se sérialisent).
 #[tauri::command]
-pub fn send_agent_process_prompt(state: State<AppState>, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
-    do_send_agent_process_prompt(state.inner(), agent_id, message, project)
+pub async fn send_agent_process_prompt(state: State<'_, AppState>, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let project = project
+        .or_else(|| state.inner().project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cmd = serde_json::json!({ "type": "prompt", "message": message });
+        agent_service.send(&project, &agent_id, cmd)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) send_agent_process_prompt: {}", e))?
 }
 
+#[allow(dead_code)]
 pub(crate) fn do_new_agent_process_session(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "new_session" });
     state.agent_service.send_sync(&project, &agent_id, cmd).map(|_| ())
 }
 
+/// Démarre une nouvelle session (contexte vierge) pour un agent multi-rôles.
+///
+/// Commande **async** : `new_session` est une commande RPC **synchrone** qui
+/// attend la réponse du processus pi (jusqu'à 30 s de timeout via
+/// `send_command_sync`). Exécutée sur le main thread en `pub fn`, elle gelait
+/// l'UI pendant tout le handshake. Déportée dans `spawn_blocking` pour libérer
+/// le main thread ; le verrou `sessions` (mutex) est acquis dans le thread
+/// bloquant, pas sur le main thread.
 #[tauri::command]
-pub fn new_agent_process_session(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
-    do_new_agent_process_session(state.inner(), agent_id, project)
+pub async fn new_agent_process_session(state: State<'_, AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let project = project
+        .or_else(|| state.inner().project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cmd = serde_json::json!({ "type": "new_session" });
+        agent_service.send_sync(&project, &agent_id, cmd).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) new_agent_process_session: {}", e))?
 }
 
+#[allow(dead_code)]
 pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, provider: String, model_id: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
@@ -216,9 +266,29 @@ pub(crate) fn do_set_agent_process_model(state: &AppState, agent_id: String, pro
     Ok(())
 }
 
+/// Applique un modèle (provider/modelId) à un agent multi-rôles.
+///
+/// Commande **async** : `set_model` est une commande RPC **synchrone** qui
+/// attend la réponse du processus pi (jusqu'à 30 s de timeout). Comme
+/// `new_agent_process_session`, déportée dans `spawn_blocking` pour éviter le
+/// gel de l'UI pendant le handshake pi.
 #[tauri::command]
-pub fn set_agent_process_model(state: State<AppState>, agent_id: String, provider: String, model_id: String, project: Option<String>) -> Result<(), String> {
-    do_set_agent_process_model(state.inner(), agent_id, provider, model_id, project)
+pub async fn set_agent_process_model(state: State<'_, AppState>, agent_id: String, provider: String, model_id: String, project: Option<String>) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let project = project
+        .or_else(|| state.inner().project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
+        let resp = agent_service.send_sync(&project, &agent_id, cmd)?;
+        if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
+            let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_model a échoué").to_string();
+            return Err(format!("pi a refusé set_model (agent {}) : {}", agent_id, err));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) set_agent_process_model: {}", e))?
 }
 
 pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {

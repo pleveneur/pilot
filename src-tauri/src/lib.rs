@@ -2221,6 +2221,7 @@ pub fn run() {
             super_agent::export_super_agent_memory,
             super_agent::import_super_agent_memory,
             super_agent::inject_session_summary,
+            super_agent::replay_superagent_summaries,
             super_agent::initialize_super_agent,
             super_agent::list_clients,
             super_agent::add_client,

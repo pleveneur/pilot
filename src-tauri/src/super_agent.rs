@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
+use crate::agent_service::SUPERAGENT_ID;
 use crate::AppState;
 
 // ── Base SQLite ──
@@ -75,6 +76,20 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             project_id INTEGER,
             session_id TEXT DEFAULT '',
             summary TEXT NOT NULL,
+            delivered INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(project_id) REFERENCES projects(id)
+        );
+        -- Perte silencieuse des comptes-rendus injectés à l'assistant :
+        -- `delivered` marque si le résumé a été réellement délivré au
+        -- super-agent. Un résumé persisté mais jamais livré (session fermée ou
+        -- occupée) est rejoué à la prochaine opportunité (rejeu T2/T4/T5).
+        CREATE TABLE IF NOT EXISTS injection_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER,
+            status TEXT DEFAULT '',
+            ok INTEGER NOT NULL DEFAULT 0,
+            detail TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(project_id) REFERENCES projects(id)
         );
@@ -112,6 +127,10 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "tasks", "deadline", "TEXT")?;
     ensure_column(conn, "tasks", "blocker_reason", "TEXT")?;
     ensure_column(conn, "tasks", "source_task_id", "INTEGER")?;
+    // T1 : migration idempotente de la colonne `delivered` (résumés déjà en
+    // base sur les anciennes bases). Les anciens résumés non livrés restent
+    // `delivered=0` et seront rejoués à la prochaine opportunité.
+    ensure_column(conn, "session_summaries", "delivered", "INTEGER NOT NULL DEFAULT 0")?;
     Ok(())
 }
 
@@ -397,6 +416,10 @@ pub(crate) fn do_send_super_agent_prompt(
 ) -> Result<(), String> {
     // Démarrage paresseux : garantit qu'une session existe avant d'envoyer.
     do_start_super_agent_session(state, app)?;
+    // T4 : au début d'un envoi réel, rejouer les résumés en attente (couvre le
+    // web remote et le premier envoi). Fire-and-forget : un échec de rejeu ne
+    // bloque pas le message utilisateur.
+    let _ = replay_pending_superagent_summaries(state, app);
     // Prompt système : nom de l'assistant + rôle de suivi multi-projets + prompt
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
@@ -1408,12 +1431,15 @@ pub fn inject_session_summary(
     project_path: Option<String>,
     session_id: Option<String>,
     summary: String,
-) -> Result<(), String> {
+) -> Result<Value, String> {
     // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
     // contexte de l'assistant. Tronqué ici à la source, le marqueur de
     // troncature informe l'assistant que le résultat a été agrégé.
     let summary = truncate_summary(&summary);
-    // Persister dans la base.
+    // Persister TOUJOURS dans la base (delivered=0 par défaut). En cas de
+    // super-agent indisponible ou occupé, le résumé est conservé en attente et
+    // sera rejoué plus tard (`replay_pending_superagent_summaries`) → plus
+    // aucune perte silencieuse.
     let conn = open_db(&app)?;
     let project_id: Option<i64> = match &project_path {
         Some(p) => {
@@ -1433,23 +1459,141 @@ pub fn inject_session_summary(
         None => None,
     };
     conn.execute(
-        "INSERT INTO session_summaries (project_id, session_id, summary) VALUES (?1, ?2, ?3)",
+        "INSERT INTO session_summaries (project_id, session_id, summary, delivered) VALUES (?1, ?2, ?3, 0)",
         rusqlite::params![project_id, session_id.unwrap_or_default(), summary],
     )
     .map_err(|e| format!("Erreur enregistrement résumé: {}", e))?;
-    drop(conn);
+    let summary_rowid = conn.last_insert_rowid();
 
-    // Injecter au super-agent s'il est démarré.
-    if state.agent_service.superagent_alive() {
-        let msg = format!(
-            "[Résumé de session] Projet: {}\n{}\n\nIntègre ces informations dans ton suivi (tâches, décisions, état d'avancement).",
-            project_path.unwrap_or_default(),
-            summary
-        );
+    // Injecter au super-agent s'il est vivant ET non occupé. Sinon le laisser
+    // en attente (delivered=0) : le rejeu le délivrera à la prochaine
+    // opportunité.
+    if superagent_available(state.inner()) {
+        let msg = build_injection_message(project_path.as_deref(), &summary);
         let cmd = serde_json::json!({"type": "prompt", "message": msg});
-        state.agent_service.send_superagent(cmd).ok();
+        match state.agent_service.send_superagent(cmd) {
+            Ok(()) => {
+                conn.execute(
+                    "UPDATE session_summaries SET delivered = 1 WHERE id = ?1",
+                    rusqlite::params![summary_rowid],
+                )
+                .map_err(|e| format!("Erreur marquage livré: {}", e))?;
+                log_injection(&conn, project_id, "delivered", true, "ok");
+                drop(conn);
+                Ok(serde_json::json!({"status": "delivered", "detail": "ok"}))
+            }
+            Err(e) => {
+                log_injection(&conn, project_id, "error", false, &e);
+                drop(conn);
+                Ok(serde_json::json!({"status": "error", "detail": e}))
+            }
+        }
+    } else {
+        log_injection(&conn, project_id, "queued", true, "super-agent indisponible ou occupé — sera rejoué");
+        drop(conn);
+        Ok(serde_json::json!({
+            "status": "queued",
+            "detail": "super-agent indisponible ou occupé — sera rejoué"
+        }))
+    }
+}
+
+/// Construit le message d'injection d'un résumé au super-agent. Le message est
+/// clairement marqué comme un résumé/injection (pas une saisie utilisateur).
+fn build_injection_message(project_path: Option<&str>, summary: &str) -> String {
+    format!(
+        "[Résumé de session] Projet: {}\n{}\n\nIntègre ces informations dans ton suivi (tâches, décisions, état d'avancement).",
+        project_path.unwrap_or(""),
+        summary
+    )
+}
+
+/// Journalise un résultat d'injection dans la table injection_logs (audit).
+fn log_injection(conn: &Connection, project_id: Option<i64>, status: &str, ok: bool, detail: &str) {
+    let _ = conn.execute(
+        "INSERT INTO injection_logs (project_id, status, ok, detail) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![project_id, status, ok as i64, detail],
+    );
+}
+
+/// Le super-agent est-il disponible pour recevoir une injection ? (session
+/// vivante ET non occupée).
+fn superagent_available(state: &AppState) -> bool {
+    state.agent_service.superagent_alive()
+        && !state
+            .agent_service
+            .agent_process_busy(&state.agent_anomaly, "", SUPERAGENT_ID)
+}
+
+/// Rejoue les résumés en attente (`delivered=0`) vers le super-agent quand la
+/// session est vivante et non occupée. Idempotent : un résumé livré n'est
+/// jamais rejoué ; un résumé en attente est livré au plus une fois (marqué
+/// `delivered=1` après succès). Chaque tentative est journalisée en
+/// `injection_logs`. S'arrête dès que le super-agent devient indisponible.
+fn replay_pending_superagent_summaries(state: &AppState, app: &AppHandle) -> Result<(), String> {
+    if !superagent_available(state) {
+        return Ok(());
+    }
+    let conn = open_db(app)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_id, session_id, summary FROM session_summaries \
+             WHERE delivered = 0 ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
+    let pending: Vec<(i64, Option<i64>, String, String)> = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
+    drop(stmt);
+    for (id, project_id, session_id, summary) in pending {
+        // Re-vérifier la disponibilité à chaque itération (le super-agent peut
+        // devenir occupé pendant le rejeu).
+        if !superagent_available(state) {
+            break;
+        }
+        let project_path = project_id.and_then(|pid| {
+            conn.query_row(
+                "SELECT path FROM projects WHERE id = ?1",
+                rusqlite::params![pid],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+        });
+        let _ = session_id;
+        let msg = build_injection_message(project_path.as_deref(), &summary);
+        let cmd = serde_json::json!({"type": "prompt", "message": msg});
+        match state.agent_service.send_superagent(cmd) {
+            Ok(()) => {
+                conn.execute(
+                    "UPDATE session_summaries SET delivered = 1 WHERE id = ?1",
+                    rusqlite::params![id],
+                )
+                .map_err(|e| format!("Erreur marquage livré: {}", e))?;
+                log_injection(&conn, project_id, "delivered", true, "rejoué");
+            }
+            Err(e) => {
+                log_injection(&conn, project_id, "error", false, &e);
+            }
+        }
     }
     Ok(())
+}
+
+/// Commande Tauri : rejoue les résumés en attente vers le super-agent. Appelée
+/// à l'ouverture de l'onglet 🧭 (fire-and-forget) et en début de
+/// `do_send_super_agent_prompt` (couvre le web remote et le premier envoi).
+#[tauri::command]
+pub fn replay_superagent_summaries(state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    replay_pending_superagent_summaries(state.inner(), &app)
 }
 
 // ── Initialisation d'un projet existant ──
@@ -2209,7 +2353,7 @@ pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
     let mut session_summaries = Vec::new();
     {
         let mut stmt = conn
-            .prepare("SELECT id, project_id, session_id, summary, created_at FROM session_summaries ORDER BY id")
+            .prepare("SELECT id, project_id, session_id, summary, delivered, created_at FROM session_summaries ORDER BY id")
             .map_err(|e| format!("Erreur lecture résumés : {}", e))?;
         let rows = stmt
             .query_map([], |r| {
@@ -2218,12 +2362,35 @@ pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
                     "project_id": r.get::<_, Option<i64>>(1)?,
                     "session_id": r.get::<_, String>(2)?,
                     "summary": r.get::<_, String>(3)?,
-                    "created_at": r.get::<_, String>(4)?,
+                    "delivered": r.get::<_, i64>(4)?,
+                    "created_at": r.get::<_, String>(5)?,
                 }))
             })
             .map_err(|e| format!("Erreur lecture résumés : {}", e))?;
         for row in rows {
             session_summaries.push(row.map_err(|e| format!("Erreur lecture résumés : {}", e))?);
+        }
+    }
+
+    let mut injection_logs = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, project_id, status, ok, detail, created_at FROM injection_logs ORDER BY id")
+            .map_err(|e| format!("Erreur lecture logs injection : {}", e))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "project_id": r.get::<_, Option<i64>>(1)?,
+                    "status": r.get::<_, String>(2)?,
+                    "ok": r.get::<_, i64>(3)?,
+                    "detail": r.get::<_, String>(4)?,
+                    "created_at": r.get::<_, String>(5)?,
+                }))
+            })
+            .map_err(|e| format!("Erreur lecture logs injection : {}", e))?;
+        for row in rows {
+            injection_logs.push(row.map_err(|e| format!("Erreur lecture logs injection : {}", e))?);
         }
     }
 
@@ -2234,6 +2401,7 @@ pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
         "decisions": decisions,
         "milestones": milestones,
         "session_summaries": session_summaries,
+        "injection_logs": injection_logs,
     }))
 }
 
@@ -2252,7 +2420,8 @@ pub(crate) fn replace_tracking(conn: &Connection, data: &Value) -> Result<Vec<St
             .map_err(|e| format!("Erreur début transaction : {}", e))?;
         // Purge dans l'ordre inverse des dépendances (enfants d'abord).
         conn.execute_batch(
-            "DELETE FROM decisions;\n\
+            "DELETE FROM injection_logs;\n\
+             DELETE FROM decisions;\n\
              DELETE FROM session_summaries;\n\
              DELETE FROM milestones;\n\
              DELETE FROM tasks;\n\
@@ -2393,12 +2562,31 @@ pub(crate) fn replace_tracking(conn: &Connection, data: &Value) -> Result<Vec<St
                     continue;
                 }
                 let session_id = s.get("session_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let delivered = s.get("delivered").and_then(|x| x.as_i64()).unwrap_or(0);
                 let created = s.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
                 conn.execute(
-                    "INSERT INTO session_summaries (project_id, session_id, summary, created_at) VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![project_new, session_id, summary, created],
+                    "INSERT INTO session_summaries (project_id, session_id, summary, delivered, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![project_new, session_id, summary, delivered, created],
                 )
                 .map_err(|e| format!("Erreur insertion résumé de session : {}", e))?;
+            }
+        }
+
+        // Logs d'injection : les ids projets sont réécrits comme les autres
+        // entrées (project_id → nouvel id).
+        if let Some(logs) = data.get("injection_logs").and_then(|x| x.as_array()) {
+            for l in logs {
+                let project_old = l.get("project_id").and_then(|x| x.as_i64());
+                let project_new = project_old.and_then(|p| project_map.get(&p)).copied();
+                let status = l.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let ok = l.get("ok").and_then(|x| x.as_i64()).unwrap_or(0);
+                let detail = l.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let created = l.get("created_at").and_then(|x| x.as_str()).unwrap_or("");
+                conn.execute(
+                    "INSERT INTO injection_logs (project_id, status, ok, detail, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![project_new, status, ok, detail, created],
+                )
+                .map_err(|e| format!("Erreur insertion log injection : {}", e))?;
             }
         }
 
@@ -2411,6 +2599,7 @@ pub(crate) fn replace_tracking(conn: &Connection, data: &Value) -> Result<Vec<St
             "decisions".to_string(),
             "milestones".to_string(),
             "session_summaries".to_string(),
+            "injection_logs".to_string(),
         ])
     })();
 
@@ -2636,7 +2825,8 @@ mod tests {
              INSERT INTO tasks (project_id, title, source_task_id) VALUES (1, 'Tâche 2', 1);\
              INSERT INTO decisions (project_id, task_id, summary) VALUES (1, 1, 'Décision 1');\
              INSERT INTO milestones (project_id, title) VALUES (1, 'Jalon 1');\
-             INSERT INTO session_summaries (project_id, summary) VALUES (1, 'Résumé 1');",
+             INSERT INTO session_summaries (project_id, summary, delivered) VALUES (1, 'Résumé 1', 1);\
+             INSERT INTO injection_logs (project_id, status, ok, detail) VALUES (1, 'delivered', 1, 'rejoué');",
         )
         .unwrap();
 
@@ -2647,6 +2837,8 @@ mod tests {
         assert_eq!(data["decisions"].as_array().unwrap().len(), 1);
         assert_eq!(data["milestones"].as_array().unwrap().len(), 1);
         assert_eq!(data["session_summaries"].as_array().unwrap().len(), 1);
+        assert_eq!(data["injection_logs"].as_array().unwrap().len(), 1);
+        assert_eq!(data["injection_logs"].as_array().unwrap().len(), 1);
 
         // Replace (idempotence : ré-appliquer ne change pas les compteurs ni le
         // contenu, seuls les ids auto-incrémentés changent).
@@ -2663,6 +2855,24 @@ mod tests {
         assert_eq!(
             data["session_summaries"][0]["summary"],
             data2["session_summaries"][0]["summary"]
+        );
+        // T1 : la colonne `delivered` survit au round-trip export/import.
+        assert_eq!(
+            data["session_summaries"][0]["delivered"],
+            data2["session_summaries"][0]["delivered"]
+        );
+        assert_eq!(
+            data["injection_logs"][0]["status"],
+            data2["injection_logs"][0]["status"]
+        );
+        // T1 : la colonne `delivered` survit au round-trip export/import.
+        assert_eq!(
+            data["session_summaries"][0]["delivered"],
+            data2["session_summaries"][0]["delivered"]
+        );
+        assert_eq!(
+            data["injection_logs"][0]["status"],
+            data2["injection_logs"][0]["status"]
         );
         // La relation parent→enfant est réécrite : le projet pointe vers le
         // client ré-inséré (nouvel id).
