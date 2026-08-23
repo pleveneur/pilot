@@ -522,6 +522,14 @@ struct AppConfig {
     // explicitement du technique. Injecté dans le prompt système.
     #[serde(default)]
     super_agent_user_friendly: bool,
+    // Mode « Assistant coordinateur pur » : quand activé (défaut false),
+    // l'assistant propose les étapes et les agents, l'utilisateur valide avant
+    // lancement ; il répond lui-même aux questions simples et délègue dès qu'il
+    // faut réfléchir sur un projet. Le comportement est UNIQUEMENT un bloc de
+    // texte d'instructions injecté dans le prompt système (aucun changement du
+    // mécanisme d'échange assistant↔agents).
+    #[serde(default)]
+    super_agent_coordinator: bool,
     // ── Détection d'anomalies (tâche 8) ──
     // Surveillance arrière-plan des agents bloqués (actifs sans progression).
     // Défaut activé, seuil 30 min. Aucune action automatique : l'utilisateur est
@@ -751,6 +759,7 @@ impl Default for AppConfig {
             super_agent_inherit_context: false,
             super_agent_auto_check_startup: false,
             super_agent_user_friendly: false,
+            super_agent_coordinator: false,
             anomaly_detection_enabled: true,
             anomaly_timeout_minutes: default_anomaly_timeout_minutes(),
             agent_auto_stop_enabled: true,

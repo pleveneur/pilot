@@ -344,6 +344,26 @@ fn concise_guideline(enabled: bool) -> String {
     "\n\nRègle de style : réponds de façon concise. Informe l'utilisateur et prends des décisions, mais ne détaille pas tout ce qui se fait, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
 }
 
+/// Construit la consigne « Assistant coordinateur pur » à injecter dans le
+/// prompt système du super-agent. Quand activé, l'assistant propose les étapes
+/// et les agents, l'utilisateur valide avant lancement ; il répond lui-même aux
+/// questions simples et délègue dès qu'il faut réfléchir sur un projet. Retourne
+/// une chaîne vide si le mode est désactivé. Le mode est UNIQUEMENT un texte
+/// d'instructions : aucun changement du mécanisme d'échange assistant↔agents.
+fn coordinator_guideline(enabled: bool) -> String {
+    if !enabled {
+        return String::new();
+    }
+    "\n\n## Mode « Assistant coordinateur pur »
+Tu es le coordinateur, pas l'exécutant. Règles :
+1. PROPOSE, l'utilisateur VALIDE : pour tout travail substantiel lié à un projet (réfléchir, analyser, modifier, vérifier), présente d'abord les étapes ET l'équipe d'agents que tu comptes utiliser, puis fais valider par l'utilisateur (ask_confirm / ask_multi_choice) avant de lancer. Ne lance pas de run_agents ni de délégation sans cette validation, sauf demande explicite.
+2. RÉPONDS TOI-MÊME aux questions simples : état d'une tâche, information déjà connue de ton suivi (base), question de compréhension. Ne délègue pas pour répondre à une question dont tu as déjà la réponse.
+3. DÉLÈGUE dès qu'il faut RÉFLÉCHIR sur une demande liée à un projet (analyse, recherche, rédaction, modification) : confie le raisonnement à l'agent le plus adapté.
+4. Les appels Git liés aux issues passent par un agent (github-tracker / git-point), pas par tes outils Git directs. La vérification de l'état d'un agent passe par un agent, pas par list_agent_sessions.
+5. Si l'utilisateur tape pendant que tu délègues, traite son message EN PRIORITÉ : réponds immédiatement, signale que la délégation continue en arrière-plan, et reviens dessus à la fin.
+6. L'utilisateur garde le contrôle : ne lance jamais un agent sans validation ; propose, il décide (ou il lance lui-même).".to_string()
+}
+
 /// Construit la consigne « mode user-friendly » (issue #16) à injecter dans le
 /// prompt système du super-agent. Quand activé, l'assistant répond en langage
 /// simple, non technique, sauf si l'utilisateur demande explicitement du
@@ -431,9 +451,9 @@ pub(crate) fn do_send_super_agent_prompt(
     // personnalisé (configurable). Le nom est toujours injecté pour que
     // l'assistant sache qui il est, même si l'utilisateur n'a pas renseigné de
     // prompt personnalisé.
-    let (name, system_prompt, concise, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (name, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
+        (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
     let mut full_system = format!(
@@ -499,6 +519,10 @@ pub(crate) fn do_send_super_agent_prompt(
     );
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     full_system.push_str(&concise_guideline(concise));
+    // Mode « Assistant coordinateur pur » (désactivé par défaut) : l'assistant
+    // propose les étapes et les agents, l'utilisateur valide avant lancement ; il
+    // répond lui-même aux questions simples et délègue dès qu'il faut réfléchir.
+    full_system.push_str(&coordinator_guideline(coordinator));
     // Issue #16 : mode « user-friendly » (désactivé par défaut).
     full_system.push_str(&user_friendly_guideline(user_friendly));
     // Voix de l'assistant : style de réponse permanent, TOUJOURS actif
@@ -537,13 +561,14 @@ pub async fn ask_super_agent(
     message: String,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model, system_prompt, concise, user_memory, adaptive_personality, personality, user_friendly) = {
+    let (pi_path, mut model, system_prompt, concise, coordinator, user_memory, adaptive_personality, personality, user_friendly) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
             cfg.super_agent_model.clone(),
             cfg.super_agent_prompt.clone(),
             cfg.super_agent_concise,
+            cfg.super_agent_coordinator,
             cfg.super_agent_user_memory.clone(),
             cfg.super_agent_adaptive_personality,
             cfg.super_agent_personality.clone(),
@@ -584,6 +609,8 @@ pub async fn ask_super_agent(
     prompt.push_str(&personality_guideline(adaptive_personality, &personality));
     // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
     prompt.push_str(&concise_guideline(concise));
+    // Mode « Assistant coordinateur pur » (désactivé par défaut).
+    prompt.push_str(&coordinator_guideline(coordinator));
     // Issue #16 : mode « user-friendly » (désactivé par défaut).
     prompt.push_str(&user_friendly_guideline(user_friendly));
     // « Voix » de l'assistant : style de réponse permanent, TOUJOURS actif

@@ -1285,7 +1285,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
         // un projet pseudo-global "" : on lui donne un libellé lisible.
         let agent_label = if agent == SUPERAGENT_ID {
-            "Assistant (Magnus)".to_string()
+            "Magnus".to_string()
         } else if agent == "default" {
             "Dossier".to_string()
         } else {
@@ -1324,7 +1324,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         .map(|(project, agents)| {
             // Projet pseudo-global "" = assistant (super-agent).
             let name = if project.is_empty() {
-                "Assistant (Magnus)".to_string()
+                "Magnus".to_string()
             } else {
                 Path::new(&project)
                     .file_name()

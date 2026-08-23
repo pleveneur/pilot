@@ -1164,8 +1164,8 @@ body.theme-light.theme-tokyo-day {
   position: absolute;
   top: 22px;
   right: 0;
-  min-width: 180px;
-  background: transparent; /* sans couleur de fond */
+  min-width: 150px;
+  background: color-mix(in srgb, var(--superagent-accent) 8%, transparent); /* translucide, teinté violet (assistant) */
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius-sm);
   padding: 4px;

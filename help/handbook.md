@@ -867,6 +867,53 @@ apprend et répond.
   demandez explicitement** du technique.
 - **Désactivé par défaut**.
 
+### Mode « Assistant coordinateur pur »
+- **Paramètres ⚙️ → onglet « Assistant » → « Assistant coordinateur (proposer +
+  validation, déléguer quand il faut réfléchir) »** : quand activé (désactivé
+  par défaut), l'Assistant passe en mode **coordinateur pur**. Il **ne modifie
+  pas** le mécanisme d'échange assistant↔agents : c'est uniquement un bloc
+  d'instructions injecté dans son prompt système.
+- **Règles injectées** (les 6 points) :
+  1. **PROPOSE, l'utilisateur VALIDE** : pour tout travail substantiel lié à un
+     projet (réfléchir, analyser, modifier, vérifier), il présente d'abord les
+     étapes ET l'équipe d'agents qu'il compte utiliser, puis fait valider
+     (`ask_confirm` / `ask_multi_choice`) avant de lancer. Il ne lance pas de
+     `run_agents` ni de délégation sans cette validation, sauf demande explicite.
+  2. **RÉPONDS TOI-MÊME aux questions simples** : état d'une tâche, information
+     déjà connue de son suivi (base), question de compréhension. Il ne délègue
+     pas pour répondre à une question dont il a déjà la réponse.
+  3. **DÉLÈGUE dès qu'il faut RÉFLÉCHIR** sur une demande liée à un projet
+     (analyse, recherche, rédaction, modification) : il confie le raisonnement
+     à l'agent le plus adapté.
+  4. **Les appels Git liés aux issues** passent par un agent (github-tracker /
+     git-point), pas par ses outils Git directs. La vérification de l'état d'un
+     agent passe par un agent, pas par `list_agent_sessions`.
+  5. **Priorité au message utilisateur** : s'il tape pendant qu'il délègue,
+     l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
+     la délégation continue en arrière-plan, puis revient dessus à la fin).
+  6. **L'utilisateur garde le contrôle** : ne lance jamais un agent sans
+     validation ; il propose, l'utilisateur décide (ou lance lui-même).
+
+<!-- HELP:super-agent-coordinator -->
+### Mode « Assistant coordinateur pur »
+Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
+(proposer + validation, déléguer quand il faut réfléchir) »** (désactivée par
+défaut) fait passer l'Assistant en mode **coordinateur** plutôt qu'exécutant :
+- Il **propose d'abord les étapes ET les agents**, et vous **validez avant
+  lancement** (pour tout travail substantiel lié à un projet).
+- Il **répond lui-même aux questions simples** (état d'une tâche, information
+  déjà connue de son suivi).
+- Il **délègue dès qu'il faut réfléchir** sur un projet (analyse, recherche,
+  rédaction, modification) à l'agent le plus adapté.
+- Les appels Git liés aux issues et la vérification de l'état des agents
+  passent par des agents (pas par ses outils directs).
+- Si vous tapez pendant une délégation, il vous répond **en priorité** puis
+  revient sur la tâche en cours.
+- Vous gardez le contrôle : rien ne se lance sans votre validation.
+Ce mode ne change pas le mécanisme d'échange assistant↔agents : c'est
+uniquement un bloc d'instructions dans le prompt système.
+<!-- /HELP:super-agent-coordinator -->
+
 ### Purge de la conversation de l'agent (à la demande)
 - La conversation de l'agent d'un projet est **conservée** entre les demandes
   déléguées par l'Assistant : chaque délégation s'appuie sur l'historique

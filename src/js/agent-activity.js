@@ -52,7 +52,7 @@ export function formatLastActivity(ts) {
  * Aplatit la supervision en une liste plate d'agents.
  * @param {object} supervision — sortie de get_agent_supervision ({projects:[...]}).
  * @param {Map<string,number>} [lastActivityMap] — timestamps de dernière activité.
- * @returns {Array<{agentId,label,project,state,busy,lastActivity,kind}>}
+ * @returns {Array<{agentId,rawId,label,project,projectPath,state,busy,lastActivity,kind}>}
  */
 export function flattenAgents(supervision, lastActivityMap) {
   const projects = (supervision && supervision.projects) || [];
@@ -66,14 +66,23 @@ export function flattenAgents(supervision, lastActivityMap) {
       const label = a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
-      const agentId = isSuper ? "superagent" : label;
+      // Identité UNIQUE par agent : deux agents peuvent porter le même nom
+      // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
+      // l'id reste "superagent" ; pour un agent, on combine nom + chemin projet
+      // (ex: "codeur|C:/proj/Pilot") pour lever toute ambiguïté dans la liste
+      // aplatie et au clic. `rawId` garde l'id brut (== label pour un agent
+      // nommé), `label` et `project` restent l'affichage lisible.
+      const rawId = isSuper ? "superagent" : label;
+      const agentId = isSuper ? "superagent" : `${label}|${project}`;
       list.push({
         agentId,
+        rawId,
         label,
         project: projectName,
+        projectPath: isSuper ? "" : project,
         state,
         busy,
-        lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(agentId)) : null,
+        lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
         kind: isSuper ? "superagent" : "agent",
       });
     }
@@ -192,8 +201,8 @@ export function initAgentActivity(tabs) {
     card.classList.remove("hidden");
   });
 
-  // Bouton « Afficher l'onglet » → ouvre l'onglet de l'agent.
-  card.addEventListener("click", (e) => {
+  // Bouton « Afficher l'onglet » → ouvre l'onglet de l'agent du BON projet.
+  card.addEventListener("click", async (e) => {
     const btn = e.target.closest(".agent-activity-card-open");
     if (!btn) return;
     const agent = currentList.find(
@@ -203,7 +212,19 @@ export function initAgentActivity(tabs) {
     if (agent.kind === "superagent") {
       tabs.openFile(agent.label, "superagent");
     } else {
-      tabs._openAgent(agent.label, agent.agentId);
+      // L'onglet d'un agent est lié au PROJET actif (_openAgent utilise
+      // window._pilotProjectPath). Si l'agent cliqué appartient à un autre
+      // projet, basculer d'abord sur ce projet via la sidebar, puis ouvrir
+      // son onglet avec son id brut (rawId). `agentId` (composite unique)
+      // ne sert qu'à l'identification interne/du clic, pas à l'ouverture.
+      const targetPath = agent.projectPath;
+      if (targetPath && targetPath !== (window._pilotProjectPath || "")) {
+        const sidebar = window._pilotGetSidebar ? window._pilotGetSidebar() : null;
+        if (sidebar) {
+          try { await sidebar._activateProject(targetPath); } catch (_) {}
+        }
+      }
+      tabs._openAgent(agent.label, agent.rawId);
     }
     card.classList.add("hidden");
   });

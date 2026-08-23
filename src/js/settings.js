@@ -204,6 +204,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const assistantSoundVolumeLabel = document.getElementById("assistant-sound-volume-label");
   const btnAssistantSoundTest = document.getElementById("btn-assistant-sound-test");
   const chkSuperAgentConcise = document.getElementById("setting-superagent-concise");
+  const chkSuperAgentCoordinator = document.getElementById("setting-superagent-coordinator");
   const chkSuperAgentUserFriendly = document.getElementById("setting-superagent-user-friendly");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
   const chkSuperAgentInvisibleAgent = document.getElementById("setting-superagent-invisible-agent");
@@ -547,6 +548,7 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
   if (assistantSoundVolumeRow) assistantSoundVolumeRow.style.display = (chkAssistantSoundEnabled && chkAssistantSoundEnabled.checked) ? "" : "none";
   if (assistantSoundVolumeLabel) assistantSoundVolumeLabel.textContent = `${inputAssistantSoundVolume ? inputAssistantSoundVolume.value : 100} %`;
   if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
+  if (chkSuperAgentCoordinator) chkSuperAgentCoordinator.checked = currentConfig.super_agent_coordinator === true;
   if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
   if (chkSuperAgentInvisibleAgent) chkSuperAgentInvisibleAgent.checked = currentConfig.super_agent_invisible_agent !== false;
@@ -880,6 +882,7 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
         assistant_sound_enabled: chkAssistantSoundEnabled ? chkAssistantSoundEnabled.checked === true : false,
         assistant_sound_volume: inputAssistantSoundVolume ? (parseInt(inputAssistantSoundVolume.value, 10) || 100) : 100,
         super_agent_concise: chkSuperAgentConcise ? chkSuperAgentConcise.checked === true : false,
+        super_agent_coordinator: chkSuperAgentCoordinator ? chkSuperAgentCoordinator.checked === true : false,
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,
         super_agent_invisible_agent: chkSuperAgentInvisibleAgent ? chkSuperAgentInvisibleAgent.checked !== false : true,

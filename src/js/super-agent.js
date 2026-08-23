@@ -1208,7 +1208,7 @@ export async function createSuperAgent(container) {
       const sup = await invoke("get_agent_supervision");
       if (!sup || !sup.projects) return;
       const proj = sup.projects.find((p) => !(p.path || ""));
-      const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
+      const agent = proj && (proj.agents || []).find((a) => a.agent === "Magnus");
       // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
       // processus super-agent est RÉELLEMENT en cours de génération (état
       // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté
@@ -1694,7 +1694,7 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
     try {
       const sup = await invoke("get_agent_supervision");
       const proj = sup && sup.projects && sup.projects.find((p) => !(p.path || ""));
-      const agent = proj && (proj.agents || []).find((a) => a.agent === "Assistant (Magnus)");
+      const agent = proj && (proj.agents || []).find((a) => a.agent === "Magnus");
       alive = !!(agent && agent.alive);
     } catch (_) { /* ignore, on garde alive=false et on test le délai */ }
     if (alive) {

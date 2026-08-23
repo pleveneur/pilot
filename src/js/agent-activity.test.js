@@ -29,8 +29,10 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({
       agentId: "superagent",
+      rawId: "superagent",
       label: "Assistant (Magnus)",
       project: "",
+      projectPath: "",
       state: "idle",
       busy: false,
       kind: "superagent",
@@ -50,8 +52,14 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
     ]);
     const list = flattenAgents(sup);
     expect(list).toHaveLength(2);
-    expect(list[0]).toMatchObject({ agentId: "default", project: "a", state: "running", busy: true, kind: "agent" });
-    expect(list[1]).toMatchObject({ agentId: "reviewer", project: "a", state: "paused", busy: false, kind: "agent" });
+    expect(list[0]).toMatchObject({
+      agentId: "default|C:/proj/a", rawId: "default", project: "a", projectPath: "C:/proj/a",
+      state: "running", busy: true, kind: "agent",
+    });
+    expect(list[1]).toMatchObject({
+      agentId: "reviewer|C:/proj/a", rawId: "reviewer", project: "a", projectPath: "C:/proj/a",
+      state: "paused", busy: false, kind: "agent",
+    });
   });
 
   it("considère running et compacting comme busy, idle/paused/stopped comme repos", () => {
@@ -69,7 +77,8 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
       },
     ]);
     const list = flattenAgents(sup);
-    const busy = Object.fromEntries(list.map((a) => [a.agentId, a.busy]));
+    // Clé par rawId (id brut), indépendant de l'agentId composite.
+    const busy = Object.fromEntries(list.map((a) => [a.rawId, a.busy]));
     expect(busy).toEqual({ a: true, b: true, c: false, d: false, e: false });
   });
 
@@ -80,6 +89,23 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
     const map = new Map([["superagent", new Date(2020, 0, 1, 12, 30).getTime()]]);
     const list = flattenAgents(sup, map);
     expect(list[0].lastActivity).toBe("12:30");
+  });
+
+  it("rend l'agentId unique quand deux projets portent un agent du même nom", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running" }] },
+      { path: "C:/proj/ExtractDoc", name: "ExtractDoc", agents: [{ agent: "codeur", state: "idle" }] },
+    ]);
+    const list = flattenAgents(sup);
+    const ids = list.map((a) => a.agentId);
+    // Deux ids distincts malgré le même label (nom court).
+    expect(new Set(ids).size).toBe(2);
+    expect(list[0].agentId).toBe("codeur|C:/proj/Pilot");
+    expect(list[1].agentId).toBe("codeur|C:/proj/ExtractDoc");
+    // L'affichage reste lisible : nom court + projet séparé.
+    expect(list[0].label).toBe("codeur");
+    expect(list[0].project).toBe("Pilot");
+    expect(list[1].project).toBe("ExtractDoc");
   });
 });
 
