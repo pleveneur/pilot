@@ -6,6 +6,11 @@
 // cercle respirant par agent, puis une fiche (nom, état, projet, dernière
 // activité) avec un bouton « Afficher l'onglet ».
 //
+// Comportement de la liste : le clic sur le cercle principal bascule
+// l'ouverture/fermeture. La liste reste OUVERTE tant qu'on ne reclique pas sur
+// ce cercle (pas de fermeture au clic extérieur). L'état déplié/replié est
+// persisté via localStorage (agent-activity-expanded) et restauré au démarrage.
+//
 // Source de vérité : `get_agent_supervision` (dashboard.rs), pollée toutes les
 // 2 s, + événement push `agent-state-changed` (Rust → JS) pour un rafraîchissement
 // immédiat. Aucune commande Rust ajoutée.
@@ -81,9 +86,10 @@ export function anyBusy(list) {
   return list.some((a) => a.busy);
 }
 
-/** Rendu HTML de la liste déroulante (fond transparent, un cercle par agent).
- * Seul le cercle (pastille) est affiché ; le nom de l'agent (et son projet)
- * apparaît au survol via un tooltip (title) sur le bouton. */
+/** Rendu HTML de la liste déroulante (fond transparent, un item par agent).
+ * Affiche la pastille (cercle) ainsi que le nom de l'agent, et son projet s'il
+ * est présent. Le nom complet (avec projet) reste accessible au survol via un
+ * tooltip (title) sur le bouton. */
 export function renderDropdown(list) {
   if (!list.length) {
     return '<div class="agent-activity-empty">Aucun agent actif</div>';
@@ -93,6 +99,8 @@ export function renderDropdown(list) {
       (a) => `
     <button class="agent-activity-item" data-agent-id="${esc(a.agentId)}" data-kind="${esc(a.kind)}" title="${esc(a.label)}${a.project ? " — " + esc(a.project) : ""}">
       <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
+      <span class="agent-activity-item-label">${esc(a.label)}</span>
+      ${a.project ? `<span class="agent-activity-item-project">${esc(a.project)}</span>` : ""}
     </button>`
     )
     .join("");
@@ -163,13 +171,13 @@ export function initAgentActivity(tabs) {
     }
   }
 
-  // Clic sur le cercle → ouvre/ferme la liste déroulante.
+  // Clic sur le cercle → bascule l'ouverture/fermeture de la liste.
   dot.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleDropdown();
   });
 
-  // Clic sur un agent de la liste → affiche sa fiche.
+  // Clic sur un agent de la liste → affiche sa fiche (la liste se replie).
   dropdown.addEventListener("click", (e) => {
     const item = e.target.closest(".agent-activity-item");
     if (!item) return;
@@ -180,6 +188,7 @@ export function initAgentActivity(tabs) {
     currentCardAgent = agent;
     card.innerHTML = renderCard(agent);
     dropdown.classList.add("hidden");
+    localStorage.setItem("agent-activity-expanded", "false");
     card.classList.remove("hidden");
   });
 
@@ -199,13 +208,9 @@ export function initAgentActivity(tabs) {
     card.classList.add("hidden");
   });
 
-  // Fermeture au clic extérieur (pattern sidebar.js).
-  document.addEventListener("click", (e) => {
-    if (!container.contains(e.target)) {
-      dropdown.classList.add("hidden");
-      card.classList.add("hidden");
-    }
-  });
+  // NOTE : pas de fermeture au clic extérieur — la liste reste ouverte jusqu'à
+  // ce qu'on reclique sur le cercle principal (comportement « liste persistante »).
+  // L'état déplié/replié est persisté via localStorage (agent-activity-expanded).
 
   // Rafraîchissement immédiat sur changement d'état d'un agent.
   listen("agent-state-changed", (event) => {

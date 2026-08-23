@@ -139,6 +139,28 @@ describe("renderDropdown — rond par agent dans la liste déroulante", () => {
     expect(html).toContain("agent-activity-item-dot");
     expect(html).not.toContain("superagent");
   });
+
+  it("affiche le nom de l'agent à côté de la pastille", () => {
+    const html = renderDropdown([
+      { agentId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+      { agentId: "default", label: "default", project: "projet-a", busy: false, kind: "agent" },
+    ]);
+    expect(html).toContain("agent-activity-item-label");
+    expect(html).toContain("Assistant (Magnus)");
+    expect(html).toContain("default");
+  });
+
+  it("affiche le projet de l'agent s'il est présent, sinon rien", () => {
+    const html = renderDropdown([
+      { agentId: "default", label: "default", project: "projet-a", busy: false, kind: "agent" },
+      { agentId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+    ]);
+    expect(html).toContain("agent-activity-item-project");
+    expect(html).toContain("projet-a");
+    // L'assistant (sans projet) ne doit pas générer de span projet.
+    const superagentItem = html.match(/data-agent-id="superagent"[\s\S]*?<\/button>/);
+    expect(superagentItem[0]).not.toContain("agent-activity-item-project");
+  });
 });
 
 describe("formatLastActivity", () => {

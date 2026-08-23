@@ -3492,27 +3492,36 @@ body.zen-mode #action-panel {
    dégradé discret basé sur --superagent-accent (même couleur que le cercle
    respirant) apparaît en douceur sur la barre de saisie ; il disparaît au
    repos. Thème sombre ET clair via la variable (aucune couleur en dur).
-   Le texte reste lisible (intensité faible, overlay non obstructif). */
-.agent-chat-input-bar {
-  position: relative;
-}
-.agent-chat-input-bar::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--superagent-accent) 16%, transparent) 0%,
-    color-mix(in srgb, var(--superagent-accent) 6%, transparent) 55%,
+   Le texte reste lisible (intensité modérée, overlay non obstructif).
+   Le voile est posé sur le fond du champ (background-image) pour être
+   clairement visible, tout en gardant la saisie et le clic actifs. Il est
+   limité au champ de saisie (.agent-input), pas à la barre entière : les
+   boutons autour ne sont pas couverts. Le champ étant une <textarea>
+   (élément remplacé), on anime son background (et non un pseudo-élément
+   ::before, non rendu sur ce type d'élément). */
+/* Respiration radiale du voile de réflexion : le halo part du centre de la
+   zone de saisie, gonfle vers les bords puis se rétracte, en boucle tant que
+   l'assistant réfléchit. Déclenché uniquement via .superagent-input-reflecting.
+   Le breathing est simulé en animant la taille du dégradé radial posé en
+   background-image du champ (position:center, repeat:none), sur le fond
+   --surface-2 conservé. */
+.agent-chat-input-bar.superagent-input-reflecting .agent-input {
+  background-color: var(--surface-2);
+  background-image: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--superagent-accent) 22%, transparent) 0%,
+    color-mix(in srgb, var(--superagent-accent) 13%, transparent) 55%,
     transparent 100%
   );
-  opacity: 0;
-  transition: opacity 400ms ease;
-  z-index: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 40% 40%;
+  animation: assistant-input-breathe 1s ease-in-out infinite;
 }
-.agent-chat-input-bar.superagent-input-reflecting::before {
-  opacity: 1;
+@keyframes assistant-input-breathe {
+  0%   { background-size: 40% 40%; }
+  50%  { background-size: 180% 180%; }
+  100% { background-size: 40% 40%; }
 }
 
 .agent-input {
