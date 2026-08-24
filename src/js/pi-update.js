@@ -44,12 +44,21 @@ async function doUpdate() {
   _statusEl.textContent = "Mise à jour de Pi en cours…";
   try {
     const r = await invoke("update_pi");
+    // La mise à jour arrête les sessions RPC (verrou de fichiers) : relancer
+    // l'agent à chaud pour restaurer la session courante. agent-pi.js écoute
+    // l'événement `pilot-agent-restart-needed` (même mécanisme qu'un changement
+    // de paramètres RPC).
+    window.dispatchEvent(new CustomEvent("pilot-agent-restart-needed"));
     if (r.ok) {
       _statusEl.textContent = "Pi mis à jour avec succès.";
       toastSuccess("Pi mis à jour.");
       setTimeout(closeModal, 1500);
     } else {
-      _statusEl.textContent = "La mise à jour a échoué. Réessaie plus tard.";
+      // 1. Diagnosité : afficher la cause réelle (ou un résumé court non
+      // technique) renvoyée par le backend au lieu du libellé générique.
+      const msg =
+        (r && r.error) || "La mise à jour a échoué. Réessaie plus tard.";
+      _statusEl.textContent = msg;
       toastError("Échec de la mise à jour de Pi.");
       _updateBtn.disabled = false;
     }

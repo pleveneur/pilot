@@ -42,10 +42,15 @@ pub type EventObserver = Arc<dyn Fn(&Value) + Send + Sync>;
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
 /// `observer` : observateur d'événements optionnel (indicateur d'activité par projet).
 pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>) -> Result<RpcSession, String> {
-    let pi_exe = if pi_path.is_empty() { "pi" } else { pi_path };
+    // Robustesse shim (issue #76) : si le chemin pointe vers un shim npm
+    // `pi.cmd`/`pi.ps1`/`pi.bat` (ou est vide → repli "pi" via le PATH), le
+    // résoudre vers le vrai exécutable (node + cli.js) car `Command::new` ne
+    // sait pas exécuter un `.cmd`/`.bat` sur Windows.
+    let (pi_exe, pi_base_args) = crate::pi_update::resolve_pi_executable(pi_path);
 
-    let mut cmd = Command::new(pi_exe);
-    cmd.args(["--mode", "rpc"]);
+    let mut cmd = Command::new(&pi_exe);
+    cmd.args(&pi_base_args)
+        .args(["--mode", "rpc"]);
     if no_session {
         cmd.arg("--no-session");
     }
