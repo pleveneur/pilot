@@ -1,5 +1,10 @@
 // agents-bus.js — Bus d'exécution inter-agents (H2 V2, spec_gestion_agents.md).
-// Ordonnanceur séquentiel : un seul agent stream à la fois.
+// Ordonnanceur : un seul agent stream à la fois PAR PROJET. Depuis T1, l'état de
+// run est INDEXÉ PAR PROJET (busState.runs[project]) : le même type d'agent peut
+// tourner en parallèle sur des PROJETS DIFFÉRENTS (architecte sur A pendant
+// architecte sur B), tout en conservant l'exclusivité d'un type d'agent sur le
+// MÊME projet (gérée côté Rust par la clé composite session_key(project,
+// agent_id) + frontend exclusivity-queue.js, clé project\u{1f}agent_id).
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -68,152 +73,209 @@ const AGENT_READ_ONLY_TOOLS = new Set([
   "search_project",
 ]);
 
+// ── T1 : contexte de run PAR PROJET ─────────────────────────────────────────
+// Tout l'état mutable d'une run vit dans un `runCtx` indexé par projet dans
+// `busState.runs[project]`. Deux runs sur des projets DIFFÉRENTS ont donc des
+// contextes indépendants (même type d'agent autorisé en parallèle sur des
+// projets distincts). `maxDepth` et `timeoutMs` restent globaux (config).
+function newRunCtx(project) {
+  return {
+    project,
+    runState: "idle", // "idle" | "running" | "stopping"
+    callStack: [],
+    budgetTotal: DEFAULT_TOTAL_BUDGET,
+    budgetByAgent: {},
+    timeoutId: null,
+    currentAgentId: null,
+    // H2 V2 parallèle : ensemble des agents en train de streamer + buffers par agent.
+    activeAgents: new Set(),
+    streamingTextByAgent: {},
+    // Issue #10 : empreintes des derniers tool calls par agent (ex: requêtes DB
+    // db_query/db_execute) pour détecter une boucle d'OUTILS identiques, même
+    // sans texte streamé répété.
+    toolCallsByAgent: {},
+    // Issue : empreintes des derniers tool calls de LECTURE PURE par agent
+    // (read/search/grep/list/glob/find). Exclus du comptage principal (P0-2,
+    // faux positifs sur l'exploration légitime) mais suivis dans un historique
+    // SÉPARÉ avec un seuil plus élevé pour détecter une boucle soutenue de
+    // lectures/recherches identiques (ex: architecte qui relit le même fichier).
+    readOnlyToolCallsByAgent: {},
+    // Compteur de tours pi PAR AGENT (pas global) : en run parallèle, chaque
+    // agent a son propre budget. Un agent qui enchaîne des turn_start légitimes
+    // (ex: plusieurs tool calls) ne doit pas être coupé à cause des tours des
+    // autres agents. La vraie boucle d'outils est détectée en amont par
+    // maybeDetectAgentLoop ; ce compteur n'est qu'un filet de sécurité.
+    piTurnCountByAgent: {},
+    parallelGroup: null, // { assignments, pending, results, onComplete }
+    pendingPromise: null,
+    isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
+    // Issue #37 : état de détection de boucle par agent.
+    loopCorrectionPending: {}, // agentId → true (arrêt en cours, correction à l'agent_end)
+    loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
+    loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
+    loopLastChecked: {}, // agentId → timestamp du dernier test
+    // Ciblage de projet (run_agents) : agentId → cwd du projet (toujours égal à
+    // ctx.project dans ce contexte). Utilisé pour router les commandes
+    // (abort/command/prompt) vers la bonne session pendant le tour.
+    agentProject: {},
+    // Bug #9 : horodatage de la dernière activité réelle (événement agent reçu).
+    // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
+    // verrou est "running" sans activité depuis trop longtemps, on le libère.
+    lastActivityAt: null,
+    // T5 : file d'attente d'exclusivité des spécialités par projet. Clé
+    // `project\u{1f}agent_id` → file d'assignments en attente. Quand un agent de
+    // même agent_id est déjà actif sur le même projet, la demande est mise en
+    // attente et lancée automatiquement à la fin de la tâche en cours.
+    exclusivityQueue: {},
+    // Filet de sécurité par run : nombre de tours agent (détection boucle).
+    turnCount: 0,
+  };
+}
+
 let busState = {
   listeners: null,
   autoStopListener: null,
   registry: null,
   coordinator: null,
   agents: new Map(),
-  runState: "idle",
-  callStack: [],
-  budgetTotal: DEFAULT_TOTAL_BUDGET,
-  budgetByAgent: {},
-  maxDepth: DEFAULT_MAX_DEPTH,
-  timeoutMs: DEFAULT_TIMEOUT_MS,
-  timeoutId: null,
-  currentAgentId: null,
-  // H2 V2 parallèle : ensemble des agents en train de streamer + buffers par agent.
-  activeAgents: new Set(),
-  streamingTextByAgent: {},
-  // Issue #10 : empreintes des derniers tool calls par agent (ex: requêtes DB
-  // db_query/db_execute) pour détecter une boucle d'OUTILS identiques, même
-  // sans texte streamé répété.
-  toolCallsByAgent: {},
-  // Issue : empreintes des derniers tool calls de LECTURE PURE par agent
-  // (read/search/grep/list/glob/find). Exclus du comptage principal (P0-2,
-  // faux positifs sur l'exploration légitime) mais suivis dans un historique
-  // SÉPARÉ avec un seuil plus élevé pour détecter une boucle soutenue de
-  // lectures/recherches identiques (ex: architecte qui relit le même fichier).
-  readOnlyToolCallsByAgent: {},
-  // Compteur de tours pi PAR AGENT (pas global) : en run parallèle, chaque
-  // agent a son propre budget. Un agent qui enchaîne des turn_start légitimes
-  // (ex: plusieurs tool calls) ne doit pas être coupé à cause des tours des
-  // autres agents. La vraie boucle d'outils est détectée en amont par
-  // maybeDetectAgentLoop ; ce compteur n'est qu'un filet de sécurité.
-  piTurnCountByAgent: {},
-  parallelGroup: null, // { assignments, pending, results, onComplete }
-  pendingPromise: null,
-  isCompacting: false, // true pendant une compaction (filtre les deltas du résumé)
-  // Issue #37 : état de détection de boucle par agent.
-  loopCorrectionPending: {}, // agentId → true (arrêt en cours, correction à l'agent_end)
-  loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
-  loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
-  loopLastChecked: {}, // agentId → timestamp du dernier test
-  // Ciblage de projet (run_agents) : agentId → cwd du projet cible (défaut =
-  // projet actif). Utilisé pour router les commandes (abort/command/prompt)
-  // vers la bonne session quand l'agent tourne sur un projet non actif.
-  agentProject: {},
   config: null,
   callbacks: {},
-  // Bug #9 : horodatage de la dernière activité réelle (événement agent reçu).
-  // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
-  // verrou est "running" sans activité depuis trop longtemps, on le libère.
-  lastActivityAt: null,
-  // T5 : file d'attente d'exclusivité des spécialités par projet. Clé
-  // `project\u{1f}agent_id` → file d'assignments en attente. Quand un agent de
-  // même agent_id est déjà actif sur le même projet, la demande est mise en
-  // attente et lancée automatiquement à la fin de la tâche en cours.
-  exclusivityQueue: {},
+  // Config dérivée, partagée entre toutes les runs (lecture seule pendant l'exécution).
+  maxDepth: DEFAULT_MAX_DEPTH,
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+  // T1 : état de run INDEXÉ PAR PROJET. Clé = projet (cwd) de la run.
+  runs: {}, // project → runCtx
 };
 
-function resetBusState() {
-  if (busState.timeoutId) clearTimeout(busState.timeoutId);
-  busState.runState = "idle";
-  busState.callStack = [];
-  busState.budgetTotal = DEFAULT_TOTAL_BUDGET;
-  busState.budgetByAgent = {};
-  busState.timeoutId = null;
-  busState.currentAgentId = null;
-  busState.activeAgents = new Set();
-  busState.streamingTextByAgent = {};
-  busState.toolCallsByAgent = {};
-  busState.readOnlyToolCallsByAgent = {};
-  busState.piTurnCountByAgent = {};
-  busState.parallelGroup = null;
-  busState.pendingPromise = null;
-  busState.isCompacting = false;
-  busState.loopCorrectionPending = {};
-  busState.loopCorrectionCount = {};
-  busState.loopAbandoned = {};
-  busState.loopLastChecked = {};
-  busState.agentProject = {};
-  busState.lastActivityAt = null;
-  busState.exclusivityQueue = {};
+// T1 : helpers purs d'accès à l'état de run PAR PROJET. Un appel sans projet
+// (clé ".") couvre le projet actif implicite.
+function runKey(project) {
+  return project || ".";
 }
 
-// Bug #9 : watchdog de sécurité du verrou de run. Si la run est marquée
-// "running" mais qu'aucun agent n'est réellement en train de streamer, le
-// verrou est bloqué (fin normale/erreur sans libération, fermeture de projet
-// qui tue les processus sans événement agent_end/process_exit, groupe parallèle
-// résiduel, agents fantômes). On force la libération pour ne pas bloquer les
-// appels suivants à run_agents. Détecte TOUS les états bloqués, pas seulement
-// le cas nominal.
-async function releaseStuckRunLock() {
-  if (busState.runState !== "running") return;
+/**
+ * Retourne le contexte de run du projet, en le créant s'il n'existe pas.
+ * @param {string} [project]
+ * @returns {object} runCtx
+ */
+function getRunCtx(project) {
+  const key = runKey(project);
+  if (!busState.runs[key]) busState.runs[key] = newRunCtx(key);
+  return busState.runs[key];
+}
+
+/**
+ * État de run d'un projet ("idle" par défaut). Helper pur utilisé par
+ * startParallelRun (garde), isRunInProgress et le watchdog.
+ * @param {string} [project]
+ * @returns {string}
+ */
+export function getRunState(project) {
+  const ctx = busState.runs[runKey(project)];
+  return ctx ? ctx.runState : "idle";
+}
+
+/**
+ * Démarre une run sur un projet : réinitialise un contexte neuf puis le passe
+ * en "running". Ne touche PAS aux contextes des autres projets.
+ * @param {string} [project]
+ * @returns {object} runCtx neuf en état "running"
+ */
+export function beginRun(project) {
+  const key = runKey(project);
+  const fresh = newRunCtx(key);
+  const ctx = getRunCtx(key);
+  for (const k of Object.keys(fresh)) if (k !== "project") ctx[k] = fresh[k];
+  ctx.budgetTotal = (busState.config && busState.config.agent_max_total_calls) || DEFAULT_TOTAL_BUDGET;
+  ctx.runState = "running";
+  return ctx;
+}
+
+/**
+ * Termine une run sur un projet : supprime uniquement son contexte (libère le
+ * verrou de run projet-scopé). Ne touche PAS aux runs des autres projets.
+ * @param {string} [project]
+ */
+export function endRun(project) {
+  const ctx = busState.runs[runKey(project)];
+  if (ctx && ctx.timeoutId) clearTimeout(ctx.timeoutId);
+  delete busState.runs[runKey(project)];
+}
+
+// Réinitialise tous les contextes de run (utilisé par destroyAgentsBus et
+// stopAgentsRun). stopAgentsRun reste volontairement GLOBAL (l'utilisateur
+// arrête tout) : on nettoie l'ensemble des runs.
+function clearAllRuns() {
+  for (const key of Object.keys(busState.runs)) {
+    const ctx = busState.runs[key];
+    if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+  }
+  busState.runs = {};
+}
+
+// Bug #9 : watchdog de sécurité du verrou de run, SCOpÉ au projet. Si la run
+// d'un projet est marquée "running" mais qu'aucun agent n'est réellement en
+// train de streamer, le verrou de CE projet est bloqué. On force sa libération
+// (endRun) pour ne pas bloquer les appels suivants à run_agents sur ce projet.
+async function releaseStuckRunLock(project) {
+  const key = runKey(project);
+  if (getRunState(key) !== "running") return;
+  const ctx = busState.runs[key];
 
   // 1. Cas nominal : aucun agent actif et aucun groupe parallèle en cours →
   //    verrou bloqué (fin normale/erreur sans libération).
-  const noActive = busState.activeAgents.size === 0;
-  const noParallel = !busState.parallelGroup || busState.parallelGroup.pending <= 0;
+  const noActive = ctx.activeAgents.size === 0;
+  const noParallel = !ctx.parallelGroup || ctx.parallelGroup.pending <= 0;
   if (noActive && noParallel) {
     console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
-    resetBusState();
+    endRun(key);
     return;
   }
 
   // 2. Groupe parallèle résiduel : objet non nul mais pending <= 0 (tous les
   //    agents ont terminé/échoué sans que onComplete n'ait libéré le verrou).
-  if (busState.parallelGroup && busState.parallelGroup.pending <= 0) {
+  if (ctx.parallelGroup && ctx.parallelGroup.pending <= 0) {
     console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
-    resetBusState();
+    endRun(key);
     return;
   }
 
   // 3. Agents fantômes : activeAgents non vide mais aucun processus réellement
   //    vivant (sessions supprimées à la fermeture du projet / arrêt des
   //    processus sans événement agent_end/process_exit).
-  if (busState.activeAgents.size > 0) {
-    const alive = await anyActiveAgentAlive();
+  if (ctx.activeAgents.size > 0) {
+    const alive = await anyActiveAgentAlive(key);
     if (!alive) {
       console.warn("[agents-bus] watchdog : agents fantômes (aucun processus vivant), libération forcée.");
-      resetBusState();
+      endRun(key);
       return;
     }
   }
 
   // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
   //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
-  if (busState.lastActivityAt && Date.now() - busState.lastActivityAt > busState.timeoutMs) {
+  if (ctx.lastActivityAt && Date.now() - ctx.lastActivityAt > busState.timeoutMs) {
     console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
-    resetBusState();
+    endRun(key);
   }
 }
 
-// Sonde de vivacité : retourne true si au moins un agent actif du bus a une
-// session de processus réellement vivante (list_agent_sessions). Utilisée par
-// releaseStuckRunLock pour distinguer un agent fantôme (processus tué à la
-// fermeture du projet, session retirée du registre) d'un agent qui stream
-// encore. En cas d'erreur de sonde, on retourne true (prudence : ne pas libérer
-// un verrou potentiellement légitime).
-async function anyActiveAgentAlive() {
+// Sonde de vivacité : retourne true si au moins un agent actif de la run du
+// projet a une session de processus réellement vivante (list_agent_sessions).
+// Utilisée par releaseStuckRunLock pour distinguer un agent fantôme d'un agent
+// qui stream encore. En cas d'erreur de sonde, on retourne true (prudence).
+async function anyActiveAgentAlive(project) {
+  const key = runKey(project);
+  const ctx = busState.runs[key];
+  if (!ctx) return false;
   try {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
-    for (const agentId of busState.activeAgents) {
-      const project = busState.agentProject[agentId] || null;
+    for (const agentId of ctx.activeAgents) {
+      const proj = ctx.agentProject[agentId] || null;
       // Préférer une correspondance (agent, projet) ; sinon n'importe quelle
       // session vivante de cet agent (prudence).
-      const byProject = sessions.find((s) => s.agent === agentId && s.alive && (project === null || s.project === project));
+      const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || s.project === proj));
       if (byProject) return true;
       const byAgent = sessions.find((s) => s.agent === agentId && s.alive);
       if (byAgent) return true;
@@ -231,7 +293,7 @@ function emit(event, data) {
 
 /**
  * T5 : indique si un agent multi-rôles H2 V2 est déjà actif sur un projet donné.
- * Vérifie d'abord l'état local (agents de la run courante), puis les sessions
+ * Vérifie d'abord l'état local (agents des runs en cours), puis les sessions
  * vivantes via `list_agent_sessions` (agents de runs précédentes encore actifs).
  * Fail-open : en cas d'erreur de sonde, on ne bloque pas (prudence).
  * @param {string} agentId
@@ -239,9 +301,10 @@ function emit(event, data) {
  * @returns {Promise<boolean>}
  */
 async function isAgentActiveOnProject(agentId, project) {
-  // 1. Local : agent déjà actif dans la run courante sur ce projet.
-  if (busState.activeAgents.has(agentId)) {
-    if (busState.agentProject[agentId] === project) return true;
+  // 1. Local : agent déjà actif dans une run en cours sur ce projet.
+  for (const key of Object.keys(busState.runs)) {
+    const ctx = busState.runs[key];
+    if (ctx.activeAgents.has(agentId) && ctx.project === project) return true;
   }
   // 2. Sessions vivantes (agents de runs précédentes encore actifs).
   try {
@@ -270,20 +333,20 @@ export function setBusNotifyCallback(fn) {
  * immédiatement (même agent, même projet). Elle reste dans le groupe parallèle
  * courant : `dispatchParallel` a conservé son `pending` au moment de la mise en
  * file, donc la run ne se termine pas avant que la demande en attente ne se soit
- * réellement exécutée. Sans ce relancement, l'item retiré par `dequeueExclusivity`
- * était perdu et le groupe ne se terminait jamais (run bloquée).
+ * réellement exécutée.
  */
 async function launchNextQueued(agentId, project) {
-  const next = dequeueExclusivity(busState.exclusivityQueue, agentId, project);
+  const ctx = getRunCtx(project);
+  const next = dequeueExclusivity(ctx.exclusivityQueue, agentId, project);
   if (!next) return;
   const id = next.agentId || agentId;
   const agent = busState.agents.get(id);
   if (!agent) {
     // Agent introuvable : enregistrer un résultat d'erreur dans le groupe
     // parallèle afin que la run ne reste pas bloquée (pending conservé).
-    if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === id)) {
-      busState.parallelGroup.results[id] = { status: "error", text: `Agent "${id}" introuvable.` };
-      busState.parallelGroup.pending--;
+    if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === id)) {
+      ctx.parallelGroup.results[id] = { status: "error", text: `Agent "${id}" introuvable.` };
+      ctx.parallelGroup.pending--;
     }
     return;
   }
@@ -291,15 +354,15 @@ async function launchNextQueued(agentId, project) {
   await runAgentTurn(agent, next.brief, "", next.project || project, undefined);
 }
 
-function resetTimeout() {
-  busState.lastActivityAt = Date.now();
-  if (busState.timeoutId) clearTimeout(busState.timeoutId);
-  if (busState.runState !== "running") return;
-  busState.timeoutId = setTimeout(() => {
+function resetTimeout(ctx) {
+  ctx.lastActivityAt = Date.now();
+  if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+  if (ctx.runState !== "running") return;
+  ctx.timeoutId = setTimeout(() => {
     // Timeout d'inactivité : on signale l'erreur puis on arrête la run SANS
     // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
     // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
-    const agentId = busState.currentAgentId;
+    const agentId = ctx.currentAgentId;
     emit("error", { message: `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).` });
     // P7 : notification desktop à l'arrêt auto (réutilise desktop-notify.js).
     notifyAgentDone({
@@ -310,26 +373,26 @@ function resetTimeout() {
   }, busState.timeoutMs);
 }
 
-function ensureBudget(agentId) {
-  if (busState.budgetTotal <= 0) {
+function ensureBudget(agentId, ctx) {
+  if (ctx.budgetTotal <= 0) {
     return { ok: false, message: "Budget total d'appels épuisé." };
   }
   const agent = busState.agents.get(agentId);
   const max = agent ? agent.max_calls_per_run : 5;
-  const used = busState.budgetByAgent[agentId] || 0;
+  const used = ctx.budgetByAgent[agentId] || 0;
   if (used >= max) {
     return { ok: false, message: `Budget d'appels épuisé pour ${agentId}.` };
   }
   return { ok: true };
 }
 
-function consumeBudget(agentId) {
-  busState.budgetTotal -= 1;
-  busState.budgetByAgent[agentId] = (busState.budgetByAgent[agentId] || 0) + 1;
+function consumeBudget(agentId, ctx) {
+  ctx.budgetTotal -= 1;
+  ctx.budgetByAgent[agentId] = (ctx.budgetByAgent[agentId] || 0) + 1;
 }
 
-function detectCycle(agentId) {
-  return busState.callStack.some((entry) => entry.agentId === agentId);
+function detectCycle(agentId, ctx) {
+  return ctx.callStack.some((entry) => entry.agentId === agentId);
 }
 
 export async function initAgentsBus(options = {}) {
@@ -356,9 +419,8 @@ export async function initAgentsBus(options = {}) {
     busState.agents.set("coordinateur", busState.coordinator);
   }
 
-  // Charger les garde-fous depuis la config
+  // Charger les garde-fous depuis la config (partagés entre toutes les runs)
   busState.maxDepth = busState.config.agent_max_call_depth || DEFAULT_MAX_DEPTH;
-  busState.budgetTotal = busState.config.agent_max_total_calls || DEFAULT_TOTAL_BUDGET;
   busState.timeoutMs = busState.config.agent_timeout_ms || DEFAULT_TIMEOUT_MS;
 
   // Écouter le canal unifié des agents
@@ -380,8 +442,13 @@ export async function initAgentsBus(options = {}) {
   busState.autoStopListener = await listen("agent-auto-stopped", (ev) => {
     const p = ev.payload || {};
     const agentId = p.agent;
-    if (!agentId || busState.runState !== "running") return;
-    if (!busState.activeAgents.has(agentId)) return;
+    if (!agentId) return;
+    // Router vers le contexte de run du projet concerné.
+    let ctx = null;
+    for (const key of Object.keys(busState.runs)) {
+      if (busState.runs[key].activeAgents.has(agentId)) { ctx = busState.runs[key]; break; }
+    }
+    if (!ctx || ctx.runState !== "running") return;
     const reason = p.reason || "arrêt automatique (bloqué sans progression)";
     console.warn("[agents-bus] arrêt automatique de l'agent", agentId, reason);
     emit("notify", {
@@ -389,7 +456,7 @@ export async function initAgentsBus(options = {}) {
       message: `⏱️ L'agent ${agentId} a été arrêté automatiquement (bloqué sans progression). Un agent en file d'attente peut prendre le relais.`,
     });
     // Libère le créneau d'exclusivité (launchNextQueued) et fait échouer le tour.
-    failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`);
+    failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`, ctx);
   });
 }
 
@@ -425,7 +492,10 @@ function resolveCoordinatorFallback() {
 }
 
 export function destroyAgentsBus() {
-  if (busState.timeoutId) clearTimeout(busState.timeoutId);
+  for (const key of Object.keys(busState.runs)) {
+    const ctx = busState.runs[key];
+    if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+  }
   if (busState.listeners) {
     busState.listeners();
     busState.listeners = null;
@@ -435,31 +505,31 @@ export function destroyAgentsBus() {
     busState.autoStopListener = null;
   }
   stopAllAgentProcesses();
-  resetBusState();
+  clearAllRuns();
 }
 
-let turnCount = 0;
-const MAX_TURNS = 50;
 // Filet de sécurité par agent (en dernier recours) : la vraie boucle d'outils
 // est détectée en amont par maybeDetectAgentLoop. 60 tours pi par agent laisse
 // de la marge aux agents qui font beaucoup de tool calls légitimes sans les
 // couper à tort (le compteur global partagé les coupait dès 40 en run parallèle).
 const MAX_PI_TURNS_PER_AGENT = 60;
+const MAX_TURNS = 50;
 
 /**
  * Issue #37 : détecte une boucle dans la réflexion d'un sous-agent et, le cas
  * échéant, arrête son processus (abort) pour renvoyer ensuite une demande de
  * correction à l'agent_end. Appelé sur chaque text_delta (throttlé).
  * @param {string} agentId
+ * @param {object} ctx - contexte de run du projet
  */
-function maybeDetectAgentLoop(agentId) {
-  if (busState.runState !== "running") return;
-  if (busState.loopCorrectionPending[agentId]) return; // déjà en cours
-  if (busState.loopAbandoned[agentId]) return; // déjà abandonné
+function maybeDetectAgentLoop(agentId, ctx) {
+  if (ctx.runState !== "running") return;
+  if (ctx.loopCorrectionPending[agentId]) return; // déjà en cours
+  if (ctx.loopAbandoned[agentId]) return; // déjà abandonné
 
   const now = Date.now();
-  if (now - (busState.loopLastChecked[agentId] || 0) < AGENT_LOOP_CHECK_INTERVAL_MS) return;
-  busState.loopLastChecked[agentId] = now;
+  if (now - (ctx.loopLastChecked[agentId] || 0) < AGENT_LOOP_CHECK_INTERVAL_MS) return;
+  ctx.loopLastChecked[agentId] = now;
 
   // Issue #10 : la détection d'une boucle d'OUTILS (detectRepeatedToolCalls) est
   // indépendante de la longueur du buffer texte. Un agent qui répète la même
@@ -472,8 +542,8 @@ function maybeDetectAgentLoop(agentId) {
   // d'outils. Un agent qui enchaîne la même commande bash est arrêté dès 5
   // occurrences dans les 20 dernières actions.
   if (
-    detectRepeatedToolCalls(busState.toolCallsByAgent[agentId]) ||
-    detectRepeatedActions(busState.toolCallsByAgent[agentId]) ||
+    detectRepeatedToolCalls(ctx.toolCallsByAgent[agentId]) ||
+    detectRepeatedActions(ctx.toolCallsByAgent[agentId]) ||
     // Issue : boucle d'outils de LECTURE PURE (read/search/grep/list/glob/find).
     // Ces outils sont exclus du comptage principal (P0-2, faux positifs sur
     // l'exploration légitime), mais un agent qui répète la MÊME lecture/recherche
@@ -482,17 +552,17 @@ function maybeDetectAgentLoop(agentId) {
     // (minRepeat 8 dans une fenêtre de 20) pour ne déclencher que sur une boucle
     // soutenue, pas sur une exploration normale (lectures à offsets différents,
     // recherches à requêtes différentes → empreintes distinctes).
-    detectRepeatedActions(busState.readOnlyToolCallsByAgent[agentId], { minRepeat: 8 })
+    detectRepeatedActions(ctx.readOnlyToolCallsByAgent[agentId], { minRepeat: 8 })
   ) {
-    busState.loopCorrectionPending[agentId] = true;
-    busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
+    ctx.loopCorrectionPending[agentId] = true;
+    ctx.loopCorrectionCount[agentId] = (ctx.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle d'outils détectée", agentId);
     emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
     return;
   }
 
-  const text = busState.streamingTextByAgent[agentId] || "";
+  const text = ctx.streamingTextByAgent[agentId] || "";
   if (text.length < AGENT_LOOP_BUFFER_MIN) return;
 
   if (
@@ -500,12 +570,28 @@ function maybeDetectAgentLoop(agentId) {
     detectRepeatedWord(text) ||
     detectSemanticLoop(text)
   ) {
-    busState.loopCorrectionPending[agentId] = true;
-    busState.loopCorrectionCount[agentId] = (busState.loopCorrectionCount[agentId] || 0) + 1;
+    ctx.loopCorrectionPending[agentId] = true;
+    ctx.loopCorrectionCount[agentId] = (ctx.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle détectée", agentId);
     emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
   }
+}
+
+// Résout le contexte de run d'un événement agent. Le payload porte désormais le
+// projet (rpc_manager.rs) → on route vers busState.runs[project]. Fallback :
+// on cherche le contexte dont l'agent est actif (rétrocompat).
+function runCtxForEvent(payload) {
+  if (payload && payload.project) {
+    const ctx = busState.runs[payload.project];
+    if (ctx) return ctx;
+  }
+  const agentId = payload && payload.agent_id;
+  if (!agentId) return null;
+  for (const key of Object.keys(busState.runs)) {
+    if (busState.runs[key].activeAgents.has(agentId)) return busState.runs[key];
+  }
+  return null;
 }
 
 function handleAgentEvent(ev) {
@@ -514,13 +600,16 @@ function handleAgentEvent(ev) {
   const event = payload.event || {};
   if (!agentId) return;
 
+  // Router vers le contexte de run du bon projet (T1) : le même agent_id peut
+  // tourner en parallèle sur des projets différents.
+  const ctx = runCtxForEvent(payload);
   // Ignorer les événements d'agents qui ne sont pas actifs (séquentiel : un seul
   // agent actif ; parallèle : plusieurs agents actifs simultanément).
-  if (!busState.activeAgents.has(agentId)) return;
-  if (busState.runState !== "running") return;
+  if (!ctx || !ctx.activeAgents.has(agentId)) return;
+  if (ctx.runState !== "running") return;
 
   const type = event.type;
-  resetTimeout();
+  resetTimeout(ctx);
 
   if (type === "turn_start") {
     // Compteur de tours pi PAR AGENT (pas global) : en run parallèle, chaque
@@ -529,8 +618,8 @@ function handleAgentEvent(ev) {
     // autres agents. La vraie boucle d'outils est détectée en amont par
     // maybeDetectAgentLoop (detectRepeatedToolCalls / detectRepeatedActions) ;
     // ce compteur n'est qu'un filet de sécurité en dernier recours.
-    const count = (busState.piTurnCountByAgent[agentId] || 0) + 1;
-    busState.piTurnCountByAgent[agentId] = count;
+    const count = (ctx.piTurnCountByAgent[agentId] || 0) + 1;
+    ctx.piTurnCountByAgent[agentId] = count;
     if (count > MAX_PI_TURNS_PER_AGENT) {
       console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count);
       emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${MAX_PI_TURNS_PER_AGENT}). Arrêt forcé.` });
@@ -541,7 +630,7 @@ function handleAgentEvent(ev) {
 
   // Log minimal : seulement les événements clés (pas chaque delta)
   if (type !== "message_update" && type !== "tool_execution_update") {
-    console.log("[agents-bus] event", type, "agent=" + agentId, "turn=" + turnCount);
+    console.log("[agents-bus] event", type, "agent=" + agentId, "turn=" + ctx.turnCount);
   }
 
   if (type === "message_update") {
@@ -552,13 +641,13 @@ function handleAgentEvent(ev) {
     // doit pas être accumulé dans streamingText (utilisé pour parser `[[CALL]]`
     // via parseCallMarker) ni affiché comme une réponse. On ignore donc tous
     // les deltas pendant isCompacting (même logique qu'agent-pi.js).
-    if (busState.isCompacting) {
+    if (ctx.isCompacting) {
       // deltas ignorés (résumé de compaction)
     } else if (delta.type === "text_delta" && typeof delta.delta === "string") {
-      busState.streamingTextByAgent[agentId] = (busState.streamingTextByAgent[agentId] || "") + delta.delta;
+      ctx.streamingTextByAgent[agentId] = (ctx.streamingTextByAgent[agentId] || "") + delta.delta;
       emit("delta", { agentId, text: delta.delta });
       // Issue #37 : détection de boucle dans la réflexion du sous-agent.
-      maybeDetectAgentLoop(agentId);
+      maybeDetectAgentLoop(agentId, ctx);
     }
   } else if (type === "message") {
     // L'event "message" apporte le message assistant COMPLET (role, stopReason,
@@ -571,16 +660,16 @@ function handleAgentEvent(ev) {
     // Activer le filtre des deltas : pendant la compaction, le résumé est
     // streamé en text_delta (plh). On le signale à l'UI mais on n'accumule pas.
     console.log("[agents-bus] compaction_start", agentId, "reason=" + (event.reason || "?"));
-    busState.isCompacting = true;
+    ctx.isCompacting = true;
   } else if (type === "compaction_end" || type === "compaction") {
     // Désactiver le filtre et reset streamingText : la compaction est terminée,
     // la vraie réponse de l'agent (post-compaction) doit repartir proprement.
     // On n'accumule pas le résumé pour ne pas polluer parseCallMarker.
     console.log("[agents-bus] compaction_end", agentId);
-    busState.isCompacting = false;
-    busState.streamingTextByAgent[agentId] = "";
-    busState.toolCallsByAgent[agentId] = [];
-    busState.readOnlyToolCallsByAgent[agentId] = [];
+    ctx.isCompacting = false;
+    ctx.streamingTextByAgent[agentId] = "";
+    ctx.toolCallsByAgent[agentId] = [];
+    ctx.readOnlyToolCallsByAgent[agentId] = [];
   } else if (type === "tool_execution_start") {
     const toolName = event.toolName || event.tool || "outil";
     console.log("[agents-bus] tool:", toolName, "agent=" + agentId);
@@ -597,14 +686,14 @@ function handleAgentEvent(ev) {
       // un historique SÉPARÉ avec un seuil plus élevé (voir maybeDetectAgentLoop)
       // pour détecter une boucle soutenue de lectures/recherches identiques.
       const roFp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
-      const roArr = (busState.readOnlyToolCallsByAgent[agentId] = busState.readOnlyToolCallsByAgent[agentId] || []);
+      const roArr = (ctx.readOnlyToolCallsByAgent[agentId] = ctx.readOnlyToolCallsByAgent[agentId] || []);
       roArr.push(roFp);
       if (roArr.length > 40) roArr.splice(0, roArr.length - 40);
-      maybeDetectAgentLoop(agentId);
+      maybeDetectAgentLoop(agentId, ctx);
       return;
     }
     const fp = buildToolLoopFingerprint(toolName, event.args || event.arguments || {});
-    const arr = (busState.toolCallsByAgent[agentId] = busState.toolCallsByAgent[agentId] || []);
+    const arr = (ctx.toolCallsByAgent[agentId] = ctx.toolCallsByAgent[agentId] || []);
     // Issue #35 : on accumule CHAQUE empreinte (pas de déduplication des
     // consécutives identiques). L'ancienne déduplication effondrait une séquence
     // de N commandes bash identiques en UNE seule entrée → detectRepeatedToolCalls
@@ -614,50 +703,50 @@ function handleAgentEvent(ev) {
     // une croissance illimitée.
     arr.push(fp);
     if (arr.length > 40) arr.splice(0, arr.length - 40);
-    maybeDetectAgentLoop(agentId);
+    maybeDetectAgentLoop(agentId, ctx);
   } else if (type === "extension_ui_request") {
-    handleExtensionUiRequest(agentId, event);
+    handleExtensionUiRequest(agentId, event, ctx);
   } else if (type === "agent_end") {
     // Issue #37 : si cet agent a été arrêté pour boucle, on le relance avec une
     // demande de correction au lieu de terminer son tour (reste actif). Escalade
     // adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies, puis abandon.
-    if (busState.loopCorrectionPending[agentId]) {
-      busState.loopCorrectionPending[agentId] = false;
-      const streamed = busState.streamingTextByAgent[agentId] || "";
-      busState.streamingTextByAgent[agentId] = "";
-      busState.toolCallsByAgent[agentId] = [];
-      busState.readOnlyToolCallsByAgent[agentId] = [];
-      busState.piTurnCountByAgent[agentId] = 0; // c'est une continuation du tour, pas un nouveau tour
-      resetTimeout();
-      const count = busState.loopCorrectionCount[agentId] || 0;
+    if (ctx.loopCorrectionPending[agentId]) {
+      ctx.loopCorrectionPending[agentId] = false;
+      const streamed = ctx.streamingTextByAgent[agentId] || "";
+      ctx.streamingTextByAgent[agentId] = "";
+      ctx.toolCallsByAgent[agentId] = [];
+      ctx.readOnlyToolCallsByAgent[agentId] = [];
+      ctx.piTurnCountByAgent[agentId] = 0; // c'est une continuation du tour, pas un nouveau tour
+      resetTimeout(ctx);
+      const count = ctx.loopCorrectionCount[agentId] || 0;
       if (count < MAX_LOOP_ESCALATION) {
         const level = count; // 1..MAX_LOOP_ESCALATION (déjà incrémenté à la détection)
         const repeatedTail = findRepeatedTail(streamed);
         const correction = buildLoopCorrectionPrompt(level, { repeatedTail });
-        sendPromptToAgent(agentId, correction).catch((e) => {
+        sendPromptToAgent(agentId, correction, ctx).catch((e) => {
           console.error("[agents-bus] erreur envoi correction boucle", agentId, e);
-          failAgentTurn(agentId, String(e));
+          failAgentTurn(agentId, String(e), ctx);
         });
       } else {
-        busState.loopAbandoned[agentId] = true;
+        ctx.loopAbandoned[agentId] = true;
         emit("notify", { agentId, message: `⚠️ L'agent ${agentId} a tourné en boucle plusieurs fois. Tâche abandonnée.` });
-        failAgentTurn(agentId, "Boucle de réflexion persistante (toutes les stratégies d'escalade épuisées).");
+        failAgentTurn(agentId, "Boucle de réflexion persistante (toutes les stratégies d'escalade épuisées).", ctx);
       }
       return;
     }
-    turnCount++;
-    busState.piTurnCountByAgent[agentId] = 0;
-    console.log("[agents-bus] agent_end turn=" + turnCount, agentId);
-    if (turnCount > MAX_TURNS) {
-      emit("error", { message: `Boucle détectée : ${turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
+    ctx.turnCount++;
+    ctx.piTurnCountByAgent[agentId] = 0;
+    console.log("[agents-bus] agent_end turn=" + ctx.turnCount, agentId);
+    if (ctx.turnCount > MAX_TURNS) {
+      emit("error", { message: `Boucle détectée : ${ctx.turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
       stopAgentsRun({ silent: true });
       return;
     }
-    finishAgentTurn(agentId);
+    finishAgentTurn(agentId, ctx);
   } else if (type === "process_exit" || type === "process_error" || type === "extension_error") {
     const reason = event.reason || event.message || event.error || "processus arrêté";
     console.log("[agents-bus] process error/exit", agentId, reason);
-    failAgentTurn(agentId, reason);
+    failAgentTurn(agentId, reason, ctx);
   }
 }
 
@@ -681,7 +770,7 @@ function extractTextFromContent(content) {
  * - input   → annule (pas de saisie utilisateur possible en mode autonome)
  * - editor  → ignore (pas d'éditeur intégré pour les agents)
  */
-async function handleExtensionUiRequest(agentId, event) {
+async function handleExtensionUiRequest(agentId, event, ctx) {
   const { id, method } = event;
   console.log("[agents-bus] ext_ui_req", agentId, "method=" + method, "id=" + id, JSON.stringify(event).slice(0, 300));
   if (!id || !method) {
@@ -716,7 +805,7 @@ async function handleExtensionUiRequest(agentId, event) {
   }
 
   try {
-    await invoke("send_agent_process_command", { agentId, command, project: busState.agentProject[agentId] || null });
+    await invoke("send_agent_process_command", { agentId, command, project: ctx.agentProject[agentId] || ctx.project || null });
     console.log("[agents-bus] ext_ui_response sent", agentId, "method=" + method, "id=" + id);
   } catch (err) {
     console.error("[agents-bus] extension_ui_response error", agentId, err);
@@ -738,28 +827,28 @@ async function cleanupReservationsForAgent(agentId, project) {
   await deleteReservations(project);
 }
 
-async function finishAgentTurn(agentId) {
-  const text = busState.streamingTextByAgent[agentId] || "";
-  busState.streamingTextByAgent[agentId] = "";
-  busState.toolCallsByAgent[agentId] = [];
-  busState.readOnlyToolCallsByAgent[agentId] = [];
-  const project = busState.agentProject[agentId];
+async function finishAgentTurn(agentId, ctx) {
+  const text = ctx.streamingTextByAgent[agentId] || "";
+  ctx.streamingTextByAgent[agentId] = "";
+  ctx.toolCallsByAgent[agentId] = [];
+  ctx.readOnlyToolCallsByAgent[agentId] = [];
+  const project = ctx.agentProject[agentId] || ctx.project;
   // T6 : libérer les réservations du projet à la fin du tour du codeur.
   await cleanupReservationsForAgent(agentId, project);
-  busState.activeAgents.delete(agentId);
-  delete busState.agentProject[agentId];
+  ctx.activeAgents.delete(agentId);
+  delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
   // de la file d'attente, s'il y en a une.
   if (project) await launchNextQueued(agentId, project);
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
-  if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
-    busState.parallelGroup.results[agentId] = { status: "done", text };
-    busState.parallelGroup.pending--;
-    if (busState.parallelGroup.pending <= 0) {
-      const group = busState.parallelGroup;
-      busState.parallelGroup = null;
+  if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+    ctx.parallelGroup.results[agentId] = { status: "done", text };
+    ctx.parallelGroup.pending--;
+    if (ctx.parallelGroup.pending <= 0) {
+      const group = ctx.parallelGroup;
+      ctx.parallelGroup = null;
       await group.onComplete(group.results);
     }
     return;
@@ -778,7 +867,7 @@ async function finishAgentTurn(agentId) {
       const result = buildResultPrompt("parallel", "done", aggregated, busState.config.agent_max_result_tokens);
       emit("parallelDone", { results });
       await runAgentTurn(busState.agents.get(agentId), result);
-    });
+    }, undefined, project, ctx);
     return;
   }
 
@@ -790,31 +879,31 @@ async function finishAgentTurn(agentId) {
     emit("transition", { from: agentId, to: targetId });
 
     // Garde-fous
-    if (busState.callStack.length >= busState.maxDepth) {
+    if (ctx.callStack.length >= busState.maxDepth) {
       const result = buildResultPrompt(targetId, "error", `Profondeur max (${busState.maxDepth}) atteinte.`, busState.config.agent_max_result_tokens);
-      await sendPromptToAgent(agentId, result);
+      await sendPromptToAgent(agentId, result, ctx);
       return;
     }
-    const budgetCheck = ensureBudget(targetId);
+    const budgetCheck = ensureBudget(targetId, ctx);
     if (!budgetCheck.ok) {
       const result = buildResultPrompt(targetId, "error", budgetCheck.message, busState.config.agent_max_result_tokens);
-      await sendPromptToAgent(agentId, result);
+      await sendPromptToAgent(agentId, result, ctx);
       return;
     }
-    if (detectCycle(targetId)) {
+    if (detectCycle(targetId, ctx)) {
       const result = buildResultPrompt(targetId, "error", `Cycle détecté : ${targetId} est déjà dans la pile.`, busState.config.agent_max_result_tokens);
-      await sendPromptToAgent(agentId, result);
+      await sendPromptToAgent(agentId, result, ctx);
       return;
     }
     const targetAgent = busState.agents.get(targetId);
     if (!targetAgent) {
       const result = buildResultPrompt(targetId, "error", `Agent "${targetId}" inconnu.`, busState.config.agent_max_result_tokens);
-      await sendPromptToAgent(agentId, result);
+      await sendPromptToAgent(agentId, result, ctx);
       return;
     }
 
-    consumeBudget(targetId);
-    busState.callStack.push({ agentId, textBeforeCall: call.before });
+    consumeBudget(targetId, ctx);
+    ctx.callStack.push({ agentId, textBeforeCall: call.before });
 
     // Lancer / réinitialiser l'agent cible et lui envoyer le brief
     await runAgentTurn(targetAgent, brief);
@@ -822,72 +911,73 @@ async function finishAgentTurn(agentId) {
   }
 
   // L'agent a terminé son tour : renvoyer le résultat à l'appelant, ou finir la run
-  if (busState.callStack.length > 0) {
-    const caller = busState.callStack.pop();
+  if (ctx.callStack.length > 0) {
+    const caller = ctx.callStack.pop();
     const result = buildResultPrompt(agentId, "done", text, busState.config.agent_max_result_tokens);
     emit("result", { from: agentId, to: caller.agentId, text: result });
     await runAgentTurn(busState.agents.get(caller.agentId), result);
   } else {
-    // Fin de la run : coordinateur a répondu
+    // Fin de la run : coordinateur a répondu. endRun (projet-scopé) ne libère
+    // QUE la run de ce projet, sans toucher aux runs d'autres projets (T4).
     if (!text || !text.trim()) {
       emit("error", { message: `L'agent ${agentId} n'a produit aucune réponse textuelle. Il a peut-être utilisé des outils sans générer de texte final. Réessayez en reformulant votre demande.` });
-      resetBusState();
+      endRun(ctx.project);
       return;
     }
     emit("done", { agentId, text });
-    resetBusState();
+    endRun(ctx.project);
   }
 }
 
-async function failAgentTurn(agentId, reason) {
-  busState.streamingTextByAgent[agentId] = "";
-  busState.toolCallsByAgent[agentId] = [];
-  busState.readOnlyToolCallsByAgent[agentId] = [];
-  const project = busState.agentProject[agentId];
+async function failAgentTurn(agentId, reason, ctx) {
+  ctx.streamingTextByAgent[agentId] = "";
+  ctx.toolCallsByAgent[agentId] = [];
+  ctx.readOnlyToolCallsByAgent[agentId] = [];
+  const project = ctx.agentProject[agentId] || ctx.project;
   // T6 : libérer les réservations du projet à l'échec du tour du codeur.
   await cleanupReservationsForAgent(agentId, project);
-  busState.activeAgents.delete(agentId);
-  delete busState.agentProject[agentId];
+  ctx.activeAgents.delete(agentId);
+  delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
   // de la file d'attente, s'il y en a une.
   if (project) await launchNextQueued(agentId, project);
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
-  if (busState.parallelGroup && busState.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
-    busState.parallelGroup.results[agentId] = { status: "error", text: reason };
-    busState.parallelGroup.pending--;
-    if (busState.parallelGroup.pending <= 0) {
-      const group = busState.parallelGroup;
-      busState.parallelGroup = null;
+  if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+    ctx.parallelGroup.results[agentId] = { status: "error", text: reason };
+    ctx.parallelGroup.pending--;
+    if (ctx.parallelGroup.pending <= 0) {
+      const group = ctx.parallelGroup;
+      ctx.parallelGroup = null;
       await group.onComplete(group.results);
     }
     return;
   }
-  if (busState.callStack.length > 0) {
-    const caller = busState.callStack.pop();
+  if (ctx.callStack.length > 0) {
+    const caller = ctx.callStack.pop();
     const result = buildResultPrompt(agentId, "error", `Erreur de l'agent ${agentId} : ${reason}`, busState.config.agent_max_result_tokens);
     emit("result", { from: agentId, to: caller.agentId, text: result });
     await runAgentTurn(busState.agents.get(caller.agentId), result);
   } else {
     emit("error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
-    resetBusState();
+    endRun(ctx.project);
   }
 }
 
 export async function startAgentsRun(userPrompt, projectContext = "") {
-  await releaseStuckRunLock();
-  if (busState.runState === "running") {
-    throw new Error("Une run est déjà en cours.");
+  const runProject = window._pilotProjectPath || ".";
+  await releaseStuckRunLock(runProject);
+  if (getRunState(runProject) === "running") {
+    throw new Error("Une run est déjà en cours sur ce projet.");
   }
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
 
-  resetBusState();
-  busState.runState = "running";
-  busState.currentAgentId = busState.coordinator.id;
-  busState.callStack = [];
-  turnCount = 0;
+  const ctx = beginRun(runProject);
+  ctx.currentAgentId = busState.coordinator.id;
+  ctx.callStack = [];
+  ctx.turnCount = 0;
 
   const manifest = buildCoordinatorManifest(Array.from(busState.agents.values()));
   const brief = `${userPrompt}\n\n${manifest}`;
@@ -903,18 +993,21 @@ export async function startAgentsRun(userPrompt, projectContext = "") {
  * `assignments` : [{ agentId, brief }].
  */
 export async function startParallelRun(assignments, projectContext = "", options) {
-  await releaseStuckRunLock();
-  if (busState.runState === "running") {
-    throw new Error("Une run est déjà en cours.");
+  // T2 : la run est scopée au PROJET cible (assignments[0].project, sinon projet
+  // actif). Deux runs sur des projets DIFFÉRENTS peuvent tourner en parallèle.
+  const runProject = (assignments && assignments[0] && assignments[0].project) || window._pilotProjectPath || ".";
+  await releaseStuckRunLock(runProject);
+  // T2 : garde projet-scopée — une run sur un AUTRE projet ne bloque pas.
+  if (getRunState(runProject) === "running") {
+    throw new Error("Une run est déjà en cours sur ce projet.");
   }
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
 
-  resetBusState();
-  busState.runState = "running";
-  busState.callStack = [];
-  turnCount = 0;
+  const ctx = beginRun(runProject);
+  ctx.callStack = [];
+  ctx.turnCount = 0;
 
   emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
   try {
@@ -922,14 +1015,13 @@ export async function startParallelRun(assignments, projectContext = "", options
       const aggregated = aggregateParallelResults(results);
       emit("parallelDone", { results });
       emit("done", { agentId: "parallel", text: aggregated });
-      // Bug #9 : libérer le verrou de run à la fin normale (ou erreur agrégée)
-      // de la run parallèle. Sans ce reset, runState restait "running" et les
-      // appels suivants à run_agents échouaient avec « Une run est déjà en cours ».
-      resetBusState();
-    }, options);
+      // Bug #9 + T4 : libérer le verrou de run de CE PROJET à la fin normale (ou
+      // erreur agrégée) de la run parallèle, sans toucher aux autres projets.
+      endRun(runProject);
+    }, options, runProject, ctx);
   } catch (e) {
     // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
-    resetBusState();
+    endRun(runProject);
     throw e;
   }
 }
@@ -995,28 +1087,42 @@ export async function runAgentsForAssistantAsync(assignments, onDone, onError, o
 }
 
 /**
- * Source de vérité « une run est occupée ou non » : retourne `true` si le bus
- * d'agents exécute actuellement une run (état réel `busState.runState ===
- * "running"`).
+ * Source de vérité « une run est occupée ou non » (par projet). Retourne `true`
+ * si une run est en cours sur le projet donné. Sans argument (ou projet vide),
+ * retourne `true` si une run est en cours sur N'IMPORTE QUEL projet (rétrocompat
+ * pour isRunStillActive / watchdog global de l'assistant).
  *
  * Utilisée par l'assistant (super-agent.js, outil `run_agents`) en plus de son
- * flag local `runAgentsInFlight` pour détecter TOUTES les runs en cours, y
- * compris celles lancées hors de sa file (mode manuel, run directe, bus resté
- * bloqué en "running"). Sans cette garde, une demande arrivant pendant une run
- * dont le flag local est faux passait la file puis échouait brutalement avec
- * « Une run est déjà en cours » (levé par `startParallelRun`).
+ * flag local `runAgentsInFlightByProject` pour détecter TOUTES les runs en
+ * cours, y compris celles lancées hors de sa file (mode manuel, run directe,
+ * bus resté bloqué en "running"). Sans cette garde, une demande arrivant
+ * pendant une run dont le flag local est faux passait la file puis échouait
+ * brutalement avec « Une run est déjà en cours » (levé par startParallelRun).
+ * @param {string} [project]
  * @returns {boolean}
  */
-export function isRunInProgress() {
-  return busState.runState === "running";
+export function isRunInProgress(project) {
+  const keys = project ? [runKey(project)] : Object.keys(busState.runs);
+  return keys.some((k) => {
+    const ctx = busState.runs[k];
+    return ctx && (ctx.runState === "running" || ctx.runState === "stopping");
+  });
 }
 
 export function stopAgentsRun(options = {}) {
-  if (busState.runState !== "running") return;
-  busState.runState = "stopping";
-  // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
-  for (const agentId of busState.activeAgents) {
-    invoke("abort_agent_process", { agentId, project: busState.agentProject[agentId] || null }).catch(() => {});
+  // stopAgentsRun reste volontairement GLOBAL (l'utilisateur arrête tout).
+  const runningKeys = Object.keys(busState.runs).filter((k) => {
+    const s = busState.runs[k].runState;
+    return s === "running" || s === "stopping";
+  });
+  if (runningKeys.length === 0) return;
+  for (const key of runningKeys) {
+    const ctx = busState.runs[key];
+    ctx.runState = "stopping";
+    // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
+    for (const agentId of ctx.activeAgents) {
+      invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
+    }
   }
   // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
   // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
@@ -1024,7 +1130,7 @@ export function stopAgentsRun(options = {}) {
   if (!options.silent) {
     emit("stop", {});
   }
-  resetBusState();
+  clearAllRuns();
 }
 
 export async function stopAllAgentProcesses() {
@@ -1034,14 +1140,18 @@ export async function stopAllAgentProcesses() {
 async function runAgentTurn(agent, brief, projectContext = "", project = null, options) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
-    resetBusState();
     return;
   }
 
-  busState.currentAgentId = agent.id;
-  busState.activeAgents.add(agent.id);
-  busState.streamingTextByAgent[agent.id] = "";
-  busState.isCompacting = false; // par sécurité si une compaction a été interrompue sans compaction_end
+  // Ciblage de projet (run_agents) : cwd = projet cible si fourni, sinon projet
+  // actif (rétrocompatible). Mémorisé pour router les commandes (abort/command/
+  // prompt) vers la bonne session pendant le tour.
+  const cwd = project || window._pilotProjectPath || ".";
+  const ctx = getRunCtx(cwd);
+  ctx.currentAgentId = agent.id;
+  ctx.activeAgents.add(agent.id);
+  ctx.streamingTextByAgent[agent.id] = "";
+  ctx.isCompacting = false; // par sécurité si une compaction a été interrompue sans compaction_end
 
   const backend = backendKind();
   const prompt = buildAgentPrompt(agent, brief, projectContext, backend, "");
@@ -1049,11 +1159,7 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   const [provider, ...rest] = model.split("/");
   const modelId = rest.join("/");
 
-  // Ciblage de projet (run_agents) : cwd = projet cible si fourni, sinon projet
-  // actif (rétrocompatible). Mémorisé pour router les commandes (abort/command/
-  // prompt) vers la bonne session pendant le tour.
-  const cwd = project || window._pilotProjectPath || ".";
-  busState.agentProject[agent.id] = cwd;
+  ctx.agentProject[agent.id] = cwd;
   const cfg = busState.config || {};
   const piPath = cfg.rpc_pi_path || "";
   const noSession = !agent.keep_context;
@@ -1144,17 +1250,17 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       });
     }
 
-    await sendPromptToAgent(agent.id, prompt);
-    resetTimeout();
+    await sendPromptToAgent(agent.id, prompt, ctx);
+    resetTimeout(ctx);
     console.log("[agents-bus] prompt sent to", agent.id);
   } catch (err) {
     console.error("[agents-bus] runAgentTurn error", agent.id, err);
-    failAgentTurn(agent.id, String(err));
+    failAgentTurn(agent.id, String(err), ctx);
   }
 }
 
-async function sendPromptToAgent(agentId, message) {
-  await invoke("send_agent_process_prompt", { agentId, message, project: busState.agentProject[agentId] || null });
+async function sendPromptToAgent(agentId, message, ctx) {
+  await invoke("send_agent_process_prompt", { agentId, message, project: ctx.agentProject[agentId] || ctx.project || null });
 }
 
 /**
@@ -1164,8 +1270,8 @@ async function sendPromptToAgent(agentId, message) {
  * Les agents parallèles sont des agents « feuille » : ils exécutent leur brief
  * et retournent leur résultat (pas de délégation [[CALL]] imbriquée en V1).
  */
-async function dispatchParallel(assignments, onComplete, options) {
-  busState.parallelGroup = {
+async function dispatchParallel(assignments, onComplete, options, runProject, ctx) {
+  ctx.parallelGroup = {
     assignments,
     pending: assignments.length,
     results: {},
@@ -1174,17 +1280,17 @@ async function dispatchParallel(assignments, onComplete, options) {
   for (const a of assignments) {
     const agent = busState.agents.get(a.agentId);
     if (!agent) {
-      busState.parallelGroup.results[a.agentId] = { status: "error", text: `Agent "${a.agentId}" inconnu.` };
-      busState.parallelGroup.pending--;
+      ctx.parallelGroup.results[a.agentId] = { status: "error", text: `Agent "${a.agentId}" inconnu.` };
+      ctx.parallelGroup.pending--;
       continue;
     }
-    const budgetCheck = ensureBudget(a.agentId);
+    const budgetCheck = ensureBudget(a.agentId, ctx);
     if (!budgetCheck.ok) {
-      busState.parallelGroup.results[a.agentId] = { status: "error", text: budgetCheck.message };
-      busState.parallelGroup.pending--;
+      ctx.parallelGroup.results[a.agentId] = { status: "error", text: budgetCheck.message };
+      ctx.parallelGroup.pending--;
       continue;
     }
-    consumeBudget(a.agentId);
+    consumeBudget(a.agentId, ctx);
     // T5 : exclusivité des spécialités par projet. Si un agent de même agent_id
     // est déjà actif sur le même projet, mettre la demande en file d'attente au
     // lieu de la lancer (elle se lancera automatiquement à la fin de la tâche en
@@ -1192,8 +1298,8 @@ async function dispatchParallel(assignments, onComplete, options) {
     // que la run ne se termine pas avant son exécution.
     const project = a.project || window._pilotProjectPath || ".";
     if (await isAgentActiveOnProject(a.agentId, project)) {
-      enqueueExclusivity(busState.exclusivityQueue, a.agentId, project, a);
-      busState.parallelGroup.results[a.agentId] = {
+      enqueueExclusivity(ctx.exclusivityQueue, a.agentId, project, a);
+      ctx.parallelGroup.results[a.agentId] = {
         status: "queued",
         text: `⏳ Demande mise en file d'attente : l'agent ${a.agentId} est déjà actif sur ce projet. Elle se lancera automatiquement à la fin de la tâche en cours.`,
       };
@@ -1204,9 +1310,9 @@ async function dispatchParallel(assignments, onComplete, options) {
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.
-  if (busState.parallelGroup && busState.parallelGroup.pending <= 0) {
-    const group = busState.parallelGroup;
-    busState.parallelGroup = null;
+  if (ctx.parallelGroup && ctx.parallelGroup.pending <= 0) {
+    const group = ctx.parallelGroup;
+    ctx.parallelGroup = null;
     await group.onComplete(group.results);
   }
 }

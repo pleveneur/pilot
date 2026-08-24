@@ -109,6 +109,15 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let pending_clone = pending.clone();
     let app_clone = app_handle.clone();
     let agent_id_owned = agent_id.map(|s| s.to_string());
+    // Projet cible (cwd) : ajouté au payload des événements agents (bus H2 V2)
+    // pour que le frontend puisse router les événements par projet et faire
+    // tourner le MÊME type d'agent en parallèle sur des projets DIFFÉRENTS
+    // (le runState et le parallelGroup sont désormais indexés par projet).
+    let project_owned = if agent_id.is_some() {
+        Some(cwd.to_string())
+    } else {
+        None
+    };
     let observer_stdout = observer.clone();
 
     // Thread de lecture stdout
@@ -117,7 +126,7 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let channel_stdout = event_channel.to_string();
     let broadcast_channel_owned = broadcast_channel;
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), observer_stdout, broadcast_channel_owned);
+        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), project_owned.as_deref(), observer_stdout, broadcast_channel_owned);
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
         // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
         // pour un changement de projet distant) n'émet rien → le desktop
@@ -224,6 +233,7 @@ fn read_jsonl_loop(
     event_tx: tokio::sync::broadcast::Sender<Value>,
     event_channel: &str,
     agent_id: Option<&str>,
+    project: Option<&str>,
     observer: Option<EventObserver>,
     broadcast_channel: Option<String>,
 ) {
@@ -279,7 +289,7 @@ fn read_jsonl_loop(
 
                             // Émettre l'événement vers le frontend pour tout le reste
                             let emit_value = if let Some(id) = agent_id {
-                                serde_json::json!({"agent_id": id, "event": value})
+                                serde_json::json!({"agent_id": id, "project": project, "event": value})
                             } else {
                                 value.clone()
                             };

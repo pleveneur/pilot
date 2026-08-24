@@ -160,39 +160,43 @@ let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
 // isStreaming peut être en retard sur le backend réel).
 let backendBusy = false;
 
-// P1-6 : suivi des run_agents lancés par l'assistant. Quand deux lancements se
-// chevauchent (le bus agents refuse « Une run est déjà en cours »), le second
-// est mis en file d'attente au lieu d'échouer brutalement, puis lancé à la fin
-// de la run en cours. P1-5 : la finalisation (settleRun) est module-level et
-// passée par inject_session_summary (Rust) → elle survit à la fermeture de
-// l'onglet 🧭 (notification + injection du résultat).
-let runAgentsInFlight = false;
-const runAgentsQueue = []; // { launch }
-// Filet de sécurité (watchdog) : si une run ne se termine pas sous quelques
-// minutes (ex: blocage du lancement, verrou graphe), on réinitialise le flag
-// `runAgentsInFlight` et on vide la file pour empêcher le blocage permanent
-// de toutes les runs suivantes. Timer module-level, annulé dans `settleRun`.
-let runAgentsWatchdog = null;
+// P1-6 + T5 : suivi des run_agents lancés par l'assistant, INDEXÉ PAR PROJET.
+// Deux runs vers des PROJETS DIFFÉRENTS ne se mettent PAS en file mutuellement
+// (parallélisme par projet) ; seules les runs vers le MÊME projet sont mises en
+// file quand l'une est déjà en cours. P1-5 : la finalisation (settleRun) est
+// module-level et passée par inject_session_summary (Rust) → elle survit à la
+// fermeture de l'onglet 🧭 (notification + injection du résultat).
+let runAgentsInFlightByProject = {}; // project → true (run en cours pour ce projet)
+const runAgentsQueueByProject = {}; // project → [{ launch }]
+// Filet de sécurité (watchdog) PAR PROJET : si une run ne se termine pas sous
+// quelques minutes (ex: blocage du lancement, verrou graphe), on réinitialise
+// le flag du projet et on vide sa file pour empêcher le blocage permanent des
+// runs suivantes de CE projet. Timer module-level, annulé dans `settleRun`.
+let runAgentsWatchdogByProject = {}; // project → timer id
 const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
 
 /**
  * Filet de sécurité CONSCIENT DE L'ACTIVITÉ (watchdog run_agents) : détermine
- * si une run d'agents de l'assistant est encore réellement active, pour ne
- * JAMAIS couper une tâche légitime longue qui progresse encore.
+ * si une run d'agents de l'assistant est encore réellement active sur le projet
+ * donné, pour ne JAMAIS couper une tâche légitime longue qui progresse encore.
  *   - Source de vérité du verrou : si le bus d'agents exécute encore une run
- *     (`isRunInProgress()`), l'agent travaille → actif.
+ *     sur ce projet (`isRunInProgress(runProject)`), l'agent travaille → actif.
  *   - Sinon, on sonde la supervision (`get_agent_supervision`) : si un agent
- *     est encore vivant (`alive`), la run est considérée active.
+ *     du projet cible est encore vivant (`alive`), la run est considérée active.
  *   - Fail-open : en cas d'erreur de supervision, on renvoie `true` (actif) —
  *     une erreur de supervision ne doit JAMAIS couper une run saine.
+ * @param {string} [runProject]
  * @returns {Promise<boolean>}
  */
-async function isRunStillActive() {
-  if (isRunInProgress()) return true;
+async function isRunStillActive(runProject) {
+  if (isRunInProgress(runProject)) return true;
   try {
     const sup = await invoke("get_agent_supervision");
     if (!sup || !sup.projects) return false;
     for (const proj of sup.projects) {
+      // T6 : sonde scopée au projet — ne considérer que les agents vivants du
+      // projet cible, pour ne pas confondre une run d'un autre projet.
+      if (runProject && proj && proj.path && proj.path !== runProject) continue;
       for (const agent of proj.agents || []) {
         if (agent && agent.alive) return true;
       }
@@ -1933,23 +1937,29 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // d'échouer si une run est déjà en cours (bus agents : « Une run est
         // déjà en cours »).
         let runSettled = false;
+        // T5 : la file et le verrou de run sont indexés PAR PROJET (`target` =
+        // projet cible de la run). Une run sur un AUTRE projet ne bloque pas.
         const settleRun = (ok, result) => {
           if (runSettled) return; // anti double-résolution (onDone + catch)
           runSettled = true;
-          runAgentsInFlight = false;
-          // Annule le watchdog : la run s'est terminée normalement.
-          if (runAgentsWatchdog) {
-            clearTimeout(runAgentsWatchdog);
-            runAgentsWatchdog = null;
+          runAgentsInFlightByProject[target] = false;
+          // Annule le watchdog du projet : la run s'est terminée normalement.
+          const wd = runAgentsWatchdogByProject[target];
+          if (wd) {
+            clearTimeout(wd);
+            delete runAgentsWatchdogByProject[target];
           }
           // Injection + notification desktop + son (survit à la fermeture de
           // l'onglet : fonctions module-level, persistance côté Rust).
           finishRunAgentsToSuperAgent(result, projectPath, ok);
-          // Lancer la run suivante mise en file, s'il y en a une.
-          const next = runAgentsQueue.shift();
+          // Lancer la run suivante mise en file pour CE projet, s'il y en a une.
+          const queue = runAgentsQueueByProject[target] || [];
+          const next = queue.shift();
           if (next) {
-            runAgentsInFlight = true;
+            runAgentsInFlightByProject[target] = true;
             next.launch();
+          } else {
+            delete runAgentsQueueByProject[target];
           }
         };
         const launchRun = () => {
@@ -2015,22 +2025,23 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             launchRun();
           }
         };
-        // Étape 2 : garde anti-chevauchement (P1-6) — met en file si une run est
-        // déjà en cours, sinon lance immédiatement. La détection s'appuie sur le
-        // flag local `runAgentsInFlight` ET sur l'état réel du bus via
-        // `isRunInProgress()` (source de vérité du verrou « Une run est déjà en
-        // cours » levé par agents-bus.js). Ce flag local peut être en retard
-        // (run lancée hors de la file de l'assistant, watchdog ayant réinitialisé
-        // le flag alors que le bus est resté occupé) : en vérifiant aussi le bus,
-        // une demande arrivant pendant une run en cours est TOUJOURS mise en
-        // file, jamais un échec brutal.
+        // Étape 2 : garde anti-chevauchement (P1-6 + T5) — met en file si une run
+        // est déjà en cours sur CE projet, sinon lance immédiatement. La détection
+        // s'appuie sur le flag local du projet `runAgentsInFlightByProject[target]`
+        // ET sur l'état réel du bus via `isRunInProgress(target)` (source de vérité
+        // du verrou « Une run est déjà en cours » levé par agents-bus.js). Ce flag
+        // local peut être en retard (run lancée hors de la file de l'assistant,
+        // watchdog ayant réinitialisé le flag alors que le bus est resté occupé) :
+        // en vérifiant aussi le bus, une demande arrivant pendant une run en cours
+        // sur CE projet est TOUJOURS mise en file, jamais un échec brutal.
         const startRun = () => {
-          if (runAgentsInFlight || isRunInProgress()) {
-            runAgentsQueue.push({ launch: launchWithEstimate });
-            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
+          if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
+            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+            runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
             return;
           }
-          runAgentsInFlight = true;
+          runAgentsInFlightByProject[target] = true;
           // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine
           // pas sous 5 min, on ne réinitialise PAS aveuglément. On vérifie
           // d'abord si la run est encore réellement active (bus en cours, agent
@@ -2042,23 +2053,23 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // Si la run s'est terminée pendant la sonde (settleRun appelé), ne
             // rien faire : le désarmement normal a déjà eu lieu.
             if (runSettled) return;
-            const stillActive = await isRunStillActive();
+            const stillActive = await isRunStillActive(target);
             // La run a pu se terminer pendant la sonde : ne rien faire non plus.
             if (runSettled) return;
             if (stillActive) {
               // La run progresse encore : repousser l'échéance, continuer
               // d'attendre. Jamais de coupe artificielle d'une tâche saine.
-              runAgentsWatchdog = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
+              runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
               return;
             }
             // La run est réellement morte/inactive : comportement actuel.
             console.warn("[super-agent] watchdog : run d'agents bloquée, réinitialisation du flag et vidage de la file.");
-            runAgentsInFlight = false;
-            runAgentsWatchdog = null;
-            runAgentsQueue.length = 0;
+            runAgentsInFlightByProject[target] = false;
+            delete runAgentsWatchdogByProject[target];
+            if (runAgentsQueueByProject[target]) { runAgentsQueueByProject[target].length = 0; delete runAgentsQueueByProject[target]; }
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
           };
-          runAgentsWatchdog = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
+          runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           launchWithEstimate();
         };
         startRun();
