@@ -2,7 +2,8 @@
 //
 // Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
 // (assistant + codeurs). Le cercle « respire » (animation agent-pulse) dès
-// qu'UN agent travaille. Au clic : liste déroulante (fond transparent) avec un
+// qu'UN agent travaille. Au clic : liste déroulante (fond solide, teinté violet
+// assistant) avec un
 // cercle respirant par agent, puis une fiche (nom, état, projet, dernière
 // activité) avec un bouton « Afficher l'onglet ».
 //
@@ -95,7 +96,7 @@ export function anyBusy(list) {
   return list.some((a) => a.busy);
 }
 
-/** Rendu HTML de la liste déroulante (fond transparent, un item par agent).
+/** Rendu HTML de la liste déroulante (fond solide teinté violet, un item par agent).
  * Affiche la pastille (cercle) ainsi que le nom de l'agent, et son projet s'il
  * est présent. Le nom complet (avec projet) reste accessible au survol via un
  * tooltip (title) sur le bouton. */

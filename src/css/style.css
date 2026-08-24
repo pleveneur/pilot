@@ -1134,7 +1134,7 @@ body.theme-light.theme-tokyo-day {
 /* --- Indicateur d'activité des agents (haut droite) ---
    Cercle flottant en haut à droite reflétant l'activité de TOUS les agents
    (assistant + codeurs). Le cercle « respire » dès qu'un agent travaille.
-   Au clic : liste déroulante (fond transparent) + fiche agent. */
+   Au clic : liste déroulante (fond solide, teinté violet) + fiche agent. */
 #agent-activity {
   position: fixed;
   top: 8px;
@@ -1165,7 +1165,7 @@ body.theme-light.theme-tokyo-day {
   top: 22px;
   right: 0;
   min-width: 150px;
-  background: color-mix(in srgb, var(--superagent-accent) 8%, transparent); /* translucide, teinté violet (assistant) */
+  background: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-3)); /* fond solide, teinté violet (assistant) */
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border-radius: var(--radius-sm);
   padding: 4px;
