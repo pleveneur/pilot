@@ -3487,6 +3487,20 @@ body.zen-mode #action-panel {
   line-height: 1.4;
 }
 
+/* Tâche #136 — bannière d'anomalie « l'assistant n'a aucun outil ».
+   Affichée dans l'onglet 🧭 quand les extensions assistant n'ont pas été
+   chargées (ex: porte probe_extension_support qui échoue sur PLh) : sans
+   outils, l'assistant ne peut que réfléchir — on le signale clairement. */
+.superagent-tools-warning {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+  font-size: var(--font-sm);
+  line-height: 1.4;
+}
+
 /* Chantier #132 — barre des questions en attente.
    Rangée de boutons de choix (assistant + relais d'agents) affichée SOUS la
    barre de saisie principale, hors du fil défilant (toujours accessible).

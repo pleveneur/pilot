@@ -772,6 +772,12 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 L'onglet **🧭 Assistant** est un assistant dédié qui **suit tous vos projets**
 (organisés par client) sans jamais modifier vos fichiers. Il lit, observe,
 apprend et répond.
+- **Tâche #136 — Détection d'absence d'outils** : à l'ouverture de l'onglet,
+  si l'assistant n'a **aucun outil** à sa disposition (ex: outils qui ne
+  remontent pas depuis le backend), une bannière d'anomalie s'affiche en haut
+  du chat (« ⚠️ Anomalie : l'assistant n'a aucun outil, il ne peut que
+  réfléchir ») au lieu de laisser croire qu'il fonctionne normalement.
+  Comportement normal (outils présents) inchangé.
 - **#30 — Restauration au démarrage** : si l'onglet 🧭 était **ouvert à la
   fermeture** de Pilot, il est **rouvert automatiquement au redémarrage**
   (état global persisté dans la config, pas par projet).

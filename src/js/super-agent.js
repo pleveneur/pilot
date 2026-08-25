@@ -662,6 +662,35 @@ function flushPendingInfo() {
   }
 }
 
+/**
+ * Tâche #136 : détecte une ABSENCE d'outils de l'assistant et affiche la
+ * bannière d'anomalie le cas échéant. Le statut des extensions (source des
+ * outils) est posé au spawn de la session super-agent (Rust) ; comme le spawn
+ * est lancé en fire-and-forget juste avant, on interroge en polling jusqu'à ce
+ * que le statut soit connu. Fail-open : si on ne peut pas le déterminer (jamais
+ * lancé, erreur), on n'affiche rien. Le comportement normal (outils présents)
+ * est strictement inchangé (bannière masquée).
+ * @param {HTMLElement|null} bannerEl Élément bannière à afficher/masquer.
+ */
+async function checkSuperAgentTools(bannerEl) {
+  let status = null;
+  // ~10 s max : le spawn écrit les extensions puis lance pi ; on attend que le
+  // statut soit connu sans bloquer l'ouverture de l'onglet.
+  for (let i = 0; i < 20; i++) {
+    try {
+      status = await invoke("get_super_agent_tools_status");
+    } catch (_) {
+      status = null;
+    }
+    if (status && status.known) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!status || !status.known) return;
+  const noTools =
+    !status.ext_supported || (Number(status.extensions_built) || 0) === 0;
+  if (bannerEl) bannerEl.hidden = !noTools;
+}
+
 // ── Création de l'interface ──
 
 export async function createSuperAgent(container) {
@@ -724,6 +753,19 @@ export async function createSuperAgent(container) {
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
   wrapper.appendChild(toolbar);
+
+  // Tâche #136 : bannière d'anomalie — si l'assistant n'a AUCUN outil à sa
+  // disposition (extensions assistant non chargées au spawn, ex: porte
+  // `probe_extension_support` qui échoue sur PLh), on le signale clairement
+  // plutôt que de laisser croire qu'il fonctionne normalement. Masquée par
+  // défaut : le comportement normal (outils présents) reste inchangé.
+  const toolsBanner = document.createElement("div");
+  toolsBanner.className = "superagent-tools-warning";
+  toolsBanner.hidden = true;
+  toolsBanner.textContent =
+    "⚠️ Anomalie : l'assistant n'a aucun outil à sa disposition, il ne peut que réfléchir. " +
+    "Les outils ne remontent pas depuis le backend — vérifiez votre configuration.";
+  wrapper.appendChild(toolsBanner);
 
   // Zone de saisie
   const inputBar = document.createElement("div");
@@ -942,6 +984,10 @@ export async function createSuperAgent(container) {
   invoke("start_super_agent_session").catch((err) => {
     console.error("Erreur démarrage session super-agent:", err);
   });
+  // Tâche #136 : au démarrage de l'onglet, détecter une absence d'outils de
+  // l'assistant (anomalie) et afficher la bannière le cas échéant. Fire-and-
+  // forget : ne bloque pas l'ouverture de l'onglet.
+  checkSuperAgentTools(toolsBanner);
   // T5 : à l'ouverture de l'onglet 🧭, rejouer les résumés en attente
   // (comptes-rendus persistés mais jamais délivrés car session fermée/occupée).
   // Fire-and-forget : ne bloque pas l'ouverture de l'onglet.

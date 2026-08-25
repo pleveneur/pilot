@@ -932,9 +932,17 @@ pub fn super_agent_schedule_list(app: AppHandle) -> Result<Value, String> {
 
 /// Tick du ticker frontend (toutes les 10 s). Retourne les planifications dues
 /// (au plus 1 par planification et par tick, marquées atomiquement) uniquement
-/// si la session super-agent est vivante — session morte = pas de tick.
+/// si la session super-agent est vivante. Issue #134 : si la session n'est pas
+/// vivante (jamais démarrée / arrêtée / morte), on la démarre d'abord (comme
+/// les autres commandes schedule) avant d'interroger `schedule_due_and_mark`,
+/// afin que `last_run_at` soit marqué quand un rappel est dû et que la
+/// livraison du prompt puisse se faire.
 #[tauri::command]
 pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
+    // Démarrage lazy (idempotent) si la session est absente/morte, puis re-vérifie.
+    if !state.agent_service.superagent_alive() {
+        do_start_super_agent_session(state.inner(), &app)?;
+    }
     if !state.agent_service.superagent_alive() {
         return Ok(serde_json::json!({ "alive": false, "due": [], "count": 0 }));
     }
@@ -1010,6 +1018,23 @@ pub fn get_super_agent_state(state: State<AppState>, app: AppHandle) -> Result<V
     do_start_super_agent_session(state.inner(), &app)?;
     let cmd = serde_json::json!({"type": "get_state"});
     state.agent_service.send_superagent_sync_timeout(cmd, 8)
+}
+
+/// Tâche #136 : expose au frontend le statut des extensions du super-agent
+/// (source des outils de l'assistant). Permet de détecter une ABSENCE d'outils
+/// (anomalie) : si la porte `probe_extension_support` a échoué ou qu'aucune
+/// extension assistant n'a été construite, l'assistant n'a AUCUN outil et ne
+/// peut que réfléchir — on le signale clairement à l'utilisateur. Lecture
+/// seule : ne démarre rien, ne modifie aucun état. `known` est false tant que
+/// la session super-agent n'a jamais été lancée.
+#[tauri::command]
+pub fn get_super_agent_tools_status(state: State<AppState>) -> Result<Value, String> {
+    let status = state.agent_service.superagent_ext_status();
+    Ok(serde_json::json!({
+        "known": status.is_some(),
+        "ext_supported": status.map(|s| s.ext_supported).unwrap_or(false),
+        "extensions_built": status.map(|s| s.extensions_built).unwrap_or(0),
+    }))
 }
 
 // ── Config (nom, clients, association projet → client) ──

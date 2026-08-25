@@ -54,6 +54,17 @@ const SUPERAGENT_MAX_CRASHES: u32 = 3;
 /// (état d'erreur) au lieu de relancer le processus.
 const SUPERAGENT_RESTART_COOLDOWN: Duration = Duration::from_secs(30);
 
+/// Statut du chargement des extensions du super-agent (source des outils de
+/// l'assistant), enregistré au spawn de la session (tâche #136). Permet au
+/// frontend de détecter une ABSENCE d'outils (anomalie) : si la porte
+/// `probe_extension_support` échoue ou qu'aucune extension assistant n'est
+/// construite, l'assistant n'a AUCUN outil et ne peut que réfléchir.
+#[derive(Clone, Copy, Debug)]
+pub struct SuperAgentExtStatus {
+    pub ext_supported: bool,
+    pub extensions_built: usize,
+}
+
 /// Politique anti-boucle de redémarrage du super-agent. Logique PURE et
 /// testable : ne dépend d'aucun processus, uniquement des horodatages.
 /// - `crash_count` : crashs rapides consécutifs observés.
@@ -154,6 +165,10 @@ pub struct AgentService {
     // événements `agent-state-changed` depuis les transitions de session
     // (start/pause/stop) qui ne reçoivent pas `app` en paramètre.
     app: Mutex<Option<AppHandle>>,
+    // Tâche #136 : statut des extensions du super-agent au dernier spawn
+    // (source des outils de l'assistant). None tant que la session n'a jamais
+    // été lancée. Lu par le frontend pour détecter une absence d'outils.
+    superagent_ext: Mutex<Option<SuperAgentExtStatus>>,
 }
 
 impl AgentService {
@@ -168,6 +183,7 @@ impl AgentService {
                 blocked_until: None,
             }),
             superagent_start_lock: Mutex::new(()),
+            superagent_ext: Mutex::new(None),
         }
     }
 
@@ -176,6 +192,13 @@ impl AgentService {
     /// de session (start/pause/stop).
     pub fn set_app_handle(&self, app: AppHandle) {
         *self.app.lock().unwrap() = Some(app);
+    }
+
+    /// Retourne le statut d'extensions du dernier spawn de la session
+    /// super-agent (None si jamais lancée). Lecture seule pour le frontend
+    /// (tâche #136 : détection d'absence d'outils de l'assistant).
+    pub fn superagent_ext_status(&self) -> Option<SuperAgentExtStatus> {
+        *self.superagent_ext.lock().unwrap()
     }
 
     /// 5.2 (cahier) : remet l'état d'exécution de TOUS les agents à « non
@@ -1116,7 +1139,11 @@ impl AgentService {
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let mut extensions: Vec<String> = Vec::new();
-        if probe_extension_support(&state, pi_path) {
+        let ext_supported = probe_extension_support(&state, pi_path);
+        // Tâche #136 : diagnostic — confirmer pourquoi la liste d'outils du
+        // super-agent est vide sur certains backends (ex: plh). Journalise la
+        // porte, le nombre d'extensions construites et le dossier utilisé.
+        if ext_supported {
             if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("extensions");
                 if std::fs::create_dir_all(&dir).is_ok() {
@@ -1168,6 +1195,27 @@ impl AgentService {
                 }
             }
         }
+        // Tâche #136 : diagnostic — journalise pi_path, le résultat de la porte,
+        // le nombre d'extensions construites et le dossier d'extensions utilisé.
+        {
+            let ext_dir = app
+                .path()
+                .app_data_dir()
+                .map(|d| d.join("extensions"))
+                .ok();
+            eprintln!(
+                "[superagent-ext] spawn_superagent_session: pi_path={:?} ext_supported={} extensions_built={} ext_dir={:?}",
+                pi_path,
+                ext_supported,
+                extensions.len(),
+                ext_dir
+            );
+        }
+        // Tâche #136 : enregistrer le statut d'extensions du super-agent (source
+        // de ses outils) pour que le frontend puisse détecter une absence
+        // d'outils et l'afficher comme une anomalie.
+        *state.agent_service.superagent_ext.lock().unwrap() =
+            Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len() });
         let session = rpc_manager::spawn_and_start(
             cwd,
             pi_path,

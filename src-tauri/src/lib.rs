@@ -2220,6 +2220,7 @@ pub fn run() {
             super_agent::super_agent_search_sessions,
             super_agent::abort_super_agent,
             super_agent::get_super_agent_state,
+            super_agent::get_super_agent_tools_status,
             super_agent::get_super_agent_config,
             super_agent::set_super_agent_config,
             super_agent::set_super_agent_prompt,
