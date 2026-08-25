@@ -2155,6 +2155,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const DB_EXEC_SENTINEL = "PILOT_ASSISTANT_DB_EXEC::";
     const PROMPT_SENTINEL = "PILOT_ASSISTANT_PROMPT::";
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
+    const RUN_ASSISTANT_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_ASSISTANT_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
@@ -2438,6 +2439,92 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(RUN_ASSISTANT_AGENTS_SENTINEL)) {
+      // Outil run_assistant_agents (tâche #140) : l'assistant délègue une tâche
+      // à des agents d'assistant SANS rattachement à un projet. Les agents
+      // tournent dans l'espace réservé `~/.pilot/assistant/` (projet réservé
+      // ASSISTANT_SPACE, distinct de ""), sans contexte de projet injecté.
+      // Lancement en ARRIÈRE-PLAN (non bloquant), résultat agrégé injecté à la
+      // fin — comme run_agents mais sans projet cible, sans réservations et
+      // sans file par projet (clé de run distincte "__assistant__").
+      let info;
+      try {
+        info = JSON.parse(title.slice(RUN_ASSISTANT_AGENTS_SENTINEL.length));
+      } catch (_) {
+        await respondSuperAgent(id, JSON.stringify({ error: "Payload run_assistant_agents invalide." }), false);
+        return;
+      }
+      const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
+      const task = String(info.task || "").trim();
+      const workspace = (info.workspace && String(info.workspace).trim()) || null;
+      if (agentIds.length === 0 || !task) {
+        await respondSuperAgent(id, JSON.stringify({ error: "run_assistant_agents : au moins un agent et une tâche requis." }), false);
+        return;
+      }
+      try {
+        const registry = await loadAgentRegistry();
+        const known = new Set((registry.agents || []).map((a) => a && a.id));
+        const missing = agentIds.filter((aid) => !known.has(aid));
+        if (missing.length > 0) {
+          await respondSuperAgent(id, JSON.stringify({ error: `Agents inconnus : ${missing.join(", ")}.` }), false);
+          return;
+        }
+        appendSystemMessage(messagesEl, `🤖 Je lance la tâche d'assistant sur les agents : ${agentIds.join(", ")}…`);
+        // Enveloppe de brief STRUCTURÉ (même mécanisme que run_agents) pour que
+        // l'agent d'assistant réussisse du premier coup.
+        const brief = applyAssistantBriefEnvelope(task, {
+          forceStructured: configCache.super_agent_force_structured_brief !== false,
+          qualityGate: configCache.super_agent_quality_gate !== false,
+        });
+        // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
+        const target = ASSISTANT_SPACE;
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target }));
+        const projectPath = window._pilotProjectPath || null;
+        let runSettled = false;
+        const settleRun = (ok, result) => {
+          if (runSettled) return;
+          runSettled = true;
+          runAgentsInFlightByProject[target] = false;
+          const wd = runAgentsWatchdogByProject[target];
+          if (wd) {
+            clearTimeout(wd);
+            delete runAgentsWatchdogByProject[target];
+          }
+          finishRunAgentsToSuperAgent(result, projectPath, ok);
+        };
+        const startRun = () => {
+          if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
+            appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file et se lancera automatiquement.");
+            return;
+          }
+          runAgentsInFlightByProject[target] = true;
+          runAgentsForAssistantAsync(
+            assignments,
+            (result) => {
+              appendSystemMessage(messagesEl, `✅ Tâche d'assistant terminée par les agents sélectionnés.`);
+              settleRun(true, result);
+            },
+            (err) => {
+              const msg = err && err.message ? err.message : String(err);
+              appendSystemMessage(messagesEl, `❌ Échec de la run d'assistant : ${msg}`);
+              settleRun(false, `[Échec de la run d'assistant] ${msg}`);
+            },
+            { purge: true }
+          ).catch((e) => {
+            console.error("Erreur préparation run_assistant_agents (assistant):", e);
+            appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run d'assistant : ${e}`);
+            settleRun(false, `[Échec de la préparation de la run d'assistant] ${e}`);
+          });
+        };
+        startRun();
+        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
+      } catch (e) {
+        console.error("Erreur run_assistant_agents (assistant):", e);
+        appendSystemMessage(messagesEl, `❌ Échec de la run d'assistant : ${e}`);
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }
       return;

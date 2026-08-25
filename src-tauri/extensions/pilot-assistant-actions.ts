@@ -24,6 +24,12 @@ const ACTION_SENTINEL = "PILOT_ASSISTANT_ACTION::";
 // lance la run sur les agents sélectionnés et renvoie le résultat agrégé comme
 // `value` de la réponse (l'outil le retourne au LLM).
 const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
+// Sentinel préfixant le titre d'un `input` d'outil run_assistant_agents (tâche
+// #140). Pilot le détecte, lance la run sur les agents d'assistant (agents SANS
+// rattachement à un projet, tournant dans l'espace `~/.pilot/assistant/`) et
+// renvoie le résultat agrégé comme `value` de la réponse. Découplé de run_agents
+// qui reste lié aux projets.
+const RUN_ASSISTANT_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_ASSISTANT_AGENTS::";
 // Sentinel préfixant le titre d'un `input` d'outil project_snapshot. Pilot le
 // détecte, exécute la commande Rust `project_snapshot` (lecture seule) et renvoie
 // l'état structuré du projet (JSON) comme `value` de la réponse.
@@ -145,6 +151,33 @@ export default function (pi: ExtensionAPI) {
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "run_assistant_agents",
+    label: "Run Assistant Agents",
+    description:
+      "Lancer une tâche sur des agents d'assistant (agents SANS rattachement à un projet), pour un travail qui concerne l'assistant lui-même (recherche, analyse, tâches internes de coordination) plutôt qu'un projet. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés et tu leur confies une tâche. Pilot les lance (en parallèle si plusieurs) dans l'espace réservé ~/.pilot/assistant/ (pas de contexte de projet injecté) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail hors de tout projet. Bloque jusqu'à ce que les agents aient terminé.",
+    promptSnippet: "run_assistant_agents: sélectionner des agents d'assistant (sans projet) et lancer une tâche",
+    promptGuidelines: [
+      "Use run_assistant_agents when you need to execute work that is NOT tied to a specific project: research, analysis, internal coordination tasks for the assistant itself. The agents run in the reserved assistant workspace (~/.pilot/assistant/), without any project context.",
+      "Select the agent ids that best fit the task (e.g. a custom agent you created for analysis). Provide a clear, atomic task description.",
+      "Do NOT use this tool for work that must happen inside a project — use run_agents (with the project path) instead.",
+    ],
+    parameters: Type.Object({
+      agent_ids: Type.Array(Type.String({ description: "Identifiants des agents d'assistant à utiliser (au moins un)" })),
+      task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
+      workspace: Type.Optional(Type.String({ description: "Dossier de travail assistant (optionnel, défaut ~/.pilot/assistant)" })),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, workspace: params.workspace || null });
+      const result = await ctx.ui.input(RUN_ASSISTANT_AGENTS_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

@@ -199,6 +199,68 @@ pub fn stop_all_agent_processes(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ── Agents d'assistant (tâche #140) ──
+// Commandes IPC dédiées aux agents délégués par le super-agent SANS
+// rattachement à un projet. Elles délèguent au service sur la clé réservée
+// `ASSISTANT_SPACE` et, contrairement aux commandes des agents de projets,
+// NE tombent PAS en fallback vers le projet actif (un agent d'assistant n'a
+// jamais de projet).
+
+/// Démarre (ou reprend) le processus pi d'un agent d'assistant. `cwd` est
+/// l'espace de travail assistant (défaut `~/.pilot/assistant`) ; le service
+/// stocke la session sous la clé réservée `__assistant__\u{1f}<agent_id>`.
+/// Commande **async** (spawn node + écriture extensions) → spawn_blocking.
+#[tauri::command]
+pub async fn start_assistant_agent_process(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    agent_id: String,
+    cwd: String,
+    pi_path: String,
+    no_session: bool,
+) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_service
+            .start_assistant_agent(&app, &agent_id, &pi_path, no_session, &cwd)
+            .map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) start_assistant_agent_process: {}", e))?
+}
+
+/// Envoie un prompt à un agent d'assistant (session réservée ASSISTANT_SPACE).
+/// Commande **async** → spawn_blocking.
+#[tauri::command]
+pub async fn send_assistant_agent_prompt(
+    state: State<'_, AppState>,
+    agent_id: String,
+    message: String,
+) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cmd = serde_json::json!({ "type": "prompt", "message": message });
+        agent_service.send_assistant_agent(&agent_id, cmd)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) send_assistant_agent_prompt: {}", e))?
+}
+
+/// Arrête la session d'un agent d'assistant (processus tué, session retirée).
+#[tauri::command]
+pub fn stop_assistant_agent(state: State<AppState>, agent_id: String) -> Result<(), String> {
+    state.agent_service.stop_assistant_agent(&agent_id)
+}
+
+/// Arrête TOUTES les sessions des agents d'assistant (à la fermeture de
+/// l'onglet Assistant).
+#[tauri::command]
+pub fn stop_assistant_agents(state: State<AppState>) -> Result<(), String> {
+    state.agent_service.stop_assistant_agents();
+    Ok(())
+}
+
 pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     let cmd = serde_json::json!({ "type": "prompt", "message": message });

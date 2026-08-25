@@ -149,6 +149,13 @@ let busState = {
 
 // T1 : helpers purs d'accès à l'état de run PAR PROJET. Un appel sans projet
 // (clé ".") couvre le projet actif implicite.
+// Agents d'assistant (tâche #140) : projet réservé (jamais un vrai chemin de
+// projet). Quand une run cible ce token, l'agent tourne dans l'espace réservé
+// `~/.pilot/assistant/` : pas de contexte projet injecté, commandes IPC dédiées
+// (start_assistant_agent_process / send_assistant_agent_prompt), clé de run
+// distincte. Doit rester distinct de "" (super-agent) et de tout projet réel.
+const ASSISTANT_SPACE = "__assistant__";
+
 function runKey(project) {
   return project || ".";
 }
@@ -1147,6 +1154,7 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   // actif (rétrocompatible). Mémorisé pour router les commandes (abort/command/
   // prompt) vers la bonne session pendant le tour.
   const cwd = project || window._pilotProjectPath || ".";
+  const isAssistant = cwd === ASSISTANT_SPACE;
   const ctx = getRunCtx(cwd);
   ctx.currentAgentId = agent.id;
   ctx.activeAgents.add(agent.id);
@@ -1173,7 +1181,10 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // Quand le paramètre est activé, on écrit le handoff de contexte (comme
     // l'agent standard) pour que l'extension pilot-context.ts l'injecte en
     // plus du rôle propre de l'agent cible (concaténation).
-    if (cfg.super_agent_inherit_context === true) {
+    // Tâche #140 : jamais pour les agents d'assistant (hors projet) — pas de
+    // contexte de projet à injecter, et pas d'extension pilot-context dans
+    // l'espace assistant.
+    if (cfg.super_agent_inherit_context === true && !isAssistant) {
       try {
         const config = await invoke("get_config");
         let handoffBlocks = "";
@@ -1225,12 +1236,23 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       }
     }
 
-    await invoke("start_agent_process", {
-      agentId: agent.id,
-      cwd,
-      piPath,
-      noSession,
-    });
+    if (isAssistant) {
+      // Agent d'assistant (hors projet) : commandes IPC dédiées, session
+      // réservée ASSISTANT_SPACE, processus dans l'espace ~/.pilot/assistant/.
+      await invoke("start_assistant_agent_process", {
+        agentId: agent.id,
+        cwd,
+        piPath,
+        noSession,
+      });
+    } else {
+      await invoke("start_agent_process", {
+        agentId: agent.id,
+        cwd,
+        piPath,
+        noSession,
+      });
+    }
 
     // Anti-boucle (run_agents) : si `options.purge` est vrai, on purge la
     // conversation de l'agent AVANT la tâche (contexte vierge, comme le mode
@@ -1250,7 +1272,11 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       });
     }
 
-    await sendPromptToAgent(agent.id, prompt, ctx);
+    if (isAssistant) {
+      await sendPromptToAssistantAgent(agent.id, prompt);
+    } else {
+      await sendPromptToAgent(agent.id, prompt, ctx);
+    }
     resetTimeout(ctx);
     console.log("[agents-bus] prompt sent to", agent.id);
   } catch (err) {
@@ -1261,6 +1287,12 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
 
 async function sendPromptToAgent(agentId, message, ctx) {
   await invoke("send_agent_process_prompt", { agentId, message, project: ctx.agentProject[agentId] || ctx.project || null });
+}
+
+// Envoie un prompt à un agent d'assistant (hors projet) : commande IPC dédiée,
+// session résolue par le service sous la clé ASSISTANT_SPACE (aucun projet).
+async function sendPromptToAssistantAgent(agentId, message) {
+  await invoke("send_assistant_agent_prompt", { agentId, message });
 }
 
 /**

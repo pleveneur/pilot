@@ -36,6 +36,15 @@ pub const ORCH_REVIEWER_ID: &str = "orch-reviewer";
 /// Distinct des agents multi-rôles H2 V2.
 pub const SUPERAGENT_ID: &str = "superagent";
 
+/// Pseudo-projet réservé pour les « agents d'assistant » (tâche #140) :
+/// délégués par le super-agent à des agents SANS les rattacher à un projet.
+/// Jeton réservé distinct du `""` du super-agent et ne pouvant jamais être un
+/// vrai chemin de projet (aucune collision de clé possible). Les sessions de
+/// ces agents sont stockées dans le registre unique sous la clé composite
+/// `ASSISTANT_SPACE\u{1f}<agent_id>`, mais le processus pi tourne dans
+/// l'espace de travail assistant `~/.pilot/assistant/...`.
+pub const ASSISTANT_SPACE: &str = "__assistant__";
+
 /// Canal d'événements dédié au super-agent (isolé des canaux projet/agents).
 const SUPERAGENT_CHANNEL: &str = "rpc-event-superagent";
 
@@ -120,6 +129,11 @@ pub enum SpawnMode {
     MainSession,
     /// Agent multi-rôles H2 V2 — canal rpc-event-agents.
     AgentProcess,
+    /// Agent d'assistant (tâche #140) : délégué par le super-agent sans
+    /// rattachement à un projet. Stocké sous la clé `ASSISTANT_SPACE`, tourne
+    /// dans `~/.pilot/assistant/`. Canal rpc-event-agents, extensions assistant
+    /// lecture seule (pas de porte pré-écriture ni d'injection de contexte projet).
+    AssistantAgent,
 }
 
 /// État d'une session dans le registre unique de l'AgentService.
@@ -511,6 +525,10 @@ impl AgentService {
             SpawnMode::AgentProcess => {
                 Self::spawn_agent_process(app, project, agent_id, pi_path, no_session)?
             }
+            // Les agents d'assistant (tâche #140) sont démarrés via
+            // `start_assistant_agent` (clé réservée ASSISTANT_SPACE, espace de
+            // travail ~/.pilot/assistant), jamais via `start` (lié à un projet).
+            SpawnMode::AssistantAgent => unreachable!("AssistantAgent doit passer par start_assistant_agent"),
         };
         {
             let mut sessions = self.sessions.lock().unwrap();
@@ -861,12 +879,22 @@ impl AgentService {
         let mut out = Vec::new();
         for (project, agent_id, state, mode, alive, is_active) in raw {
             // Visibilité depuis la table agents (projet porté par la session).
-            let visible = self
-                .get_agent(app, &agent_id, Some(&project))
-                .ok()
-                .flatten()
-                .map(|a| a.visible)
-                .unwrap_or(false);
+            // Tâche #140 : pour les agents d'assistant (projet réservé
+            // `ASSISTANT_SPACE`), l'agent est GLOBAL (project_path NULL) → on
+            // résout la visibilité via `get_agent(None, agent_id)`.
+            let visible = if project == ASSISTANT_SPACE {
+                self.get_agent(app, &agent_id, None)
+                    .ok()
+                    .flatten()
+                    .map(|a| a.visible)
+                    .unwrap_or(false)
+            } else {
+                self.get_agent(app, &agent_id, Some(&project))
+                    .ok()
+                    .flatten()
+                    .map(|a| a.visible)
+                    .unwrap_or(false)
+            };
             // Dernière activité depuis la map d'anomalie (champs optionnels).
             let (last_activity, last_activity_relative, last_event, busy) = {
                 let m = anomaly_map.lock().unwrap();
@@ -1136,6 +1164,228 @@ impl AgentService {
         timeout_secs: u64,
     ) -> Result<Value, String> {
         self.send_sync_timeout("", SUPERAGENT_ID, command, timeout_secs)
+    }
+
+    // ── Agents d'assistant (tâche #140) ──
+    // Sessions déléguées par le super-agent à des agents SANS les rattacher à
+    // un projet. Stockées dans le registre unique sous la clé composite
+    // `ASSISTANT_SPACE\u{1f}<agent_id>` (projet pseudo-réservé "__assistant__",
+    // jamais un vrai chemin de projet). Le processus pi tourne dans l'espace de
+    // travail assistant `~/.pilot/assistant/...`. Ces agents sont des agents
+    // GLOBAUX (project_path = NULL dans la table agents) : leur visibilité est
+    // donc résolue via `get_agent(None, agent_id)`.
+
+    /// Dossier de travail réservé des agents d'assistant (`~/.pilot/assistant`).
+    /// Créé à l'usage (pas de pré-génération) ; sert de `cwd` aux processus pi
+    /// des agents d'assistant (découplé de tout projet réel).
+    pub fn assistant_workspace() -> Result<std::path::PathBuf, String> {
+        let dir = pilot_user_dir()?.join("assistant");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Création espace assistant: {}", e))?;
+        Ok(dir)
+    }
+
+    /// Démarre (ou reprend) la session d'un agent d'assistant. Stockée sous la
+    /// clé `ASSISTANT_SPACE\u{1f}<agent_id>`, processus lancé dans `space_cwd`
+    /// (défaut `~/.pilot/assistant`). Reprend une session vivante ; sinon lance
+    /// un nouveau processus. Retourne `true` si la session a été reprise
+    /// (processus vivant), `false` si un nouveau processus a été lancé.
+    pub fn start_assistant_agent(
+        &self,
+        app: &AppHandle,
+        agent_id: &str,
+        pi_path: &str,
+        no_session: bool,
+        space_cwd: &str,
+    ) -> Result<bool, String> {
+        let key = Self::session_key(ASSISTANT_SPACE, agent_id);
+        let cwd = if space_cwd.trim().is_empty() {
+            Self::assistant_workspace()?.to_string_lossy().to_string()
+        } else {
+            space_cwd.to_string()
+        };
+        let resumed = {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&key) {
+                let alive = entry
+                    .session
+                    .child
+                    .try_wait()
+                    .map(|s| s.is_none())
+                    .unwrap_or(false);
+                if alive {
+                    entry.state = SessionState::Active;
+                    true
+                } else {
+                    sessions.remove(&key);
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if resumed {
+            // Agent global (scope NULL) : visibilité/état par project_path None.
+            self.set_state(app, agent_id, None, true, false, &AgentProcessState::Running).ok();
+            return Ok(true);
+        }
+        let session = Self::spawn_assistant_session(app, agent_id, pi_path, no_session, &cwd)?;
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions.insert(
+                key,
+                SessionEntry {
+                    session,
+                    project: ASSISTANT_SPACE.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AssistantAgent,
+                },
+            );
+        }
+        self.set_state(app, agent_id, None, true, false, &AgentProcessState::Running).ok();
+        Ok(false)
+    }
+
+    /// Arrête la session d'un agent d'assistant (processus tué, session retirée).
+    pub fn stop_assistant_agent(&self, agent_id: &str) -> Result<(), String> {
+        let key = Self::session_key(ASSISTANT_SPACE, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        if let Some(mut entry) = sessions.remove(&key) {
+            rpc_manager::stop_session(&mut entry.session);
+        }
+        Ok(())
+    }
+
+    /// Arrête TOUTES les sessions des agents d'assistant. Appelé à la fermeture
+    /// de l'onglet Assistant (le super-agent ne doit pas laisser de processus
+    /// d'assistant orphelins). N'affecte ni les agents de projets ni le
+    /// super-agent (mode distinct).
+    pub fn stop_assistant_agents(&self) {
+        let mut sessions = self.sessions.lock().unwrap();
+        let keys: Vec<String> = sessions
+            .iter()
+            .filter(|(_, e)| e.mode == SpawnMode::AssistantAgent)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in keys {
+            if let Some(mut entry) = sessions.remove(&k) {
+                rpc_manager::stop_session(&mut entry.session);
+            }
+        }
+    }
+
+    /// Indique si la session d'un agent d'assistant est vivante (déjà lancée).
+    #[allow(dead_code)]
+    pub fn assistant_agent_alive(&self, agent_id: &str) -> bool {
+        let key = Self::session_key(ASSISTANT_SPACE, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Route une commande asynchrone vers la session d'un agent d'assistant.
+    pub fn send_assistant_agent(&self, agent_id: &str, command: Value) -> Result<(), String> {
+        self.send(ASSISTANT_SPACE, agent_id, command)
+    }
+
+    /// Route une commande synchrone vers la session d'un agent d'assistant.
+    #[allow(dead_code)]
+    pub fn send_assistant_agent_sync(&self, agent_id: &str, command: Value) -> Result<Value, String> {
+        self.send_sync(ASSISTANT_SPACE, agent_id, command)
+    }
+
+    /// Écrit les extensions assistant LECTURE SEULE sur disque et retourne leurs
+    /// chemins. Réutilisé par `spawn_assistant_session` (les agents d'assistant
+    /// tournent dans `~/.pilot/assistant/`, pas dans un projet). Retourne la
+    /// liste des chemins d'extensions construits (vide si non supporté).
+    fn write_assistant_extensions(app: &AppHandle, pi_path: &str) -> Vec<String> {
+        let state = app.state::<AppState>();
+        let mut extensions: Vec<String> = Vec::new();
+        if !probe_extension_support(&state, pi_path) {
+            return extensions;
+        }
+        let Ok(data_dir) = app.path().app_data_dir() else {
+            return extensions;
+        };
+        let dir = data_dir.join("extensions");
+        if std::fs::create_dir_all(&dir).is_err() {
+            return extensions;
+        }
+        let files: &[(&str, &str)] = &[
+            ("pilot-assistant-files.ts", include_str!("../extensions/pilot-assistant-files.ts")),
+            ("pilot-choices.ts", include_str!("../extensions/pilot-choices.ts")),
+            ("pilot-assistant-actions.ts", include_str!("../extensions/pilot-assistant-actions.ts")),
+            ("pilot-assistant-db.ts", include_str!("../extensions/pilot-assistant-db.ts")),
+            ("pilot-assistant-prompt.ts", include_str!("../extensions/pilot-assistant-prompt.ts")),
+            ("pilot-assistant-sessions.ts", include_str!("../extensions/pilot-assistant-sessions.ts")),
+            ("pilot-assistant-delegation.ts", include_str!("../extensions/pilot-assistant-delegation.ts")),
+            ("pilot-assistant-schedule.ts", include_str!("../extensions/pilot-assistant-schedule.ts")),
+            ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
+            ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
+        ];
+        for (name, content) in files {
+            let file = dir.join(name);
+            if std::fs::write(&file, content).is_ok() {
+                extensions.push(file.to_string_lossy().to_string());
+            }
+        }
+        extensions
+    }
+
+    /// Lance un nouveau processus pi --mode rpc pour un agent d'assistant.
+    /// Canal rpc-event-agents (comme les agents multi-rôles), extensions
+    /// assistant LECTURE SEULE (comme le super-agent), SANS porte pré-écriture
+    /// `pilot-reserve-gate` ni injection de contexte projet `pilot-context`
+    /// (ces agents tournent dans `~/.pilot/assistant/`, pas dans un projet).
+    fn spawn_assistant_session(
+        app: &AppHandle,
+        agent_id: &str,
+        pi_path: &str,
+        no_session: bool,
+        cwd: &str,
+    ) -> Result<rpc_manager::RpcSession, String> {
+        let state = app.state::<AppState>();
+        let extensions = Self::write_assistant_extensions(app, pi_path);
+        let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
+            cfg_path
+                .with_file_name("agent")
+                .join("sessions")
+                .join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
+        } else {
+            pilot_user_dir()?
+                .join("agent")
+                .join("sessions")
+                .join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
+        };
+        let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
+        let session = rpc_manager::spawn_and_start(
+            cwd,
+            pi_path,
+            no_session,
+            &session_dir_str,
+            None,
+            extensions,
+            app.clone(),
+            state.event_tx.clone(),
+            "rpc-event-agents",
+            Some(agent_id),
+            // Observateur d'anomalie par agent (clé réservée ASSISTANT_SPACE).
+            Some(anomaly::make_observer(
+                &state.agent_activity,
+                &state.agent_anomaly,
+                ASSISTANT_SPACE,
+                &format!("{}\u{1f}{}", ASSISTANT_SPACE, agent_id),
+            )),
+            None,
+        )
+        .map_err(|e| format!("Erreur lancement agent d'assistant {} : {}", agent_id, e))?;
+        Ok(session)
     }
 
     /// Lance un nouveau processus pi --mode rpc pour le super-agent (Assistant
@@ -1482,6 +1732,7 @@ fn collect_session_states(
             let mode = match entry.mode {
                 SpawnMode::MainSession => "main",
                 SpawnMode::AgentProcess => "agent_process",
+                SpawnMode::AssistantAgent => "assistant_agent",
             };
             let is_active = entry.mode == SpawnMode::MainSession
                 && active.as_deref() == Some(agent_id.as_str());
@@ -1835,6 +2086,82 @@ mod tests {
         assert!(svc.superagent_alive());
         svc.shutdown_all();
         assert!(!svc.superagent_alive(), "arrêt complet → session super-agent purgée");
+    }
+
+    /// La session d'un agent d'assistant (tâche #140) vit dans le registre
+    /// unique sous la clé `ASSISTANT_SPACE\u{1f}<agent_id>` (projet réservé
+    /// "__assistant__"). Elle doit être insensible à la fermeture de projet et
+    /// au `stop_all_agent_processes` (mode distinct), tout en étant arrêtée par
+    /// `stop_assistant_agent` / `stop_assistant_agents` et l'arrêt complet.
+    #[test]
+    fn assistant_agent_session_is_isolated() {
+        let svc = AgentService::new();
+        let key = AgentService::session_key(ASSISTANT_SPACE, "analyseur");
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: ASSISTANT_SPACE.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AssistantAgent,
+                },
+            );
+        }
+        assert!(svc.assistant_agent_alive("analyseur"), "session assistant vivante détectée");
+        // La fermeture d'un projet ne la tue pas.
+        svc.stop_project_sessions("/p/A");
+        assert!(svc.assistant_agent_alive("analyseur"), "fermeture de projet → session assistant intacte");
+        // stop_all_agent_processes (mode AgentProcess) ne la tue pas non plus.
+        svc.stop_all_agent_processes();
+        assert!(svc.assistant_agent_alive("analyseur"), "stop_all_agent_processes → session assistant intacte");
+        // stop_assistant_agent l'arrête précisément.
+        svc.stop_assistant_agent("analyseur").unwrap();
+        assert!(!svc.assistant_agent_alive("analyseur"), "stop_assistant_agent → session arrêtée");
+
+        // Réinsérer deux sessions puis stop_assistant_agents (fermeture onglet).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: ASSISTANT_SPACE.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AssistantAgent,
+                },
+            );
+            sessions.insert(
+                AgentService::session_key(ASSISTANT_SPACE, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: ASSISTANT_SPACE.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AssistantAgent,
+                },
+            );
+        }
+        svc.stop_assistant_agents();
+        assert!(!svc.assistant_agent_alive("analyseur"));
+        assert!(!svc.assistant_agent_alive("codeur"), "stop_assistant_agents → toutes arrêtées");
+
+        // Réinsérer puis arrêt complet (fermeture app) : purgé.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: ASSISTANT_SPACE.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AssistantAgent,
+                },
+            );
+        }
+        assert!(svc.assistant_agent_alive("analyseur"));
+        svc.shutdown_all();
+        assert!(!svc.assistant_agent_alive("analyseur"), "arrêt complet → session assistant purgée");
     }
 
     /// P2 : `collect_session_states` extrait l'état de toutes les sessions du
