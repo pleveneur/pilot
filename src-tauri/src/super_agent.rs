@@ -855,11 +855,13 @@ pub(crate) fn schedule_list(conn: &Connection) -> Result<Vec<Value>, String> {
     Ok(result)
 }
 
-/// Retourne les planifications dues à `now` (format datetime('now') UTC) et les
-/// marque comme exécutées (last_run_at = now) : 1 exécution max par
-/// planification et par tick — un second appel dans la même fenêtre ne renvoie
-/// plus rien pour ces planifications.
-pub(crate) fn schedule_due_and_mark(conn: &Connection, now: &str) -> Result<Vec<DueSchedule>, String> {
+/// Retourne les planifications dues à `now` (format datetime('now') UTC) SANS
+/// les marquer comme exécutées (issue #135). Le marquage (`last_run_at`) est
+/// différé et déclenché par le frontend via `schedule_mark_done` UNIQUEMENT une
+/// fois le rappel effectivement injecté (assistant libre). Tant qu'un rappel n'a
+/// pas été livré, il reste « dû » et est re-renvoyé aux ticks suivants — un
+/// rappel tombé pendant que l'assistant est occupé n'est donc jamais perdu.
+pub(crate) fn schedule_due(conn: &Connection, now: &str) -> Result<Vec<DueSchedule>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, name, prompt, every FROM assistant_schedules \
@@ -880,15 +882,24 @@ pub(crate) fn schedule_due_and_mark(conn: &Connection, now: &str) -> Result<Vec<
         .map_err(|e| format!("Erreur SQL : {}", e))?;
     let mut due = Vec::new();
     for row in rows {
-        let d = row.map_err(|e| format!("Erreur SQL : {}", e))?;
-        conn.execute(
-            "UPDATE assistant_schedules SET last_run_at = ?1, updated_at = ?1 WHERE id = ?2",
-            rusqlite::params![now, d.id],
-        )
-        .map_err(|e| format!("Erreur SQL : {}", e))?;
-        due.push(d);
+        due.push(row.map_err(|e| format!("Erreur SQL : {}", e))?);
     }
     Ok(due)
+}
+
+/// Marque UNE planification comme exécutée (last_run_at = now, format
+/// datetime('now') UTC). Utilisé après livraison effective d'un rappel (issue
+/// #135) : contrairement à l'ancien marquage atomique au tick, le rappel n'est
+/// considéré livré qu'une fois réellement injecté. Retourne false si l'id
+/// n'existe pas. Fonction pure sur `Connection` pour être testable.
+pub(crate) fn schedule_mark_done(conn: &Connection, id: i64, now: &str) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE assistant_schedules SET last_run_at = ?1, updated_at = ?1 WHERE id = ?2",
+            rusqlite::params![now, id],
+        )
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    Ok(n > 0)
 }
 
 // ── Commandes Tauri (appelées depuis super-agent.js / l'extension) ──
@@ -930,13 +941,27 @@ pub fn super_agent_schedule_list(app: AppHandle) -> Result<Value, String> {
     Ok(serde_json::json!({ "schedules": rows, "count": rows.len() }))
 }
 
+/// Marque une planification comme livrée (last_run_at = now) après injection
+/// effective du rappel dans la discussion (issue #135). Appelé par le frontend
+/// une fois le rappel injecté alors que l'assistant était libre.
+#[tauri::command]
+pub fn super_agent_schedule_mark_done(app: AppHandle, id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let now: String = conn
+        .query_row("SELECT datetime('now')", [], |r| r.get(0))
+        .map_err(|e| format!("Erreur SQL : {}", e))?;
+    let done = schedule_mark_done(&conn, id, &now)?;
+    Ok(serde_json::json!({ "ok": done, "id": id }))
+}
+
 /// Tick du ticker frontend (toutes les 10 s). Retourne les planifications dues
-/// (au plus 1 par planification et par tick, marquées atomiquement) uniquement
-/// si la session super-agent est vivante. Issue #134 : si la session n'est pas
-/// vivante (jamais démarrée / arrêtée / morte), on la démarre d'abord (comme
-/// les autres commandes schedule) avant d'interroger `schedule_due_and_mark`,
-/// afin que `last_run_at` soit marqué quand un rappel est dû et que la
-/// livraison du prompt puisse se faire.
+/// (sans les marquer — le marquage est différé via `super_agent_schedule_mark_done`
+/// après livraison effective, issue #135) uniquement si la session super-agent
+/// est vivante. Issue #134 : si la session n'est pas vivante (jamais démarrée /
+/// arrêtée / morte), on la démarre d'abord (comme les autres commandes schedule)
+/// avant d'interroger `schedule_due`, afin que les rappels dus soient bien
+/// renvoyés. Un rappel non encore livré (assistant occupé) reste dû et sera
+/// re-renvoyé au tick suivant : il n'est jamais perdu.
 #[tauri::command]
 pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
     // Démarrage lazy (idempotent) si la session est absente/morte, puis re-vérifie.
@@ -950,7 +975,7 @@ pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandl
     let now: String = conn
         .query_row("SELECT datetime('now')", [], |r| r.get(0))
         .map_err(|e| format!("Erreur SQL : {}", e))?;
-    let due = schedule_due_and_mark(&conn, &now)?;
+    let due = schedule_due(&conn, &now)?;
     let due_json: Vec<Value> = due.iter().map(|d| d.to_json()).collect();
     Ok(serde_json::json!({ "alive": true, "due": due_json, "count": due_json.len() }))
 }
@@ -2971,7 +2996,7 @@ pub fn import_super_agent_memory(
 mod tests {
     use super::{
         build_project_context, init_db, parse_session_memory, replace_tracking, schedule_delete,
-        schedule_due_and_mark, schedule_insert, schedule_list, schedule_set_enabled,
+        schedule_due, schedule_insert, schedule_list, schedule_mark_done, schedule_set_enabled,
         serialize_session_memory, serialize_tracking, validate_export_json, MEMORY_FORMAT,
         MEMORY_VERSION, SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
     };
@@ -3218,20 +3243,23 @@ mod tests {
     }
 
     #[test]
-    fn schedule_due_marks_and_returns_at_most_once_per_tick() {
+    fn schedule_due_returns_due_until_marked() {
         let conn = mem_conn();
-        schedule_insert(&conn, "s1", "prompt", 60).unwrap();
-        // Premier tick : jamais exécutée → due.
-        let due = schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap();
+        let id = schedule_insert(&conn, "s1", "prompt", 60).unwrap();
+        // Premier tick : jamais exécutée → due (non marquée, issue #135).
+        let due = schedule_due(&conn, "2025-01-01 00:00:00").unwrap();
         assert_eq!(due.len(), 1);
-        // Second tick immédiat : marquée → plus due.
-        let due2 = schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap();
-        assert!(due2.is_empty());
-        // Avance de 61 s → due à nouveau.
-        let due3 = schedule_due_and_mark(&conn, "2025-01-01 00:01:01").unwrap();
+        // Tant qu'elle n'est pas livrée (assistant occupé), elle reste due.
+        let due2 = schedule_due(&conn, "2025-01-01 00:00:05").unwrap();
+        assert_eq!(due2.len(), 1);
+        // Livraison effective → mark_done → plus due.
+        assert!(schedule_mark_done(&conn, id, "2025-01-01 00:00:06").unwrap());
+        assert!(schedule_due(&conn, "2025-01-01 00:00:07").unwrap().is_empty());
+        // Avance de plus de 60 s → due à nouveau.
+        let due3 = schedule_due(&conn, "2025-01-01 00:01:06").unwrap();
         assert_eq!(due3.len(), 1);
-        // Marquer avec une date dans le futur ne renvoie rien non plus.
-        assert!(schedule_due_and_mark(&conn, "2025-01-01 00:00:30").unwrap().is_empty());
+        // Marquer avec une date dans le futur ne change rien à la re-due.
+        assert!(schedule_mark_done(&conn, 9999, "2025-01-01 00:00:08").unwrap() == false);
     }
 
     #[test]
@@ -3250,10 +3278,10 @@ mod tests {
         let id = schedule_insert(&conn, "s1", "prompt", 120).unwrap();
         // Désactivation : le rappel n'est plus dû (enabled = 0).
         assert!(schedule_set_enabled(&conn, id, false).unwrap());
-        assert!(schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap().is_empty());
+        assert!(schedule_due(&conn, "2025-01-01 00:00:00").unwrap().is_empty());
         // Réactivation : le rappel redevient dû.
         assert!(schedule_set_enabled(&conn, id, true).unwrap());
-        assert_eq!(schedule_due_and_mark(&conn, "2025-01-01 00:00:00").unwrap().len(), 1);
+        assert_eq!(schedule_due(&conn, "2025-01-01 00:00:00").unwrap().len(), 1);
         // Id inexistant : retourne false, pas d'erreur.
         assert!(!schedule_set_enabled(&conn, 9999, false).unwrap());
     }

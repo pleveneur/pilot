@@ -1460,6 +1460,14 @@ export async function createSuperAgent(container) {
 const SCHEDULE_TICK_INTERVAL_MS = 10000;
 let scheduleTicker = null;
 
+// Issue #135 : ids des rappels dont l'injection est en cours dans cette fenêtre.
+// Le tick ne marque plus `last_run_at` côté Rust : un rappel reste « dû » tant
+// qu'il n'a pas été livré (injecté alors que l'assistant était libre) et marqué
+// via `super_agent_schedule_mark_done`. Ce set évite d'injecter un DOUBLON si
+// plusieurs ticks se succèdent avant le marquage ; on retire l'id dès que le
+// rappel est marqué livré.
+const pendingReminderIds = new Set();
+
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
   // Issue #134 : le réglage super_agent_auto_check_startup ne gouverne QUE le
@@ -1470,11 +1478,24 @@ async function scheduleTick() {
     const res = await invoke("super_agent_schedule_tick");
     const due = (res && res.due) || [];
     for (const d of due) {
+      // Issue #135 : ne pas re-injecter un rappel déjà en cours d'injection.
+      if (pendingReminderIds.has(d.id)) continue;
+      // Si l'assistant est occupé (en train de rédiger/afficher sa réponse), on
+      // n'injecte PAS et on ne marque PAS : le rappel reste « dû » et sera
+      // rejoué au tick suivant, une fois l'assistant libre. Évite de perdre le
+      // rappel (le prompt serait ignoré par un assistant occupé).
+      if (backendBusy) continue;
+      pendingReminderIds.add(d.id);
       try {
         await invoke("send_super_agent_command", {
           command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
         });
+        // Livraison effective → marquer le rappel comme exécuté (issue #135).
+        try {
+          await invoke("super_agent_schedule_mark_done", { id: d.id });
+        } catch (_) { /* échec de marquage : le rappel sera re-renvoyé, pas de blocage */ }
       } catch (_) { /* un rappel qui échoue ne bloque pas les suivants */ }
+      pendingReminderIds.delete(d.id);
     }
   } catch (_) { return; }
 }
