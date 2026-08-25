@@ -70,6 +70,13 @@ const ACTIVITY_EVENTS: &[&str] = &[
     "auto_retry_end",
 ];
 
+/// Événements de cycle de vie du PROCESSUS (pas une activité de génération).
+/// Quand le processus agent meurt (exit, erreur), il ne peut plus être
+/// « occupé » : ces événements effacent `busy` dans les deux maps même sans
+/// `agent_settled`/`agent_end`. Évite l'indicateur « Réfléchit » bloqué à
+/// jamais si le process meurt en pleine génération (issue #141).
+const RESET_EVENTS: &[&str] = &["process_exit", "process_error"];
+
 /// Construit l'observateur combiné : met à jour la map d'activité par projet
 /// (issue #13, pastille « travaille en arrière-plan ») ET la map de surveillance
 /// d'anomalie par agent (tâche 8). `project_key` = chemin normalisé du projet,
@@ -86,7 +93,11 @@ pub fn make_observer(
     let agent_key = agent_key.to_string();
     Arc::new(move |value: &Value| {
         let t = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if !ACTIVITY_EVENTS.contains(&t) {
+        // Événement de reset (mort du process) : même si ce n'est pas une
+        // activité de génération, on efface `busy` pour ne pas bloquer
+        // l'indicateur. Un reset ne CRÉE pas d'entrée (pas d'agent à suivre).
+        let is_reset = RESET_EVENTS.contains(&t);
+        if !is_reset && !ACTIVITY_EVENTS.contains(&t) {
             return;
         }
         let now = Instant::now();
@@ -94,52 +105,74 @@ pub fn make_observer(
         // `rpc::make_project_activity_observer`.
         {
             let mut m = activity_map.lock().unwrap();
-            let entry = m.entry(project_key.clone()).or_insert(SessionActivity {
-                busy: false,
-                updated: now,
-            });
-            if t == "agent_start" {
-                entry.busy = true;
-            } else if t == "agent_settled" || t == "agent_end" {
-                // `agent_end` marque la fin d'un tour (le frontend considère
-                // l'agent « au repos » dès cet événement). On repasse busy=false
-                // aussi sur `agent_end` pour être robuste si `agent_settled` est
-                // perdu : l'indicateur d'activité ne doit pas rester « occupé »
-                // alors que l'agent a fini de répondre.
-                entry.busy = false;
+            if is_reset {
+                // Process mort : l'agent ne peut plus être « occupé ».
+                if let Some(entry) = m.get_mut(&project_key) {
+                    entry.busy = false;
+                    entry.updated = now;
+                }
+            } else {
+                let entry = m.entry(project_key.clone()).or_insert(SessionActivity {
+                    busy: false,
+                    updated: now,
+                });
+                if t == "agent_start" {
+                    entry.busy = true;
+                } else if t == "agent_settled" || t == "agent_end" {
+                    // `agent_end` marque la fin d'un tour (le frontend considère
+                    // l'agent « au repos » dès cet événement). On repasse busy=false
+                    // aussi sur `agent_end` pour être robuste si `agent_settled` est
+                    // perdu : l'indicateur d'activité ne doit pas rester « occupé »
+                    // alors que l'agent a fini de répondre.
+                    entry.busy = false;
+                }
+                entry.updated = now;
             }
-            entry.updated = now;
         }
         // Map de surveillance d'anomalie par agent (tâche 8).
         {
             let mut m = anomaly_map.lock().unwrap();
-            let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
-                last_activity: now,
-                last_activity_wall: Some(SystemTime::now()),
-                last_event: t.to_string(),
-                busy: false,
-                blocked_reported: false,
-                auto_stopped_reported: false,
-            });
-            if t == "agent_start" {
-                entry.busy = true;
-                // Nouvelle exécution : réarmer la détection de blocage ET l'arrêt auto.
-                entry.blocked_reported = false;
-                entry.auto_stopped_reported = false;
-            } else if t == "agent_settled" || t == "agent_end" {
-                // `agent_end` marque la fin d'un tour (le frontend considère
-                // l'agent « au repos » dès cet événement). On repasse busy=false
-                // aussi sur `agent_end` pour être robuste si `agent_settled` est
-                // perdu : l'indicateur d'activité ne doit pas rester « occupé »
-                // alors que l'agent a fini de répondre. Réarme aussi la détection
-                // de blocage / l'arrêt auto (nouvelle exécution à venir).
-                entry.busy = false;
-                entry.blocked_reported = false;
-                entry.auto_stopped_reported = false;
+            if is_reset {
+                // Process mort en pleine génération : effacer `busy` (et réarmer
+                // la détection de blocage / l'arrêt auto) pour ne JAMAIS laisser
+                // l'indicateur « Réfléchit » bloqué à true (issue #141).
+                if let Some(entry) = m.get_mut(&agent_key) {
+                    entry.busy = false;
+                    entry.blocked_reported = false;
+                    entry.auto_stopped_reported = false;
+                    entry.last_activity = now;
+                    entry.last_activity_wall = Some(SystemTime::now());
+                    entry.last_event = t.to_string();
+                }
+            } else {
+                let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
+                    last_activity: now,
+                    last_activity_wall: Some(SystemTime::now()),
+                    last_event: t.to_string(),
+                    busy: false,
+                    blocked_reported: false,
+                    auto_stopped_reported: false,
+                });
+                if t == "agent_start" {
+                    entry.busy = true;
+                    // Nouvelle exécution : réarmer la détection de blocage ET l'arrêt auto.
+                    entry.blocked_reported = false;
+                    entry.auto_stopped_reported = false;
+                } else if t == "agent_settled" || t == "agent_end" {
+                    // `agent_end` marque la fin d'un tour (le frontend considère
+                    // l'agent « au repos » dès cet événement). On repasse busy=false
+                    // aussi sur `agent_end` pour être robuste si `agent_settled` est
+                    // perdu : l'indicateur d'activité ne doit pas rester « occupé »
+                    // alors que l'agent a fini de répondre. Réarme aussi la détection
+                    // de blocage / l'arrêt auto (nouvelle exécution à venir).
+                    entry.busy = false;
+                    entry.blocked_reported = false;
+                    entry.auto_stopped_reported = false;
+                }
+                entry.last_activity = now;
+                entry.last_activity_wall = Some(SystemTime::now());
+                entry.last_event = t.to_string();
             }
-            entry.last_activity = now;
-            entry.last_activity_wall = Some(SystemTime::now());
-            entry.last_event = t.to_string();
         }
     })
 }
@@ -182,6 +215,13 @@ fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u
     idle_secs > (timeout_minutes.max(1) as u64) * 60
 }
 
+/// Identifie la clé d'anomalie du super-agent (projet pseudo-global `""`).
+/// Le super-agent est géré par un plafond « réfléchit » dédié (tâche #141) et
+/// NON par l'arrêt auto T2 (scope agents délégués). Pure et testable.
+fn is_super_agent_key(project: &str, agent: &str) -> bool {
+    project.is_empty() && agent == crate::agent_service::SUPERAGENT_ID
+}
+
 /// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8) ET
 /// l'arrêt AUTOMATIQUE des agents délégués bloqués (T2).
 /// Thread autonome : toutes les 30 s, vérifie si un agent actif (busy) n'a pas
@@ -202,19 +242,22 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<AppState>();
-            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes) = {
+            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes, super_stop_enabled, super_stop_minutes) = {
                 let cfg = state.config.lock().unwrap();
                 (
                     cfg.anomaly_detection_enabled,
                     cfg.anomaly_timeout_minutes,
                     cfg.agent_auto_stop_enabled,
                     cfg.agent_auto_stop_minutes,
+                    cfg.super_agent_auto_stop_enabled,
+                    cfg.super_agent_auto_stop_minutes,
                 )
             };
             let anomaly_timeout_secs = (timeout_minutes.max(1) as u64) * 60;
             let now = Instant::now();
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
             let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
+            let mut super_stops: Vec<(String, u64)> = Vec::new();
             {
                 let mut m = anomaly_map.lock().unwrap();
                 for (key, entry) in m.iter_mut() {
@@ -222,6 +265,9 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     let project = parts.next().unwrap_or("").to_string();
                     let agent = parts.next().unwrap_or("").to_string();
                     let idle_secs = now.duration_since(entry.last_activity).as_secs();
+                    // Le super-agent (Assistant 🧭) est géré par un plafond dédié
+                    // (tâche #141) et NON par l'arrêt auto T2 (scope agents délégués).
+                    let is_super = is_super_agent_key(&project, &agent);
                     // 1. Anomalie (lecture seule, tâche 8) : agent busy sans progression.
                     if anomaly_enabled
                         && entry.busy
@@ -231,13 +277,27 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         entry.blocked_reported = true;
                         alerts.push((project.clone(), agent.clone(), entry.last_event.clone(), idle_secs / 60));
                     }
-                    // 2. Arrêt auto (T2) : agent busy sans progression depuis le seuil dédié.
-                    //    Le scope (AgentProcess) est filtré après (agent_process_alive).
-                    if should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes, Instant::now()) {
+                    // 2. Arrêt auto (T2) : agents délégués uniquement (le super-agent
+                    //    est exclu, cf. `is_super`). Le scope (AgentProcess) est filtré
+                    //    après (agent_process_alive).
+                    if !is_super
+                        && should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes, Instant::now())
+                    {
                         entry.auto_stopped_reported = true;
                         // Pas de double alerte (anomalie) pour un agent déjà arrêté.
                         entry.blocked_reported = true;
-                        auto_stops.push((project, agent, idle_secs / 60));
+                        auto_stops.push((project.clone(), agent.clone(), idle_secs / 60));
+                    }
+                    // 3. Plafond « réfléchit » du super-agent (tâche #141) : filet de
+                    //    sécurité si le super-agent reste busy sans progression depuis
+                    //    `super_agent_auto_stop_minutes` (défaut 10 min). Coupe le
+                    //    process + alerte, sans toucher aux agents de projets.
+                    if is_super
+                        && should_auto_stop(entry, super_stop_enabled, super_stop_minutes, Instant::now())
+                    {
+                        entry.auto_stopped_reported = true;
+                        entry.blocked_reported = true;
+                        super_stops.push((agent, idle_secs / 60));
                     }
                 }
             }
@@ -282,6 +342,31 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 let anomaly_val =
                     serde_json::json!({ "lastEvent": "arrêt automatique (bloqué)", "idleMinutes": idle_min });
                 let _ = do_start_diagnostic_agent(state.inner(), &app, &project, &agent, &anomaly_val);
+            }
+            // 3. Plafond « réfléchit » du super-agent (tâche #141) : couper le
+            //    process du super-agent bloqué (busy sans progression) + alerter.
+            //    Ne touche jamais aux agents de projets (clé dédiée `\u{1f}superagent`).
+            for (agent, idle_min) in super_stops {
+                // Couper le processus du super-agent (libère aussi la session).
+                let _ = state.agent_service.stop_superagent();
+                // Marquer busy=false pour ne pas re-détecter (le kill volontaire
+                // n'émet pas process_exit : running passé à false avant le kill).
+                {
+                    let mut m = anomaly_map.lock().unwrap();
+                    if let Some(e) = m.get_mut(&format!("\u{1f}{}", agent)) {
+                        e.busy = false;
+                        e.blocked_reported = false;
+                        e.auto_stopped_reported = false;
+                    }
+                }
+                // Événement Rust → JS : l'UI informe l'utilisateur.
+                let _ = app.emit(
+                    "super-agent-auto-stopped",
+                    serde_json::json!({
+                        "reason": "Assistant arrêté automatiquement : bloqué (actif sans progression).",
+                        "idleMinutes": idle_min,
+                    }),
+                );
             }
         }
     });
@@ -453,6 +538,56 @@ mod tests {
         }
     }
 
+    /// `process_exit`/`process_error` (mort du process) effacent `busy` même
+    /// sans `agent_settled`/`agent_end` (issue #141 : indicateur « Réfléchit »
+    /// bloqué si le process meurt en pleine génération). Un reset ne crée pas
+    /// d'entrée si aucune activité n'a eu lieu avant.
+    #[test]
+    fn observer_clears_busy_on_process_exit_and_error() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        // Pas d'entrée avant : un reset ne crée rien (aucun agent à suivre).
+        obs(&ev("process_exit"));
+        assert!(anomaly.lock().unwrap().is_empty());
+        assert!(activity.lock().unwrap().is_empty());
+
+        // agent_start → busy=true dans les deux maps.
+        obs(&ev("agent_start"));
+        {
+            let a = anomaly.lock().unwrap();
+            assert!(a.get("/proj\u{1f}codeur").unwrap().busy);
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(act.get("/proj").unwrap().busy);
+        }
+
+        // process_exit → busy=false dans les deux maps (process mort).
+        obs(&ev("process_exit"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(!s.busy);
+            assert_eq!(s.last_event, "process_exit");
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(!act.get("/proj").unwrap().busy);
+        }
+
+        // process_error → busy=false aussi.
+        obs(&ev("agent_start"));
+        obs(&ev("process_error"));
+        {
+            let a = anomaly.lock().unwrap();
+            assert!(!a.get("/proj\u{1f}codeur").unwrap().busy);
+        }
+    }
+
     /// Un événement non-pertinent (ex: "unknown") ne crée pas d'entrée.
     #[test]
     fn observer_ignores_irrelevant_events() {
@@ -556,5 +691,16 @@ mod tests {
         // Seuil min 1 min : une inactivité > 1 min suffit.
         let e = state_at(90, true, false);
         assert!(should_auto_stop(&e, true, 1, now));
+    }
+
+    /// Le super-agent (projet pseudo-global `""`) est identifié par sa clé
+    /// dédiée et n'est PAS confondu avec un agent de projet (tâche #141).
+    #[test]
+    fn is_super_agent_key_identifies_superagent_only() {
+        assert!(is_super_agent_key("", "superagent"));
+        // Un agent de projet (projet non vide) n'est jamais le super-agent.
+        assert!(!is_super_agent_key("/proj", "superagent"));
+        assert!(!is_super_agent_key("", "codeur"));
+        assert!(!is_super_agent_key("/proj", "codeur"));
     }
 }

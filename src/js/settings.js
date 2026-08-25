@@ -799,6 +799,12 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
         // ── Arrêt auto des agents délégués bloqués (T2) ──
         agent_auto_stop_enabled: chkAutoStopEnabled ? chkAutoStopEnabled.checked !== false : true,
         agent_auto_stop_minutes: inputAutoStopTimeout ? (parseInt(inputAutoStopTimeout.value, 10) || 10) : 10,
+        // ── Plafond « réfléchit » du super-agent (tâche #141) ──
+        // Pas d'UI dédiée : on préserve les valeurs de la config courante pour
+        // qu'un enregistrement des Paramètres ne les réinitialise pas (défauts
+        // activé / 10 min, cf. lib.rs).
+        super_agent_auto_stop_enabled: currentConfig?.super_agent_auto_stop_enabled !== false,
+        super_agent_auto_stop_minutes: currentConfig?.super_agent_auto_stop_minutes || 10,
         pdf_md_model: inputPdfMdModel.value.trim(),
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,

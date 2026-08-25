@@ -1571,7 +1571,7 @@ export async function createSuperAgent(container) {
   return {
     wrapper,
     superTrackingRefresh: loadSuperTracking,
-    unlisten: () => {
+    unlisten: async () => {
       clearInterval(superStatusPoll);
       // SOUCIS 1 : retirer le listener `scroll` (évite la fuite à la recréation
       // de l'onglet 🧭).
@@ -1588,7 +1588,18 @@ export async function createSuperAgent(container) {
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       window._pilotSuperAgentOpen = false;
-      // Chantier #132 : nettoyer la barre des questions en attente.
+      // Chantier #132 + tâche #141 : nettoyer la barre des questions en attente.
+      // IMPORTANT : avant de vider la file, LIBÉRER le backend pour chaque
+      // question pendante (répondre {cancelled:true} via le responder). Sinon le
+      // process pi reste bloqué en attente de la réponse (jamais d'agent_end) et
+      // l'indicateur « Réfléchit » reste bloqué à la réouverture (issue #141).
+      // On attend la libération AVANT que closeTab n'arrête la session (sinon le
+      // kill du process précéderait l'agent_end et busy resterait à true).
+      for (const q of pendingQuestions) {
+        try {
+          await q.responder(q.id, null, true);
+        } catch (_) { /* une réponse qui échoue ne bloque pas la fermeture */ }
+      }
       pendingQuestions.length = 0;
       if (pendingBar) pendingBar.innerHTML = "";
       pendingBarEl = null;

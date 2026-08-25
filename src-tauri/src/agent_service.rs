@@ -1061,6 +1061,18 @@ impl AgentService {
                 secs
             ));
         }
+        // (Re)création de la session : réinitialiser l'entrée de surveillance
+        // d'anomalie du super-agent (issue #141). Ne jamais laisser le flag
+        // `busy` bloqué à true entre deux lancements (process mort en pleine
+        // génération) : le reset efface busy/blocked/auto_stopped/last_activity.
+        {
+            let state = app.state::<AppState>();
+            state
+                .agent_anomaly
+                .lock()
+                .unwrap()
+                .remove(&format!("\u{1f}{}", SUPERAGENT_ID));
+        }
         let session = Self::spawn_superagent_session(app, cwd, pi_path)?;
         {
             let mut sessions = self.sessions.lock().unwrap();

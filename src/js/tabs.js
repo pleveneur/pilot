@@ -1619,7 +1619,11 @@ class TabsManager {
     // Nettoyage super-agent (spec_super_agent.md) : arrêter la session dédiée.
     if (tab.mode === "superagent") {
       if (tab.unlistenSuperAgent) {
-        tab.unlistenSuperAgent();
+        // Tâche #141 : attendre la libération des questions pendantes (réponses
+        // {cancelled:true} envoyées au backend) AVANT d'arrêter la session. Si on
+        // tuait le process d'abord, l'agent_end (qui efface busy) ne serait jamais
+        // émis et l'indicateur « Réfléchit » resterait bloqué à la réouverture.
+        await tab.unlistenSuperAgent();
         tab.unlistenSuperAgent = null;
       }
       if (!options.skipAgentStop) {

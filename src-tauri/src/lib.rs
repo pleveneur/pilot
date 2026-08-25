@@ -551,6 +551,16 @@ struct AppConfig {
     agent_auto_stop_enabled: bool,
     #[serde(default = "default_agent_auto_stop_minutes")]
     agent_auto_stop_minutes: u32,
+    // ── Plafond « réfléchit » du super-agent (tâche #141) ──
+    // Filet de sécurité : si le super-agent (Assistant 🧭) reste busy (actif
+    // sans progression) depuis ce seuil, son processus est coupé et l'utilisateur
+    // est alerté. Distinct de l'arrêt auto des agents délégués (T2) : le
+    // super-agent est explicitement exclu de start_monitor (anomaly.rs) pour
+    // l'arrêt auto, donc on lui applique ici un plafond dédié. Défaut 10 min.
+    #[serde(default = "default_true")]
+    super_agent_auto_stop_enabled: bool,
+    #[serde(default = "default_agent_auto_stop_minutes")]
+    super_agent_auto_stop_minutes: u32,
 }
 
 fn default_true() -> bool { true }
@@ -767,6 +777,8 @@ impl Default for AppConfig {
             anomaly_timeout_minutes: default_anomaly_timeout_minutes(),
             agent_auto_stop_enabled: true,
             agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
+            super_agent_auto_stop_enabled: true,
+            super_agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
         }
     }
 }

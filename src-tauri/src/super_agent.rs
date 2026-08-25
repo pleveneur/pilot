@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent_service::SUPERAGENT_ID;
@@ -1507,6 +1508,12 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
 // marqueur de troncature explicite.
 const SUPER_AGENT_SUMMARY_MAX_CHARS: usize = 8000;
 const SUMMARY_TRUNCATION_MARKER: &str = "\n…[résumé tronqué : trop volumineux]";
+// Issue #141 : rafale de réflexions à l'ouverture de l'onglet. Chaque résumé
+// en attente rejoué lance un VRAI tour de génération. Borne max injectée par
+// appel (cycle) + délai entre deux injections : les résumés restants sont
+// traités progressivement (réouverture / prochain prompt).
+const SUPER_AGENT_REPLAY_MAX_PER_CALL: usize = 3;
+const SUPER_AGENT_REPLAY_INTERVAL_MS: u64 = 150;
 
 /// Tronque un résumé pour l'injection à l'assistant (borne + marqueur).
 fn truncate_summary(summary: &str) -> String {
@@ -1650,7 +1657,16 @@ fn replay_pending_superagent_summaries(state: &AppState, app: &AppHandle) -> Res
         .collect::<Result<_, _>>()
         .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
     drop(stmt);
+    // Rafale à l'ouverture (issue #141) : chaque résumé rejoué lance un VRAI
+    // tour de génération. On borne le nombre injecté par appel (cycle) et on
+    // espace les injections pour ne pas saturer une machine lente. Les résumés
+    // restants (delivered=0) seront traités progressivement aux prochaines
+    // opportunités (réouverture de l'onglet, prochain prompt).
+    let mut delivered_count: usize = 0;
     for (id, project_id, session_id, summary) in pending {
+        if delivered_count >= SUPER_AGENT_REPLAY_MAX_PER_CALL {
+            break;
+        }
         // Re-vérifier la disponibilité à chaque itération (le super-agent peut
         // devenir occupé pendant le rejeu).
         if !superagent_available(state) {
@@ -1675,11 +1691,14 @@ fn replay_pending_superagent_summaries(state: &AppState, app: &AppHandle) -> Res
                 )
                 .map_err(|e| format!("Erreur marquage livré: {}", e))?;
                 log_injection(&conn, project_id, "delivered", true, "rejoué");
+                delivered_count += 1;
             }
             Err(e) => {
                 log_injection(&conn, project_id, "error", false, &e);
             }
         }
+        // Espace les injections (chaque rejeu = un tour de génération).
+        std::thread::sleep(Duration::from_millis(SUPER_AGENT_REPLAY_INTERVAL_MS));
     }
     Ok(())
 }
