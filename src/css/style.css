@@ -3487,6 +3487,38 @@ body.zen-mode #action-panel {
   line-height: 1.4;
 }
 
+/* Chantier #132 — barre des questions en attente.
+   Rangée de boutons de choix (assistant + relais d'agents) affichée SOUS la
+   barre de saisie principale, hors du fil défilant (toujours accessible).
+   La précision / la réponse est saisie dans la barre principale. */
+.agent-pending-bar-container {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.agent-pending-bar-container:empty {
+  border-top: none;
+}
+.agent-pending-bar {
+  padding: 8px 12px;
+}
+.agent-pending-block {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.agent-pending-block:last-child {
+  border-bottom: none;
+}
+.agent-pending-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Évolution UI : teinte « réflexion » du fond de la zone de saisie de
    l'assistant. Quand l'assistant réfléchit (agent_start → agent_end), un
    dégradé discret basé sur --superagent-accent (même couleur que le cercle
@@ -3888,6 +3920,10 @@ body.zen-mode #action-panel {
 }
 
 .agent-choice-note {
+  /* Chantier #132 : le super-agent (assistant) n'utilise plus cette zone de
+     précision séparée — la précision est saisie dans la barre principale.
+     La règle reste conservée car l'agent standard (agent-pi.js) l'utilise
+     encore dans ses widgets de choix inline. */
   font-style: italic;
   opacity: 0.85;
 }

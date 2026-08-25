@@ -305,6 +305,101 @@ let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
 let superSetBusyHint = () => {};
 let superSetReflecting = () => {};
 
+// ── Questions en attente (chantier #132) ──
+// Boutons de choix réunis avec la barre de saisie principale : quand
+// l'assistant (ou un agent relayé, tâche #22) pose une question (ask_choice /
+// ask_confirm / ask_multi_choice / ask_input), une rangée interactive de
+// boutons est affichée dans #pendingBar, SOUS la barre de saisie principale
+// (hors du fil défilant, toujours accessible). La précision / la réponse est
+// saisie dans la textarea principale (#superagent-input). Les payloads envoyés
+// ({selected,note}/{confirmed,note}/{value}) restent IDENTIQUES à avant :
+// seule la présentation change. Une seule question active à la fois, file FIFO
+// si concurrence (ex: plusieurs agents qui relayent simultanément).
+let pendingBarEl = null;        // conteneur #pendingBar (défini par createSuperAgent)
+let pendingInputEl = null;      // textarea #superagent-input (défini par createSuperAgent)
+const pendingQuestions = [];    // file FIFO de questions en attente
+const SUPERAGENT_PLACEHOLDER_DEFAULT = "Poser une question sur tous les projets… (Entrée pour envoyer)";
+const PENDING_NOTE_PLACEHOLDER = "Votre précision (optionnel)… puis validez";
+
+/** Relie la barre de questions en attente à la barre de saisie principale. */
+function registerPendingBar(barEl, inputEl) {
+  pendingBarEl = barEl;
+  pendingInputEl = inputEl;
+  // Re-rend une éventuelle question déjà mise en file avant l'enregistrement.
+  renderActivePendingQuestion();
+}
+
+/** Y a-t-il au moins une question en attente ? */
+function hasPendingQuestion() {
+  return pendingQuestions.length > 0;
+}
+
+/** Efface la textarea principale (uniquement après un envoi réussi). */
+function clearPendingInput() {
+  if (pendingInputEl) {
+    pendingInputEl.value = "";
+    pendingInputEl.style.height = "auto";
+  }
+}
+
+/** Rend la question active (tête de file) dans #pendingBar. */
+function renderActivePendingQuestion() {
+  if (!pendingBarEl) return;
+  pendingBarEl.innerHTML = "";
+  const q = pendingQuestions[0];
+  if (!q) return;
+  const bar = document.createElement("div");
+  bar.className = "agent-pending-bar";
+  pendingBarEl.appendChild(bar);
+  q.render(bar);
+  // Chantier #132 : pendant l'attente d'un choix, la barre reste en mode
+  // normal, prête à saisir — on retire toute teinte « réflexion » (le dégradé
+  // ne s'applique qu'à la réflexion réelle, cf. superSetReflecting).
+  if (pendingInputEl && pendingInputEl.parentElement) {
+    pendingInputEl.parentElement.classList.remove("superagent-input-reflecting");
+  }
+  // Placeholder de la barre adapté quand une question est en attente.
+  if (pendingInputEl) pendingInputEl.placeholder = q.placeholder || PENDING_NOTE_PLACEHOLDER;
+}
+
+/** Ajoute une question à la file et re-rend la barre. */
+function enqueuePendingQuestion(q) {
+  pendingQuestions.push(q);
+  renderActivePendingQuestion();
+}
+
+/** Finalise la question active (après envoi) et passe à la suivante (FIFO). */
+function finalizePendingQuestion() {
+  pendingQuestions.shift();
+  renderActivePendingQuestion();
+  if (pendingInputEl && !hasPendingQuestion()) {
+    pendingInputEl.placeholder = SUPERAGENT_PLACEHOLDER_DEFAULT;
+  }
+}
+
+/** Envoie la réponse d'une question : marque la barre résolue, envoie, puis
+ * efface le champ et passe à la question suivante en cas de succès. En cas
+ * d'échec, on ne vide PAS le champ et on réactive la barre. */
+async function finishPendingQuestion(q, value, cancelled) {
+  if (pendingBarEl) pendingBarEl.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  try {
+    await q.responder(q.id, value, cancelled);
+    clearPendingInput();
+    finalizePendingQuestion();
+  } catch (err) {
+    console.error("Erreur envoi choix assistant:", err);
+    renderActivePendingQuestion();
+  }
+}
+
+/** Valide la question active avec la précision saisie (appel depuis send()). */
+function validatePendingQuestion(raw) {
+  const q = pendingQuestions[0];
+  if (!q) return;
+  const note = (raw || "").trim();
+  q.submit(note, false);
+}
+
 // ── Détection de boucle dans la réflexion (issue #55) ──
 // Même mécanique que l'agent standard (loop-detection.js, issue #37) : on
 // accumule le flux streamé (text_delta + thinking_delta) et, si un bloc répété
@@ -334,7 +429,10 @@ const SUPER_LOOP_BUFFER_MIN = 200;
 // cours (id résolu + projet) et ses références DOM/unlisten. Le buffer de
 // détection de boucle est scopé au listener (closure), pas une variable de
 // module transitoire.
-let invisibleAgent = null; // { agentId, projectPath, messagesEl, banner, unlisten }
+// Issue #135 : map des suivis d'agents invisibles indexée par clé
+// (agentId, projectPath) — deux agents invisibles peuvent tourner en parallèle
+// sur deux projets différents sans s'écraser (perte d'événements du premier).
+const invisibleAgents = new Map(); // key -> { agentId, projectPath, messagesEl, banner, unlisten }
 const INVISIBLE_LOOP_CHECK_INTERVAL_MS = 500;
 const INVISIBLE_LOOP_BUFFER_MIN = 200;
 
@@ -644,6 +742,13 @@ export async function createSuperAgent(container) {
   busyHint.textContent = "⏳ L'assistant travaille — ton message sera envoyé quand il est libre";
   busyHint.hidden = true;
   wrapper.insertBefore(busyHint, inputBar);
+  // Chantier #132 : barre des questions en attente (boutons de choix) affichée
+  // SOUS la barre de saisie principale, hors du fil défilant. Remplie par les
+  // fonctions renderSuperAgent* via registerPendingBar.
+  const pendingBar = document.createElement("div");
+  pendingBar.id = "pendingBar";
+  pendingBar.className = "agent-pending-bar-container";
+  wrapper.appendChild(pendingBar);
 
   container.appendChild(wrapper);
 
@@ -707,6 +812,7 @@ export async function createSuperAgent(container) {
   const statusEl = toolbar.querySelector("#superagent-status");
   const inputEl = inputBar.querySelector("#superagent-input");
   const modelSelect = toolbar.querySelector("#superagent-model-select");
+  registerPendingBar(pendingBar, inputEl);
   // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
   function setBusyHint(visible) {
     superSetBusyHint(visible);
@@ -727,7 +833,11 @@ export async function createSuperAgent(container) {
     superSetReflecting(reflecting);
   }
   superSetReflecting = (reflecting) => {
-    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting);
+    // Chantier #132 : pendant l'attente d'un choix (question en attente), la
+    // barre ne passe PAS en teinte « réflexion » — elle reste en mode normal,
+    // prête à saisir la précision. La teinte ne s'applique qu'à la réflexion
+    // réelle (aucune question en attente).
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting && !hasPendingQuestion());
   };
 
   // ── Chargement de la liste des modèles ──
@@ -1022,6 +1132,7 @@ export async function createSuperAgent(container) {
     if (busyHint && busyHint.parentNode) busyHint.parentNode.removeChild(busyHint);
     immInput.appendChild(busyHint);
     immInput.appendChild(inputBar);
+    if (pendingBar) immInput.appendChild(pendingBar);
     immersiveOverlay.querySelector(".sa-immersive-top").appendChild(statusEl);
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
@@ -1034,6 +1145,7 @@ export async function createSuperAgent(container) {
     wrapper.appendChild(messagesEl);
     wrapper.insertBefore(busyHint, inputBar);
     wrapper.appendChild(inputBar);
+    if (pendingBar) wrapper.appendChild(pendingBar);
     toolbar.appendChild(statusEl);
     immersiveOverlay.remove();
     immersiveOverlay = null;
@@ -1085,6 +1197,13 @@ export async function createSuperAgent(container) {
 
   // ── Envoi (session persistante : streaming + mémoire de conversation) ──
   async function send() {
+    // Chantier #132 : si une question est en attente, on valide la question
+    // (la précision saisie dans la barre devient la note) au lieu d'envoyer un
+    // nouveau message chat. Le champ n'est pas vidé en cas d'échec.
+    if (hasPendingQuestion()) {
+      validatePendingQuestion(inputEl.value);
+      return;
+    }
     const text = inputEl.value.trim();
     if (!text) return;
     // P0-1 : la garde repose sur l'état RÉEL du backend (backendBusy, mis à
@@ -1276,6 +1395,11 @@ export async function createSuperAgent(container) {
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       window._pilotSuperAgentOpen = false;
+      // Chantier #132 : nettoyer la barre des questions en attente.
+      pendingQuestions.length = 0;
+      if (pendingBar) pendingBar.innerHTML = "";
+      pendingBarEl = null;
+      pendingInputEl = null;
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
     },
@@ -1292,10 +1416,10 @@ let scheduleTicker = null;
 
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
-  // Issue #77 : ne PAS lancer automatiquement un « point à faire » (rappel dû)
-  // à l'ouverture de la session, sauf si l'utilisateur a validé ce comportement
-  // (toggle « Vérifier les points à faire à l'ouverture » dans Paramètres).
-  if (configCache.super_agent_auto_check_startup !== true) return;
+  // Issue #134 : le réglage super_agent_auto_check_startup ne gouverne QUE le
+  // lancement automatique à l'ouverture de session (géré ailleurs), pas le tick
+  // périodique. Le tick doit toujours s'exécuter quand l'onglet assistant est
+  // ouvert.
   try {
     const res = await invoke("super_agent_schedule_tick");
     const due = (res && res.due) || [];
@@ -2470,7 +2594,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await invoke("stop_agent_session", { agentId: targetAgentId || null, projectPath }).catch(() => {});
         // Nettoyer aussi le suivi de l'agent invisible (bandeau + écouteur).
         if (typeof stopInvisibleAgentMonitoring === "function") {
-          stopInvisibleAgentMonitoring();
+          stopInvisibleAgentMonitoring(targetAgentId, projectPath);
         }
         // Issue #66 : l'arrêt annule les délégations en file d'attente — on ne
         // veut pas qu'elles soient (re)transmises automatiquement après un arrêt
@@ -2689,8 +2813,8 @@ function flushDelegationQueue() {
  * @param {string} request - demande déléguée (contexte, pour le suivi).
  */
 async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request) {
-  // Couper tout suivi précédent (idempotent).
-  stopInvisibleAgentMonitoring();
+  // Issue #135 : on ne coupe plus les suivis précédents — chaque agent invisible
+  // a son propre suivi dans la map invisibleAgents (clé agentId+projectPath).
 
   // Afficher un bandeau de statut avec un bouton « Arrêter » dans le chat.
   const statusEl = document.createElement("div");
@@ -2703,7 +2827,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
   stopBtn.textContent = "Arrêter";
   stopBtn.title = "Arrêter l'agent en arrière-plan";
   stopBtn.addEventListener("click", () => {
-    stopInvisibleAgent();
+    stopInvisibleAgent(agentId, projectPath);
   });
   statusEl.appendChild(label);
   statusEl.appendChild(stopBtn);
@@ -2728,7 +2852,14 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
     }
   });
 
-  invisibleAgent = { agentId, projectPath, messagesEl, banner: statusEl, unlisten };
+  invisibleAgents.set(invisibleAgentKey(agentId, projectPath), {
+    agentId, projectPath, messagesEl, banner: statusEl, unlisten,
+  });
+}
+
+/** Clé d'indexation d'un suivi d'agent invisible (agentId + projectPath). */
+function invisibleAgentKey(agentId, projectPath) {
+  return `${agentId || ""}::${projectPath || ""}`;
 }
 
 /** Traite un événement du canal de l'agent invisible. */
@@ -2740,10 +2871,10 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     // Accumuler le flux streamé dans le buffer scpé pour la détection de boucle.
     if (delta.type === "text_delta" && typeof delta.delta === "string") {
       loop.buffer += delta.delta;
-      maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId);
+      maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath);
     } else if (delta.type === "thinking_delta" && typeof delta.delta === "string") {
       loop.buffer += delta.delta;
-      maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId);
+      maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath);
     }
     return;
   }
@@ -2752,7 +2883,7 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     // détecter une boucle d'OUTILS identiques, même sans texte streamé répété.
     const toolName = payload.toolName || payload.tool || "outil";
     loop.toolCalls.push(buildToolLoopFingerprint(toolName, payload.args));
-    maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId);
+    maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath);
     return;
   }
   if (type === "agent_end") {
@@ -2793,8 +2924,9 @@ async function checkInvisibleAgentCompletion(messagesEl, agentId, projectPath) {
 /** Finalise le suivi (idempotent) : nettoie le bandeau, notifie, feedback délégation. */
 function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   // Finaliser une seule fois (l'état de l'objet a déjà basculé).
-  if (!invisibleAgent || invisibleAgent.agentId !== agentId) return;
-  stopInvisibleAgentMonitoring();
+  const key = invisibleAgentKey(agentId, projectPath);
+  if (!invisibleAgents.has(key)) return;
+  stopInvisibleAgentMonitoring(agentId, projectPath);
   appendSystemMessage(messagesEl, message);
   // Injecter le feedback de délégation (consomme pendingDelegation → notification).
   injectSessionSummaryToSuperAgent(
@@ -2804,7 +2936,7 @@ function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
 }
 
 /** Détection de boucle de réflexion sur l'agent invisible (throttlée). */
-function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId) {
+function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath) {
   if (loop.stopped) return; // déjà arrêté pour boucle
   const now = Date.now();
   if (now - loop.lastChecked < INVISIBLE_LOOP_CHECK_INTERVAL_MS) return;
@@ -2822,37 +2954,47 @@ function maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId) {
       messagesEl,
       "⚠️ L'agent a tourné en boucle (répétition du même texte ou des mêmes appels d'outils). Agent arrêté."
     );
-    stopInvisibleAgent();
+    stopInvisibleAgent(agentId, projectPath);
   }
 }
 
 /**
  * Arrête l'agent invisible (session + suivi). 4.1 : cible l'id RÉSOLU.
  */
-function stopInvisibleAgent() {
-  const t = invisibleAgent;
-  const agentId = t ? t.agentId : null;
-  const projectPath = t ? t.projectPath : null;
+function stopInvisibleAgent(agentId, projectPath) {
+  const key = invisibleAgentKey(agentId, projectPath);
+  const t = invisibleAgents.get(key);
   const messagesEl = t ? t.messagesEl : null;
   invoke("stop_agent_session", { agentId: agentId || null, projectPath }).catch((e) =>
     console.error("Erreur stop_agent_session (agent invisible):", e)
   );
-  stopInvisibleAgentMonitoring();
+  stopInvisibleAgentMonitoring(agentId, projectPath);
   if (messagesEl) {
     appendSystemMessage(messagesEl, "🛑 Agent en arrière-plan arrêté.");
   }
 }
 
 /** Nettoie le suivi de l'agent invisible (unlisten + bandeau). */
-function stopInvisibleAgentMonitoring() {
-  if (!invisibleAgent) return;
-  if (invisibleAgent.unlisten) {
-    try { invisibleAgent.unlisten(); } catch (_) {}
+function stopInvisibleAgentMonitoring(agentId, projectPath) {
+  // Sans clé : nettoyage global de tous les suivis (arrêt complet).
+  if (agentId === undefined) {
+    for (const t of Array.from(invisibleAgents.values())) {
+      if (t.unlisten) { try { t.unlisten(); } catch (_) {} }
+      if (t.banner) { try { t.banner.remove(); } catch (_) {} }
+    }
+    invisibleAgents.clear();
+    return;
   }
-  if (invisibleAgent.banner) {
-    try { invisibleAgent.banner.remove(); } catch (_) {}
+  const key = invisibleAgentKey(agentId, projectPath);
+  const t = invisibleAgents.get(key);
+  if (!t) return;
+  if (t.unlisten) {
+    try { t.unlisten(); } catch (_) {}
   }
-  invisibleAgent = null;
+  if (t.banner) {
+    try { t.banner.remove(); } catch (_) {}
+  }
+  invisibleAgents.delete(key);
 }
 
 /**
@@ -2887,9 +3029,10 @@ async function resolveDelegationAgentId(projectPath) {
  * @param {object} payload - { agentId, projectPath, loaded, busy, procState, visible }.
  */
 function handleAgentStateChanged(payload) {
-  const t = invisibleAgent;
+  if (!payload) return;
+  const key = invisibleAgentKey(payload.agentId, payload.projectPath);
+  const t = invisibleAgents.get(key);
   if (!t) return;
-  if (!payload || payload.agentId !== t.agentId) return;
   const state = payload.procState || payload.state;
   const active =
     payload.visible === false &&
@@ -3017,90 +3160,8 @@ function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, stat
  * @param {Function} responder - (id, value, cancelled) => Promise ; par défaut
  *   envoie au super-agent, sinon (relais) route vers la session agent ciblée.
  * @param {HTMLElement|null} targetOverride - cible d'attache (sinon auto). */
-function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, responder = respondSuperAgent, targetOverride = null) {
-  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
-  const wrapper = document.createElement("div");
-  wrapper.className = "agent-choice";
-  const titleEl = document.createElement("div");
-  titleEl.className = "agent-choice-title";
-  titleEl.textContent = title;
-  wrapper.appendChild(titleEl);
-  const buttons = document.createElement("div");
-  buttons.className = "agent-choice-buttons";
-  const respond = async (value, cancelled) => {
-    const btns = wrapper.querySelectorAll("button");
-    btns.forEach((b) => { b.disabled = true; });
-    const inputs = wrapper.querySelectorAll(".agent-choice-input");
-    inputs.forEach((i) => { i.disabled = true; });
-    wrapper.classList.add("resolved");
-    await responder(id, value, cancelled);
-  };
-  if (multi) {
-    const selected = new Set();
-    options.forEach((opt, i) => {
-      const btn = document.createElement("button");
-      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
-      btn.textContent = opt;
-      btn.addEventListener("click", () => {
-        if (selected.has(opt)) { selected.delete(opt); btn.classList.remove("selected"); }
-        else { selected.add(opt); btn.classList.add("selected"); }
-      });
-      buttons.appendChild(btn);
-    });
-    const note = document.createElement("input");
-    note.type = "text";
-    note.className = "agent-choice-input agent-choice-note";
-    note.placeholder = "Ajouter une précision (optionnel)…";
-    wrapper.appendChild(note);
-    const validate = document.createElement("button");
-    validate.className = "agent-choice-btn agent-choice-validate";
-    validate.textContent = "✓ Valider";
-    validate.addEventListener("click", () =>
-      respond(JSON.stringify({ selected: [...selected], note: note.value.trim() }), false));
-    buttons.appendChild(validate);
-  } else {
-    // Choix unique : toggle + Valider — permet de valider SANS choisir d'option
-    // (précision libre, issue #39). `selected` = null si aucune option cochée.
-    const note = document.createElement("input");
-    note.type = "text";
-    note.className = "agent-choice-input agent-choice-note";
-    note.placeholder = "Ajouter une précision (optionnel)…";
-    wrapper.appendChild(note);
-    let selectedOpt = null;
-    for (const [i, opt] of options.entries()) {
-      const btn = document.createElement("button");
-      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}`;
-      btn.textContent = opt;
-      btn.addEventListener("click", () => {
-        if (selectedOpt === opt) {
-          selectedOpt = null;
-          btn.classList.remove("selected");
-        } else {
-          selectedOpt = opt;
-          buttons.querySelectorAll(".selected").forEach((b) => b.classList.remove("selected"));
-          btn.classList.add("selected");
-        }
-      });
-      buttons.appendChild(btn);
-    }
-    const validate = document.createElement("button");
-    validate.className = "agent-choice-btn agent-choice-validate";
-    validate.textContent = "✓ Valider";
-    validate.addEventListener("click", () =>
-      respond(JSON.stringify({ selected: selectedOpt, note: note.value.trim() }), false));
-    buttons.appendChild(validate);
-  }
-  wrapper.appendChild(buttons);
-  target.appendChild(wrapper);
-  // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
-  // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
-  scrollSuperToBottom(messagesEl);
-}
-
-/** Rend des boutons Oui / Non inline.
- * @param {Function} responder - (id, value, cancelled) => Promise */
-function renderSuperAgentConfirm(messagesEl, state, id, title, message, responder = respondSuperAgent, targetOverride = null) {
-  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
+/** Bandeau informatif (lecture seule) posé dans le fil pour une question. */
+function makeChoiceBanner(title, message) {
   const wrapper = document.createElement("div");
   wrapper.className = "agent-choice";
   const titleEl = document.createElement("div");
@@ -3113,79 +3174,169 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
     msg.textContent = message;
     wrapper.appendChild(msg);
   }
+  return wrapper;
+}
+
+/** Rend la rangée de boutons (unique ou multi) de la question dans #pendingBar. */
+function renderChoicePendingBar(q, bar) {
+  bar.innerHTML = "";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-pending-title";
+  titleEl.textContent = q.title;
+  bar.appendChild(titleEl);
   const buttons = document.createElement("div");
   buttons.className = "agent-choice-buttons";
-  const note = document.createElement("input");
-  note.type = "text";
-  note.className = "agent-choice-input agent-choice-note";
-  note.placeholder = "Ajouter une précision (optionnel)…";
-  wrapper.appendChild(note);
-  const respond = async (confirmed) => {
-    const btns = wrapper.querySelectorAll("button");
-    btns.forEach((b) => { b.disabled = true; });
-    const inputs = wrapper.querySelectorAll(".agent-choice-input");
-    inputs.forEach((i) => { i.disabled = true; });
-    wrapper.classList.add("resolved");
-    await responder(id, JSON.stringify({ confirmed, note: note.value.trim() }), false);
-  };
+  if (q.multi) {
+    q.options.forEach((opt, i) => {
+      const btn = document.createElement("button");
+      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}` + (q.selected.has(opt) ? " selected" : "");
+      btn.textContent = opt;
+      btn.addEventListener("click", () => {
+        if (q.selected.has(opt)) q.selected.delete(opt); else q.selected.add(opt);
+        renderActivePendingQuestion();
+      });
+      buttons.appendChild(btn);
+    });
+  } else {
+    // Choix unique : toggle + Valider — permet de valider SANS choisir d'option
+    // (précision libre, issue #39). `selected` = null si aucune option cochée.
+    q.options.forEach((opt, i) => {
+      const btn = document.createElement("button");
+      btn.className = `agent-choice-btn agent-choice-opt-${i % 6}` + (q.selected === opt ? " selected" : "");
+      btn.textContent = opt;
+      btn.addEventListener("click", () => {
+        q.selected = (q.selected === opt) ? null : opt;
+        renderActivePendingQuestion();
+      });
+      buttons.appendChild(btn);
+    });
+  }
+  const validate = document.createElement("button");
+  validate.className = "agent-choice-btn agent-choice-validate";
+  validate.textContent = "✓ Valider";
+  validate.addEventListener("click", () =>
+    validatePendingQuestion(pendingInputEl ? pendingInputEl.value.trim() : ""));
+  buttons.appendChild(validate);
+  bar.appendChild(buttons);
+}
+
+/** Rend la rangée Oui / Non de la question dans #pendingBar. */
+function renderConfirmPendingBar(q, bar) {
+  bar.innerHTML = "";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-pending-title";
+  titleEl.textContent = q.title;
+  bar.appendChild(titleEl);
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+  const note = () => (pendingInputEl ? pendingInputEl.value.trim() : "");
   const yes = document.createElement("button");
   yes.className = "agent-choice-btn agent-choice-yes";
   yes.textContent = "✓ Oui";
-  yes.addEventListener("click", () => respond(true));
+  yes.addEventListener("click", () => { q.confirmed = true; validatePendingQuestion(note()); });
   const no = document.createElement("button");
   no.className = "agent-choice-btn agent-choice-no";
   no.textContent = "✗ Non";
-  no.addEventListener("click", () => respond(false));
+  no.addEventListener("click", () => { q.confirmed = false; validatePendingQuestion(note()); });
   buttons.appendChild(yes);
   buttons.appendChild(no);
-  wrapper.appendChild(buttons);
-  target.appendChild(wrapper);
+  bar.appendChild(buttons);
+}
+
+/** Rend la rangée Valider / Annuler pour une demande de saisie libre. */
+function renderInputPendingBar(q, bar) {
+  bar.innerHTML = "";
+  const titleEl = document.createElement("div");
+  titleEl.className = "agent-pending-title";
+  titleEl.textContent = q.title;
+  bar.appendChild(titleEl);
+  const buttons = document.createElement("div");
+  buttons.className = "agent-choice-buttons";
+  const ok = document.createElement("button");
+  ok.className = "agent-choice-btn agent-choice-validate";
+  ok.textContent = "✓ Valider";
+  ok.addEventListener("click", () => validatePendingQuestion(pendingInputEl ? pendingInputEl.value.trim() : ""));
+  const cancel = document.createElement("button");
+  cancel.className = "agent-choice-btn agent-choice-cancel";
+  cancel.textContent = "Annuler";
+  cancel.addEventListener("click", () => {
+    const active = pendingQuestions[0];
+    if (active) active.submit("", true);
+  });
+  buttons.appendChild(ok);
+  buttons.appendChild(cancel);
+  bar.appendChild(buttons);
+}
+
+/** Rend des boutons de choix (unique ou multi). La rangée interactive vit dans
+ * #pendingBar (sous la barre de saisie) ; le fil reçoit un bandeau informatif.
+ * @param {Function} responder - (id, value, cancelled) => Promise ; par défaut
+ *   envoie au super-agent, sinon (relais) route vers la session agent ciblée.
+ * @param {HTMLElement|null} targetOverride - cible d'attache (sinon auto). */
+function renderSuperAgentChoice(messagesEl, state, id, title, options, multi, responder = respondSuperAgent, targetOverride = null) {
+  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
+  // Bandeau informatif en lecture seule dans le fil.
+  target.appendChild(makeChoiceBanner(title, ""));
+  const q = {
+    id, title, responder, multi,
+    options: options.slice(),
+    selected: multi ? new Set() : null,
+    placeholder: PENDING_NOTE_PLACEHOLDER,
+  };
+  q.render = (bar) => renderChoicePendingBar(q, bar);
+  q.submit = async (note, cancelled) => {
+    let value;
+    if (cancelled) value = null;
+    else if (q.multi) value = JSON.stringify({ selected: [...q.selected], note });
+    else value = JSON.stringify({ selected: q.selected, note });
+    await finishPendingQuestion(q, value, cancelled);
+  };
+  enqueuePendingQuestion(q);
   // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
   // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
   scrollSuperToBottom(messagesEl);
 }
 
-/** Rend un champ de saisie inline.
+/** Rend des boutons Oui / Non. La rangée interactive vit dans #pendingBar.
+ * @param {Function} responder - (id, value, cancelled) => Promise */
+function renderSuperAgentConfirm(messagesEl, state, id, title, message, responder = respondSuperAgent, targetOverride = null) {
+  const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
+  target.appendChild(makeChoiceBanner(title, message));
+  const q = {
+    id, title, responder, confirmed: true,
+    placeholder: PENDING_NOTE_PLACEHOLDER,
+  };
+  q.render = (bar) => renderConfirmPendingBar(q, bar);
+  q.submit = async (note, cancelled) => {
+    let value;
+    if (cancelled) value = null;
+    else value = JSON.stringify({ confirmed: q.confirmed, note });
+    await finishPendingQuestion(q, value, cancelled);
+  };
+  enqueuePendingQuestion(q);
+  // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
+  // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
+  scrollSuperToBottom(messagesEl);
+}
+
+/** Rend une demande de saisie libre. La réponse est tapée dans la barre
+ * principale ; la rangée Valider / Annuler vit dans #pendingBar.
  * @param {Function} responder - (id, value, cancelled) => Promise */
 function renderSuperAgentInput(messagesEl, state, id, title, placeholder, responder = respondSuperAgent, targetOverride = null) {
   const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
-  const wrapper = document.createElement("div");
-  wrapper.className = "agent-choice";
-  const titleEl = document.createElement("div");
-  titleEl.className = "agent-choice-title";
-  titleEl.textContent = title;
-  wrapper.appendChild(titleEl);
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "agent-choice-input";
-  input.placeholder = placeholder || "";
-  wrapper.appendChild(input);
-  const buttons = document.createElement("div");
-  buttons.className = "agent-choice-buttons";
-  const respond = async (value, cancelled) => {
-    const btns = wrapper.querySelectorAll("button");
-    btns.forEach((b) => { b.disabled = true; });
-    input.disabled = true;
-    wrapper.classList.add("resolved");
-    await responder(id, value, cancelled);
+  target.appendChild(makeChoiceBanner(title, ""));
+  const q = {
+    id, title, responder,
+    placeholder: placeholder || PENDING_NOTE_PLACEHOLDER,
   };
-  const ok = document.createElement("button");
-  ok.className = "agent-choice-btn agent-choice-validate";
-  ok.textContent = "✓ Valider";
-  ok.addEventListener("click", () => respond(input.value, false));
-  const cancel = document.createElement("button");
-  cancel.className = "agent-choice-btn agent-choice-cancel";
-  cancel.textContent = "Annuler";
-  cancel.addEventListener("click", () => respond(null, true));
-  buttons.appendChild(ok);
-  buttons.appendChild(cancel);
-  wrapper.appendChild(buttons);
-  target.appendChild(wrapper);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") respond(input.value, false);
-    if (e.key === "Escape") respond(null, true);
-  });
-  setTimeout(() => input.focus(), 0);
+  q.render = (bar) => renderInputPendingBar(q, bar);
+  q.submit = async (note, cancelled) => {
+    if (cancelled) await finishPendingQuestion(q, null, true);
+    else await finishPendingQuestion(q, note, false);
+  };
+  enqueuePendingQuestion(q);
+  // Focus la barre principale, prête à saisir la réponse.
+  if (pendingInputEl) setTimeout(() => pendingInputEl.focus(), 0);
   // Bug 2 (UX) : scroll intelligent (respecte la distinction « utilisateur a
   // remonté pour relire ») — ne force le bas que si l'utilisateur était en bas.
   scrollSuperToBottom(messagesEl);
