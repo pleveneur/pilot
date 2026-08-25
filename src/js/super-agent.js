@@ -333,6 +333,7 @@ let superSetReflecting = () => {};
 // si concurrence (ex: plusieurs agents qui relayent simultanément).
 let pendingBarEl = null;        // conteneur #pendingBar (défini par createSuperAgent)
 let pendingInputEl = null;      // textarea #superagent-input (défini par createSuperAgent)
+let superMessagesEl = null;     // zone des messages du chat (définie par createSuperAgent)
 const pendingQuestions = [];    // file FIFO de questions en attente
 const SUPERAGENT_PLACEHOLDER_DEFAULT = "Poser une question sur tous les projets… (Entrée pour envoyer)";
 const PENDING_NOTE_PLACEHOLDER = "Votre précision (optionnel)… puis validez";
@@ -398,6 +399,26 @@ function finalizePendingQuestion() {
  * d'échec, on ne vide PAS le champ et on réactive la barre. */
 async function finishPendingQuestion(q, value, cancelled) {
   if (pendingBarEl) pendingBarEl.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  // Affiche dans la discussion ce que l'utilisateur a répondu (choix unique /
+  // multi / confirmation / saisie), pour qu'en relisant la conversation on
+  // sache ce qui a été choisi. Cas d'annulation : rien à afficher.
+  if (!cancelled && superMessagesEl) {
+    let label;
+    if (q.multi) {
+      label = q.selected && q.selected.size ? [...q.selected].join(", ") : "aucune option";
+    } else if (q.confirmed !== undefined) {
+      label = q.confirmed ? "Oui" : "Non";
+    } else if (q.selected !== undefined) {
+      label = q.selected || "aucune option";
+    } else {
+      label = String(value ?? "");
+    }
+    const note = (typeof value === "string" && value.startsWith("{"))
+      ? (() => { try { return JSON.parse(value).note; } catch (_) { return ""; } })()
+      : "";
+    if (note) label += ` (${note})`;
+    appendMessage(superMessagesEl, "user", "Réponse : " + label);
+  }
   try {
     await q.responder(q.id, value, cancelled);
     clearPendingInput();
@@ -826,6 +847,7 @@ export async function createSuperAgent(container) {
   // Zone des messages
   const messagesEl = document.createElement("div");
   superWarnMessagesEl = messagesEl; // T6 : cible des alertes d'échec d'injection
+  superMessagesEl = messagesEl; // cible du rendu des réponses aux questions
   messagesEl.className = "agent-chat-messages";
   wrapper.appendChild(messagesEl);
 
@@ -1539,7 +1561,18 @@ export async function createSuperAgent(container) {
       // sans agent-status-idle). L'ancienne condition exigeait la classe idle,
       // absente à la création de l'onglet → le statut restait « Prêt » pendant
       // tout le travail. On protège uniquement les états d'erreur.
-      if (processing && !isStreaming && !isError) {
+      //
+      // Chantier « saisie-réflexion » : la teinte de la zone de saisie est
+      // pilotée par le MÊME signal que le cercle respirant en haut (état
+      // `processing` de get_agent_supervision), SANS la garde `!isStreaming`.
+      // Cette garde était fragile : `isStreaming` dérive de la classe
+      // `agent-status-streaming` posée par le poll lui-même et NON réinitialisée
+      // à l'agent_end (onEnd ne reset que le texte, pas la classe). Si
+      // l'assistant se remettait à réfléchir dans la fenêtre où la classe était
+      // encore `streaming` (et sans agent_start reçu), la garde sautait
+      // `setReflecting(true)` → l'effet de la zone de saisie ne se déclenchait
+      // pas alors que le cercle en haut (qui n'a pas cette garde) respirait.
+      if (processing && !isError) {
         backendBusy = true;
         statusEl.textContent = "Réfléchit…";
         statusEl.className = "agent-status agent-status-streaming";
@@ -1555,6 +1588,10 @@ export async function createSuperAgent(container) {
         // backendBusy verrouillé sur true (sinon les envois suivants seraient
         // bloqués sans raison).
         backendBusy = false;
+        // Filet de sécurité : retire aussi la teinte « réflexion » si elle
+        // était restée active (ex: agent_end manqué) — l'effet ne doit jamais
+        // rester bloqué quand l'assistant ne réfléchit plus.
+        setReflecting(false);
       }
     } catch (_) { /* ignore */ }
   }, 2000);
@@ -1604,6 +1641,7 @@ export async function createSuperAgent(container) {
       if (pendingBar) pendingBar.innerHTML = "";
       pendingBarEl = null;
       pendingInputEl = null;
+      superMessagesEl = null;
       // Tâche #139 : libérer les références du panneau des événements (l'onglet
       // est fermé ; les prochains événements seront ignorés jusqu'à la réouverture).
       superEventsPanel = null;
