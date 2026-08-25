@@ -1810,6 +1810,10 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
       const raTask = String(raInfo.task || "").trim();
       fingerprint = buildToolLoopFingerprint("run_agents", { agent_ids: raIds, task: raTask });
       superLoopBuffer += "run_agents task: " + raTask + "\n";
+    } else if (title.startsWith("PILOT_ASSISTANT_SESSIONS::")) {
+      // Issue #143 : empreinte concordante pour list_agent_sessions (le sentinel
+      // arrive via un input d'outil, pas via tool_execution_start).
+      fingerprint = buildToolLoopFingerprint("list_agent_sessions", {});
     } else {
       fingerprint = "input::" + title;
     }
@@ -1858,10 +1862,6 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       pendingText = "";
       pendingRender = false;
       lastAssistantRawText = "";
-      // Issue #55 : nouveau message → reset du buffer de détection de boucle.
-      superLoopBuffer = "";
-      superLoopToolCalls = [];
-      superLoopStopped = false;
     }
     return;
   }
