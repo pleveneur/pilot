@@ -3616,6 +3616,143 @@ body.zen-mode #action-panel {
   50% { opacity: 0.5; }
 }
 
+/* ── Panneau des événements système de l'assistant (tâche #139) ──
+   Les événements système (délégations, démarrage/arrêt d'agents, erreurs,
+   connexion perdue, notifications) sont regroupés dans un petit panneau en bas
+   à droite de l'onglet 🧭, ouvert par un bouton « cloche » compact dans la barre
+   de saisie. Tout via les variables de thème (aucune couleur en dur). */
+.sa-events-btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  margin-left: auto; /* tout à droite de la barre de saisie */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.sa-events-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+.sa-events-btn.agent-pulse {
+  animation: agent-pulse 1.5s ease-in-out infinite;
+}
+.sa-events-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--superagent-accent);
+  color: var(--bg-input);
+  font-size: var(--font-xs);
+  line-height: 16px;
+  text-align: center;
+  font-weight: 600;
+  pointer-events: none;
+}
+.sa-events-badge[hidden] { display: none; }
+#superagent-events-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 56px;
+  width: 280px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-floating);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: 10001;
+  overflow: hidden;
+}
+#superagent-events-panel.hidden { display: none; }
+.sa-events-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+}
+.sa-events-title {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sa-events-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sa-events-header-actions .agent-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+}
+.sa-events-header-actions .agent-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.sa-events-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px;
+}
+.sa-events-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+.sa-events-item:hover { background: var(--bg-hover); }
+.sa-events-item-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--superagent-accent);
+}
+.sa-events-item-dot.success { background: var(--success); }
+.sa-events-item-dot.warning { background: var(--warning); }
+.sa-events-item-dot.danger { background: var(--danger); }
+.sa-events-item-dot.info { background: var(--superagent-accent); }
+.sa-events-text {
+  flex: 1;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.sa-events-time {
+  flex-shrink: 0;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 /* Prévisualisation des images en attente */
 .agent-image-previews {
   display: none;

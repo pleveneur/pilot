@@ -54,6 +54,25 @@ apprend et répond.
   Tâche terminée… », « ⚠️ Connexion perdue… ») sont affichés **dans l'ordre
   de leur émission** grâce à un buffer d'ordonnancement + compteur de
   séquence (#20), même s'ils arrivent hors ordre (sources asynchrones).
+- **#139 — Panneau des événements système** : les **événements système**
+  (délégations, démarrage/arrêt d'agents, erreurs, connexion perdue,
+  notifications) ne s'affichent **plus au centre** de la discussion : ils sont
+  regroupés dans un **petit panneau en bas à droite** de l'onglet 🧭, ouvert
+  par un **bouton « cloche » 🔔** compact tout à droite de la barre de saisie.
+  - Un **badge compteur** indique le nombre d'événements **non lus** depuis la
+    dernière ouverture (il **pulse** quand le panneau est fermé et qu'un
+    nouvel événement arrive).
+  - Le panneau **reste ouvert** tant qu'on ne le ferme pas (bouton **×** ou
+    cloche) ; l'état ouvert/fermé est **mémorisé** et restauré à la réouverture
+    de l'onglet. Pendant l'ouverture, les nouveaux événements s'ajoutent en
+    direct en haut de la liste (compteur à 0).
+  - Liste **chronologique** (plus récent en haut), pastille colorée par
+    sévérité (succès / avertissement / erreur / info), horodatage discret.
+  - Bouton **« tout effacer »** 🗑️ pour vider la liste. Tampon mémoire borné
+    (~150 items) pour garder le panneau lisible.
+  - Les **éléments interactifs** (boutons de choix, confirmations, saisies)
+    restent **au centre** de la discussion : ce sont des questions qui
+    nécessitent votre action, pas des événements système.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
@@ -74,7 +93,9 @@ apprend et répond.
   colorée) et au **badge projet** (fond coloré + texte blanc). La couleur est
   **identique** pour un même projet d'une session à l'autre.
 - Les **bulles système** (messages d'info `appendSystemMessage`) ne portent
-  **aucune couleur de projet**.
+  **aucune couleur de projet** et sont désormais regroupées dans le **panneau
+  des événements système** (tâche #139, voir plus haut) au lieu du centre de
+  la discussion.
 
 ### Notifications natives
 - **Paramètres ⚙️ → onglet « Assistant » → « Notifier quand l'Assistant a

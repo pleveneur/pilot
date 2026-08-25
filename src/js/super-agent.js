@@ -69,6 +69,22 @@ let infoSeq = 0;
 const pendingInfo = {};
 let nextInfoSeq = 0;
 
+// ── Panneau des événements système (tâche #139) ──
+// Les événements système (délégations, démarrage/arrêt d'agents, erreurs,
+// connexion perdue, notifications) sont retirés du centre de la discussion et
+// regroupés dans un petit panneau en bas à droite de l'onglet 🧭, ouvert par un
+// bouton « cloche » compact dans la barre de saisie. Les éléments interactifs
+// (confirm/select/choice) restent au centre. L'état ouvert/fermé est mémorisé
+// (localStorage) et restauré à la réouverture de l'onglet.
+const SUPER_EVENTS_KEY = "pilot_superagent_events_open";
+const SUPER_EVENTS_MAX = 150; // tampon mémoire (évite un panneau illisible)
+let superEventsPanel = null;   // panneau #superagent-events-panel
+let superEventsBtn = null;     // bouton cloche .sa-events-btn
+let superEventsBadge = null;   // badge compteur .sa-events-badge
+let superEventsList = null;    // liste .sa-events-list
+let superEventsOpen = false;   // panneau ouvert ?
+let superEventsUnread = 0;     // événements non lus depuis la dernière ouverture
+
 /** Décision pure (testable) : faut-il descendre en bas ? Vrai si l'utilisateur
  * est déjà en bas (ou presque, seuil `threshold`). Ne force pas le bas si
  * l'utilisateur a volontairement remonté pour relire (issue #60). */
@@ -648,18 +664,106 @@ function isBareProjectPath(s) {
   return /^[A-Za-z]:[\\/]/.test(s) || /^[~/]/.test(s);
 }
 
+/**
+ * Infère le niveau de sévérité d'un événement système depuis son préfixe
+ * (tâche #139). Les messages d'info de l'assistant sont préfixés par une
+ * icône emoji (❌ erreur, ⚠️ avertissement, ✅ succès) ; tout le reste est
+ * considéré comme de l'info. @returns {string} info|warn|error|success
+ */
+function inferSuperEventLevel(text) {
+  if (/^❌/.test(text)) return "error";
+  if (/^⚠️/.test(text)) return "warn";
+  if (/^✅/.test(text)) return "success";
+  return "info";
+}
+
+/** Formate un horodatage discret HH:MM pour un événement système. */
+function formatSuperEventTime(d) {
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+/**
+ * Ajoute un événement système au panneau (tâche #139). `level` ∈
+ * info|warn|error|success. Si le panneau est fermé, incrémente le compteur
+ * non-lu et fait pulser le badge. Tampon mémoire borné (SUPER_EVENTS_MAX).
+ * Fail-open : si le panneau n'existe pas (onglet fermé), on ne fait rien.
+ * @param {string} level
+ * @param {string} text
+ */
+function pushSuperAgentSystemEvent(level, text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed || isBareProjectPath(trimmed)) return;
+  if (!superEventsList) return; // panneau pas encore créé (onglet fermé)
+  const item = document.createElement("div");
+  item.className = "sa-events-item";
+  const dot = document.createElement("span");
+  const dotLevel = level === "error" ? "danger" : level === "warn" ? "warning" : level === "success" ? "success" : "info";
+  dot.className = "sa-events-item-dot " + dotLevel;
+  const label = document.createElement("span");
+  label.className = "sa-events-text";
+  label.textContent = trimmed;
+  const time = document.createElement("span");
+  time.className = "sa-events-time";
+  time.textContent = formatSuperEventTime(new Date());
+  item.appendChild(dot);
+  item.appendChild(label);
+  item.appendChild(time);
+  superEventsList.prepend(item);
+  // Tampon mémoire borné : on retire les plus anciens (fin de liste).
+  while (superEventsList.children.length > SUPER_EVENTS_MAX) {
+    superEventsList.lastChild.remove();
+  }
+  if (!superEventsOpen) {
+    superEventsUnread++;
+    updateSuperEventsBadge();
+    if (superEventsBtn) superEventsBtn.classList.add("agent-pulse");
+  }
+}
+
 /** Affiche les messages d'info en attente dans l'ordre de leur séquence. */
 function flushPendingInfo() {
   while (pendingInfo[nextInfoSeq]) {
-    const { messagesEl, text } = pendingInfo[nextInfoSeq];
+    const { text } = pendingInfo[nextInfoSeq];
     delete pendingInfo[nextInfoSeq];
     nextInfoSeq++;
-    const el = document.createElement("div");
-    el.className = "agent-message agent-message-system";
-    el.textContent = text;
-    messagesEl.appendChild(el);
-    scrollSuperToBottom(messagesEl);
+    pushSuperAgentSystemEvent(inferSuperEventLevel(text), text);
   }
+}
+
+/** Met à jour le badge compteur d'événements non lus (masqué si 0). */
+function updateSuperEventsBadge() {
+  if (!superEventsBadge) return;
+  if (superEventsUnread > 0) {
+    superEventsBadge.textContent = superEventsUnread > 99 ? "99+" : String(superEventsUnread);
+    superEventsBadge.hidden = false;
+  } else {
+    superEventsBadge.hidden = true;
+  }
+}
+
+/** Ouvre le panneau des événements (compteur remis à 0, badge masqué). */
+function openSuperEvents() {
+  superEventsOpen = true;
+  superEventsUnread = 0;
+  updateSuperEventsBadge();
+  if (superEventsPanel) superEventsPanel.classList.remove("hidden");
+  if (superEventsBtn) superEventsBtn.classList.remove("agent-pulse");
+  localStorage.setItem(SUPER_EVENTS_KEY, "1");
+}
+
+/** Ferme le panneau des événements. */
+function closeSuperEvents() {
+  superEventsOpen = false;
+  if (superEventsPanel) superEventsPanel.classList.add("hidden");
+  localStorage.setItem(SUPER_EVENTS_KEY, "0");
+}
+
+/** Bascule l'ouverture/fermeture du panneau des événements. */
+function toggleSuperEvents() {
+  if (superEventsOpen) closeSuperEvents();
+  else openSuperEvents();
 }
 
 /**
@@ -774,8 +878,46 @@ export async function createSuperAgent(container) {
     <textarea class="agent-input" id="superagent-input" rows="1" placeholder="Poser une question sur tous les projets… (Entrée pour envoyer)"></textarea>
     <button class="agent-btn agent-mic-btn" data-action="voice" title="Dictée vocale (transcription cloud)" aria-label="Dictée vocale"><i data-lucide="mic" class="icon-sm"></i></button>
     <button class="agent-btn agent-send-btn" data-action="send"><i data-lucide="send-horizontal" class="icon-sm"></i></button>
+    <button class="agent-btn sa-events-btn" data-action="events" title="Événements système" aria-label="Événements système"><i data-lucide="bell" class="icon-sm"></i><span class="sa-events-badge" hidden>0</span></button>
   `;
   wrapper.appendChild(inputBar);
+
+  // ── Panneau des événements système (tâche #139) ──
+  // Bouton « cloche » compact tout à droite de la barre de saisie + panneau en
+  // bas à droite de l'onglet. Les événements système y sont regroupés au fil de
+  // leur arrivée ; le compteur non-lu pulse quand le panneau est fermé. L'état
+  // ouvert/fermé est mémorisé (localStorage) et restauré à la réouverture.
+  const eventsBtn = inputBar.querySelector(".sa-events-btn");
+  const eventsBadge = eventsBtn.querySelector(".sa-events-badge");
+  const eventsPanel = document.createElement("div");
+  eventsPanel.id = "superagent-events-panel";
+  eventsPanel.className = "sa-events-panel hidden";
+  eventsPanel.innerHTML = `
+    <div class="sa-events-header">
+      <span class="sa-events-title">Événements</span>
+      <div class="sa-events-header-actions">
+        <button class="agent-btn sa-events-clear" title="Tout effacer" aria-label="Tout effacer"><i data-lucide="trash-2" class="icon-sm"></i></button>
+        <button class="agent-btn sa-events-close" title="Fermer" aria-label="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
+      </div>
+    </div>
+    <div class="sa-events-list"></div>
+  `;
+  wrapper.appendChild(eventsPanel);
+  superEventsPanel = eventsPanel;
+  superEventsBtn = eventsBtn;
+  superEventsBadge = eventsBadge;
+  superEventsList = eventsPanel.querySelector(".sa-events-list");
+  superEventsOpen = false;
+  superEventsUnread = 0;
+  eventsBtn.addEventListener("click", toggleSuperEvents);
+  eventsPanel.querySelector(".sa-events-close").addEventListener("click", closeSuperEvents);
+  eventsPanel.querySelector(".sa-events-clear").addEventListener("click", () => {
+    if (superEventsList) superEventsList.innerHTML = "";
+  });
+  // Restaurer l'état ouvert/fermé mémorisé (localStorage).
+  if (localStorage.getItem(SUPER_EVENTS_KEY) === "1") {
+    openSuperEvents();
+  }
   // Indicateur discret « assistant occupé » (Bug 1 UX) : bandeau inséré au-dessus
   // de la barre de saisie. Visible uniquement quand l'utilisateur tente d'envoyer
   // pendant que l'assistant est occupé ; disparaît quand le backend redevient libre.
@@ -1179,6 +1321,9 @@ export async function createSuperAgent(container) {
     immInput.appendChild(busyHint);
     immInput.appendChild(inputBar);
     if (pendingBar) immInput.appendChild(pendingBar);
+    // Tâche #139 : déplacer aussi le panneau des événements avec la barre de
+    // saisie (sinon les événements disparaissent en mode Assistant Only).
+    if (superEventsPanel) immInput.appendChild(superEventsPanel);
     immersiveOverlay.querySelector(".sa-immersive-top").appendChild(statusEl);
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
@@ -1192,6 +1337,8 @@ export async function createSuperAgent(container) {
     wrapper.insertBefore(busyHint, inputBar);
     wrapper.appendChild(inputBar);
     if (pendingBar) wrapper.appendChild(pendingBar);
+    // Tâche #139 : remettre le panneau des événements dans le wrapper.
+    if (superEventsPanel) wrapper.appendChild(superEventsPanel);
     toolbar.appendChild(statusEl);
     immersiveOverlay.remove();
     immersiveOverlay = null;
@@ -1446,6 +1593,14 @@ export async function createSuperAgent(container) {
       if (pendingBar) pendingBar.innerHTML = "";
       pendingBarEl = null;
       pendingInputEl = null;
+      // Tâche #139 : libérer les références du panneau des événements (l'onglet
+      // est fermé ; les prochains événements seront ignorés jusqu'à la réouverture).
+      superEventsPanel = null;
+      superEventsBtn = null;
+      superEventsBadge = null;
+      superEventsList = null;
+      superEventsOpen = false;
+      superEventsUnread = 0;
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
       window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
     },
@@ -1926,9 +2081,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
   } catch (_) {}
 
   if (method === "notify") {
+    // Tâche #139 : les notifications pures (informatif) partent dans le panneau
+    // des événements système, PAS au centre de la discussion. Les éléments
+    // interactifs (confirm/select/choice) restent au centre.
     const type = payload.notifyType || "info";
     const msg = payload.message || "";
-    appendSystemMessage(messagesEl, `ℹ️ [${type}] ${msg}`);
+    const level = type === "error" ? "error" : type === "warn" || type === "warning" ? "warn" : type === "success" ? "success" : "info";
+    pushSuperAgentSystemEvent(level, msg);
     return;
   }
 
