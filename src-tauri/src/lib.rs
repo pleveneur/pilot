@@ -25,6 +25,9 @@ pub(crate) use rpc::{
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 /// Dossiers systématiquement ignorés à la lecture de l'arborescence projet et
 /// par le file watcher. Ces dossiers (dépendances, build, VCS, caches) peuvent
 /// contenir des dizaines de milliers de fichiers ; les inclure fait exploser
@@ -1334,15 +1337,23 @@ fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
         return Err(format!("Script de notification introuvable: {}", script.display()));
     }
     let vol = volume.min(100);
-    let _ = std::process::Command::new("powershell")
-        .arg("-NoProfile")
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")
         .arg(&script)
         .arg(&sound_type)
-        .arg(vol.to_string())
-        .spawn();
+        .arg(vol.to_string());
+
+    // Évite qu'une fenêtre console noire n'apparaisse/disparaisse fugacement
+    // à l'écran pendant la lecture du son (PlaySync() bloquant).
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let _ = cmd.spawn();
     Ok(())
 }
 
