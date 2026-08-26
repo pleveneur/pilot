@@ -154,7 +154,7 @@ let busState = {
 // `~/.pilot/assistant/` : pas de contexte projet injecté, commandes IPC dédiées
 // (start_assistant_agent_process / send_assistant_agent_prompt), clé de run
 // distincte. Doit rester distinct de "" (super-agent) et de tout projet réel.
-const ASSISTANT_SPACE = "__assistant__";
+export const ASSISTANT_SPACE = "__assistant__";
 
 function runKey(project) {
   return project || ".";
