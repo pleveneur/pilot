@@ -3555,8 +3555,8 @@ body.zen-mode #action-panel {
   background-color: var(--surface-2);
   background-image: radial-gradient(
     circle at center,
-    color-mix(in srgb, var(--superagent-accent) 22%, transparent) 0%,
-    color-mix(in srgb, var(--superagent-accent) 13%, transparent) 55%,
+    color-mix(in srgb, var(--superagent-accent) 10%, transparent) 0%,
+    color-mix(in srgb, var(--superagent-accent) 5%, transparent) 55%,
     transparent 100%
   );
   background-repeat: no-repeat;
@@ -3564,10 +3564,40 @@ body.zen-mode #action-panel {
   background-size: 40% 40%;
   animation: assistant-input-breathe 1s ease-in-out infinite;
 }
+/* La respiration fait varier à la fois la TAILLE (40% → 180% → 40%) et
+   l'INTENSITÉ du dégradé : petit = très transparent, en grossissant il devient
+   de plus en plus opaque jusqu'au pic (35%/15%, plus prononcé que l'ancien
+   22%/13%), puis se rétracte en refaiblissant. Les dégradés étant
+   interpolables, les étapes intermédiaires suivent naturellement. Thème dark
+   et light OK via la variable --superagent-accent (aucune couleur en dur). */
 @keyframes assistant-input-breathe {
-  0%   { background-size: 40% 40%; }
-  50%  { background-size: 180% 180%; }
-  100% { background-size: 40% 40%; }
+  0% {
+    background-size: 40% 40%;
+    background-image: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--superagent-accent) 10%, transparent) 0%,
+      color-mix(in srgb, var(--superagent-accent) 5%, transparent) 55%,
+      transparent 100%
+    );
+  }
+  50% {
+    background-size: 180% 180%;
+    background-image: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--superagent-accent) 35%, transparent) 0%,
+      color-mix(in srgb, var(--superagent-accent) 15%, transparent) 55%,
+      transparent 100%
+    );
+  }
+  100% {
+    background-size: 40% 40%;
+    background-image: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--superagent-accent) 10%, transparent) 0%,
+      color-mix(in srgb, var(--superagent-accent) 5%, transparent) 55%,
+      transparent 100%
+    );
+  }
 }
 
 .agent-input {
