@@ -1200,19 +1200,29 @@ body.theme-light.theme-tokyo-day {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
+/* Assistant (superagent) : cercle discret NON rempli au repos (simple anneau
+   teinté superagent-accent, faible opacité). Plein violet + halo uniquement
+   en activité (.breathing). */
 .agent-activity-item-dot.superagent {
-  background: var(--superagent-accent);
-  opacity: 1;
+  background: transparent;
+  border: 1.5px solid var(--superagent-accent);
+  opacity: 0.4;
 }
 .agent-activity-item-dot.superagent.breathing {
   background: var(--superagent-accent);
+  border-color: var(--superagent-accent);
   box-shadow: 0 0 8px var(--superagent-accent);
+  opacity: 1;
 }
 .agent-activity-item-label {
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Le libellé de l'assistant (superagent) reprend la couleur de son onglet. */
+.agent-activity-item[data-kind="superagent"] .agent-activity-item-label {
+  color: var(--superagent-accent);
 }
 .agent-activity-item-project {
   color: var(--text-muted);
