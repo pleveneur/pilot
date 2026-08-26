@@ -18,7 +18,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
-use crate::agent_service::SUPERAGENT_ID;
+use crate::agent_service::{ASSISTANT_SPACE, SUPERAGENT_ID};
 use crate::{run_captured, AppState};
 
 /// Dossiers/dépendances/caches exclus du « poids du code source pur ».
@@ -1322,9 +1322,12 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
     let projects: Vec<Value> = by_project
         .into_iter()
         .map(|(project, agents)| {
-            // Projet pseudo-global "" = assistant (super-agent).
+            // Projet pseudo-global "" = assistant (super-agent) ; espace
+            // réservé ASSISTANT_SPACE = agents d'assistant sans projet.
             let name = if project.is_empty() {
                 "Magnus".to_string()
+            } else if project == ASSISTANT_SPACE {
+                "Assistant".to_string()
             } else {
                 Path::new(&project)
                     .file_name()

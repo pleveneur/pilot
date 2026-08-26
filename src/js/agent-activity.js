@@ -26,6 +26,10 @@ import { listen } from "@tauri-apps/api/event";
 // `agent-state-changed`. Clé = agentId (id brut, ex: "superagent" ou l'id agent).
 const lastActivity = new Map();
 
+// Espace réservé des agents d'assistant SANS projet (clé `__assistant__`),
+// distinct de "" (super-agent Magnus) et de tout chemin de projet réel.
+const ASSISTANT_SPACE = "__assistant__";
+
 /** Échappe un texte pour insertion HTML sûre. */
 function esc(s) {
   return String(s == null ? "" : s)
@@ -61,8 +65,14 @@ export function flattenAgents(supervision, lastActivityMap) {
   for (const proj of projects) {
     const project = proj.path || "";
     const isSuper = project === "";
-    // L'assistant (projet pseudo-global "") n'a pas de projet : on laisse vide.
-    const projectName = isSuper ? "" : proj.name || project.split(/[\\/]/).pop() || "";
+    const isAssistant = project === ASSISTANT_SPACE;
+    // L'assistant (projet pseudo-global "") et l'espace des agents d'assistant
+    // (ASSISTANT_SPACE) n'ont pas de projet réel : étiquette lisible « Assistant ».
+    const projectName = isSuper
+      ? ""
+      : isAssistant
+        ? "Assistant"
+        : proj.name || project.split(/[\\/]/).pop() || "";
     for (const a of proj.agents || []) {
       const label = a.agent || "";
       const state = a.state || "stopped";
@@ -74,17 +84,17 @@ export function flattenAgents(supervision, lastActivityMap) {
       // aplatie et au clic. `rawId` garde l'id brut (== label pour un agent
       // nommé), `label` et `project` restent l'affichage lisible.
       const rawId = isSuper ? "superagent" : label;
-      const agentId = isSuper ? "superagent" : `${label}|${project}`;
+      const agentId = isSuper ? "superagent" : (isAssistant ? label : `${label}|${project}`);
       list.push({
         agentId,
         rawId,
         label,
         project: projectName,
-        projectPath: isSuper ? "" : project,
+        projectPath: isSuper || isAssistant ? "" : project,
         state,
         busy,
         lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
-        kind: isSuper ? "superagent" : "agent",
+        kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
       });
     }
   }
@@ -212,6 +222,11 @@ export function initAgentActivity(tabs) {
     if (!agent) return;
     if (agent.kind === "superagent") {
       tabs.openFile(agent.label, "superagent");
+    } else if (agent.kind === "assistant") {
+      // Agent d'assistant SANS projet : il tourne dans l'espace réservé
+      // ~/.pilot/assistant, aucun projet réel à activer. On ouvre simplement
+      // son onglet via son id brut.
+      tabs._openAgent(agent.label, agent.rawId);
     } else {
       // L'onglet d'un agent est lié au PROJET actif (_openAgent utilise
       // window._pilotProjectPath). Si l'agent cliqué appartient à un autre

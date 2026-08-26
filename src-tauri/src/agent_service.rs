@@ -1198,7 +1198,12 @@ impl AgentService {
         space_cwd: &str,
     ) -> Result<bool, String> {
         let key = Self::session_key(ASSISTANT_SPACE, agent_id);
-        let cwd = if space_cwd.trim().is_empty() {
+        // Le frontend passe le token réservé ASSISTANT_SPACE comme `space_cwd`
+        // (jamais un vrai chemin) : on ne doit JAMAIS l'utiliser tel quel comme
+        // répertoire de travail du processus pi. On le résout vers l'espace
+        // assistant réel `~/.pilot/assistant` (idem si vide). Tout autre chemin
+        // explicite est conservé tel quel.
+        let cwd = if space_cwd.trim().is_empty() || space_cwd.trim() == ASSISTANT_SPACE {
             Self::assistant_workspace()?.to_string_lossy().to_string()
         } else {
             space_cwd.to_string()

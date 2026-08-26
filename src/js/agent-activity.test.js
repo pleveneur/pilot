@@ -62,6 +62,41 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
     });
   });
 
+  it("aplatit les agents d'assistant (espace __assistant__) avec kind assistant et étiquette Assistant", () => {
+    const sup = makeSupervision([
+      {
+        path: "__assistant__",
+        name: "Assistant",
+        agents: [
+          { agent: "analyseur", state: "running", alive: true },
+          { agent: "codeur", state: "idle", alive: true },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({
+      agentId: "analyseur",
+      rawId: "analyseur",
+      label: "analyseur",
+      project: "Assistant",
+      projectPath: "",
+      state: "running",
+      busy: true,
+      kind: "assistant",
+    });
+    expect(list[1]).toMatchObject({
+      agentId: "codeur",
+      rawId: "codeur",
+      label: "codeur",
+      project: "Assistant",
+      projectPath: "",
+      state: "idle",
+      busy: false,
+      kind: "assistant",
+    });
+  });
+
   it("considère running et compacting comme busy, idle/paused/stopped comme repos", () => {
     const sup = makeSupervision([
       {
