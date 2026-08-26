@@ -419,6 +419,20 @@ async function finishPendingQuestion(q, value, cancelled) {
     if (note) label += ` (${note})`;
     appendMessage(superMessagesEl, "user", "Réponse : " + label);
   }
+  // Bug d'affichage : après une réponse inline (choix / confirmation / saisie),
+  // on ferme la bulle assistant en cours (celle qui contenait la question) pour
+  // que la continuation de l'assistant démarre une NOUVELLE bulle, au lieu de se
+  // ré-injecter dans l'ancienne (même logique que `send()` après un message
+  // utilisateur). Le bandeau de la question reste dans sa bulle (déjà dans le
+  // DOM) ; seul le streaming suivant est réorienté vers un nouveau bloc.
+  currentBody = null;
+  currentFlow = null;
+  currentTextSection = null;
+  currentThinkingBlock = null;
+  pendingText = "";
+  pendingRender = false;
+  lastAssistantRawText = "";
+  currentBubbleProject = null;
   try {
     await q.responder(q.id, value, cancelled);
     clearPendingInput();
