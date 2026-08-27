@@ -1369,12 +1369,17 @@ export async function createSuperAgent(container) {
 
   function exitImmersive() {
     if (!immersiveOverlay) return;
-    wrapper.appendChild(messagesEl);
-    wrapper.insertBefore(busyHint, inputBar);
+    // Remettre chaque élément à sa place d'origine, dans le bon ordre, pour
+    // rester symétrique avec enterImmersive (sans doublon ni perte).
+    // messagesEl était le premier enfant du wrapper (avant la toolbar).
+    wrapper.insertBefore(messagesEl, toolbar);
+    // inputBar doit être dans le wrapper AVANT d'insérer busyHint devant lui
+    // (sinon insertBefore lève une DOMException et le retour échoue).
     wrapper.appendChild(inputBar);
-    if (pendingBar) wrapper.appendChild(pendingBar);
-    // Tâche #139 : remettre le panneau des événements dans le wrapper.
-    if (superEventsPanel) wrapper.appendChild(superEventsPanel);
+    wrapper.insertBefore(busyHint, inputBar);
+    // pendingBar était le dernier enfant ; superEventsPanel juste avant lui.
+    wrapper.appendChild(pendingBar);
+    if (superEventsPanel) wrapper.insertBefore(superEventsPanel, pendingBar);
     toolbar.appendChild(statusEl);
     immersiveOverlay.remove();
     immersiveOverlay = null;
