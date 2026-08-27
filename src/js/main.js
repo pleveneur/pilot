@@ -425,19 +425,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   initModelsConfig();
 
   // 5. Boutons du panneau d'actions
-  document.getElementById("btn-terminal").addEventListener("click", async () => {
-    try {
-      const config = await invoke("get_config");
-      if (config.integrated_terminal) {
-        tabs.openFile("Terminal", "terminal");
-      } else {
-        await invoke("open_terminal", { runDefault: false });
-      }
-    } catch (e) {
-      console.error("Erreur terminal:", e);
-    }
-  });
-
   document.getElementById("btn-explorer").addEventListener("click", async () => {
     try {
       await invoke("open_explorer");

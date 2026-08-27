@@ -38,6 +38,16 @@
         <button id="dd-close-project" class="hidden"><i data-lucide="x" class="icon-sm"></i> Fermer le projet</button>
       </div>
     </div>
+
+    <!-- Boutons GLOBAUX de Pilot (toujours visibles, en haut de la sidebar) -->
+    <div id="global-actions">
+      <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)"><i data-lucide="file-text" class="icon"></i></button>
+      <button id="btn-settings" title="Paramètres"><i data-lucide="settings" class="icon"></i></button>
+      <button id="btn-vault" title="Coffre fort de mots de passe (chiffré)"><i data-lucide="lock" class="icon"></i></button>
+      <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
+      <button id="btn-help" title="Aide sur Pilot (poser une question)"><i data-lucide="circle-help" class="icon"></i></button>
+      <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i> <b id="remote-badge-count">0</b></span>
+    </div>
     <div id="open-projects-bar" class="hidden"></div>
     <div id="tree-filter-wrapper" class="hidden">
       <input type="search" id="tree-filter" placeholder="Filtrer les fichiers..." autocomplete="off" />
@@ -47,26 +57,37 @@
       <p class="empty-message">Aucun projet ouvert</p>
     </div>
 
-    <!-- Panneau d'Actions (Bas Gauche) -->
-    <div id="action-panel">
-      <button id="btn-scratchpad" title="Brouillon (Ctrl+Shift+N)"><i data-lucide="file-text" class="icon"></i></button>
-      <button id="btn-settings" title="Paramètres"><i data-lucide="settings" class="icon"></i></button>
-      <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon"></i></button>
-      <button id="btn-terminal" class="project-only hidden" title="Ouvrir le terminal"><i data-lucide="terminal" class="icon"></i></button>
-      <button id="btn-terminal-cmd" class="project-only hidden" title="Lancer l'agent"><i data-lucide="bot" class="icon"></i></button>
-      <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon"></i></button>
-      <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
-      <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
-      <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i></button>
-      <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
-      <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
-      <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
-      <button id="btn-code-graph" class="project-only hidden" title="Graphe du projet (visualisation 2D du Code Graph)"><i data-lucide="network" class="icon"></i></button>
-      <button id="btn-dashboard" class="project-only hidden" title="Tableau de bord du projet (métriques, Git, langages, activité)"><i data-lucide="gauge" class="icon"></i></button>
-      <button id="btn-vault" title="Coffre fort de mots de passe (chiffré)"><i data-lucide="lock" class="icon"></i></button>
-      <button id="btn-feedback" title="Envoyer une remarque ou une suggestion"><i data-lucide="message-square-plus" class="icon"></i></button>
-      <button id="btn-help" title="Aide sur Pilot (poser une question)"><i data-lucide="circle-help" class="icon"></i></button>
-      <span id="remote-badge" class="remote-badge hidden" title="Client(s) distant(s) connecté(s) — cliquer pour gérer"><i data-lucide="globe" class="icon-sm"></i> <b id="remote-badge-count">0</b></span>
+    <!-- Boutons du PROJET (en bas de la liste des fichiers, visibles si projet ouvert) -->
+    <div id="project-footer" class="project-only hidden">
+      <!-- Bloc Projet -->
+      <div class="pj-block">
+        <div class="pj-title proj">Projet</div>
+        <div class="pj-panel">
+          <button id="btn-explorer" class="project-only hidden" title="Ouvrir le dossier dans l'explorateur"><i data-lucide="folder-open" class="icon"></i></button>
+          <button id="btn-terminal-cmd" class="project-only hidden" title="Agent / Terminal"><i data-lucide="bot" class="icon"></i></button>
+          <button id="btn-commands" class="project-only hidden" title="Commandes du projet (lancer une commande paramétrée)"><i data-lucide="square-terminal" class="icon"></i></button>
+          <button id="btn-prompt-builder" class="project-only hidden" title="Prompt Builder"><i data-lucide="puzzle" class="icon"></i></button>
+          <button id="btn-dashboard" class="project-only hidden" title="Tableau de bord du projet (métriques, Git, langages, activité)"><i data-lucide="gauge" class="icon"></i></button>
+        </div>
+      </div>
+      <!-- Bloc Vues -->
+      <div class="pj-block">
+        <div class="pj-title view">Vues</div>
+        <div class="pj-panel">
+          <button id="btn-code-graph" class="project-only hidden" title="Graphe du projet (visualisation 2D du Code Graph)"><i data-lucide="network" class="icon"></i></button>
+          <button id="btn-review" class="project-only hidden" title="Revue de code du diff Git (H5)"><i data-lucide="search-check" class="icon"></i></button>
+          <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
+        </div>
+      </div>
+      <!-- Bloc Assistant -->
+      <div class="pj-block">
+        <div class="pj-title assist">Assistant</div>
+        <div class="pj-panel">
+          <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
+          <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i></button>
+          <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
+        </div>
+      </div>
     </div>
   </aside>
   <div id="sidebar-separator"></div>

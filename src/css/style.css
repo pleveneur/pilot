@@ -477,18 +477,53 @@ body.theme-light.theme-tokyo-day {
   background: var(--accent);
 }
 
-#action-panel {
+#global-actions {
   flex-shrink: 0;
-  margin: 8px 8px 8px;
+  margin: 8px 8px 0;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
-  display: grid;
-  grid-template-columns: repeat(5, 32px);
-  justify-content: start;
-  justify-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 8px;
+}
+
+#project-footer {
+  flex-shrink: 0;
+  margin: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 40%;
+}
+
+.pj-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pj-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  padding: 0 2px;
+  user-select: none;
+}
+
+.pj-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
 }
 
 #main-area {
@@ -1093,8 +1128,9 @@ body.theme-light.theme-tokyo-day {
   text-overflow: ellipsis;
 }
 
-/* --- Action Panel --- */
-#action-panel button {
+/* --- Action Panel (boutons globaux + panneaux projet) --- */
+#global-actions button,
+.pj-panel button {
   width: 32px;
   height: 32px;
   padding: 0;
@@ -1110,12 +1146,14 @@ body.theme-light.theme-tokyo-day {
   justify-content: center;
   flex: 0 0 auto;
 }
-#action-panel button:hover {
+#global-actions button:hover,
+.pj-panel button:hover {
   background: var(--surface-2);
   color: var(--text-primary);
   border-color: var(--border-subtle);
 }
-#action-panel button:active { transform: scale(0.94); }
+#global-actions button:active,
+.pj-panel button:active { transform: scale(0.94); }
 
 /* --- Tab Bar --- */
 #tab-bar {
@@ -2519,7 +2557,8 @@ mark.search-highlight {
 
 /* --- Mode Zen --- */
 body.zen-mode #sidebar,
-body.zen-mode #action-panel {
+body.zen-mode #global-actions,
+body.zen-mode #project-footer {
   display: none !important;
 }
 
@@ -5453,10 +5492,6 @@ body.pilot-loading *::after {
 }
 
 /* ── Accès distant (mode remote) ── */
-
-#action-panel {
-  align-items: center;
-}
 
 .remote-badge {
   width: 32px;
