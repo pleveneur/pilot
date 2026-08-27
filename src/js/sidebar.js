@@ -223,6 +223,9 @@ class Sidebar {
     // Séparateur sidebar draggable + persistance
     this._initSidebarResize();
 
+    // Barre de boutons projet : bascule des onglets Projet / Vues / Assistant
+    this._initProjectTabs();
+
     // Bouton Projets → toggle dropdown
     this.btnOpen.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1439,6 +1442,46 @@ class Sidebar {
     if (this.unlistenFileChange) {
       this.unlistenFileChange();
     }
+  }
+
+  /**
+   * Barre de boutons projet (v8) : bascule des onglets Projet / Vues / Assistant.
+   * Un seul panneau visible à la fois ; l'onglet actif est marqué (accent).
+   * Navigation clavier basique : ←/→ pour changer d'onglet quand un onglet a le focus.
+   */
+  _initProjectTabs() {
+    const footer = document.getElementById("project-footer");
+    if (!footer) return;
+    const tabs = footer.querySelectorAll(".pj-tab");
+    const panels = footer.querySelectorAll(".pj-panel");
+    if (tabs.length === 0 || panels.length === 0) return;
+
+    const activate = (tab) => {
+      const name = tab.getAttribute("data-tab");
+      tabs.forEach((t) => {
+        const on = t === tab;
+        t.classList.toggle("active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      panels.forEach((p) => {
+        p.style.display = p.getAttribute("data-panel") === name ? "" : "none";
+      });
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => activate(tab));
+      tab.addEventListener("keydown", (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        const idx = Array.prototype.indexOf.call(tabs, tab);
+        const next =
+          e.key === "ArrowRight"
+            ? (idx + 1) % tabs.length
+            : (idx - 1 + tabs.length) % tabs.length;
+        tabs[next].focus();
+        activate(tabs[next]);
+      });
+    });
   }
 
   /** Initialise le drag du séparateur sidebar avec persistance */

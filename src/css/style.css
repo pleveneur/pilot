@@ -495,24 +495,47 @@ body.theme-light.theme-tokyo-day {
   margin: 0 8px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow-y: auto;
   max-height: 40%;
 }
 
-.pj-block {
+/* --- Barre de boutons projet : système à onglets (v8) --- */
+.pj-tabs {
   display: flex;
-  flex-direction: column;
   gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  width: 100%;
+  flex-shrink: 0;
 }
 
-.pj-title {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-muted);
-  padding: 0 2px;
-  user-select: none;
+.pj-tab {
+  flex: 1;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  text-align: center;
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast),
+              border-color var(--transition-fast);
+}
+.pj-tab:hover {
+  color: var(--text-primary);
+  background: var(--surface-3);
+}
+.pj-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .pj-panel {
