@@ -1083,6 +1083,9 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "super_agent_auto_check_startup": cfg.super_agent_auto_check_startup,
         "adaptive_personality": cfg.super_agent_adaptive_personality,
         "personality": cfg.super_agent_personality,
+        // Tâche #160 : overlay plein écran des événements (activé + durée s).
+        "super_agent_events_overlay_enabled": cfg.super_agent_events_overlay_enabled,
+        "super_agent_events_overlay_seconds": cfg.super_agent_events_overlay_seconds,
     }))
 }
 
@@ -1102,6 +1105,8 @@ pub fn set_super_agent_config(
     super_agent_inherit_context: Option<bool>,
     super_agent_user_friendly: Option<bool>,
     super_agent_auto_check_startup: Option<bool>,
+    super_agent_events_overlay_enabled: Option<bool>,
+    super_agent_events_overlay_seconds: Option<u32>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -1139,6 +1144,12 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = super_agent_auto_check_startup {
         cfg.super_agent_auto_check_startup = v;
+    }
+    if let Some(v) = super_agent_events_overlay_enabled {
+        cfg.super_agent_events_overlay_enabled = v;
+    }
+    if let Some(v) = super_agent_events_overlay_seconds {
+        cfg.super_agent_events_overlay_seconds = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())

@@ -3872,6 +3872,55 @@ body.zen-mode #project-footer {
   white-space: nowrap;
 }
 
+/* Tâche #160 : bandeau d'événement en PLEIN ÉCRAN (réglage de l'onglet
+   Assistant). Overlay centré, au-dessus de tout, NON interactif
+   (pointer-events: none — laisse passer les clics), disparition automatique
+   via la classe .fade-out (transition courte ~400 ms). Même palette que le
+   panneau cloche (tâche #139) : variables de thème, aucune couleur en dur. */
+.superagent-events-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: min(520px, 80vw);
+  padding: 12px 20px;
+  background: var(--surface-floating);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  z-index: 99991; /* au-dessus des modales et du mode immersif, sous les dialogues de questions interactives (100000) et l'écran de chargement (99999) */
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+.superagent-events-overlay.fade-out {
+  opacity: 0;
+  transform: translate(-50%, -54%);
+}
+.superagent-events-overlay-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--superagent-accent);
+}
+.superagent-events-overlay-dot.success { background: var(--success); }
+.superagent-events-overlay-dot.warning { background: var(--warning); }
+.superagent-events-overlay-dot.danger { background: var(--danger); }
+.superagent-events-overlay-dot.info { background: var(--superagent-accent); }
+.superagent-events-overlay-text {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+  max-height: 40vh;
+  overflow: hidden;
+}
+
 /* Prévisualisation des images en attente */
 .agent-image-previews {
   display: none;

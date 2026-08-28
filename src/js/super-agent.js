@@ -85,6 +85,91 @@ let superEventsList = null;    // liste .sa-events-list
 let superEventsOpen = false;   // panneau ouvert ?
 let superEventsUnread = 0;     // événements non lus depuis la dernière ouverture
 
+// ── Overlay plein écran des événements (tâche #160) ──
+// Quand le réglage `super_agent_events_overlay_enabled` est actif, chaque
+// événement du panneau cloche s'affiche AUSSI en bandeau discret AU CENTRE de
+// l'écran (au-dessus de tout), avec disparition automatique après une durée
+// réglable (défaut 5 s). Un SEUL emplacement : le dernier événement REMPLACE le
+// précédent et le minuteur repart (jamais d'empilement). Les questions
+// interactives (confirm/select/choice) ne passent PAS par cette source
+// (pushSuperAgentSystemEvent) et restent exclusivement au centre du chat.
+const SUPER_EVENTS_OVERLAY_FADE_MS = 400; // fade-out court (~400 ms)
+let superEventsOverlayEl = null;          // élément overlay (unique)
+let superEventsOverlayTimer = null;       // minuteur d'affichage
+let superEventsOverlayHideTimer = null;   // minuteur de retrait après fade-out
+
+/** Normalise la durée d'affichage de l'overlay (secondes) : défaut 5, borné à
+ * [1, 120]. Pur et testable (tâche #160).
+ * @param {number|undefined} seconds
+ * @returns {number}
+ */
+export function normalizeOverlaySeconds(seconds) {
+  const n = Math.floor(Number(seconds));
+  if (!Number.isFinite(n) || n <= 0) return 5;
+  return Math.min(Math.max(n, 1), 120);
+}
+
+/** Mappe un niveau d'événement (info|warn|error|success) vers la classe CSS de
+ * la pastille de l'overlay (même palette que le panneau cloche). Pur et
+ * testable (tâche #160).
+ * @param {string} level
+ * @returns {string} info|warning|danger|success
+ */
+export function superEventOverlayLevelClass(level) {
+  if (level === "error") return "danger";
+  if (level === "warn") return "warning";
+  if (level === "success") return "success";
+  return "info";
+}
+
+/** Affiche (ou remplace) le bandeau central d'événement (tâche #160). Fail-open :
+ * réglage désactivé → aucun affichage (comportement actuel inchangé).
+ * @param {string} level info|warn|error|success
+ * @param {string} text texte déjà filtré (trim + chemin nu exclus)
+ */
+function showSuperEventOverlay(level, text) {
+  const cfg = configCache || {};
+  if (cfg.super_agent_events_overlay_enabled !== true) return;
+  const seconds = normalizeOverlaySeconds(cfg.super_agent_events_overlay_seconds);
+  // Un seul emplacement : l'élément est créé une fois puis RÉUTILISÉ (le
+  // dernier événement remplace le précédent, jamais d'empilement).
+  if (!superEventsOverlayEl) {
+    superEventsOverlayEl = document.createElement("div");
+    superEventsOverlayEl.className = "superagent-events-overlay";
+    const dot = document.createElement("span");
+    dot.className = "superagent-events-overlay-dot";
+    const label = document.createElement("span");
+    label.className = "superagent-events-overlay-text";
+    superEventsOverlayEl.appendChild(dot);
+    superEventsOverlayEl.appendChild(label);
+    document.body.appendChild(superEventsOverlayEl);
+  }
+  // Annule un éventuel fade-out en cours : le bandeau redevient pleinement
+  // visible avec le NOUVEAU contenu et le minuteur repart de zéro.
+  if (superEventsOverlayTimer) { clearTimeout(superEventsOverlayTimer); superEventsOverlayTimer = null; }
+  if (superEventsOverlayHideTimer) { clearTimeout(superEventsOverlayHideTimer); superEventsOverlayHideTimer = null; }
+  superEventsOverlayEl.classList.remove("fade-out");
+  const dot = superEventsOverlayEl.querySelector(".superagent-events-overlay-dot");
+  const label = superEventsOverlayEl.querySelector(".superagent-events-overlay-text");
+  if (dot) dot.className = "superagent-events-overlay-dot " + superEventOverlayLevelClass(level);
+  if (label) label.textContent = text;
+  // Disparition automatique après `seconds` secondes : fade-out court puis retrait.
+  superEventsOverlayTimer = setTimeout(() => {
+    if (!superEventsOverlayEl) return;
+    superEventsOverlayEl.classList.add("fade-out");
+    superEventsOverlayHideTimer = setTimeout(() => {
+      if (superEventsOverlayEl) { superEventsOverlayEl.remove(); superEventsOverlayEl = null; }
+    }, SUPER_EVENTS_OVERLAY_FADE_MS);
+  }, seconds * 1000);
+}
+
+/** Retire l'overlay plein écran + ses minuteurs (fermeture de l'onglet 🧭). */
+function hideSuperEventOverlay() {
+  if (superEventsOverlayTimer) { clearTimeout(superEventsOverlayTimer); superEventsOverlayTimer = null; }
+  if (superEventsOverlayHideTimer) { clearTimeout(superEventsOverlayHideTimer); superEventsOverlayHideTimer = null; }
+  if (superEventsOverlayEl) { superEventsOverlayEl.remove(); superEventsOverlayEl = null; }
+}
+
 /** Décision pure (testable) : faut-il descendre en bas ? Vrai si l'utilisateur
  * est déjà en bas (ou presque, seuil `threshold`). Ne force pas le bas si
  * l'utilisateur a volontairement remonté pour relire (issue #60). */
@@ -730,6 +815,10 @@ function formatSuperEventTime(d) {
 function pushSuperAgentSystemEvent(level, text) {
   const trimmed = String(text || "").trim();
   if (!trimmed || isBareProjectPath(trimmed)) return;
+  // Tâche #160 : même source que le panneau cloche → overlay plein écran (si le
+  // réglage est activé). Indépendant du panneau : s'affiche même si l'onglet 🧭
+  // n'a pas encore construit le panneau (fail-open symétrique).
+  showSuperEventOverlay(level, trimmed);
   if (!superEventsList) return; // panneau pas encore créé (onglet fermé)
   const item = document.createElement("div");
   item.className = "sa-events-item";
@@ -1629,6 +1718,9 @@ export async function createSuperAgent(container) {
     superTrackingRefresh: loadSuperTracking,
     unlisten: async () => {
       clearInterval(superStatusPoll);
+      // Tâche #160 : retirer l'overlay plein écran + ses minuteurs (sinon
+      // éléments orphelins dans le body et timers qui tournent après fermeture).
+      hideSuperEventOverlay();
       // SOUCIS 1 : retirer le listener `scroll` (évite la fuite à la recréation
       // de l'onglet 🧭).
       messagesEl.removeEventListener("scroll", onSuperScroll);

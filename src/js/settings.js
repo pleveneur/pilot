@@ -212,6 +212,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
 const chkSuperAgentForceStructuredBrief = document.getElementById("setting-superagent-force-structured-brief");
 const chkSuperAgentInheritContext = document.getElementById("setting-superagent-inherit-context");
 const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagent-auto-check-startup");
+// ── Tâche #160 : overlay plein écran des événements ──
+const chkSuperAgentEventsOverlay = document.getElementById("setting-superagent-events-overlay");
+const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-superagent-events-overlay-seconds");
+const superAgentEventsOverlayDurationRow = document.getElementById("superagent-events-overlay-duration-row");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -556,6 +560,10 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
   if (chkSuperAgentForceStructuredBrief) chkSuperAgentForceStructuredBrief.checked = currentConfig.super_agent_force_structured_brief !== false;
   if (chkSuperAgentInheritContext) chkSuperAgentInheritContext.checked = currentConfig.super_agent_inherit_context === true;
   if (chkSuperAgentAutoCheckStartup) chkSuperAgentAutoCheckStartup.checked = currentConfig.super_agent_auto_check_startup === true;
+  // ── Tâche #160 : overlay plein écran des événements ──
+  if (chkSuperAgentEventsOverlay) chkSuperAgentEventsOverlay.checked = currentConfig.super_agent_events_overlay_enabled === true;
+  if (inputSuperAgentEventsOverlaySeconds) inputSuperAgentEventsOverlaySeconds.value = currentConfig.super_agent_events_overlay_seconds ?? 5;
+  if (superAgentEventsOverlayDurationRow) superAgentEventsOverlayDurationRow.style.display = (chkSuperAgentEventsOverlay && chkSuperAgentEventsOverlay.checked) ? "" : "none";
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -626,6 +634,12 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
   if (chkAssistantSoundEnabled) {
     chkAssistantSoundEnabled.addEventListener("change", () => {
       if (assistantSoundVolumeRow) assistantSoundVolumeRow.style.display = chkAssistantSoundEnabled.checked ? "" : "none";
+    });
+  }
+  // ── Tâche #160 : overlay plein écran — montre/masque la row durée ──
+  if (chkSuperAgentEventsOverlay) {
+    chkSuperAgentEventsOverlay.addEventListener("change", () => {
+      if (superAgentEventsOverlayDurationRow) superAgentEventsOverlayDurationRow.style.display = chkSuperAgentEventsOverlay.checked ? "" : "none";
     });
   }
   if (inputAssistantSoundVolume) {
@@ -896,6 +910,9 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
         super_agent_force_structured_brief: chkSuperAgentForceStructuredBrief ? chkSuperAgentForceStructuredBrief.checked !== false : true,
         super_agent_inherit_context: chkSuperAgentInheritContext ? chkSuperAgentInheritContext.checked === true : false,
         super_agent_auto_check_startup: chkSuperAgentAutoCheckStartup ? chkSuperAgentAutoCheckStartup.checked === true : false,
+        // ── Tâche #160 : overlay plein écran des événements ──
+        super_agent_events_overlay_enabled: chkSuperAgentEventsOverlay ? chkSuperAgentEventsOverlay.checked === true : false,
+        super_agent_events_overlay_seconds: inputSuperAgentEventsOverlaySeconds ? (parseInt(inputSuperAgentEventsOverlaySeconds.value, 10) || 5) : 5,
       };
     try {
       await invoke("save_config", { config });

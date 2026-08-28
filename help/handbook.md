@@ -835,6 +835,14 @@ apprend et répond.
   - Les **éléments interactifs** (boutons de choix, confirmations, saisies)
     restent **au centre** de la discussion : ce sont des questions qui
     nécessitent votre action, pas des événements système.
+  - **#160 — Événements en plein écran (optionnel)** : **Paramètres ⚙️ → onglet
+    « Assistant »** → « Événements en plein écran (bandeau central temporaire) »
+    affiche **en plus**, au **centre de l'écran** (au-dessus de tout), chaque
+    événement dans un **bandeau temporaire discret** — pratique quand l'onglet
+    🧭 est en arrière-plan. **Désactivé par défaut** ; **durée réglable**
+    (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
+    précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
+    **questions interactives** (choix, confirmations) ne sont **pas** concernées.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).

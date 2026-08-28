@@ -561,7 +561,21 @@ struct AppConfig {
     super_agent_auto_stop_enabled: bool,
     #[serde(default = "default_agent_auto_stop_minutes")]
     super_agent_auto_stop_minutes: u32,
+    // Tâche #160 : bandeau d'événements en PLEIN ÉCRAN (onglet assistant). Quand
+    // activé, chaque événement du panneau cloche (notify, messages d'info,
+    // erreurs…) s'affiche AUSSI en overlay temporaire au centre de l'écran
+    // (disparition automatique, dernier remplace le précédent). Les questions
+    // interactives (confirm/select/choice) ne passent pas par cette source et
+    // restent exclusivement au centre du chat. Défaut off (comportement inchangé).
+    #[serde(default)]
+    super_agent_events_overlay_enabled: bool,
+    // Durée d'affichage du bandeau central en secondes (défaut 5). Réglable dans
+    // Paramètres → onglet « Assistant ». Borne côté JS (1-120 s).
+    #[serde(default = "default_super_agent_events_overlay_seconds")]
+    super_agent_events_overlay_seconds: u32,
 }
+
+fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
 
 fn default_true() -> bool { true }
 fn default_anomaly_timeout_minutes() -> u32 { 30 }
@@ -779,6 +793,8 @@ impl Default for AppConfig {
             agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
             super_agent_auto_stop_enabled: true,
             super_agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
+            super_agent_events_overlay_enabled: false,
+            super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
         }
     }
 }
