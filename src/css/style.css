@@ -498,15 +498,23 @@ body.theme-light.theme-tokyo-day {
   gap: 6px;
   overflow-y: auto;
   max-height: 40%;
+  /* Un seul cadre pour onglets + boutons (v9) : la bordure accent, le fond
+     léger et le rayon qui étaient portés par .pj-panel montent ici pour
+     entourer aussi la rangée d'onglets. */
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: 6px;
 }
 
 /* --- Barre de boutons projet : système à onglets (v8) --- */
 .pj-tabs {
   display: flex;
   gap: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  /* Fond semi-transparent : suit le thème (dark/light) via --surface-2,
+     laisse deviner le fond du cadre parent. L'onglet actif reste plein. */
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+  border-radius: var(--radius-sm);
   padding: 3px;
   width: 100%;
   flex-shrink: 0;
@@ -533,9 +541,19 @@ body.theme-light.theme-tokyo-day {
   background: var(--surface-3);
 }
 .pj-tab.active {
-  background: var(--accent);
+  /* Fond translucide (60 %) : l'onglet actif reste nettement marqué sans
+     être un pavé plein — suit le thème via --accent. La bordure pleine
+     délimite l'onglet actif. */
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
   border-color: var(--accent);
   color: #fff;
+}
+/* Thèmes clairs : le fond translucide éclaircit l'accent (contraste blanc
+   ~2:1, insuffisant) — on utilise la variable de texte foncée du thème
+   (~8:1 sur dark #4f6ef7 → #1a1d24). Les thèmes sombres gardent le blanc
+   (meilleur contraste : #fff 4.4:1 vs --text-primary 3.5:1). */
+.theme-light .pj-tab.active {
+  color: var(--text-primary);
 }
 
 .pj-panel {
@@ -544,9 +562,8 @@ body.theme-light.theme-tokyo-day {
   align-items: center;
   gap: 6px;
   padding: 8px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-lg);
+  /* Cadre + fond portés par #project-footer (un seul bloc visuel) :
+     le panel ne garde que sa mise en page interne. */
 }
 
 #main-area {
