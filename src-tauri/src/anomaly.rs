@@ -31,6 +31,14 @@ use crate::{AppState, SessionActivity};
 pub struct AgentAnomalyState {
     /// Dernier événement RPC d'activité (base du calcul d'inactivité).
     pub last_activity: Instant,
+    /// Bug #152 : dernier événement de PROGRESSION réelle (démarrage de run,
+    /// sortie visible, fin de tour) — en EXCLUANT les réessais provider
+    /// (`auto_retry_*`, cf. `NO_PROGRESS_EVENTS`). Base du calcul d'inactivité
+    /// de l'arrêt automatique T2 : un agent qui boucle sur des réessais provider
+    /// sans produire de sortie doit rester éligible à l'arrêt, alors que ces
+    /// événements rafraîchissent `last_activity` (comportement conservé pour
+    /// l'alerte lecture seule et la pastille d'activité).
+    pub last_progress: Instant,
     /// Horodatage wall-clock (SystemTime) du dernier événement RPC d'activité.
     /// `Instant` est monotone (pas un horodatage réel) : ce champ permet de
     /// produire un timestamp ISO lisible pour l'assistant (list_agent_sessions).
@@ -76,6 +84,13 @@ const ACTIVITY_EVENTS: &[&str] = &[
 /// `agent_settled`/`agent_end`. Évite l'indicateur « Réfléchit » bloqué à
 /// jamais si le process meurt en pleine génération (issue #141).
 const RESET_EVENTS: &[&str] = &["process_exit", "process_error"];
+
+/// Événements d'activité qui NE SONT PAS une progression réelle de la tâche
+/// (bug #152) : les réessais provider. pi peut boucler sur `auto_retry` quand
+/// le fournisseur est indisponible : ces événements rafraîchissent
+/// `last_activity` (alerte/pastille inchangées) mais PAS `last_progress`, pour
+/// que l'arrêt automatique anti-inactivité (T2) reste déclenchable.
+const NO_PROGRESS_EVENTS: &[&str] = &["auto_retry_start", "auto_retry_end"];
 
 /// Construit l'observateur combiné : met à jour la map d'activité par projet
 /// (issue #13, pastille « travaille en arrière-plan ») ET la map de surveillance
@@ -141,12 +156,14 @@ pub fn make_observer(
                     entry.blocked_reported = false;
                     entry.auto_stopped_reported = false;
                     entry.last_activity = now;
+                    entry.last_progress = now;
                     entry.last_activity_wall = Some(SystemTime::now());
                     entry.last_event = t.to_string();
                 }
             } else {
                 let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
                     last_activity: now,
+                    last_progress: now,
                     last_activity_wall: Some(SystemTime::now()),
                     last_event: t.to_string(),
                     busy: false,
@@ -170,6 +187,11 @@ pub fn make_observer(
                     entry.auto_stopped_reported = false;
                 }
                 entry.last_activity = now;
+                // Bug #152 : les réessais provider ne sont pas une progression —
+                // ils ne repoussent pas le plafond de l'arrêt automatique.
+                if !NO_PROGRESS_EVENTS.contains(&t) {
+                    entry.last_progress = now;
+                }
                 entry.last_activity_wall = Some(SystemTime::now());
                 entry.last_event = t.to_string();
             }
@@ -212,6 +234,27 @@ fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
+    idle_secs > (timeout_minutes.max(1) as u64) * 60
+}
+
+/// T2 + bug #152 : variante de `should_auto_stop` INSENSIBLE aux réessais
+/// provider : l'inactivité est mesurée depuis le dernier événement de
+/// PROGRESSION réelle (`last_progress`, cf. `NO_PROGRESS_EVENTS`) et non
+/// depuis n'importe quel événement d'activité. Un agent délégué qui boucle sur
+/// des `auto_retry` sans produire de sortie est donc bien arrêté après le
+/// seuil, au lieu de rafraîchir indéfiniment son horodatage d'activité.
+/// `should_auto_stop` (toute activité) reste utilisée pour le super-agent
+/// (comportement inchangé). Pure et testable.
+fn should_auto_stop_on_progress(
+    entry: &AgentAnomalyState,
+    enabled: bool,
+    timeout_minutes: u32,
+    now: Instant,
+) -> bool {
+    if !enabled || !entry.busy || entry.auto_stopped_reported {
+        return false;
+    }
+    let idle_secs = now.duration_since(entry.last_progress).as_secs();
     idle_secs > (timeout_minutes.max(1) as u64) * 60
 }
 
@@ -258,6 +301,10 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
             let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
             let mut super_stops: Vec<(String, u64)> = Vec::new();
+            // Bug #152 : entrées busy dont la vivacité (process mort sans
+            // événement de fin) sera vérifiée HORS verrou (try_wait sur le
+            // registre de sessions).
+            let mut stale_busy: Vec<(String, String)> = Vec::new();
             {
                 let mut m = anomaly_map.lock().unwrap();
                 for (key, entry) in m.iter_mut() {
@@ -279,14 +326,26 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     }
                     // 2. Arrêt auto (T2) : agents délégués uniquement (le super-agent
                     //    est exclu, cf. `is_super`). Le scope (AgentProcess) est filtré
-                    //    après (agent_process_alive).
+                    //    après (agent_process_alive). Bug #152 : le calcul d'inactivité
+                    //    ignore les réessais provider (should_auto_stop_on_progress).
                     if !is_super
-                        && should_auto_stop(entry, auto_stop_enabled, auto_stop_minutes, Instant::now())
+                        && should_auto_stop_on_progress(
+                            entry,
+                            auto_stop_enabled,
+                            auto_stop_minutes,
+                            Instant::now(),
+                        )
                     {
                         entry.auto_stopped_reported = true;
                         // Pas de double alerte (anomalie) pour un agent déjà arrêté.
                         entry.blocked_reported = true;
                         auto_stops.push((project.clone(), agent.clone(), idle_secs / 60));
+                    }
+                    // Bug #152 : candidat à la purge si l'entrée reste busy — la
+                    // vivacité est vérifiée hors verrou (has_dead_agent_process).
+                    // Placé AVANT le plafond super-agent qui déplace `agent`.
+                    if entry.busy && !is_super {
+                        stale_busy.push((project.clone(), agent.clone()));
                     }
                     // 3. Plafond « réfléchit » du super-agent (tâche #141) : filet de
                     //    sécurité si le super-agent reste busy sans progression depuis
@@ -342,6 +401,41 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 let anomaly_val =
                     serde_json::json!({ "lastEvent": "arrêt automatique (bloqué)", "idleMinutes": idle_min });
                 let _ = do_start_diagnostic_agent(state.inner(), &app, &project, &agent, &anomaly_val);
+            }
+            // Bug #152 : purge des agents délégués marqués « busy » alors que
+            // leur processus est DÉJÀ MORT (aucun agent_end/process_exit traité,
+            // ex: événements perdus). Sans purge, l'exclusivité des spécialités
+            // (agent_process_busy côté Rust, file d'attente côté JS) attend un
+            // agent qui n'existe plus et la file d'attente se bloque. Scope
+            // strictement restreint aux sessions enregistrées en mode
+            // AgentProcess (has_dead_agent_process) : la session principale, le
+            // reviewer, le super-agent et les agents d'assistant (autres modes)
+            // ne sont JAMAIS touchés. La purge est indépendante du seuil
+            // d'inactivité : dès que busy ∧ process mort → purge + événement.
+            for (project, agent) in stale_busy {
+                if !state.agent_service.has_dead_agent_process(&project, &agent) {
+                    continue;
+                }
+                {
+                    let mut m = anomaly_map.lock().unwrap();
+                    if let Some(e) = m.get_mut(&format!("{}\u{1f}{}", project, agent)) {
+                        e.busy = false;
+                        e.blocked_reported = false;
+                        e.auto_stopped_reported = false;
+                    }
+                }
+                // Événement Rust → JS : le bus d'agents libère le créneau
+                // d'exclusivité (failAgentTurn → launchNextQueued) pour qu'un
+                // agent en file d'attente prenne le relais immédiatement.
+                let _ = app.emit(
+                    "agent-auto-stopped",
+                    serde_json::json!({
+                        "project": project,
+                        "agent": agent,
+                        "reason": "Agent délégué purgé automatiquement : processus terminé sans retour d'état.",
+                        "idleMinutes": 0,
+                    }),
+                );
             }
             // 3. Plafond « réfléchit » du super-agent (tâche #141) : couper le
             //    process du super-agent bloqué (busy sans progression) + alerter.
@@ -621,6 +715,7 @@ mod tests {
     fn last_activity_info_formats_iso_and_relative() {
         let state = AgentAnomalyState {
             last_activity: Instant::now(),
+            last_progress: Instant::now(),
             last_activity_wall: Some(SystemTime::now()),
             last_event: "tool_execution_end".to_string(),
             busy: true,
@@ -638,6 +733,7 @@ mod tests {
         // Sans activité wall-clock → ISO absent, relatif toujours présent.
         let no_wall = AgentAnomalyState {
             last_activity: Instant::now(),
+            last_progress: Instant::now(),
             last_activity_wall: None,
             last_event: "agent_start".to_string(),
             busy: true,
@@ -661,6 +757,7 @@ mod tests {
         // Helper : construit un état avec une dernière activité il y a `idle_secs`.
         let state_at = |idle_secs: u64, busy: bool, reported: bool| AgentAnomalyState {
             last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
             last_activity_wall: Some(SystemTime::now()),
             last_event: "tool_execution_start".to_string(),
             busy,
@@ -702,5 +799,96 @@ mod tests {
         assert!(!is_super_agent_key("/proj", "superagent"));
         assert!(!is_super_agent_key("", "codeur"));
         assert!(!is_super_agent_key("/proj", "codeur"));
+    }
+
+    /// Bug #152 : l'observateur rafraîchit `last_progress` sur les événements
+    /// de progression réelle, mais PAS sur les réessais provider (`auto_retry_*`)
+    /// qui rafraîchissent uniquement `last_activity` (alerte/pastille inchangées).
+    #[test]
+    fn observer_refreshes_progress_but_not_on_auto_retry() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        // agent_start → busy=true, progression enregistrée.
+        obs(&ev("agent_start"));
+        let progress_at_start = {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(s.busy);
+            s.last_progress
+        };
+        let activity_at_start = {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            s.last_activity
+        };
+
+        // auto_retry_end (réessai provider) : rafraîchit last_activity…
+        obs(&ev("auto_retry_end"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(s.last_activity > activity_at_start, "auto_retry rafraîchit l'activité");
+            assert_eq!(
+                s.last_progress, progress_at_start,
+                "auto_retry ne doit PAS rafraîchir la progression"
+            );
+        }
+
+        // tool_execution_end (progression réelle) → rafraîchit les deux.
+        obs(&ev("tool_execution_end"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(
+                s.last_progress > progress_at_start,
+                "une sortie visible rafraîchit la progression"
+            );
+        }
+    }
+
+    /// Bug #152 : `should_auto_stop_on_progress` ignore les réessais provider —
+    /// un agent busy dont `last_activity` est frais (auto_retry) mais dont
+    /// `last_progress` date de plus que le seuil est arrêté. À l'inverse, une
+    /// progression récente protège l'agent (outil long légitime).
+    #[test]
+    fn should_auto_stop_on_progress_ignores_provider_retries() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // Helper : last_activity frais (réessai), last_progress ancien.
+        let state = |progress_age_secs: u64, retry_age_secs: u64| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(retry_age_secs),
+            last_progress: now - Duration::from_secs(progress_age_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "auto_retry_end".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+        };
+
+        // Boucle de réessais fraîche (il y a 30 s) mais AUCUNE progression depuis
+        // 12 min (seuil 10 min) → arrêt (l'ancienne logique n'aurait JAMAIS coupé).
+        let e = state(700, 30);
+        assert!(should_auto_stop_on_progress(&e, true, 10, now));
+
+        // Progression réelle récente (outil long légitime) → pas d'arrêt.
+        let e = state(300, 30);
+        assert!(!should_auto_stop_on_progress(&e, true, 10, now));
+
+        // Mêmes gardes que should_auto_stop : désactivé / non busy / déjà arrêté.
+        let e = state(700, 30);
+        assert!(!should_auto_stop_on_progress(&e, false, 10, now));
+        let e = AgentAnomalyState {
+            busy: false,
+            ..state(700, 30)
+        };
+        assert!(!should_auto_stop_on_progress(&e, true, 10, now));
+        let e = AgentAnomalyState {
+            auto_stopped_reported: true,
+            ..state(700, 30)
+        };
+        assert!(!should_auto_stop_on_progress(&e, true, 10, now));
     }
 }

@@ -299,10 +299,63 @@ function emit(event, data) {
 }
 
 /**
+ * Bug #152 : sonde de vivacité d'UN agent (pour la garde d'exclusivité).
+ * Interroge `list_agent_sessions` et retourne true si une session vivante
+ * existe pour cet agent — même (agent, projet) en priorité, sinon n'importe
+ * quel projet par prudence (même politique que anyActiveAgentAlive).
+ * Fail-open : en cas d'erreur de sonde, retourne true (on ne purge pas).
+ * @param {string} agentId
+ * @param {object} ctx - contexte de run du projet
+ * @returns {Promise<boolean>}
+ */
+async function isAgentSessionAlive(agentId, ctx) {
+  try {
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    const proj = ctx.agentProject[agentId] || ctx.project || null;
+    const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || s.project === proj));
+    if (byProject) return true;
+    return sessions.some((s) => s.agent === agentId && s.alive);
+  } catch (e) {
+    return true; // sonde indisponible → prudence (pas de purge)
+  }
+}
+
+/**
+ * Bug #152 : purge un tour fantôme — l'agent est marqué actif dans la run
+ * (activeAgents) mais son processus est déjà mort (aucun agent_end ni
+ * process_exit traité). On le retire des agents actifs et on enregistre une
+ * erreur dans le groupe parallèle (sinon `pending` ne descend jamais et la
+ * run reste bloquée). Ne lance PAS la file d'attente ici : la demande courante
+ * démarre immédiatement (isAgentActiveOnProject retourne false) et la file
+ * sera vidée à la fin de son tour (launchNextQueued), ce qui évite deux runs
+ * concurrentes sur le même créneau d'exclusivité.
+ * @param {string} agentId
+ * @param {object} ctx - contexte de run du projet
+ */
+function purgeGhostTurn(agentId, ctx) {
+  ctx.activeAgents.delete(agentId);
+  delete ctx.agentProject[agentId];
+  if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+    ctx.parallelGroup.results[agentId] = {
+      status: "error",
+      text: `Processus de l'agent ${agentId} mort (tour fantôme purgé).`,
+    };
+    ctx.parallelGroup.pending--;
+    // Le cas pending<=0 est géré par dispatchParallel après la boucle de lancement.
+  }
+}
+
+/**
  * T5 : indique si un agent multi-rôles H2 V2 est déjà actif sur un projet donné.
  * Vérifie d'abord l'état local (agents des runs en cours), puis les sessions
  * vivantes via `list_agent_sessions` (agents de runs précédentes encore actifs).
  * Fail-open : en cas d'erreur de sonde, on ne bloque pas (prudence).
+ *
+ * Bug #152 : un agent « actif » localement doit avoir un processus VIVANT.
+ * S'il est fantôme (processus mort sans agent_end/process_exit traité), son
+ * tour est purgé (purgeGhostTurn) et la demande courante est lancée
+ * immédiatement au lieu d'être empilée derrière un agent qui ne finira jamais.
  * @param {string} agentId
  * @param {string} project
  * @returns {Promise<boolean>}
@@ -311,7 +364,16 @@ async function isAgentActiveOnProject(agentId, project) {
   // 1. Local : agent déjà actif dans une run en cours sur ce projet.
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
-    if (ctx.activeAgents.has(agentId) && ctx.project === project) return true;
+    if (ctx.activeAgents.has(agentId) && ctx.project === project) {
+      const alive = await isAgentSessionAlive(agentId, ctx);
+      if (!alive) {
+        console.warn("[agents-bus] exclusivité : processus de l'agent", agentId, "mort → purge du tour fantôme.");
+        emit("notify", { agentId, message: `⚠️ L'agent ${agentId} était bloqué (processus terminé sans retour d'état). Le créneau a été libéré et la demande démarre immédiatement.` });
+        purgeGhostTurn(agentId, ctx);
+        return false;
+      }
+      return true;
+    }
   }
   // 2. Sessions vivantes (agents de runs précédentes encore actifs).
   try {

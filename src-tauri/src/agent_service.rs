@@ -766,6 +766,28 @@ impl AgentService {
             .unwrap_or(false)
     }
 
+    /// Bug #152 : indique si un agent délégué (mode `AgentProcess`) a une
+    /// session ENCORE ENREGISTRÉE pour (project, agent_id) mais dont le
+    /// processus est DÉJÀ MORT (aucun événement de fin traité). Utilisée par le
+    /// moniteur d'anomalies pour purger le flag `busy` résiduel (busy ∧ process
+    /// mort) et libérer l'exclusivité des spécialités / la file d'attente côté
+    /// frontend. Ne concerne QUE les sessions `AgentProcess` : la session
+    /// principale, le reviewer et le super-agent (autres modes) retournent
+    /// toujours false, ainsi qu'une session vivante ou absente du registre.
+    pub fn has_dead_agent_process(&self, project: &str, agent_id: &str) -> bool {
+        let key = Self::session_key(project, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) if e.mode == SpawnMode::AgentProcess => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_some())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Réinitialise explicitement le pointeur actif (nettoyage d'orphelin).
     /// Utilisé par `do_start_agent_session` quand la session pointée est morte :
     /// on libère le pointeur pour débloquer les délégations suivantes au lieu
@@ -2405,6 +2427,7 @@ mod tests {
             format!("{}\u{1f}{}", proj, "codeur"),
             anomaly::AgentAnomalyState {
                 last_activity: Instant::now(),
+                last_progress: Instant::now(),
                 last_activity_wall: Some(std::time::SystemTime::now()),
                 last_event: "agent_start".to_string(),
                 busy: true,
@@ -2439,6 +2462,57 @@ mod tests {
             !svc.agent_process_busy(&anomaly_map, proj, "codeur"),
             "processus tué → pas busy"
         );
+    }
+
+    /// Bug #152 : `has_dead_agent_process` détecte une session d'agent délégué
+    /// ENCORE ENREGISTRÉE dont le processus est mort (busy résiduel à purger).
+    /// Une session vivante, une session morte déjà retirée du registre ou une
+    /// session d'un autre mode (main) retournent toujours false — la purge du
+    /// moniteur ne doit jamais viser la session principale, le reviewer ou le
+    /// super-agent.
+    #[test]
+    fn has_dead_agent_process_detects_dead_registered_process() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Session absente → false.
+        assert!(!svc.has_dead_agent_process(proj, "codeur"), "session absente → false");
+        // Session AgentProcess vivante → false (rien à purger).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+            sessions.insert(
+                AgentService::session_key(proj, "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        assert!(!svc.has_dead_agent_process(proj, "codeur"), "process vivant → false");
+        assert!(!svc.has_dead_agent_process(proj, "default"), "mode main → jamais détecté");
+        // Tuer le processus → session enregistrée + morte → true (à purger).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&AgentService::session_key(proj, "codeur")) {
+                let _ = entry.session.child.kill();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            svc.has_dead_agent_process(proj, "codeur"),
+            "processus mort + session enregistrée → true (purge)"
+        );
+        assert!(!svc.has_dead_agent_process(proj, "inconnu"), "agent inconnu → false");
     }
 
     /// `clear_active_if_dead` réinitialise un pointeur `active` orphelin
