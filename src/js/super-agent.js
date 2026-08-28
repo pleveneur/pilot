@@ -460,6 +460,11 @@ function renderActivePendingQuestion() {
   if (pendingInputEl && pendingInputEl.parentElement) {
     pendingInputEl.parentElement.classList.remove("superagent-input-reflecting");
   }
+  // Ajustements A19 : en mode assistant seul, l'anneau de réflexion vit autour
+  // du logo hero — retiré lui aussi tant qu'une question attend une réponse
+  // (même logique que le retrait de la teinte de la barre ci-dessus).
+  const reflectingHero = document.querySelector(".sa-immersive-hero.sa-immersive-reflecting");
+  if (reflectingHero) reflectingHero.classList.remove("sa-immersive-reflecting");
   // Placeholder de la barre adapté quand une question est en attente.
   if (pendingInputEl) pendingInputEl.placeholder = q.placeholder || PENDING_NOTE_PLACEHOLDER;
 }
@@ -940,6 +945,12 @@ export async function createSuperAgent(container) {
       if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
         tabs.updateSuperAgentLabel(superAgentDisplayLabel());
       }
+      // Ajustement A19 : l'accueil du mode Assistant Only affiche le nom réel
+      // de l'assistant — le rafraîchir si l'overlay est déjà ouvert.
+      if (immersiveOverlay) {
+        const heroTitle = immersiveOverlay.querySelector(".sa-immersive-hero-title");
+        if (heroTitle) heroTitle.textContent = `Bonjour, je suis ${immersiveAssistantName()}`;
+      }
     });
   };
   window.addEventListener("pilot-config-changed", onConfigChanged);
@@ -971,7 +982,7 @@ export async function createSuperAgent(container) {
   const toolbar = document.createElement("div");
   toolbar.className = "agent-chat-toolbar superagent-toolbar";
   toolbar.innerHTML = `
-    <button class="agent-btn" data-action="immersive" title="Mode Assistant Only (immersif) : tout masquer sauf le chat"><i data-lucide="maximize-2" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="immersive" title="Mode assistant seul : tout masquer sauf la discussion (Ctrl+Shift+A)"><i data-lucide="maximize-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="abort" title="Arrêter"><i data-lucide="square" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="new-session" title="Nouvelle session"><i data-lucide="plus" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="initialize" title="Initialiser le suivi du projet actif"><i data-lucide="sparkles" class="icon-sm"></i></button>
@@ -1141,12 +1152,29 @@ export async function createSuperAgent(container) {
   function setReflecting(reflecting) {
     superSetReflecting(reflecting);
   }
+  // Ajustements A19 : en mode assistant seul (overlay immersif), la zone de
+  // saisie reste 100 % calme — l'indicateur de réflexion devient un anneau
+  // pulsant autour du cercle du logo hero (classe `sa-immersive-reflecting`).
+  // Le mode standard garde la teinte « réflexion » de la barre telle quelle.
+  // L'état est mémorisé (`reflectingActive`) pour resynchroniser l'effet au
+  // bon endroit quand on bascule de mode pendant une réflexion (voir
+  // applyReflecting appelé par enterImmersive / exitImmersive).
+  let reflectingActive = false;
+  function applyReflecting() {
+    const active = reflectingActive && !hasPendingQuestion();
+    if (immersiveOverlay) {
+      const hero = immersiveOverlay.querySelector(".sa-immersive-hero");
+      if (hero) hero.classList.toggle("sa-immersive-reflecting", active);
+    }
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", active && !immersiveOverlay);
+  }
   superSetReflecting = (reflecting) => {
     // Chantier #132 : pendant l'attente d'un choix (question en attente), la
     // barre ne passe PAS en teinte « réflexion » — elle reste en mode normal,
     // prête à saisir la précision. La teinte ne s'applique qu'à la réflexion
     // réelle (aucune question en attente).
-    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", !!reflecting && !hasPendingQuestion());
+    reflectingActive = !!reflecting;
+    applyReflecting();
   };
 
   // ── Chargement de la liste des modèles ──
@@ -1402,38 +1430,84 @@ export async function createSuperAgent(container) {
 
   // ── Mode « Assistant Only » immersif (A19) ──
   // Overlay plein écran : tout est masqué sauf le chat + une barre minimale
-  // (bouton retour + statut) + logo agrandi + toggles voix (dictée + synthèse).
-  // Réutilise les éléments existants (messagesEl, inputBar, statusEl) en les
-  // DÉPLAÇANT dans l'overlay — aucun rendu dupliqué, la dictée vocale et le
-  // rendu du chat restent ceux de l'onglet normal. Le dernier mode choisi est
-  // mémorisé (localStorage) et restauré à la réouverture de l'onglet.
+  // (bouton retour + titre + ⚙) + hero (logo rond + accueil, maquette V4).
+  // Réutilise les éléments existants (messagesEl, inputBar) en les DÉPLAÇANT
+  // dans l'overlay — aucun rendu dupliqué, la dictée vocale et le rendu du
+  // chat restent ceux de l'onglet normal. Le dernier mode choisi est mémorisé
+  // (localStorage) et restauré à la réouverture de l'onglet.
+  // Ajustements A19 : ni bouton de synthèse vocale (🔊), ni bouton/panneau
+  // d'événements (cloche) dans ce mode — ils restent propres au mode standard.
   const IMMERSIVE_KEY = "pilot_superagent_immersive";
   let immersiveOverlay = null;
+  // Éléments créés avec l'overlay, réutilisés à chaque entrée en mode immersif.
+  let immersiveSuggestions = null;
+  let immersiveDisclaimer = null;
+
+  /** Nom réel de l'assistant courant (config de l'onglet 🧭), avec fallback
+   * propre si aucun nom n'est disponible. */
+  function immersiveAssistantName() {
+    const label = (superAgentDisplayLabel() || "").trim();
+    return label || "Pilot Assistant";
+  }
 
   function buildImmersiveOverlay() {
     const ov = document.createElement("div");
     ov.className = "superagent-immersive";
+    // Barre du haut conforme à la maquette ASS_Only_V4 : gauche = bouton
+    // retour (flèche) + titre « Pilot » ; droite = UN SEUL bouton ⚙ qui ouvre
+    // les paramètres existants de l'assistant (modale Paramètres, onglet
+    // « Assistant »). Sous la barre : hero (logo Pilot rond dans un cercle +
+    // message d'accueil, comme la maquette). Les suggestions et le disclaimer
+    // vivent dans la zone basse (.sa-suggestions / .sa-immersive-disclaimer)
+    // — les éléments du chat (messagesEl, inputBar…) sont DÉPLACÉS dans
+    // l'overlay, jamais dupliqués.
     ov.innerHTML = `
       <div class="sa-immersive-top">
-        <button class="agent-btn sa-immersive-back" data-imm="back" title="Retour au mode normal"><i data-lucide="arrow-left" class="icon"></i></button>
-        <img class="sa-immersive-logo" src="/logo_pilot_vector.svg" alt="Pilot" />
-        <div class="sa-immersive-voice">
-          <button class="agent-btn" data-imm="voice" title="Dictée vocale"><i data-lucide="mic" class="icon"></i></button>
-          <button class="agent-btn" data-imm="speak" title="Synthèse vocale (lire les réponses)"><i data-lucide="volume-2" class="icon"></i></button>
-        </div>
+        <button class="agent-btn sa-immersive-back" data-imm="back" title="Revenir au mode standard"><i data-lucide="arrow-left" class="icon"></i></button>
+        <span class="sa-immersive-title">Pilot</span>
+        <button class="agent-btn sa-immersive-settings" data-imm="settings" title="Paramètres de l'assistant"><i data-lucide="settings" class="icon"></i></button>
+      </div>
+      <div class="sa-immersive-hero">
+        <div class="sa-immersive-hero-mark"><img src="/logo_pilot_vector.svg" alt="Pilot"></div>
+        <h1 class="sa-immersive-hero-title">Bonjour, je suis ${immersiveAssistantName()}</h1>
+        <div class="sa-immersive-hero-subtitle">Comment puis-je vous aider aujourd'hui&nbsp;?</div>
       </div>
       <div class="sa-immersive-messages"></div>
       <div class="sa-immersive-input"></div>
     `;
     ov.querySelector('[data-imm="back"]').addEventListener("click", exitImmersive);
-    ov.querySelector('[data-imm="voice"]').addEventListener("click", toggleVoiceInput);
-    ov.querySelector('[data-imm="speak"]').addEventListener("click", () => {
-      speakEnabled = !speakEnabled;
-      const btn = ov.querySelector('[data-imm="speak"]');
-      btn.classList.toggle("active", speakEnabled);
-      btn.title = speakEnabled ? "Synthèse vocale activée" : "Synthèse vocale (lire les réponses)";
-      if (!speakEnabled) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+    ov.querySelector('[data-imm="settings"]').addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
     });
+    // Suggestions (maquette V4, cahier des charges §4.3) : chips cliquables
+    // qui PRÉREMPLISSENT la zone de saisie et lui donnent le focus — elles
+    // n'envoient PAS (cohérent avec le comportement du chat).
+    const sugg = document.createElement("div");
+    sugg.className = "sa-suggestions";
+    for (const label of [
+      "Faire un point sur un projet",
+      "Déléguer une demande à l'agent",
+      "Préparer une livraison",
+      "Lister les tâches en cours",
+    ]) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.textContent = label;
+      chip.addEventListener("click", () => {
+        inputEl.value = label;
+        resizeInput();
+        inputEl.focus();
+      });
+      sugg.appendChild(chip);
+    }
+    immersiveSuggestions = sugg;
+    // Disclaimer (maquette V4) : mention discrète sous la barre de saisie,
+    // déplacée dans l'overlay à l'entrée, retirée à la sortie.
+    const disclaimer = document.createElement("div");
+    disclaimer.className = "sa-immersive-disclaimer";
+    disclaimer.textContent = "Pilot Assistant peut se tromper. Vérifiez les informations importantes.";
+    immersiveDisclaimer = disclaimer;
     return ov;
   }
 
@@ -1442,18 +1516,24 @@ export async function createSuperAgent(container) {
     immersiveOverlay = buildImmersiveOverlay();
     immersiveOverlay.querySelector(".sa-immersive-messages").appendChild(messagesEl);
     const immInput = immersiveOverlay.querySelector(".sa-immersive-input");
+    // Suggestions (préremplissent la saisie, n'envoient pas).
+    if (immersiveSuggestions) immInput.appendChild(immersiveSuggestions);
     if (busyHint && busyHint.parentNode) busyHint.parentNode.removeChild(busyHint);
     immInput.appendChild(busyHint);
     immInput.appendChild(inputBar);
     if (pendingBar) immInput.appendChild(pendingBar);
-    // Tâche #139 : déplacer aussi le panneau des événements avec la barre de
-    // saisie (sinon les événements disparaissent en mode Assistant Only).
-    if (superEventsPanel) immInput.appendChild(superEventsPanel);
-    immersiveOverlay.querySelector(".sa-immersive-top").appendChild(statusEl);
+    // Disclaimer (maquette V4) : mention sous la barre de saisie.
+    if (immersiveDisclaimer) immInput.appendChild(immersiveDisclaimer);
+    // Ajustement A19 : le panneau des événements (et sa cloche) reste un
+    // contrôleur du mode standard — il n'est plus déplacé dans l'overlay
+    // (recouvert par celui-ci, bouton masqué via .superagent-immersive-active).
     document.body.appendChild(immersiveOverlay);
     document.body.classList.add("superagent-immersive-active");
     refreshIcons(immersiveOverlay);
     localStorage.setItem(IMMERSIVE_KEY, "1");
+    // Ajustements A19 : si l'assistant réfléchissait déjà au moment de la
+    // bascule, reporter l'indicateur sur le logo hero (et calmer la barre).
+    applyReflecting();
   }
 
   function exitImmersive() {
@@ -1466,15 +1546,33 @@ export async function createSuperAgent(container) {
     // (sinon insertBefore lève une DOMException et le retour échoue).
     wrapper.appendChild(inputBar);
     wrapper.insertBefore(busyHint, inputBar);
-    // pendingBar était le dernier enfant ; superEventsPanel juste avant lui.
+    // pendingBar revenait en fin de wrapper. (statusEl n'est plus déplacé : il
+    // reste dans la toolbar, masqué par la règle T6 — l'indicateur d'activité
+    // n'apparaît plus en mode immersif. Le panneau des événements n'est plus
+    // déplacé non plus : il reste en mode standard, ajustement A19.)
     wrapper.appendChild(pendingBar);
-    if (superEventsPanel) wrapper.insertBefore(superEventsPanel, pendingBar);
-    toolbar.appendChild(statusEl);
+    // Disclaimer : retiré avec l'overlay (réinséré à la prochaine entrée).
+    if (immersiveDisclaimer && immersiveDisclaimer.parentNode) immersiveDisclaimer.remove();
     immersiveOverlay.remove();
     immersiveOverlay = null;
     document.body.classList.remove("superagent-immersive-active");
     localStorage.setItem(IMMERSIVE_KEY, "0");
+    // Ajustements A19 : si l'assistant réfléchissait encore, reporter
+    // l'indicateur sur la barre de saisie (comportement du mode standard).
+    applyReflecting();
   }
+
+  // Raccourci clavier de bascule (maquette V4) : Ctrl+Shift+A (Cmd+Shift+A sur
+  // macOS) entre en mode assistant seul / en sort. Actif tant que l'onglet 🧭
+  // existe (les éléments du chat vivent dans sa vue) ; retiré à sa fermeture.
+  const onImmersiveKeydown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "A" || e.key === "a")) {
+      e.preventDefault();
+      if (immersiveOverlay) exitImmersive();
+      else enterImmersive();
+    }
+  };
+  document.addEventListener("keydown", onImmersiveKeydown);
 
   // ── Actions ──
   toolbar.addEventListener("click", async (e) => {
@@ -1735,6 +1833,7 @@ export async function createSuperAgent(container) {
       unlistenProjectChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
+      document.removeEventListener("keydown", onImmersiveKeydown);
       window._pilotSuperAgentOpen = false;
       // Chantier #132 + tâche #141 : nettoyer la barre des questions en attente.
       // IMPORTANT : avant de vider la file, LIBÉRER le backend pour chaque

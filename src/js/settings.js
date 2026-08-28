@@ -747,10 +747,21 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
 
   // Ouvrir depuis l'extérieur (ex: gate E4 dans tabs.js → bouton « Ouvrir les
   // paramètres » quand l'agent est indisponible). Focus le champ chemin pi.
-  window.addEventListener("pilot-open-settings", () => {
+  window.addEventListener("pilot-open-settings", (e) => {
     populateSubthemeSelect(selectSubtheme, savedTheme, savedSubtheme);
+    // Onglet demandé (ex: { tab: "superagent" } depuis l'onglet 🧭 Assistant
+    // et son mode assistant seul) : active l'onglet correspondant AVANT
+    // l'ouverture. Sans detail (ex: gate E4), conserve le comportement
+    // historique : onglet actif courant + focus sur le chemin pi.
+    const wanted = e && e.detail && e.detail.tab;
+    if (wanted) {
+      const tabBtn = modal.querySelector(`.settings-tab[data-settings-tab="${wanted}"]`);
+      if (tabBtn) tabBtn.click();
+    }
     modal.classList.remove("hidden");
-    try { inputRpcPath.focus(); inputRpcPath.scrollIntoView({ block: "center" }); } catch (_) {}
+    if (!wanted) {
+      try { inputRpcPath.focus(); inputRpcPath.scrollIntoView({ block: "center" }); } catch (_) {}
+    }
   });
 
   // Sauvegarder

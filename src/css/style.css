@@ -7837,8 +7837,15 @@ body.pilot-loading *::after {
 
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)
-   Overlay plein écran : tout est masqué sauf le chat + barre minimale
-   (bouton retour + statut) + logo agrandi + toggles voix.
+   Overlay plein écran : tout est masqué sauf le chat. Barre du haut
+   conforme à la maquette ASS_Only_V4 : gauche = bouton retour (flèche)
+   + titre « Pilot » ; droite = UN SEUL bouton ⚙ (paramètres de
+   l'assistant). Sous la barre : hero (logo Pilot rond + accueil, comme
+   la maquette). Sous les messages : suggestions (chips qui
+   préremplissent la saisie), barre de saisie, disclaimer — SANS
+   indicateur d'activité (supprimé sur retour utilisateur). Contenu
+   centré avec marges latérales (comme la maquette). Tokens
+   exclusivement (cohérence dark/light).
    ================================================================ */
 .superagent-immersive {
   position: fixed;
@@ -7852,42 +7859,89 @@ body.pilot-loading *::after {
 .superagent-immersive-active {
   overflow: hidden;
 }
+/* En mode assistant seul, les modales (Paramètres ⚙ notamment) et les toasts
+   s'affichent AU-DESSUS de l'overlay. En mode normal, z-index inchangés
+   (100 / 9999) : aucune régression hors de ce mode. */
+.superagent-immersive-active .modal {
+  z-index: 99995;
+}
+.superagent-immersive-active #toast-container {
+  z-index: 99995;
+}
 .sa-immersive-top {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
+  height: 58px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-1);
 }
 .sa-immersive-back {
   flex-shrink: 0;
 }
-.sa-immersive-logo {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  object-fit: contain;
+.sa-immersive-title {
+  font-size: var(--font-lg);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.1px;
+  color: var(--text-primary);
+  white-space: nowrap;
 }
-.sa-immersive-top .agent-status {
+.sa-immersive-settings {
   margin-left: auto;
-}
-.sa-immersive-voice {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   flex-shrink: 0;
 }
-.sa-immersive-voice .agent-btn.active {
-  color: var(--superagent-accent);
-  border-color: var(--superagent-accent);
-  background: color-mix(in srgb, var(--superagent-accent) 12%, transparent);
+
+/* Hero (maquette V4) : logo Pilot rond centré (dégradé, cercle teinté accent)
+   + message d'accueil + sous-titre. Fixe sous la barre du haut ; seul le fil
+   défile. */
+.sa-immersive-hero {
+  flex-shrink: 0;
+  text-align: center;
+  padding: 42px 16px 25px;
 }
+.sa-immersive-hero-mark {
+  position: relative; /* ancre l'anneau pulsant de réflexion (::after) */
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  margin: 0 auto 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--superagent-accent) 30%, var(--border-subtle));
+  background: radial-gradient(circle at 35% 25%,
+    color-mix(in srgb, var(--superagent-accent) 12%, var(--surface-1)),
+    var(--bg-app) 68%);
+  box-shadow:
+    0 0 35px color-mix(in srgb, var(--superagent-accent) 11%, transparent),
+    inset 0 0 25px color-mix(in srgb, var(--superagent-accent) 8%, transparent);
+}
+.sa-immersive-hero-mark img {
+  width: 40px;
+  height: 40px;
+  display: block;
+}
+.sa-immersive-hero-title {
+  margin: 0 0 7px;
+  font-size: 25px;
+  line-height: 1.2;
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.4px;
+  color: var(--text-primary);
+}
+.sa-immersive-hero-subtitle {
+  color: var(--text-muted);
+  font-size: var(--font-base);
+}
+
 .sa-immersive-messages {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* Marges latérales (maquette V4) : contenu centré, jamais collé aux bords. */
+  width: min(920px, calc(100vw - 48px));
+  margin: 0 auto;
 }
 .sa-immersive-messages .agent-chat-messages {
   flex: 1;
@@ -7895,9 +7949,109 @@ body.pilot-loading *::after {
 }
 .sa-immersive-input {
   flex-shrink: 0;
+  /* Marges latérales (maquette V4) : même largeur que la discussion. */
+  width: min(920px, calc(100vw - 48px));
+  margin: 0 auto;
 }
 .sa-immersive-input .agent-chat-input-bar {
   background: var(--surface-1);
+  /* Composer arrondi (maquette V4) au lieu de la bande pleine largeur. */
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+/* Ajustements A19 : en mode assistant seul, la zone de saisie reste 100 %
+   calme — l'indicateur de réflexion n'y apparaît JAMAIS (filet de sécurité
+   si la classe arrive avant la resynchronisation JS au changement de mode).
+   Le mode standard garde la teinte « réflexion » telle quelle. */
+.superagent-immersive .agent-chat-input-bar.superagent-input-reflecting .agent-input {
+  background-image: none;
+  animation: none;
+}
+/* Indicateur de réflexion du mode assistant seul : anneau pulsant autour du
+   cercle du logo hero (accent violette --superagent-accent, même rythme doux
+   que les autres indicateurs « breathing » : 1.5s ease-in-out infinite).
+   Déclenché uniquement via .sa-immersive-reflecting (posée/retirée par
+   superSetReflecting sur le hero) ; état calme = cercle statique, aucune
+   animation. Thème dark et light via la variable (aucune couleur en dur). */
+.sa-immersive-hero.sa-immersive-reflecting .sa-immersive-hero-mark::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 2px solid var(--superagent-accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--superagent-accent) 45%, transparent);
+  pointer-events: none;
+  animation: sa-hero-reflect 1.5s ease-in-out infinite;
+}
+@keyframes sa-hero-reflect {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.25;
+  }
+}
+
+/* Suggestions (maquette V4, cahier des charges §4.3) : chips cliquables qui
+   PRÉREMPLISSENT la zone de saisie sans envoyer. Sur le fond de l'app
+   (pas de bande surface-1), comme la maquette. */
+.sa-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 12px;
+}
+.sa-suggestions .chip {
+  border: 1px solid var(--border-hover);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+.sa-suggestions .chip:hover {
+  border-color: var(--superagent-accent);
+  color: var(--superagent-accent);
+  background: color-mix(in srgb, var(--superagent-accent) 8%, var(--surface-2));
+}
+/* Ajustements A19 : le bouton de synthèse vocale (🔊) a été retiré du mode
+   Assistant Only (l'élément n'existe plus), et le bouton « cloche » des
+   événements reste un contrôleur du mode standard — masqué tant que l'overlay
+   est actif (le panneau, non déplacé, est de toute façon recouvert). */
+.superagent-immersive-active .sa-events-btn {
+  display: none;
+}
+
+/* Disclaimer (maquette V4) : mention discrète sous la barre de saisie. */
+.sa-immersive-disclaimer {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  margin: 10px 0 8px;
+  padding: 0 16px;
+}
+
+/* Responsive (maquette V4) : marges réduites + hero compact sur petit écran. */
+@media (max-width: 700px) {
+  .sa-immersive-messages,
+  .sa-immersive-input {
+    width: calc(100vw - 24px);
+  }
+  .sa-immersive-hero {
+    padding: 25px 16px 15px;
+  }
+  .sa-immersive-hero-mark {
+    width: 54px;
+    height: 54px;
+  }
+  .sa-immersive-hero-title {
+    font-size: 21px;
+  }
 }
 
 /* --- Détection d'anomalies (tâche 8) --- */

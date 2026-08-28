@@ -1279,14 +1279,29 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   outil de suivi, pas un codeur. Reformulez simplement votre question pour
   relancer.
 
-### Mode « Assistant Only » immersif (A19)
-- Le bouton **⛶ (maximize-2)** en haut à gauche de l'onglet 🧭 bascule en mode
-  **immersif « Assistant Only »** : tout est masqué sauf le chat de l'assistant
-  et une **barre minimale** (bouton retour + statut), avec le **logo agrandi**.
-- La barre minimale offre deux **toggles voix** : **🎙️ dictée vocale** et
-  **🔊 synthèse vocale** (lire les réponses de l'assistant à voix haute).
-- Le bouton **← (retour)** revient au mode normal. Le **dernier mode choisi est
-  mémorisé** et restauré à la réouverture de l'onglet.
+### Mode « Assistant seul » (A19, maquette ASS_Only_V4)
+- Le bouton **⛶ (maximize-2)** de la barre d'outils de l'onglet 🧭 — ou le
+  **raccourci Ctrl+Shift+A** (Cmd+Shift+A sur macOS, onglet 🧭 ouvert) — bascule
+  en mode **assistant seul** : tout est masqué (sidebar, explorateur, éditeur,
+  onglets, terminal) et seule la discussion de l'Assistant reste visible.
+- **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
+  « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
+  existants de l'Assistant (modale Paramètres, onglet « Assistant »).
+- **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
+  seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
+  travaille.
+- **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
+  une demande à l'agent », « Préparer une livraison », « Lister les tâches en
+  cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).
+- La barre du haut ne contient aucun toggle voix : la **🎙️ dictée** reste dans
+  la barre de saisie. Ni bouton de **synthèse vocale** (🔊), ni bouton
+  d'**événements** (cloche / panneau) en mode assistant seul — ces contrôles
+  restent propres au mode standard. Le message d'accueil affiche le **nom réel
+  de l'assistant** (config de l'onglet 🧭), avec repli « Pilot Assistant ».
+- Le bouton **← (retour)** revient à l'interface complète. L'état de la
+  conversation est **préservé** lors des allers-retours (les éléments du chat
+  sont déplacés, jamais recréés). Le **dernier mode choisi est mémorisé** et
+  restauré à la réouverture de l'onglet.
 - **Identique sur l'accès distant web** : en mode « 🧭 Assistant », le bouton
   **⛶** en haut de l'interface web ouvre le même mode immersif.
 
