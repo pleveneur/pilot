@@ -1185,7 +1185,10 @@ class Sidebar {
       label.className = "open-projects-label";
       label.textContent = "Projets en cours";
       bar.appendChild(label);
-      for (const p of open) {
+      // Affichage : le projet actif en dernier (juste au-dessus de son
+      // arborescence) ; les autres conservent leur ordre (tri stable).
+      const ordered = [...open].sort((a, b) => (a === active) - (b === active));
+      for (const p of ordered) {
         const name = p.replace(/\\/g, "/").split("/").pop();
         const isActive = p === active;
         const item = document.createElement("div");

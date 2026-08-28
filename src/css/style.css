@@ -942,19 +942,16 @@ body.theme-light.theme-tokyo-day {
   align-items: center;
   gap: 6px;
   padding: 5px 8px;
-  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: var(--font-sm);
   color: var(--text-secondary);
   background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  transition: background var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast);
 }
-.open-project-item:hover { background: var(--surface-3); border-color: var(--border-hover); }
+.open-project-item:hover { background: var(--surface-3); }
 
 .open-project-item.active {
   color: var(--accent);
-  border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   font-weight: 700;
 }
