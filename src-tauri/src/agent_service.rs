@@ -547,7 +547,65 @@ impl AgentService {
         }
         // 5.1 : notifier le frontend de la transition (session démarrée).
         self.set_state(app, agent_id, Some(project), true, false, &AgentProcessState::Running).ok();
+        // Tâche #167 : après un NOUVEAU spawn, appliquer mécaniquement le modèle
+        // (registre de l'agent → defaultModel du backend actif). JAMAIS sur
+        // reprise (retour anticipé plus haut) : un set_model tardif écraserait
+        // un modèle posé explicitement (UI / bus JS) sur la session parkée.
+        self.apply_initial_model(app, project, agent_id, pi_path);
         Ok(false)
+    }
+
+    /// Tâche #167 : applique mécaniquement le modèle initial à une session
+    /// fraîchement spawnée (agents lancés en Rust direct — ex: agent de
+    /// diagnostic auto — qui, sans set_model, retombaient sur le modèle interne
+    /// de pi, potentiellement muet, ex: 402 credits).
+    /// Priorité des modèles (identique au bus JS, `resolveAgentModel` +
+    /// fallback defaultModel) :
+    ///   1. modèle explicite de session : n'existe PAS encore sur un processus
+    ///      neuf — la priorité « ne jamais écraser un modèle explicite » est
+    ///      respectée structurellement car on n'agit QUE sur un spawn neuf ;
+    ///   2. modèle du registre de l'agent pour le backend actif (fallback
+    ///      croisé pi/plh, comme `resolveAgentModel`) ;
+    ///   3. `defaultModel` du model-switch.json du backend actif
+    ///      (`default_model_from_config`).
+    /// Fail-open : tout échec (agent absent, lecture disque, set_model refusé
+    /// par pi) n'empêche JAMAIS le démarrage — l'agent retombe sur le modèle
+    /// interne de pi, comme avant ce correctif. Le set_model du bus JS reste
+    /// en place (idempotent) : il repositionne la même valeur après le spawn.
+    fn apply_initial_model(&self, app: &AppHandle, project: &str, agent_id: &str, pi_path: &str) {
+        let stem = if pi_path.is_empty() {
+            "pi".to_string()
+        } else {
+            std::path::Path::new(pi_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("pi")
+                .to_string()
+        };
+        // Modèle du registre de l'agent (porté par le projet, comme le seed
+        // de `start`). Lecture tolérante : agent absent → pas de modèle registre.
+        let (models_pi, models_plh) = match self.get_agent(app, agent_id, Some(project)) {
+            Ok(Some(a)) => (a.models.pi.clone(), a.models.plh.clone()),
+            _ => (String::new(), String::new()),
+        };
+        // defaultModel lu UNIQUEMENT si le registre ne fournit rien (une
+        // lecture disque de moins dans le cas nominal).
+        let default_model = crate::super_agent::default_model_from_config(pi_path);
+        if let Some((provider, model_id)) =
+            resolve_initial_model(&models_pi, &models_plh, &stem, default_model)
+        {
+            let cmd = serde_json::json!({
+                "type": "set_model",
+                "provider": provider,
+                "modelId": model_id
+            });
+            if let Err(e) = self.send_sync(project, agent_id, cmd) {
+                eprintln!(
+                    "[agent-service] set_model initial non appliqué pour l'agent {} : {}",
+                    agent_id, e
+                );
+            }
+        }
     }
 
     /// Parke la session d'un agent (état Parked, processus vivant). No-op si la
@@ -1724,6 +1782,44 @@ impl AgentService {
 /// Dérive un nom d'agent lisible depuis son id (ex: "default" → "Default",
 /// "orch-reviewer" → "Orch reviewer"). Utilisé au seed d'un agent absent en
 /// base (Bug principal).
+/// Découpe un modèle "provider/modelId" au premier '/' (le modelId peut
+/// contenir des '/' ex: openrouter). Retourne None si vide/malformé.
+fn split_model(s: &str) -> Option<(String, String)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (provider, model_id) = s.split_once('/')?;
+    let provider = provider.trim();
+    let model_id = model_id.trim();
+    if provider.is_empty() || model_id.is_empty() {
+        return None;
+    }
+    Some((provider.to_string(), model_id.to_string()))
+}
+
+/// Tâche #167 : résout le modèle initial à poser sur une session spawnée
+/// (fonction PURE, testable). Priorité identique au bus JS :
+///   1. modèle du registre pour le backend actif (`models.{stem}`),
+///   2. fallback croisé sur l'autre backend (`resolveAgentModel`),
+///   3. `defaultModel` du model-switch.json (`default_model`, déjà découpé).
+/// Retourne None si aucun modèle disponible (pi garde son modèle interne).
+pub(crate) fn resolve_initial_model(
+    models_pi: &str,
+    models_plh: &str,
+    stem: &str,
+    default_model: Option<(String, String)>,
+) -> Option<(String, String)> {
+    let (primary, secondary) = if stem == "plh" {
+        (models_plh, models_pi)
+    } else {
+        (models_pi, models_plh)
+    };
+    split_model(primary)
+        .or_else(|| split_model(secondary))
+        .or(default_model)
+}
+
 fn default_agent_name(id: &str) -> String {
     let human = id.replace(['-', '_'], " ");
     let mut chars = human.chars();
@@ -1979,6 +2075,51 @@ mod tests {
         // chemin de projet : il garantit l'absence de collision entre projets.
         assert!(a.contains('\u{1f}'));
         assert!(!a.contains("\\u{1f}"));
+    }
+
+    /// Tâche #167 : priorité de résolution du modèle initial (registre →
+    /// fallback croisé → defaultModel), alignée sur le bus JS.
+    #[test]
+    fn resolve_initial_model_priority_registry_then_cross_then_default() {
+        // Priorité 1 : modèle du registre pour le backend actif (pi).
+        assert_eq!(
+            resolve_initial_model(
+                "prov/a-model",
+                "other/b-model",
+                "pi",
+                Some(("d".to_string(), "m".to_string()))
+            ),
+            Some(("prov".to_string(), "a-model".to_string()))
+        );
+        // Priorité 1 bis : backend plh → champ plh d'abord.
+        assert_eq!(
+            resolve_initial_model("prov/a-model", "other/b-model", "plh", None),
+            Some(("other".to_string(), "b-model".to_string()))
+        );
+        // Priorité 2 : registre vide pour le backend actif → fallback croisé.
+        assert_eq!(
+            resolve_initial_model("prov/a-model", "", "plh", None),
+            Some(("prov".to_string(), "a-model".to_string()))
+        );
+        // Backend inconnu → essaie pi puis plh (comme le bus JS).
+        assert_eq!(
+            resolve_initial_model("", "plh/x", "mystem", None),
+            Some(("plh".to_string(), "x".to_string()))
+        );
+        // Priorité 3 : registre vide → defaultModel du model-switch.json.
+        assert_eq!(
+            resolve_initial_model("", "", "pi", Some(("d".to_string(), "m".to_string()))),
+            Some(("d".to_string(), "m".to_string()))
+        );
+        // Aucun modèle disponible → None (pi garde son modèle interne).
+        assert_eq!(resolve_initial_model("", "", "pi", None), None);
+        // Modèle de registre malformé (sans '/') → ignoré.
+        assert_eq!(resolve_initial_model("nomodel", "", "pi", None), None);
+        // modelId contenant un '/' : provider = 1er segment, le reste entier.
+        assert_eq!(
+            resolve_initial_model("openrouter/meta/llama", "", "pi", None),
+            Some(("openrouter".to_string(), "meta/llama".to_string()))
+        );
     }
 
     /// Construit une fausse session RPC vivante (processus enfant inoffensif qui

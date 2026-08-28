@@ -189,7 +189,10 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
 /// Résout le modèle par défaut du backend actif depuis `model-switch.json`
 /// (`~/.<stem>/agent/model-switch.json`, champ `defaultModel`). Retourne
 /// `(provider, model_id)` si présent.
-fn default_model_from_config(pi_path: &str) -> Option<(String, String)> {    let stem = if pi_path.is_empty() {
+/// Tâche #167 : `pub(crate)` — réutilisée par `AgentService::apply_initial_model`
+/// (fallback defaultModel des agents spawnés en Rust direct), sans duplication.
+pub(crate) fn default_model_from_config(pi_path: &str) -> Option<(String, String)> {
+    let stem = if pi_path.is_empty() {
         "pi".to_string()
     } else {
         std::path::Path::new(pi_path)
