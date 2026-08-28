@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -30,6 +30,37 @@ describe("isRunInProgress — source de vérité « run occupée ou non » (par 
   it("retourne false quand aucune run n'est en cours (état initial = idle)", () => {
     expect(isRunInProgress()).toBe(false);
     expect(isRunInProgress("projetA")).toBe(false);
+  });
+});
+
+describe("resolveEffectiveModel — fallback defaultModel du model-switch.json", () => {
+  // Agent normalisé (forme produite par normalizeAgent dans agents.js).
+  const mkAgent = (models) => ({ id: "x", models: { pi: "", plh: "", ...models } });
+
+  it("retourne le modèle configuré de l'agent quand il est défini", () => {
+    const a = mkAgent({ pi: "ollama/qwen2", plh: "" });
+    expect(resolveEffectiveModel(a, "pi", "openai/gpt-4o")).toBe("ollama/qwen2");
+    // L'autre backend est utilisé si le backend actif n'a pas de modèle.
+    expect(resolveEffectiveModel(a, "plh", "openai/gpt-4o")).toBe("ollama/qwen2");
+  });
+
+  it("retombe sur le defaultModel (fallback) quand l'agent n'a aucun modèle", () => {
+    const a = mkAgent({});
+    expect(resolveEffectiveModel(a, "pi", "anthropic/claude")).toBe("anthropic/claude");
+    expect(resolveEffectiveModel(a, "plh", "anthropic/claude")).toBe("anthropic/claude");
+  });
+
+  it("retourne une chaîne vide si ni l'agent ni le fallback n'ont de modèle", () => {
+    const a = mkAgent({});
+    expect(resolveEffectiveModel(a, "pi", "")).toBe("");
+    expect(resolveEffectiveModel(a, "unknown", "")).toBe("");
+  });
+
+  it("trim et ignore un fallback non chaîne (robustesse)", () => {
+    const a = mkAgent({});
+    expect(resolveEffectiveModel(a, "pi", "  openai/gpt-4o  ")).toBe("openai/gpt-4o");
+    expect(resolveEffectiveModel(a, "pi", undefined)).toBe("");
+    expect(resolveEffectiveModel(a, "pi", null)).toBe("");
   });
 });
 

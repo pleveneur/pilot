@@ -129,6 +129,10 @@ function newRunCtx(project) {
     exclusivityQueue: {},
     // Filet de sécurité par run : nombre de tours agent (détection boucle).
     turnCount: 0,
+    // Modèle de secours (defaultModel du model-switch.json) résolu UNE fois par
+    // run (voir ensureFallbackModel). `undefined` = non résolu, "" = résolu
+    // mais vide, sinon la valeur. Reset à `undefined` par beginRun (run neuve).
+    fallbackModel: undefined,
   };
 }
 
@@ -571,9 +575,67 @@ async function reloadAgentsRegistry() {
 
 function resolveCoordinatorFallback() {
   // Le modèle du coordinateur se règle uniquement via l'éditeur d'agents (onglet 🎭).
-  // En cas de coordinateur absent du registre (chemin défensif), on retourne "" : pas
-  // de set_model → pi utilise son modèle par défaut (defaultModel du model-switch.json).
+  // En cas de coordinateur absent du registre (chemin défensif), on retourne "".
+  // ⚠️ pi n'utilise PAS le defaultModel du model-switch.json en mode RPC : sans
+  // set_model explicite, pi retombe sur son modèle interne par défaut (ex:
+  // huggingface/Kimi-K2.6) qui peut renvoyer 402 « credits depleted ». C'est le
+  // bus (runAgentTurn) qui doit appliquer le defaultModel comme fallback quand
+  // un agent n'a pas de modèle configuré (voir resolveEffectiveModel +
+  // ensureFallbackModel ci-dessous).
   return "";
+}
+
+/**
+ * Pure (testable) : résout le modèle EFFECTIF d'un agent pour le backend actif.
+ * D'abord le modèle configuré de l'agent (resolveAgentModel) ; s'il est vide,
+ * on retombe sur `fallbackModel` (ex: defaultModel lu du model-switch.json).
+ * Retourne "" si aucun modèle n'est disponible — le caller doit alors faire
+ * échouer le tour explicitement (voir runAgentTurn).
+ * @param {object} agent - agent normalisé (avec .models.{pi,plh})
+ * @param {string} backend - "pi" | "plh" | "unknown"
+ * @param {string} fallbackModel - defaultModel du model-switch.json ("" si aucun)
+ * @returns {string} "provider/modelId" ou ""
+ */
+export function resolveEffectiveModel(agent, backend, fallbackModel) {
+  const resolved = resolveAgentModel(agent, backend, "");
+  if (resolved) return resolved;
+  return (typeof fallbackModel === "string" ? fallbackModel : "").trim();
+}
+
+/**
+ * Lit le `defaultModel` du model-switch.json du backend actif, puis de l'autre
+ * backend en fallback. Fail-open : en cas d'erreur de lecture IPC, retourne "".
+ * @returns {Promise<string>}
+ */
+async function readDefaultModel() {
+  const backend = backendKind();
+  const stems = [];
+  if (backend && backend !== "unknown") stems.push(backend);
+  stems.push(backend === "pi" ? "plh" : "pi");
+  for (const stem of stems) {
+    try {
+      const cfg = await invoke("read_model_aliases", { stem });
+      const dm = cfg && typeof cfg.defaultModel === "string" ? cfg.defaultModel.trim() : "";
+      if (dm) return dm;
+    } catch (e) {
+      console.warn("[agents-bus] read_model_aliases échoué pour", stem, e);
+    }
+  }
+  return "";
+}
+
+/**
+ * Résout (et cache) le modèle de secours pour la run : une seule lecture du
+ * model-switch.json par run (coût d'un appel IPC), partagée entre tous les
+ * agents de la même run. `ctx.fallbackModel` : `undefined` = non résolu,
+ * `""` = résolu mais vide, sinon la valeur du defaultModel.
+ * @param {object} ctx - contexte de run du projet
+ * @returns {Promise<string>}
+ */
+async function ensureFallbackModel(ctx) {
+  if (ctx.fallbackModel !== undefined) return ctx.fallbackModel;
+  ctx.fallbackModel = await readDefaultModel();
+  return ctx.fallbackModel;
 }
 
 export function destroyAgentsBus() {
@@ -663,6 +725,33 @@ function maybeDetectAgentLoop(agentId, ctx) {
   }
 }
 
+/**
+ * Erreurs pi non silencieuses (bug : agents sans modèle → 402 credits depleted
+ * en silence). pi peut émettre un message (event "message" ou "message_end")
+ * avec `stopReason === "error"` + `errorMessage`. On émet une notification + une
+ * erreur visibles (nom de l'agent + message parlant) puis on fait échouer le
+ * tour de CET agent via failAgentTurn (libère le créneau d'exclusivité et
+ * décrémente le groupe parallèle) SANS arrêter la run : les autres agents
+ * actifs continuent. Retourne true si une erreur a été traitée.
+ * @param {string} agentId
+ * @param {object} msg - event.message (peut être null/undefined)
+ * @param {object} ctx - contexte de run du projet
+ * @returns {boolean}
+ */
+function handleAgentMessageError(agentId, msg, ctx) {
+  if (!msg || msg.stopReason !== "error" || !msg.errorMessage) return false;
+  const raw = String(msg.errorMessage);
+  const friendly = raw === "Connection error."
+    ? "erreur de connexion, vérifiez votre connexion à l'API"
+    : raw;
+  const message = `L'agent ${agentId} : le modèle a répondu une erreur — ${friendly}`;
+  console.error("[agents-bus] message error", agentId, raw);
+  emit("notify", { agentId, message });
+  emit("error", { agentId, message });
+  failAgentTurn(agentId, message, ctx);
+  return true;
+}
+
 // Résout le contexte de run d'un événement agent. Le payload porte désormais le
 // projet (rpc_manager.rs) → on route vers busState.runs[project]. Fallback :
 // on cherche le contexte dont l'agent est actif (rétrocompat).
@@ -734,13 +823,20 @@ function handleAgentEvent(ev) {
       // Issue #37 : détection de boucle dans la réflexion du sous-agent.
       maybeDetectAgentLoop(agentId, ctx);
     }
-  } else if (type === "message") {
-    // L'event "message" apporte le message assistant COMPLET (role, stopReason,
-    // content). Le texte utile est déjà streamé via message_update/text_delta
-    // ci-dessus et accumulé dans streamingText ; l'accumuler à nouveau ici le
-    // doublerait dans streamingText ET dans l'UI (emit delta). Le chat standard
-    // (agent-pi.js) n'accumule pas non plus le "message" — on l'ignore donc pour
-    // le rendu, à l'instar d'agent-pi.js.
+  } else if (type === "message" || type === "message_end") {
+    // L'event "message" (non streamé) ou "message_end" (streamé) apporte le
+    // message assistant COMPLET (role, stopReason, content). Le texte utile est
+    // déjà streamé via message_update/text_delta ci-dessus et accumulé dans
+    // streamingText ; on ne le réaccumule pas ici (doublerait le rendu).
+    // ⚠️ Erreurs pi non silencieuses : pi peut émettre un message avec
+    // stopReason === "error" + errorMessage (ex: 402 « credits depleted » quand
+    // l'agent retombe sur le modèle interne par défaut). Sans cette branche, le
+    // tour échouait en silence (agent_end sans travail, résultat vide) et la run
+    // restait bloquée. On émet notify + error visibles (nom de l'agent + message)
+    // et on fait échouer le tour de CET agent (failAgentTurn libère le créneau
+    // et décrémente le groupe parallèle) SANS arrêter la run : les autres agents
+    // actifs continuent.
+    if (handleAgentMessageError(agentId, event.message, ctx)) return;
   } else if (type === "compaction_start") {
     // Activer le filtre des deltas : pendant la compaction, le résumé est
     // streamé en text_delta (plh). On le signale à l'UI mais on n'accumule pas.
@@ -1248,17 +1344,35 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   ctx.isCompacting = false; // par sécurité si une compaction a été interrompue sans compaction_end
 
   const backend = backendKind();
-  const prompt = buildAgentPrompt(agent, brief, projectContext, backend, "");
-  const model = resolveAgentModel(agent, backend, "");
+
+  // set_model OBLIGATOIRE avec fallback (bug : agents sans modèle configuré →
+  // pi retombe sur son modèle interne par défaut, ex huggingface/Kimi-K2.6, qui
+  // renvoie 402 « credits depleted » et échoue silencieusement au 1er tour).
+  // D'abord le modèle configuré de l'agent ; s'il est vide, on retombe sur le
+  // defaultModel du model-switch.json (résolu une fois par run, caché dans le
+  // ctx). Sans modèle du tout, le tour échoue explicitement AVANT de lancer pi.
+  let model = resolveAgentModel(agent, backend, "");
+  if (!model) {
+    const fb = await ensureFallbackModel(ctx);
+    model = resolveEffectiveModel(agent, backend, fb);
+  }
   const [provider, ...rest] = model.split("/");
   const modelId = rest.join("/");
+  if (!provider || !modelId) {
+    const msg = `Aucun modèle pour l'agent « ${agent.id} » — définissez son modèle dans l'éditeur d'agents (onglet 🎭).`;
+    console.error("[agents-bus]", msg);
+    failAgentTurn(agent.id, msg, ctx);
+    return;
+  }
+
+  const prompt = buildAgentPrompt(agent, brief, projectContext, backend, model);
 
   ctx.agentProject[agent.id] = cwd;
   const cfg = busState.config || {};
   const piPath = cfg.rpc_pi_path || "";
   const noSession = !agent.keep_context;
 
-  console.log("[agents-bus] turn", { agentId: agent.id, model, provider: provider || "(none)", modelId: modelId || "(none)", cwd });
+  console.log("[agents-bus] turn", { agentId: agent.id, model, provider, modelId, cwd });
 
   emit("agentStart", { agentId: agent.id, model });
 
@@ -1349,14 +1463,15 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       await invoke("new_agent_process_session", { agentId: agent.id, project: cwd });
     }
 
-    if (provider && modelId) {
-      await invoke("set_agent_process_model", {
-        agentId: agent.id,
-        provider,
-        modelId,
-        project: cwd,
-      });
-    }
+    // set_model obligatoire : provider+modelId ont été validés ci-dessus. Sans
+    // set_model explicite, pi retombe sur son modèle interne par défaut (hors
+    // model-switch.json) qui peut échouer en silence (402 credits depleted).
+    await invoke("set_agent_process_model", {
+      agentId: agent.id,
+      provider,
+      modelId,
+      project: cwd,
+    });
 
     if (isAssistant) {
       await sendPromptToAssistantAgent(agent.id, prompt);
