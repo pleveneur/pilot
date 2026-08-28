@@ -42,7 +42,7 @@ import {
   dequeueExclusivity,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
 } from "./exclusivity-queue.js";
-import { isProjectReservedBy, deleteReservations } from "./reservations.js";
+import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
 
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
@@ -465,6 +465,22 @@ export async function initAgentsBus(options = {}) {
     // Libère le créneau d'exclusivité (launchNextQueued) et fait échouer le tour.
     failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`, ctx);
   });
+
+  // T6-fix (fuite 2) : les réservations sont suivies en MÉMOIRE seule
+  // (reservedProjects) → après un rechargement de la webview, plus aucun
+  // nettoyage n'est possible et le fichier .pilot/reservations.json résiduel
+  // bloquerait silencieusement les écritures. À l'init du bus, purger le
+  // résiduel éventuel du projet actif — SAUF si une run est en cours sur ce
+  // projet (ses réservations sont actives, pas résiduelles). Fire-and-forget,
+  // fail-open : ne jamais bloquer l'init.
+  try {
+    const activeProject = (typeof window !== "undefined" && window._pilotProjectPath) || "";
+    if (activeProject && !isRunInProgress(activeProject)) {
+      deleteReservations(activeProject).catch(() => {});
+    }
+  } catch (_) {
+    // fail-open : la purge au démarrage ne doit jamais casser l'init
+  }
 }
 
 /**
@@ -1116,7 +1132,7 @@ export function isRunInProgress(project) {
   });
 }
 
-export function stopAgentsRun(options = {}) {
+export async function stopAgentsRun(options = {}) {
   // stopAgentsRun reste volontairement GLOBAL (l'utilisateur arrête tout).
   const runningKeys = Object.keys(busState.runs).filter((k) => {
     const s = busState.runs[k].runState;
@@ -1131,6 +1147,14 @@ export function stopAgentsRun(options = {}) {
       invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
     }
   }
+  // T6-fix (fuite 1) : purger les réservations de tous les projets réservés
+  // AVANT de vider les runs. En état "stopping", handleAgentEvent ignore les
+  // événements agent_end (runState !== "running") → finishAgentTurn n'est
+  // jamais appelé → sans cette purge, .pilot/reservations.json resterait sur
+  // disque et bloquerait silencieusement les écritures des futurs agents.
+  // stopAgentsRun étant global (toutes les runs sont vidées), purger TOUTES
+  // les réservations connues est sûr et couvre aussi un codeur non actif.
+  await clearAllReservations();
   // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
   // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
   // l'utilisateur. » ne doit apparaître que pour un arrêt manuel (issue #10).

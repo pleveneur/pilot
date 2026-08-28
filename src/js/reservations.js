@@ -5,15 +5,20 @@
 // ["plan"]) pour obtenir un plan JSON, extrait la liste des fichiers que le
 // codeur va probablement toucher, et l'écrit dans `.pilot/reservations.json`
 // du projet concerné. Ce fichier est lu par l'extension `pilot-reserve-gate.ts`
-// (T3) qui bloque automatiquement les `write`/`edit` des non-codeurs sur ces
-// fichiers (le codeur, identifié via PILOT_AGENT_ID, n'est jamais bloqué).
+// (T3) qui bloque automatiquement les `write`/`edit` des agents HORS de la run
+// sur ces fichiers (les participants de la run, identifiés via PILOT_AGENT_ID,
+// ne sont jamais bloqués).
 //
 // Estimation INFORMATIVE : fail-open. Si l'estimation échoue (plan-maker absent,
 // parsing échoué, timeout, écriture impossible), on n'écrit rien et on NE BLOQUE
 // PAS le lancement du codeur.
 //
 // Format écrit (compatible pilot-reserve-gate.ts, T3) :
-//   { "coder": "<agent_id>", "files": ["src/lib.rs", ...] }
+//   { "coder": "<agent_id>", "files": ["src/lib.rs", ...], "agents": ["<agent_id>", ...] }
+// `coder` = premier codeur de la run (propriétaire du nettoyage), `agents` = ids
+// de TOUS les participants de la run (codeurs et spécialistes) : la gate exempte
+// tout participant (fail-open — on ne bloque jamais un agent légitime de la
+// run). Les agents HORS de la run restent bloqués sur les fichiers réservés.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -103,15 +108,21 @@ function tryParseJson(s) {
 
 /**
  * Construit l'objet reservations.json attendu par pilot-reserve-gate.ts (T3) :
- *   { "coder": "<agent_id>", "files": ["src/lib.rs", ...] }
+ *   { "coder": "<agent_id>", "files": ["src/lib.rs", ...], "agents": [...] }
+ * `coder` reste le propriétaire du nettoyage (1er codeur de la run) ; `agents`
+ * liste TOUS les participants de la run (coder inclus) pour que la gate
+ * n'exempte pas que le 1er codeur (fuite 3 : un second codeur légitime de la
+ * même run ne devait pas être bloqué silencieusement).
  * @param {string} coderId
  * @param {string[]} files
- * @returns {{coder: string, files: string[]}}
+ * @param {string[]} [participantIds] - ids de tous les agents de la run
+ * @returns {{coder: string, files: string[], agents: string[]}}
  */
-export function buildReservations(coderId, files) {
+export function buildReservations(coderId, files, participantIds = []) {
   return {
     coder: String(coderId || ""),
     files: dedupeFiles(files),
+    agents: dedupeFiles([String(coderId || ""), ...(Array.isArray(participantIds) ? participantIds : [])]),
   };
 }
 
@@ -157,10 +168,10 @@ export function reservationsPath(project) {
  * @param {string[]} files
  * @returns {Promise<boolean>}
  */
-export async function writeReservations(project, coderId, files) {
+export async function writeReservations(project, coderId, files, participantIds = []) {
   if (!project) return false;
   try {
-    const payload = JSON.stringify(buildReservations(coderId, files), null, 2);
+    const payload = JSON.stringify(buildReservations(coderId, files, participantIds), null, 2);
     await invoke("write_file_content", { path: reservationsPath(project), content: payload });
     markProjectReserved(project, coderId);
     return true;
@@ -171,9 +182,25 @@ export async function writeReservations(project, coderId, files) {
 }
 
 /**
+ * Purge TOUTES les réservations actives (map mémoire + fichiers disque) —
+ * fail-open. Utilisée à l'arrêt global des runs (stopAgentsRun, fuite 1) : le
+ * chemin « stopping » ignore les événements agent_end, donc finishAgentTurn ne
+ * tourne jamais → sans cette purge, le fichier résiduel bloquerait les agents.
+ * @returns {Promise<void>}
+ */
+export async function clearAllReservations() {
+  const projects = Array.from(reservedProjects.keys());
+  for (const project of projects) {
+    await deleteReservations(project);
+  }
+}
+
+/**
  * Supprime les réservations d'un projet (fail-open). Si le fichier n'existe
  * pas, ne fait rien. Utilisé à la fin de la run du codeur (finishAgentTurn /
- * failAgentTurn) et à l'arrêt/annulation d'un agent.
+ * failAgentTurn), à l'arrêt/annulation d'un agent et à la purge du résiduel au
+ * démarrage du bus (fuite 2 : le fichier ne doit jamais survivre à un
+ * rechargement de la webview).
  * @param {string} project - chemin absolu du projet
  * @returns {Promise<void>}
  */
@@ -204,15 +231,23 @@ export async function deleteReservations(project) {
  * @param {string} task - la demande confiée au codeur
  * @param {string[]} coderIds - ids des agents codeurs de la run
  * @param {{runAgentsForAssistant: Function, loadAgentRegistry: Function}} deps
+ * @param {string[]} [participantIds] - ids de TOUS les agents de la run (ex:
+ *   reservations.agents côté gate). Absent → fallback sur coderIds seul.
  * @returns {Promise<{reserved: boolean, coderId: string, files: string[]}>}
  */
-export async function estimateAndReserve(project, task, coderIds, deps) {
+export async function estimateAndReserve(project, task, coderIds, deps, participantIds) {
   const { runAgentsForAssistant, loadAgentRegistry } = deps || {};
   const firstCoder = (Array.isArray(coderIds) ? coderIds : []).find(Boolean);
   const empty = { reserved: false, coderId: firstCoder || "", files: [] };
   if (!project || !firstCoder || !runAgentsForAssistant || !loadAgentRegistry) {
     return empty;
   }
+  // Purge préalable d'un éventuel résiduel (fuite 2, garde-fou défensif) : le
+  // fichier ne doit refléter QUE les réservations de la run qui démarre. Un
+  // résiduel d'une run précédente (reload webview, estimation fail-open) est
+  // supprimé AVANT l'estimation — ainsi, après estimateAndReserve, le fichier
+  // soit contient des réservations fraîches pour CETTE run, soit n'existe plus.
+  await deleteReservations(project);
   // plan-maker absent du registre → pas d'estimation (fail-open).
   try {
     const registry = await loadAgentRegistry();
@@ -228,7 +263,7 @@ export async function estimateAndReserve(project, task, coderIds, deps) {
     ]);
     const files = parsePlanFiles(result);
     if (files.length === 0) return empty;
-    const ok = await writeReservations(project, firstCoder, files);
+    const ok = await writeReservations(project, firstCoder, files, participantIds);
     return { reserved: ok, coderId: firstCoder, files };
   } catch (e) {
     console.warn("[reservations] estimation échouée (fail-open, le codeur n'est pas bloqué) :", e);

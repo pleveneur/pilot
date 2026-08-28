@@ -2429,7 +2429,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             estimateAndReserve(targetProject, task, coderIds, {
               runAgentsForAssistant,
               loadAgentRegistry,
-            })
+            }, agentIds)
               .then((r) => {
                 if (r.reserved && r.files.length > 0) {
                   appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
