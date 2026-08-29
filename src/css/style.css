@@ -2983,6 +2983,18 @@ body.zen-mode #project-footer {
   padding-right: 2px;
 }
 
+/* Bulle de rappel programmé déclenché par le ticker de l'Assistant (🧭) :
+   centrée comme un message système, avec l'accent violet de l'Assistant. */
+.agent-message-reminder {
+  align-self: center;
+  max-width: 85%;
+}
+.agent-bubble-reminder {
+  background: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--superagent-accent) 30%, transparent);
+  font-size: 13px;
+}
+
 /* Badge « via remote » sous un prompt utilisateur tapé à distance. */
 .agent-message-remote::after {
   content: "📱 via remote";

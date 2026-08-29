@@ -23,7 +23,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classi
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
-import { shouldScheduleTick, parseScheduleEvery } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderDate } from "./super-agent-schedule.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -1889,6 +1889,27 @@ let scheduleTicker = null;
 // rappel est marqué livré.
 const pendingReminderIds = new Set();
 
+// Bulle de rappel : affiche dans la conversation, au moment de l'injection
+// effective, le prompt du rappel avec sa date + heure de déclenchement au
+// format local français (ex: « 29/08 à 14:30 »). Date absente/invalide →
+// bulle inchangée (formatReminderDate retourne "") : jamais « Invalid
+// Date »/« NaN ». Fail-open : onglet 🧭 fermé (pas de zone de messages) → rien.
+function appendReminderBubble(prompt) {
+  const messagesEl = superMessagesEl;
+  if (!messagesEl) return;
+  const when = formatReminderDate(new Date());
+  const el = document.createElement("div");
+  el.className = "agent-message agent-message-reminder";
+  const bubble = document.createElement("div");
+  bubble.className = "agent-bubble agent-bubble-reminder";
+  bubble.textContent = when
+    ? `⏰ Rappel programmé — ${when} : ${prompt}`
+    : `⏰ Rappel programmé : ${prompt}`;
+  el.appendChild(bubble);
+  messagesEl.appendChild(el);
+  scrollSuperToBottom(messagesEl);
+}
+
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
   // Issue #134 : le réglage super_agent_auto_check_startup ne gouverne QUE le
@@ -1911,6 +1932,8 @@ async function scheduleTick() {
         await invoke("send_super_agent_command", {
           command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
         });
+        // Bulle de rappel avec la date + heure de déclenchement (locale).
+        appendReminderBubble(d.prompt);
         // Livraison effective → marquer le rappel comme exécuté (issue #135).
         try {
           await invoke("super_agent_schedule_mark_done", { id: d.id });

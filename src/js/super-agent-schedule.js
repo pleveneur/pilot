@@ -21,6 +21,22 @@ export function parseScheduleEvery(value) {
   return null;
 }
 
+// Formate une date/heure de rappel au format français court « 29/08 à 14:30 »
+// (jour/mois à HH:MM, heure locale). Retourne "" si la date est absente ou
+// invalide : l'appelant garde alors la bulle inchangée (jamais « Invalid
+// Date »/« NaN » à l'écran). Formatage manuel (pas d'Intl) pour garantir le
+// même rendu sur Windows/macOS/Linux quel que soit le moteur.
+export function formatReminderDate(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm} à ${hh}:${mi}`;
+}
+
 // Validation miroir de l'opération Rust schedule_set_enabled (désactivation /
 // réactivation d'un rappel sans le supprimer). Retourne null si valide, sinon
 // un message d'erreur. `id` doit être un entier positif, `enabled` un booléen.

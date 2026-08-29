@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldScheduleTick, parseScheduleEvery, parseScheduleSetEnabled } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, parseScheduleSetEnabled, formatReminderDate } from "./super-agent-schedule.js";
 
 describe("shouldScheduleTick (garde-fou 4 : pas de tick si session morte)", () => {
   it("false si l'onglet 🧭 est fermé (session morte)", () => {
@@ -30,6 +30,26 @@ describe("parseScheduleEvery (validation miroir de la borne Rust >= 60)", () => 
     expect(parseScheduleEvery(1.5)).toContain("entier");
     expect(parseScheduleEvery(NaN)).toContain("entier");
     expect(parseScheduleEvery(undefined)).toContain("entier");
+  });
+});
+
+describe("formatReminderDate (bulle de rappel : date + heure locale)", () => {
+  it("formate une date valide en jj/mm à HH:MM heure locale", () => {
+    expect(formatReminderDate(new Date(2026, 7, 29, 14, 30))).toBe("29/08 à 14:30");
+    expect(formatReminderDate(new Date(2026, 0, 5, 3, 7))).toBe("05/01 à 03:07");
+  });
+
+  it("accepte une chaîne ISO interprétée en heure locale", () => {
+    expect(formatReminderDate("2026-08-29T14:30:00")).toBe("29/08 à 14:30");
+  });
+
+  it("retourne une chaîne vide pour une date absente/invalide (jamais Invalid Date/NaN)", () => {
+    for (const bad of [null, undefined, "", "pas une date", Number.NaN, new Date("pas une date")]) {
+      const out = formatReminderDate(bad);
+      expect(out).toBe("");
+      expect(out).not.toContain("Invalid");
+      expect(out).not.toContain("NaN");
+    }
   });
 });
 
