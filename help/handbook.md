@@ -1338,7 +1338,10 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   travaille en arrière-plan.
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
-  travaille.
+  travaille. Pendant la réflexion, le **fond de la zone de saisie** respire
+  (halo discret animé) dans les **deux modes** (standard et assistant seul) —
+  en complément de l'**anneau pulsant autour du logo** en mode immersif ; au
+  repos, aucun effet, la zone reste utilisable.
 - **Suggestions** : quatre chips (« Faire un point sur un projet », « Déléguer
   une demande à l'agent », « Préparer une livraison », « Lister les tâches en
   cours ») qui **préremplissent la zone de saisie** (elles n'envoient pas).

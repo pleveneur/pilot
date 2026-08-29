@@ -8036,14 +8036,13 @@ body.pilot-loading *::after {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
 }
-/* Ajustements A19 : en mode assistant seul, la zone de saisie reste 100 %
-   calme — l'indicateur de réflexion n'y apparaît JAMAIS (filet de sécurité
-   si la classe arrive avant la resynchronisation JS au changement de mode).
-   Le mode standard garde la teinte « réflexion » telle quelle. */
-.superagent-immersive .agent-chat-input-bar.superagent-input-reflecting .agent-input {
-  background-image: none;
-  animation: none;
-}
+/* Mode assistant seul : aucune surcharge ici — la classe
+   `superagent-input-reflecting` suit la barre déplacée dans l'overlay, et la
+   respiration du champ (règle de base
+   .agent-chat-input-bar.superagent-input-reflecting .agent-input plus haut)
+   s'y applique telle quelle pendant la réflexion, en complément de l'anneau
+   du logo hero ci-dessous. Tokens dark/light existants, aucune couleur en
+   dur. */
 /* Indicateur de réflexion du mode assistant seul : anneau pulsant autour du
    cercle du logo hero (accent violette --superagent-accent, même rythme doux
    que les autres indicateurs « breathing » : 1.5s ease-in-out infinite).

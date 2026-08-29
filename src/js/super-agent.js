@@ -1216,13 +1216,16 @@ export async function createSuperAgent(container) {
   function setReflecting(reflecting) {
     superSetReflecting(reflecting);
   }
-  // Ajustements A19 : en mode assistant seul (overlay immersif), la zone de
-  // saisie reste 100 % calme — l'indicateur de réflexion devient un anneau
-  // pulsant autour du cercle du logo hero (classe `sa-immersive-reflecting`).
-  // Le mode standard garde la teinte « réflexion » de la barre telle quelle.
-  // L'état est mémorisé (`reflectingActive`) pour resynchroniser l'effet au
-  // bon endroit quand on bascule de mode pendant une réflexion (voir
-  // applyReflecting appelé par enterImmersive / exitImmersive).
+  // Teinte « réflexion », commune aux deux modes : la classe
+  // `superagent-input-reflecting` fait respirer le fond de la barre — en mode
+  // standard sur la barre de l'onglet, en mode assistant seul sur la barre
+  // DÉPLACÉE dans l'overlay (mêmes classes CSS, donc même respiration ; cet
+  // effet y avait été retiré par mégarde par la maquette V4). En mode
+  // immersif s'ajoute l'anneau pulsant autour du cercle du logo hero (classe
+  // `sa-immersive-reflecting`). L'état est mémorisé (`reflectingActive`) pour
+  // resynchroniser l'effet au bon endroit quand on bascule de mode pendant
+  // une réflexion (voir applyReflecting appelé par enterImmersive /
+  // exitImmersive).
   let reflectingActive = false;
   function applyReflecting() {
     const active = reflectingActive && !hasPendingQuestion();
@@ -1230,7 +1233,7 @@ export async function createSuperAgent(container) {
       const hero = immersiveOverlay.querySelector(".sa-immersive-hero");
       if (hero) hero.classList.toggle("sa-immersive-reflecting", active);
     }
-    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", active && !immersiveOverlay);
+    if (inputBar) inputBar.classList.toggle("superagent-input-reflecting", active);
   }
   superSetReflecting = (reflecting) => {
     // Chantier #132 : pendant l'attente d'un choix (question en attente), la
