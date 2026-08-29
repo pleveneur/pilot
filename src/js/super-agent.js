@@ -23,7 +23,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classi
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
-import { shouldScheduleTick, parseScheduleEvery, formatReminderDate } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatReminderQuietLabel } from "./super-agent-schedule.js";
 import { mountStaticAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames } from "./super-agent-badges.js";
@@ -1967,11 +1967,14 @@ let scheduleTicker = null;
 // rappel est marqué livré.
 const pendingReminderIds = new Set();
 
-// Bulle de rappel : affiche dans la conversation, au moment de l'injection
-// effective, le prompt du rappel avec sa date + heure de déclenchement au
-// format local français (ex: « 29/08 à 14:30 »). Date absente/invalide →
-// bulle inchangée (formatReminderDate retourne "") : jamais « Invalid
-// Date »/« NaN ». Fail-open : onglet 🧭 fermé (pas de zone de messages) → rien.
+// Bulle de rappel : marque discrètement dans la conversation, au moment de
+// l'injection effective, une relance programmée. Retour utilisateur du
+// 29/08 : le prompt du rappel (consigne technique pour l'assistant) polluait
+// l'écran sans rien apporter — la bulle n'affiche plus qu'une ligne courte
+// « ⏰ relance — 29/08 à 14:30 » (formatReminderQuietLabel) ; le prompt
+// complet reste consultable au survol (title). Jamais « Invalid Date »/« NaN »
+// (formatReminderDate retourne ""). Fail-open : onglet 🧭 fermé (pas de zone
+// de messages) → rien. Cosmétique pur : injection/tick/marquage inchangés.
 function appendReminderBubble(prompt) {
   const messagesEl = superMessagesEl;
   if (!messagesEl) return;
@@ -1980,9 +1983,8 @@ function appendReminderBubble(prompt) {
   el.className = "agent-message agent-message-reminder";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-reminder";
-  bubble.textContent = when
-    ? `⏰ Rappel programmé — ${when} : ${prompt}`
-    : `⏰ Rappel programmé : ${prompt}`;
+  bubble.textContent = formatReminderQuietLabel(when);
+  if (prompt && String(prompt).trim()) bubble.title = String(prompt);
   el.appendChild(bubble);
   messagesEl.appendChild(el);
   scrollSuperToBottom(messagesEl);

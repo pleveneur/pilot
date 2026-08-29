@@ -3002,14 +3002,18 @@ body.zen-mode #project-footer {
 }
 
 /* Bulle de rappel programmé déclenché par le ticker de l'Assistant (🧭) :
-   centrée comme un message système, avec l'accent violet de l'Assistant. */
+   centrée comme un message système, avec l'accent violet de l'Assistant.
+   Contraste : texte explicite var(--text-primary) — la bulle n'hérite plus
+   d'une couleur de texte sombre sur fond teinté (illisible en thème sombre,
+   faiblement lisible en clair) ; bordure renforcée pour délimiter la bulle. */
 .agent-message-reminder {
   align-self: center;
   max-width: 85%;
 }
 .agent-bubble-reminder {
   background: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-2));
-  border: 1px solid color-mix(in srgb, var(--superagent-accent) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--superagent-accent) 40%, transparent);
+  color: var(--text-primary);
   font-size: 13px;
 }
 

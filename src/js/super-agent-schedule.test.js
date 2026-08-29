@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shouldScheduleTick, parseScheduleEvery, parseScheduleSetEnabled, formatReminderDate } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, parseScheduleSetEnabled, formatReminderDate, formatReminderQuietLabel } from "./super-agent-schedule.js";
 
 describe("shouldScheduleTick (garde-fou 4 : pas de tick si session morte)", () => {
   it("false si l'onglet 🧭 est fermé (session morte)", () => {
@@ -50,6 +50,25 @@ describe("formatReminderDate (bulle de rappel : date + heure locale)", () => {
       expect(out).not.toContain("Invalid");
       expect(out).not.toContain("NaN");
     }
+  });
+});
+
+describe("formatReminderQuietLabel (bulle de relance discrète : pas de prompt affiché)", () => {
+  it("retourne le marqueur court avec la date quand elle est fournie", () => {
+    expect(formatReminderQuietLabel("29/08 à 14:30")).toBe("⏰ relance — 29/08 à 14:30");
+    expect(formatReminderQuietLabel("05/01 à 03:07")).toBe("⏰ relance — 05/01 à 03:07");
+  });
+
+  it("retourne le marqueur seul sans date (date absente/invalide)", () => {
+    expect(formatReminderQuietLabel("")).toBe("⏰ relance");
+    expect(formatReminderQuietLabel(undefined)).toBe("⏰ relance");
+    expect(formatReminderQuietLabel(null)).toBe("⏰ relance");
+  });
+
+  it("ne contient jamais le libellé verbeux « Rappel programmé » ni de prompt", () => {
+    const out = formatReminderQuietLabel("29/08 à 14:30");
+    expect(out).not.toContain("Rappel programmé");
+    expect(out).not.toContain(" : ");
   });
 });
 

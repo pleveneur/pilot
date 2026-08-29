@@ -37,6 +37,16 @@ export function formatReminderDate(value) {
   return `${dd}/${mm} à ${hh}:${mi}`;
 }
 
+// Bulle de relance discrète (retours utilisateur 2026-08-29). Le prompt du
+// rappel est une consigne technique destinée à l'assistant : l'afficher en
+// clair pollue la conversation pour rien. La bulle ne montre donc qu'un
+// marqueur court « ⏰ relance — 29/08 à 14:30 » (garde-fou discret) ; la date
+// n'apparaît que si formatReminderDate en a produit une. Le prompt complet
+// reste consultable au survol (title, côté super-agent.js).
+export function formatReminderQuietLabel(when) {
+  return when ? `⏰ relance — ${when}` : "⏰ relance";
+}
+
 // Validation miroir de l'opération Rust schedule_set_enabled (désactivation /
 // réactivation d'un rappel sans le supprimer). Retourne null si valide, sinon
 // un message d'erreur. `id` doit être un entier positif, `enabled` un booléen.
