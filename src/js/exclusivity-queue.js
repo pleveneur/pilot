@@ -72,3 +72,64 @@ export function isAgentActiveOnProject(sessions, agentId, project) {
     (s) => s.agent === agentId && s.busy && s.alive && s.mode === "agent_process" && s.project === project
   );
 }
+
+// Chantier 6/6 (verrou fantôme) : fenêtre de grâce courte. Une session dont la
+// dernière activité date de MOINS de cette durée est considérée réellement en
+// activité même si busy n'est pas (encore) à true — couvre un tour qui vient de
+// démarrer (agent_start pas encore propagé) et les fins de tour en vol. Au-delà,
+// une session vivante mais sans travail n'est plus « une run en cours » : elle
+// ne doit JAMAIS maintenir un verrou de run (faux « Une run est déjà en cours »).
+export const RECENT_ACTIVITY_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+
+/**
+ * Pure (testable) : indique si UNE session d'agent représente un travail
+ * RÉELLEMENT en cours. Un agent travaille réellement si :
+ *  - busy === true (agent_start reçu, aucun agent_settled depuis), OU
+ *  - sa dernière activité (lastActivity ISO) date de moins de `windowMs`.
+ * Une session « vivante mais inactive » (parkée après agent_settled, oubliée)
+ * ne compte PAS : un processus vivant ≠ travail en cours.
+ * Fail-open anti-verrou : en cas de donnée manquante ou illisible (session
+ * absente/morte, busy absent ET lastActivity absente/non parsable), retourne
+ * false — jamais de verrou sur incertitude (le bug historique était un FAUX
+ * verrou ; il ne faut pas créer l'inverse, un verrou oublié).
+ * @param {{alive?:boolean, busy?:boolean, lastActivity?:string}|null} session
+ * @param {number} [now] - timestamp de référence (ms)
+ * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
+ * @returns {boolean}
+ */
+export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+  if (!session || session.alive !== true) return false;
+  if (session.busy === true) return true;
+  if (!session.lastActivity) return false;
+  const ts = Date.parse(session.lastActivity);
+  if (!Number.isFinite(ts)) return false;
+  return now - ts < windowMs;
+}
+
+/**
+ * Pure (testable) : indique si au moins UN des agents donnés a une session
+ * VRAIMENT en activité (voir isSessionWorking). Priorité à la session
+ * (agent, projet mappé) ; sinon n'importe quelle session vivante de cet agent
+ * (même politique de matching que la sonde historique). Sans donnée exploitable
+ * → false (fail-open) : aucun agent prouvé en activité = aucun verrou.
+ * @param {Array<object>} sessions - liste des sessions (list_agent_sessions)
+ * @param {Iterable<string>} agentIds - agents participants à la run
+ * @param {(agentId: string) => string|null} [getAgentProject] - projet mappé
+ *   d'un agent (agentProject du contexte de run) ; null si inconnu
+ * @param {number} [now]
+ * @param {number} [windowMs]
+ * @returns {boolean}
+ */
+export function isAnyAgentWorking(sessions, agentIds, getAgentProject, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+  const alive = (sessions || []).filter((s) => s && s.alive === true);
+  for (const agentId of agentIds || []) {
+    const proj = getAgentProject ? getAgentProject(agentId) : null;
+    // Priorité (agent, projet) : si une session dédiée existe, c'est elle qui
+    // tranche seule. Sinon (projet inconnu ou sans session dédiée), on regarde
+    // n'importe quelle session vivante de l'agent (prudence, pratique historique).
+    const byProject = proj ? alive.find((s) => s.agent === agentId && s.project === proj) : null;
+    const candidates = byProject ? [byProject] : alive.filter((s) => s.agent === agentId);
+    if (candidates.some((s) => isSessionWorking(s, now, windowMs))) return true;
+  }
+  return false;
+}

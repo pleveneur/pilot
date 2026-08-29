@@ -41,6 +41,7 @@ import {
   enqueueExclusivity,
   dequeueExclusivity,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
+  isAnyAgentWorking,
 } from "./exclusivity-queue.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
 
@@ -228,7 +229,8 @@ function clearAllRuns() {
 // d'un projet est marquée "running" mais qu'aucun agent n'est réellement en
 // train de streamer, le verrou de CE projet est bloqué. On force sa libération
 // (endRun) pour ne pas bloquer les appels suivants à run_agents sur ce projet.
-async function releaseStuckRunLock(project) {
+// Exportée pour les tests vitest (verrou fantôme, chantier 6/6).
+export async function releaseStuckRunLock(project) {
   const key = runKey(project);
   if (getRunState(key) !== "running") return;
   const ctx = busState.runs[key];
@@ -251,13 +253,18 @@ async function releaseStuckRunLock(project) {
     return;
   }
 
-  // 3. Agents fantômes : activeAgents non vide mais aucun processus réellement
-  //    vivant (sessions supprimées à la fermeture du projet / arrêt des
-  //    processus sans événement agent_end/process_exit).
+  // 3. Agents fantômes / inactifs : activeAgents non vide mais plus AUCUN agent
+  //    réellement en activité (busy, ou dernière activité plus récente que la
+  //    fenêtre de grâce — isAnyAgentWorking). Une session peut rester « vivante »
+  //    chez Rust sans aucun travail en cours (parkée après agent_settled,
+  //    oubliée) : elle ne doit PAS maintenir le verrou — c'est le verrou
+  //    fantôme qui rejetait les délégations « Une run est déjà en cours sur ce
+  //    projet » (chantier 6/6). On se détache de la session : endRun libère le
+  //    verrou et la demande suivante démarre normalement.
   if (ctx.activeAgents.size > 0) {
-    const alive = await anyActiveAgentAlive(key);
-    if (!alive) {
-      console.warn("[agents-bus] watchdog : agents fantômes (aucun processus vivant), libération forcée.");
+    const working = await anyActiveAgentWorking(key);
+    if (!working) {
+      console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
       endRun(key);
       return;
     }
@@ -271,29 +278,29 @@ async function releaseStuckRunLock(project) {
   }
 }
 
-// Sonde de vivacité : retourne true si au moins un agent actif de la run du
-// projet a une session de processus réellement vivante (list_agent_sessions).
-// Utilisée par releaseStuckRunLock pour distinguer un agent fantôme d'un agent
-// qui stream encore. En cas d'erreur de sonde, on retourne true (prudence).
-async function anyActiveAgentAlive(project) {
+// Sonde « une run est-elle VRAIMENT en activité ? » : retourne true si au moins
+// un agent actif de la run du projet est réellement au travail — busy = true,
+// ou dernière activité plus récente que la fenêtre de grâce (2 min,
+// exclusivity-queue.js). Une session vivante mais INACTIVE (parkée après
+// agent_settled, oubliée, sans dernière activité exploitable) ne compte PAS :
+// c'est elle qui maintenait à tort le verrou fantôme « Une run est déjà en
+// cours sur ce projet ». Utilisée par releaseStuckRunLock pour distinguer une
+// session fantôme/inactive d'un agent qui travaille encore.
+// Fail-open (sens anti-verrou) : en cas d'erreur de sonde ou de donnée
+// manquante, on retourne false → le watchdog considère le système LIBRE
+// (jamais de faux verrou ; le risque inverse — libérer une run réellement
+// active — reste couvert côté exécution par busy=true de la session et par
+// l'exclusivité Rust (clé composite) + la file d'attente T5).
+async function anyActiveAgentWorking(project) {
   const key = runKey(project);
   const ctx = busState.runs[key];
   if (!ctx) return false;
   try {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
-    for (const agentId of ctx.activeAgents) {
-      const proj = ctx.agentProject[agentId] || null;
-      // Préférer une correspondance (agent, projet) ; sinon n'importe quelle
-      // session vivante de cet agent (prudence).
-      const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || s.project === proj));
-      if (byProject) return true;
-      const byAgent = sessions.find((s) => s.agent === agentId && s.alive);
-      if (byAgent) return true;
-    }
-    return false;
+    return isAnyAgentWorking(sessions, Array.from(ctx.activeAgents), (id) => ctx.agentProject[id] || null, Date.now());
   } catch (e) {
-    return true;
+    return false;
   }
 }
 
@@ -303,10 +310,10 @@ function emit(event, data) {
 }
 
 /**
- * Bug #152 : sonde de vivacité d'UN agent (pour la garde d'exclusivité).
+ * Bug #152 : sonde de vivacité d'un agent (pour la garde d'exclusivité).
  * Interroge `list_agent_sessions` et retourne true si une session vivante
  * existe pour cet agent — même (agent, projet) en priorité, sinon n'importe
- * quel projet par prudence (même politique que anyActiveAgentAlive).
+ * quel projet par prudence (même politique de matching que anyActiveAgentWorking).
  * Fail-open : en cas d'erreur de sonde, retourne true (on ne purge pas).
  * @param {string} agentId
  * @param {object} ctx - contexte de run du projet

@@ -4,7 +4,7 @@
 // l'exclusivité sur un MÊME projet. `busState.runs` est vide au chargement du
 // module (env vitest Node, sans Tauri/window) → `isRunInProgress()` doit
 // retourner false sans amorcer le bus.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock des commandes Tauri : stopAgentsRun doit purger les réservations (T6-fix,
 // fuite 1) via deleteReservations (file_exists → delete_file_or_dir). On simule
@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -165,5 +165,95 @@ describe("stopAgentsRun — purge des réservations (T6-fix, fuite 1)", () => {
     // le sera par la purge au démarrage du bus (fuite 2) ou l'estimation suivante.
     expect(isProjectReserved("projetA")).toBe(true);
     unmarkProjectReserved("projetA");
+  });
+});
+
+// ── Chantier 6/6 : verrou fantôme (session vivante ≠ run en cours) ──────────
+// Incident du 29/08 : des délégations étaient rejetées « Une run est déjà en
+// cours sur ce projet » alors que la session de l'agent était simplement
+// VIVANTE mais inactive (parkée après agent_settled). Le watchdog
+// (releaseStuckRunLock, appelé en tête de startAgentsRun/startParallelRun)
+// doit libérer le verrou quand aucun agent n'est VRAIMENT en activité, et le
+// maintenir quand un agent travaille réellement (busy ou activité récente).
+describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
+  beforeEach(() => {
+    endRun("projetA");
+    vi.mocked(invoke).mockClear();
+  });
+  afterEach(() => {
+    endRun("projetA");
+    // Restaurer l'implémentation par défaut du mock (mockReset réinitialise
+    // l'implémentation d'origine passée à vi.fn dans la factory du mock).
+    vi.mocked(invoke).mockReset();
+  });
+
+  /** Pose la run en cours avec un agent actif « magnus » sur le projet. */
+  const beginRunWithAgent = () => {
+    const ctx = beginRun("projetA");
+    ctx.activeAgents.add("magnus");
+    ctx.agentProject["magnus"] = "projetA";
+    return ctx;
+  };
+  /** Mock la sonde Rust list_agent_sessions. */
+  const mockSessions = (sessions) => {
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "list_agent_sessions" ? { sessions } : undefined
+    );
+  };
+  const session = (extra = {}) => (
+    { agent: "magnus", project: "projetA", mode: "agent_process", alive: true, ...extra }
+  );
+
+  it("scénario du bug : agent vivant mais inactif (parké) → verrou libéré, la délégation passe", async () => {
+    beginRunWithAgent();
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })]);
+    await releaseStuckRunLock("projetA");
+    // Le système se détache de la session fantôme : le verrou est libéré →
+    // la prochaine demande n'est plus rejetée « Une run est déjà en cours ».
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("agent réellement au travail (busy=true) → verrou MAINTENU (pas de double run)", async () => {
+    beginRunWithAgent();
+    mockSessions([session({ busy: true })]);
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("activité très récente (busy pas encore posé, lastActivity < 2 min) → verrou maintenu (fenêtre de grâce)", async () => {
+    beginRunWithAgent();
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 30_000).toISOString() })]);
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("données manquantes (sans busy ni lastActivity) → JAMAIS de verrou (fail-open)", async () => {
+    beginRunWithAgent();
+    mockSessions([session()]); // vivante, sans busy ni lastActivity
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("sonde de sessions en erreur → verrou libéré (fail-open, jamais de faux verrou)", async () => {
+    beginRunWithAgent();
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agent_sessions") throw new Error("sonde indisponible");
+      return undefined;
+    });
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("session morte (alive=false avec busy résiduel) → verrou libéré", async () => {
+    beginRunWithAgent();
+    mockSessions([session({ alive: false, busy: true })]);
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
+    beginRun("projetA");
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
   });
 });
