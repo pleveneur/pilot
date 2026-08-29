@@ -7,6 +7,12 @@
 > de ce plan, puis les chantiers passés un par un au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`).
 >
+> **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par projet**
+> — chaque projet désigne **son** serveur GDS via `.pilot/gds.json` (activation
+> on/off, URL du serveur, identité) ; **ni serveur par défaut, ni config
+> globale**. Détail et règles : `spec_gds.md` §0.4 (arbitrage 11). Ce document
+> reste synthétique : `spec_gds.md` fait foi.
+>
 > **Ordre imposé** : le **GDS est un prérequis** au composant web. On ne construit
 > pas le composant web avant que le GDS (sources centralisées + suivi fusionné
 > dans PostgreSQL) ne soit en place et stable.
@@ -27,6 +33,9 @@
 - **Dépendance forte** : le composant web s'appuie sur les **tickets** et le
   **suivi** stockés dans PostgreSQL (créés par le GDS). Le GDS doit donc être
   livré d'abord.
+- **Activation par projet (décision 29/08/2026)** : chaque projet active le
+  GDS lui-même et désigne **son** serveur (`.pilot/gds.json`) — voir
+  `spec_gds.md` §0.4.
 
 ---
 
@@ -202,8 +211,13 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
   en une commande idempotente.
 
 ### 3.2 Configuration GDS depuis Pilot + ajout de projet
-- **Objectif** : panneau **« 🌐 GDS »** dans Pilot desktop : adresse du serveur,
-  identité (email), dossier local GDS, liste des projets GDS.
+- **Objectif** : panneau **« 🌐 GDS »** **du projet** dans Pilot desktop :
+  activation on/off, URL du serveur GDS de ce projet, identité (email), dossier
+  local de clonage.
+- **Activation par projet (décision 29/08/2026)** : la config vit **dans le
+  projet** (`.pilot/gds.json` : activation, URL du serveur GDS de ce projet,
+  identité) — pas de config globale ni de serveur par défaut. Voir
+  `spec_gds.md` §0.4 et §3.2.
 - **Ajout de projet** : le dev sélectionne un projet local → Pilot crée le dépôt
   **bare** côté serveur (`gds_git.rs`), l'enregistre dans `projects` (Postgres),
   et fait le `git remote add`/push initial.
@@ -338,7 +352,8 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 **A1. Provisionnement PostgreSQL + socle GDS**
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust.
-- Modules : `gds_db.rs`, `gds.rs` (provision), migration sqlx, config `AppConfig` (`gds_*`).
+- Modules : `gds_db.rs`, `gds.rs` (provision), migration sqlx, config projet `.pilot/gds.json`
+  (aucune config globale — décision 29/08, `spec_gds.md` §0.4).
 - Dépendances : néant (socle). Tests : unitaires pool/CRUD, migration appliquée.
 - Critère de fin : `gds_provision` crée la base + tables depuis un VPS vide.
 

@@ -92,6 +92,10 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
   ferme sans sauvegarder).
 - **Commande par défaut** : exécutée automatiquement via le bouton π (ex : `python main.py`, `pi`).
 - **Charger le dernier projet** au démarrage.
+- **Démarrer l'agent au lancement de Pilot** : ouvre automatiquement l'onglet de
+  l'agent au lancement de Pilot ET à l'ouverture d'un projet (les onglets agents
+  mémorisés ne sont pas restaurés sinon) (désactivé par défaut ; l'onglet agent
+  reste toujours ouvrable manuellement).
 - **Lancer la commande au démarrage**.
 - **Intégrer le terminal** : terminal dans un onglet (xterm.js + PTY) ou fenêtre externe.
 

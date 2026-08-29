@@ -9,7 +9,9 @@
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
-> **Arbitrages utilisateur intégrés (10/10)** : cf. §0.2.
+> **Arbitrages utilisateur intégrés (11/11)** : cf. §0.2 + §0.4.
+> **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par
+> projet** (config `.pilot/gds.json`, aucun serveur par défaut) — cf. §0.4.
 
 ---
 
@@ -24,7 +26,7 @@ composant web (issue #56) : on ne construit pas le composant web avant que le
 GDS (sources centralisées + suivi fusionné dans PostgreSQL) ne soit en place et
 stable.
 
-### 0.2 Arbitrages utilisateur (10/10) — à respecter strictement
+### 0.2 Arbitrages utilisateur (11/11) — à respecter strictement
 
 | # | Sujet | Décision |
 |---|---|---|
@@ -38,6 +40,7 @@ stable.
 | 8 | **Assistant de groupe** | **Cloud (pi/plh)** pour l'instant, mais **moteur configurable côté serveur web** dès le départ. Plus tard : clients avec leurs propres APIs LLM ou comptes cloud Ollama (déjà utilisé par l'équipe Kalico). |
 | 9 | **Sécurité remontée publique** | **Captcha** sur le formulaire de remontée + **garde-fous de base** (rate limiting + validation des contenus) **par défaut**. |
 | 10 | **Sauvegardes** | Gérées par **l'utilisateur lui-même** (provision + `pg_dump` planifiés + monitoring). |
+| 11 | **Activation GDS (décision 29/08/2026)** | Le GDS est **activé par projet** : chaque projet pointe vers son **propre serveur GDS**, configuré explicitement à l'activation. **Aucun serveur par défaut, aucune config globale** (cf. §0.4). |
 
 ### 0.3 Évolutions durables (hors périmètre V1 — à noter, pas à implémenter)
 
@@ -46,6 +49,21 @@ stable.
 - **Mode déconnecté** (détaillé au point 1, §7) avec **résumés visuels au
   tableau de bord**.
 - **Clients avec leurs propres APIs LLM / comptes Ollama** (point 8, §9.4).
+
+### 0.4 Activation GDS par projet (décision du 29/08/2026 — non négociable)
+
+- **Le GDS est activé par projet**, jamais globalement : l'activation est une
+  décision **explicite** du dev, projet par projet.
+- **La config GDS vit au niveau du projet**, dans **`.pilot/gds.json`** (fichier
+  du projet, versionnable) : **activation on/off**, **URL du serveur GDS**,
+  **identité** (email). Chaque projet pointe vers son **propre** serveur GDS ;
+  deux projets peuvent viser deux serveurs différents.
+- **Aucun serveur GDS par défaut** et **aucune config GDS globale** de Pilot
+  (pas de champ `gds_*` dans la config applicative). Sans activation, le projet
+  reste 100 % local (cf. §7.1).
+- **Aide intégrée** : l'aide sur le GDS est **générale à Pilot** (bloc
+  `HELP:gds` de `help/overview.md` → handbook) — **pas** d'aide spécifique
+  par projet.
 
 ---
 
@@ -79,6 +97,9 @@ stable.
 
 - **V1** : le GDS tourne sur le **poste fixe** (Pilot desktop, mode serveur /
   keep-alive), accessible aux autres postes de dev via **Tailscale**. Pas de VPS.
+- **Activation par projet** (§0.4) : chaque projet déclare **son** serveur GDS
+  dans `.pilot/gds.json` à l'activation — aucun serveur par défaut, aucune
+  config globale.
 - **Plus tard** : le **VPS OVH tout-en-un** (PostgreSQL + instance Pilot serveur +
   repos git bare) n'est nécessaire que pour le **widget public** (issue #56).
 - **Postgres local OU distant dès le départ** : la config GDS accepte une
@@ -106,7 +127,7 @@ stable.
 
 | Module Rust | Rôle |
 |---|---|
-| `gds.rs` | Config GDS, auto-provisioning, enregistrement de projet, états (source de vérité côté serveur) |
+| `gds.rs` | Config GDS **par projet** (`.pilot/gds.json`), auto-provisioning, enregistrement de projet, états (source de vérité côté serveur) |
 | `gds_db.rs` | Accès **PostgreSQL** (pool sqlx), schéma, migrations |
 | `gds_git.rs` | Gestion des dépôts git serveur (bare), création par projet, autorisations clefs SSH |
 | `gds_sync.rs` | Synchronisation poste, **verrou global projet** + **mode urgent**, détection de lock obsolète (TTL), **pont bidirectionnel SQLite↔Postgres** |
@@ -196,35 +217,43 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - Le **même code** (`gds_db.rs`) construit le pool sqlx à partir de cette
   adresse, provisionne la base et applique les migrations, que le serveur soit
   local ou distant.
-- **Dès le V1**, le panneau de configuration GDS permet de saisir l'adresse
-  PostgreSQL (locale ou distante) et de tester la connexion.
+- **Dès le V1**, l'adresse PostgreSQL (locale ou distante) est saisie au niveau
+  du projet (panneau **« 🌐 GDS »**, config `.pilot/gds.json`, §0.4) et la
+  connexion est testée **avant activation**.
 
 ---
 
 ## 3. Auto-provisioning & identité
 
-### 3.1 Auto-provisioning du serveur
+### 3.1 Auto-provisioning du serveur du projet
 
-- **Objectif** : depuis Pilot desktop, un dev **configure le GDS** (adresse
-  PostgreSQL, dossier des repos, identité email). Si le serveur GDS n'existe pas
-  encore, **la base se crée automatiquement** (provision PostgreSQL + migrations
-  + repos).
-- **Modules** : `gds.rs`, `gds_db.rs`, commande desktop `gds_provision(server, db, user)`.
-- **Critère de fin** : `npm run tauri dev` → onglet « 🌐 GDS » → « Provisionner »
-  → base PostgreSQL créée + migrations appliquées + dossier des repos prêt, en
-  une commande **idempotente**.
+- **Objectif** : à **l'activation du GDS pour un projet** (→ écriture de
+  `.pilot/gds.json` : URL du serveur GDS, identité email, §0.4), Pilot
+  **configure le serveur visé** (adresse PostgreSQL, dossier des repos). Si ce
+  serveur GDS n'existe pas encore, **la base se crée automatiquement**
+  (provision PostgreSQL + migrations + repos). Aucune autre config n'existe :
+  chaque projet fait son provisionment sur **son** serveur, explicitement.
+- **Modules** : `gds.rs` (lit `.pilot/gds.json`), `gds_db.rs`, commande desktop
+  `gds_provision(...)` (paramètres issus de la config projet).
+- **Critère de fin** : `npm run tauri dev` → panneau « 🌐 GDS » du projet →
+  « Activer / Provisionner » → base PostgreSQL créée + migrations appliquées +
+  dossier des repos prêt, en une commande **idempotente**.
 
-### 3.2 Configuration GDS depuis Pilot + ajout de projet
+### 3.2 Activation GDS d'un projet + enregistrement du projet
 
-- **Objectif** : panneau **« 🌐 GDS »** dans Pilot desktop : adresse du serveur
-  (Postgres local ou distant), identité (email), dossier local GDS, liste des
-  projets GDS.
-- **Ajout de projet** : le dev sélectionne un projet local → Pilot crée le dépôt
-  **bare** côté serveur (`gds_git.rs`), l'enregistre dans `projects` (Postgres),
-  et fait le `git remote add`/push initial.
+- **Objectif** : panneau **« 🌐 GDS »** **du projet** dans Pilot desktop :
+  activation on/off du GDS pour ce projet, URL de **son** serveur GDS (Postgres
+  local ou distant), identité (email), dossier local de clonage. Le tout est
+  écrit dans **`.pilot/gds.json`** (§0.4) — **aucune** config globale,
+  **aucun** serveur par défaut.
+- **Ajout du projet** : à l'activation, Pilot crée le dépôt **bare** côté
+  serveur (`gds_git.rs`), l'enregistre dans `projects` (Postgres), et fait le
+  `git remote add`/push initial.
 - **Modules** : `gds.rs`, `gds_git.rs`, `gds_client.rs`, UI desktop (`src/js/gds-ui.js`).
-- **Critère de fin** : ajouter un projet depuis le desktop → dépôt bare visible
-  côté serveur, projet listé dans la base, remote configuré sur le poste.
+- **Critère de fin** : activer le GDS sur un projet depuis le desktop → dépôt
+  bare visible côté serveur, projet listé dans la base, remote configuré sur le
+  poste, `.pilot/gds.json` créé ; désactiver → le projet redevient 100 % local
+  (`.pilot/gds.json` conserve l'URL mais le flag est **off**).
 
 ### 3.3 Identité & accès par email (arbitrage 2)
 
@@ -259,7 +288,8 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 ### 5.1 Synchronisation poste + verrou global projet
 
 - **Objectif** : un dev qui veut **modifier** un projet → **synchronise** sur son
-  poste (dossier des projets GDS **paramétrable**, champ config `gds_local_dir`),
+  poste (dossier des projets GDS **paramétrable**, champ de la config projet
+  `.pilot/gds.json`),
   le projet est **bloqué côté GDS** pour les autres devs.
 - **Verrou global** : `project_locks` (UN par projet). Posé à la sync de
   modification, relâché au push/à la fin. **TTL/lease** (`expires_at`) pour
@@ -272,7 +302,8 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 ### 5.2 Dossier des projets GDS paramétrable
 
 - **Objectif** : le dossier local où les projets GDS sont clonés est configurable
-  (`gds_local_dir`, défaut `~/Pilot/GDS`), validé dans la config.
+  (champ `gds_local_dir` de la **config projet** `.pilot/gds.json`, défaut
+  `~/Pilot/GDS`), validé à l'activation (§0.4).
 - **Critère de fin** : changer le dossier → les futures sync utilisent le nouveau.
 
 ### 5.3 Mode urgent (arbitrage 6)
@@ -283,8 +314,8 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - **Personne désignée** : le mode urgent est **réservé** à une personne
   désignée (admin/dev/gestionnaire). Un **mécanisme de rôle / gestionnaire de
   verrous** permet de **désigner cette personne parmi les utilisateurs connectés
-  au GDS** (champ dans la config GDS, ex: `gds_urgent_user_email`, contrôlé par
-  un `admin`).
+  au GDS** (champ de la **config du serveur GDS** visé par le projet, ex:
+  `gds_urgent_user_email`, contrôlé par un `admin` — pas dans la config Pilot).
 - **Comportement** : seul l'utilisateur désigné peut appeler
   `gds_urgent_lock`. Tout autre utilisateur reçoit un refus. Le passage en
   urgent journalise l'événement et avertit les deux parties.
@@ -332,10 +363,12 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 
 ### 7.1 Principe
 
-- **Sans GDS configuré** : SQLite local = vérité. L'utilisateur travaille
-  normalement, aucun GDS n'est impliqué.
-- **Connecté au GDS** (projet ajouté ou chargé depuis le GDS) : Postgres =
-  vérité pour tous.
+- **Sans activation GDS pour le projet** (flag **off** ou `.pilot/gds.json`
+  absent, §0.4) : SQLite local = vérité. L'utilisateur travaille normalement,
+  aucun GDS n'est impliqué — **c'est le cas par défaut de tout nouveau projet**
+  (aucun serveur par défaut).
+- **Projet activé et connecté au GDS** (ajouté ou chargé depuis **le serveur du
+  projet**) : Postgres = vérité pour tous.
 - **En cas d'indisponibilité du serveur** (ou LLM local) : l'utilisateur
   travaille **localement** et **tout ce qui a bougé se synchronise** dès que le
   serveur redevient accessible.
@@ -375,9 +408,10 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 
 ### 8.2 Moteur configurable (arbitrage 8)
 
-- **Cloud (pi/plh)** pour l'instant, mais **moteur configurable côté serveur
-  web** dès le départ (champ config `gds_group_engine` : `cloud` par défaut,
-  extensible à `ollama` / API LLM).
+- **Cloud (pi/plh)** pour l'instant, mais **moteur configurable côté serveur GDS**
+  dès le départ (champ de la **config du serveur GDS** lui-même, ex:
+  `gds_group_engine` : `cloud` par défaut, extensible à `ollama` / API LLM —
+  pas dans la config Pilot desktop).
 - **Évolution future** : clients avec leurs propres APIs LLM ou comptes cloud
   Ollama (déjà utilisé par l'équipe Kalico).
 
@@ -459,11 +493,14 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 
 **A1. Provisionnement PostgreSQL + socle GDS**
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust
-  (local OU distant, arbitrage 3).
-- Modules : `gds_db.rs`, `gds.rs` (provision), migration sqlx, config `AppConfig` (`gds_*`).
+  (local OU distant, arbitrage 3) + **activation du GDS par projet**
+  (`.pilot/gds.json`, §0.4 : activation on/off, URL serveur, identité).
+- Modules : `gds_db.rs`, `gds.rs` (provision + lecture config projet),
+  migration sqlx. **Pas de champ `gds_*` dans la config globale de Pilot**
+  (décision 29/08/2026 : la config GDS vit uniquement dans le projet).
 - Dépendances : néant (socle). Tests : unitaires pool/CRUD, migration appliquée.
-- Critère de fin : `gds_provision` crée la base + tables depuis un serveur vide
-  (local ou distant).
+- Critère de fin : `.pilot/gds.json` actif + `gds_provision` crée la base +
+  tables depuis un serveur vide (local ou distant).
 
 **A2. Identité & accès par email**
 - Objectif : users (email/password_hash), provision premier user (admin),
@@ -478,10 +515,26 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - Dépendances : A1, A2. Tests : création bare, clone/push/pull entre deux clones.
 - Critère : un projet ajouté → repo bare centralisé + push initial OK.
 
+**Périmètre de la Phase A** : elle livre **uniquement les fondations**
+(provision serveur, identité, activation par projet, dépôt git bare). Elle ne
+couvre **ni** la synchronisation / les verrous (Phase B), **ni** le suivi
+fusionné / l'assistant de groupe (Phase C).
+
+**Interfaces prévues pour ouvrir B et C plus tard** (réservées dès la Phase A,
+sans implémentation) :
+- commandes desktop `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock`
+  (Phase B) : noms figés dès la A, mais non disponibles/en erreur explicite
+  (« disponible à la Phase B ») tant que B n'est pas livrée ;
+- routes API réservées dans `gds_web.rs` (verrous, suivi fusionné, tickets —
+  Phases B/C) : noms de routes figés dès la A pour éviter toute rupture d'API ;
+- schéma serveur extensible : tables `project_locks` (B), suivi fusionné +
+  tickets (C) ajoutées plus tard par migrations sqlx incrémentales, sans
+  redécoupage de la base créée en A.
+
 ### PHASE B — GDS : synchronisation & verrous
 
 **B1. Dossier GDS paramétrable + clone/fetch/pull**
-- Modules : `gds_client.rs`, config `gds_local_dir`, `git.rs`. Dépendance : A3.
+- Modules : `gds_client.rs`, config projet `gds_local_dir`, `git.rs`. Dépendance : A3.
 - Critère : sync d'un projet dans le dossier paramétré.
 
 **B2. Verrou global projet + TTL + mode urgent**

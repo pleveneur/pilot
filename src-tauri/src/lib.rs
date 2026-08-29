@@ -174,6 +174,11 @@ struct AppConfig {
     auto_load_last_project: bool,
     #[serde(default)]
     auto_run_command: bool,
+    // When true, the agent tab is automatically opened at Pilot launch (on top
+    // of auto_load_last_project + rpc_agent_enabled). Default false: the agent
+    // tab only opens manually unless the user opts in.
+    #[serde(default)]
+    agent_start_on_launch: bool,
     #[serde(default)]
     integrated_terminal: bool,
     #[serde(default)]
@@ -437,6 +442,14 @@ struct AppConfig {
     // persisté ici (pas par projet) pour le rouvrir au démarrage de Pilot.
     #[serde(default)]
     super_agent_open: bool,
+    // Setting "Start assistant on Pilot launch" (super_agent_start_on_launch).
+    // DEFAULT = true (enabled): the 🧭 Assistant tab reopens automatically at
+    // startup unless explicitly disabled (`!== false` on the JS side — old
+    // configs without this field stay backward compatible). Complements the
+    // legacy `super_agent_open` flag (restore-on-close state, kept for compat):
+    // the tab reopens when either is active.
+    #[serde(default = "default_true")]
+    super_agent_start_on_launch: bool,
     // Évolution « Tableau de bord systématique » : si true, l'onglet 📊 Tableau
     // de bord s'ouvre automatiquement au démarrage (uniquement si un projet est
     // chargé) et est verrouillé en position dans la barre d'onglets (juste après
@@ -683,6 +696,7 @@ impl Default for AppConfig {
             last_project: None,
             auto_load_last_project: false,
             auto_run_command: false,
+            agent_start_on_launch: false,
             integrated_terminal: false,
             rpc_agent_enabled: false,
             rpc_pi_path: String::new(),
@@ -767,6 +781,7 @@ impl Default for AppConfig {
             super_agent_model: String::new(),
             super_agent_prompt: String::new(),
             super_agent_open: false,
+            super_agent_start_on_launch: true,
             dashboard_auto_open: false,
             dashboard_auto_refresh: true,
             dashboard_auto_refresh_seconds: default_dashboard_refresh_seconds(),
@@ -833,6 +848,8 @@ fn ensure_config_loaded(state: &AppState, app: &AppHandle) {
         && config.last_project == default.last_project
         && config.auto_load_last_project == default.auto_load_last_project
         && config.auto_run_command == default.auto_run_command
+        && config.agent_start_on_launch == default.agent_start_on_launch
+        && config.super_agent_start_on_launch == default.super_agent_start_on_launch
         && config.integrated_terminal == default.integrated_terminal
         && config.rpc_agent_enabled == default.rpc_agent_enabled
         && config.show_thinking == default.show_thinking

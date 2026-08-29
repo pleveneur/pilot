@@ -144,6 +144,75 @@ describe("flattenAgents — aplatit la supervision en liste plate", () => {
   });
 });
 
+describe("flattenAgents — filtrage des agents de projet sans onglet (visible=false)", () => {
+  it("exclut un agent de projet sans onglet (visible=false) au repos", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: false }] },
+    ]);
+    expect(flattenAgents(sup)).toEqual([]);
+  });
+
+  it("garde un agent sans onglet (visible=false) qui travaille (running/compacting)", () => {
+    const sup = makeSupervision([
+      {
+        path: "C:/proj/a",
+        name: "a",
+        agents: [
+          { agent: "codeur", state: "running", visible: false },
+          { agent: "docs", state: "compacting", visible: false },
+        ],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({ rawId: "codeur", busy: true, kind: "agent" });
+    expect(list[1]).toMatchObject({ rawId: "docs", busy: true, kind: "agent" });
+  });
+
+  it("garde un agent avec onglet ouvert (visible=true) même au repos", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0].rawId).toBe("codeur");
+  });
+
+  it("ne filtre JAMAIS l'assistant (superagent, projet '') ni les agents d'assistant (__assistant__)", () => {
+    const sup = makeSupervision([
+      {
+        path: "",
+        name: "Assistant (Magnus)",
+        agents: [{ agent: "Assistant (Magnus)", state: "idle", visible: false }],
+      },
+      {
+        path: "__assistant__",
+        name: "Assistant",
+        agents: [{ agent: "analyseur", state: "idle", visible: false }],
+      },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(2);
+    expect(list.map((a) => a.kind).sort()).toEqual(["assistant", "superagent"]);
+  });
+
+  it("ne filtre PAS quand visible est absent (undefined, backend ancien)", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", alive: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0].rawId).toBe("codeur");
+  });
+
+  it("l'agent busy invisible ressort dans anyBusy (le cercle respire toujours)", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "running", visible: false }] },
+    ]);
+    expect(anyBusy(flattenAgents(sup))).toBe(true);
+  });
+});
+
 describe("anyBusy — true si au moins un agent travaille", () => {
   it("retourne false pour une liste vide", () => {
     expect(anyBusy([])).toBe(false);

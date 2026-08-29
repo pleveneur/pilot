@@ -163,6 +163,16 @@ projet (ouverture, fermeture, bascule).
   le frontend l'affiche tel quel s'il apparaît). Retourne `{ projects: […] }`
   avec, par projet : `path`, `name` et `agents` (agent, mode, état, vivant,
   visible, actif).
+- **Indicateur circulaire (haut droite)** (`src/js/agent-activity.js`) :
+  cercle d'activité respirant dès qu'un agent travaille + liste déroulante au
+  clic (poll 2 s de `get_agent_supervision` + push `agent-state-changed`),
+  avec fiche et bouton « Afficher l'onglet ». **Filtrage de la liste** : un
+  agent de projet dont l'onglet a été fermé (`visible = false`) et qui est au
+  repos (ni `running` ni `compacting`) n'apparaît pas dans la liste — il n'est
+  qu'une entrée du registre. Un agent **en travail en arrière-plan** reste
+  listé même sans onglet (cas d'un agent « parké » lors d'une bascule de
+  projet). Le superagent (assistant) et les agents d'assistant ne sont jamais
+  filtrés ; un `visible` absent (backend ancien) est traité comme visible.
 - **Frontend** (`src/js/dashboard.js`) : carte « Supervision des agents »
   rendue dans la grille dès qu'au moins une session d'agent existe. Tableau
   (projet, agent, état, mode) + ligne d'insight (nombre d'agents en cours).

@@ -16,9 +16,14 @@ apprend et répond.
   du chat (« ⚠️ Anomalie : l'assistant n'a aucun outil, il ne peut que
   réfléchir ») au lieu de laisser croire qu'il fonctionne normalement.
   Comportement normal (outils présents) inchangé.
-- **#30 — Restauration au démarrage** : si l'onglet 🧭 était **ouvert à la
-  fermeture** de Pilot, il est **rouvert automatiquement au redémarrage**
-  (état global persisté dans la config, pas par projet).
+- **#30 — Restauration au démarrage** : l'onglet 🧭 est **rouvert
+  automatiquement au démarrage de Pilot** via le réglage **« Démarrer
+  l'assistant au lancement de Pilot »** (**activé par défaut** — Paramètres
+  ⚙️ → onglet Démarrage). S'ajoute (mécanisme historique conservé) à la
+  **reprise de l'état** : si l'onglet était **ouvert à la fermeture** de Pilot,
+  il est rouvert aussi (état global persisté dans la config, pas par projet).
+  Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
+  fermeture.
 
 ### Donner un nom à votre assistant
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant

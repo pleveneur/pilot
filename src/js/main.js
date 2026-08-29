@@ -798,9 +798,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       // auto-load est désactivée → on ouvre quand même l'actif restauré.
       await sidebar.openProjectByPath(restoredActive);
     }
-    // Si RPC activé, ouvrir systématiquement l'onglet Agent Pi
-    // (on ignore integrated_terminal et auto_run_command pour l'agent)
-    if (config.rpc_agent_enabled && config.auto_load_last_project && config.recent_projects && config.recent_projects.length > 0) {
+    // Si l'agent RPC est activé ET que l'option « Démarrer l'agent au lancement
+    // de Pilot » est cochée (agent_start_on_launch, défaut false), ouvrir
+    // l'onglet Agent au démarrage (on ignore integrated_terminal et
+    // auto_run_command pour l'agent)
+    if (config.rpc_agent_enabled && config.agent_start_on_launch === true && config.auto_load_last_project && config.recent_projects && config.recent_projects.length > 0) {
       tabs.openFile(agentDisplayLabel(), "agent");
     } else if (config.auto_load_last_project && config.auto_run_command && config.default_command && config.recent_projects && config.recent_projects.length > 0) {
       // Lancer l'agent automatiquement si les deux options sont activées
@@ -815,12 +817,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Pas grave
   }
 
-  // Super-agent (🧭) : onglet GLOBAL (multi-projets). S'il était ouvert à la
-  // fermeture de Pilot, on le rouvre au démarrage (état persisté dans la config,
-  // pas par projet).
+  // 🧭 Assistant tab is GLOBAL (multi-projects). Reopened at startup when the
+  // "Start assistant on Pilot launch" setting is on (super_agent_start_on_launch,
+  // default true — hence `!== false`: undefined = enabled for old configs) or
+  // when the tab was open at Pilot shutdown (persisted super_agent_open flag,
+  // legacy mechanism kept).
   try {
     const cfg = await invoke("get_config");
-    if (cfg.super_agent_open === true) {
+    if (cfg.super_agent_open === true || cfg.super_agent_start_on_launch !== false) {
       const { superAgentDisplayLabel, switchToSuperAgent } = await import("./super-agent.js");
       await tabs.openFile(superAgentDisplayLabel(), "superagent");
       // Issue #46 : au démarrage, une fois le projet chargé et l'onglet assistant

@@ -606,17 +606,22 @@ function createSuperAgentBlock(messagesEl) {
     badge.className = "agent-project-badge";
     badge.textContent = "📁 " + projectName;
     if (color) {
-      badge.style.background = color;
-      badge.style.color = "#ffffff";
-      badge.style.borderColor = color;
+      // Pastel rendering: the raw palette color stays the stable hue
+      // reference, but is diluted at display time so it stays readable in
+      // dark AND light themes (same pattern as --superagent-accent in CSS).
+      // Text mixes with --text-primary → light text on dark, dark on light.
+      badge.style.background = `color-mix(in srgb, ${color} 14%, transparent)`;
+      badge.style.color = `color-mix(in srgb, ${color} 70%, var(--text-primary))`;
+      badge.style.borderColor = `color-mix(in srgb, ${color} 32%, transparent)`;
     }
     bubble.appendChild(badge);
   }
   if (color) {
     // Border-left coloré par projet (Règle 3). Inline style pour primer sur
     // la règle `.superagent-wrapper .agent-bubble-assistant` qui force
-    // `border-left: 3px solid var(--superagent-accent)`.
-    bubble.style.borderLeftColor = color;
+    // `border-left: 3px solid var(--superagent-accent)`. Diluted tint for a
+    // soft pastel edge, still distinct per project in both themes.
+    bubble.style.borderLeftColor = `color-mix(in srgb, ${color} 40%, transparent)`;
   }
   const flow = document.createElement("div");
   flow.className = "agent-stream-flow";
@@ -658,15 +663,17 @@ function refreshSuperBubbleProject(messagesEl) {
     }
     badge.textContent = "📁 " + projectName;
     if (color) {
-      badge.style.background = color;
-      badge.style.color = "#ffffff";
-      badge.style.borderColor = color;
+      // Pastel rendering — same dilution as createSuperAgentBlock so a
+      // refreshed bubble keeps a color consistent with newly created ones.
+      badge.style.background = `color-mix(in srgb, ${color} 14%, transparent)`;
+      badge.style.color = `color-mix(in srgb, ${color} 70%, var(--text-primary))`;
+      badge.style.borderColor = `color-mix(in srgb, ${color} 32%, transparent)`;
     }
   } else if (badge) {
     badge.remove();
   }
   if (color) {
-    bubble.style.borderLeftColor = color;
+    bubble.style.borderLeftColor = `color-mix(in srgb, ${color} 40%, transparent)`;
   } else {
     bubble.style.borderLeftColor = "";
   }

@@ -77,6 +77,16 @@ export function flattenAgents(supervision, lastActivityMap) {
       const label = a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
+      //Hide project agents whose tab was closed (visible === false) and that
+      // are at rest: still registered in the registry, but a display-only
+      // residue in the supervisor list. Busy agents always stay listed, even
+      // without a tab (e.g. an agent parked during a project switch keeps
+      // working in the background). Missing `visible` (old backend payload)
+      // is treated as visible. The superagent (project "") and the assistant
+      // agents (ASSISTANT_SPACE) are never filtered.
+      if (!isSuper && !isAssistant && a.visible === false && !busy) {
+        continue;
+      }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
       // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
       // l'id reste "superagent" ; pour un agent, on combine nom + chemin projet

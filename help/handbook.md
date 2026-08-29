@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-28 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-08-29 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -219,6 +219,26 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
   configuré.
 - Le bouton « + » reste disponible pour ajouter des agents au-delà de ceux
   configurés.
+
+---
+
+## GDS (gestionnaire de sources) — principe
+
+Le **GDS** (Gestionnaire De Sources) est la solution prévue dans Pilot pour
+**centraliser les sources des projets** (dépôts git + suivi partagé dans une
+base de données PostgreSQL unique), en remplacement d'un hébergement externe
+type GitHub.
+
+- **Activé projet par projet** : le GDS n'est jamais activé globalement.
+  Chaque projet choisit explicitement **son propre serveur** au moment de
+  l'activation (activation on/off, URL du serveur, identité), via un fichier
+  de configuration **dans le projet**. Il n'y a **aucun serveur par défaut**
+  et **aucune configuration globale** pour le GDS.
+- **Sans activation** : le projet reste 100 % local, exactement comme
+  aujourd'hui.
+- **Fonctionnalité en préparation** : le GDS n'est pas encore implémenté dans
+  cette version de Pilot. L'aide ci-dessus est **générale à Pilot** ; il
+  n'existe pas d'aide spécifique par projet.
 
 ---
 
@@ -778,9 +798,14 @@ apprend et répond.
   du chat (« ⚠️ Anomalie : l'assistant n'a aucun outil, il ne peut que
   réfléchir ») au lieu de laisser croire qu'il fonctionne normalement.
   Comportement normal (outils présents) inchangé.
-- **#30 — Restauration au démarrage** : si l'onglet 🧭 était **ouvert à la
-  fermeture** de Pilot, il est **rouvert automatiquement au redémarrage**
-  (état global persisté dans la config, pas par projet).
+- **#30 — Restauration au démarrage** : l'onglet 🧭 est **rouvert
+  automatiquement au démarrage de Pilot** via le réglage **« Démarrer
+  l'assistant au lancement de Pilot »** (**activé par défaut** — Paramètres
+  ⚙️ → onglet Démarrage). S'ajoute (mécanisme historique conservé) à la
+  **reprise de l'état** : si l'onglet était **ouvert à la fermeture** de Pilot,
+  il est rouvert aussi (état global persisté dans la config, pas par projet).
+  Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
+  fermeture.
 
 ### Donner un nom à votre assistant
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant

@@ -115,6 +115,8 @@ export async function initSettings() {
   const inputCmd = document.getElementById("setting-command");
   const chkAutoLoad = document.getElementById("setting-auto-load");
   const chkAutoRun = document.getElementById("setting-auto-run");
+  const chkAgentStartOnLaunch = document.getElementById("setting-agent-start-on-launch");
+  const chkSuperAgentStartOnLaunch = document.getElementById("setting-super-agent-start-on-launch");
   const chkIntegratedTerminal = document.getElementById("setting-integrated-terminal");
   const chkRpcAgent = document.getElementById("setting-rpc-agent");
   const inputRpcPath = document.getElementById("setting-rpc-path");
@@ -446,6 +448,10 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     inputCmd.value = currentConfig.default_command || "";
     chkAutoLoad.checked = currentConfig.auto_load_last_project || false;
     chkAutoRun.checked = currentConfig.auto_run_command || false;
+    chkAgentStartOnLaunch.checked = currentConfig.agent_start_on_launch === true;
+    // Start assistant on launch: DEFAULT ENABLED (undefined = true for old
+    // configs without the super_agent_start_on_launch field).
+    if (chkSuperAgentStartOnLaunch) chkSuperAgentStartOnLaunch.checked = currentConfig.super_agent_start_on_launch !== false;
     chkIntegratedTerminal.checked = currentConfig.integrated_terminal || false;
     chkRpcAgent.checked = currentConfig.rpc_agent_enabled || false;
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
@@ -804,6 +810,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         recent_projects: currentConfig?.recent_projects || [],
         auto_load_last_project: chkAutoLoad.checked,
         auto_run_command: chkAutoRun.checked,
+        agent_start_on_launch: chkAgentStartOnLaunch.checked,
+        super_agent_start_on_launch: chkSuperAgentStartOnLaunch ? chkSuperAgentStartOnLaunch.checked : true,
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),

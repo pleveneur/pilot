@@ -225,3 +225,23 @@ chacun avec sa propre conversation (bouton **« + »** dans la barre d'onglets).
 - Le bouton « + » reste disponible pour ajouter des agents au-delà de ceux
   configurés.
 <!-- /HELP:multi-agents -->
+
+<!-- HELP:gds -->
+## GDS (gestionnaire de sources) — principe
+
+Le **GDS** (Gestionnaire De Sources) est la solution prévue dans Pilot pour
+**centraliser les sources des projets** (dépôts git + suivi partagé dans une
+base de données PostgreSQL unique), en remplacement d'un hébergement externe
+type GitHub.
+
+- **Activé projet par projet** : le GDS n'est jamais activé globalement.
+  Chaque projet choisit explicitement **son propre serveur** au moment de
+  l'activation (activation on/off, URL du serveur, identité), via un fichier
+  de configuration **dans le projet**. Il n'y a **aucun serveur par défaut**
+  et **aucune configuration globale** pour le GDS.
+- **Sans activation** : le projet reste 100 % local, exactement comme
+  aujourd'hui.
+- **Fonctionnalité en préparation** : le GDS n'est pas encore implémenté dans
+  cette version de Pilot. L'aide ci-dessus est **générale à Pilot** ; il
+  n'existe pas d'aide spécifique par projet.
+<!-- /HELP:gds -->

@@ -218,20 +218,41 @@ export async function restoreTabs(tabs, projectPath, onProgress) {
     }, 200);
   } // fin hasTabs
 
-  // 5.2 : reconstruire la barre d'onglets agents depuis `agent_views` (vue
-  // dissociée de l'objet). Chaque onglet démarre/reprent sa propre session.
-  for (const v of views) {
-    try {
-      await tabs._openAgent(v.name_override || agentDisplayLabel(), v.agent_id);
-    } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+  // `agent_start_on_launch` gates ALL automatic agent startup: at Pilot launch
+  // (main.js) AND at project open/switch (here). When disabled, agent tabs are
+  // NOT restored from `agent_views`; the persisted rows are left untouched
+  // (never rewritten here — save_agent_views is only called from
+  // saveTabSession), so the memorized layout survives and the agent can be
+  // reopened manually or restored again after re-enabling the setting.
+  let restoreAgentTabs = true;
+  try {
+    const config = await invoke("get_config");
+    // `!== false` tolerates old configs where the field is missing (matches the
+    // super_agent_start_on_launch pattern: undefined = enabled).
+    restoreAgentTabs = config.agent_start_on_launch !== false;
+  } catch (_) {
+    // Config read failure → keep the current behavior (restore agent views).
   }
-  // Restaurer l'ordre des onglets agents (positions persistées).
-  for (const v of views) {
-    if (typeof v.order_index === "number" && v.order_index >= 0) {
-      const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === v.agent_id);
-      if (t) {
-        const cur = tabs.tabs.indexOf(t);
-        if (cur !== -1 && cur !== v.order_index) tabs._moveTabToIndex(t.id, v.order_index);
+
+  if (restoreAgentTabs) {
+    // 5.2 : reconstruire la barre d'onglets agents depuis `agent_views` (vue
+    // dissociée de l'objet). Chaque onglet démarre/reprent sa propre session.
+    for (const v of views) {
+      try {
+        await tabs._openAgent(v.name_override || agentDisplayLabel(), v.agent_id);
+      } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+    }
+    // Restaurer l'ordre des onglets agents (positions persistées). Only runs
+    // when agent tabs were actually restored above — `_moveTabToIndex` is only
+    // called on an existing tab, so this loop would be a harmless no-op
+    // otherwise, but keeping it inside the same branch makes that explicit.
+    for (const v of views) {
+      if (typeof v.order_index === "number" && v.order_index >= 0) {
+        const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === v.agent_id);
+        if (t) {
+          const cur = tabs.tabs.indexOf(t);
+          if (cur !== -1 && cur !== v.order_index) tabs._moveTabToIndex(t.id, v.order_index);
+        }
       }
     }
   }
