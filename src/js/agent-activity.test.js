@@ -2,8 +2,9 @@
 // Couvre les fonctions pures : flattenAgents (assistant + codeurs, états
 // running/idle/paused), anyBusy (true si ≥1 running), mapping état→libellé
 // travail/repos, formatLastActivity, le rendu AFFICHAGE SEUL
-// renderStaticAgentList (mode assistant only) et le store partagé
-// subscribeAgentActivity (mono-source de l'indicateur et de la liste immersif).
+// renderStaticAgentList (liste déployée du résumé en mode assistant only),
+// le store partagé subscribeAgentActivity (mono-source de l'indicateur et du
+// résumé immersif) et le montage repliable mountCollapsibleAgentList.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -15,7 +16,7 @@ import {
   renderStaticAgentList,
   subscribeAgentActivity,
   getAgentActivitySnapshot,
-  mountStaticAgentList,
+  mountCollapsibleAgentList,
   formatLastActivity,
 } from "./agent-activity.js";
 
@@ -465,7 +466,17 @@ describe("store partagé — subscribeAgentActivity (mono-source, indicateur sta
   });
 });
 
-describe("mountStaticAgentList — montage de la liste affichage seul (mode assistant only)", () => {
+describe("mountCollapsibleAgentList — résumé repliable du mode assistant only (point ⇆ liste)", () => {
+  // Hôte factice : capture les listeners et simule un clic sur la zone.
+  function makeHost() {
+    const listeners = {};
+    return {
+      innerHTML: "",
+      addEventListener(type, cb) { (listeners[type] ||= []).push(cb); },
+      click() { for (const cb of listeners.click || []) cb({ stopPropagation() {} }); },
+    };
+  }
+
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     vi.mocked(listen).mockReset();
@@ -479,26 +490,64 @@ describe("mountStaticAgentList — montage de la liste affichage seul (mode assi
     vi.restoreAllMocks();
   });
 
-  it("rend les agents dans l'hôte et se met à jour via le store (aucun listener d'interaction)", async () => {
+  it("replié par défaut : point seul, éteint au repos, qui respire quand un agent travaille", async () => {
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "idle" }] },
+    ]));
+
+    const host = makeHost();
+    const unsub = mountCollapsibleAgentList(host);
+
+    // Replié dès le montage : point unique, aucun item de liste.
+    expect(host.innerHTML).toContain("sa-immersive-dot");
+    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
+
+    // Agent au repos → point statique (pas de classe breathing).
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(host.innerHTML).toContain("sa-immersive-dot");
+    expect(host.innerHTML).not.toContain("breathing");
+
+    // L'agent démarre (running) → le point respire.
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running" }] },
+    ]));
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(host.innerHTML).toMatch(/sa-immersive-dot\s*breathing/);
+    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
+    unsub();
+  });
+
+  it("clic → la liste se déploie (contenu affichage seul) ; re-clic → repli sur le point", async () => {
     vi.mocked(invoke).mockResolvedValue(makeSupervision([
       { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running" }] },
       { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
     ]));
 
-    const host = { innerHTML: "" };
-    const unsub = mountStaticAgentList(host);
+    const host = makeHost();
+    const unsub = mountCollapsibleAgentList(host);
     pushAgentState({ agentId: "codeur" });
     await flush();
 
-    expect(host.innerHTML).toContain("sa-immersive-agent");
+    // Déplier : la liste déployée = renderStaticAgentList (strictement
+    // informative : pas de data-agent-id cliquable).
+    host.click();
+    expect(host.innerHTML).toContain('data-kind="agent"');
     expect(host.innerHTML).toContain("codeur");
     expect(host.innerHTML).toContain("Assistant (Magnus)");
-    expect(unsub).toBeTypeOf("function");
+    expect(host.innerHTML).not.toContain("data-agent-id");
+    expect(host.innerHTML).not.toContain("sa-immersive-dot");
+
+    // Replier : retour au point unique.
+    host.click();
+    expect(host.innerHTML).toContain("sa-immersive-dot");
+    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
     unsub();
   });
 
-  it("mountStaticAgentList(null) reste inoffensif (désabonnement no-op)", () => {
-    const unsub = mountStaticAgentList(null);
+  it("mountCollapsibleAgentList(null) reste inoffensif (désabonnement no-op)", () => {
+    const unsub = mountCollapsibleAgentList(null);
     expect(() => unsub()).not.toThrow();
   });
 });

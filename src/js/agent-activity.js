@@ -17,9 +17,10 @@
 // immédiat. Aucune commande Rust ajoutée.
 //
 // Le poll + le filtrage sont centralisés dans un « store » partagé
-// (subscribeAgentActivity) consommé par l'indicateur ci-dessus ET par la liste
-// des agents en AFFICHAGE SEUL du mode « Assistant Only » immersif (super-agent.js)
-// — même source de données, même filtrage, aucun polling dupliqué.
+// (subscribeAgentActivity) consommé par l'indicateur ci-dessus ET par le
+// résumé repliable des agents du mode « Assistant Only » immersif
+// (super-agent.js) — même source de données, même filtrage, aucun polling
+// dupliqué.
 //
 // Les fonctions pures (flattenAgents, anyBusy, renderDropdown, renderCard,
 // renderStaticAgentList, formatLastActivity) sont testées dans
@@ -207,23 +208,39 @@ export function renderStaticAgentList(list) {
 }
 
 /**
- * Monte la liste « affichage seul » dans un conteneur hôte (barre du haut du
- * mode « Assistant Only »). Mise à jour via le store partagé (même liste, même
- * filtrage que l'indicateur du mode standard). AUCUN listener d'interaction
- * n'est attaché — l'affichage est strictement informatif.
+ * Monte le résumé des agents dans la barre du haut du mode « Assistant Only »
+ * : par DÉFAUT replié en un petit point unique qui « respire » (animation
+ * agent-pulse) quand un agent ou l'Assistant travaille, statique sinon. Un
+ * clic sur le point déploie la liste des agents (renderStaticAgentList —
+ * strictement informative, mêmes entrées que l'indicateur du mode standard) ;
+ * un second clic replie sur le point. Rien n'est persisté : chaque entrée en
+ * mode immersif repart repliée. Mise à jour continue via le store partagé.
  * @param {HTMLElement|null} host — conteneur (détruit avec l'overlay immersif).
  * @returns {Function} désabonnement (à appeler à la sortie du mode).
  */
-export function mountStaticAgentList(host) {
+export function mountCollapsibleAgentList(host) {
   if (!host) return () => {};
-  const render = (list) => {
-    host.innerHTML = renderStaticAgentList(list);
+  let expanded = false;
+  const render = (list, busy) => {
+    if (expanded) {
+      host.innerHTML = renderStaticAgentList(list);
+    } else {
+      host.innerHTML = `
+    <button type="button" class="sa-immersive-dot ${busy ? "breathing" : ""}" aria-expanded="false" title="${busy ? "Agents au travail — afficher la liste" : "Agents au repos — afficher la liste"}" aria-label="Agents"></button>`;
+    }
   };
-  // Rendu initial sans flash trompeur : si aucune donnée n'arrive encore
-  // (store jamais alimenté), on laisse le callback poser l'état (vide ou
-  // items) au premier poll (<2 s) au lieu d'afficher « Aucun agent actif ».
+  // Clic sur la zone (point OU liste) → bascule point ⇆ liste. Les items de
+  // la liste déployée restent informatifs : le clic ne fait que replier.
+  host.addEventListener("click", (e) => {
+    e.stopPropagation();
+    expanded = !expanded;
+    const snapshot = getAgentActivitySnapshot();
+    render(snapshot.list, snapshot.busy);
+  });
+  // Rendu initial sans attendre le premier poll : replié (point). Tant que le
+  // store n'a rien signalé, busy=false (état neutre : point éteint).
   const snapshot = getAgentActivitySnapshot();
-  if (snapshot.list.length) render(snapshot.list);
+  render(snapshot.list, snapshot.busy);
   return subscribeAgentActivity(render);
 }
 

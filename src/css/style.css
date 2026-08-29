@@ -7919,14 +7919,14 @@ body.pilot-loading *::after {
   color: var(--text-primary);
   white-space: nowrap;
 }
-/* Liste des agents (affichage seul) : poussée à droite dans la barre du haut,
-   juste avant le bouton ⚙ (margin-left: auto reporté ici). STRICTEMENT
-   informative — pointer-events: none : aucun clic, aucun menu, aucune fiche,
-   aucun tooltip (choix validé par l'utilisateur). Pastilles réutilisées de
-   l'indicateur d'activité (.agent-activity-item-dot, défini plus haut) : même
-   respiration en activité, style « anneau violet assistant » au repos —
-   cohérence totale avec la liste du mode standard, thèmes dark/light/alterne
-   via tokens uniquement. Débordement tronqué discrètement si trop d'agents. */
+/* Résumé des agents : poussé à droite dans la barre du haut, juste avant le
+   bouton ⚙ (margin-left: auto reporté ici). Replié par défaut en un petit
+   point unique (.sa-immersive-dot) ; un clic déploie la liste, un second
+   clic replie. Pastilles réutilisées de l'indicateur d'activité
+   (.agent-activity-item-dot, défini plus haut) : même respiration en
+   activité, style « anneau violet assistant » au repos — cohérence totale
+   avec la liste du mode standard, thèmes dark/clair/alterne via tokens
+   uniquement. Débordement tronqué discrètement si trop d'agents. */
 .sa-immersive-agents {
   margin-left: auto;
   display: flex;
@@ -7935,7 +7935,31 @@ body.pilot-loading *::after {
   min-width: 0;
   overflow: hidden;
   padding: 0 4px;
-  pointer-events: none;
+  cursor: pointer;
+}
+/* Point replié (état par défaut) : statique/éteint au repos (muted), violet
+   plein + halo + respiration (agent-pulse) quand un agent ou l'Assistant
+   travaille. Mêmes tokens que l'indicateur standard #agent-activity-dot :
+   lisible en mode sombre ET clair, sans couleur en dur. */
+.sa-immersive-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--text-muted);
+  border: 2px solid var(--bg-sidebar);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+.sa-immersive-dot:hover { opacity: 0.9; }
+.sa-immersive-dot.breathing {
+  background: var(--superagent-accent);
+  border-color: var(--superagent-accent);
+  box-shadow: 0 0 8px var(--superagent-accent);
+  opacity: 1;
+  animation: agent-pulse 1.5s ease-in-out infinite;
 }
 .sa-immersive-agent {
   display: flex;

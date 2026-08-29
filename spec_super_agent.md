@@ -583,13 +583,19 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
   « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
   existants de l'Assistant (modale Paramètres, onglet « Assistant »).
-- **Liste des agents (affichage seul)** : dans cette barre, juste à gauche du
-  bouton ⚙, la **liste des agents disponibles** est affichée : mêmes entrées et
+- **Résumé des agents (point repliable)** : dans cette barre, juste à gauche
+  du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
+  unique** : le point **respire** (pulsation douce) quand un agent ou l'
+  Assistant travaille, il reste **statique et éteint** sinon. **Un clic** sur
+  le point **déploie la liste des agents disponibles** : mêmes entrées et
   mêmes règles que la liste du mode standard (agents avec onglet ou occupés,
   assistant toujours visible) — une **pastille pulsante** quand un agent
-  travaille, sinon un anneau discret ; nom + projet. Strictement **informative** : rien n'est cliquable (pas de menu, pas de fiche, pas
-  d'ouverture d'onglet, pas de tooltip) — c'est un simple aperçu de qui
-  travaille en arrière-plan.
+  travaille, sinon un anneau discret ; nom + projet. Strictement
+  **informative** : les éléments de la liste restent non cliquables (pas de
+  menu, pas de fiche, pas d'ouverture d'onglet, pas de tooltip) — un simple
+  aperçu de qui travaille en arrière-plan. **Un second clic replie** sur le
+  point (l'état n'est pas mémorisé : chaque entrée en mode assistant seul
+  repart repliée).
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
   travaille. Pendant la réflexion, le **fond de la zone de saisie** respire
