@@ -210,6 +210,7 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const chkSuperAgentUserFriendly = document.getElementById("setting-superagent-user-friendly");
   const chkSuperAgentBlockAgentInput = document.getElementById("setting-superagent-block-agent-input");
   const chkSuperAgentInvisibleAgent = document.getElementById("setting-superagent-invisible-agent");
+  const chkSuperAgentPurgeBeforeDelegate = document.getElementById("setting-superagent-purge-before-delegate");
   const chkSuperAgentQualityGate = document.getElementById("setting-superagent-quality-gate");
 const chkSuperAgentForceStructuredBrief = document.getElementById("setting-superagent-force-structured-brief");
 const chkSuperAgentInheritContext = document.getElementById("setting-superagent-inherit-context");
@@ -562,6 +563,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
   if (chkSuperAgentBlockAgentInput) chkSuperAgentBlockAgentInput.checked = currentConfig.super_agent_block_agent_input === true;
   if (chkSuperAgentInvisibleAgent) chkSuperAgentInvisibleAgent.checked = currentConfig.super_agent_invisible_agent !== false;
+  if (chkSuperAgentPurgeBeforeDelegate) chkSuperAgentPurgeBeforeDelegate.checked = currentConfig.super_agent_purge_before_delegate !== false;
   if (chkSuperAgentQualityGate) chkSuperAgentQualityGate.checked = currentConfig.super_agent_quality_gate !== false;
   if (chkSuperAgentForceStructuredBrief) chkSuperAgentForceStructuredBrief.checked = currentConfig.super_agent_force_structured_brief !== false;
   if (chkSuperAgentInheritContext) chkSuperAgentInheritContext.checked = currentConfig.super_agent_inherit_context === true;
@@ -925,6 +927,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         super_agent_user_friendly: chkSuperAgentUserFriendly ? chkSuperAgentUserFriendly.checked === true : false,
         super_agent_block_agent_input: chkSuperAgentBlockAgentInput ? chkSuperAgentBlockAgentInput.checked === true : false,
         super_agent_invisible_agent: chkSuperAgentInvisibleAgent ? chkSuperAgentInvisibleAgent.checked !== false : true,
+        // Chantier 5/5 : purge automatique avant délégation (défaut ON).
+        super_agent_purge_before_delegate: chkSuperAgentPurgeBeforeDelegate ? chkSuperAgentPurgeBeforeDelegate.checked !== false : true,
         super_agent_quality_gate: chkSuperAgentQualityGate ? chkSuperAgentQualityGate.checked !== false : true,
         super_agent_force_structured_brief: chkSuperAgentForceStructuredBrief ? chkSuperAgentForceStructuredBrief.checked !== false : true,
         super_agent_inherit_context: chkSuperAgentInheritContext ? chkSuperAgentInheritContext.checked === true : false,

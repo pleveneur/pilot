@@ -1079,6 +1079,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "show_thinking": cfg.super_agent_show_thinking,
         "show_tools": cfg.super_agent_show_tools,
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
+        "super_agent_purge_before_delegate": cfg.super_agent_purge_before_delegate,
         "super_agent_quality_gate": cfg.super_agent_quality_gate,
         "super_agent_force_structured_brief": cfg.super_agent_force_structured_brief,
         "super_agent_inherit_context": cfg.super_agent_inherit_context,

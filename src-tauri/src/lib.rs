@@ -508,6 +508,17 @@ struct AppConfig {
     // défaut. Désactivé → comportement actuel (l'onglet agent s'ouvre).
     #[serde(default = "default_true")]
     super_agent_invisible_agent: bool,
+    // Chantier 5/5 (v0.3.8) : purge automatique — quand activé (défaut), chaque
+    // nouvelle demande déléguée par l'Assistant (delegate_to_coder, y compris
+    // les demandes mises en file) purge d'abord la conversation de l'agent
+    // cible SI elle n'est pas déjà vierge (mécanique bouton « + » : new_session
+    // + ré-application du modèle). Évite que chaque demande porte le poids de
+    // tout l'historique (délégations « hyper long »). Désactivé → comportement
+    // actuel (l'historique s'accumule). Les messages directs de l'utilisateur
+    // dans l'onglet agent ne déclenchent JAMAIS de purge (ses retouches gardent
+    // leur fil). Aucune purge au démarrage de Pilot ni à la fermeture d'onglet.
+    #[serde(default = "default_true")]
+    super_agent_purge_before_delegate: bool,
     // Paramètre assistant : quand activé (défaut), chaque agent appelé par
     // l'assistant (delegate_to_coder / run_agents) intègre le protocole
     // quality-gate dans son prompt (consigne + cargo test --lib).
@@ -796,6 +807,7 @@ impl Default for AppConfig {
             super_agent_user_memory: String::new(),
             super_agent_block_agent_input: false,
             super_agent_invisible_agent: true,
+            super_agent_purge_before_delegate: true,
             super_agent_quality_gate: true,
             super_agent_force_structured_brief: true,
             super_agent_inherit_context: false,
@@ -2129,6 +2141,7 @@ pub fn run() {
             rpc::abort_agent,
             rpc::new_agent_session,
             rpc::purge_agent_conversation,
+            rpc::purge_agent_conversation_to,
             session_history::resume_agent_session,
             rpc::get_agent_messages,
             rpc::set_agent_model,

@@ -205,17 +205,29 @@ Ce mode ne change pas le mécanisme d'échange assistant↔agents : c'est
 uniquement un bloc d'instructions dans le prompt système.
 <!-- /HELP:super-agent-coordinator -->
 
-### Purge de la conversation de l'agent (à la demande)
-- La conversation de l'agent d'un projet est **conservée** entre les demandes
-  déléguées par l'Assistant : chaque délégation s'appuie sur l'historique
-  existant de l'agent.
-- L'Assistant peut **purger à la demande** la conversation de l'agent (outil
-  `purge_agent_conversation`) — équivalent au clic sur « + » de l'onglet agent
-  (départ d'une conversation vierge). Il l'utilise **au début d'une
-  conversation** ou **quand il faut arrêter l'agent**, pas avant chaque
-  demande.
-- Le modèle actif de l'agent est **préservé** lors de la purge (le mécanisme
-  `new_session` réinitialise le modèle par défaut de pi ; Pilot le ré-applique).
+### Purge de la conversation de l'agent (avant chaque demande de l'Assistant)
+- **Purge automatique (défaut)** : à chaque nouvelle demande déléguée par
+  l'Assistant (`delegate_to_coder`, y compris les demandes mises en file), la
+  conversation de l'agent cible est **purgée avant l'envoi** SI elle n'est pas
+  déjà vierge (mécanique bouton « + » : `new_session` + ré-application du
+  modèle actif). Chaque demande repart donc d'un contexte vierge au lieu
+  d'hériter de tout le fil précédent (délégations « hyper long »).
+- **Réglage** : Paramètres ⚙️ → onglet « Assistant » → « Purger la
+  conversation de l'agent avant chaque demande de l'Assistant » (activé par
+  défaut ; désactivable pour retrouver l'accumulation d'historique).
+- **Purge uniquement si nécessaire** : si la conversation est déjà vierge
+  (agent jamais sollicité, session fraîchement créée), rien n'est re-purgé —
+  Pilot compare l'historique (pi `get_messages`) avant de décider.
+- **EXCEPTION — messages directs** : vos messages **directs** dans l'onglet
+  agent ne déclenchent **jamais** de purge : vos retouches gardent leur fil.
+- **Périmètre** : aucune purge au démarrage de Pilot ni à la fermeture
+  d'onglet ; la vue de l'onglet agent (s'il est ouvert) est vidée en
+  synchronisation (discussion DOM + flags Context Engine réinjectés au
+  prochain envoi), le modèle actif est préservé.
+- **Purge à la demande (inchangée)** : l'Assistant peut aussi purger via
+  l'outil `purge_agent_conversation` — équivalent au clic sur « + » de l'onglet
+  agent. Les runs `run_agents` purgent déjà systématiquement les agents avant
+  leur run (indépendant de ce réglage).
 
 ### Suivre les projets
 - L'Assistant suit chaque projet **de la demande jusqu'à la livraison** :
@@ -304,6 +316,16 @@ uniquement un bloc d'instructions dans le prompt système.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **Purge automatique avant chaque demande** : par défaut, avant chaque
+  nouvelle demande déléguée à un agent (délégation directe **ou** demande mise
+  en file), la conversation de cet agent est **purgée** si elle n'est pas déjà
+  vierge — départ d'une discussion neuve, **modèle actif préservé** (même
+  mécanique que le bouton « + » de l'onglet agent). Chaque demande repart
+  ainsi d'un contexte propre au lieu d'hériter de tout l'historique
+  (délégations « hyper long »). Réglage **Paramètres → Assistant → « Purger la
+  conversation de l'agent avant chaque demande de l'Assistant »** (activé par
+  défaut). Vos **messages directs** dans l'onglet agent ne déclenchent
+  **jamais** de purge : vos retouches gardent leur fil.
 - **`run_agents` non bloquant** : quand l'Assistant lance une run d'agents
   (`run_agents`), la run est lancée **en arrière-plan** et l'Assistant **finit
   son tour immédiatement** — vous pouvez **continuer à lui parler** pendant que
@@ -662,6 +684,25 @@ Sessions d'agents (chat / orchestration)
   redémarrer Pilot. **Agent invisible joignable (issue #64)** : une nouvelle
   délégation à un agent invisible déjà vivant reprend sa session au lieu
   d'errer « déjà active ».
+  **Purge automatique avant délégation (chantier 5/5, v0.3.8)** : quand le
+  réglage `super_agent_purge_before_delegate` est activé (défaut),
+  `transmitDelegationToAgent` purge la conversation de l'agent cible AVANT
+  l'envoi, mais UNIQUEMENT si elle n'est pas déjà vierge : commande Tauri
+  `purge_agent_conversation_to(project_path, agent_id)` → pi `get_messages`
+  (via `AgentService.send_sync_timeout`, clé (projet, agent), formats
+  défensifs via `count_rpc_messages`) ; si des messages existent, capture du
+  modèle actif (`get_state`) puis `new_session` + `set_model` (helper
+  `purge_target_agent_session`) — mécanique bouton « + » (modèle préservé).
+  Fail-open : échec de purge → la demande est transmise quand même (comportement
+  d'avant). Si purgée, la vue de l'onglet agent (projet actif uniquement) est
+  vidée via `purgeAgentTabView(agentId, projectPath)` (agent-pi.js : registre
+  `agentTabStates` des states multi-onglets, reset des 4 flags Context Engine,
+  suppression du handoff `.pilot/context-inject.md` via
+  `deleteContextHandoffFile`, vidage DOM) + message 🧹 dans le chat de
+  l'Assistant ; la demande déléguée (chemin visible) est affichée APRÈS la
+  purge. Les prompts directs de l'utilisateur (sendPrompt) ne passent pas par
+  ce chemin : aucune purge sur ses retouches. Aucune purge au démarrage de
+  Pilot ni à la fermeture d'onglet.
   **Garde anti-compaction (issue #54)** : pendant une compaction de fond, pi
   peut émettre un `agent_end` parasite (le tour réel n'est pas fini). Ce
   `agent_end` ne consomme PAS la délégation en attente (`pendingDelegation`) :

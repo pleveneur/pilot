@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("markdown-it", () => ({ default: vi.fn(() => ({ render: () => "" })) }));
 vi.mock("./icons.js", () => ({ refreshIcons: vi.fn() }));
 vi.mock("./backend-info.js", () => ({ agentDisplayLabel: vi.fn(), backendKind: vi.fn() }));
-vi.mock("./agent-pi.js", () => ({ appendDelegatedMessage: vi.fn() }));
+vi.mock("./agent-pi.js", () => ({ appendDelegatedMessage: vi.fn(), purgeAgentTabView: vi.fn() }));
 vi.mock("./loop-detection.js", () => ({
   detectRepeatedBlock: vi.fn(), detectRepeatedWord: vi.fn(),
   detectRepeatedToolCalls: vi.fn(), detectSemanticLoop: vi.fn(),

@@ -152,6 +152,26 @@ const md = markdownit({
  * @param {HTMLElement} container - Élément conteneur (.editor-wrapper)
  * @returns {Promise<{wrapper: HTMLElement, unlisten: Function}>}
  */
+// Chantier 5/5 (v0.3.8) : registre des states des onglets agents (multi-
+// onglets, clé agentId) — permet une réinitialisation ciblée (purge de la
+// conversation par l'Assistant avant une délégation) depuis l'extérieur de
+// createAgentPi (le state vit normalement dans la closure). Les entrées sont
+// retirées à la fermeture de l'onglet (unlisten).
+const agentTabStates = new Map();
+
+// Supprime un éventuel fichier de handoff de contexte (`.pilot/context-inject.md`)
+// quand on démarre une nouvelle session / réinitialise le contexte : évite qu'un
+// contexte stale soit injecté par l'extension pilot-context sur un prompt suivant.
+// Version module-level : utilisée par les handlers de session (closure
+// clearContextHandoff ci-dessous) ET par purgeAgentTabView (purge par l'Assistant).
+function deleteContextHandoffFile() {
+  try {
+    if (!window._pilotProjectPath) return;
+    const abs = window._pilotProjectPath.replace(/[\\/]+$/, "") + "/.pilot/context-inject.md";
+    invoke("delete_file_or_dir", { path: abs }).catch(() => {});
+  } catch (_) {}
+}
+
 export async function createAgentPi(container, resumed = false, agentId = "default") {
   // Charger la configuration show_thinking
   await refreshShowThinking();
@@ -497,6 +517,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // relais des choix via l'assistant (tâche de suivi #22) afin de router la
   // réponse vers la bonne session agent.
   state.agentId = agentId;
+  // Chantier 5/5 : enregistre le state de CET onglet (purge ciblée par
+  // l'Assistant via purgeAgentTabView). Retiré à la fermeture de l'onglet.
+  agentTabStates.set(agentId, state);
 
   const inputEl = wrapper.querySelector("#agent-input");
   const sendBtn = wrapper.querySelector(".agent-send-btn");
@@ -913,13 +936,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // Supprime un éventuel fichier de handoff de contexte restant (`.pilot/context-inject.md`)
   // quand on démarre une nouvelle session / réinitialise le contexte : évite qu'un
   // contexte stale soit injecté par l'extension pilot-context sur un prompt suivant.
-  const clearContextHandoff = () => {
-    try {
-      if (!window._pilotProjectPath) return;
-      const abs = window._pilotProjectPath.replace(/[\\/]+$/, "") + "/.pilot/context-inject.md";
-      invoke("delete_file_or_dir", { path: abs }).catch(() => {});
-    } catch (_) {}
-  };
+  // Chantier 5/5 : délègue à la version module-level (partagée avec
+  // purgeAgentTabView — purge de l'Assistant avant délégation).
+  const clearContextHandoff = () => deleteContextHandoffFile();
 
   // Envoi du message
   const sendPrompt = async () => {
@@ -4774,6 +4793,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       try { unlistenRagDone(); } catch (_) {}
       window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
       window.removeEventListener("pilot:rag-building", showRagBuilding);
+      // Chantier 5/5 : libérer l'entrée du registre de states de cet onglet
+      // (fermeture de l'onglet → la purge Assistante ne la touchera plus).
+      try { agentTabStates.delete(agentId); } catch (_) {}
     },
     unlistenDragDrop,
     // Multi-onglets agents : éléments du chat de CET onglet, pour que tabs.js
@@ -4801,6 +4823,56 @@ export function activateAgentTab(elements) {
   if (elements.autocompleteEl) acPopupEl = elements.autocompleteEl;
   if (elements.resumePopup) resumePopupEl = elements.resumePopup;
   if (elements.promptPopup) promptPopupEl = elements.promptPopup;
+}
+
+/**
+ * Chantier 5/5 (v0.3.8) : purge la VUE (DOM + état UI) de l'onglet agent
+ * correspondant après une purge backend (new_session) déclenchée par
+ * l'Assistant (purge automatique avant délégation). Même mécanique visuelle
+ * que le bouton « + » :
+ *  - réinitialise les flags Context Engine de l'onglet (contexte projet /
+ *    mémoire / graphe réinjectés au prochain envoi) ;
+ *  - supprime un éventuel fichier de handoff de contexte restant ;
+ *  - vide la discussion affichée (s'il l'onglet agent est ouvert).
+ *
+ * Ne touche QUE le projet actif : le tab manager ne possède que les vues du
+ * projet affiché — les délégations vers un projet non actif sont headless
+ * (aucune vue à purger). Aucune purge au démarrage ni à la fermeture d'onglet.
+ * @param {string} agentId - id de l'agent cible ("default" pour l'agent standard).
+ * @param {string|null} [projectPath] - projet de la délégation (défaut : projet actif).
+ * @returns {boolean} true si un onglet agent a été trouvé et vidé.
+ */
+export function purgeAgentTabView(agentId, projectPath = null) {
+  const id = (agentId && String(agentId).trim()) || "default";
+  // Ne purger la vue que si la délégation cible le projet actif : le tab
+  // manager ne dispose que des vues du projet affiché (les délégations vers un
+  // autre projet sont headless — aucune vue à purger, on ne touche à rien).
+  const targetProject = projectPath || window._pilotProjectPath || null;
+  if (targetProject && window._pilotProjectPath && targetProject !== window._pilotProjectPath) {
+    return false;
+  }
+  // Réinitialiser les flags Context Engine de l'onglet (réinjection au
+  // prochain prompt, comme le case "new-session").
+  const state = agentTabStates.get(id);
+  if (state) {
+    state.contextInjected = false;
+    state.contextRefreshRequested = false;
+    state.memoryInjected = false;
+    state.graphInjected = false;
+  }
+  // Supprimer le handoff de contexte restant (l'extension pilot-context
+  // réinjecterait un contexte stale sur le prochain prompt).
+  deleteContextHandoffFile();
+  // Vider le DOM de la discussion de l'onglet agent (s'il existe).
+  const tm = getTabsManager();
+  const tab = tm && Array.isArray(tm.tabs)
+    ? tm.tabs.find((t) => t && t.mode === "agent" && t.agentId === id)
+    : null;
+  if (tab && tab.agentElements && tab.agentElements.messagesEl) {
+    tab.agentElements.messagesEl.innerHTML = "";
+    return true;
+  }
+  return false;
 }
 
 // ── Stats tokens/coûts ──

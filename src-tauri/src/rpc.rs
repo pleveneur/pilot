@@ -687,23 +687,142 @@ pub(crate) fn do_purge_agent_conversation(state: &AppState, app: &AppHandle) -> 
 fn get_current_model(session: &mut rpc_manager::RpcSession) -> Option<(String, String)> {
     let cmd = serde_json::json!({ "type": "get_state" });
     if let Ok(resp) = rpc_manager::send_command_sync_timeout(session, cmd, 8) {
-        if let Some(model) = resp.get("data").and_then(|d| d.get("model")) {
-            let provider = model
-                .get("provider")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let id = model
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !provider.is_empty() && !id.is_empty() {
-                return Some((provider, id));
-            }
-        }
+        return extract_model_from_state(&resp);
     }
     None
+}
+
+/// Extrait (provider, model_id) du modèle actif depuis une réponse `get_state`
+/// de pi (fonction pure, testable).
+fn extract_model_from_state(resp: &Value) -> Option<(String, String)> {
+    let model = resp.get("data").and_then(|d| d.get("model"))?;
+    let provider = model
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let id = model
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if provider.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some((provider, id))
+}
+
+/// Compte les messages renvoyés par la commande RPC pi `get_messages` (fonction
+/// pure, testable). Formats défensifs — les mêmes que côté JS — : tableau
+/// direct, {"messages":[…]}, {"data":[…]} ou {"data":{"messages":[…]}}.
+fn count_rpc_messages(resp: &Value) -> usize {
+    if let Some(arr) = resp.as_array() {
+        return arr.len();
+    }
+    if let Some(arr) = resp.get("messages").and_then(|v| v.as_array()) {
+        return arr.len();
+    }
+    if let Some(data) = resp.get("data") {
+        if let Some(arr) = data.as_array() {
+            return arr.len();
+        }
+        if let Some(arr) = data.get("messages").and_then(|v| v.as_array()) {
+            return arr.len();
+        }
+    }
+    0
+}
+
+/// Chantier 5/5 (v0.3.8) : purge automatique avant délégation. Purge la
+/// conversation de la session agent d'un projet cible (clé (projet, agent) du
+/// registre AgentService) en préservant le modèle actif, UNIQUEMENT si cette
+/// conversation n'est pas déjà vierge.
+///
+/// Utilisé par l'Assistant (🧭) avant chaque délégation (delegate_to_coder,
+/// y compris les demandes mises en file) quand le réglage
+/// `super_agent_purge_before_delegate` est activé : chaque nouvelle demande
+/// de l'Assistant repart d'une conversation vierge au lieu d'hériter de tout
+/// l'historique précédent (délégations « hyper long »).
+///
+/// Les messages directs de l'utilisateur dans l'onglet agent ne passent pas
+/// par cette commande : aucune purge sur ses retouches.
+///
+/// Retourne `true` si la conversation a été purgée, `false` si elle était
+/// déjà vierge (ou si la session est absente — rien à purger). Détecter la
+/// présence d'une conversation : la commande pi `get_messages` ; une session
+/// fraîchement démarrée restaura l'historique persisté, une session vierge
+/// répond 0 → pas de new_session superflu.
+#[tauri::command]
+pub fn purge_agent_conversation_to(
+    state: State<AppState>,
+    project_path: Option<String>,
+    agent_id: Option<String>,
+) -> Result<bool, String> {
+    let agent_id = normalize_agent_id(agent_id.as_deref());
+    // Résoudre le projet : explicitement fourni, sinon le projet actif (même
+    // convention que send_agent_command_to).
+    let project = match project_path.filter(|p| !p.trim().is_empty()) {
+        Some(p) => p,
+        None => state
+            .active_project
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("Aucun projet ouvert")?,
+    };
+    // La purge n'a de sens que si l'agent a déjà travaillé : get_messages
+    // renvoie l'historique de la session pi (vide → conversation vierge).
+    let has_messages = state
+        .agent_service
+        .send_sync_timeout(
+            &project,
+            &agent_id,
+            serde_json::json!({ "type": "get_messages" }),
+            8,
+        )
+        .map(|resp| count_rpc_messages(&resp) > 0)
+        .unwrap_or(false);
+    if !has_messages {
+        return Ok(false);
+    }
+    purge_target_agent_session(state.inner(), &project, &agent_id)?;
+    Ok(true)
+}
+
+/// Purge (new_session) la conversation d'une session agent ciblée (clé
+/// (projet, agent)) en préservant le modèle actif — même mécanique que
+/// `do_purge_agent_conversation`, mais routée via `AgentService.send_sync`
+/// (clé composite) au lieu de la session ACTIVE. Ne recrée PAS la session :
+/// l'appelant garantit qu'elle vient d'être démarrée (idempotence gérée par
+/// transmitDelegationToAgent via startAgentInvisible/openFile).
+fn purge_target_agent_session(
+    state: &AppState,
+    project: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    // Capture du modèle actif AVANT new_session (qui reset le modèle au défaut
+    // de pi) pour le ré-appliquer ensuite.
+    let model = state
+        .agent_service
+        .send_sync_timeout(&project, &agent_id, serde_json::json!({ "type": "get_state" }), 8)
+        .ok()
+        .and_then(|resp| extract_model_from_state(&resp));
+    state
+        .agent_service
+        .send_sync(&project, &agent_id, serde_json::json!({ "type": "new_session" }))
+        .ok();
+    if let Some((provider, model_id)) = model {
+        let set_cmd = serde_json::json!({
+            "type": "set_model",
+            "provider": provider,
+            "modelId": model_id
+        });
+        state
+            .agent_service
+            .send_sync(&project, &agent_id, set_cmd)
+            .ok();
+    }
+    Ok(())
 }
 
 pub(crate) fn do_get_agent_messages(state: &AppState) -> Result<Value, String> {
@@ -858,7 +977,64 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{kind_from_version_output, should_block_start};
+    use super::{
+        count_rpc_messages, extract_model_from_state, kind_from_version_output, should_block_start,
+    };
+
+    #[test]
+    fn count_messages_array_direct() {
+        // Tableau direct de messages
+        let resp = serde_json::json!([{"role":"user"}, {"role":"assistant"}]);
+        assert_eq!(count_rpc_messages(&resp), 2);
+    }
+
+    #[test]
+    fn count_messages_wrapper_messages() {
+        // Format {"messages": [...]}
+        let resp = serde_json::json!({"messages":[{"role":"user"}]});
+        assert_eq!(count_rpc_messages(&resp), 1);
+    }
+
+    #[test]
+    fn count_messages_wrapper_data_messages() {
+        // Format {"data": {"messages": [...]}}
+        let resp = serde_json::json!({"data":{"messages":[1,2,3]}});
+        assert_eq!(count_rpc_messages(&resp), 3);
+    }
+
+    #[test]
+    fn count_messages_data_array() {
+        // Format {"data": [...]}
+        let resp = serde_json::json!({"data":[{"role":"user"}]});
+        assert_eq!(count_rpc_messages(&resp), 1);
+    }
+
+    #[test]
+    fn count_messages_empty_and_unknown() {
+        // Vide / formats inattendus → 0 (conversation vierge → pas de purge)
+        assert_eq!(count_rpc_messages(&serde_json::json!([])), 0);
+        assert_eq!(count_rpc_messages(&serde_json::json!({})), 0);
+        assert_eq!(count_rpc_messages(&serde_json::json!(null)), 0);
+        assert_eq!(count_rpc_messages(&serde_json::json!({"success": true})), 0);
+        assert_eq!(count_rpc_messages(&serde_json::json!({"data":{}})), 0);
+    }
+
+    #[test]
+    fn extract_model_ok() {
+        let resp = serde_json::json!({"data":{"model":{"provider":"openai","id":"gpt-4o"}}});
+        assert_eq!(extract_model_from_state(&resp), Some(("openai".to_string(), "gpt-4o".to_string())));
+    }
+
+    #[test]
+    fn extract_model_missing_or_partial() {
+        // Sans data/model → None ; provider ou id vide → None
+        let empty = serde_json::json!({});
+        assert_eq!(extract_model_from_state(&empty), None);
+        let no_provider = serde_json::json!({"data":{"model":{"provider":"","id":"m"}}});
+        assert_eq!(extract_model_from_state(&no_provider), None);
+        let no_id = serde_json::json!({"data":{"model":{"provider":"pi"}}});
+        assert_eq!(extract_model_from_state(&no_id), None);
+    }
 
     #[test]
     fn kind_pi_version() {

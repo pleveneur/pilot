@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import markdownit from "markdown-it";
 import { refreshIcons } from "./icons.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
-import { appendDelegatedMessage } from "./agent-pi.js";
+import { appendDelegatedMessage, purgeAgentTabView } from "./agent-pi.js";
 import {
   detectRepeatedBlock,
   detectRepeatedWord,
@@ -3364,6 +3364,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
  * @returns {Promise<boolean>} true si la demande a été transmise.
  */
 async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen }) {
+  let agentTab = null;
   try {
     if (invisible || forceInvisible || !agentTabOpen) {
       // Démarrer la session agent en arrière-plan sans onglet (agent résolu).
@@ -3374,8 +3375,37 @@ async function transmitDelegationToAgent({ request, projectPath, agentId, messag
     } else {
       // Issue #49 : ouvrir/démarrer l'agent du projet SANS basculer sur son
       // onglet — on reste sur l'onglet Assistant pour attendre le retour.
-      const agentTab = await tabs.openFile("", "agent", false, false);
-      // Issue #45 : afficher la demande déléguée dans la discussion de l'agent.
+      agentTab = await tabs.openFile("", "agent", false, false);
+    }
+    // Chantier 5/5 (v0.3.8) : purge automatique avant délégation. Si l'option
+    // est activée (défaut) et que l'agent a DÉJÀ une conversation (a déjà
+    // travaillé), on purge cette conversation (mécanique bouton « + » :
+    // new_session + ré-application du modèle actif) PUIS on envoie la demande —
+    // chaque demande repart d'un contexte vierge au lieu d'hériter de tout le
+    // fil précédent (délégations « hyper long »). La conversation déjà vierge
+    // n'est pas re-purgée (le backend compare l'historique get_messages).
+    // Les messages directs de l'utilisateur dans l'onglet agent ne passent PAS
+    // ici : aucune purge sur ses retouches. Fail-open : si la purge échoue
+    // (session absente, backend muet…), on transmet quand même la demande
+    // (comportement d'avant).
+    let purgedBefore = false;
+    if (configCache.super_agent_purge_before_delegate !== false) {
+      try {
+        purgedBefore = await invoke("purge_agent_conversation_to", { projectPath, agentId });
+      } catch (e) {
+        console.warn("Purge automatique avant délégation impossible:", e);
+      }
+      if (purgedBefore) {
+        // Bug d'affichage : la conversation backend est repartie à zéro — vider la
+        // discussion DOM de l'onglet agent (s'il existe) et réinitialiser les
+        // flags Context Engine (réinjection au prochain envoi).
+        purgeAgentTabView(agentId, projectPath);
+        appendSystemMessage(messagesEl, "🧹 Conversation de l'agent purgée avant la nouvelle demande (modèle actif préservé).");
+      }
+    }
+    if (!invisible && !forceInvisible && agentTabOpen) {
+      // Issue #45 : afficher la demande déléguée dans la discussion de l'agent
+      // (APRÈS la purge — la nouvelle demande démarre une discussion vierge).
       const agentMessagesEl = agentTab && agentTab.agentElements ? agentTab.agentElements.messagesEl : null;
       if (agentMessagesEl) {
         appendDelegatedMessage(agentMessagesEl, request);
