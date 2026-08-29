@@ -707,64 +707,38 @@ pub fn get_session_detail(state: State<AppState>, id: String) -> Result<Value, S
 /// `[Tâche déléguée terminée]`, sinon le dernier message de l'agent) + les N
 /// derniers messages de la session (N=20). Retourne `{ project, session_id,
 /// result, history }`. Utilisé par l'assistant (outil get_delegation_result).
+///
+/// Résolution robuste (chantier restitution fin-de-run) — la fonction essaie
+/// dans l'ordre et s'arrête à la première source non vide :
+/// 1. `session_id` fourni → fichier de session jsonl exact du projet ;
+/// 2. `agent_id` fourni → session VIVANTE de l'agent (`get_messages` en
+///    mémoire : agents `--no-session`/orchestration qui n'écrivent jamais de
+///    jsonl) ;
+/// 3. `agent_id` fourni → jsonl le plus récent du dossier de sessions de cet
+///    agent (agents `keep_context`). Lecture seule et idempotent.
 #[tauri::command]
 pub fn get_delegation_result(
     state: State<AppState>,
     project: String,
-    session_id: String,
+    session_id: Option<String>,
+    agent_id: Option<String>,
 ) -> Result<Value, String> {
     const HISTORY_LIMIT: usize = 20;
     const DONE_MARKER: &str = "[Tâche déléguée terminée]";
 
-    let config = state.config.lock().unwrap();
-    let session_dir = project_sessions_dir(&config);
-    let folder_name = project_to_session_folder(&project);
-    let project_dir = session_dir.join(&folder_name);
-    drop(config);
-
-    // Messages simplifiés (role + text) dans l'ordre chronologique.
-    let mut messages: Vec<Value> = Vec::new();
-    if project_dir.exists() {
-        for entry_it in fs::read_dir(&project_dir).map_err(|e| format!("Lecture sessions: {}", e))? {
-            let entry_it = match entry_it {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry_it.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            if !stem.ends_with(&format!("_{}", session_id)) {
-                continue;
-            }
-            let content = fs::read_to_string(&path).unwrap_or_default();
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let v: Value = match serde_json::from_str(line) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if v.get("type").and_then(|x| x.as_str()) != Some("message") {
-                    continue;
-                }
-                if let Some(msg) = v.get("message") {
-                    let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                    let text = extract_message_text(msg);
-                    if !text.is_empty() {
-                        messages.push(serde_json::json!({
-                            "role": role,
-                            "text": text
-                        }));
-                    }
-                }
-            }
-            break;
-        }
+    let session_id = session_id.unwrap_or_default();
+    let agent_id = agent_id.unwrap_or_default();
+    if session_id.trim().is_empty() && agent_id.trim().is_empty() {
+        return Err("get_delegation_result : fournir session_id (via list_agent_sessions) ou agent_id.".to_string());
     }
+
+    // Résolution des messages : jsonl exact → live → jsonl de l'agent.
+    let (messages, source) = resolve_delegation_messages(
+        state.inner(),
+        &project,
+        &session_id,
+        &agent_id,
+    );
 
     // Dernier message de type « résultat de délégation » : on cherche le marqueur
     // `[Tâche déléguée terminée]` dans le texte ; sinon on retombe sur le dernier
@@ -793,9 +767,190 @@ pub fn get_delegation_result(
     Ok(serde_json::json!({
         "project": project,
         "session_id": session_id,
+        "agent_id": agent_id,
+        "source": source,
         "result": result.unwrap_or(Value::Null),
         "history": history
     }))
+}
+
+/// Résout les messages d'une délégation (chantier restitution fin-de-run) :
+/// 1. jsonl exact par `session_id` (persistant, cible précise) ;
+/// 2. session vivante de l'agent via `get_messages` (agents sans jsonl : la
+///    conversation est en mémoire dans le processus pi) ;
+/// 3. jsonl le plus récent du dossier de sessions de l'agent (agents
+///    `keep_context` : la session survit au tour). Retourne aussi la source
+///    utilisée ("session_file" | "live" | "session_file_agent" | "none")
+///    pour le diagnostic de l'assistant.
+fn resolve_delegation_messages(
+    state: &AppState,
+    project: &str,
+    session_id: &str,
+    agent_id: &str,
+) -> (Vec<Value>, &'static str) {
+    let has_session = !session_id.trim().is_empty();
+    let has_agent = !agent_id.trim().is_empty();
+    // 1. Fichier exact de la session (historique durable).
+    let messages = if has_session {
+        load_session_jsonl_messages(state, project, session_id)
+    } else {
+        Vec::new()
+    };
+    if !messages.is_empty() {
+        return (messages, "session_file");
+    }
+    // 2. Session vivante (get_messages en mémoire — marche même en streaming
+    //    et pour les agents `--no-session` qui n'écrivent aucun jsonl).
+    if has_agent {
+        let cmd = serde_json::json!({ "type": "get_messages" });
+        if let Ok(resp) = state.agent_service.send_sync_timeout(project, agent_id, cmd, 4) {
+            if let Some(live) = parse_get_messages_response(&resp) {
+                return (live, "live");
+            }
+        }
+    }
+    // 3. Dossier de sessions de l'agent : jsonl le plus récent (agents
+    //    `keep_context` — la session jsonl de l'agent survit au tour).
+    if has_agent {
+        let found = load_recent_agent_jsonl_messages(state, project, agent_id);
+        if !found.is_empty() {
+            return (found, "session_file_agent");
+        }
+    }
+    (messages, if has_agent { "session_file" } else { "none" })
+}
+
+/// Lit le(s) fichier(s) jsonl d'une session identifiée par session_id dans le
+/// dossier des sessions du projet (même parsing que l'ancien flux inline).
+fn load_session_jsonl_messages(state: &AppState, project: &str, session_id: &str) -> Vec<Value> {
+    let config = state.config.lock().unwrap();
+    let session_dir = project_sessions_dir(&config);
+    drop(config);
+    let folder_name = project_to_session_folder(project);
+    let project_dir = session_dir.join(&folder_name);
+    let mut messages: Vec<Value> = Vec::new();
+    if !project_dir.exists() {
+        return messages;
+    }
+    let entries = match fs::read_dir(&project_dir) {
+        Ok(e) => e,
+        Err(_) => return messages,
+    };
+    for entry_it in entries {
+        let entry_it = match entry_it {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry_it.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if !stem.ends_with(&format!("_{}", session_id)) {
+            continue;
+        }
+        messages = parse_jsonl_message_lines(&fs::read_to_string(&path).unwrap_or_default());
+        break;
+    }
+    messages
+}
+
+/// Lit le jsonl le plus récent du dossier de sessions de l'agent
+/// (`<sessions>/<dossier_projet>/<agent_id>/`, sinon `<sessions>/<dossier_projet>/`).
+fn load_recent_agent_jsonl_messages(state: &AppState, project: &str, agent_id: &str) -> Vec<Value> {
+    let config = state.config.lock().unwrap();
+    let session_dir = project_sessions_dir(&config);
+    drop(config);
+    let project_dir = session_dir.join(project_to_session_folder(project));
+    // Dossiers candidats : sous-dossier de l'agent (agents multi-rôles) puis le
+    // dossier projet lui-même (agent standard).
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    let sanitized = agent_id.replace(|c: char| !c.is_alphanumeric(), "_");
+    candidates.push(project_dir.join(agent_id));
+    candidates.push(project_dir.join(&sanitized));
+    candidates.push(project_dir.clone());
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for dir in candidates {
+        if !dir.is_dir() {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry_it in entries.flatten() {
+            let path = entry_it.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let mtime = entry_it
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let take = match &best {
+                Some((t, _)) => mtime > *t,
+                None => true,
+            };
+            if take {
+                best = Some((mtime, path));
+            }
+        }
+    }
+    match best {
+        Some((_, path)) => {
+            parse_jsonl_message_lines(&fs::read_to_string(&path).unwrap_or_default())
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Parse une réponse `get_messages` pi — les messages non vides (role + texte)
+/// dans l'ordre, même format que la lecture jsonl { role, text }.
+fn parse_get_messages_response(resp: &Value) -> Option<Vec<Value>> {
+    // Les réponses pi enveloppent la charge utile dans `data` ; défensif si une
+    // version ancienne renvoie la racine.
+    let data = resp.get("data").unwrap_or(resp);
+    let arr = data.get("messages")?.as_array()?;
+    let mut out = Vec::new();
+    for msg in arr {
+        let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let text = extract_message_text(msg);
+        if !text.is_empty() {
+            out.push(serde_json::json!({ "role": role, "text": text }));
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Parse le contenu d'un fichier de session jsonl → messages simplifiés
+/// (role + text), mêmes règles que l'index H9 (entrées `type: "message"`).
+fn parse_jsonl_message_lines(content: &str) -> Vec<Value> {
+    let mut messages: Vec<Value> = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("type").and_then(|x| x.as_str()) != Some("message") {
+            continue;
+        }
+        if let Some(msg) = v.get("message") {
+            let role = msg.get("role").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let text = extract_message_text(msg);
+            if !text.is_empty() {
+                messages.push(serde_json::json!({ "role": role, "text": text }));
+            }
+        }
+    }
+    messages
 }
 
 /// Persiste les tags d'une session (fichier séparé, ne touche pas l'index).
@@ -1299,5 +1454,70 @@ mod tests {
         assert!(!tags_after.contains_key("abc123"), "le tag doit être retiré");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+
+    // ── Restitution fiable (get_delegation_result, chantier fin-de-run) ──────
+
+    #[test]
+    fn parse_get_messages_response_reads_data_envelope() {
+        // Réponse pi standard : la charge utile est enveloppée dans `data`.
+        let resp = serde_json::json!({
+            "type": "response",
+            "data": { "sessionId": "s1", "messages": [
+                { "role": "user", "content": [{ "type": "text", "text": "bonjour" }] },
+                { "role": "assistant", "content": [{ "type": "text", "text": "travail fait" }] }
+            ]}
+        });
+        let msgs = parse_get_messages_response(&resp).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[1]["text"], "travail fait");
+    }
+
+    #[test]
+    fn parse_get_messages_response_tolerates_root_payload() {
+        // Défensif : version ancienne qui renvoie la racine sans enveloppe data.
+        let resp = serde_json::json!({
+            "messages": [ { "role": "assistant", "content": [{ "type": "text", "text": "salut" }] } ]
+        });
+        let msgs = parse_get_messages_response(&resp).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["text"], "salut");
+    }
+
+    #[test]
+    fn parse_get_messages_response_skips_empty_messages() {
+        // Les messages sans texte (toolCall pur) sont filtrés.
+        let resp = serde_json::json!({
+            "data": { "messages": [
+                { "role": "assistant", "content": [{ "type": "toolCall", "id": "t1" }] },
+                { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] }
+            ]}
+        });
+        let msgs = parse_get_messages_response(&resp).unwrap();
+        assert_eq!(msgs.len(), 1);
+    }
+
+    #[test]
+    fn parse_jsonl_message_lines_extracts_role_and_text() {
+        let content = concat!(
+            r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"bonjour"}]}}"#, "
+",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"faire le boulot"},{"type":"text","text":"✔"}]}}"#, "
+",
+            r#"{"type":"other"}"#, "
+",
+            "not json at all", "
+",
+            r#"{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":1}]}}"#, "
+"
+        );
+        let msgs = parse_jsonl_message_lines(content);
+        // 2 messages avec du texte (le message toolCall seul est ignoré).
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["text"], "bonjour");
+        assert_eq!(msgs[1]["text"], "faire le boulot\n✔"); // blocs joints par \n
     }
 }

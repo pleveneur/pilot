@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
@@ -1530,6 +1531,12 @@ const SUMMARY_TRUNCATION_MARKER: &str = "\n…[résumé tronqué : trop volumine
 const SUPER_AGENT_REPLAY_MAX_PER_CALL: usize = 3;
 const SUPER_AGENT_REPLAY_INTERVAL_MS: u64 = 150;
 
+// Restitution fiable (fin de run → assistant) : garde d'unicité du rejeu (un
+// seul cycle à la fois, anti-doublon) et délai laissé à pi pour finir d'émettre
+// la fin de sa réponse après la libération de la session.
+static REPLAY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+const REPLAY_TRIGGER_DELAY_MS: u64 = 400;
+
 /// Tronque un résumé pour l'injection à l'assistant (borne + marqueur).
 fn truncate_summary(summary: &str) -> String {
     if summary.len() <= SUPER_AGENT_SUMMARY_MAX_CHARS {
@@ -1648,7 +1655,23 @@ fn superagent_available(state: &AppState) -> bool {
 /// jamais rejoué ; un résumé en attente est livré au plus une fois (marqué
 /// `delivered=1` après succès). Chaque tentative est journalisée en
 /// `injection_logs`. S'arrête dès que le super-agent devient indisponible.
+/// Anti-doublon : un seul cycle à la fois (REPLAY_IN_FLIGHT) — le rejeu peut
+/// être demandé par plusieurs sources (observateur de settle, ouverture de
+/// l'onglet 🧭, début de prompt), seule la première demande travaille.
 fn replay_pending_superagent_summaries(state: &AppState, app: &AppHandle) -> Result<(), String> {
+    if REPLAY_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let result = replay_pending_superagent_summaries_inner(state, app);
+    REPLAY_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+/// Corps du rejeu (cf. `replay_pending_superagent_summaries`).
+fn replay_pending_superagent_summaries_inner(
+    state: &AppState,
+    app: &AppHandle,
+) -> Result<(), String> {
     if !superagent_available(state) {
         return Ok(());
     }
@@ -1716,6 +1739,48 @@ fn replay_pending_superagent_summaries(state: &AppState, app: &AppHandle) -> Res
         std::thread::sleep(Duration::from_millis(SUPER_AGENT_REPLAY_INTERVAL_MS));
     }
     Ok(())
+}
+
+/// Observateur d'événements du super-agent : surveillance d'anomalie (base,
+/// comportement inchangé) + déclencheur de rejeu des résumés en attente.
+/// Utilisé par agent_service::spawn_superagent_session à la place de
+/// `anomaly::make_observer` seul.
+pub(crate) fn make_superagent_session_observer(app: &AppHandle) -> crate::rpc_manager::EventObserver {
+    let state = app.state::<AppState>();
+    let base = crate::anomaly::make_observer(
+        &state.agent_activity,
+        &state.agent_anomaly,
+        "",
+        &format!("\u{1f}{}", SUPERAGENT_ID),
+    );
+    let app = app.clone();
+    std::sync::Arc::new(move |value: &Value| {
+        base(value);
+        schedule_replay_on_superagent_release(&app, value);
+    })
+}
+
+/// Planifie le rejeu des résumés en attente quand la session du super-agent
+/// vient de se libérer (agent_settled / agent_end). C'est LA garantie « zéro
+/// perte » : un résumé mis en file (delivered=0, super-agent occupé ou fermé
+/// au moment de l'injection d'une fin de tâche) est maintenant livré DÈS la
+/// fin du tour de l'assistant, sans attendre une réouverture d'onglet ni un
+/// prochain prompt. Lancé sur un thread détaché (jamais depuis le thread de
+/// lecture stdout) ; le rejeu est auto-bouclant (chaque injection provoque un
+/// tour qui, à son settle, re-déclenche le rejeu des résumés restants).
+fn schedule_replay_on_superagent_release(app: &AppHandle, value: &Value) {
+    let ev_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if ev_type != "agent_settled" && ev_type != "agent_end" {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // Laisse pi finir complètement (deltas résiduels, agent_settled en
+        // transit) avant d'injecter.
+        std::thread::sleep(Duration::from_millis(REPLAY_TRIGGER_DELAY_MS));
+        let state = app.state::<AppState>();
+        let _ = replay_pending_superagent_summaries(state.inner(), &app);
+    });
 }
 
 /// Commande Tauri : rejoue les résumés en attente vers le super-agent. Appelée

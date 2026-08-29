@@ -1132,6 +1132,19 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **Restitution fiable du résultat (fin de run → Assistant)** : le résultat
+  d'une délégation arrive **automatiquement** dans la conversation de
+  l'Assistant à la fin de la tâche — même si pi a dû **se relancer** après une
+  erreur transitoire (le résultat produit APRÈS la relance fait foi), même si
+  vous avez posté une nouvelle demande entretemps (mise en file) et sans
+  avoir à réouvrir l'onglet 🧭. Côté technique (détails § 3) : événement pi
+  `agent_settled` traité comme filet de finalisation, erreurs fournisseur
+  différées à la fin du tour, et rejeu automatique des résumés en attente dès
+  la libération de la session Assistant. En cas de doute, l'Assistant relit
+  un résultat via `get_delegation_result(project, sessionId?|agent_id?)`
+  (`sessionId` exposé par `list_agent_sessions` ; à défaut le jsonl le plus
+  récent de l'agent ou sa session vivante `get_messages`), lecture seule et
+  sûre à retenter.
 - **Plan structuré avant délégation (plan-maker)** : pour les demandes
   importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
   `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,

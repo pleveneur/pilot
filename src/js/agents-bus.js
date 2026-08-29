@@ -115,6 +115,14 @@ function newRunCtx(project) {
     loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
     loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
     loopLastChecked: {}, // agentId → timestamp du dernier test
+    // Restitution fiable (fin de run → assistant) : marqueur « tour déjà
+    // finalisé pour cet agent » (posé par le PREMIER agent_end final ou
+    // agent_settled traité) + erreur pi en attente d'arbitrage (annulée si
+    // pi relance tout seul, prononcée à l'agent_end final sinon) + marqueur
+    // « tour démarré dans CETTE run » (antidate les événements terminaux).
+    endedByAgent: {},
+    pendingErrorByAgent: {},
+    startedByAgent: {},
     // Ciblage de projet (run_agents) : agentId → cwd du projet (toujours égal à
     // ctx.project dans ce contexte). Utilisé pour router les commandes
     // (abort/command/prompt) vers la bonne session pendant le tour.
@@ -754,8 +762,13 @@ function handleAgentMessageError(agentId, msg, ctx) {
   const message = `L'agent ${agentId} : le modèle a répondu une erreur — ${friendly}`;
   console.error("[agents-bus] message error", agentId, raw);
   emit("notify", { agentId, message });
-  emit("error", { agentId, message });
-  failAgentTurn(agentId, message, ctx);
+  // Restitution fiable : on NE fait PAS échouer le tour immédiatement. pi se
+  // relance automatiquement sur une erreur transitoire (402/429/réseau) —
+  // l'agent_end qui suit porte alors willRetry=true et le vrai travail est
+  // produit après la relance. On garde l'erreur en attente : annulée si une
+  // relance suit (auto_retry_start), prononcée à l'agent_end final sinon
+  // (comportement historique préservé, différé de quelques ms).
+  ctx.pendingErrorByAgent[agentId] = message;
   return true;
 }
 
@@ -775,7 +788,12 @@ function runCtxForEvent(payload) {
   return null;
 }
 
-function handleAgentEvent(ev) {
+/**
+ * Traite un événement RPC d'agent (payload pi : { project, agent_id, event }).
+ * Exporté pour les tests vitest (restitution fiable fin-de-run : willRetry,
+ * agent_settled, erreurs différées) et pour la sonde de diagnostic.
+ */
+export function handleAgentEvent(ev) {
   const payload = ev.payload || {};
   const agentId = payload.agent_id;
   const event = payload.event || {};
@@ -809,6 +827,16 @@ function handleAgentEvent(ev) {
     }
   }
 
+  if (type === "agent_start") {
+    // Restitution fiable : le tour de CET agent démarre réellement DANS cette run
+    // (les événements terminaux qui suivent nous concernent). Un agent_end /
+    // agent_settled reçu AVANT tout agent_start pour cet agent est un événement
+    // PÉRIMÉ de la run précédente (session processus réutilisée, cross-talk) :
+    // settleAgentTurn le rejettera grâce à ce marqueur.
+    ctx.startedByAgent[agentId] = true;
+    return;
+  }
+
   // Log minimal : seulement les événements clés (pas chaque delta)
   if (type !== "message_update" && type !== "tool_execution_update") {
     console.log("[agents-bus] event", type, "agent=" + agentId, "turn=" + ctx.turnCount);
@@ -839,10 +867,10 @@ function handleAgentEvent(ev) {
     // stopReason === "error" + errorMessage (ex: 402 « credits depleted » quand
     // l'agent retombe sur le modèle interne par défaut). Sans cette branche, le
     // tour échouait en silence (agent_end sans travail, résultat vide) et la run
-    // restait bloquée. On émet notify + error visibles (nom de l'agent + message)
-    // et on fait échouer le tour de CET agent (failAgentTurn libère le créneau
-    // et décrémente le groupe parallèle) SANS arrêter la run : les autres agents
-    // actifs continuent.
+    // restait bloquée. On émet une notification visible (nom de l'agent +
+    // message) et on garde l'erreur EN ATTENTE : si pi se relance tout seul
+    // (auto_retry_start), elle est annulée et la run continue ; sinon elle est
+    // prononcée à l'agent_end final (settleAgentTurn → failAgentTurn).
     if (handleAgentMessageError(agentId, event.message, ctx)) return;
   } else if (type === "compaction_start") {
     // Activer le filtre des deltas : pendant la compaction, le résumé est
@@ -930,7 +958,43 @@ function handleAgentEvent(ev) {
       stopAgentsRun({ silent: true });
       return;
     }
-    finishAgentTurn(agentId, ctx);
+    // Restitution fiable : `agent_end` est un événement PAR RUN BAS NIVEAU —
+    // pi peut émettre un agent_end avec `willRetry: true` suivie d'une relance
+    // automatique (erreur transitoire 402/429/réseau), d'une compaction ou
+    // d'une continuation en file. Terminer le tour ICI fermait la run pendant
+    // que l'agent continuait de travailler : le résultat réel ne parvenait
+    // JAMAIS à l'assistant (personne n'écoutait plus, fin observée seulement
+    // à l'agent_settled). On ne finalise que si pi n'a PAS de relance automatique
+    // prévue ; sinon on réarme les buffers de l'agent et on attend le prochain
+    // agent_end / agent_settled (filet ci-dessous).
+    if (event.willRetry === true) {
+      console.warn("[agents-bus] agent_end willRetry=true (relance automatique pi)", agentId);
+      emit("notify", { agentId, message: `⏳ L'agent ${agentId} : relance automatique en cours (erreur transitoire)…` });
+      ctx.streamingTextByAgent[agentId] = "";
+      ctx.toolCallsByAgent[agentId] = [];
+      ctx.readOnlyToolCallsByAgent[agentId] = [];
+      ctx.piTurnCountByAgent[agentId] = 0; // continuation du même tour logique
+      resetTimeout(ctx);
+      return;
+    }
+    settleAgentTurn(agentId, ctx);
+  } else if (type === "auto_retry_start") {
+    // pi se relance tout seul sur une erreur transitoire : l'erreur en attente
+    // est annulée (la run continue, pas d'échec) et on informe l'UI.
+    const hadPending = !!ctx.pendingErrorByAgent[agentId];
+    ctx.pendingErrorByAgent[agentId] = undefined;
+    console.warn("[agents-bus] auto_retry_start (relance automatique pi)", agentId);
+    if (hadPending) {
+      emit("notify", { agentId, message: `⏳ L'agent ${agentId} est relancé automatiquement après l'erreur du fournisseur.` });
+    }
+  } else if (type === "agent_settled") {
+    // Filet « zéro perte » : agent_settled = la run est TOTALEMENT terminée
+    // (pas de retry, compaction ni continuation en attente). Si l'agent_end
+    // final a été raté (canal occupé, ctx routé tard, événement ignoré), la
+    // finalisation ET l'agrégat vers l'assistant (inject_session_summary)
+    // sont déclenchés ICI au lieu d'être perdus. Idempotent : un agent déjà
+    // finalisé (agent_end) ou non actif est ignoré.
+    settleAgentTurn(agentId, ctx);
   } else if (type === "process_exit" || type === "process_error" || type === "extension_error") {
     const reason = event.reason || event.message || event.error || "processus arrêté";
     console.log("[agents-bus] process error/exit", agentId, reason);
@@ -1017,6 +1081,7 @@ async function cleanupReservationsForAgent(agentId, project) {
 
 async function finishAgentTurn(agentId, ctx) {
   const text = ctx.streamingTextByAgent[agentId] || "";
+  ctx.pendingErrorByAgent[agentId] = undefined;
   ctx.streamingTextByAgent[agentId] = "";
   ctx.toolCallsByAgent[agentId] = [];
   ctx.readOnlyToolCallsByAgent[agentId] = [];
@@ -1117,7 +1182,34 @@ async function finishAgentTurn(agentId, ctx) {
   }
 }
 
+/**
+ * Restitution fiable : finalise le tour d'un agent UNE SEULE FOIS, que la
+ * fin arrive par `agent_end` (finale) ou par le filet `agent_settled`. Si une
+ * erreur pi est restée en attente (aucune relance automatique ne l'a annulée),
+ * l'échec est prononcé ici (comportement historique) ; sinon l'agent se
+ * termine normalement (agrégat + restitution à l'assistant). L'appel est
+ * idempotent : les événements suivants pour le même agent sont ignorés.
+ */
+function settleAgentTurn(agentId, ctx) {
+  // Événement terminal PÉRIMÉ (run précédente, session processus réutilisée) :
+  // aucun agent_start n'a été vu pour cet agent dans cette run → il ne nous
+  // concerne pas (cross-talk, on l'ignore au lieu de tuer la run en cours).
+  if (!ctx.startedByAgent[agentId]) return;
+  if (ctx.endedByAgent[agentId]) return;
+  if (!ctx.activeAgents.has(agentId)) return;
+  ctx.endedByAgent[agentId] = true;
+  if (ctx.pendingErrorByAgent[agentId]) {
+    const pendingError = String(ctx.pendingErrorByAgent[agentId]);
+    ctx.pendingErrorByAgent[agentId] = undefined;
+    failAgentTurn(agentId, pendingError, ctx);
+    return;
+  }
+  finishAgentTurn(agentId, ctx);
+}
+
 async function failAgentTurn(agentId, reason, ctx) {
+  ctx.endedByAgent[agentId] = true; // marqueur anti double-finalisation
+  ctx.pendingErrorByAgent[agentId] = undefined;
   ctx.streamingTextByAgent[agentId] = "";
   ctx.toolCallsByAgent[agentId] = [];
   ctx.readOnlyToolCallsByAgent[agentId] = [];

@@ -2891,12 +2891,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     }
     if (title.startsWith(DELEGATION_SENTINEL)) {
       // Outil get_delegation_result (P5) : l'assistant récupère le résultat
-      // d'une délégation. Le titre contient un JSON {project, session_id}.
+      // d'une délégation. Le titre contient un JSON {project, session_id?,
+      // agent_id?} — Résolution côté Rust : fichier de session exact (session_id)
+      // → session vivante (get_messages) → jsonl le plus récent de l'agent
+      // (agents d'orchestration sans session persistée).
       try {
         const info = JSON.parse(title.slice(DELEGATION_SENTINEL.length));
         const result = await invoke("get_delegation_result", {
           project: String(info.project || ""),
-          sessionId: String(info.session_id || ""),
+          sessionId: info.session_id ? String(info.session_id) : null,
+          agentId: info.agent_id ? String(info.agent_id) : null,
         });
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {

@@ -350,6 +350,19 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **Restitution fiable du résultat (fin de run → Assistant)** : le résultat
+  d'une délégation arrive **automatiquement** dans la conversation de
+  l'Assistant à la fin de la tâche — même si pi a dû **se relancer** après une
+  erreur transitoire (le résultat produit APRÈS la relance fait foi), même si
+  vous avez posté une nouvelle demande entretemps (mise en file) et sans
+  avoir à réouvrir l'onglet 🧭. Côté technique (détails § 3) : événement pi
+  `agent_settled` traité comme filet de finalisation, erreurs fournisseur
+  différées à la fin du tour, et rejeu automatique des résumés en attente dès
+  la libération de la session Assistant. En cas de doute, l'Assistant relit
+  un résultat via `get_delegation_result(project, sessionId?|agent_id?)`
+  (`sessionId` exposé par `list_agent_sessions` ; à défaut le jsonl le plus
+  récent de l'agent ou sa session vivante `get_messages`), lecture seule et
+  sûre à retenter.
 - **Plan structuré avant délégation (plan-maker)** : pour les demandes
   importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
   `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
@@ -703,6 +716,49 @@ Sessions d'agents (chat / orchestration)
   purge. Les prompts directs de l'utilisateur (sendPrompt) ne passent pas par
   ce chemin : aucune purge sur ses retouches. Aucune purge au démarrage de
   Pilot ni à la fermeture d'onglet.
+  **Restitution automatique du résultat des délégations (chantier fin-de-run,
+  v0.3.8)** — la chaîne « l'agent finit → l'Assistant est informé » est rendue
+  fiable de bout en bout (cinq pertes identifiées et corrigées) :
+  1. **`willRetry` (agents-bus.js)** : le `agent_end` prématuré portant
+     `willRetry: true` (relance automatique pi après erreur transitoire) ne
+     finalise plus le tour : buffers reset (streaming/toolCalls/readOnly/
+     compteur de tours pi), agent laissé actif, notification ⏳ ; le résultat
+     produit APRÈS la relance est celui qui est agrégé. Les erreurs
+     fournisseur (`message` `stopReason:"error"`) sont mémorisées
+     (`pendingErrorByAgent`), **annulées** si `auto_retry_start` suit,
+     prononcées à l'agent_end final sinon (plus d'échec immédiat prématuré).
+  2. **`agent_settled` = filet zéro perte (agents-bus.js)** : l'événement pi
+     de settle finalise désormais aussi le tour (`settleAgentTurn`, idempotent
+     avec `agent_end`). Garde anti cross-talk : un événement terminal périmé
+     (run précédente, session processus réutilisée) est ignoré grâce au
+     marqueur `startedByAgent` posé uniquement sur l'événement `agent_start`
+     de CETTE run. `handleAgentEvent` est exporté pour les tests vitest.
+  3. **Rejeu des résumés à la libération de l'Assistant (super_agent.rs)** :
+     l'observateur de session du super-agent devient composite
+     (`make_superagent_session_observer` = surveillance d'anomalie inchangée +
+     `schedule_replay_on_superagent_release`) : sur `agent_settled`/`agent_end`
+     un thread détaché (JAMAIS le thread de lecture stdout) attend 400 ms
+     (`REPLAY_TRIGGER_DELAY_MS`) puis rejoue les résumés en attente
+     (`delivered=0`) via `replay_pending_superagent_summaries` — garde
+     d'unicité `REPLAY_IN_FLIGHT` (AtomicBool), boucle auto-drainante (chaque
+     injection provoque un tour qui, à son settle, re-déclenche le rejeu).
+     Plus besoin de réouvrir l'onglet 🧭 ni de poster un prompt pour recevoir
+     le résultat d'une fin de tâche.
+  4. **`list_agent_sessions` expose `sessionId`** (agent_service.rs) : pour
+     chaque session VIVANTE, probe `get_state` (timeout 2 s, défensif
+     `data.sessionId` puis racine, échec toléré — champ simplement absent) —
+     l'Assistant peut cibler précisément une session.
+  5. **`get_delegation_result` robuste (session_history.rs)** : signature
+     `(project, session_id?, agent_id?)` — résolution en cascade :
+     fichier de session exact (jsonl suffixé `_<session_id>`) → session
+     vivante (`get_messages` via `send_sync_timeout`, couvre les agents
+     `--no-session` en cours de streaming) → jsonl le plus récent du dossier
+     de l'agent (`<sessions>/<projet>/<agent_id[_sanitized]>/`, sinon le
+     dossier projet). Erreur claire si les deux identifiants sont vides ; le
+     champ `source` (`session_file` | `live` | `session_file_agent` |
+     `none`) permet le diagnostic. L'extension
+     `pilot-assistant-delegation.ts` passe `agent_id` optionnel et
+     documente la stratégie de repli ; `super-agent.js` transmet `agentId`.
   **Garde anti-compaction (issue #54)** : pendant une compaction de fond, pi
   peut émettre un `agent_end` parasite (le tour réel n'est pas fini). Ce
   `agent_end` ne consomme PAS la délégation en attente (`pendingDelegation`) :
@@ -965,7 +1021,10 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   Quand une activité a été enregistrée, chaque session expose aussi sa dernière
   activité : `lastActivity` (timestamp ISO), `lastActivityRelative` (« il y a X
   min ») et `lastEvent` (type du dernier événement RPC), dérivés de la map
-  d'anomalie (`agent_anomaly`, tâche 8). L'assistant l'utilise pour superviser
+  d'anomalie (`agent_anomaly`, tâche 8). Pour les sessions VIVANTES, chaque
+  entrée expose aussi `sessionId` (session pi, probe `get_state` 2 s, échec
+  toléré) : c'est la clé cible de `get_delegation_result` (résultat d'une
+  délégation). L'assistant l'utilise pour superviser
   quels agents tournent et pour juger si un agent progresse réellement (dernière
   activité récente) avant de déléguer ou d'arrêter.
 - **Auto-adaptation du prompt** : l'extension `pilot-assistant-prompt` fournit

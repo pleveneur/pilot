@@ -1012,6 +1012,32 @@ impl AgentService {
             if let Some(b) = busy {
                 entry["busy"] = serde_json::Value::Bool(b);
             }
+            // sessionId (chantier restitution fin-de-run) : identifiant de session
+            // pi, exposé pour que l'assistant puisse cibler get_delegation_result
+            // (résultat d'une délégation) ou arrêter précisément une session.
+            // Uniquement pour les sessions VIVANTES ; get_state répond même en
+            // cours de streaming (lecture seule, timeout court, échec toléré :
+            // le champ reste simplement absent).
+            if alive {
+                let probe = self.send_sync_timeout(
+                    &project,
+                    &agent_id,
+                    serde_json::json!({ "type": "get_state" }),
+                    2,
+                );
+                if let Ok(state_val) = probe {
+                    // Fallbacks défensifs selon les versions de pi : data.* puis racine.
+                    let data = state_val.get("data").unwrap_or(&state_val);
+                    let sid = data
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| state_val.get("sessionId").and_then(|v| v.as_str()))
+                        .unwrap_or("");
+                    if !sid.is_empty() {
+                        entry["sessionId"] = serde_json::Value::String(sid.to_string());
+                    }
+                }
+            }
             out.push(entry);
         }
         Ok(serde_json::json!({ "sessions": out }))
@@ -1575,12 +1601,11 @@ impl AgentService {
             SUPERAGENT_CHANNEL,
             None,
             // Tâche 8 : observateur combiné → surveillance d'anomalie par agent.
-            Some(anomaly::make_observer(
-                &state.agent_activity,
-                &state.agent_anomaly,
-                "",
-                &format!("\u{1f}{}", SUPERAGENT_ID),
-            )),
+            // Restitution fiable : cet observateur déclenche aussi le rejeu des
+            // résumés en attente quand la session se libère (agent_settled /
+            // agent_end) — super_agent::make_superagent_session_observer compose
+            // `anomaly::make_observer` (inchangé) + le déclencheur.
+            Some(crate::super_agent::make_superagent_session_observer(app)),
             Some(SUPERAGENT_ID.to_string()),
         )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;

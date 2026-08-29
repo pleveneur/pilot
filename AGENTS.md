@@ -153,6 +153,7 @@ pilot/
 │       ├── main.js            # Point d'entrée JS, orchestration, raccourcis
 │       ├── agent-pi.js        # Chat agent Pi (RPC), streaming, onglet π
 │       ├── orchestration.js   # Mode Orchestration : prompts, parsing plan, validation (pures)
+│       ├── agents-bus.js      # Bus d'agents (orchestration) : contexte de run, verrou par projet, restitution fiable fin-de-run (willRetry/agent_settled, erreurs différées)
 │       ├── orchestration-reviewer.js # Reviewer indépendant (H2 V1) : buildReviewPrompt, parseReviewResult, glob matching (pures)
 │       ├── theme.js           # Gestion des thèmes dark/light
 │       ├── sidebar.js         # Barre latérale, explorateur, filtre, menus

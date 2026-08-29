@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -255,5 +255,171 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     beginRun("projetA");
     await releaseStuckRunLock("projetA");
     expect(getRunState("projetA")).toBe("idle");
+  });
+});
+
+// ── Restitution fiable (fin de run → assistant) ───────────────────────────
+// Chantier : « les agents finissent (agent_settled) mais leur résultat
+// n'arrive JAMAIS dans la conversation de l'Assistant ». Causes testées ici :
+//  1. agent_end PRÉMATURÉ avec willRetry=true (pi relance automatiquement) —
+//     la run ne doit PAS être finalisée sur cet événement ;
+//  2. agent_settled = filet « zéro perte » si l'agent_end final est perdu ;
+//  3. agent_settled PÉRIMÉ (run précédente, session réutilisée) → ignoré ;
+//  4. erreur pi transitoire (message stopReason=error) → échec différé,
+//     annulé si une relance automatique suit ;
+//  5. idempotence : agent_end final + agent_settled → un seul agrégat.
+describe("handleAgentEvent — restitution fiable (fin de run → assistant)", () => {
+  /** Flushe les microtâches (finishAgentTurn / onComplete sont async). */
+  const flushAsync = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  };
+  /** Prépare une run parallèle avec deux agents actifs et un onComplete espion. */
+  const beginParallelRun = () => {
+    const ctx = beginRun("projetA");
+    ctx.activeAgents.add("coder");
+    ctx.activeAgents.add("architec");
+    ctx.agentProject["coder"] = "projetA";
+    ctx.agentProject["architec"] = "projetA";
+    const completions = [];
+    ctx.parallelGroup = {
+      assignments: [{ agentId: "coder" }, { agentId: "architec" }],
+      pending: 2,
+      results: {},
+      onComplete: (results) => completions.push(results),
+    };
+    return { ctx, completions };
+  };
+  /** Événement de fin générique (agent_start / agent_end / agent_settled…). */
+  const ev = (agentId, type, event = {}) => ({
+    payload: { project: "projetA", agent_id: agentId, event: { type, ...event } },
+  });
+  /** Delta de texte (message_update) accumulé dans le buffer de l'agent. */
+  const delta = (agentId, text) => ({
+    payload: {
+      project: "projetA",
+      agent_id: agentId,
+      event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: text } },
+    },
+  });
+  /** Message assistant pi (stopReason error ⇒ erreur fournisseur). */
+  const errMsg = (agentId, text) =>
+    ev(agentId, "message", {
+      message: { role: "assistant", stopReason: "error", errorMessage: text, content: [] },
+    });
+
+  afterEach(() => {
+    endRun("projetA");
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("agent_end avec willRetry=true ne finalise PAS le tour (la relance suit)", async () => {
+    const { ctx, completions } = beginParallelRun();
+    handleAgentEvent(delta("coder", "début du travail"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: true }));
+    // L'agent reste actif : pi va se relancer tout seul, le tour continue.
+    expect(ctx.activeAgents.has("coder")).toBe(true);
+    expect(ctx.parallelGroup.pending).toBe(2);
+    expect(completions).toHaveLength(0);
+    // La run reste "running" (aucun endRun prématuré).
+    expect(getRunState("projetA")).toBe("running");
+    await flushAsync();
+    expect(completions).toHaveLength(0);
+  });
+
+  it("scénario du bug : willRetry puis agent_end final → le VRAI résultat agrégé aboutit", async () => {
+    const { ctx, completions } = beginParallelRun();
+    // Tour 1 (échec transitoire) pi se relance : le travail réel est produit
+    // APRÈS le premier agent_end — c'est lui qui doit être restitué.
+    handleAgentEvent(ev("coder", "agent_start"));
+    handleAgentEvent(delta("coder", "tentative 1"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: true }));
+    handleAgentEvent(ev("coder", "agent_start"));
+    handleAgentEvent(delta("coder", "résultat final complet"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: false }));
+    await flushAsync();
+    // L'agent est finalisé avec le texte de la relance (pas la tentative 1)…
+    expect(ctx.activeAgents.has("coder")).toBe(false);
+    expect(ctx.parallelGroup.results["coder"]).toEqual({
+      status: "done",
+      text: "résultat final complet",
+    });
+    expect(completions).toHaveLength(0); // il reste "architec" (pending=1)
+    // …et le 2e agent peut terminer normalement (agent_end classique).
+    handleAgentEvent(ev("architec", "agent_start"));
+    handleAgentEvent(delta("architec", "ok architecte"));
+    handleAgentEvent(ev("architec", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(completions).toHaveLength(1);
+    // Restitution : les DEUX résultats atteignent le regroupement (onComplete).
+    expect(completions[0]["architec"]).toEqual({ status: "done", text: "ok architecte" });
+  });
+
+  it("agent_settled en filet : finalise un tour dont l'agent_end final a été perdu", async () => {
+    const { ctx, completions } = beginParallelRun();
+    // L'agent_end final est PERDU (seul agent_settled arrive).
+    handleAgentEvent(ev("coder", "agent_start"));
+    handleAgentEvent(delta("coder", "travail perdu côté coder"));
+    handleAgentEvent(ev("architec", "agent_start"));
+    handleAgentEvent(delta("architec", "archi OK"));
+    handleAgentEvent(ev("architec", "agent_end", { willRetry: false }));
+    handleAgentEvent(ev("coder", "agent_settled"));
+    await flushAsync();
+    expect(completions).toHaveLength(1);
+    expect(completions[0]["coder"]).toEqual({ status: "done", text: "travail perdu côté coder" });
+  });
+
+  it("agent_settled périmé (aucun agent_start vu dans cette run) → ignoré", async () => {
+    const { ctx, completions } = beginParallelRun();
+    // Aucun agent_start n'a été vu pour "coder" dans CETTE run : l'agent_settled
+    // est périmé (événement de la session précédente, processus réutilisé).
+    handleAgentEvent(ev("coder", "agent_settled"));
+    await flushAsync();
+    expect(completions).toHaveLength(0);
+    // L'agent n'a PAS été finalisé par un événement périmé : la run continue.
+    expect(ctx.activeAgents.has("coder")).toBe(true);
+    expect(ctx.parallelGroup.pending).toBe(2);
+  });
+
+  it("double finalisation impossible : agent_end final puis agent_settled → un agrégat", async () => {
+    const { ctx, completions } = beginParallelRun();
+    handleAgentEvent(ev("coder", "agent_start"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: false }));
+    handleAgentEvent(ev("architec", "agent_start"));
+    handleAgentEvent(ev("architec", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(completions).toHaveLength(1); // run terminée normalement
+    // agent_settled de la MÊME session, arrivé après : ignoré (idempotence).
+    handleAgentEvent(ev("coder", "agent_settled"));
+    handleAgentEvent(ev("architec", "agent_settled"));
+    await flushAsync();
+    expect(completions).toHaveLength(1);
+  });
+
+  it("erreur pi transitoire suivie d'auto_retry → tour continu, succès final", async () => {
+    const { ctx, completions } = beginParallelRun();
+    handleAgentEvent(ev("coder", "agent_start"));
+    // Message d'erreur du fournisseur (ex: 429) : pas d'échec immédiat.
+    handleAgentEvent(errMsg("coder", "Connection error."));
+    handleAgentEvent(ev("coder", "auto_retry_start"));
+    // pi relance et produit le vrai résultat.
+    handleAgentEvent(delta("coder", "réponse après relance"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(ctx.parallelGroup.results["coder"]).toEqual({
+      status: "done",
+      text: "réponse après relance",
+    });
+    expect(completions).toHaveLength(0); // il reste "architec" (pending=1)
+  });
+
+  it("erreur définitive (pas de relance) → échec prononcé à l'agent_end final", async () => {
+    const { ctx, completions } = beginParallelRun();
+    handleAgentEvent(ev("coder", "agent_start"));
+    handleAgentEvent(errMsg("coder", "credits depleted"));
+    handleAgentEvent(ev("coder", "agent_end", { willRetry: false }));
+    await flushAsync();
+    // L'erreur mémorisée est prononcée à la FIN du tour (plus d'échec immédiat).
+    expect(ctx.activeAgents.has("coder")).toBe(false);
+    expect(ctx.parallelGroup.results["coder"].status).toBe("error");
   });
 });
