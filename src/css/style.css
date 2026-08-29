@@ -1465,6 +1465,24 @@ body.theme-light.theme-tokyo-day {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Badge(s) projet(s) d'un message : rangée compacte (une bulle peut porter
+   PLUSIEURS badges — projets nommés à l'envoi, snapshot figé par bulle). La
+   bulle assistant est un flex column (align-self:flex-start s'applique) ; la
+   bulle user est en bloc (align-self inopérant, le conteneur passe en tête de
+   bulle et le texte démarre en dessous). Les styles pastel des badges sont
+   posés en inline par le JS (super-agent.js) comme avant ; sans couleur
+   inline, le badge garde l'accent violet de l'Assistant. */
+.agent-project-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-self: flex-start;
+  margin-bottom: 6px;
+  max-width: 100%;
+}
+.agent-project-badges .agent-project-badge {
+  margin-bottom: 0; /* l'espacement est géré par le gap du conteneur */
+}
 /* Issue #43 : la réflexion et les outils de l'Assistant utilisent la même
    structure de rendu que l'agent standard, mais avec l'accent violet dédié. */
 .superagent-wrapper .agent-thinking {

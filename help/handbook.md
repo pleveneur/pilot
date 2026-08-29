@@ -871,6 +871,20 @@ apprend et répond.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
+- **Badges projet par bulle (snapshot à l'envoi)** : chaque demande et sa
+  réponse portent les badges des projets dont elles parlent, **étiquetés au
+  moment où vous envoyez la demande** = projet actif à cet instant + chaque
+  projet explicitement nommé dans le texte. La détection est **sans IA** :
+  correspondance insensible à la casse sur le **nom affiché** du projet (ex:
+  « PLh ») ou la **fin de son chemin** (ex: « ia_pl/plh »), avec **frontières
+  de mots** (une demande qui parle de « pilotage » n'étiquette pas le projet
+  « pilot »). Plusieurs badges compacts possibles sur une même bulle ; la
+  réponse hérite des badges de la demande qui l'a déclenchée. Les badges sont
+  **figés pour toujours** : changer de projet actif (même via `open_project`
+  pendant le tour) ne modifie **jamais** les badges déjà affichés, et aucune
+  bulle n'est re-étiquetée rétrospectivement. La **bulle de continuation**
+  après une question posée à l'utilisateur hérite des badges de la demande
+  initiale (la paire question/réponse porte les mêmes étiquettes).
 - **Une bulle par tour d'agent par projet** : un « tour » = depuis que
   l'Assistant commence à répondre jusqu'à `agent_end` (fin du tour, c'est à
   l'utilisateur de parler). Pendant un tour, l'Assistant peut enchaîner
@@ -878,14 +892,13 @@ apprend et répond.
   tout reste dans la **MÊME bulle**. On ne crée PAS de nouvelle bulle à chaque
   `message_end` intermédiaire ; le reset de la bulle courante se fait
   uniquement à `agent_end` ou quand l'utilisateur envoie un nouveau message.
-- **Nouvelle bulle si changement de projet** : si le projet actif change
-  pendant un tour (ex: l'Assistant exécute `open_project`), la prochaine bulle
-  est **nouvelle** (le projet de la bulle courante est suivi dans
-  `currentBubbleProject`).
+  Changer de projet actif pendant un tour (ex: `open_project`) n'ouvre plus de
+  nouvelle bulle : la réponse reste dans la bulle étiquetée par sa demande.
 - **Couleur par projet** : chaque projet reçoit une **couleur stable**
   déterminée par un hash de son nom → palette de ~10 couleurs lisibles en thème
   dark ET light. La couleur est appliquée à la bulle (**bordure gauche**
-  colorée) et au **badge projet** (fond coloré + texte blanc). La couleur est
+  colorée) et aux **badges projet** (rendu pastel : fond et bordure dilués,
+  texte teinté via `color-mix`). La couleur est
   **identique** pour un même projet d'une session à l'autre.
 - Les **bulles système** (messages d'info `appendSystemMessage`) ne portent
   **aucune couleur de projet** et sont désormais regroupées dans le **panneau

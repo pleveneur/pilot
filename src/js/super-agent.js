@@ -25,6 +25,7 @@ import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderDate } from "./super-agent-schedule.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
+import { captureProjectBadgeNames } from "./super-agent-badges.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -389,9 +390,15 @@ function projectColor(projectName) {
 // chronologique (sections texte / pensée / outils) — voir issue #43.
 let currentBody = null;      // élément `.agent-message-assistant` du tour courant
 let currentFlow = null;      // sous-élément `.agent-stream-flow`
-// Projet associé à la bulle courante (Règle 2 : nouvelle bulle si le projet
-// actif change pendant un tour). Null tant qu'aucune bulle n'est ouverte.
-let currentBubbleProject = null;
+// Badges projet de la bulle courante (chantier « badge par bulle ») : snapshot
+// capturé au moment où l'utilisateur envoie sa demande = projet actif à cet
+// instant + projets explicitement nommés dans le texte (module pur
+// super-agent-badges.js). Les bulles du tour (réponse incluse) héritent du
+// snapshot, qui est FIGÉ pour toujours : changer le projet actif ne modifie
+// plus jamais les badges déjà affichés. Null = aucun tour utilisateur en
+// cours (les bulles créées hors envoi — question relais, widget — retombent
+// sur le projet actif, comme avant : fail-open).
+let currentTurnProjectBadges = null;
 let currentTextSection = null; // section texte non fermée
 let currentThinkingBlock = null; // bloc pensée courant
 let pendingText = "";
@@ -522,7 +529,9 @@ async function finishPendingQuestion(q, value, cancelled) {
   pendingText = "";
   pendingRender = false;
   lastAssistantRawText = "";
-  currentBubbleProject = null;
+  // Snapshot de badges conservé : la continuation (réponse à la question)
+  // hérite des badges de la demande qui a ouvert le tour. Reset seulement à
+  // la vraie fin de tour (onEnd) ou au prochain envoi utilisateur.
   try {
     await q.responder(q.id, value, cancelled);
     clearPendingInput();
@@ -588,34 +597,23 @@ function refreshSuperRenderOptions() {
 /** Crée un bloc message assistant avec flux chronologique (comme agent-pi).
  * Une seule bulle par tour d'agent par projet (Règle 1) : on ne crée pas de
  * nouvelle bulle à chaque `message_end` intermédiaire, seulement à `agent_end`
- * ou si le projet actif change (Règle 2). La bulle porte la couleur du projet
- * (Règle 3 : hash du nom → palette). */
+ * ou la fin du tour. La bulle porte la couleur du projet (Règle 3 : hash du
+ * nom → palette). */
 function createSuperAgentBlock(messagesEl) {
   const el = document.createElement("div");
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
-  // Badge projet + couleur par projet (Règle 3). Le projet suivi est celui
-  // actif au moment de la création de la bulle ; il ne change plus jusqu'à
-  // la fin du tour (sauf open_project pendant le tour → nouvelle bulle).
-  const projectName = getSuperActiveProjectName();
-  currentBubbleProject = projectName;
-  const color = projectColor(projectName);
-  if (projectName) {
-    const badge = document.createElement("div");
-    badge.className = "agent-project-badge";
-    badge.textContent = "📁 " + projectName;
-    if (color) {
-      // Pastel rendering: the raw palette color stays the stable hue
-      // reference, but is diluted at display time so it stays readable in
-      // dark AND light themes (same pattern as --superagent-accent in CSS).
-      // Text mixes with --text-primary → light text on dark, dark on light.
-      badge.style.background = `color-mix(in srgb, ${color} 14%, transparent)`;
-      badge.style.color = `color-mix(in srgb, ${color} 70%, var(--text-primary))`;
-      badge.style.borderColor = `color-mix(in srgb, ${color} 32%, transparent)`;
-    }
-    bubble.appendChild(badge);
-  }
+  // Badges projet (snapshot) : la bulle de réponse hérite des badges de la
+  // demande qui l'a déclenchée (projet actif à l'envoi + projets nommés).
+  // Figés pour toujours : aucun recalcul ni rafraîchissement rétrospectif.
+  // Création hors envoi utilisateur (question relais, widget…) : fallback sur
+  // le projet actif (comportement historique, sans rétro-écriture ensuite).
+  const badgeNames = (currentTurnProjectBadges && currentTurnProjectBadges.length)
+    ? currentTurnProjectBadges
+    : (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();
+  const color = projectColor(badgeNames[0]);
+  renderProjectBadgesInto(bubble, badgeNames);
   if (color) {
     // Border-left coloré par projet (Règle 3). Inline style pour primer sur
     // la règle `.superagent-wrapper .agent-bubble-assistant` qui force
@@ -641,41 +639,99 @@ function getSuperActiveProjectName() {
 }
 
 /**
- * SOUCIS 2 : met à jour le badge « 📁 nom » + la couleur (background +
- * border-left) de la bulle assistant COURANTE pour refléter le projet actif
- * actuel, SANS créer de nouvelle bulle ni casser le flux en cours. Appelée
- * après un changement de projet (open_project dans le handler d'action, et
- * via l'événement `project_changed`). Ne fait rien si aucune bulle n'est ouverte.
+ * Rend les badges « 📁 nom » d'une bulle (chantier badge-par-bulle). Une bulle
+ * peut parler de PLUSIEURS projets : chaque nom donne un badge compact,
+ * posés dans une rangée `.agent-project-badges` en tête de bulle (la bulle
+ * assistant est un flex column, la bulle user est en bloc — conteneur adapté
+ * aux deux). Un seul nom → rangée à badge unique. Aucun nom → rien. La
+ * couleur est STABLE par projet (hash → palette, `projectColor`), appliquée
+ * en rendu pastel inline (même dilution que le rendering historique, lisible
+ * en thème dark ET light). Les badges sont créés une fois : cette fonction
+ * n'est PAS rappelée sur des bulles existantes (pas de retouche rétrospective).
+ * @param {HTMLElement} bubble - élément bulle (assistant ou user).
+ * @param {string[]} badgeNames - noms à afficher (snapshot, déjà dedupliqué).
  */
-function refreshSuperBubbleProject(messagesEl) {
-  if (!currentBody) return;
-  const projectName = getSuperActiveProjectName();
-  currentBubbleProject = projectName;
-  const color = projectColor(projectName);
-  const bubble = currentBody.querySelector(".agent-bubble-assistant");
-  if (!bubble) return;
-  let badge = bubble.querySelector(".agent-project-badge");
-  if (projectName) {
-    if (!badge) {
-      badge = document.createElement("div");
-      badge.className = "agent-project-badge";
-      bubble.insertBefore(badge, bubble.firstChild);
-    }
+function renderProjectBadgesInto(bubble, badgeNames) {
+  if (!bubble || !Array.isArray(badgeNames) || badgeNames.length === 0) return;
+  const stack = document.createElement("div");
+  stack.className = "agent-project-badges";
+  for (const projectName of badgeNames) {
+    const badge = document.createElement("div");
+    badge.className = "agent-project-badge";
     badge.textContent = "📁 " + projectName;
+    const color = projectColor(projectName);
     if (color) {
-      // Pastel rendering — same dilution as createSuperAgentBlock so a
-      // refreshed bubble keeps a color consistent with newly created ones.
+      // Pastel rendering : couleur brute diluée à l'affichage pour rester
+      // lisible en thème dark ET light (même pattern que --superagent-accent).
       badge.style.background = `color-mix(in srgb, ${color} 14%, transparent)`;
       badge.style.color = `color-mix(in srgb, ${color} 70%, var(--text-primary))`;
       badge.style.borderColor = `color-mix(in srgb, ${color} 32%, transparent)`;
     }
-  } else if (badge) {
-    badge.remove();
+    stack.appendChild(badge);
   }
-  if (color) {
-    bubble.style.borderLeftColor = `color-mix(in srgb, ${color} 40%, transparent)`;
-  } else {
-    bubble.style.borderLeftColor = "";
+  bubble.insertBefore(stack, bubble.firstChild);
+}
+
+/**
+ * Garde-fou anti-blocage : résout la promise en `fallback` après `ms` ms si
+ * elle n'a pas déjà résolu (les invokes restent locaux et ultra rapides ; le
+ * snapshot ne doit JAMAIS retarder l'envoi d'une demande).
+ */
+function withTimeout(promise, ms, fallback) {
+  let timer = null;
+  const guard = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([promise, guard]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/** Garde de durée du snapshot projets (ms) : au-delà, fail-open (projet actif
+ * seul) plutôt que retarder l'envoi. Les invokes sont locaux (DB/UI) et
+ * répondent en quelques ms → marge large. */
+const BADGE_PROJECTS_COLLECT_TIMEOUT_MS = 800;
+
+/**
+ * Snapshot des badges pour un envoi : projette la liste des projets
+ * connus/ouverts côtés UI dans le module pur (captureProjectBadgeNames).
+ * Candidats = projets ouverts (list_open_projects, chemins) + projets suivis
+ * connus (list_super_agent_projects, {path, name}) ; dédupliqués par chemin.
+ * Fail-open : toute erreur ou lenteur → projet actif seul, jamais bloquant.
+ * @param {string} text - texte de la demande (déjà trimmé par l'appelant).
+ * @returns {Promise<string[]>} noms de badges (actif en tête).
+ */
+async function collectBubbleBadgeProjects(text) {
+  const fallback = (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();
+  try {
+    const resolved = await withTimeout((async () => {
+      const [opened, tracked] = await Promise.allSettled([
+        invoke("list_open_projects"),
+        invoke("list_super_agent_projects"),
+      ]);
+      const candidates = [];
+      const seen = new Set();
+      const push = (path, name) => {
+        const key = String(path || name || "");
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        candidates.push({ path: path || "", name: name || null });
+      };
+      if (opened.status === "fulfilled" && Array.isArray(opened.value)) {
+        for (const p of opened.value) {
+          if (typeof p === "string" && p) push(p, null);
+        }
+      }
+      if (tracked.status === "fulfilled" && Array.isArray(tracked.value && tracked.value.projects)) {
+        for (const p of tracked.value.projects) {
+          if (p && (p.path || p.name)) push(p.path || "", p.name || null);
+        }
+      }
+      return captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
+    })(), BADGE_PROJECTS_COLLECT_TIMEOUT_MS, fallback);
+    return resolved;
+  } catch (_) {
+    return fallback; // fail-open : jamais bloquant
   }
 }
 
@@ -1423,8 +1479,9 @@ export async function createSuperAgent(container) {
         pendingRender = false;
         lastAssistantRawText = "";
         state.currentAssistantBlock = null;
-        // Règle 1 : fin de tour (agent_end) → reset du projet de la bulle.
-        currentBubbleProject = null;
+        // Fin de tour → snapshot consommé : les bulles affichées gardent leurs
+        // badges figés ; le prochain envoi capturera un nouveau snapshot.
+        currentTurnProjectBadges = null;
         // Issue #55 : fin de tour → reset du buffer de détection de boucle.
         superLoopBuffer = "";
         superLoopToolCalls = [];
@@ -1601,7 +1658,7 @@ export async function createSuperAgent(container) {
       pendingText = "";
       pendingRender = false;
       lastAssistantRawText = "";
-      currentBubbleProject = null;
+      currentTurnProjectBadges = null;
       // SOUCIS 1 : une nouvelle session réarme le suivi automatique du bas.
       superAtBottom = true;
       appendSystemMessage(messagesEl, "🆕 Nouvelle session.");
@@ -1653,10 +1710,15 @@ export async function createSuperAgent(container) {
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     inputEl.style.height = "auto";
-    appendMessage(messagesEl, "user", text);
+    const userBubble = appendMessage(messagesEl, "user", text);
+    // Snapshot des badges projet (chantier badge-par-bulle) : capturé ICI, au
+    // moment de l'envoi = projet actif à cet instant + projets explicitement
+    // nommés dans la demande (détection sans IA, module pur).
+    const badgeNames = await collectBubbleBadgeProjects(text);
+    if (userBubble) renderProjectBadgesInto(userBubble, badgeNames);
     // Règle 1 : nouveau tour utilisateur → fermer la bulle assistant en cours
-    // (reset complet, y compris le projet de la bulle) pour qu'un nouveau
-    // tour démarre dans une NOUVELLE bulle.
+    // (reset complet) pour qu'un nouveau tour démarre dans une NOUVELLE bulle,
+    // qui héritera du snapshot ci-dessus. Snapshot FIGÉ : jamais recalculé.
     currentBody = null;
     currentFlow = null;
     currentTextSection = null;
@@ -1664,7 +1726,7 @@ export async function createSuperAgent(container) {
     pendingText = "";
     pendingRender = false;
     lastAssistantRawText = "";
-    currentBubbleProject = null;
+    currentTurnProjectBadges = badgeNames;
     isStreaming = true;
     backendBusy = true;
     statusEl.textContent = "Réfléchit…";
@@ -1735,17 +1797,11 @@ export async function createSuperAgent(container) {
     }
   });
 
-  // SOUCIS 2 : écouter le changement de projet (Tauri event émis par Rust sur
-  // open_project_path, desktop ET remote) pour rafraîchir le badge de la bulle
-  // courante. Robuste : couvre aussi les changements initiés à distance (web)
-  // qui ne passent pas par le handler `open_project` de l'assistant.
-  const unlistenProjectChanged = await listen("project_changed", () => {
-    try {
-      refreshSuperBubbleProject(messagesEl);
-    } catch (err) {
-      console.error("[project_changed] erreur badge:", err);
-    }
-  });
+  // Badges par bulle : plus d'écoute de `project_changed` pour re-étiqueter
+  // la bulle courante (ancien comportement `refreshSuperBubbleProject`, badge
+  // « projet courant global » supprimé). Chaque bulle garde les badges FIGÉS
+  // de sa demande (snapshot à l'envoi) : changer le projet actif — y compris
+  // via un changement distant — ne modifie plus les bulles déjà affichées.
 
   const origUnlisten = unlisten;
 
@@ -1837,7 +1893,6 @@ export async function createSuperAgent(container) {
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
-      unlistenProjectChanged();
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
@@ -2077,18 +2132,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   if (type === "message_start") {
     const msg = payload.message;
     if (msg && msg.role === "assistant") {
-      // Règle 2 : si le projet actif a changé depuis la création de la bulle
-      // courante (ex: open_project pendant le tour), on ferme la bulle en cours
-      // et on en crée une NOUVELLE (couleur du nouveau projet).
-      const activeProject = getSuperActiveProjectName();
-      if (currentBody && currentBubbleProject !== activeProject) {
-        currentBody = null;
-        currentFlow = null;
-        currentTextSection = null;
-        currentThinkingBlock = null;
-        pendingText = "";
-        pendingRender = false;
-      }
+      // Badges par bulle : plus de « nouvelle bulle si le projet actif change »
+      // (ancienne Règle 2 supprimée). La bulle en cours garde les badges FIGÉS
+      // de sa demande jusqu'à la fin du tour, même si `open_project` change le
+      // projet actif pendant le tour.
       // Début d'un message assistant streamé : créer un bloc avec flux.
       // Règle 1 : on réutilise la bulle courante si elle existe déjà (tour en
       // cours) → les messages intermédiaires (texte → outil → texte) restent
@@ -3069,9 +3116,9 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         return;
       }
       await sidebar.openProjectByPath(path);
-      // SOUCIS 2 : mettre à jour le badge de la bulle courante pour refléter le
-      // nouveau projet actif (sans créer de nouvelle bulle).
-      refreshSuperBubbleProject(messagesEl);
+      // Badges par bulle : pas de re-étiquetage de la bulle courante — elle
+      // garde les badges figés de sa demande. Les bulles suivantes prendront
+      // leur PROPRE snapshot à leur envoi.
       // Mémoriser le projet sur lequel l'assistant travaille (distinct du projet
       // actif) : si l'utilisateur change ensuite de projet, l'assistant saura
       // qu'il travaillait sur celui-ci et pourra continuer la discussion dessus.
