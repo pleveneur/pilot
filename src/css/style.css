@@ -7867,13 +7867,13 @@ body.pilot-loading *::after {
    A19 — Mode « Assistant Only » immersif (super-agent)
    Overlay plein écran : tout est masqué sauf le chat. Barre du haut
    conforme à la maquette ASS_Only_V4 : gauche = bouton retour (flèche)
-   + titre « Pilot » ; droite = UN SEUL bouton ⚙ (paramètres de
-   l'assistant). Sous la barre : hero (logo Pilot rond + accueil, comme
-   la maquette). Sous les messages : suggestions (chips qui
-   préremplissent la saisie), barre de saisie, disclaimer — SANS
-   indicateur d'activité (supprimé sur retour utilisateur). Contenu
-   centré avec marges latérales (comme la maquette). Tokens
-   exclusivement (cohérence dark/light).
+   + titre « Pilot » ; droite = liste des agents (AFFICHAGE SEUL, voir
+   ci-dessous) + UN SEUL bouton ⚙ (paramètres de l'assistant). Sous la
+   barre : hero (logo Pilot rond + accueil, comme la maquette). Sous les
+   messages : suggestions (chips qui préremplissent la saisie), barre de
+   saisie, disclaimer — SANS indicateur d'activité (supprimé sur retour
+   utilisateur). Contenu centré avec marges latérales (comme la maquette).
+   Tokens exclusivement (cohérence dark/light).
    ================================================================ */
 .superagent-immersive {
   position: fixed;
@@ -7915,8 +7915,57 @@ body.pilot-loading *::after {
   color: var(--text-primary);
   white-space: nowrap;
 }
-.sa-immersive-settings {
+/* Liste des agents (affichage seul) : poussée à droite dans la barre du haut,
+   juste avant le bouton ⚙ (margin-left: auto reporté ici). STRICTEMENT
+   informative — pointer-events: none : aucun clic, aucun menu, aucune fiche,
+   aucun tooltip (choix validé par l'utilisateur). Pastilles réutilisées de
+   l'indicateur d'activité (.agent-activity-item-dot, défini plus haut) : même
+   respiration en activité, style « anneau violet assistant » au repos —
+   cohérence totale avec la liste du mode standard, thèmes dark/light/alterne
+   via tokens uniquement. Débordement tronqué discrètement si trop d'agents. */
+.sa-immersive-agents {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  pointer-events: none;
+}
+.sa-immersive-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sa-immersive-agent-name {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+/* L'assistant (superagent) reprend la couleur de son onglet, comme dans la
+   liste déroulante du mode standard. */
+.sa-immersive-agent[data-kind="superagent"] .sa-immersive-agent-name {
+  color: var(--superagent-accent);
+}
+.sa-immersive-agent-project {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 70px;
+}
+.sa-immersive-agents-empty {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.sa-immersive-settings {
   flex-shrink: 0;
 }
 

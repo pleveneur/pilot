@@ -24,6 +24,7 @@ import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderDate } from "./super-agent-schedule.js";
+import { mountStaticAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames } from "./super-agent-badges.js";
 
@@ -1503,6 +1504,9 @@ export async function createSuperAgent(container) {
   // d'événements (cloche) dans ce mode — ils restent propres au mode standard.
   const IMMERSIVE_KEY = "pilot_superagent_immersive";
   let immersiveOverlay = null;
+  // Liste des agents (affichage seul, barre du haut) : désabonnement au store
+  // partagé de agent-activity.js, posé à l'entrée et retiré à la sortie du mode.
+  let immersiveAgentsUnsubscribe = null;
   // Éléments créés avec l'overlay, réutilisés à chaque entrée en mode immersif.
   let immersiveSuggestions = null;
   let immersiveDisclaimer = null;
@@ -1518,7 +1522,10 @@ export async function createSuperAgent(container) {
     const ov = document.createElement("div");
     ov.className = "superagent-immersive";
     // Barre du haut conforme à la maquette ASS_Only_V4 : gauche = bouton
-    // retour (flèche) + titre « Pilot » ; droite = UN SEUL bouton ⚙ qui ouvre
+    // retour (flèche) + titre « Pilot » ; droite = liste des agents
+    // (AFFICHAGE SEUL : même liste et même filtrage que l'indicateur
+    // d'activité du mode standard, via le store partagé agent-activity.js —
+    // aucun clic, aucun menu, aucun tooltip) + UN SEUL bouton ⚙ qui ouvre
     // les paramètres existants de l'assistant (modale Paramètres, onglet
     // « Assistant »). Sous la barre : hero (logo Pilot rond dans un cercle +
     // message d'accueil, comme la maquette). Les suggestions et le disclaimer
@@ -1529,6 +1536,7 @@ export async function createSuperAgent(container) {
       <div class="sa-immersive-top">
         <button class="agent-btn sa-immersive-back" data-imm="back" title="Revenir au mode standard"><i data-lucide="arrow-left" class="icon"></i></button>
         <span class="sa-immersive-title">Pilot</span>
+        <div class="sa-immersive-agents" data-imm="agents" aria-hidden="true"></div>
         <button class="agent-btn sa-immersive-settings" data-imm="settings" title="Paramètres de l'assistant"><i data-lucide="settings" class="icon"></i></button>
       </div>
       <div class="sa-immersive-hero">
@@ -1578,6 +1586,13 @@ export async function createSuperAgent(container) {
   function enterImmersive() {
     if (immersiveOverlay) return;
     immersiveOverlay = buildImmersiveOverlay();
+    // Liste des agents (affichage seul) : abonnement au store partagé de
+    // agent-activity.js (même source de données que l'indicateur du mode
+    // standard). Le conteneur est en pointer-events: none — strictement
+    // informatif. Désabonnement à la sortie (exitImmersive).
+    immersiveAgentsUnsubscribe = mountStaticAgentList(
+      immersiveOverlay.querySelector('[data-imm="agents"]')
+    );
     immersiveOverlay.querySelector(".sa-immersive-messages").appendChild(messagesEl);
     const immInput = immersiveOverlay.querySelector(".sa-immersive-input");
     // Suggestions (préremplissent la saisie, n'envoient pas).
@@ -1602,6 +1617,11 @@ export async function createSuperAgent(container) {
 
   function exitImmersive() {
     if (!immersiveOverlay) return;
+    // Liste des agents (affichage seul) : désabonnement au store partagé.
+    if (immersiveAgentsUnsubscribe) {
+      immersiveAgentsUnsubscribe();
+      immersiveAgentsUnsubscribe = null;
+    }
     // Remettre chaque élément à sa place d'origine, dans le bon ordre, pour
     // rester symétrique avec enterImmersive (sans doublon ni perte).
     // messagesEl était le premier enfant du wrapper (avant la toolbar).

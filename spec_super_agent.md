@@ -547,6 +547,13 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
   « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
   existants de l'Assistant (modale Paramètres, onglet « Assistant »).
+- **Liste des agents (affichage seul)** : dans cette barre, juste à gauche du
+  bouton ⚙, la **liste des agents disponibles** est affichée : mêmes entrées et
+  mêmes règles que la liste du mode standard (agents avec onglet ou occupés,
+  assistant toujours visible) — une **pastille pulsante** quand un agent
+  travaille, sinon un anneau discret ; nom + projet. Strictement **informative** : rien n'est cliquable (pas de menu, pas de fiche, pas
+  d'ouverture d'onglet, pas de tooltip) — c'est un simple aperçu de qui
+  travaille en arrière-plan.
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant
   travaille.

@@ -16,8 +16,14 @@
 // 2 s, + événement push `agent-state-changed` (Rust → JS) pour un rafraîchissement
 // immédiat. Aucune commande Rust ajoutée.
 //
+// Le poll + le filtrage sont centralisés dans un « store » partagé
+// (subscribeAgentActivity) consommé par l'indicateur ci-dessus ET par la liste
+// des agents en AFFICHAGE SEUL du mode « Assistant Only » immersif (super-agent.js)
+// — même source de données, même filtrage, aucun polling dupliqué.
+//
 // Les fonctions pures (flattenAgents, anyBusy, renderDropdown, renderCard,
-// formatLastActivity) sont testées dans agent-activity.test.js.
+// renderStaticAgentList, formatLastActivity) sont testées dans
+// agent-activity.test.js.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -116,6 +122,111 @@ export function anyBusy(list) {
   return list.some((a) => a.busy);
 }
 
+// ── Store partagé (supervision, plusieurs consommateurs) ──
+// Sémantique historique de l'indicateur (poll 2 s + push `agent-state-changed`,
+// filtrage flattenAgents), extraite d'initAgentActivity pour être réutilisée
+// sans doublon : un seul polling actif quelle que soit la consommation. En cas
+// d'échec de get_agent_supervision, aucun abonné n'est noté (pas de mise à
+// jour), comme avant.
+const activitySubscribers = new Set();
+let activityStarted = false;
+// Dernière liste/busy notifiés. `null` = store jamais alimenté.
+let currentActivityList = null;
+let currentActivityBusy = false;
+
+async function activityRefresh() {
+  try {
+    const sup = await invoke("get_agent_supervision");
+    const list = flattenAgents(sup, lastActivity);
+    currentActivityList = list;
+    currentActivityBusy = anyBusy(list);
+    for (const cb of [...activitySubscribers]) {
+      try { cb(currentActivityList, currentActivityBusy); } catch (_) {}
+    }
+  } catch (_) {
+    /* ignore : pas de mise à jour */
+  }
+}
+
+/** Démarre le polling partagé (une seule fois, au premier abonné). */
+function ensureActivityStore() {
+  if (activityStarted) return;
+  activityStarted = true;
+  // Push immédiat : changement d'état d'un agent (mise à jour lastActivity).
+  listen("agent-state-changed", (event) => {
+    const p = event.payload || {};
+    if (p.agentId) lastActivity.set(p.agentId, Date.now());
+    activityRefresh();
+  }).catch(() => {});
+  // Poll toutes les 2 s (source de vérité get_agent_supervision).
+  setInterval(activityRefresh, 2000);
+  activityRefresh();
+}
+
+/**
+ * S'abonne au flux d'activité partagé (liste aplatie flattenAgents + busy).
+ * L'abonné est noté immédiatement avec le dernier état connu (s'il existe),
+ * puis à chaque poll/événement. @returns {Function} désabonnement.
+ */
+export function subscribeAgentActivity(cb) {
+  ensureActivityStore();
+  activitySubscribers.add(cb);
+  if (currentActivityList) {
+    try { cb(currentActivityList, currentActivityBusy); } catch (_) {}
+  }
+  return () => activitySubscribers.delete(cb);
+}
+
+/** Dernier état connu du store partagé (vide tant qu'aucun poll n'a abouti). */
+export function getAgentActivitySnapshot() {
+  return { list: currentActivityList || [], busy: currentActivityBusy };
+}
+
+/**
+ * Rendu HTML de la liste des agents en AFFICHAGE SEUL (mode « Assistant Only »
+ * immersif, barre du haut) : mêmes items que renderDropdown (pastille + nom +
+ * projet, même filtrage amont) mais SANS aucun élément interactif — pas de
+ * <button>, pas de title, pas de data-agent-id cliquable. Le conteneur recevant
+ * ce rendu est en pointer-events: none (CSS) : affichage strictement
+ * informatif, choix validé par l'utilisateur.
+ */
+export function renderStaticAgentList(list) {
+  if (!list || !list.length) {
+    return '<span class="sa-immersive-agents-empty">Aucun agent actif</span>';
+  }
+  return list
+    .map(
+      (a) => `
+    <span class="sa-immersive-agent" data-kind="${esc(a.kind)}">
+      <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
+      <span class="sa-immersive-agent-name">${esc(a.label)}</span>
+      ${a.project ? `<span class="sa-immersive-agent-project">${esc(a.project)}</span>` : ""}
+    </span>`
+    )
+    .join("");
+}
+
+/**
+ * Monte la liste « affichage seul » dans un conteneur hôte (barre du haut du
+ * mode « Assistant Only »). Mise à jour via le store partagé (même liste, même
+ * filtrage que l'indicateur du mode standard). AUCUN listener d'interaction
+ * n'est attaché — l'affichage est strictement informatif.
+ * @param {HTMLElement|null} host — conteneur (détruit avec l'overlay immersif).
+ * @returns {Function} désabonnement (à appeler à la sortie du mode).
+ */
+export function mountStaticAgentList(host) {
+  if (!host) return () => {};
+  const render = (list) => {
+    host.innerHTML = renderStaticAgentList(list);
+  };
+  // Rendu initial sans flash trompeur : si aucune donnée n'arrive encore
+  // (store jamais alimenté), on laisse le callback poser l'état (vide ou
+  // items) au premier poll (<2 s) au lieu d'afficher « Aucun agent actif ».
+  const snapshot = getAgentActivitySnapshot();
+  if (snapshot.list.length) render(snapshot.list);
+  return subscribeAgentActivity(render);
+}
+
 /** Rendu HTML de la liste déroulante (fond solide teinté violet, un item par agent).
  * Affiche la pastille (cercle) ainsi que le nom de l'agent, et son projet s'il
  * est présent. Le nom complet (avec projet) reste accessible au survol via un
@@ -165,29 +276,26 @@ export function initAgentActivity(tabs) {
   let currentList = [];
   let currentCardAgent = null;
 
-  async function refresh() {
-    try {
-      const sup = await invoke("get_agent_supervision");
-      currentList = flattenAgents(sup, lastActivity);
-      const busy = anyBusy(currentList);
-      dot.classList.toggle("breathing", busy);
-      dot.title = busy ? "Un agent travaille" : "Agents au repos";
-      if (!dropdown.classList.contains("hidden")) {
-        dropdown.innerHTML = renderDropdown(currentList);
-      }
-      if (currentCardAgent) {
-        const updated = currentList.find(
-          (a) => a.agentId === currentCardAgent.agentId && a.kind === currentCardAgent.kind
-        );
-        if (updated) {
-          currentCardAgent = updated;
-          card.innerHTML = renderCard(updated);
-        }
-      }
-    } catch (_) {
-      /* ignore : pas de mise à jour */
+  // Consommation du store partagé (poll 2 s + push agent-state-changed, même
+  // filtrage flattenAgents) : comportement identique à l'ancien refresh()
+  // interne, sans polling propre (source unique pour tous les affichages).
+  subscribeAgentActivity((list, busy) => {
+    currentList = list;
+    dot.classList.toggle("breathing", busy);
+    dot.title = busy ? "Un agent travaille" : "Agents au repos";
+    if (!dropdown.classList.contains("hidden")) {
+      dropdown.innerHTML = renderDropdown(list);
     }
-  }
+    if (currentCardAgent) {
+      const updated = list.find(
+        (a) => a.agentId === currentCardAgent.agentId && a.kind === currentCardAgent.kind
+      );
+      if (updated) {
+        currentCardAgent = updated;
+        card.innerHTML = renderCard(updated);
+      }
+    }
+  });
 
   function toggleDropdown() {
     if (dropdown.classList.contains("hidden")) {
@@ -258,17 +366,8 @@ export function initAgentActivity(tabs) {
   // NOTE : pas de fermeture au clic extérieur — la liste reste ouverte jusqu'à
   // ce qu'on reclique sur le cercle principal (comportement « liste persistante »).
   // L'état déplié/replié est persisté via localStorage (agent-activity-expanded).
-
-  // Rafraîchissement immédiat sur changement d'état d'un agent.
-  listen("agent-state-changed", (event) => {
-    const p = event.payload || {};
-    if (p.agentId) lastActivity.set(p.agentId, Date.now());
-    refresh();
-  }).catch(() => {});
-
-  // Poll toutes les 2 s (source de vérité get_agent_supervision).
-  setInterval(refresh, 2000);
-  refresh();
+  // Le poll 2 s + le push `agent-state-changed` sont gérés par le store partagé
+  // (ensureActivityStore), auquel l'indicateur vient de s'abonner.
 
   // Restaure l'état déplié/replié persisté (localStorage).
   if (localStorage.getItem("agent-activity-expanded") === "true") {

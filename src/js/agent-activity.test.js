@@ -1,9 +1,51 @@
 // Tests unitaires — agent-activity.js (indicateur d'activité des agents)
 // Couvre les fonctions pures : flattenAgents (assistant + codeurs, états
 // running/idle/paused), anyBusy (true si ≥1 running), mapping état→libellé
-// travail/repos, et formatLastActivity.
-import { describe, it, expect } from "vitest";
-import { flattenAgents, anyBusy, renderCard, renderDropdown, formatLastActivity } from "./agent-activity.js";
+// travail/repos, formatLastActivity, le rendu AFFICHAGE SEUL
+// renderStaticAgentList (mode assistant only) et le store partagé
+// subscribeAgentActivity (mono-source de l'indicateur et de la liste immersif).
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import {
+  flattenAgents,
+  anyBusy,
+  renderCard,
+  renderDropdown,
+  renderStaticAgentList,
+  subscribeAgentActivity,
+  getAgentActivitySnapshot,
+  mountStaticAgentList,
+  formatLastActivity,
+} from "./agent-activity.js";
+
+// Mocks Tauri : le store partagé démarre listen/poll à l'abonnement —
+// pilote inhabituel ici : chaque test contrôle invoke via mockResolvedValue et
+// déclenche les mises à jour via le handler push capté par listen.
+let storeListenHandler = null;
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+
+/** Flush les microtasks (chaîne listen → poll → abonnés) sans timers réels. */
+async function flush() {
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+}
+
+/** Invoque le handler push `agent-state-changed` enregistré par le store. */
+function pushAgentState(payload) {
+  if (!storeListenHandler) throw new Error("store jamais démarré : listen non enregistré");
+  storeListenHandler({ payload });
+}
+
+/** Pose un listen mocké qui capture le handler push enregistré par le store. */
+function installListenCapture() {
+  vi.mocked(listen).mockImplementation((_event, handler) => {
+    storeListenHandler = handler;
+    return Promise.resolve(() => {});
+  });
+}
 
 // Supervision type retournée par get_agent_supervision (dashboard.rs).
 function makeSupervision(projects) {
@@ -303,5 +345,160 @@ describe("formatLastActivity", () => {
   it("formate un timestamp en heure locale", () => {
     const ts = new Date(2020, 0, 1, 9, 5).getTime();
     expect(formatLastActivity(ts)).toBe("09:05");
+  });
+});
+
+describe("renderStaticAgentList — liste des agents en AFFICHAGE SEUL (mode assistant only)", () => {
+  it("affiche l'état vide discret quand la liste est vide", () => {
+    const html = renderStaticAgentList([]);
+    expect(html).toContain("sa-immersive-agents-empty");
+    expect(html).toContain("Aucun agent actif");
+    expect(html).not.toContain("sa-immersive-agent\"");
+  });
+
+  it("rend un item STRICTEMENT informatif : aucun button, aucun title, aucun data-agent-id", () => {
+    const html = renderStaticAgentList([
+      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+      { agentId: "codeur|C:/proj/Pilot", rawId: "codeur", label: "codeur", project: "Pilot", busy: true, kind: "agent" },
+    ]);
+    // Aucune interaction : pas de <button> (contrairement à renderDropdown),
+    // pas de tooltip, pas d'identifiant cliquable.
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("title=");
+    expect(html).not.toContain("data-agent-id");
+    // Même contenu visuel que la liste standard : nom, projet, pastille.
+    expect(html).toContain("Assistant (Magnus)");
+    expect(html).toContain("codeur");
+    expect(html).toContain("Pilot");
+    expect(html).toContain('data-kind="superagent"');
+    // Pastille réutilisée : breathing quand l'agent travaille.
+    expect(html).toMatch(/agent-activity-item-dot\s*breathing/);
+  });
+
+  it("applique le style superagent à l'assistant et pas aux agents standard", () => {
+    const html = renderStaticAgentList([
+      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+      { agentId: "x", rawId: "x", label: "x", project: "p", busy: false, kind: "agent" },
+    ]);
+    expect(html).toMatch(/agent-activity-item-dot\s*superagent/);
+  });
+
+  it("n'affiche pas de span projet quand l'agent n'a pas de projet", () => {
+    const html = renderStaticAgentList([
+      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+    ]);
+    expect(html).not.toContain("sa-immersive-agent-project");
+  });
+
+  it("échappe le HTML du nom et du projet (rendu sûr du store partagé)", () => {
+    const html = renderStaticAgentList([
+      { agentId: "x", rawId: "x", label: "<b>bad</b>", project: "a\u0026'b", busy: false, kind: "agent" },
+    ]);
+    expect(html).not.toContain("<b>bad</b>");
+    expect(html).toContain("&lt;b&gt;bad&lt;/b&gt;");
+    expect(html).toContain("a\u0026amp;&#39;b");
+  });
+});
+
+describe("store partagé — subscribeAgentActivity (mono-source, indicateur standard + affichage seul)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(listen).mockReset();
+    installListenCapture();
+    // Fake timers : neutralise l'interval partagé du store (les mises à jour
+    // sont déclenchées explicitement via pushAgentState, jamais par le temps).
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("notifie l'abonné avec la liste aplatie + busy, re-notifie au push, et stoppe après unsubscribe", async () => {
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running", visible: false }] },
+    ]));
+
+    const cb = vi.fn();
+    const unsub = subscribeAgentActivity(cb);
+    await flush();
+
+    // Premier poll : notification avec la liste aplatie (même filtrage).
+    // Ici l'agent busy sans onglet est CONSERVÉ, l'assistant jamais filtré.
+    expect(cb).toHaveBeenCalled();
+    const [lastList, lastBusy] = cb.mock.calls[cb.mock.calls.length - 1];
+    expect(lastList).toEqual(getAgentActivitySnapshot().list);
+    expect(lastList).toHaveLength(2);
+    expect(lastList[0]).toMatchObject({ agentId: "superagent", kind: "superagent" });
+    expect(lastList[1]).toMatchObject({ rawId: "codeur", busy: true, kind: "agent" });
+    expect(lastBusy).toBe(true);
+
+    // Push agent-state-changed → rafraîchissement immédiat + notification.
+    cb.mockClear();
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "idle", visible: false }] },
+    ]));
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(cb).toHaveBeenCalled();
+    const [pushedList, pushedBusy] = cb.mock.calls[cb.mock.calls.length - 1];
+    expect(pushedList).toHaveLength(0); // agent au repos sans onglet → filtré
+    expect(pushedBusy).toBe(false);
+
+    // Après désabonnement : plus aucune notification (re-push + flush).
+    unsub();
+    cb.mockClear();
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("getAgentActivitySnapshot — invariant : liste un tableau (jamais null), busy un booléen", () => {
+    // Quoi qu'il arrive (store jamais alimenté ou déjà alimenté par les
+    // tests précédents), le snapshot reste consommable tel quel.
+    const snap = getAgentActivitySnapshot();
+    expect(Array.isArray(snap.list)).toBe(true);
+    expect(typeof snap.busy).toBe("boolean");
+  });
+});
+
+describe("mountStaticAgentList — montage de la liste affichage seul (mode assistant only)", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(listen).mockReset();
+    installListenCapture();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("rend les agents dans l'hôte et se met à jour via le store (aucun listener d'interaction)", async () => {
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running" }] },
+      { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
+    ]));
+
+    const host = { innerHTML: "" };
+    const unsub = mountStaticAgentList(host);
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+
+    expect(host.innerHTML).toContain("sa-immersive-agent");
+    expect(host.innerHTML).toContain("codeur");
+    expect(host.innerHTML).toContain("Assistant (Magnus)");
+    expect(unsub).toBeTypeOf("function");
+    unsub();
+  });
+
+  it("mountStaticAgentList(null) reste inoffensif (désabonnement no-op)", () => {
+    const unsub = mountStaticAgentList(null);
+    expect(() => unsub()).not.toThrow();
   });
 });
