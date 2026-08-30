@@ -22,7 +22,6 @@ use crate::{run_captured, AppState};
 // process partagé) et retournent une erreur lisible en cas d'échec.
 
 /// Initialise un dépôt bare (côté serveur GDS).
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_init_bare(path: &str) -> Result<(), String> {
     let out = run_captured("git", &["init", "--bare", path], Duration::from_secs(10));
     if out.trim().is_empty() {
@@ -42,7 +41,6 @@ pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
 }
 
 /// Ajoute (ou met à jour) un remote à un dépôt local.
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
     // Retirer un remote existant du même nom pour être idempotent.
     run_captured("git", &["-C", cwd, "remote", "remove", name], Duration::from_secs(5));
@@ -54,7 +52,6 @@ pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
 }
 
 /// Pousse la branche courante (ou HEAD) vers un remote.
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
     let out = run_captured(
         "git",
@@ -82,7 +79,6 @@ pub fn git_pull(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
 }
 
 /// Nom de la branche courante d'un dépôt local (vide si détaché / pas de HEAD).
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_current_branch(cwd: &str) -> String {
     run_captured("git", &["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3))
         .trim()

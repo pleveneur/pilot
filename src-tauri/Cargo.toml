@@ -36,6 +36,11 @@ include_dir = "0.7"
 qrcode = "0.14"
 
 # ── GDS (Gestionnaire de Sources, spec_gds.md) : PostgreSQL ──
+# Pool sqlx async (tokio) + migrations embarquées. `macros` est inclus mais on
+# utilise `sqlx::query` (runtime) pour ne pas exiger DATABASE_URL à la compilation.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+tokio-postgres = "0.7"
+
 # ── Context Engine V2 (RAG embeddings) ──
 rusqlite = { version = "0.31", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

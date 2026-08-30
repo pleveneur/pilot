@@ -1,10 +1,10 @@
 # ROADMAP — GDS (Gestionnaire de Sources) + Composant web de discussion (issue #56)
 
-> **Statut : 🟡 Plan technique — À VALIDER avec l'utilisateur avant toute implémentation.**
+> **Statut : 🟢 Phase A (bloc serveur) implémentée — B/C à venir.**
 >
-> Document de planification. Rien n'est encore implémenté. Une fois validé, une
-> spec détaillée (`spec_gds.md` / `spec_web_component.md`) sera rédigée à partir
-> de ce plan, puis les chantiers passés un par un au **protocole quality-gate**
+> Document de planification. La **Phase A (bloc serveur)** est implémentée
+> (voir `spec_gds.md` §PHASE A) ; les phases B/C et le composant web restent à
+> faire. Chaque chantier passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`).
 >
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par projet**
@@ -350,23 +350,27 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
-**A1. Provisionnement PostgreSQL + socle GDS**
+> ✅ **Implémentée (bloc serveur)** — `cargo test --lib` vert. Reste l'UI desktop
+> et la gestion des clefs SSH serveur (A3).
+
+**A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust.
 - Modules : `gds_db.rs`, `gds.rs` (provision), migration sqlx, config projet `.pilot/gds.json`
   (aucune config globale — décision 29/08, `spec_gds.md` §0.4).
 - Dépendances : néant (socle). Tests : unitaires pool/CRUD, migration appliquée.
 - Critère de fin : `gds_provision` crée la base + tables depuis un VPS vide.
 
-**A2. Identité & accès par email**
+**A2. Identité & accès par email** ✅
 - Objectif : users (email/password_hash), provision premier user, auth réutilisée.
 - Modules : `gds_db.rs` (table users), extension de `web_auth.rs`/`web_audit.rs`.
 - Tests : login, récupération, révocabilité. Critère : dev identifié par email.
 
-**A3. Dépôt git par projet (serveur)**
+**A3. Dépôt git par projet (serveur)** ✅ (bloc serveur)
 - Objectif : création d'un repo bare par projet + remote.
 - Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu).
 - Dépendances : A1, A2. Tests : création bare, clone/push/pull entre deux clones.
 - Critère : un projet ajouté → repo bare centralisé + push initial OK.
+- **Reste** : gestion des clefs SSH serveur (`authorized_keys` liées à un email).
 
 ### PHASE B — GDS : synchronisation & verrous
 

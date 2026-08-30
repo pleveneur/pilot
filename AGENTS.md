@@ -200,6 +200,7 @@ pilot/
 └── src-tauri/
     ├── Cargo.toml             # Dépendances Rust
     ├── tauri.conf.json        # Configuration Tauri
+    ├── migrations/            # Migrations SQL GDS (sqlx) : 0001_init.sql (users, projects, project_members, git_repos, audit_gds)
     ├── capabilities/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
@@ -248,6 +249,10 @@ pilot/
         ├── dashboard.rs      # Tableau de bord projet (issue #51) : métriques fichiers/Git + activité agent
         ├── vault.rs          # Coffre fort (issue #52) : AES-256-GCM + Argon2id, ~/.pilot/vault.json
         ├── mcp_config.rs     # POC MCP consommateur : mcp.json (app_data_dir), serveurs stdio, test connexion
+        ├── gds.rs            # GDS Phase A : config projet .pilot/gds.json + provision + commandes (gds_provision/gds_validate_user/gds_add_project)
+        ├── gds_db.rs         # GDS : pool PostgreSQL sqlx, provision idempotent, migrations, CRUD users/projects/git_repos
+        ├── gds_git.rs        # GDS : repo bare par projet, validation chemins, association membre
+        ├── gds_web.rs        # GDS : routes axum Phase A (provision, identité, projets, git) + routes B/C réservées
         └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches)
 ```
 

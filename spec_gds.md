@@ -5,9 +5,17 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟡 Plan validé — specs rédigées, aucune implémentation.**
+> **Statut : 🟢 Phase A (bloc serveur) implémentée — B/C à venir.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
+>
+> **Implémenté (Phase A, bloc serveur)** : dépendances PostgreSQL (sqlx +
+> tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
+> project_members, git_repos, audit_gds), `gds_db.rs` (pool, provision
+> idempotent, migrate, CRUD), `gds.rs` (config `.pilot/gds.json`, commandes
+> `gds_provision` / `gds_validate_user` / `gds_add_project`), `gds_git.rs`
+> (repo bare par projet, validation chemins), `gds_web.rs` (routes axum de base
+> + routes B/C réservées). Pas encore d'UI desktop (panneau « 🌐 GDS »).
 >
 > **Arbitrages utilisateur intégrés (11/11)** : cf. §0.2 + §0.4.
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par
@@ -491,7 +499,10 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
-**A1. Provisionnement PostgreSQL + socle GDS**
+> ✅ **Implémentée (bloc serveur)** — `cargo test --lib` vert. Reste l'UI desktop
+> (panneau « 🌐 GDS ») et la gestion des clefs SSH serveur (Phase A3).
+
+**A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust
   (local OU distant, arbitrage 3) + **activation du GDS par projet**
   (`.pilot/gds.json`, §0.4 : activation on/off, URL serveur, identité).
@@ -502,18 +513,19 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - Critère de fin : `.pilot/gds.json` actif + `gds_provision` crée la base +
   tables depuis un serveur vide (local ou distant).
 
-**A2. Identité & accès par email**
+**A2. Identité & accès par email** ✅
 - Objectif : users (email/password_hash), provision premier user (admin),
   auth réutilisée.
 - Modules : `gds_db.rs` (table users), extension de `web_auth.rs`/`web_audit.rs`.
 - Tests : login, récupération, révocabilité. Critère : dev identifié par email.
 
-**A3. Dépôt git par projet (serveur)**
+**A3. Dépôt git par projet (serveur)** ✅ (bloc serveur)
 - Objectif : création d'un repo bare par projet + remote, transport **SSH par
   clef liée à l'email** (arbitrage 2).
 - Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu).
 - Dépendances : A1, A2. Tests : création bare, clone/push/pull entre deux clones.
 - Critère : un projet ajouté → repo bare centralisé + push initial OK.
+- **Reste** : gestion des clefs SSH serveur (`authorized_keys` liées à un email).
 
 **Périmètre de la Phase A** : elle livre **uniquement les fondations**
 (provision serveur, identité, activation par projet, dépôt git bare). Elle ne

@@ -75,6 +75,10 @@ mod mcp_config;
 mod agent;
 mod agent_service;
 mod anomaly;
+mod gds;
+mod gds_db;
+mod gds_git;
+mod gds_web;
 
 // ── État global de l'application ──
 
@@ -146,6 +150,10 @@ struct AppState {
     /// conservée en mémoire uniquement tant que le coffre est déverrouillé.
     /// `None` = verrouillé. Jamais persistée sur disque.
     vault_key: Mutex<Option<Vec<u8>>>,
+    /// GDS (spec_gds.md) : pool PostgreSQL du serveur GDS du projet actif.
+    /// `None` tant que le GDS n'est pas provisionné. La config GDS vit dans le
+    /// projet (`.pilot/gds.json`), jamais dans AppConfig (décision 29/08/2026).
+    gds_pool: Mutex<Option<sqlx::PgPool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -2098,6 +2106,7 @@ pub fn run() {
                 web_runs: Mutex::new(HashMap::new()),
                 working_project: Mutex::new(None),
                 vault_key: Mutex::new(None),
+                gds_pool: Mutex::new(None),
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -2356,6 +2365,10 @@ pub fn run() {
             vault::vault_add,
             vault::vault_update,
             vault::vault_delete,
+            // ── GDS (Gestionnaire de Sources, spec_gds.md) : Phase A serveur ──
+            gds::gds_provision,
+            gds::gds_validate_user,
+            gds::gds_add_project,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

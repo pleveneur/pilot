@@ -191,6 +191,9 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         // Issue #61 : mode d'interface du web remote (assistant/agents), persisté
         // côté serveur (config) au lieu du localStorage.
         .route("/api/settings", get(web_settings_get).post(web_settings_set))
+        // GDS (spec_gds.md) : routes API Phase A (provision, identité, projets,
+        // dépôts git) + routes B/C réservées. Derrière auth_middleware.
+        .merge(crate::gds_web::gds_routes())
         .layer(from_fn_with_state(ctx.clone(), auth_middleware));
 
     Router::new()
@@ -264,13 +267,13 @@ async fn login(
 /// et émettre un audit log (origine + sujet) sans re-extraire le bearer.
 /// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source.
 #[derive(Clone)]
-struct AuthedClient {
-    key: String,
-    ip: String,
+pub(crate) struct AuthedClient {
+    pub(crate) key: String,
+    pub(crate) ip: String,
 }
 
 /// Middleware d'authentification : valide le header `Authorization: Bearer <token>`.
-async fn auth_middleware(
+pub(crate) async fn auth_middleware(
     State(ctx): State<Arc<WebCtx>>,
     headers: HeaderMap,
     mut req: Request,
