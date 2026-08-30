@@ -439,7 +439,7 @@ async function launchNextQueued(agentId, project) {
     return;
   }
   emit("notify", { agentId: id, message: `▶️ L'agent ${id} démarre sa tâche en file d'attente sur ce projet.` });
-  await runAgentTurn(agent, next.brief, "", next.project || project, undefined);
+  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null);
 }
 
 function resetTimeout(ctx) {
@@ -1425,7 +1425,57 @@ export async function stopAllAgentProcesses() {
   await invoke("stop_all_agent_processes").catch(() => {});
 }
 
-async function runAgentTurn(agent, brief, projectContext = "", project = null, options) {
+/**
+ * Pure (testable) : indique si un tour d'agent exige un contexte VIERGE.
+ *
+ * Restitution fiable (relance d'agents secondaires via `run_agents`) : un
+ * contexte vierge est requis quand `options.purge` est vrai (anti-boucle,
+ * contexte propre comme le mode manuel) OU quand l'agent n'est pas en
+ * `keep_context`. Dans ce cas le frontend force un process pi NEUF et une
+ * `new_session` plutôt que de reprendre un processus vivant d'une run
+ * précédente (qui peut conserver l'ancienne conversation).
+ * @param {object} agent - agent normalisé (champ `keep_context`).
+ * @param {object} [options] - options du tour (`purge`).
+ * @returns {boolean}
+ */
+export function needsFreshAgentSession(agent, options) {
+  return !!(((options && options.purge) === true) || (agent && agent.keep_context !== true));
+}
+
+/**
+ * Force le redémarrage propre d'une session AgentProcess de run précédente
+ * quand un contexte vierge est demandé (voir `needsFreshAgentSession`).
+ *
+ * Problème cible : après une `run_agents`, le processus pi de l'agent reste
+ * VIVANT (parké). À la relance du MÊME agent, `start_agent_process` le REPREND
+ * au lieu d'en créer un neuf ; la conversation antérieure n'est pas garantie
+ * d'être réellement purgée (`new_agent_process_session` peut être ignoré par un
+ * process encore en streaming/delta). Résultat : l'agent soit « ne démarre pas
+ * réellement », soit renvoie L'ANCIENNE session au lieu du nouveau travail.
+ *
+ * On arrête donc l'éventuelle session AgentProcess existante (project, agent)
+ * AVANT le spawn, pour forcer un processus neuf au contexte vierge. Garde de
+ * sûreté : on ne stoppe QUE les sessions en mode `agent_process` (délégations) ;
+ * une session MainSession (onglet agent ouvert à la main) n'est jamais tuée.
+ * Fail-open : toute erreur est ignorée — on ne bloque jamais un tour.
+ * @param {object} agent - agent normalisé (`id`).
+ * @param {string} project - chemin du projet.
+ */
+async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
+  try {
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    const existing = sessions.find(
+      (s) => s.agent === agent.id && s.project === project && s.mode === "agent_process"
+    );
+    if (!existing) return;
+    await invoke("stop_agent_process", { agentId: agent.id, project }).catch(() => {});
+  } catch (_) {
+    // fail-open : inoffensif, le spawn suivant créera de toute façon une session.
+  }
+}
+
+async function runAgentTurn(agent, brief, projectContext = "", project = null, options, mcpServer = null) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
     return;
@@ -1470,6 +1520,11 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   const cfg = busState.config || {};
   const piPath = cfg.rpc_pi_path || "";
   const noSession = !agent.keep_context;
+  // Restitution fiable : ce tour exige-t-il un contexte vierge (purge ou agent
+  // non keep_context) ? Si oui on force un process neuf (voir
+  // forceStaleAgentProcessRestartIfNeeded + new_session), sinon on conserve le
+  // comportement historique (reprise de la session pour les keep_context).
+  const freshContext = needsFreshAgentSession(agent, options);
 
   console.log("[agents-bus] turn", { agentId: agent.id, model, provider, modelId, cwd });
 
@@ -1543,13 +1598,21 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
         cwd,
         piPath,
         noSession,
+        mcpServer: mcpServer || null,
       });
     } else {
+      // Restitution fiable : contexte vierge demandé → arrêter l'éventuelle
+      // session AgentProcess de la run précédente pour que le spawn qui suit
+      // crée un process NEUF (au lieu de reprendre une session réutilisée).
+      if (freshContext) {
+        await forceStaleAgentProcessRestartIfNeeded(agent, cwd);
+      }
       await invoke("start_agent_process", {
         agentId: agent.id,
         cwd,
         piPath,
         noSession,
+        mcpServer: mcpServer || null,
       });
     }
 
@@ -1558,7 +1621,7 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // manuel) — indépendamment de `keep_context`. Sinon, on conserve le
     // comportement historique : nouvelle session uniquement pour les agents
     // sans `keep_context`.
-    if ((options && options.purge) || !agent.keep_context) {
+    if (freshContext) {
       await invoke("new_agent_process_session", { agentId: agent.id, project: cwd });
     }
 
@@ -1638,7 +1701,7 @@ async function dispatchParallel(assignments, onComplete, options, runProject, ct
       emit("notify", { agentId: a.agentId, message: `⏳ L'agent ${a.agentId} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.` });
       continue;
     }
-    await runAgentTurn(agent, a.brief, "", a.project, options);
+    await runAgentTurn(agent, a.brief, "", a.project, options, a.mcp_server || null);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.

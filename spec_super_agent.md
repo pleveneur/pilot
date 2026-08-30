@@ -342,6 +342,13 @@ uniquement un bloc d'instructions dans le prompt système.
     l'agent réussisse du premier coup.
   - **Purge de la conversation** : la conversation de chaque agent est purgée
     avant la run (contexte vierge), indépendamment de `keep_context`.
+  - **Processus neuf (restitution fiable)** : pour une relance, l'éventuelle
+    session `agent_process` de la run précédente est **arrêtée** avant le
+    lancement, de sorte qu'un **process pi neuf** démarre avec un contexte
+    vierge — on ne reprend pas un processus réutilisé qui pourrait conserver
+    l'ancienne conversation (« renvoie l'ancienne session ») ou ignorer la
+    purge s'il est encore en streaming. Une session d'agent ouverte à la main
+    (onglet agent, mode `main_session`) n'est jamais tuée.
   - **Détection de boucle** : les appels `run_agents` identiques répétés sont
     détectés (empreinte `agent_ids` + tâche) et arrêtent l'Assistant.
   - **Consigne système** : l'Assistant est invité à construire des prompts

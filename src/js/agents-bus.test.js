@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -30,6 +30,35 @@ describe("isRunInProgress — source de vérité « run occupée ou non » (par 
   it("retourne false quand aucune run n'est en cours (état initial = idle)", () => {
     expect(isRunInProgress()).toBe(false);
     expect(isRunInProgress("projetA")).toBe(false);
+  });
+});
+
+describe("needsFreshAgentSession — contexte vierge pour relance d'agents secondaires (restitution fiable)", () => {
+  const keep = { id: "code", keep_context: true };
+  const noKeep = { id: "review", keep_context: false }; // défaut des agents secondaires
+
+  it("exige un contexte vierge pour un agent sans keep_context (défaut des agents secondaires)", () => {
+    expect(needsFreshAgentSession(noKeep, undefined)).toBe(true);
+    expect(needsFreshAgentSession(noKeep, {})).toBe(true);
+  });
+
+  it("exige un contexte vierge quand options.purge est vrai, même pour un keep_context", () => {
+    expect(needsFreshAgentSession(keep, { purge: true })).toBe(true);
+  });
+
+  it("conserve la reprise (false) pour un agent keep_context sans purge", () => {
+    expect(needsFreshAgentSession(keep, undefined)).toBe(false);
+    expect(needsFreshAgentSession(keep, {})).toBe(false);
+    expect(needsFreshAgentSession(keep, { purge: false })).toBe(false);
+  });
+
+  it("purge non-booléenne / absent ne force pas un tour keep_context", () => {
+    expect(needsFreshAgentSession(keep, { purge: 0 })).toBe(false);
+    expect(needsFreshAgentSession(keep, null)).toBe(false);
+  });
+
+  it("gère un agent manquant sans erreur (fail-open)", () => {
+    expect(needsFreshAgentSession(null, {})).toBe(false);
   });
 });
 
