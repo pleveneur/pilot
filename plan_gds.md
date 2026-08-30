@@ -350,8 +350,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
-> ✅ **Implémentée (bloc serveur)** — `cargo test --lib` vert. Reste l'UI desktop
-> et la gestion des clefs SSH serveur (A3).
+> ✅ **Implémentée (bloc serveur + clefs SSH)** — `cargo test --lib` vert.
 
 **A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust.
@@ -365,12 +364,17 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - Modules : `gds_db.rs` (table users), extension de `web_auth.rs`/`web_audit.rs`.
 - Tests : login, récupération, révocabilité. Critère : dev identifié par email.
 
-**A3. Dépôt git par projet (serveur)** ✅ (bloc serveur)
+**A3. Dépôt git par projet (serveur)** ✅
 - Objectif : création d'un repo bare par projet + remote.
-- Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu).
+- Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu),
+  **`gds_ssh.rs`** (clefs SSH serveur).
 - Dépendances : A1, A2. Tests : création bare, clone/push/pull entre deux clones.
 - Critère : un projet ajouté → repo bare centralisé + push initial OK.
-- **Reste** : gestion des clefs SSH serveur (`authorized_keys` liées à un email).
+- **Clefs SSH serveur** ✅ : `gds_ssh.rs` gère tout automatiquement (GDS V1 =
+  serveur local) — clef du poste dev (ed25519, idempotente), utilisateur `git`
+  + `authorized_keys` (700/600), clefs liées aux emails (table `ssh_keys`,
+  migration 0003), synchro DB → authorized_keys, enregistrement auto à la
+  provision / add_project / sync. UI desktop : section « Clefs SSH » de l'onglet GDS.
 
 ### PHASE B — GDS : synchronisation & verrous
 

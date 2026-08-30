@@ -80,6 +80,7 @@ mod gds_client;
 mod gds_db;
 mod gds_git;
 mod gds_sync;
+mod gds_ssh;
 mod gds_web;
 
 // ── État global de l'application ──
@@ -2380,6 +2381,9 @@ pub fn run() {
             gds_sync::gds_release_lock,
             gds_sync::gds_urgent_lock,
             gds_sync::gds_get_lock,
+            // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
+            gds_ssh::gds_ssh_key,
+            gds_ssh::gds_register_ssh_key,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

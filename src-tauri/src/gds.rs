@@ -6,6 +6,7 @@
 
 use crate::gds_db;
 use crate::gds_git;
+use crate::gds_ssh;
 use crate::git::{git_current_branch, git_push, git_remote_add};
 use crate::web_auth::WebAuth;
 use crate::AppState;
@@ -166,6 +167,9 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
+    // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
+    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
+    gds_ssh::ensure_poste_key(pool, email).await?;
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let name = project_name(project);
     let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
@@ -202,6 +206,10 @@ pub async fn gds_provision(
     admin_password: String,
 ) -> Result<Value, String> {
     let pool = provision_db(&db_addr, &db_user, &db_password, &admin_email, &admin_password).await?;
+    // Phase A3 : provision SSH serveur (user git + authorized_keys + sshd) puis
+    // générer la clef du poste et l'enregistrer automatiquement.
+    gds_ssh::provision_server_ssh()?;
+    gds_ssh::ensure_poste_key(&pool, &admin_email).await?;
     // Dossier des repos.
     let local_dir = default_gds_local_dir();
     let repos = gds_git::repos_dir(&local_dir);

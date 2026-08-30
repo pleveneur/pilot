@@ -247,6 +247,13 @@ type GitHub.
     ajoute le remote `gds` (sans toucher à un éventuel `origin` existant) et
     pousse la branche courante ;
   - **Consulter** la liste des projets et des dépôts git du serveur.
+- **Clefs SSH (Phase A3)** : la section « Clefs SSH » de l'onglet GDS gère
+  automatiquement l'accès SSH au serveur (utilisateur `git` + clefs publiques
+  liées aux emails) :
+  - **Générer / afficher la clef du poste** (paire ed25519 créée dans `~/.ssh/`
+    si absente, sans écraser une clef existante) ;
+  - **Enregistrer une clef de dev** (email + clef publique) → Pilot l'ajoute à
+    `authorized_keys` du serveur, liée à l'email.
 - **Synchronisation & verrous (Phase B)** : la section « Synchronisation &
   verrous » de l'onglet GDS permet de :
   - **Synchroniser** le projet depuis le remote `gds` (clone si absent, sinon

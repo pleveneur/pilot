@@ -8044,6 +8044,27 @@ body.pilot-loading *::after {
   color: var(--text-secondary, #a0a6b4);
   line-height: 1.7;
 }
+.gds-ssh-poste {
+  margin-top: 6px;
+}
+.gds-ssh-key {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-secondary, #a0a6b4);
+  background: var(--surface-1, #16181d);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-top: 6px;
+  word-break: break-all;
+  user-select: all;
+}
+.gds-textarea {
+  resize: vertical;
+  min-height: 48px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
 
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)

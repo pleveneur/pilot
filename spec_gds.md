@@ -164,6 +164,7 @@ stable.
 | `gds_sync.rs` | Synchronisation poste, **verrou global projet** + **mode urgent**, détection de lock obsolète (TTL), **pont bidirectionnel SQLite↔Postgres** |
 | `gds_web.rs` | Routes GDS ajoutées à `web_server.rs` (ou module axum dédié) |
 | `gds_client.rs` | Côté **poste de dev** : commandes de sync/verrou/push, dossier GDS paramétrable |
+| `gds_ssh.rs` | **Clefs SSH serveur** (Phase A3) : clef du poste dev, utilisateur `git`, `authorized_keys` liées aux emails, validation/formatage |
 | `group_assistant.rs` | **Assistant de groupe** (lecture seule) : questions sur projets + ajout de demandes au suivi — basé sur `super_agent.rs` |
 | `tickets.rs` | Modèle de demandes/tickets, statuts, commentaires, visibilité |
 
@@ -545,13 +546,39 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - Modules : `gds_db.rs` (table users), extension de `web_auth.rs`/`web_audit.rs`.
 - Tests : login, récupération, révocabilité. Critère : dev identifié par email.
 
-**A3. Dépôt git par projet (serveur)** ✅ (bloc serveur)
+**A3. Dépôt git par projet (serveur)** ✅
 - Objectif : création d'un repo bare par projet + remote, transport **SSH par
   clef liée à l'email** (arbitrage 2).
-- Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu).
+- Modules : `gds_git.rs`, `gds.rs` (add project), `git.rs` (étendu),
+  **`gds_ssh.rs`** (gestion des clefs SSH serveur, Phase A3).
 - Dépendances : A1, A2. Tests : création bare, clone/push/pull entre deux clones.
 - Critère : un projet ajouté → repo bare centralisé + push initial OK.
-- **Reste** : gestion des clefs SSH serveur (`authorized_keys` liées à un email).
+- **Gestion des clefs SSH serveur** ✅ : `gds_ssh.rs` gère tout automatiquement
+  (GDS V1 = serveur local) :
+  - **Clef du poste dev** : génération d'une paire ed25519 dans `~/.ssh/` si
+    absente (idempotent, n'écrase jamais une clef existante), lecture de la clef
+    publique (commande `gds_ssh_key` → `{ public_key, path, generated }`).
+  - **Utilisateur système `git`** : créé à la provision s'il n'existe pas
+    (`useradd`/`adduser` Linux/macOS, `net user` Windows), `~git/.ssh/` en 700
+    et `authorized_keys` en 600, activation sshd (OpenSSH Server). Erreur claire
+    si les droits admin manquent.
+  - **Clefs liées aux emails** : table `ssh_keys` (migration `0003_ssh_keys.sql`,
+    `public_key` UNIQUE, FK `users`), CRUD dans `gds_db.rs`
+    (`create_ssh_key`, `get_ssh_keys_by_user`, `get_ssh_key_by_key`,
+    `get_ssh_key_by_fingerprint`, `delete_ssh_key`).
+  - **Synchronisation DB → authorized_keys** : pour chaque clef de `ssh_keys`
+    (associée à un email), écrit la ligne `type base64 <email>` dans
+    `~git/.ssh/authorized_keys` (idempotent, sans doublon). Commande
+    `gds_register_ssh_key` (email + clef) : insère en base puis met à jour
+    authorized_keys. Validation stricte du format de clef (anti-injection de
+    ligne).
+  - **Bout en bout** : à la provision, la clef du poste est générée et
+    enregistrée automatiquement ; à `gds_add_project` et `gds_sync_project`, on
+    s'assure que la clef du poste est présente dans authorized_keys pour que le
+    remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
+  - **UI desktop** : section « Clefs SSH » de l'onglet GDS (`src/js/gds.js`) —
+    bouton générer/afficher la clef du poste, champ email + zone de saisie pour
+    enregistrer une clef de dev, affichage de l'état.
 
 **Périmètre de la Phase A** : elle livre **uniquement les fondations**
 (provision serveur, identité, activation par projet, dépôt git bare). Elle ne

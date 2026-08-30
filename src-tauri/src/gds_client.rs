@@ -6,6 +6,7 @@
 // git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
 
 use crate::gds;
+use crate::gds_ssh;
 use crate::gds_sync;
 use crate::git;
 use crate::AppState;
@@ -27,6 +28,9 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     }
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(gds::default_gds_local_dir);
     let name = gds::project_name(project);
+    // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
+    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
+    gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
     let dest = std::path::Path::new(&local_dir).join(&name);
     let dest_str = dest.to_string_lossy().to_string();
     let branch = git::git_current_branch(project);

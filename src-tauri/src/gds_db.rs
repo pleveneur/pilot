@@ -434,6 +434,76 @@ pub(crate) async fn expire_stale_locks(pool: &PgPool) -> Result<u64, String> {
     Ok(res.rows_affected())
 }
 
+// ── Clefs SSH serveur (Phase A3, spec_gds.md §4) ──
+// Clefs publiques des devs, associées à un utilisateur (email) de la base.
+// public_key UNIQUE (une clef = un dev).
+
+/// Enregistre une clef publique pour un utilisateur (idempotent : ON CONFLICT
+/// DO NOTHING sur public_key UNIQUE). Retourne l'id de la clef (0 si déjà
+/// présente).
+pub(crate) async fn create_ssh_key(pool: &PgPool, user_id: i64, public_key: &str) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO ssh_keys (user_id, public_key) VALUES ($1, $2) \
+         ON CONFLICT (public_key) DO NOTHING RETURNING id",
+    )
+    .bind(user_id)
+    .bind(public_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Création clef SSH: {}", e))?;
+    Ok(row.map(|r| r.get::<i64, _>("id")).unwrap_or(0))
+}
+
+/// Retourne les clefs publiques d'un utilisateur (par id).
+#[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
+pub(crate) async fn get_ssh_keys_by_user(pool: &PgPool, user_id: i64) -> Result<Vec<String>, String> {
+    let rows = sqlx::query("SELECT public_key FROM ssh_keys WHERE user_id = $1 ORDER BY id")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Lecture clefs SSH: {}", e))?;
+    Ok(rows.iter().map(|r| r.get::<String, _>("public_key")).collect())
+}
+
+/// Retourne l'id d'une clef publique exacte (None si absente).
+pub(crate) async fn get_ssh_key_by_key(pool: &PgPool, public_key: &str) -> Result<Option<i64>, String> {
+    let row = sqlx::query("SELECT id FROM ssh_keys WHERE public_key = $1")
+        .bind(public_key)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture clef SSH: {}", e))?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+/// Retourne l'id d'une clef publique par empreinte SHA256 (None si absente).
+/// L'empreinte est calculée sur la partie base64 de la clef (même convention
+/// que `ssh-keygen -lf`).
+#[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
+pub(crate) async fn get_ssh_key_by_fingerprint(pool: &PgPool, fingerprint: &str) -> Result<Option<i64>, String> {
+    let rows = sqlx::query("SELECT id, public_key FROM ssh_keys")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Lecture clefs SSH: {}", e))?;
+    for r in rows {
+        let key: String = r.get("public_key");
+        if crate::gds_ssh::public_key_fingerprint(&key) == fingerprint {
+            return Ok(Some(r.get::<i64, _>("id")));
+        }
+    }
+    Ok(None)
+}
+
+/// Supprime une clef publique par id.
+#[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
+pub(crate) async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM ssh_keys WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression clef SSH: {}", e))?;
+    Ok(())
+}
+
 /// Journalise une action GDS dans `audit_gds` (Phase B : verrous, sync).
 pub(crate) async fn audit_gds(
     pool: &PgPool,

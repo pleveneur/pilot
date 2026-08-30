@@ -8,7 +8,9 @@
 //   3. Ajout du projet au GDS (bare + remote + push) → gds_add_project.
 //   4. Liste des projets et des dépôts git du serveur → gds_list_projects /
 //      gds_list_git_repos.
-//   5. Bloc Phase B/C (sync, verrous, tickets) — texte statique uniquement.
+//   5. Clefs SSH (Phase A3) → gds_ssh_key / gds_register_ssh_key.
+//   6. Bloc Phase B (sync, verrous) — texte statique uniquement.
+//   7. Bloc Phase C (tickets, suivi fusionné) — texte statique uniquement.
 //
 // Le GDS est activé projet par projet (aucun serveur par défaut, aucune config
 // globale — décision 29/08/2026, spec_gds.md §0.4).
@@ -290,12 +292,81 @@ export function createGds(container) {
     refreshIcons(container);
   }
 
-  // ── Section 5 : synchronisation & verrous (Phase B) ──
+  // ── Section 5 : clefs SSH (Phase A3) ──
+  function renderSshKeys() {
+    const panel = document.createElement("div");
+    panel.className = "gds-panel";
+    panel.innerHTML = `
+      <div class="gds-panel-title"><i data-lucide="key-round" class="icon-sm"></i> 5. Clefs SSH (Phase A3)</div>
+      <div class="gds-panel-desc">
+        Le GDS synchronise les projets via SSH (<code>ssh://git@&lt;host&gt;:22/&lt;projet&gt;.git</code>).
+        Pilot gère automatiquement l'utilisateur <code>git</code> et les clefs publiques liées aux emails.
+      </div>
+      <div class="gds-panel-desc" style="margin-top:8px"><strong>Clef du poste</strong> (générée automatiquement si absente) :</div>
+      <div id="gds-ssh-poste" class="gds-ssh-poste"></div>
+      <div class="gds-actions">
+        <button id="gds-ssh-key-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Générer / afficher la clef du poste</button>
+      </div>
+      <div class="gds-panel-desc" style="margin-top:12px"><strong>Enregistrer une clef de dev</strong> (liée à un email) :</div>
+      <label class="gds-label">Email</label>
+      <input id="gds-ssh-email" class="gds-input" placeholder="dev@kalico" autocomplete="off">
+      <label class="gds-label">Clef publique</label>
+      <textarea id="gds-ssh-pubkey" class="gds-input gds-textarea" rows="2" placeholder="ssh-ed25519 AAAA..." autocomplete="off"></textarea>
+      <div id="gds-ssh-err" class="gds-error"></div>
+      <div id="gds-ssh-ok" class="gds-ok"></div>
+      <div class="gds-actions">
+        <button id="gds-ssh-register-btn" class="web-btn"><i data-lucide="plus" class="icon-sm"></i> Enregistrer la clef</button>
+      </div>
+    `;
+    bodyEl.appendChild(panel);
+    refreshIcons(container);
+
+    const err = panel.querySelector("#gds-ssh-err");
+    const ok = panel.querySelector("#gds-ssh-ok");
+    const posteEl = panel.querySelector("#gds-ssh-poste");
+
+    async function showPosteKey() {
+      try {
+        const res = await invoke("gds_ssh_key");
+        posteEl.innerHTML = `
+          <div class="gds-row">
+            <div class="gds-row-info">
+              <div class="gds-row-title">${res.generated ? "Clef générée" : "Clef existante"}</div>
+              <div class="gds-row-sub">${esc(res.path)}</div>
+              <div class="gds-ssh-key">${esc(res.public_key)}</div>
+            </div>
+          </div>
+        `;
+      } catch (e) {
+        posteEl.innerHTML = `<div class="gds-error">${esc(String(e))}</div>`;
+      }
+    }
+
+    panel.querySelector("#gds-ssh-key-btn").addEventListener("click", showPosteKey);
+
+    panel.querySelector("#gds-ssh-register-btn").addEventListener("click", async () => {
+      const email = panel.querySelector("#gds-ssh-email").value.trim();
+      const publicKey = panel.querySelector("#gds-ssh-pubkey").value.trim();
+      if (!email) { err.textContent = "L'email est requis."; return; }
+      if (!publicKey) { err.textContent = "La clef publique est requise."; return; }
+      err.textContent = ""; ok.textContent = "";
+      try {
+        await invoke("gds_register_ssh_key", { email, publicKey });
+        ok.textContent = "✅ Clef enregistrée et authorized_keys à jour.";
+      } catch (e) {
+        err.textContent = String(e);
+      }
+    });
+
+    showPosteKey();
+  }
+
+  // ── Section 6 : synchronisation & verrous (Phase B) ──
   function renderPhaseB() {
     const panel = document.createElement("div");
     panel.className = "gds-panel";
     panel.innerHTML = `
-      <div class="gds-panel-title"><i data-lucide="refresh-cw" class="icon-sm"></i> 5. Synchronisation & verrous (Phase B)</div>
+      <div class="gds-panel-title"><i data-lucide="refresh-cw" class="icon-sm"></i> 6. Synchronisation & verrous (Phase B)</div>
       <div class="gds-panel-desc">
         Synchronise les sources depuis le remote <code>gds</code> (clone si absent,
         sinon fetch/pull) et acquiert le verrou global projet (exclusif, TTL 30 min).
@@ -401,12 +472,12 @@ export function createGds(container) {
     refreshLock();
   }
 
-  // ── Section 6 : bloc Phase C (texte statique) ──
+  // ── Section 7 : bloc Phase C (texte statique) ──
   function renderPhaseC() {
     const panel = document.createElement("div");
     panel.className = "gds-panel gds-phase";
     panel.innerHTML = `
-      <div class="gds-panel-title"><i data-lucide="hourglass" class="icon-sm"></i> 6. Phase C — à venir</div>
+      <div class="gds-panel-title"><i data-lucide="hourglass" class="icon-sm"></i> 7. Phase C — à venir</div>
       <div class="gds-panel-desc">
         Les fonctionnalités suivantes sont <strong>disponibles à la Phase C</strong>
         (non implémentées dans cette version) :
@@ -457,6 +528,7 @@ export function createGds(container) {
     } catch (_) { repos = null; }
     renderLists(projects, repos);
 
+    renderSshKeys();
     renderPhaseB();
     renderPhaseC();
     refreshIcons(container);
