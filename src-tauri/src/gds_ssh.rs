@@ -279,19 +279,66 @@ pub(crate) fn commands_to_create_git_user(os: &SshOs) -> Vec<String> {
     }
 }
 
-/// Dossier personnel de l'utilisateur `git` (via `getent passwd git`).
+/// Dossier personnel de l'utilisateur `git`.
+/// - Linux/macOS : via `getent passwd git` (champ 6 = home).
+/// - Windows : via `windows_git_user_home()` (registre ProfileImagePath, le
+///   home réel consulté par sshd — pas `C:\Users\git`).
 pub(crate) fn git_user_home() -> String {
-    let out = run_captured("getent", &["passwd", "git"], Duration::from_secs(5));
-    if let Some(home) = out.split(':').nth(5) {
-        let home = home.trim();
-        if !home.is_empty() {
-            return home.to_string();
+    match detect_os() {
+        SshOs::Windows => windows_git_user_home(),
+        _ => {
+            let out = run_captured("getent", &["passwd", "git"], Duration::from_secs(5));
+            if let Some(home) = out.split(':').nth(5) {
+                let home = home.trim();
+                if !home.is_empty() {
+                    return home.to_string();
+                }
+            }
+            "/home/git".to_string()
         }
     }
-    match detect_os() {
-        SshOs::Windows => "C:\\Users\\git".to_string(),
-        _ => "/home/git".to_string(),
+}
+
+/// Résout le home réel du user `git` sur Windows. Le home consulté par sshd
+/// est le `ProfileImagePath` du registre (pas `C:\Users\git`). Priorité :
+/// 1. Registre ProfileImagePath (locale-indépendant) via PowerShell.
+/// 2. `net user git` (champ "Répertoire de base" / "Home directory", localisé).
+/// 3. Repli `C:\Users\git`.
+#[cfg(windows)]
+fn windows_git_user_home() -> String {
+    let script = "$sid=(Get-WmiObject Win32_UserAccount -Filter \"Name='git'\").SID; if($sid){(Get-ItemProperty \"HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\$sid\").ProfileImagePath}";
+    let out = run_captured(
+        "powershell",
+        &["-NoProfile", "-Command", script],
+        Duration::from_secs(10),
+    );
+    let home = out.trim();
+    if !home.is_empty() {
+        return home.to_string();
     }
+    let out = run_captured("net", &["user", "git"], Duration::from_secs(5));
+    for line in out.lines() {
+        if let Some(p) = extract_windows_path(line) {
+            return p;
+        }
+    }
+    "C:\\Users\\git".to_string()
+}
+
+#[cfg(not(windows))]
+fn windows_git_user_home() -> String {
+    String::new()
+}
+
+/// Extrait un chemin absolu Windows (`X:\...`) d'une ligne. Pure — testable.
+pub(crate) fn extract_windows_path(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    for i in 0..bytes.len().saturating_sub(2) {
+        if bytes[i].is_ascii_alphabetic() && bytes[i + 1] == b':' && bytes[i + 2] == b'\\' {
+            return Some(line[i..].trim().to_string());
+        }
+    }
+    None
 }
 
 /// Chemin du fichier `authorized_keys` de l'utilisateur `git`.
@@ -554,5 +601,22 @@ mod tests {
         assert!(!commands_to_create_git_user(&SshOs::MacOs).is_empty());
         assert!(!commands_to_create_git_user(&SshOs::Windows).is_empty());
         assert!(commands_to_create_git_user(&SshOs::Unknown).is_empty());
+    }
+
+    #[test]
+    fn extract_windows_path_finds_drive_path() {
+        // Ligne `net user git` (champ "Répertoire de base" / "Home directory").
+        assert_eq!(
+            extract_windows_path("R\u{e9}pertoire de base                             C:\\Users\\pldistance\\Pilot\\GDS\\repos"),
+            Some("C:\\Users\\pldistance\\Pilot\\GDS\\repos".to_string())
+        );
+        // Ligne sans chemin → None.
+        assert_eq!(extract_windows_path("Stations autoris\u{e9}es                            Tout"), None);
+        assert_eq!(extract_windows_path(""), None);
+        // Chemin en début de ligne.
+        assert_eq!(
+            extract_windows_path("C:\\Users\\git"),
+            Some("C:\\Users\\git".to_string())
+        );
     }
 }

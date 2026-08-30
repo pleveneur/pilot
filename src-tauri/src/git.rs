@@ -33,11 +33,20 @@ pub fn git_init_bare(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Clone un dépôt distant dans un dossier local.
+/// Clone un dépôt distant dans un dossier local. `git clone` écrit sa
+/// progression ET ses erreurs sur stderr (stdout vide) → on vérifie le code de
+/// sortie (pas stdout) et on remonte le stderr dans le message d'erreur pour
+/// révéler la cause réelle (serveur SSH injoignable, utilisateur `git` absent,
+/// clef non reconnue, port différent, etc.).
 pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
-    let out = run_captured("git", &["clone", url, dest], Duration::from_secs(60));
-    if out.trim().is_empty() {
-        return Err(format!("git clone a échoué: {}", url));
+    let (_, stderr, ok) =
+        crate::run_captured_full("git", &["clone", url, dest], Duration::from_secs(60));
+    if !ok {
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            return Err(format!("git clone a échoué: {}", url));
+        }
+        return Err(format!("git clone a échoué: {} — {}", url, detail));
     }
     Ok(())
 }

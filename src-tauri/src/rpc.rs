@@ -196,6 +196,52 @@ pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Du
     }
 }
 
+/// Exécute `<exe> <args...>`, capture stdout ET stderr, kill si `deadline`
+/// dépassé. Retourne `(stdout, stderr, success)`. Utilisé par les helpers qui
+/// ont besoin du stderr (ex: `git clone`, qui écrit sa progression et ses
+/// erreurs sur stderr) pour remonter la cause réelle d'un échec au lieu d'un
+/// message générique.
+pub(crate) fn run_captured_full(
+    exe: &str,
+    args: &[&str],
+    deadline_dur: std::time::Duration,
+) -> (String, String, bool) {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return (String::new(), String::new(), false),
+    };
+    let deadline = Instant::now() + deadline_dur;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return (String::new(), String::new(), false);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return (String::new(), String::new(), false),
+        }
+    }
+    match child.wait_with_output() {
+        Ok(o) => (
+            String::from_utf8_lossy(&o.stdout).to_string(),
+            String::from_utf8_lossy(&o.stderr).to_string(),
+            o.status.success(),
+        ),
+        Err(_) => (String::new(), String::new(), false),
+    }
+}
+
 /// Fenêtre (s) pendant laquelle un projet reste « occupé » après sa dernière
 /// activité RPC, même après un `agent_settled`. Évite que la pastille n'oscille
 /// en « en attente » entre deux sous-tâches d'un même plan d'orchestration

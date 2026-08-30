@@ -210,8 +210,13 @@ pub async fn gds_provision(
     // générer la clef du poste et l'enregistrer automatiquement.
     gds_ssh::provision_server_ssh()?;
     gds_ssh::ensure_poste_key(&pool, &admin_email).await?;
-    // Dossier des repos.
-    let local_dir = default_gds_local_dir();
+    // Dossier des repos. Préserve un `gds_local_dir` existant (re-provision
+    // idempotent) : on ne réinitialise pas vers `~/Pilot/GDS` si l'utilisateur
+    // a déplacé le dossier (ex: hors du profil, `C:\GDS`).
+    let existing = read_gds_config(&project).ok();
+    let local_dir = existing
+        .and_then(|c| c.gds_local_dir)
+        .unwrap_or_else(default_gds_local_dir);
     let repos = gds_git::repos_dir(&local_dir);
     std::fs::create_dir_all(&repos).map_err(|e| format!("Création dossier repos: {}", e))?;
     // Écrire la config projet (activation).

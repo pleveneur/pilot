@@ -10,7 +10,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 // Réexports des helpers partagés extraits dans les modules (autres modules
 // les importent depuis `crate::`).
-pub(crate) use rpc::{kind_from_version_output, probe_backend, probe_extension_support, resolve_agent_home, run_captured, BackendProbe};
+pub(crate) use rpc::{kind_from_version_output, probe_backend, probe_extension_support, resolve_agent_home, run_captured, run_captured_full, BackendProbe};
 // Réexports RPC utilisés par web_server.rs (canal distant).
 pub(crate) use rpc::{
     do_abort_agent, do_get_agent_messages, do_get_agent_state, do_get_session_stats,
