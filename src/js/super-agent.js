@@ -20,7 +20,7 @@ import {
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
-import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, ASSISTANT_SPACE } from "./agents-bus.js";
+import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatReminderQuietLabel } from "./super-agent-schedule.js";
@@ -2785,7 +2785,24 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // watchdog ayant réinitialisé le flag alors que le bus est resté occupé) :
         // en vérifiant aussi le bus, une demande arrivant pendant une run en cours
         // sur CE projet est TOUJOURS mise en file, jamais un échec brutal.
-        const startRun = () => {
+        const startRun = async () => {
+          // Bug : verrou de run fantôme. Si le bus d'agents est resté bloqué en
+          // "running" (run précédente jamais finalisée — process pi lancé mais
+          // jamais d'agent_start/agent_end, ou groupe parallèle dont pending ne
+          // descend jamais à 0), `isRunInProgress` renvoie true pour toujours et
+          // toutes les demandes suivantes seraient mises en file sans jamais
+          // démarrer (launched:true mais aucun agent ne s'active). On force
+          // d'abord la libération d'un verrou bloqué MAIS INACTIF
+          // (releaseStuckRunLock ne libère que si aucun agent n'est réellement
+          // en activité) pour que la demande courante démarre immédiatement.
+          await releaseStuckRunLock(target);
+          // Si le flag local est resté à true alors que le bus n'a plus de run
+          // en cours (run précédente jamais finalisée, verrou fantôme), le
+          // réinitialiser pour ne pas mettre la demande en file derrière une
+          // run morte.
+          if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
+            runAgentsInFlightByProject[target] = false;
+          }
           if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
@@ -2803,6 +2820,14 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           const runAgentsWatchdogHandler = async () => {
             // Si la run s'est terminée pendant la sonde (settleRun appelé), ne
             // rien faire : le désarmement normal a déjà eu lieu.
+            if (runSettled) return;
+            // Bug : verrou de run fantôme. Si le bus est resté bloqué en
+            // "running" (run jamais finalisée), `isRunStillActive` ci-dessous
+            // renvoie true pour toujours (isRunInProgress) et le watchdog
+            // repousserait indéfiniment l'échéance sans jamais vider la file.
+            // On force d'abord la libération d'un verrou bloqué MAIS INACTIF.
+            await releaseStuckRunLock(target);
+            // La run a pu se terminer pendant la sonde : ne rien faire non plus.
             if (runSettled) return;
             const stillActive = await isRunStillActive(target);
             // La run a pu se terminer pendant la sonde : ne rien faire non plus.
@@ -2823,7 +2848,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           launchWithEstimate();
         };
-        startRun();
+        await startRun();
         await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
@@ -2887,7 +2912,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           }
           finishRunAgentsToSuperAgent(result, projectPath, ok);
         };
-        const startRun = () => {
+        const startRun = async () => {
+          // Bug : verrou de run fantôme (même correctif que run_agents) —
+          // libérer un verrou de bus bloqué MAIS INACTIF avant la garde pour
+          // que la demande d'assistant démarre immédiatement au lieu de rester
+          // en file derrière une run morte.
+          await releaseStuckRunLock(target);
+          if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
+            runAgentsInFlightByProject[target] = false;
+          }
           if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
             appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file et se lancera automatiquement.");
             return;
@@ -2911,7 +2944,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             settleRun(false, `[Échec de la préparation de la run d'assistant] ${e}`);
           });
         };
-        startRun();
+        await startRun();
         await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
       } catch (e) {
         console.error("Erreur run_assistant_agents (assistant):", e);
