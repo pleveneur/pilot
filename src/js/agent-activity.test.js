@@ -248,6 +248,38 @@ describe("flattenAgents — filtrage des agents de projet sans onglet (visible=f
     expect(list[0].rawId).toBe("codeur");
   });
 
+  it("garde un agent délégué VIVANT au repos (agent_process, visible=false) — lancé par run_agents, pas encore d'agent_start", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: false, mode: "agent_process", alive: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ rawId: "codeur", busy: false, kind: "agent" });
+  });
+
+  it("garde aussi les agents d'assistant délégués vivants (assistant_agent, visible=false)", () => {
+    // L'espace des agents d'assistant (__assistant__) est déjà jamais filtré :
+    // on vérifie ici qu'un délégué assistant_agent sur un VRAI projet passe.
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "transcripteur", state: "idle", visible: false, mode: "assistant_agent", alive: true }] },
+    ]);
+    expect(flattenAgents(sup)).toHaveLength(1);
+  });
+
+  it("filtre toujours un délégué ARRÊTÉ (alive=false) — le process est mort", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "stopped", visible: false, mode: "agent_process", alive: false }] },
+    ]);
+    expect(flattenAgents(sup)).toEqual([]);
+  });
+
+  it("filtre toujours un agent de mode main parké au repos (visible=false) — résidu de registre", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "paused", visible: false, mode: "main", alive: true }] },
+    ]);
+    expect(flattenAgents(sup)).toEqual([]);
+  });
+
   it("l'agent busy invisible ressort dans anyBusy (le cercle respire toujours)", () => {
     const sup = makeSupervision([
       { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "running", visible: false }] },
@@ -349,46 +381,34 @@ describe("formatLastActivity", () => {
   });
 });
 
-describe("renderStaticAgentList — liste des agents en AFFICHAGE SEUL (mode assistant only)", () => {
-  it("affiche l'état vide discret quand la liste est vide", () => {
+describe("renderStaticAgentList — liste déployée du mode assistant only (identique au standard, 30/08)", () => {
+  it("affiche l'état vide standard quand la liste est vide", () => {
     const html = renderStaticAgentList([]);
-    expect(html).toContain("sa-immersive-agents-empty");
+    // Même état vide que la liste standard (agent-activity-empty).
+    expect(html).toContain("agent-activity-empty");
     expect(html).toContain("Aucun agent actif");
-    expect(html).not.toContain("sa-immersive-agent\"");
   });
 
-  it("rend un item STRICTEMENT informatif : aucun button, aucun title, aucun data-agent-id", () => {
+  it("PARITÉ exacte avec le rendu de la liste standard (renderDropdown)", () => {
+    // La liste déployée en mode « Assistant Only » utilise le MÊME rendu
+    // d'entrées que la liste du mode normal (mêmes items : pastille + nom +
+    // projet + tooltip). Aucun handler d'action n'est branché dessus en mode
+    // immersif — cliquer une entrée n'affiche AUCUN détail.
+    const list = [
+      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
+      { agentId: "codeur|C:/proj/Pilot", rawId: "codeur", label: "codeur", project: "Pilot", busy: true, kind: "agent" },
+    ];
+    expect(renderStaticAgentList(list)).toBe(renderDropdown(list));
+  });
+
+  it("réutilise les items standard : pastille breathing + style superagent de l'assistant", () => {
     const html = renderStaticAgentList([
       { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
       { agentId: "codeur|C:/proj/Pilot", rawId: "codeur", label: "codeur", project: "Pilot", busy: true, kind: "agent" },
     ]);
-    // Aucune interaction : pas de <button> (contrairement à renderDropdown),
-    // pas de tooltip, pas d'identifiant cliquable.
-    expect(html).not.toContain("<button");
-    expect(html).not.toContain("title=");
-    expect(html).not.toContain("data-agent-id");
-    // Même contenu visuel que la liste standard : nom, projet, pastille.
-    expect(html).toContain("Assistant (Magnus)");
-    expect(html).toContain("codeur");
-    expect(html).toContain("Pilot");
-    expect(html).toContain('data-kind="superagent"');
-    // Pastille réutilisée : breathing quand l'agent travaille.
     expect(html).toMatch(/agent-activity-item-dot\s*breathing/);
-  });
-
-  it("applique le style superagent à l'assistant et pas aux agents standard", () => {
-    const html = renderStaticAgentList([
-      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
-      { agentId: "x", rawId: "x", label: "x", project: "p", busy: false, kind: "agent" },
-    ]);
     expect(html).toMatch(/agent-activity-item-dot\s*superagent/);
-  });
-
-  it("n'affiche pas de span projet quand l'agent n'a pas de projet", () => {
-    const html = renderStaticAgentList([
-      { agentId: "superagent", rawId: "superagent", label: "Assistant (Magnus)", project: "", busy: false, kind: "superagent" },
-    ]);
-    expect(html).not.toContain("sa-immersive-agent-project");
+    expect(html).toContain('data-kind="superagent"');
   });
 
   it("échappe le HTML du nom et du projet (rendu sûr du store partagé)", () => {
@@ -500,7 +520,7 @@ describe("mountCollapsibleAgentList — résumé repliable du mode assistant onl
 
     // Replié dès le montage : point unique, aucun item de liste.
     expect(host.innerHTML).toContain("sa-immersive-dot");
-    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
+    expect(host.innerHTML).not.toContain("agent-activity-item");
 
     // Agent au repos → point statique (pas de classe breathing).
     pushAgentState({ agentId: "codeur" });
@@ -515,11 +535,11 @@ describe("mountCollapsibleAgentList — résumé repliable du mode assistant onl
     pushAgentState({ agentId: "codeur" });
     await flush();
     expect(host.innerHTML).toMatch(/sa-immersive-dot\s*breathing/);
-    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
+    expect(host.innerHTML).not.toContain("agent-activity-item");
     unsub();
   });
 
-  it("clic → la liste se déploie (contenu affichage seul) ; re-clic → repli sur le point", async () => {
+  it("clic → la liste se déploie (mêmes items que la liste standard) ; re-clic → repli sur le point ; jamais de fiche", async () => {
     vi.mocked(invoke).mockResolvedValue(makeSupervision([
       { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "running" }] },
       { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
@@ -530,19 +550,78 @@ describe("mountCollapsibleAgentList — résumé repliable du mode assistant onl
     pushAgentState({ agentId: "codeur" });
     await flush();
 
-    // Déplier : la liste déployée = renderStaticAgentList (strictement
-    // informative : pas de data-agent-id cliquable).
+    // Déplier : la liste déployée réutilise le RENDU STANDARD (mêmes entrées
+    // que la liste du mode normal : items agent-activity-item avec
+    // data-agent-id et tooltip). SEULE différence : aucune fiche/action n'est
+    // branchée (pas d'agent-activity-card jamais rendue dans le host).
     host.click();
+    expect(host.innerHTML).toContain("sa-immersive-agents-drop");
+    expect(host.innerHTML).toContain("agent-activity-item");
     expect(host.innerHTML).toContain('data-kind="agent"');
     expect(host.innerHTML).toContain("codeur");
     expect(host.innerHTML).toContain("Assistant (Magnus)");
-    expect(host.innerHTML).not.toContain("data-agent-id");
-    expect(host.innerHTML).not.toContain("sa-immersive-dot");
+    expect(host.innerHTML).toContain("data-agent-id");
+    // Aucun détail au clic d'entrée : jamais de fiche, jamais un onglet.
+    expect(host.innerHTML).not.toContain("agent-activity-card");
+    // Retour 30/08 : le point respirant reste AFFICHÉ EN PERMANENCE à côté de
+    // la liste (poignée de fermeture) — il ne disparaît jamais quand on déplie.
+    expect(host.innerHTML).toContain("sa-immersive-dot");
+    // L'agent déplié est running → le point continue de respirer (breathing).
+    expect(host.innerHTML).toMatch(/sa-immersive-dot\s*breathing/);
 
     // Replier : retour au point unique.
     host.click();
     expect(host.innerHTML).toContain("sa-immersive-dot");
-    expect(host.innerHTML).not.toContain('sa-immersive-agent"');
+    expect(host.innerHTML).not.toContain("agent-activity-item");
+    unsub();
+  });
+
+  it("liste DÉPLOYÉE : un agent délégué qui démarre ensuite apparaît automatiquement (raffrachat du store, sans clic) — scénario utilisateur du 29/08", async () => {
+    // Au montage : aucun agent connu (l'assistant vient de lancer rien encore).
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
+    ]));
+
+    const host = makeHost();
+    const unsub = mountCollapsibleAgentList(host);
+    // Synchronisation initiale du store (le poll tourne déjà en continu : l'état
+    // connu peut contenir des données antérieures au montage de cet onglet).
+    pushAgentState({ agentId: "Assistant (Magnus)" });
+    await flush();
+
+    // L'utilisateur déplie la liste (un seul clic) : elle ne contient que
+    // l'assistant — le délégué n'est pas encore démarré côté superviseur.
+    host.click();
+    expect(host.innerHTML).toContain("Assistant (Magnus)");
+    expect(host.innerHTML).not.toContain("codeur");
+
+    // L'assistant lance un agent via run_agents en arrière-plan : la session
+    // est vivante (agent_process, pas d'onglet → visible=false), l'observateur
+    // n'a pas encore vu d'agent_start (le poll remonte « idle »). La liste
+    // déployée doit afficher cet agent SANS aucun clic, au prochain cycle.
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
+      { path: "C:/proj/Pilot", name: "Pilot", agents: [{ agent: "codeur", state: "idle", visible: false, mode: "agent_process", alive: true }] },
+    ]));
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(host.innerHTML).toContain("codeur");
+    expect(host.innerHTML).toContain("Pilot");
+    expect(host.innerHTML).toContain('data-kind="agent"');
+    // Mêmes items que la liste standard (parité) — mais strictement
+    // informatif : le rendu contient les items standard (data-agent-id comme
+    // dans la référence) JAMAIS de fiche (aucun handler d'action branché).
+    expect(host.innerHTML).toContain("agent-activity-item");
+    expect(host.innerHTML).not.toContain("agent-activity-card");
+
+    // L'agent s'arrête (process tué en fin de run) : il disparaît de la liste.
+    vi.mocked(invoke).mockResolvedValue(makeSupervision([
+      { path: "", name: "Assistant (Magnus)", agents: [{ agent: "Assistant (Magnus)", state: "idle" }] },
+    ]));
+    pushAgentState({ agentId: "codeur" });
+    await flush();
+    expect(host.innerHTML).not.toContain("codeur");
+    expect(host.innerHTML).toContain("Assistant (Magnus)");
     unsub();
   });
 

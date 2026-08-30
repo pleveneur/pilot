@@ -304,9 +304,12 @@ uniquement un bloc d'instructions dans le prompt système.
   **n'importe quel projet**, même s'il n'est **pas actif** (outil
   `delegate_to_coder` avec le paramètre `project`). L'agent de ce projet est
   alors **démarré en arrière-plan (invisible)** automatiquement, **sans ouvrir
-  le projet ni l'onglet**. Le suivi (bouton Arrêter, détection de boucle,
-  notification de fin) et l'arrêt ciblent ce projet précis (canal d'événements
-  et `stop_agent_session` routés par chemin de projet).
+  le projet ni l'onglet**. Le suivi se matérialise par une **notification
+  discrète hors du flux de discussion** (bandeau au-dessus de la barre de
+  saisie, sans bouton : l'arrêt passe par l'outil `stop_agent` de l'Assistant),
+  une détection de boucle et une notification de fin. L'arrêt et
+  l'événementiel ciblent ce projet précis (canal d'événements et
+  `stop_agent_session` routés par chemin de projet).
 - **#28 — Fermeture de l'onglet** : quand l'Assistant **arrête l'agent standard
   du projet actif** (`stop_agent`), l'onglet de cet agent est **fermé
   automatiquement** s'il était ouvert (évite un onglet fantôme alors que
@@ -583,18 +586,28 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - **Barre du haut** (maquette V4) : à gauche le bouton **← (retour)** + le titre
   « **Pilot** » ; à droite **UN SEUL bouton ⚙** qui ouvre les paramètres
   existants de l'Assistant (modale Paramètres, onglet « Assistant »).
-- **Résumé des agents (point repliable)** : dans cette barre, juste à gauche
+- **Résumé des agents (point poignée)** : dans cette barre, juste à gauche
   du bouton ⚙, la liste des agents est **repliée par défaut en un petit point
   unique** : le point **respire** (pulsation douce) quand un agent ou l'
-  Assistant travaille, il reste **statique et éteint** sinon. **Un clic** sur
-  le point **déploie la liste des agents disponibles** : mêmes entrées et
-  mêmes règles que la liste du mode standard (agents avec onglet ou occupés,
-  assistant toujours visible) — une **pastille pulsante** quand un agent
-  travaille, sinon un anneau discret ; nom + projet. Strictement
-  **informative** : les éléments de la liste restent non cliquables (pas de
-  menu, pas de fiche, pas d'ouverture d'onglet, pas de tooltip) — un simple
-  aperçu de qui travaille en arrière-plan. **Un second clic replie** sur le
-  point (l'état n'est pas mémorisé : chaque entrée en mode assistant seul
+  Assistant travaille, il reste **statique et éteint** sinon. Le point reste
+  **affiché en permanence** — y compris quand la liste est dépliée : il sert de
+  **poignée d'ouverture/fermeture** (cohérent avec le point de la barre du
+  mode standard). **Un clic** sur le point **déploie la liste des agents
+  disponibles à côté de lui** : **exactement la même
+  liste que le mode standard** (référence) — mêmes entrées et
+  mêmes règles (agents avec onglet, agents
+  délégués en arrière-plan tant que leur processus tourne — lancés par la
+  délégation, sans onglet — et agents occupés ; l'assistant toujours
+  visible), issues de la même source (stock partagé) et du **même rendu**
+  (mêmes items : pastille + nom + projet, tooltip au survol). Elle se
+  **met à jour automatiquement** : un agent qui démarre
+  ou s'arrête apparaît/disparaît de la liste déployée sans aucun clic
+  (même flux que l'indicateur du mode standard, actualisé toutes les 2 s
+  + événements). **SEULE différence avec le mode standard** : un clic sur une
+  entrée n'affiche **aucun détail** (aucune fiche, aucune action, aucune
+  ouverture d'onglet) — la liste reste strictement **informative** ; un clic
+  sur la zone replie simplement le résumé. **Un re-clic sur le point replie**
+  (l'état n'est pas mémorisé : chaque entrée en mode assistant seul
   repart repliée).
 - **Indicateur d'activité** sous les messages : point **vert « Prêt · lecture
   seule »** au repos, **violet pulsant « Réfléchit… »** quand l'Assistant

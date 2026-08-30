@@ -1604,6 +1604,11 @@ export async function createSuperAgent(container) {
     if (immersiveSuggestions) immInput.appendChild(immersiveSuggestions);
     if (busyHint && busyHint.parentNode) busyHint.parentNode.removeChild(busyHint);
     immInput.appendChild(busyHint);
+    // 4.3 : les notifications d'agents en arrière-plan suivent la discussion
+    // (hors flux) lors de la bascule en mode assistant seul.
+    for (const t of invisibleAgents.values()) {
+      if (t.banner && t.banner.isConnected) attachInvisibleBanner(t.banner);
+    }
     immInput.appendChild(inputBar);
     if (pendingBar) immInput.appendChild(pendingBar);
     // Disclaimer (maquette V4) : mention sous la barre de saisie.
@@ -1635,6 +1640,11 @@ export async function createSuperAgent(container) {
     // (sinon insertBefore lève une DOMException et le retour échoue).
     wrapper.appendChild(inputBar);
     wrapper.insertBefore(busyHint, inputBar);
+    // 4.3 : ré-attacher les notifications d'agents en arrière-plan (elles
+    // étaient dans l'overlay, détruit ci-dessous) au mode standard.
+    for (const t of invisibleAgents.values()) {
+      if (t.banner && t.banner.isConnected) attachInvisibleBanner(t.banner);
+    }
     // pendingBar revenait en fin de wrapper. (statusEl n'est plus déplacé : il
     // reste dans la toolbar, masqué par la règle T6 — l'indicateur d'activité
     // n'apparaît plus en mode immersif. Le panneau des événements n'est plus
@@ -3505,18 +3515,42 @@ function flushDelegationQueue() {
 //
 // Quand l'option « agent invisible » est activée, l'Assistant délègue une
 // demande à l'agent SANS créer d'onglet agent. On écoute alors le canal
-// d'événements de l'agent en arrière-plan pour : (1) offrir un bouton
-// « Arrêter » dans le chat de l'Assistant (coupure à tout moment), (2) détecter
-// une boucle de réflexion (loop-detection) et arrêter l'agent automatiquement,
-// (3) notifier l'utilisateur et injecter le feedback de délégation à la fin de
-// la tâche (agent_end).
+// d'événements de l'agent en arrière-plan pour : (1) afficher une notification
+// discrète HORS du flux de discussion (bandeau au-dessus de la barre de
+// saisie, sans bouton — l'arrêt passe par l'outil stop_agent de l'Assistant),
+// (2) détecter une boucle de réflexion (loop-detection) et arrêter l'agent
+// automatiquement, (3) notifier l'utilisateur et injecter le feedback de
+// délégation à la fin de la tâche (agent_end).
 
 /**
- * Démarre le suivi réactif de l'agent invisible (bouton Arrêter + écoute du
- * canal). 4.3 : le bandeau « Arrêter » et la notification de fin sont pilotés
- * par l'état de l'objet (agent-state-changed + lecture get_agent), plus par un
- * état local non persisté. Le buffer de détection de boucle est SCOPÉ au
- * listener (closure), pas une variable de module transitoire.
+ * Attache une notification d'agent en arrière-plan HORS du flux de discussion
+ * (retour utilisateur 30/08) : juste au-dessus de la barre de saisie, à côté
+ * de l'indicateur busyHint. Fallback : en tête du conteneur courant du flux.
+ * Utilisée à la création puis à chaque ré-affichage et bascule immersif.
+ * @param {Element} banner
+ * @returns {boolean} true si l'attache a réussi.
+ */
+function attachInvisibleBanner(banner) {
+  if (!banner) return false;
+  const busyHintEl = document.querySelector(".agent-busy-hint");
+  if (busyHintEl && busyHintEl.parentNode) {
+    busyHintEl.parentNode.insertBefore(banner, busyHintEl);
+    return true;
+  }
+  const messagesEl = superMessagesEl;
+  if (messagesEl && messagesEl.parentNode) {
+    messagesEl.parentNode.insertBefore(banner, messagesEl);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Démarre le suivi réactif de l'agent invisible (notification hors flux +
+ * écoute du canal). 4.3 : la notification et la notification de fin sont
+ * pilotées par l'état de l'objet (agent-state-changed + lecture get_agent),
+ * plus par un état local non persisté. Le buffer de détection de boucle est
+ * SCOPÉ au listener (closure), pas une variable de module transitoire.
  * @param {Element} messagesEl
  * @param {string} agentId - id résolu depuis l'objet (4.1).
  * @param {string|null} projectPath
@@ -3526,23 +3560,18 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
   // Issue #135 : on ne coupe plus les suivis précédents — chaque agent invisible
   // a son propre suivi dans la map invisibleAgents (clé agentId+projectPath).
 
-  // Afficher un bandeau de statut avec un bouton « Arrêter » dans le chat.
+  // Notification hors flux (retour utilisateur 30/08) : un bandeau discret
+  // affiché AU-DESSUS de la barre de saisie — PAS un message du chat — et
+  // SANS bouton : l'arrêt passe par l'outil stop_agent de l'Assistant
+  // (stop_agent_session), pas par un bouton dans la discussion.
   const statusEl = document.createElement("div");
   statusEl.className = "agent-invisible-status";
+  statusEl.setAttribute("role", "status");
   const label = document.createElement("span");
   label.className = "agent-invisible-label";
   label.textContent = "🤖 Agent en arrière-plan…";
-  const stopBtn = document.createElement("button");
-  stopBtn.className = "agent-btn agent-invisible-stop";
-  stopBtn.textContent = "Arrêter";
-  stopBtn.title = "Arrêter l'agent en arrière-plan";
-  stopBtn.addEventListener("click", () => {
-    stopInvisibleAgent(agentId, projectPath);
-  });
   statusEl.appendChild(label);
-  statusEl.appendChild(stopBtn);
-  messagesEl.appendChild(statusEl);
-  scrollSuperToBottom(messagesEl);
+  attachInvisibleBanner(statusEl);
 
   // Buffer de détection de boucle, SCOPÉ au listener (pas de variable de
   // module transitoire — issue #55, 4.3).
@@ -3748,9 +3777,9 @@ function handleAgentStateChanged(payload) {
     payload.visible === false &&
     (state === "Running" || state === "Paused" || state === "Compacting" || !!payload.busy);
   if (active && t.banner && !t.banner.isConnected) {
-    // Le bandeau a été retiré (ex: réaffichage) → le re-créer via l'état objet.
-    t.messagesEl.appendChild(t.banner);
-    scrollSuperToBottom(t.messagesEl);
+    // La notification a été déconnectée (bascule de mode, purge de l'overlay)
+    // → la ré-attacher hors flux, dans le conteneur courant.
+    attachInvisibleBanner(t.banner);
   }
   if (!active && (state === "Stopped" || state === "Error" || state === "Unloaded")) {
     // Fin pilotée par l'état de l'objet (si pas déjà finalisé).

@@ -4114,36 +4114,25 @@ body.zen-mode #project-footer {
   border-radius: 4px;
 }
 
-/* Bandeau de statut de l'agent invisible (évolution 64) : affiché dans le chat
-   de l'Assistant quand une délégation s'exécute en arrière-plan sans onglet. */
+/* Notification d'un agent en arrière-plan (évolution 64, retour utilisateur
+   30/08) : bandeau discret affiché HORS du flux de discussion (au-dessus de la
+   barre de saisie), sans bouton d'action. Tokens de thème uniquement. */
 .agent-invisible-status {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 8px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color, #444);
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
   border-left: 3px solid var(--accent);
   background: var(--bg-secondary);
   border-radius: 6px;
   font-size: 12px;
+  color: var(--text-muted);
 }
 .agent-invisible-label {
   flex: 1;
   color: var(--text-muted);
-}
-.agent-invisible-stop {
-  padding: 4px 10px;
-  font-size: 12px;
-  border: 1px solid var(--danger, #f87171);
-  color: var(--danger, #f87171);
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.agent-invisible-stop:hover {
-  background: var(--danger, #f87171);
-  color: #fff;
 }
 
 .agent-choice-message {
@@ -7933,7 +7922,8 @@ body.pilot-loading *::after {
   align-items: center;
   gap: 14px;
   min-width: 0;
-  overflow: hidden;
+  position: relative; /* ancre du panneau déployé .sa-immersive-agents-drop */
+  overflow: visible;
   padding: 0 4px;
   cursor: pointer;
 }
@@ -7961,37 +7951,32 @@ body.pilot-loading *::after {
   opacity: 1;
   animation: agent-pulse 1.5s ease-in-out infinite;
 }
-.sa-immersive-agent {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+/* Liste déployée du résumé (retour 30/08) : MÊMES entrées que la liste
+   standard du mode normal (items .agent-activity-item réutilisés via
+   renderDropdown) et panneau aux mêmes couleurs que le dropdown standard.
+   SEULE différence : aucune action au clic (pas de fiche, pas d'ouverture
+   d'onglet) — strictement informatif. Tokens de thème uniquement. */
+.sa-immersive-agents-drop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10001;
+  min-width: 150px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--superagent-accent) 16%, var(--surface-3));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  cursor: default;
 }
-.sa-immersive-agent-name {
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 130px;
+/* Mêmes items que la référence, mais sans affordance d'action : le curseur
+   reste neutre (pas de hover actif) — strictement informative. */
+.sa-immersive-agents-drop .agent-activity-item {
+  cursor: default;
 }
-/* L'assistant (superagent) reprend la couleur de son onglet, comme dans la
-   liste déroulante du mode standard. */
-.sa-immersive-agent[data-kind="superagent"] .sa-immersive-agent-name {
-  color: var(--superagent-accent);
-}
-.sa-immersive-agent-project {
-  font-size: var(--font-xs);
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 70px;
-}
-.sa-immersive-agents-empty {
-  font-size: var(--font-xs);
-  color: var(--text-muted);
-  white-space: nowrap;
+.sa-immersive-agents-drop .agent-activity-item:hover {
+  background: transparent;
 }
 .sa-immersive-settings {
   flex-shrink: 0;

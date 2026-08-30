@@ -171,8 +171,14 @@ projet (ouverture, fermeture, bascule).
   repos (ni `running` ni `compacting`) n'apparaît pas dans la liste — il n'est
   qu'une entrée du registre. Un agent **en travail en arrière-plan** reste
   listé même sans onglet (cas d'un agent « parké » lors d'une bascule de
-  projet). Le superagent (assistant) et les agents d'assistant ne sont jamais
-  filtrés ; un `visible` absent (backend ancien) est traité comme visible.
+  projet). Un **agent délégué par l'assistant** (`run_agents`, mode
+  `agent_process` ou `assistant_agent`) **vivant reste listé même au repos** :
+  entre son lancement et son premier tour, puis entre ses tours, il est vivant
+  mais inactif — le masquer donnait l'impression que les listes (standard et
+  résumé repliable du mode assistant seul) ne se rafraîchissaient pas. À
+  l'arrêt du process (fin de run / échec), il disparaît à nouveau. Le
+  superagent (assistant) et les agents d'assistant ne sont jamais filtrés ;
+  un `visible` absent (backend ancien) est traité comme visible.
 - **Frontend** (`src/js/dashboard.js`) : carte « Supervision des agents »
   rendue dans la grille dès qu'au moins une session d'agent existe. Tableau
   (projet, agent, état, mode) + ligne d'insight (nombre d'agents en cours).

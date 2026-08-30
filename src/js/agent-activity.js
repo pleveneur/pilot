@@ -91,8 +91,16 @@ export function flattenAgents(supervision, lastActivityMap) {
       // working in the background). Missing `visible` (old backend payload)
       // is treated as visible. The superagent (project "") and the assistant
       // agents (ASSISTANT_SPACE) are never filtered.
+      // Delegated background agents (launched by the assistant via run_agents,
+      // mode agent_process / assistant_agent — no tab, visible=false) that
+      // are STILL ALIVE stay listed too, even at rest: between the dispatch
+      // and their first agent_start, then between each agent_settled and the
+      // next agent_start, they are alive but idle — hiding them made the
+      // open summary list look like it never refreshed. A stopped delegate
+      // (alive=false) is filtered like before (process is gone).
       if (!isSuper && !isAssistant && a.visible === false && !busy) {
-        continue;
+        const delegatedAlive = a.alive && (a.mode === "agent_process" || a.mode === "assistant_agent");
+        if (!delegatedAlive) continue;
       }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
       // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),
@@ -185,52 +193,59 @@ export function getAgentActivitySnapshot() {
 
 /**
  * Rendu HTML de la liste des agents en AFFICHAGE SEUL (mode « Assistant Only »
- * immersif, barre du haut) : mêmes items que renderDropdown (pastille + nom +
- * projet, même filtrage amont) mais SANS aucun élément interactif — pas de
- * <button>, pas de title, pas de data-agent-id cliquable. Le conteneur recevant
- * ce rendu est en pointer-events: none (CSS) : affichage strictement
- * informatif, choix validé par l'utilisateur.
+ * immersif, barre du haut). Retour du 30/08 : la liste déployée en mode
+ * assistant seul doit être EXACTEMENT la même que celle du mode standard —
+ * mêmes entrées (pastille + nom + projet), issues de la même source (store
+ * partagé, même filtrage amont) et rendues par le MÊME code : on réutilise
+ * donc renderDropdown tel quel. SEULE différence (portée par le monteur) :
+ * aucun handler d'action n'est branché sur ces items dans le mode immersif —
+ * cliquer une entrée n'affiche AUCUN détail (pas de fiche, pas d'ouverture
+ * d'onglet, pas de changement de projet) ; un clic replie simplement le
+ * résumé. La liste reste strictement informative.
+ * @param {Array} list — liste aplatie (flattenAgents), identique au standard.
+ * @returns {string} HTML identique à la liste déroulante standard.
  */
 export function renderStaticAgentList(list) {
-  if (!list || !list.length) {
-    return '<span class="sa-immersive-agents-empty">Aucun agent actif</span>';
-  }
-  return list
-    .map(
-      (a) => `
-    <span class="sa-immersive-agent" data-kind="${esc(a.kind)}">
-      <span class="agent-activity-item-dot ${a.busy ? "breathing" : ""} ${a.kind === "superagent" ? "superagent" : ""}"></span>
-      <span class="sa-immersive-agent-name">${esc(a.label)}</span>
-      ${a.project ? `<span class="sa-immersive-agent-project">${esc(a.project)}</span>` : ""}
-    </span>`
-    )
-    .join("");
+  return renderDropdown(list || []);
 }
 
 /**
  * Monte le résumé des agents dans la barre du haut du mode « Assistant Only »
- * : par DÉFAUT replié en un petit point unique qui « respire » (animation
- * agent-pulse) quand un agent ou l'Assistant travaille, statique sinon. Un
- * clic sur le point déploie la liste des agents (renderStaticAgentList —
- * strictement informative, mêmes entrées que l'indicateur du mode standard) ;
- * un second clic replie sur le point. Rien n'est persisté : chaque entrée en
- * mode immersif repart repliée. Mise à jour continue via le store partagé.
+ * : le petit point unique (animation agent-pulse) qui « respire » quand un
+ * agent ou l'Assistant travaille, statique sinon, reste AFFICHÉ EN PERMANENCE
+ * dans le host — y compris quand la liste est déployée : il sert de poignée
+ * d'ouverture/fermeture. Un clic sur le point déploie la liste des agents
+ * (renderStaticAgentList — strictement informative, mêmes entrées que
+ * l'indicateur du mode standard) à côté du point ; un second clic (sur le
+ * point, ou n'importe quel item de la liste) replie. Rien n'est persisté :
+ * chaque entrée en mode immersif repart repliée. Mise à jour continue via le
+ * store partagé.
  * @param {HTMLElement|null} host — conteneur (détruit avec l'overlay immersif).
  * @returns {Function} désabonnement (à appeler à la sortie du mode).
  */
 export function mountCollapsibleAgentList(host) {
   if (!host) return () => {};
   let expanded = false;
+  const dot = (ariaExpanded, busy) => `
+    <button type="button" class="sa-immersive-dot ${busy ? "breathing" : ""}" aria-expanded="${ariaExpanded}" title="${busy ? "Agents au travail — afficher la liste" : "Agents au repos — afficher la liste"}" aria-label="Agents"></button>`;
   const render = (list, busy) => {
     if (expanded) {
-      host.innerHTML = renderStaticAgentList(list);
+      // Retour 30/08 : la liste déployée réutilise le rendu EXACT des entrées
+      // de la liste standard (renderStaticAgentList ≡ renderDropdown), dans un
+      // panneau aux mêmes couleurs que le dropdown standard. Aucun handler
+      // d'action n'est branché sur les items : cliquer une entrée n'affiche
+      // aucun détail — le clic replie le résumé (strictement informatif,
+      // aucune fiche, aucune ouverture d'onglet). Le point reste rendu à côté
+      // : il ne disparaît JAMAIS, la liste apparaît sous/sur lui.
+      host.innerHTML = `${dot("true", busy)}
+    <div class="sa-immersive-agents-drop">${renderStaticAgentList(list)}</div>`;
     } else {
-      host.innerHTML = `
-    <button type="button" class="sa-immersive-dot ${busy ? "breathing" : ""}" aria-expanded="false" title="${busy ? "Agents au travail — afficher la liste" : "Agents au repos — afficher la liste"}" aria-label="Agents"></button>`;
+      host.innerHTML = dot("false", busy);
     }
   };
-  // Clic sur la zone (point OU liste) → bascule point ⇆ liste. Les items de
-  // la liste déployée restent informatifs : le clic ne fait que replier.
+  // Clic sur la zone (point OU liste) → bascule point ⇆ liste. Le point restant
+  // toujours rendu, un re-clic dessus sert de poignée de fermeture. Les items
+  // de la liste déployée restent informatifs : le clic ne fait que replier.
   host.addEventListener("click", (e) => {
     e.stopPropagation();
     expanded = !expanded;
