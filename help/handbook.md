@@ -244,11 +244,21 @@ type GitHub.
   - **Configurer le projet** (`.pilot/gds.json`) : activation on/off, URL du
     serveur, email d'identité, dossier local de clonage, hôte SSH ;
   - **Ajouter le projet au GDS** : crée un dépôt git bare sur le serveur,
-    ajoute le remote `origin` et pousse la branche courante ;
+    ajoute le remote `gds` (sans toucher à un éventuel `origin` existant) et
+    pousse la branche courante ;
   - **Consulter** la liste des projets et des dépôts git du serveur.
-- **Phase B/C à venir** : la synchronisation, les verrous et les tickets
-  (suivi des demandes clients) sont affichés comme « disponibles à la Phase
-  B/C » — non implémentés dans cette version.
+- **Synchronisation & verrous (Phase B)** : la section « Synchronisation &
+  verrous » de l'onglet GDS permet de :
+  - **Synchroniser** le projet depuis le remote `gds` (clone si absent, sinon
+    fetch/pull) et d'acquérir le **verrou global projet** (exclusif, TTL 30 min) ;
+  - **Consulter l'état du verrou** (titulaire, expiration) ;
+  - **Relâcher le verrou** en fin de travail ;
+  - **Verrou urgent** : passer outre un verrou détenu par un autre (réservé à
+    la personne désignée dans la config projet) — le projet devient « en
+    conflit potentiel » et les deux parties sont averties.
+- **Phase C à venir** : les tickets (suivi des demandes clients) et le suivi
+  fusionné (contexte projet partagé) sont affichés comme « disponibles à la
+  Phase C » — non implémentés dans cette version.
 
 ---
 

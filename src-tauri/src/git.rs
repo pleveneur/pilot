@@ -14,6 +14,9 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::State;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use crate::{run_captured, AppState};
 
 // ── Helpers git génériques (GDS, spec_gds.md §4) ──
@@ -31,7 +34,6 @@ pub fn git_init_bare(path: &str) -> Result<(), String> {
 }
 
 /// Clone un dépôt distant dans un dossier local.
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
     let out = run_captured("git", &["clone", url, dest], Duration::from_secs(60));
     if out.trim().is_empty() {
@@ -65,7 +67,6 @@ pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
 }
 
 /// Tire les changements depuis un remote (branch courante).
-#[allow(dead_code)] // GDS Phase A3 (spec_gds.md §4) — pas encore branché
 pub fn git_pull(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
     let out = run_captured(
         "git",
@@ -76,6 +77,24 @@ pub fn git_pull(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
         return Err(format!("git pull a échoué (remote {}): {}", remote, out.trim()));
     }
     Ok(())
+}
+
+/// Récupère les changements depuis un remote (sans fusionner). `git fetch`
+/// écrit sa sortie sur stderr → on vérifie le code de sortie, pas stdout.
+/// Timeout généreux (60 s) pour les gros dépôts.
+pub fn git_fetch(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new("git");
+    cmd.args(["-C", cwd, "fetch", remote, branch])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    match cmd.status() {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) => Err(format!("git fetch a échoué (remote {}): {}", remote, branch)),
+        Err(e) => Err(format!("git fetch a échoué: {}", e)),
+    }
 }
 
 /// Nom de la branche courante d'un dépôt local (vide si détaché / pas de HEAD).

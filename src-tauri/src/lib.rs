@@ -23,7 +23,7 @@ pub(crate) use rpc::{
 /// `Command::new` silencieux pour éviter qu'une fenêtre console noire
 /// n'apparaisse/disparaisse fugacement à l'écran (ex: `git`, `pi`, `where`).
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -76,8 +76,10 @@ mod agent;
 mod agent_service;
 mod anomaly;
 mod gds;
+mod gds_client;
 mod gds_db;
 mod gds_git;
+mod gds_sync;
 mod gds_web;
 
 // ── État global de l'application ──
@@ -2373,6 +2375,11 @@ pub fn run() {
             gds::gds_save_config,
             gds::gds_list_projects,
             gds::gds_list_git_repos,
+            // ── GDS Phase B : synchronisation + verrous (spec_gds.md §5) ──
+            gds_client::gds_sync_project,
+            gds_sync::gds_release_lock,
+            gds_sync::gds_urgent_lock,
+            gds_sync::gds_get_lock,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

@@ -27,6 +27,10 @@ pub(crate) struct GdsConfig {
     /// provision. Utilisé pour construire l'URL du remote git (transport SSH).
     #[serde(default)]
     pub ssh_host: String,
+    /// Email de la personne désignée autorisée à passer en mode urgent (Phase B).
+    /// Vide = aucun urgent autorisé (arbitrage 6 : réservé à la personne désignée).
+    #[serde(default)]
+    pub urgent_email: Option<String>,
 }
 
 /// Dossier local par défaut des projets GDS (clonage) : `~/Pilot/GDS`.
@@ -85,6 +89,26 @@ fn ssh_host_from_db_addr(db_addr: &str) -> String {
     format!("{}:22", host)
 }
 
+/// Nom de projet (dernier segment du chemin) — ex: `/path/to/proj` → `proj`.
+pub(crate) fn project_name(project: &str) -> String {
+    std::path::Path::new(project)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// URL du remote git GDS d'un projet (`ssh://git@<host>/<name>.git`).
+/// Hôte SSH dédié (renseigné à la provision) ; repli sur server_url si absent
+/// (configs anciennes). Évite d'embarquer le port PostgreSQL 5432 dans l'URL SSH.
+pub(crate) fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
+    let host = if cfg.ssh_host.is_empty() {
+        server_host(&cfg.server_url)
+    } else {
+        cfg.ssh_host.clone()
+    };
+    format!("ssh://git@{}/{}.git", host, project_name)
+}
+
 /// Provisionne la base GDS (test connexion → provision → migrate → admin) et
 /// retourne le pool applicatif. Partagé entre la commande Tauri et la route web.
 pub(crate) async fn provision_db(
@@ -122,21 +146,10 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
         return Err("GDS non activé pour ce projet".to_string());
     }
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
-    let name = std::path::Path::new(project)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+    let name = project_name(project);
     let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
     // git remote add + push initial dans le projet local (bloquant → spawn_blocking).
-    let repo_name = format!("{}.git", name);
-    // Hôte SSH dédié (renseigné à la provision) ; repli sur server_url si absent
-    // (configs anciennes). Évite d'embarquer le port PostgreSQL 5432 dans l'URL SSH.
-    let host = if cfg.ssh_host.is_empty() {
-        server_host(&cfg.server_url)
-    } else {
-        cfg.ssh_host.clone()
-    };
-    let repo_url = format!("ssh://git@{}/{}", host, repo_name);
+    let repo_url = gds_remote_url(&cfg, &name);
     let project_owned = project.to_string();
     let repo_url_owned = repo_url.clone();
     // Remote dédié `gds` (et non `origin`) : préserve un éventuel remote
@@ -179,6 +192,7 @@ pub async fn gds_provision(
         identity_email: admin_email.trim().to_string(),
         gds_local_dir: Some(local_dir),
         ssh_host: ssh_host_from_db_addr(&db_addr),
+        urgent_email: None,
     };
     write_gds_config(&project, &cfg)?;
     // Stocker le pool dans AppState.
@@ -285,6 +299,7 @@ mod tests {
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
             ssh_host: ssh_host_from_db_addr(db_addr),
+            urgent_email: None,
         };
         let repo_url = format!("ssh://git@{}/{}", cfg.ssh_host, "proj.git");
         assert_eq!(repo_url, "ssh://git@192.168.1.10:22/proj.git");

@@ -7,7 +7,9 @@
 // spawn_blocking.
 
 use crate::gds;
+use crate::gds_client;
 use crate::gds_db;
+use crate::gds_sync;
 use crate::web_auth::WebAuth;
 use crate::web_server::WebCtx;
 use crate::AppState;
@@ -32,13 +34,14 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
         .route("/api/gds/users/validate", post(gds_validate))
         .route("/api/gds/projects", get(gds_projects).post(gds_add_project_web))
         .route("/api/gds/git-repos", get(gds_git_repos))
-        // ── Réservées Phase B/C (verrous, sync, suivi, tickets) ──
-        .route("/api/gds/sync", post(gds_phase_bc))
-        .route("/api/gds/lock/release", post(gds_phase_bc))
-        .route("/api/gds/lock/urgent", post(gds_phase_bc))
-        .route("/api/gds/locks", get(gds_phase_bc))
-        .route("/api/gds/tracking", get(gds_phase_bc))
-        .route("/api/gds/tickets", get(gds_phase_bc))
+        // ── Phase B : sync + verrous (implémentées) ──
+        .route("/api/gds/sync", post(gds_sync_web))
+        .route("/api/gds/lock/release", post(gds_lock_release_web))
+        .route("/api/gds/lock/urgent", post(gds_lock_urgent_web))
+        .route("/api/gds/locks", get(gds_locks_web))
+        // ── Réservées Phase C (suivi fusionné, tickets) ──
+        .route("/api/gds/tracking", get(gds_phase_c))
+        .route("/api/gds/tickets", get(gds_phase_c))
 }
 
 /// Pool GDS depuis AppState (clone court, jamais tenu en lock pendant un await).
@@ -230,12 +233,106 @@ async fn gds_add_project_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<Ad
     }
 }
 
-// ── Routes réservées Phase B/C ──
+// ── Phase B : synchronisation & verrous ──
 
-async fn gds_phase_bc() -> Response {
+#[derive(Deserialize)]
+struct SyncBody {
+    project: String,
+    reason: Option<String>,
+}
+
+/// POST /api/gds/sync — synchronise un projet depuis le remote GDS + acquiert
+/// le verrou global. Rate limiting login réutilisé (garde-fou).
+async fn gds_sync_web(
+    State(ctx): State<Arc<WebCtx>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<SyncBody>,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !ctx.guard.check_login(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
+        )
+            .into_response();
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_client::sync_project(&pool, &body.project).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// POST /api/gds/lock/release — relâche le verrou global du projet.
+async fn gds_lock_release_web(
+    State(ctx): State<Arc<WebCtx>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<SyncBody>,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !ctx.guard.check_login(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
+        )
+            .into_response();
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_sync::release_project_lock(&pool, &body.project).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// POST /api/gds/lock/urgent — passe le verrou en mode urgent (personne désignée).
+async fn gds_lock_urgent_web(
+    State(ctx): State<Arc<WebCtx>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<SyncBody>,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !ctx.guard.check_login(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
+        )
+            .into_response();
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let reason = body.reason.unwrap_or_default();
+    match gds_sync::urgent_project_lock(&pool, &body.project, &reason).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// GET /api/gds/locks — liste les verrous actifs.
+async fn gds_locks_web(State(ctx): State<Arc<WebCtx>>) -> Response {
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_locks(&pool).await {
+        Ok(list) => Json(json!({ "locks": list })).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Routes réservées Phase C ──
+
+async fn gds_phase_c() -> Response {
     (
         StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "Disponible à la Phase B/C" })),
+        Json(json!({ "error": "Disponible à la Phase C" })),
     )
         .into_response()
 }

@@ -1,11 +1,11 @@
 # ROADMAP — GDS (Gestionnaire de Sources) + Composant web de discussion (issue #56)
 
-> **Statut : 🟢 Phase A (bloc serveur) implémentée — B/C à venir.**
+> **Statut : 🟢 Phases A + B implémentées — C à venir.**
 >
-> Document de planification. La **Phase A (bloc serveur)** est implémentée
-> (voir `spec_gds.md` §PHASE A) ; les phases B/C et le composant web restent à
-> faire. Chaque chantier passe au **protocole quality-gate**
-> (`.pi/skills/quality-gate/SKILL.md`).
+> Document de planification. Les **phases A (bloc serveur) et B (synchronisation
+> + verrous)** sont implémentées (voir `spec_gds.md` §PHASE A et §PHASE B) ; la
+> phase C et le composant web restent à faire. Chaque chantier passe au
+> **protocole quality-gate** (`.pi/skills/quality-gate/SKILL.md`).
 >
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par projet**
 > — chaque projet désigne **son** serveur GDS via `.pilot/gds.json` (activation
@@ -374,12 +374,15 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE B — GDS : synchronisation & verrous
 
-**B1. Dossier GDS paramétrable + clone/fetch/pull**
-- Modules : `gds_client.rs`, config `gds_local_dir`, `git.rs`. Dépendance : A3.
+> ✅ **Implémentée** — `cargo test --lib` vert (163 tests).
+
+**B1. Dossier GDS paramétrable + clone/fetch/pull** ✅
+- Modules : `gds_client.rs`, config `gds_local_dir`, `git.rs` (`git_fetch`). Dépendance : A3.
 - Critère : sync d'un projet dans le dossier paramétré.
 
-**B2. Verrou global projet + TTL + mode urgent**
-- Modules : `gds_sync.rs`, `project_locks`, commandes desktop, UI. Dépendance : B1.
+**B2. Verrou global projet + TTL + mode urgent** ✅
+- Modules : `gds_sync.rs`, `project_locks` (migration 0002), commandes desktop
+  `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock` / `gds_get_lock`, UI.
 - Tests : verrou exclusif, TTL récupère un verrou orphelin, urgent passe outre,
   avertissement des deux parties. Critère : §3.5 complet.
 

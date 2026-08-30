@@ -294,6 +294,167 @@ pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Valu
         .collect())
 }
 
+// ── Verrous de projet (Phase B, spec_gds.md §5) ──
+// UN verrou global par projet (project_id UNIQUE). TTL/lease via expires_at
+// (epoch millis) pour récupérer les verrous orphelins. Mode urgent (urgent BOOL)
+// pour passer outre un verrou (réservé à la personne désignée).
+
+/// Ligne de verrou de projet (lecture).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct LockRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub user_id: i64,
+    pub email: String,
+    pub locked_at: i64,
+    pub expires_at: i64,
+    pub urgent: bool,
+    pub reason: String,
+}
+
+/// Instant courant en epoch millis (partagé par les verrous).
+pub(crate) fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Acquiert un verrou exclusif sur un projet (UN par projet). Retourne
+/// `Ok(true)` si acquis, `Ok(false)` si déjà verrouillé (ON CONFLICT DO NOTHING
+/// sur project_id UNIQUE).
+pub(crate) async fn acquire_lock(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    email: &str,
+    ttl_secs: i64,
+    urgent: bool,
+    reason: &str,
+) -> Result<bool, String> {
+    let now = now_millis();
+    let expires = now + ttl_secs * 1000;
+    let res = sqlx::query(
+        "INSERT INTO project_locks (project_id, user_id, email, locked_at, expires_at, urgent, reason, created_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (project_id) DO NOTHING",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .bind(email)
+    .bind(now)
+    .bind(expires)
+    .bind(urgent)
+    .bind(reason)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Acquisition verrou: {}", e))?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Retourne le verrou d'un projet (None si absent).
+pub(crate) async fn get_lock_by_project(pool: &PgPool, project_id: i64) -> Result<Option<LockRow>, String> {
+    let row = sqlx::query(
+        "SELECT id, project_id, user_id, email, locked_at, expires_at, urgent, reason \
+         FROM project_locks WHERE project_id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Lecture verrou: {}", e))?;
+    Ok(row.map(|r| LockRow {
+        id: r.get::<i64, _>("id"),
+        project_id: r.get::<i64, _>("project_id"),
+        user_id: r.get::<i64, _>("user_id"),
+        email: r.get::<String, _>("email"),
+        locked_at: r.get::<i64, _>("locked_at"),
+        expires_at: r.get::<i64, _>("expires_at"),
+        urgent: r.get::<bool, _>("urgent"),
+        reason: r.get::<String, _>("reason"),
+    }))
+}
+
+/// Liste tous les verrous.
+pub(crate) async fn list_locks(pool: &PgPool) -> Result<Vec<LockRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, user_id, email, locked_at, expires_at, urgent, reason \
+         FROM project_locks ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste verrous: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| LockRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<i64, _>("project_id"),
+            user_id: r.get::<i64, _>("user_id"),
+            email: r.get::<String, _>("email"),
+            locked_at: r.get::<i64, _>("locked_at"),
+            expires_at: r.get::<i64, _>("expires_at"),
+            urgent: r.get::<bool, _>("urgent"),
+            reason: r.get::<String, _>("reason"),
+        })
+        .collect())
+}
+
+/// Relâche le verrou d'un projet (suppression).
+pub(crate) async fn release_lock(pool: &PgPool, project_id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM project_locks WHERE project_id = $1")
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Relâchement verrou: {}", e))?;
+    Ok(())
+}
+
+/// Renouvelle le TTL d'un verrou (lease). API CRUD — renouvellement périodique
+/// branché plus tard (boucle de lease).
+#[allow(dead_code)]
+pub(crate) async fn renew_lock(pool: &PgPool, project_id: i64, ttl_secs: i64) -> Result<(), String> {
+    let expires = now_millis() + ttl_secs * 1000;
+    sqlx::query("UPDATE project_locks SET expires_at = $1 WHERE project_id = $2")
+        .bind(expires)
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Renouvellement verrou: {}", e))?;
+    Ok(())
+}
+
+/// Supprime les verrous expirés (TTL) — récupération des verrous orphelins.
+/// Retourne le nombre de verrous expirés supprimés.
+pub(crate) async fn expire_stale_locks(pool: &PgPool) -> Result<u64, String> {
+    let now = now_millis();
+    let res = sqlx::query("DELETE FROM project_locks WHERE expires_at < $1")
+        .bind(now)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Expiration verrous: {}", e))?;
+    Ok(res.rows_affected())
+}
+
+/// Journalise une action GDS dans `audit_gds` (Phase B : verrous, sync).
+pub(crate) async fn audit_gds(
+    pool: &PgPool,
+    ip: &str,
+    subject: &str,
+    action: &str,
+    detail: &str,
+    ok: bool,
+) -> Result<(), String> {
+    sqlx::query("INSERT INTO audit_gds (ip, subject, action, detail, ok) VALUES ($1, $2, $3, $4, $5)")
+        .bind(ip)
+        .bind(subject)
+        .bind(action)
+        .bind(detail)
+        .bind(ok)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Audit GDS: {}", e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

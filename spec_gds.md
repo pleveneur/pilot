@@ -5,7 +5,7 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟢 Phase A (bloc serveur) implémentée — B/C à venir.**
+> **Statut : 🟢 Phases A + B implémentées — C à venir.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -18,8 +18,19 @@
 > (repo bare par projet, validation chemins), `gds_web.rs` (routes axum de base
 > + routes B/C réservées). **UI desktop** : onglet « 🌐 GDS » (`src/js/gds.js`,
 > bouton `btn-gds` dans la sidebar, branchement `tabs.js` mode `gds`) —
-> provision serveur, config projet, ajout projet, listes projets/dépôts,
-> bloc Phase B/C statique.
+> provision serveur, config projet, ajout projet, listes projets/dépôts.
+>
+> **Implémenté (Phase B, synchronisation + verrous)** : migration
+> `migrations/0002_project_locks.sql` (table `project_locks`, UN par projet,
+> TTL/lease, urgent), `gds_client.rs` (`gds_sync_project` : clone/fetch/pull
+> depuis le remote `gds` + acquisition du verrou), `gds_sync.rs` (verrou global
+> exclusif, TTL + récupération des orphelins, relâchement, mode urgent réservé
+> à la personne désignée, audit_gds), `gds_db.rs` (CRUD `project_locks` +
+> `audit_gds`), `gds_web.rs` (routes `POST /api/gds/sync`, `POST
+> /api/gds/lock/release`, `POST /api/gds/lock/urgent`, `GET /api/gds/locks`),
+> commandes Tauri `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock` /
+> `gds_get_lock`. **UI desktop** : section 5 « Synchronisation & verrous »
+> (bouton Synchroniser, état du verrou, Relâcher, Verrou urgent).
 >
 > **Arbitrages utilisateur intégrés (11/11)** : cf. §0.2 + §0.4.
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par
@@ -549,12 +560,17 @@ sans implémentation) :
 
 ### PHASE B — GDS : synchronisation & verrous
 
-**B1. Dossier GDS paramétrable + clone/fetch/pull**
-- Modules : `gds_client.rs`, config projet `gds_local_dir`, `git.rs`. Dépendance : A3.
+> ✅ **Implémentée** — `cargo test --lib` vert (163 tests).
+
+**B1. Dossier GDS paramétrable + clone/fetch/pull** ✅
+- Modules : `gds_client.rs`, config projet `gds_local_dir`, `git.rs`
+  (`git_fetch` ajouté). Dépendance : A3.
 - Critère : sync d'un projet dans le dossier paramétré.
 
-**B2. Verrou global projet + TTL + mode urgent**
-- Modules : `gds_sync.rs`, `project_locks`, commandes desktop, UI. Dépendance : B1.
+**B2. Verrou global projet + TTL + mode urgent** ✅
+- Modules : `gds_sync.rs`, `project_locks` (migration 0002), commandes desktop
+  `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock` / `gds_get_lock`,
+  UI. Dépendance : B1.
 - Tests : verrou exclusif, TTL récupère un verrou orphelin, urgent passe outre
   (réservé à la personne désignée, arbitrage 6), avertissement des deux parties.
 - Critère : §5 complet.

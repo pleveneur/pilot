@@ -289,21 +289,130 @@ export function createGds(container) {
     refreshIcons(container);
   }
 
-  // ── Section 5 : bloc Phase B/C (texte statique) ──
-  function renderPhaseBC() {
+  // ── Section 5 : synchronisation & verrous (Phase B) ──
+  function renderPhaseB() {
+    const panel = document.createElement("div");
+    panel.className = "gds-panel";
+    panel.innerHTML = `
+      <div class="gds-panel-title"><i data-lucide="refresh-cw" class="icon-sm"></i> 5. Synchronisation & verrous (Phase B)</div>
+      <div class="gds-panel-desc">
+        Synchronise les sources depuis le remote <code>gds</code> (clone si absent,
+        sinon fetch/pull) et acquiert le verrou global projet (exclusif, TTL 30 min).
+      </div>
+      <div id="gds-sync-err" class="gds-error"></div>
+      <div id="gds-sync-ok" class="gds-ok"></div>
+      <div id="gds-lock-state" class="gds-lock-state"></div>
+      <div class="gds-actions">
+        <button id="gds-sync-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Synchroniser</button>
+        <button id="gds-release-btn" class="web-btn"><i data-lucide="unlock" class="icon-sm"></i> Relâcher le verrou</button>
+      </div>
+      <label class="gds-label">Raison du verrou urgent</label>
+      <input id="gds-urgent-reason" class="gds-input" placeholder="Motif du passage en urgent" autocomplete="off">
+      <div class="gds-actions">
+        <button id="gds-urgent-btn" class="web-btn"><i data-lucide="alert-triangle" class="icon-sm"></i> Verrou urgent</button>
+      </div>
+    `;
+    bodyEl.appendChild(panel);
+    refreshIcons(container);
+
+    const err = panel.querySelector("#gds-sync-err");
+    const ok = panel.querySelector("#gds-sync-ok");
+    const lockState = panel.querySelector("#gds-lock-state");
+
+    async function refreshLock() {
+      const project = currentProjectPath();
+      if (!project) return;
+      try {
+        const lock = await invoke("gds_get_lock", { project });
+        if (!lock) {
+          lockState.innerHTML = `<div class="gds-empty">Aucun verrou actif sur ce projet.</div>`;
+        } else {
+          const held = lock.urgent ? " (urgent)" : "";
+          lockState.innerHTML = `
+            <div class="gds-row">
+              <div class="gds-row-info">
+                <div class="gds-row-title">Verrou détenu par ${esc(lock.email)}${held}</div>
+                <div class="gds-row-sub">Expire : ${new Date(lock.expires_at).toLocaleString()} — ${esc(lock.reason || "—")}</div>
+              </div>
+            </div>
+          `;
+        }
+      } catch (_) {
+        lockState.innerHTML = `<div class="gds-empty">GDS non provisionné — verrou indisponible.</div>`;
+      }
+    }
+
+    panel.querySelector("#gds-sync-btn").addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      err.textContent = ""; ok.textContent = "";
+      const btn = panel.querySelector("#gds-sync-btn");
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Synchronisation…';
+      refreshIcons(container);
+      try {
+        const res = await invoke("gds_sync_project", { project });
+        const lock = res.lock || {};
+        if (lock.acquired) {
+          ok.textContent = `✅ Synchronisé (${res.action}) et verrou acquis.`;
+        } else {
+          ok.textContent = `⚠️ Synchronisé (${res.action}) mais verrou détenu par ${lock.held_by || "un autre"} — conflit potentiel.`;
+        }
+        await refreshLock();
+      } catch (e) {
+        err.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="refresh-cw" class="icon-sm"></i> Synchroniser';
+        refreshIcons(container);
+      }
+    });
+
+    panel.querySelector("#gds-release-btn").addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      err.textContent = ""; ok.textContent = "";
+      try {
+        await invoke("gds_release_lock", { project });
+        ok.textContent = "✅ Verrou relâché.";
+        await refreshLock();
+      } catch (e) {
+        err.textContent = String(e);
+      }
+    });
+
+    panel.querySelector("#gds-urgent-btn").addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      const reason = panel.querySelector("#gds-urgent-reason").value.trim();
+      err.textContent = ""; ok.textContent = "";
+      try {
+        const res = await invoke("gds_urgent_lock", { project, reason });
+        ok.textContent = res.replaced
+          ? `✅ Verrou urgent acquis (remplace ${res.replaced}).`
+          : "✅ Verrou urgent acquis.";
+        await refreshLock();
+      } catch (e) {
+        err.textContent = String(e);
+      }
+    });
+
+    refreshLock();
+  }
+
+  // ── Section 6 : bloc Phase C (texte statique) ──
+  function renderPhaseC() {
     const panel = document.createElement("div");
     panel.className = "gds-panel gds-phase";
     panel.innerHTML = `
-      <div class="gds-panel-title"><i data-lucide="hourglass" class="icon-sm"></i> 5. Phase B / C — à venir</div>
+      <div class="gds-panel-title"><i data-lucide="hourglass" class="icon-sm"></i> 6. Phase C — à venir</div>
       <div class="gds-panel-desc">
-        Les fonctionnalités suivantes sont <strong>disponibles à la Phase B/C</strong>
+        Les fonctionnalités suivantes sont <strong>disponibles à la Phase C</strong>
         (non implémentées dans cette version) :
       </div>
       <ul class="gds-phase-list">
-        <li><strong>Synchronisation</strong> (sync des sources entre postes) — Phase B</li>
-        <li><strong>Verrous</strong> (verrouillage de fichiers / projets) — Phase B</li>
-        <li><strong>Tickets</strong> (suivi des demandes clients) — Phase C</li>
-        <li><strong>Suivi fusionné</strong> (contexte projet partagé) — Phase C</li>
+        <li><strong>Tickets</strong> (suivi des demandes clients)</li>
+        <li><strong>Suivi fusionné</strong> (contexte projet partagé)</li>
       </ul>
     `;
     bodyEl.appendChild(panel);
@@ -347,7 +456,8 @@ export function createGds(container) {
     } catch (_) { repos = null; }
     renderLists(projects, repos);
 
-    renderPhaseBC();
+    renderPhaseB();
+    renderPhaseC();
     refreshIcons(container);
   }
 
