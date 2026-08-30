@@ -71,6 +71,7 @@ mod vault;
 mod pi_update;
 mod project_agents;
 mod db;
+mod mcp_config;
 mod agent;
 mod agent_service;
 mod anomaly;
@@ -208,6 +209,10 @@ struct AppConfig {
     // depuis l'onglet agent. Persistance + rechargement au démarrage de Pilot.
     #[serde(default)]
     quality_gate_enabled: bool,
+    // Mode consommateur MCP (POC) : si true, l'agent passe l'extension MCP client
+    // (pilot-mcp-client.ts) et la variable PILOT_MCP_CONFIG pointe vers mcp.json.
+    #[serde(default)]
+    mcp_enabled: bool,
     #[serde(default = "default_true")]
     show_thinking: bool,
     #[serde(default)]
@@ -717,6 +722,7 @@ impl Default for AppConfig {
             session_retention_days: default_session_retention_days(),
             pi_skip_update_check: false,
             quality_gate_enabled: false,
+            mcp_enabled: false,
             show_thinking: true,
             show_tools: false,
             notify_agent_done: false,
@@ -2328,6 +2334,11 @@ pub fn run() {
             // ── Outils Git assistant (A2, lecture seule) ──
             git::git_status_project,
             git::git_log_project,
+            // ── Mode consommateur MCP (POC) ──
+            mcp_config::mcp_list_servers,
+            mcp_config::mcp_save_servers,
+            mcp_config::mcp_set_enabled,
+            mcp_config::mcp_test_connection,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,
             vault::vault_unlock,

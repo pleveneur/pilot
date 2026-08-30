@@ -158,6 +158,13 @@ utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
 - **Clic sur une commande** → le système se place dans le dossier configuré puis lance la commande dans un **onglet terminal dédié** (#29) : titre = nom de la commande, liste des commandes fermée. Relancer une commande déjà ouverte **bascule** sur son onglet (sans relancer le process). Fermer l'onglet arrête le PTY (comportement identique au terminal intégré).
 - Backend : `files::read_project_commands` / `files::save_project_commands` (`.pilot/commands.json`), `terminal::spawn_terminal_command` (PTY avec `cwd` + commande explicites). Frontend : `project-commands.js`.
 
+### Mode consommateur MCP (POC)
+- **POC minimal** (pas d'UI Paramètres, pas de transport http/sse) : Pilot peut se connecter à un **serveur MCP externe** (stdio) via une **extension pi dédiée** qui embarque le **SDK MCP bundlé** (esbuild).
+- Flux : extension `mcp-client.src.ts` → bundlé par `npm run build:mcp` → `pilot-mcp-client.ts` (généré, `.gitignore`). Au spawn de la session agent, si `mcp_enabled` est vrai, l'extension est écrite dans `<app_data_dir>/extensions/` et `PILOT_MCP_CONFIG` pointe vers `mcp.json`.
+- `mcp_config.rs` lit/écrit `mcp.json` dans `app_data_dir` (**pas AppConfig**) : `McpServer { id, name, command, args, env, enabled }`. L'extension se connecte au 1er serveur stdio activé, découvre ses outils et les enregistre en `mcp_<serverId>_<name>` (fail-open).
+- Commandes : `mcp_list_servers`, `mcp_save_servers`, `mcp_test_connection` (handshake `initialize`), `mcp_set_enabled` (persiste `mcp_enabled` dans AppConfig).
+- Dette technique à lever (post-POC) : UI Paramètres pour les serveurs, transports non-stdio, résolution des collisions de noms d'outils.
+
 <!-- HELP:commands -->
 ## Commandes du projet (▶)
 

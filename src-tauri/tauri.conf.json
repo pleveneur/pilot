@@ -24,8 +24,8 @@
     }
   },
   "build": {
-    "beforeDevCommand": "npm run build:handbook && npm run dev",
-    "beforeBuildCommand": "npm run build:handbook && npm run build",
+    "beforeDevCommand": "npm run build:mcp && npm run build:handbook && npm run dev",
+    "beforeBuildCommand": "npm run build:mcp && npm run build:handbook && npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },

@@ -1087,6 +1087,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, ORCH_REVIEWER_ID),
             )),
             None,
+            None,
         )
         .map_err(|e| format!("Erreur lancement du reviewer : {}", e))?;
         {
@@ -1494,6 +1495,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", ASSISTANT_SPACE, agent_id),
             )),
             None,
+            None,
         )
         .map_err(|e| format!("Erreur lancement agent d'assistant {} : {}", agent_id, e))?;
         Ok(session)
@@ -1607,6 +1609,7 @@ impl AgentService {
             // `anomaly::make_observer` (inchangé) + le déclencheur.
             Some(crate::super_agent::make_superagent_session_observer(app)),
             Some(SUPERAGENT_ID.to_string()),
+            None,
         )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
         Ok(session)
@@ -1684,6 +1687,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, agent_id),
             )),
             None,
+            None,
         )
         .map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
         Ok(session)
@@ -1694,7 +1698,7 @@ impl AgentService {
     /// dossier de session, skill quality-gate, extensions pi, canal projet).
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
-        let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits) = {
+        let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits, mcp_enabled) = {
             let config = state.config.lock().unwrap();
             (
                 config.rpc_pi_path.clone(),
@@ -1702,6 +1706,7 @@ impl AgentService {
                 config.rpc_session_dir.clone(),
                 config.quality_gate_enabled,
                 config.confirm_file_edits,
+                config.mcp_enabled,
             )
         };
 
@@ -1762,9 +1767,32 @@ impl AgentService {
                     if std::fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
                         extensions.push(choices_file.to_string_lossy().to_string());
                     }
+                    // POC MCP : extension client MCP (SDK bundlé) si activé.
+                    if mcp_enabled {
+                        let mcp_file = dir.join("pilot-mcp-client.ts");
+                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
+                            extensions.push(mcp_file.to_string_lossy().to_string());
+                        }
+                    }
                 }
             }
         }
+
+        // POC MCP : on expose le chemin du mcp.json au process pi via la variable
+        // d'environnement PILOT_MCP_CONFIG (uniquement si l'extension MCP est bien
+        // chargée). L'extension lit cette env au démarrage, jamais via AppConfig.
+        let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
+            && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
+        {
+            app.path().app_data_dir().ok().map(|d| {
+                vec![(
+                    "PILOT_MCP_CONFIG".to_string(),
+                    d.join("mcp.json").to_string_lossy().into_owned(),
+                )]
+            })
+        } else {
+            None
+        };
 
         let channel = agent_event_channel(project, agent_id);
         let mut session = rpc_manager::spawn_and_start(
@@ -1788,6 +1816,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, agent_id),
             )),
             None,
+            mcp_env_vars,
         )
         .map_err(|e| {
             if pi_path.is_empty() {

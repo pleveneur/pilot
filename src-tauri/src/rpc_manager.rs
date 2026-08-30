@@ -41,7 +41,7 @@ pub type EventObserver = Arc<dyn Fn(&Value) + Send + Sync>;
 /// `agent_id` : si Some, chaque événement est enveloppé dans
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
 /// `observer` : observateur d'événements optionnel (indicateur d'activité par projet).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>) -> Result<RpcSession, String> {
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>, env_vars: Option<Vec<(String, String)>>) -> Result<RpcSession, String> {
     // Robustesse shim (issue #76) : si le chemin pointe vers un shim npm
     // `pi.cmd`/`pi.ps1`/`pi.bat` (ou est vide → repli "pi" via le PATH), le
     // résoudre vers le vrai exécutable (node + cli.js) car `Command::new` ne
@@ -75,6 +75,14 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     // Sans effet pour les sessions sans agent_id (session principale, reviewer).
     if let Some(aid) = agent_id {
         cmd.env("PILOT_AGENT_ID", aid);
+    }
+    // Variables d'environnement additionnelles optionnelles. POC MCP : l'extension
+    // mcp-client lit le chemin du mcp.json via PILOT_MCP_CONFIG. `None` (ou liste
+    // vide) pour les sessions sans besoin (reviewer, PDF, agents sans projet).
+    if let Some(env_list) = env_vars {
+        for (k, v) in env_list {
+            cmd.env(k, v);
+        }
     }
     #[cfg(windows)]
     {

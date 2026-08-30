@@ -65,6 +65,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Diff Review agent (modifications) | `spec_diff_review.md` |
 | Détection d'anomalies (agents bloqués) | `spec_anomaly.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
+| Mode consommateur MCP (POC) | `spec_pilot.md` § MCP |
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
@@ -137,6 +138,8 @@ pilot/
 │   └── handbook.md           # GÉNÉRÉ (ne pas éditer) — embarqué via include_str!
 ├── scripts/
 │   ├── build-handbook.js      # Agrège les blocs HELP des specs → help/handbook.md
+│   ├── build-mcp-extension.js # Bundles esbuild de l'extension MCP (SDK embarqué) → pilot-mcp-client.ts
+│   ├── mcp-test-server.js     # Serveur MCP stdio de test (outil `echo`) pour le POC MCP
 │   ├── create-release.js      # Crée la GitHub Release (idempotent) avant les builds
 │   └── gen-latest-json.js     # Génère latest.json (updater) depuis les assets + changelog (git ou release-notes/vX.Y.Z.md) + met à jour le body + upload
 ├── release-notes/            # Changelog utilisateur (vX.Y.Z.md) rédigé à chaque release (option A)
@@ -200,6 +203,7 @@ pilot/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
     ├── extensions/            # Extensions pi embarquées (incluses via include_str!)
+    │   ├── mcp-client.src.ts # POC MCP : source extension client MCP (SDK bundlé · génère pilot-mcp-client.ts)
     │   ├── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)
     │   ├── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
     │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
@@ -242,6 +246,7 @@ pilot/
         ├── code_graph.rs     # Code Graph : extraction heuristique/tree-sitter + graphe SQLite + requêtes
         ├── dashboard.rs      # Tableau de bord projet (issue #51) : métriques fichiers/Git + activité agent
         ├── vault.rs          # Coffre fort (issue #52) : AES-256-GCM + Argon2id, ~/.pilot/vault.json
+        ├── mcp_config.rs     # POC MCP consommateur : mcp.json (app_data_dir), serveurs stdio, test connexion
         └── super_agent.rs    # Assistant : session RPC dédiée + base SQLite (clients/projets/tâches)
 ```
 
