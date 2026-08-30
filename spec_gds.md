@@ -81,6 +81,14 @@ stable.
   du projet, versionnable) : **activation on/off**, **URL du serveur GDS**,
   **identité** (email). Chaque projet pointe vers son **propre** serveur GDS ;
   deux projets peuvent viser deux serveurs différents.
+- **Config simplifiée (UI)** : l'interface ne demande que l'**adresse du serveur**
+  (`server_url`) et l'**email d'identité** (`identity_email`). L'hôte SSH
+  (`ssh_host`, `host:22`) est **dérivé automatiquement** de `server_url` à la
+  sauvegarde (schémas `postgres://`, `http://`, `https://`, `ssh://`), et le
+  dossier local de clonage (`gds_local_dir`) utilise le **défaut** `~/Pilot/GDS`.
+  Les champs `ssh_host` / `gds_local_dir` / `urgent_email` restent présents dans
+  `.pilot/gds.json` (compat) mais ne sont **plus édités dans l'UI** ; le backend
+  les **préserve** à la sauvegarde (pas de perte de données → réaffichage correct).
 - **Aucun serveur GDS par défaut** et **aucune config GDS globale** de Pilot
   (pas de champ `gds_*` dans la config applicative). Sans activation, le projet
   reste 100 % local (cf. §7.1).
@@ -327,6 +335,9 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - **Objectif** : le dossier local où les projets GDS sont clonés est configurable
   (champ `gds_local_dir` de la **config projet** `.pilot/gds.json`, défaut
   `~/Pilot/GDS`), validé à l'activation (§0.4).
+- **UI simplifiée** : le champ `gds_local_dir` n'est **plus édité dans l'UI**
+  (config simplifiée, §0.4) — le défaut `~/Pilot/GDS` est utilisé, et une valeur
+  existante est **préservée** par le backend à la sauvegarde.
 - **Critère de fin** : changer le dossier → les futures sync utilisent le nouveau.
 
 ### 5.3 Mode urgent (arbitrage 6)

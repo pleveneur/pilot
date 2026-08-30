@@ -145,10 +145,11 @@ export function createGds(container) {
       <input id="gds-cfg-server" class="gds-input" value="${esc(cfg ? cfg.server_url : "")}" placeholder="postgres://user:pass@host:5432/postgres" autocomplete="off">
       <label class="gds-label">Email d'identité</label>
       <input id="gds-cfg-email" class="gds-input" value="${esc(cfg ? cfg.identity_email : "")}" placeholder="dev@kalico" autocomplete="off">
-      <label class="gds-label">Dossier local de clonage (optionnel)</label>
-      <input id="gds-cfg-localdir" class="gds-input" value="${esc(cfg && cfg.gds_local_dir ? cfg.gds_local_dir : "")}" placeholder="~/Pilot/GDS" autocomplete="off">
-      <label class="gds-label">Hôte SSH (host:22, optionnel)</label>
-      <input id="gds-cfg-ssh" class="gds-input" value="${esc(cfg ? cfg.ssh_host : "")}" placeholder="192.168.1.10:22" autocomplete="off">
+      <div class="gds-panel-desc" style="margin-top:8px">
+        L'hôte SSH (<code>host:22</code>) est dérivé automatiquement de l'adresse du
+        serveur et le dossier local de clonage utilise le défaut
+        (<code>~/Pilot/GDS</code>).
+      </div>
       <div id="gds-config-err" class="gds-error"></div>
       <div id="gds-config-ok" class="gds-ok"></div>
       <div class="gds-actions">
@@ -167,13 +168,13 @@ export function createGds(container) {
         enabled: panel.querySelector("#gds-cfg-enabled").checked,
         server_url: panel.querySelector("#gds-cfg-server").value.trim(),
         identity_email: panel.querySelector("#gds-cfg-email").value.trim(),
-        gds_local_dir: panel.querySelector("#gds-cfg-localdir").value.trim() || null,
-        ssh_host: panel.querySelector("#gds-cfg-ssh").value.trim(),
       };
       err.textContent = "";
       ok.textContent = "";
       try {
         await invoke("gds_save_config", { project, cfg: cfgPayload });
+        // Re-rendu avec les valeurs fraîches (le backend dérive ssh_host et
+        // préserve les champs non envoyés) — corrige le mauvais réaffichage.
         await refresh();
         const okEl = bodyEl.querySelector("#gds-config-ok");
         if (okEl) okEl.textContent = "✅ Configuration enregistrée.";

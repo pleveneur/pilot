@@ -79,14 +79,35 @@ fn server_host(server_url: &str) -> String {
     s.split('/').next().unwrap_or(s).to_string()
 }
 
+/// Hôte SSH (host:22) dérivé de l'adresse serveur GDS (server_url).
+/// Gère les schémas `postgres://`, `http://`, `https://` et `ssh://` :
+/// - `postgres://user:pass@host:5432/db` → `host:22` (port SSH 22, pas 5432)
+/// - `http://host:8080` → `host:22`
+/// - `https://host` → `host:22`
+/// - `ssh://git@host` → `host:22`
+fn ssh_host_from_server_url(server_url: &str) -> String {
+    let s = server_url.trim();
+    // Retire le schéma.
+    let s = s
+        .strip_prefix("postgres://")
+        .or_else(|| s.strip_prefix("http://"))
+        .or_else(|| s.strip_prefix("https://"))
+        .or_else(|| s.strip_prefix("ssh://"))
+        .unwrap_or(s);
+    // Retire user:pass@ (postgres:// et ssh://).
+    let at = s.rfind('@').map(|i| i + 1).unwrap_or(0);
+    let after_at = &s[at..];
+    // Retire le chemin (/db, /proj.git).
+    let host_port = after_at.split('/').next().unwrap_or(after_at);
+    // Retire le port éventuel (5432, 8080…).
+    let host = host_port.split(':').next().unwrap_or(host_port);
+    format!("{}:22", host)
+}
+
 /// Hôte SSH (host:22) dérivé de l'adresse PostgreSQL du serveur GDS.
 /// `postgres://user:pass@host:5432/db` → `host:22` (port SSH 22, pas 5432).
 fn ssh_host_from_db_addr(db_addr: &str) -> String {
-    let at = db_addr.rfind('@').unwrap_or(0);
-    let after_at = &db_addr[at + 1..];
-    let host_port = after_at.split('/').next().unwrap_or(after_at);
-    let host = host_port.split(':').next().unwrap_or(host_port);
-    format!("{}:22", host)
+    ssh_host_from_server_url(db_addr)
 }
 
 /// Nom de projet (dernier segment du chemin) — ex: `/path/to/proj` → `proj`.
@@ -237,8 +258,35 @@ pub fn gds_get_config(project: String) -> Result<Option<GdsConfig>, String> {
 }
 
 /// Commande Tauri : écrit la config GDS du projet (`.pilot/gds.json`).
+///
+/// - Dérive `ssh_host` depuis `server_url` si vide ou si l'URL a changé
+///   (l'UI simplifiée n'envoie plus `ssh_host`).
+/// - Préserve `urgent_email` (et `gds_local_dir`) si le payload ne les inclut
+///   pas (l'UI simplifiée ne les envoie plus) — sinon perte de données à
+///   chaque sauvegarde UI, cause du mauvais réaffichage.
 #[tauri::command]
-pub fn gds_save_config(project: String, cfg: GdsConfig) -> Result<(), String> {
+pub fn gds_save_config(project: String, mut cfg: GdsConfig) -> Result<(), String> {
+    let existing = read_gds_config(&project).ok();
+    // Préserve les champs non envoyés par l'UI (urgent_email, gds_local_dir).
+    if cfg.urgent_email.is_none() {
+        if let Some(ex) = &existing {
+            cfg.urgent_email = ex.urgent_email.clone();
+        }
+    }
+    if cfg.gds_local_dir.is_none() {
+        if let Some(ex) = &existing {
+            cfg.gds_local_dir = ex.gds_local_dir.clone();
+        }
+    }
+    // Recalcule ssh_host si vide ou si server_url a changé.
+    let recompute = cfg.ssh_host.is_empty()
+        || existing
+            .as_ref()
+            .map(|ex| ex.server_url != cfg.server_url)
+            .unwrap_or(true);
+    if recompute {
+        cfg.ssh_host = ssh_host_from_server_url(&cfg.server_url);
+    }
     write_gds_config(&project, &cfg)
 }
 
@@ -288,6 +336,78 @@ mod tests {
             ssh_host_from_db_addr("postgres://user:pw@db.local:5432/pilot_gds"),
             "db.local:22"
         );
+    }
+
+    #[test]
+    fn ssh_host_derived_from_http_https_ssh_urls() {
+        assert_eq!(ssh_host_from_server_url("http://192.168.1.10:8080"), "192.168.1.10:22");
+        assert_eq!(ssh_host_from_server_url("https://gds.example.com"), "gds.example.com:22");
+        assert_eq!(ssh_host_from_server_url("ssh://git@192.168.1.10"), "192.168.1.10:22");
+        assert_eq!(
+            ssh_host_from_server_url("postgres://postgres:secret@192.168.1.10:5432/postgres"),
+            "192.168.1.10:22"
+        );
+    }
+
+    #[test]
+    fn gds_save_config_recomputes_ssh_host_when_server_url_changes() {
+        let dir = std::env::temp_dir().join(format!("pilot-gds-test-recompute-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        let initial = GdsConfig {
+            enabled: true,
+            server_url: "postgres://postgres:secret@old.host:5432/postgres".to_string(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_host: "old.host:22".to_string(),
+            urgent_email: Some("admin@kalico".to_string()),
+        };
+        write_gds_config(&project, &initial).unwrap();
+        // Sauvegarde avec une nouvelle URL et ssh_host vide (l'UI ne l'envoie plus).
+        let new_cfg = GdsConfig {
+            enabled: true,
+            server_url: "https://new.host".to_string(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_host: String::new(),
+            urgent_email: None,
+        };
+        gds_save_config(project.clone(), new_cfg).unwrap();
+        let saved = read_gds_config(&project).unwrap();
+        // ssh_host recalculé depuis la nouvelle URL.
+        assert_eq!(saved.ssh_host, "new.host:22");
+        // urgent_email préservé (non envoyé par l'UI).
+        assert_eq!(saved.urgent_email.as_deref(), Some("admin@kalico"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gds_save_config_preserves_ssh_host_when_url_unchanged() {
+        let dir = std::env::temp_dir().join(format!("pilot-gds-test-preserve-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        let initial = GdsConfig {
+            enabled: true,
+            server_url: "postgres://postgres:secret@host:5432/postgres".to_string(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: Some("/custom/dir".to_string()),
+            ssh_host: "custom:2222".to_string(),
+            urgent_email: None,
+        };
+        write_gds_config(&project, &initial).unwrap();
+        // Sauvegarde avec la même URL, ssh_host et gds_local_dir non envoyés.
+        let new_cfg = GdsConfig {
+            enabled: true,
+            server_url: "postgres://postgres:secret@host:5432/postgres".to_string(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_host: String::new(),
+            urgent_email: None,
+        };
+        gds_save_config(project.clone(), new_cfg).unwrap();
+        let saved = read_gds_config(&project).unwrap();
+        // ssh_host recalculé (vide → dérivé), gds_local_dir préservé.
+        assert_eq!(saved.ssh_host, "host:22");
+        assert_eq!(saved.gds_local_dir.as_deref(), Some("/custom/dir"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
