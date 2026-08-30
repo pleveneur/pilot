@@ -14,6 +14,7 @@ import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
 import { switchToSuperAgent } from "./super-agent.js";
+import { isProjectGds } from "./gds-status.js";
 import { toastError, toastSuccess, toastInfo } from "./toast.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
@@ -1194,8 +1195,11 @@ class Sidebar {
         const item = document.createElement("div");
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
+        // Indicateur « (GDS) » : ajouté après le nom si le projet est branché
+        // sur un GDS (config .pilot/gds.json activée). Fail-open : non branché.
+        const gdsSuffix = (await isProjectGds(p)) ? " - (GDS)" : "";
         item.innerHTML =
-          `<span class="open-project-name">${this._esc(name)}</span>` +
+          `<span class="open-project-name">${this._esc(name)}${this._esc(gdsSuffix)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
         // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
         item.addEventListener("click", (e) => {

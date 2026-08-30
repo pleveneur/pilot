@@ -164,6 +164,16 @@ pub(crate) async fn set_user_status(pool: &PgPool, email: &str, status: &str) ->
     Ok(())
 }
 
+/// Retourne l'id d'un projet par nom (None si absent).
+pub(crate) async fn get_project_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
+    let row = sqlx::query("SELECT id FROM projects WHERE name = $1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture projet: {}", e))?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
 /// Crée un projet, retourne son id.
 pub(crate) async fn create_project(
     pool: &PgPool,
@@ -188,6 +198,16 @@ pub(crate) async fn create_project(
     .await
     .map_err(|e| format!("Création projet: {}", e))?;
     Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne l'id d'un dépôt git par projet (None si absent).
+pub(crate) async fn get_git_repo_by_project(pool: &PgPool, project_id: i64) -> Result<Option<i64>, String> {
+    let row = sqlx::query("SELECT id FROM git_repos WHERE project_id = $1")
+        .bind(project_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture git_repo: {}", e))?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
 /// Enregistre un dépôt git (bare) pour un projet.

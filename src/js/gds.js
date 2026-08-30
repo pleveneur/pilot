@@ -80,6 +80,7 @@ export function createGds(container) {
         </div>
       </div>
       <div id="gds-provision-err" class="gds-error"></div>
+      <div id="gds-provision-ok" class="gds-ok"></div>
       <div class="gds-actions">
         <button id="gds-provision-btn" class="web-btn"><i data-lucide="rocket" class="icon-sm"></i> Provisionner</button>
       </div>
@@ -89,6 +90,7 @@ export function createGds(container) {
 
     const btn = panel.querySelector("#gds-provision-btn");
     const err = panel.querySelector("#gds-provision-err");
+    const ok = panel.querySelector("#gds-provision-ok");
     btn.addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
@@ -102,6 +104,7 @@ export function createGds(container) {
         return;
       }
       err.textContent = "";
+      ok.textContent = "";
       btn.disabled = true;
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Provisionnement…';
       refreshIcons(container);
@@ -111,8 +114,11 @@ export function createGds(container) {
         });
         err.textContent = "";
         await refresh();
+        const okEl = bodyEl.querySelector("#gds-provision-ok");
+        if (okEl) okEl.textContent = "✅ Serveur provisionné et GDS activé pour ce projet.";
       } catch (e) {
         err.textContent = String(e);
+        ok.textContent = "";
       } finally {
         btn.disabled = false;
         btn.innerHTML = '<i data-lucide="rocket" class="icon-sm"></i> Provisionner';
@@ -144,6 +150,7 @@ export function createGds(container) {
       <label class="gds-label">Hôte SSH (host:22, optionnel)</label>
       <input id="gds-cfg-ssh" class="gds-input" value="${esc(cfg ? cfg.ssh_host : "")}" placeholder="192.168.1.10:22" autocomplete="off">
       <div id="gds-config-err" class="gds-error"></div>
+      <div id="gds-config-ok" class="gds-ok"></div>
       <div class="gds-actions">
         <button id="gds-config-save" class="web-btn"><i data-lucide="check" class="icon-sm"></i> Enregistrer</button>
       </div>
@@ -152,6 +159,7 @@ export function createGds(container) {
     refreshIcons(container);
 
     const err = panel.querySelector("#gds-config-err");
+    const ok = panel.querySelector("#gds-config-ok");
     panel.querySelector("#gds-config-save").addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
@@ -163,11 +171,15 @@ export function createGds(container) {
         ssh_host: panel.querySelector("#gds-cfg-ssh").value.trim(),
       };
       err.textContent = "";
+      ok.textContent = "";
       try {
         await invoke("gds_save_config", { project, cfg: cfgPayload });
         await refresh();
+        const okEl = bodyEl.querySelector("#gds-config-ok");
+        if (okEl) okEl.textContent = "✅ Configuration enregistrée.";
       } catch (e) {
         err.textContent = String(e);
+        ok.textContent = "";
       }
     });
   }
@@ -180,11 +192,13 @@ export function createGds(container) {
       <div class="gds-panel-title"><i data-lucide="git-branch" class="icon-sm"></i> 3. Ajouter le projet au GDS</div>
       <div class="gds-panel-desc">
         Crée un dépôt git bare sur le serveur, enregistre le projet, ajoute le
-        remote <code>origin</code> et pousse la branche courante.
+        remote <code>gds</code> (sans toucher à un éventuel <code>origin</code>
+        existant) et pousse la branche courante.
       </div>
       <label class="gds-label">Email (membre du projet)</label>
       <input id="gds-add-email" class="gds-input" placeholder="dev@kalico" autocomplete="off">
       <div id="gds-add-err" class="gds-error"></div>
+      <div id="gds-add-ok" class="gds-ok"></div>
       <div class="gds-actions">
         <button id="gds-add-btn" class="web-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter le projet au GDS</button>
       </div>
@@ -194,12 +208,14 @@ export function createGds(container) {
 
     const btn = panel.querySelector("#gds-add-btn");
     const err = panel.querySelector("#gds-add-err");
+    const ok = panel.querySelector("#gds-add-ok");
     btn.addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
       const email = panel.querySelector("#gds-add-email").value.trim();
       if (!email) { err.textContent = "L'email est requis."; return; }
       err.textContent = "";
+      ok.textContent = "";
       btn.disabled = true;
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Ajout…';
       refreshIcons(container);
@@ -207,9 +223,12 @@ export function createGds(container) {
         const res = await invoke("gds_add_project", { project, email });
         err.textContent = "";
         await refresh();
+        const okEl = bodyEl.querySelector("#gds-add-ok");
+        if (okEl) okEl.textContent = "✅ Projet ajouté au GDS.";
         return res;
       } catch (e) {
         err.textContent = String(e);
+        ok.textContent = "";
       } finally {
         btn.disabled = false;
         btn.innerHTML = '<i data-lucide="plus" class="icon-sm"></i> Ajouter le projet au GDS';

@@ -139,11 +139,14 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
     let repo_url = format!("ssh://git@{}/{}", host, repo_name);
     let project_owned = project.to_string();
     let repo_url_owned = repo_url.clone();
+    // Remote dédié `gds` (et non `origin`) : préserve un éventuel remote
+    // `origin` existant (ex: GitHub) et reste idempotent — `git_remote_add`
+    // retire puis ré-ajoute le remote `gds` sans toucher aux autres.
     tokio::task::spawn_blocking(move || {
-        git_remote_add(&project_owned, "origin", &repo_url_owned)?;
+        git_remote_add(&project_owned, "gds", &repo_url_owned)?;
         let branch = git_current_branch(&project_owned);
         if !branch.is_empty() && branch != "HEAD" {
-            git_push(&project_owned, "origin", &branch)?;
+            git_push(&project_owned, "gds", &branch)?;
         }
         Ok::<(), String>(())
     })

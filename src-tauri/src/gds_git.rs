@@ -60,8 +60,19 @@ pub(crate) async fn add_project(
 
     let repo_name = format!("{}.git", name);
     let path_on_server = bare.to_string_lossy().to_string();
-    let project_id = gds_db::create_project(pool, &name, &repo_name, "", &path_on_server, "active", description).await?;
-    gds_db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
+    // Idempotent : si le projet existe déjà en base (ex: tentative précédente
+    // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
+    // sur la contrainte UNIQUE `projects.name`.
+    let project_id = match gds_db::get_project_by_name(pool, &name).await? {
+        Some(id) => id,
+        None => {
+            gds_db::create_project(pool, &name, &repo_name, "", &path_on_server, "active", description).await?
+        }
+    };
+    // git_repos.project_id est UNIQUE → idempotent aussi.
+    if gds_db::get_git_repo_by_project(pool, project_id).await?.is_none() {
+        gds_db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
+    }
     // Associer l'utilisateur (email) au projet (V1 : tous accès, table prête V2).
     if let Ok(Some(user)) = gds_db::get_user_by_email(pool, email).await {
         let _ = gds_db::create_project_member(pool, project_id, user.id, "dev").await;

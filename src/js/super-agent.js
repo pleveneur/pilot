@@ -26,7 +26,8 @@ import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatReminderQuietLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
-import { captureProjectBadgeNames } from "./super-agent-badges.js";
+import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
+import { isProjectGds } from "./gds-status.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -728,7 +729,26 @@ async function collectBubbleBadgeProjects(text) {
           if (p && (p.path || p.name)) push(p.path || "", p.name || null);
         }
       }
-      return captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
+      const names = captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
+      // Indicateur « (GDS) » : suffixe ajouté au nom du badge si le projet est
+      // branché sur un GDS (config .pilot/gds.json activée). Fail-open : non
+      // branché. Les invokes sont locaux/rapides ; toute lenteur → fallback.
+      if (names.length) {
+        try {
+          const gdsByDisplay = new Map();
+          await Promise.all(candidates.map(async (c) => {
+            const display = (c.name && String(c.name).trim()) || pathTailName(c.path);
+            if (!display) return;
+            if (await isProjectGds(c.path)) gdsByDisplay.set(display.toLowerCase(), true);
+          }));
+          return names.map((n) =>
+            gdsByDisplay.has(String(n).trim().toLowerCase()) ? `${n} - (GDS)` : n
+          );
+        } catch (_) {
+          return names; // fail-open : badges sans suffixe
+        }
+      }
+      return names;
     })(), BADGE_PROJECTS_COLLECT_TIMEOUT_MS, fallback);
     return resolved;
   } catch (_) {
