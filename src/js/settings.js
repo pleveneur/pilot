@@ -10,6 +10,7 @@ import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
+import { MCP_TRANSPORT, parseArgs, formatArgs, validateServer, newServerId, testResult } from "./mcp-utils.js";
 
 let currentConfig = null;
 
@@ -422,6 +423,199 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   });
   btnSaveProjectAgents?.addEventListener("click", saveProjectAgents);
 
+  // ── Serveurs MCP (POC) — onglet dédié dans les Paramètres ──
+  const chkMcpEnabled = document.getElementById("setting-mcp-enabled");
+  const chkMcpAgentConfirm = document.getElementById("setting-mcp-agent-confirm");
+  const mcpServersList = document.getElementById("mcp-servers-list");
+  const btnMcpAdd = document.getElementById("btn-mcp-add");
+  const btnMcpReload = document.getElementById("btn-mcp-reload");
+  const mcpEditor = document.getElementById("mcp-editor");
+  const mcpFName = document.getElementById("mcp-f-name");
+  const mcpFCommand = document.getElementById("mcp-f-command");
+  const mcpFArgs = document.getElementById("mcp-f-args");
+  const mcpFEnabled = document.getElementById("mcp-f-enabled");
+  const mcpFStatus = document.getElementById("mcp-f-status");
+  const btnMcpSave = document.getElementById("btn-mcp-save");
+  const btnMcpCancel = document.getElementById("btn-mcp-cancel");
+  const mcpStatus = document.getElementById("mcp-status");
+  let mcpServers = []; // état éditable ([{id,name,transport,enabled,command,args}])
+  let mcpEditingId = null; // id du serveur en cours d'édition (null = nouveau)
+
+  function setMcpStatus(text, color) {
+    if (!mcpStatus) return;
+    mcpStatus.textContent = text || "";
+    mcpStatus.style.color = color || "var(--text-muted)";
+  }
+
+  async function loadMcp() {
+    if (!chkMcpEnabled) return;
+    try {
+      const list = await invoke("mcp_list_servers");
+      mcpServers = Array.isArray(list) ? list : [];
+    } catch (_) {
+      mcpServers = [];
+    }
+    chkMcpEnabled.checked = !!(currentConfig && currentConfig.mcp_enabled);
+    chkMcpAgentConfirm.checked = !!(currentConfig && currentConfig.mcp_agent_confirm);
+    setMcpStatus("");
+    renderMcpServers();
+  }
+
+  function renderMcpServers() {
+    if (!mcpServersList) return;
+    mcpServersList.innerHTML = "";
+    if (mcpServers.length === 0) {
+      mcpServersList.innerHTML = '<div style="font-size:12px;opacity:.6;padding:4px 0;">Aucun serveur MCP configuré. Ajoutez-en un pour permettre à l agent de s&apos;y connecter.</div>';
+      return;
+    }
+    mcpServers.forEach((s) => {
+      const card = document.createElement("div");
+      card.className = "mcp-server-card";
+      const badge = document.createElement("span");
+      badge.className = "mcp-badge " + (s.enabled ? "ok" : "off");
+      badge.textContent = s.enabled ? "activé" : "désactivé";
+      const info = document.createElement("div");
+      info.className = "mcp-server-info";
+      const title = document.createElement("div");
+      title.className = "mcp-server-title";
+      title.textContent = s.name || s.id || "(sans nom)";
+      const meta = document.createElement("div");
+      meta.className = "mcp-server-meta";
+      meta.textContent = (s.transport || "stdio") + " · " + ((s.command || "") + " " + formatArgs(s.args || [])).trim() || "—";
+      info.appendChild(title);
+      info.appendChild(meta);
+      const actions = document.createElement("div");
+      actions.className = "mcp-server-actions";
+      const btnTest = document.createElement("button");
+      btnTest.type = "button"; btnTest.className = "web-btn"; btnTest.textContent = "Tester";
+      btnTest.addEventListener("click", () => testMcpServer(s));
+      const btnEdit = document.createElement("button");
+      btnEdit.type = "button"; btnEdit.className = "web-btn"; btnEdit.textContent = "Modifier";
+      btnEdit.addEventListener("click", () => openMcpEditor(s));
+      const btnDel = document.createElement("button");
+      btnDel.type = "button"; btnDel.className = "web-btn web-btn-danger"; btnDel.textContent = "Supprimer";
+      btnDel.addEventListener("click", () => deleteMcpServer(s));
+      actions.appendChild(btnTest);
+      actions.appendChild(btnEdit);
+      actions.appendChild(btnDel);
+      card.appendChild(badge);
+      card.appendChild(info);
+      card.appendChild(actions);
+      mcpServersList.appendChild(card);
+    });
+  }
+
+  function openMcpEditor(s) {
+    mcpEditingId = s ? s.id : null;
+    mcpFName.value = s ? (s.name || "") : "";
+    mcpFCommand.value = s ? (s.command || "") : "";
+    mcpFArgs.value = s ? formatArgs(s.args || []) : "";
+    mcpFEnabled.checked = s ? !!s.enabled : true;
+    mcpFStatus.textContent = "";
+    mcpFStatus.style.color = "var(--text-muted)";
+    if (mcpEditor) {
+      mcpEditor.style.display = "block";
+      mcpEditor.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  async function saveMcpServer() {
+    const name = mcpFName.value.trim();
+    const command = mcpFCommand.value.trim();
+    const err = validateServer({ name, command });
+    if (err) { mcpFStatus.textContent = "⚠ " + err; mcpFStatus.style.color = "var(--danger,#f87171)"; return; }
+    const prev = mcpEditingId ? mcpServers.find((x) => x.id === mcpEditingId) : null;
+    const id = mcpEditingId || (prev ? prev.id : newServerId(mcpServers));
+    const server = {
+      id,
+      name,
+      transport: MCP_TRANSPORT,
+      enabled: mcpFEnabled.checked,
+      command,
+      args: parseArgs(mcpFArgs.value),
+    };
+    mcpFStatus.textContent = "Enregistrement…";
+    mcpFStatus.style.color = "var(--text-muted)";
+    try {
+      if (mcpEditingId) {
+        mcpServers = mcpServers.map((x) => (x.id === mcpEditingId ? server : x));
+      } else {
+        mcpServers.push(server);
+      }
+      await invoke("mcp_save_servers", { servers: mcpServers });
+      mcpEditingId = null;
+      mcpEditor.style.display = "none";
+      renderMcpServers();
+      setMcpStatus("✓ Serveurs enregistrés.", "var(--success,#4ade80)");
+      setTimeout(() => setMcpStatus(""), 2500);
+    } catch (e) {
+      mcpFStatus.textContent = "Erreur : " + e;
+      mcpFStatus.style.color = "var(--danger,#f87171)";
+    }
+  }
+
+  async function deleteMcpServer(s) {
+    const label = s.name || s.id || "ce serveur";
+    if (!confirm(`Supprimer le serveur MCP « ${label} » ?`)) return;
+    const next = mcpServers.filter((x) => x.id !== s.id);
+    try {
+      await invoke("mcp_save_servers", { servers: next });
+      mcpServers = next;
+      renderMcpServers();
+      if (mcpEditingId === s.id) { mcpEditingId = null; if (mcpEditor) mcpEditor.style.display = "none"; }
+    } catch (e) {
+      alert("Erreur : " + e);
+    }
+  }
+
+  async function testMcpServer(s) {
+    const label = s.name || s.id || "serveur";
+    setMcpStatus(`⏳ Test de « ${label} »…`);
+    try {
+      const res = await invoke("mcp_test_connection", { server: s });
+      const r = testResult(res);
+      if (r.ok) {
+        setMcpStatus(`✓ Connexion au serveur « ${label} » réussie.`, "var(--success,#4ade80)");
+        showToast(`MCP : connexion OK (${label})`, "success", 4000);
+      } else {
+        setMcpStatus(`❌ ${r.error || `Échec de connexion au serveur « ${label} ».`}`, "var(--danger,#f87171)");
+      }
+    } catch (e) {
+      setMcpStatus(`❌ ${e}`, "var(--danger,#f87171)");
+    }
+  }
+
+  btnMcpAdd?.addEventListener("click", () => openMcpEditor(null));
+  btnMcpReload?.addEventListener("click", loadMcp);
+  btnMcpCancel?.addEventListener("click", () => {
+    mcpEditingId = null;
+    if (mcpEditor) mcpEditor.style.display = "none";
+  });
+  btnMcpSave?.addEventListener("click", saveMcpServer);
+  // Toggle global → persisté immédiatement (flag consommateur Pilot, distinct de
+  // la liste des serveurs). Revert visuel si le backend échoue.
+  chkMcpEnabled?.addEventListener("change", async () => {
+    if (!chkMcpEnabled) return;
+    try {
+      await invoke("mcp_set_enabled", { enabled: chkMcpEnabled.checked });
+    } catch (e) {
+      chkMcpEnabled.checked = !chkMcpEnabled.checked;
+      alert("Erreur : " + e);
+    }
+  });
+  // Confirmation utilisateur avant qu'un agent utilise un serveur MCP (brique
+  // C) : activée par défaut. L'assistant la lit via mcp_state et demande un
+  // confirmation (ask_confirm) avant de lancer un agent sur un serveur MCP.
+  chkMcpAgentConfirm?.addEventListener("change", async () => {
+    if (!chkMcpAgentConfirm) return;
+    try {
+      await invoke("mcp_set_agent_confirm", { enabled: chkMcpAgentConfirm.checked });
+    } catch (e) {
+      chkMcpAgentConfirm.checked = !chkMcpAgentConfirm.checked;
+      alert("Erreur : " + e);
+    }
+  });
+
   btnWebAudit.addEventListener("click", async (e) => {
     auditModal.classList.remove("hidden");
     animateModalOpen(auditModal, e.clientX, e.clientY);
@@ -445,6 +639,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     }
     // Agents du projet (issue #35) : charger la config du projet actif.
     await loadProjectAgents();
+    await loadMcp();
     selectTheme.value = currentConfig.theme || "dark";
     inputCmd.value = currentConfig.default_command || "";
     chkAutoLoad.checked = currentConfig.auto_load_last_project || false;

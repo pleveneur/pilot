@@ -255,6 +255,7 @@
           <button class="settings-tab" data-settings-tab="rag" role="tab" aria-selected="false"><i data-lucide="database" class="icon"></i> RAG</button>
           <button class="settings-tab" data-settings-tab="codegraph" role="tab" aria-selected="false"><i data-lucide="network" class="icon"></i> Graphe</button>
           <button class="settings-tab" data-settings-tab="superagent" role="tab" aria-selected="false"><i data-lucide="compass" class="icon"></i> Assistant</button>
+          <button class="settings-tab" data-settings-tab="mcp" role="tab" aria-selected="false"><i data-lucide="plug" class="icon"></i> Serveurs MCP</button>
         </nav>
         <div class="settings-panels">
 
@@ -857,6 +858,62 @@
               <button type="button" id="btn-superagent-memory-export" class="web-btn">Exporter la mémoire</button>
               <button type="button" id="btn-superagent-memory-import" class="web-btn">Importer la mémoire</button>
               <span id="mem-status" style="font-size:11px;color:var(--text-muted);align-self:center;"></span>
+            </div>
+          </div>
+          </div>
+
+          <div class="settings-panel" data-settings-panel="mcp" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="plug" class="icon-sm"></i> Serveurs MCP (Pilot consommateur)</h3>
+            <p class="muted">L'agent peut se connecter à des serveurs MCP externes via une extension embarquée (transport <code>stdio</code> uniquement — pas de http/sse). Les outils sont exposés sous le préfixe <code>mcp_&lt;serveur&gt;_&lt;outil&gt;</code>.</p>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-mcp-enabled" />
+              <label for="setting-mcp-enabled" title="Active globalement la connexion au premier serveur MCP activé de la liste (au prochain démarrage de la session agent).">Activer le client MCP (connexion aux serveurs ci-dessous)</label>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-mcp-agent-confirm" />
+              <label for="setting-mcp-agent-confirm" title="Quand activé (défaut), l'Assistant demande une confirmation à l'utilisateur avant de lancer un agent sur un serveur MCP. Désactivé = l'Assistant choisit et lance automatiquement.">Demander une confirmation utilisateur avant qu'un agent utilise un serveur MCP</label>
+            </div>
+            <hr class="settings-sep" />
+            <div class="setting-row">
+              <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). Le serveur actif au démarrage d'une session agent est le premier serveur « stdio » activé de la liste.</small>
+            </div>
+            <div class="providers-toolbar">
+              <button type="button" id="btn-mcp-add" class="pc-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter un serveur</button>
+              <button type="button" id="btn-mcp-reload" class="pc-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Recharger</button>
+              <span id="mcp-status" class="muted"></span>
+            </div>
+            <div id="mcp-servers-list" class="providers-list"></div>
+
+            <div id="mcp-editor" class="mcp-editor" style="display:none;margin-top:10px;">
+              <div class="field-row">
+                <label for="mcp-f-name" title="Nom libre du serveur (affiché dans la liste).">Nom :</label>
+                <input type="text" id="mcp-f-name" placeholder="Mon serveur"/>
+              </div>
+              <div class="field-row">
+                <label for="mcp-f-command" title="Exécutable à lancer (ex: node, python).">Commande :</label>
+                <input type="text" id="mcp-f-command" placeholder="node"/>
+              </div>
+              <div class="field-row">
+                <label for="mcp-f-args" title="Arguments séparés par des espaces. Les arguments contenant des espaces doivent être entre guillemets.">Arguments :</label>
+                <input type="text" id="mcp-f-args" placeholder="scripts/mcp-test-server.js"/>
+              </div>
+              <div class="field-row">
+                <label>Transport :</label>
+                <span class="muted">stdio (unique transport supporté par le POC)</span>
+              </div>
+              <div class="field-row">
+                <label for="mcp-f-enabled">Activé :</label>
+                <input type="checkbox" id="mcp-f-enabled" checked style="width:auto;"/>
+                <small class="muted">Uniquement le premier serveur activé est connecté au démarrage.</small>
+              </div>
+              <div class="field-row">
+                <span id="mcp-f-status" class="muted"></span>
+              </div>
+              <div class="providers-toolbar">
+                <button type="button" id="btn-mcp-save" class="pc-btn pc-btn-primary"><i data-lucide="save" class="icon-sm"></i> Enregistrer le serveur</button>
+                <button type="button" id="btn-mcp-cancel" class="pc-btn">Annuler</button>
+              </div>
             </div>
           </div>
           </div>

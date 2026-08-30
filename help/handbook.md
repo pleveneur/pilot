@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-08-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-08-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1430,6 +1430,24 @@ retrouvez immédiatement où on en était, sans avoir à tout ré-expliquer. À
 l'ouverture de l'onglet, un message « 🔁 Reprise de session — … » rappelle le
 contexte. Vous pouvez aussi lui demander explicitement de « retenir » ou de
 « reprendre » une discussion.
+
+---
+
+### MCP piloté par l'Assistant
+
+L'Assistant peut piloter les **serveurs MCP** (connectés à Pilot) pour déléguer
+une tâche à un agent en lui donnant accès au serveur de son choix.
+
+- **Découvrir** : l'outil `mcp_state` retourne `{ enabled, confirm, servers }`
+  (actif, confirmation requise, serveurs configurés avec leur id).
+- **Choisir un serveur** : passer le serveur id (`mcp_server`) à `run_agents` /
+  `run_assistant_agents` → l'agent de CETTE run charge le serveur désigné à la
+  volée. Sans `mcp_server`, un agent non-standard ne charge pas MCP.
+- **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
+  l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
+  Si désactivé, il choisit et lance seul.
+- L'agent standard du projet garde son comportement historique (1er serveur
+  stdio activé au démarrage). Les serveurs restent en transport `stdio` seul.
 
 ---
 

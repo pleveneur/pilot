@@ -34,6 +34,12 @@ const RUN_ASSISTANT_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_ASSISTANT_AGENTS::";
 // détecte, exécute la commande Rust `project_snapshot` (lecture seule) et renvoie
 // l'état structuré du projet (JSON) comme `value` de la réponse.
 const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
+// Sentinel préfixant le titre d'un `input` d'outil mcp_state (MCP piloté par
+// l'assistant, brique C). Pilot le détecte, exécute la commande Rust
+// `mcp_get_state` (lecture seule) et renvoie `{ enabled, confirm, servers }`
+// comme `value` de la réponse. L'assistant lit `confirm` pour savoir s'il doit
+// demander une confirmation avant qu'un agent utilise un serveur MCP.
+const MCP_STATE_SENTINEL = "PILOT_ASSISTANT_MCP_STATE::";
 // Sentinel préfixant le titre d'un `input` d'outil git_status. Pilot le détecte,
 // exécute la commande Rust `git_status_project` (lecture seule) et renvoie l'état
 // Git du projet (JSON) comme `value` de la réponse.
@@ -144,10 +150,11 @@ export default function (pi: ExtensionAPI) {
       agent_ids: Type.Array(Type.String({ description: "Identifiants des agents à utiliser (au moins un)" })),
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
       project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible (optionnel, défaut = projet actif)" })),
+      mcp_server: Type.Optional(Type.String({ description: "Identifiant d'un serveur MCP à connecter pour CET agent (optionnel). À utiliser quand la tâche nécessite les outils MCP d'un serveur que tu as découvert via mcp_state. Sans lui, l'agent ne charge pas MCP, sauf à être l'agent standard." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, project: params.project || null });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, project: params.project || null, mcp_server: params.mcp_server || null });
       const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé." }] };
@@ -171,10 +178,11 @@ export default function (pi: ExtensionAPI) {
       agent_ids: Type.Array(Type.String({ description: "Identifiants des agents d'assistant à utiliser (au moins un)" })),
       task: Type.String({ description: "La tâche à confier aux agents sélectionnés" }),
       workspace: Type.Optional(Type.String({ description: "Dossier de travail assistant (optionnel, défaut ~/.pilot/assistant)" })),
+      mcp_server: Type.Optional(Type.String({ description: "Identifiant d'un serveur MCP à connecter pour CET agent d'assistant (optionnel), découvert via mcp_state. Sans lui, l'agent ne charge pas MCP." })),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, workspace: params.workspace || null });
+      const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, workspace: params.workspace || null, mcp_server: params.mcp_server || null });
       const result = await ctx.ui.input(RUN_ASSISTANT_AGENTS_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé." }] };
@@ -250,6 +258,28 @@ export default function (pi: ExtensionAPI) {
       const result = await ctx.ui.input(GIT_LOG_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Analyse Git annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "mcp_state",
+    label: "MCP State",
+    description:
+      "Obtenir l'état MCP (lecture seule) : si le client MCP est activé, si la confirmation utilisateur est requise avant qu'un agent utilise un serveur (mcp_agent_confirm) et la liste des serveurs MCP configurés (id, nom, état activé/désactivé). À utiliser quand tu comptes faire utiliser un serveur MCP : 1) découvre les serveurs disponibles, 2) choisis un serveur (mcp_server) à passer à run_agents, 3) si `confirm` est vrai, demande une confirmation à l'utilisateur (ask_confirm) avant de lancer l'agent sur ce serveur.",
+    promptSnippet: "mcp_state: obtenir l'état MCP (activé, confirmation requise, serveurs disponibles)",
+    promptGuidelines: [
+      "Use mcp_state when you plan to have an agent use an MCP server: discover the available servers, then pick one (mcp_server id) to pass to run_agents.",
+      "IMPORTANT confirmation rule: if `confirm` is true (default), ALWAYS ask the user for confirmation (ask_confirm) before launching an agent on a specific MCP server. If `confirm` is false, you may choose and launch alone automatically.",
+      "Only call mcp_state again when the set of servers may have changed; prefer remembering the server ids in your context.",
+    ],
+    parameters: Type.Object({}),
+    executionMode: "sequential",
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const result = await ctx.ui.input(MCP_STATE_SENTINEL + "{}", "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Interrogation de l'état MCP annulée." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

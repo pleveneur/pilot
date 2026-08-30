@@ -66,6 +66,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Détection d'anomalies (agents bloqués) | `spec_anomaly.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
 | Mode consommateur MCP (POC) | `spec_pilot.md` § MCP |
+| MCP piloté par l'Assistant | `spec_pilot.md` § MCP + `spec_super_agent.md` § MCP piloté (flag `mcp_agent_confirm`, outils `mcp_state` / `run_agents(mcp_server)`) |
 | Historique de sessions searchable (H9) | `spec_session_history.md` |
 | Feedback utilisateurs (remarques/évolutions) | `spec_feedback.md` |
 | Quality-gate interne | `spec_quality_gate.md` |
@@ -208,7 +209,7 @@ pilot/
     │   ├── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
     │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
     │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)
-    │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder / purge_agent_conversation (actions Pilot via sentinel)
+    │   ├── pilot-assistant-actions.ts # 🧭 : open_project / delegate_to_coder / purge_agent_conversation / run_agents(mcp_server) / mcp_state (actions Pilot via sentinel)
     │   ├── pilot-assistant-db.ts # 🧭 : db_query / db_execute (accès contrôlé à la base de suivi de l'assistant)
     │   ├── pilot-assistant-prompt.ts # 🧭 : update_my_prompt (auto-adaptation du prompt personnalisé)
     │   └── pilot-assistant-sessions.ts # 🧭 : list_agent_sessions (vue d'ensemble des sessions d'agents, P2)

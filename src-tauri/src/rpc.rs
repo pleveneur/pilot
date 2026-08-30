@@ -314,6 +314,7 @@ pub(crate) fn do_start_agent_session(state: &AppState, app: &AppHandle, agent_id
         &pi_path,
         no_session,
         SpawnMode::MainSession,
+        None,
     )?;
     Ok(false)
 }

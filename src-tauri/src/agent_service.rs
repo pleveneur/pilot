@@ -427,6 +427,7 @@ impl AgentService {
         pi_path: &str,
         no_session: bool,
         mode: SpawnMode,
+        mcp_server: Option<String>,
     ) -> Result<bool, String> {
         let key = Self::session_key(project, agent_id);
         // T4 : exclusivité des spécialités par projet. Un seul agent de chaque
@@ -523,7 +524,7 @@ impl AgentService {
         let session = match mode {
             SpawnMode::MainSession => Self::spawn_session(app, project, agent_id)?,
             SpawnMode::AgentProcess => {
-                Self::spawn_agent_process(app, project, agent_id, pi_path, no_session)?
+                Self::spawn_agent_process(app, project, agent_id, pi_path, no_session, mcp_server)?
             }
             // Les agents d'assistant (tâche #140) sont démarrés via
             // `start_assistant_agent` (clé réservée ASSISTANT_SPACE, espace de
@@ -1303,6 +1304,7 @@ impl AgentService {
         pi_path: &str,
         no_session: bool,
         space_cwd: &str,
+        mcp_server: Option<String>,
     ) -> Result<bool, String> {
         let key = Self::session_key(ASSISTANT_SPACE, agent_id);
         // Le frontend passe le token réservé ASSISTANT_SPACE comme `space_cwd`
@@ -1340,7 +1342,7 @@ impl AgentService {
             self.set_state(app, agent_id, None, true, false, &AgentProcessState::Running).ok();
             return Ok(true);
         }
-        let session = Self::spawn_assistant_session(app, agent_id, pi_path, no_session, &cwd)?;
+        let session = Self::spawn_assistant_session(app, agent_id, pi_path, no_session, &cwd, mcp_server)?;
         {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.insert(
@@ -1416,7 +1418,7 @@ impl AgentService {
     /// chemins. Réutilisé par `spawn_assistant_session` (les agents d'assistant
     /// tournent dans `~/.pilot/assistant/`, pas dans un projet). Retourne la
     /// liste des chemins d'extensions construits (vide si non supporté).
-    fn write_assistant_extensions(app: &AppHandle, pi_path: &str) -> Vec<String> {
+    fn write_assistant_extensions(app: &AppHandle, pi_path: &str, want_mcp: bool) -> Vec<String> {
         let state = app.state::<AppState>();
         let mut extensions: Vec<String> = Vec::new();
         if !probe_extension_support(&state, pi_path) {
@@ -1429,7 +1431,7 @@ impl AgentService {
         if std::fs::create_dir_all(&dir).is_err() {
             return extensions;
         }
-        let files: &[(&str, &str)] = &[
+        let mut files: Vec<(&str, &str)> = vec![
             ("pilot-assistant-files.ts", include_str!("../extensions/pilot-assistant-files.ts")),
             ("pilot-choices.ts", include_str!("../extensions/pilot-choices.ts")),
             ("pilot-assistant-actions.ts", include_str!("../extensions/pilot-assistant-actions.ts")),
@@ -1441,6 +1443,14 @@ impl AgentService {
             ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
             ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
         ];
+        // Assistant piloté MCP (brique B) : extension client MCP ajoutée à la
+        // demande uniquement (serveur cible désigné + MCP activé).
+        if want_mcp {
+            files.push((
+                "pilot-mcp-client.ts",
+                include_str!("../extensions/pilot-mcp-client.ts"),
+            ));
+        }
         for (name, content) in files {
             let file = dir.join(name);
             if std::fs::write(&file, content).is_ok() {
@@ -1461,9 +1471,15 @@ impl AgentService {
         pi_path: &str,
         no_session: bool,
         cwd: &str,
+        mcp_server: Option<String>,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
-        let extensions = Self::write_assistant_extensions(app, pi_path);
+        let mcp_enabled = state.config.lock().unwrap().mcp_enabled;
+        // Agent d'assistant piloté MCP (brique B) : si MCP est activé ET qu'un
+        // serveur cible est désigné, on écrit l'extension client MCP en plus des
+        // extensions assistant standards. Jamais au démarrage (à la demande).
+        let want_mcp = mcp_enabled && mcp_server.as_deref().map(str::trim).unwrap_or("") != "";
+        let extensions = Self::write_assistant_extensions(app, pi_path, want_mcp);
         let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
             cfg_path
                 .with_file_name("agent")
@@ -1476,6 +1492,28 @@ impl AgentService {
                 .join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
         };
         let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
+        // Agent d'assistant piloté MCP (brique B) : expose le mcp.json
+        // (PILOT_MCP_CONFIG) et le serveur cible (PILOT_MCP_SERVER) au process pi.
+        // Uniquement si l'extension MCP est chargée (serveur désigné + MCP activé).
+        let mcp_env_vars: Option<Vec<(String, String)>> = if extensions
+            .iter()
+            .any(|e| e.contains("pilot-mcp-client.ts"))
+        {
+            app.path().app_data_dir().ok().map(|d| {
+                let mut vars = vec![(
+                    "PILOT_MCP_CONFIG".to_string(),
+                    d.join("mcp.json").to_string_lossy().into_owned(),
+                )];
+                if let Some(srv) = mcp_server.as_deref() {
+                    if !srv.trim().is_empty() {
+                        vars.push(("PILOT_MCP_SERVER".to_string(), srv.trim().to_string()));
+                    }
+                }
+                vars
+            })
+        } else {
+            None
+        };
         let session = rpc_manager::spawn_and_start(
             cwd,
             pi_path,
@@ -1495,7 +1533,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", ASSISTANT_SPACE, agent_id),
             )),
             None,
-            None,
+            mcp_env_vars,
         )
         .map_err(|e| format!("Erreur lancement agent d'assistant {} : {}", agent_id, e))?;
         Ok(session)
@@ -1513,6 +1551,7 @@ impl AgentService {
         pi_path: &str,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
+        let mcp_enabled = state.config.lock().unwrap().mcp_enabled;
         let mut extensions: Vec<String> = Vec::new();
         let ext_supported = probe_extension_support(&state, pi_path);
         // Tâche #136 : diagnostic — confirmer pourquoi la liste d'outils du
@@ -1567,6 +1606,15 @@ impl AgentService {
                     if std::fs::write(&session_memory, include_str!("../extensions/pilot-assistant-session-memory.ts")).is_ok() {
                         extensions.push(session_memory.to_string_lossy().to_string());
                     }
+                    // Assistant piloté MCP (brique A) : si MCP est activé, l'assistant
+                    // charge l'extension client MCP (comme l'agent standard) pour
+                    // découvrir les serveurs avec ses outils mcp_<serveur>_<outil>.
+                    if mcp_enabled {
+                        let mcp_file = dir.join("pilot-mcp-client.ts");
+                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
+                            extensions.push(mcp_file.to_string_lossy().to_string());
+                        }
+                    }
                 }
             }
         }
@@ -1591,6 +1639,21 @@ impl AgentService {
         // d'outils et l'afficher comme une anomalie.
         *state.agent_service.superagent_ext.lock().unwrap() =
             Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len() });
+        // Assistant piloté MCP (brique A) : expose le chemin du mcp.json au process
+        // pi de l'assistant via PILOT_MCP_CONFIG (uniquement si l'extension MCP est
+        // bien chargée). L'extension lit cette env au démarrage.
+        let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
+            && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
+        {
+            app.path().app_data_dir().ok().map(|d| {
+                vec![(
+                    "PILOT_MCP_CONFIG".to_string(),
+                    d.join("mcp.json").to_string_lossy().into_owned(),
+                )]
+            })
+        } else {
+            None
+        };
         let session = rpc_manager::spawn_and_start(
             cwd,
             pi_path,
@@ -1609,7 +1672,7 @@ impl AgentService {
             // `anomaly::make_observer` (inchangé) + le déclencheur.
             Some(crate::super_agent::make_superagent_session_observer(app)),
             Some(SUPERAGENT_ID.to_string()),
-            None,
+            mcp_env_vars,
         )
         .map_err(|e| format!("Erreur lancement du super-agent : {}", e))?;
         Ok(session)
@@ -1624,13 +1687,17 @@ impl AgentService {
         agent_id: &str,
         pi_path: &str,
         no_session: bool,
+        mcp_server: Option<String>,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         // #21 : quand l'assistant active l'héritage de contexte, les agents
         // spécifiques qu'il utilise (run_agents) chargent l'extension
         // pilot-context.ts (comme l'agent standard) pour hériter du contexte
         // projet (RAG/Context Engine + mémoire + Code Graph) en plus de leur rôle.
-        let inherit_context = state.config.lock().unwrap().super_agent_inherit_context;
+        let (inherit_context, mcp_enabled) = {
+            let config = state.config.lock().unwrap();
+            (config.super_agent_inherit_context, config.mcp_enabled)
+        };
         let mut extensions: Vec<String> = Vec::new();
         if probe_extension_support(&state, pi_path) {
             if let Ok(data_dir) = app.path().app_data_dir() {
@@ -1653,9 +1720,41 @@ impl AgentService {
                             extensions.push(ctx_file.to_string_lossy().to_string());
                         }
                     }
+                    // Agent piloté MCP (brique B) : si l'assistant a désigné un
+                    // serveur MCP cible via run_agents (mcp_server) ET que MCP est
+                    // activé, on charge l'extension client MCP à la volée pour CET
+                    // agent. Jamais au démarrage (MCP ne s'ajoute qu'à la demande).
+                    if mcp_enabled && mcp_server.as_deref().map(str::trim).unwrap_or("") != "" {
+                        let mcp_file = dir.join("pilot-mcp-client.ts");
+                        if std::fs::write(&mcp_file, include_str!("../extensions/pilot-mcp-client.ts")).is_ok() {
+                            extensions.push(mcp_file.to_string_lossy().to_string());
+                        }
+                    }
                 }
             }
         }
+        // Agent piloté MCP (brique B) : expose le mcp.json (PILOT_MCP_CONFIG) et le
+        // serveur cible (PILOT_MCP_SERVER) au process pi. Uniquement si l'extension
+        // MCP est chargée. PILOT_MCP_SERVER fait choisir à l'extension le serveur
+        // désigné (sinon fail-back le 1er activé).
+        let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
+            && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
+        {
+            app.path().app_data_dir().ok().map(|d| {
+                let mut vars = vec![(
+                    "PILOT_MCP_CONFIG".to_string(),
+                    d.join("mcp.json").to_string_lossy().into_owned(),
+                )];
+                if let Some(srv) = mcp_server.as_deref() {
+                    if !srv.trim().is_empty() {
+                        vars.push(("PILOT_MCP_SERVER".to_string(), srv.trim().to_string()));
+                    }
+                }
+                vars
+            })
+        } else {
+            None
+        };
         let session_dir_resolved = if let Ok(cfg_path) = config_path(app) {
             cfg_path
                 .with_file_name("agent")
@@ -1687,7 +1786,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, agent_id),
             )),
             None,
-            None,
+            mcp_env_vars,
         )
         .map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
         Ok(session)

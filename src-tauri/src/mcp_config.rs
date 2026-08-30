@@ -139,6 +139,43 @@ pub fn mcp_set_enabled(app: AppHandle, enabled: bool) -> Result<bool, String> {
     Ok(saved.is_ok())
 }
 
+/// Active/désactive la confirmation MCP pilotée par l'assistant
+/// (AppConfig.mcp_agent_confirm, défaut ON). Quand activé, l'assistant demande
+/// une confirmation à l'utilisateur avant qu'un agent utilise un serveur MCP.
+#[tauri::command]
+pub fn mcp_set_agent_confirm(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let state = app.state::<crate::AppState>();
+    let saved = {
+        let mut config = state.config.lock().unwrap();
+        config.mcp_agent_confirm = enabled;
+        crate::save_config_disk(&app, &config)
+    };
+    Ok(saved.is_ok())
+}
+
+/// État MCP consolidé exposé à l'assistant (brique C). Retourne
+/// `{ enabled, confirm, servers }` où `confirm` reflète `mcp_agent_confirm`
+/// (défaut ON) et `servers` liste les serveurs configurés (avec leurs ids) pour
+/// que l'assistant choisisse un serveur cible (mcp_server) et sache s'il doit
+/// demander une confirmation avant qu'un agent l'utilise.
+#[tauri::command]
+pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<crate::AppState>();
+    let enabled = state.config.lock().unwrap().mcp_enabled;
+    let confirm = state.config.lock().unwrap().mcp_agent_confirm;
+    let servers = read_mcp_config(&app).map(|c| c.servers).unwrap_or_default();
+    Ok(serde_json::json!({
+        "enabled": enabled,
+        "confirm": confirm,
+        "servers": servers.iter().map(|s| serde_json::json!({
+            "id": s.id,
+            "name": s.name,
+            "enabled": s.enabled,
+            "transport": s.transport,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
 /// Teste la connexion à un serveur MCP stdio : lance la commande et vérifie la
 /// handshake MCP (`initialize` → réponse) avec un timeout. Retourne
 /// `{ ok, server, error }` où `ok` indique le succès de la handshake.

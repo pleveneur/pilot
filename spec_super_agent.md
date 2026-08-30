@@ -1070,6 +1070,24 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   pas modifié. Toutes les sessions passent par l'AgentService (le champ
   `rpc_superagent` d'`AppState` a été retiré en phase 2).
 
+<!-- HELP:super-agent-mcp -->
+### MCP piloté par l'Assistant
+
+L'Assistant peut piloter les **serveurs MCP** (connectés à Pilot) pour déléguer
+une tâche à un agent en lui donnant accès au serveur de son choix.
+
+- **Découvrir** : l'outil `mcp_state` retourne `{ enabled, confirm, servers }`
+  (actif, confirmation requise, serveurs configurés avec leur id).
+- **Choisir un serveur** : passer le serveur id (`mcp_server`) à `run_agents` /
+  `run_assistant_agents` → l'agent de CETTE run charge le serveur désigné à la
+  volée. Sans `mcp_server`, un agent non-standard ne charge pas MCP.
+- **Confirmation** : si `confirm` est activé (défaut), l'Assistant **demande à
+  l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
+  Si désactivé, il choisit et lance seul.
+- L'agent standard du projet garde son comportement historique (1er serveur
+  stdio activé au démarrage). Les serveurs restent en transport `stdio` seul.
+<!-- /HELP:super-agent-mcp -->
+
 ## 9. Perspective — lien futur avec un serveur de sources
 
 - L'Assistant est conçu pour s'appuyer plus tard sur le **gestionnaire de
@@ -1086,7 +1104,8 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
 - Extensions pi : `pilot-assistant-files.ts` (espace d'écriture restreint
   `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
   `pilot-assistant-actions.ts` (open_project / delegate_to_coder /
-  purge_agent_conversation / create_agent / run_agents),
+  purge_agent_conversation / create_agent / run_agents (option `mcp_server`) /
+  run_assistant_agents / mcp_state),
   `pilot-assistant-db.ts` (db_query / db_execute sur la base de suivi),
   `pilot-assistant-prompt.ts` (update_my_prompt) et
   `pilot-assistant-sessions.ts` (list_agent_sessions), chargées dans la session

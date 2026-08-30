@@ -151,6 +151,7 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
         &pi_path,
         no_session,
         crate::agent_service::SpawnMode::AgentProcess,
+        None,
     )
     .map(|_| ())
 }
@@ -163,13 +164,24 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
 /// webview (gel de l'UI observé au démarrage d'une `run_agents`). Le helper
 /// synchrone `do_start_agent_process` reste `pub(crate)` pour les appelants
 /// internes (anomaly.rs) qui disposent déjà d'un `&AppState` hors webview.
+/// `mcp_server` : identifiant d'un serveur MCP cible (run_agents piloté par
+/// l'assistant) — optionnel, seulement appliqué au spawn (une session vivante
+/// reprise ne change pas de serveur).
 #[tauri::command]
-pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
+pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool, mcp_server: Option<String>) -> Result<(), String> {
     let agent_service = state.inner().agent_service.clone();
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         agent_service
-            .start(&app, &cwd, &agent_id, &pi_path, no_session, crate::agent_service::SpawnMode::AgentProcess)
+            .start(
+                &app,
+                &cwd,
+                &agent_id,
+                &pi_path,
+                no_session,
+                crate::agent_service::SpawnMode::AgentProcess,
+                mcp_server,
+            )
             .map(|_| ())
     })
     .await
@@ -218,12 +230,13 @@ pub async fn start_assistant_agent_process(
     cwd: String,
     pi_path: String,
     no_session: bool,
+    mcp_server: Option<String>,
 ) -> Result<(), String> {
     let agent_service = state.inner().agent_service.clone();
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         agent_service
-            .start_assistant_agent(&app, &agent_id, &pi_path, no_session, &cwd)
+            .start_assistant_agent(&app, &agent_id, &pi_path, no_session, &cwd, mcp_server)
             .map(|_| ())
     })
     .await

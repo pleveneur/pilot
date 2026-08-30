@@ -213,6 +213,11 @@ struct AppConfig {
     // (pilot-mcp-client.ts) et la variable PILOT_MCP_CONFIG pointe vers mcp.json.
     #[serde(default)]
     mcp_enabled: bool,
+    // MCP piloté par l'assistant : si true (défaut), avant qu'un agent utilise un
+    // serveur MCP, l'assistant demande une confirmation à l'utilisateur
+    // (ask_confirm). Si false, l'assistant choisit et lance seul.
+    #[serde(default = "default_true")]
+    mcp_agent_confirm: bool,
     #[serde(default = "default_true")]
     show_thinking: bool,
     #[serde(default)]
@@ -723,6 +728,7 @@ impl Default for AppConfig {
             pi_skip_update_check: false,
             quality_gate_enabled: false,
             mcp_enabled: false,
+            mcp_agent_confirm: true,
             show_thinking: true,
             show_tools: false,
             notify_agent_done: false,
@@ -2338,6 +2344,8 @@ pub fn run() {
             mcp_config::mcp_list_servers,
             mcp_config::mcp_save_servers,
             mcp_config::mcp_set_enabled,
+            mcp_config::mcp_set_agent_confirm,
+            mcp_config::mcp_get_state,
             mcp_config::mcp_test_connection,
             // ── Coffre fort de mots de passe (issue #52) ──
             vault::vault_status,

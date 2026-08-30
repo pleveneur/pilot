@@ -2146,6 +2146,10 @@ function accumulateSuperLoopToolResponse(messagesEl, method, payload) {
       // Issue #143 : empreinte concordante pour list_agent_sessions (le sentinel
       // arrive via un input d'outil, pas via tool_execution_start).
       fingerprint = buildToolLoopFingerprint("list_agent_sessions", {});
+    } else if (title.startsWith("PILOT_ASSISTANT_MCP_STATE::")) {
+      // MCP piloté (brique C) : empreinte stable pour mcp_state (l'état MCP ne
+      // change que rarement — une répétition est une boucle).
+      fingerprint = buildToolLoopFingerprint("mcp_state", {});
     } else {
       fingerprint = "input::" + title;
     }
@@ -2519,6 +2523,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const RUN_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_AGENTS::";
     const RUN_ASSISTANT_AGENTS_SENTINEL = "PILOT_ASSISTANT_RUN_ASSISTANT_AGENTS::";
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
+    const MCP_STATE_SENTINEL = "PILOT_ASSISTANT_MCP_STATE::";
     const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
@@ -2589,8 +2594,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
       // Ciblage de projet (run_agents) : chemin absolu du projet cible, ou null
-      // → projet actif par défaut (rétrocompatible).
+      // → projet actif par défaut (rétrocompatible). MCP piloté (brique B) :
+      // serveur MCP cible (id) que les agents chargent à la demande.
       const targetProject = (info.project && String(info.project).trim()) || null;
+      const mcpServer = (info.mcp_server && String(info.mcp_server).trim()) || null;
       if (agentIds.length === 0 || !task) {
         await respondSuperAgent(id, JSON.stringify({ error: "run_agents : au moins un agent et une tâche requis." }), false);
         return;
@@ -2623,7 +2630,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
         });
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject }));
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer }));
         const projectPath = window._pilotProjectPath || null;
         // T5 : exclusivité des spécialités par projet. Si un agent demandé est
         // déjà actif sur le projet cible, la demande sera mise en file d'attente
@@ -2823,6 +2830,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       const agentIds = Array.isArray(info.agent_ids) ? info.agent_ids.map(String) : [];
       const task = String(info.task || "").trim();
       const workspace = (info.workspace && String(info.workspace).trim()) || null;
+      // MCP piloté (brique B) : serveur MCP cible (id) pour les agents d'assistant.
+      const mcpServer = (info.mcp_server && String(info.mcp_server).trim()) || null;
       if (agentIds.length === 0 || !task) {
         await respondSuperAgent(id, JSON.stringify({ error: "run_assistant_agents : au moins un agent et une tâche requis." }), false);
         return;
@@ -2844,7 +2853,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         });
         // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
         const target = ASSISTANT_SPACE;
-        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target }));
+        const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer }));
         const projectPath = window._pilotProjectPath || null;
         let runSettled = false;
         const settleRun = (ok, result) => {
@@ -2897,6 +2906,19 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       // résultat (JSON) comme `value` de la réponse.
       try {
         const result = await invoke("list_agent_sessions");
+        await respondSuperAgent(id, JSON.stringify(result), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(MCP_STATE_SENTINEL)) {
+      // Outil mcp_state (brique C) : l'assistant interroge l'état MCP
+      // { enabled, confirm, servers } pour savoir s'il doit demander une
+      // confirmation avant qu'un agent utilise un serveur MCP, et pour choisir
+      // un serveur cible (mcp_server) à passer à run_agents.
+      try {
+        const result = await invoke("mcp_get_state");
         await respondSuperAgent(id, JSON.stringify(result), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);

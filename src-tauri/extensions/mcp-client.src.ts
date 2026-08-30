@@ -10,9 +10,13 @@
 // L'extension :
 //   1. lit la config via process.env.PILOT_MCP_CONFIG (chemin d'un mcp.json —
 //      Pilot le renseigne à la création du process pi, PAS via AppConfig),
-//   2. se connecte au PREMIER serveur `enabled` en transport `stdio` uniquement,
-//   3. découvre tools/list et enregistre chaque outil sous `mcp_<serverId>_<name>`
-//      via pi.registerTool (exécution qui redéclenche un callTool sur le serveur).
+//   2. choisit le serveur : `process.env.PILOT_MCP_SERVER` (id d'un serveur
+//      cible, posé à la demande par l'assistant via run_agents / mcp_server)
+//      s'il correspond à un serveur `enabled` `stdio` — sinon retombe sur le
+//      PREMIER serveur `enabled` `stdio` (rétrocompat du POC),
+//   3. se connecte en `stdio`, découvre tools/list et enregistre chaque outil
+//      sous `mcp_<serverId>_<name>` via pi.registerTool (exécution qui
+//      redéclenche un callTool sur le serveur).
 //
 // Fail-open : toute erreur (config absente, serveur indisponible, tools/list en
 // échec) est interceptée — pi ne doit jamais planter à cause d'une extension MCP.
@@ -63,9 +67,21 @@ export default async function (api: ExtensionAPI): Promise<void> {
   }
 
   const servers = config.servers ?? [];
-  const server = servers.find((s) => s.enabled !== false && s.transport === "stdio");
+  // Serveur cible (brique B) : si PILOT_MCP_SERVER désigne un serveur enabled
+  // stdio de la config, on le prend ; sinon fail-back sur le 1er enabled stdio.
+  const targetId = (process.env.PILOT_MCP_SERVER || "").trim();
+  const server =
+    (targetId
+      ? servers.find(
+          (s) =>
+            (s.id ?? "") === targetId &&
+            s.enabled !== false &&
+            s.transport === "stdio"
+        )
+      : undefined) ??
+    servers.find((s) => s.enabled !== false && s.transport === "stdio");
   if (!server || !server.command) {
-    return; // Aucun serveur stdio enabled — fail-open.
+    return; // Aucun serveur stdio enabled (ni cible valide) — fail-open.
   }
 
   const serverId = server.id ?? server.name ?? "mcp";
