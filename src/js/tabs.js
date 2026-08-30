@@ -315,6 +315,12 @@ class TabsManager {
       return;
     }
 
+    // Onglet GDS (🌐) — spec_gds.md : gestionnaire de sources (par projet).
+    if (mode === "gds") {
+      await this._openGds(path || "GDS");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -1039,6 +1045,48 @@ class TabsManager {
   }
 
   /**
+   * Ouvre l'onglet GDS (🌐) — spec_gds.md : gestionnaire de sources, PAR
+   * PROJET. Alimenté par les commandes Rust gds_* (provision, config,
+   * ajout projet, listes).
+   */
+  async _openGds(label = "GDS") {
+    const existing = this.tabs.find((t) => t.mode === "gds");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "gds");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper gds-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createGds } = await import("./gds.js");
+      const result = createGds(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenGds = result.unlisten;
+      tab.gdsRefresh = result.refresh;
+      tab.gdsSetActive = result.setActive;
+    } catch (e) {
+      console.error("Erreur onglet GDS:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🌐</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">GDS</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
    * Ouvre un terminal intégré dans un onglet
    */
   async _openTerminal(label, runDefault = false) {
@@ -1671,6 +1719,11 @@ class TabsManager {
       tab.unlistenDashboard();
       tab.unlistenDashboard = null;
     }
+    // Nettoyage onglet GDS (🌐) — spec_gds.md
+    if (tab.mode === "gds" && tab.unlistenGds) {
+      tab.unlistenGds();
+      tab.unlistenGds = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -1792,6 +1845,11 @@ class TabsManager {
       tab.unlistenDashboard();
       tab.unlistenDashboard = null;
     }
+    // Nettoyage onglet GDS (🌐) — spec_gds.md
+    if (tab.mode === "gds" && tab.unlistenGds) {
+      tab.unlistenGds();
+      tab.unlistenGds = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -1886,6 +1944,10 @@ class TabsManager {
       if (old && old.mode === "dashboard" && old.dashboardSetActive) {
         old.dashboardSetActive(false);
       }
+      // GDS : signaler la désactivation.
+      if (old && old.mode === "gds" && old.gdsSetActive) {
+        old.gdsSetActive(false);
+      }
     }
 
     // Afficher le nouveau
@@ -1938,6 +2000,12 @@ class TabsManager {
     if (tab.mode === "dashboard") {
       if (tab.dashboardRefresh) tab.dashboardRefresh();
       if (tab.dashboardSetActive) tab.dashboardSetActive(true);
+    }
+
+    // GDS : recharger si le projet actif a changé (par projet).
+    if (tab.mode === "gds") {
+      if (tab.gdsRefresh) tab.gdsRefresh();
+      if (tab.gdsSetActive) tab.gdsSetActive(true);
     }
 
     // Tableau de bord de suivi multi-projets (Assistant 🧭) : recharger à

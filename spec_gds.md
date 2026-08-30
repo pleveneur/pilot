@@ -9,13 +9,17 @@
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
-> **Implémenté (Phase A, bloc serveur)** : dépendances PostgreSQL (sqlx +
+> **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
 > project_members, git_repos, audit_gds), `gds_db.rs` (pool, provision
 > idempotent, migrate, CRUD), `gds.rs` (config `.pilot/gds.json`, commandes
-> `gds_provision` / `gds_validate_user` / `gds_add_project`), `gds_git.rs`
+> `gds_provision` / `gds_validate_user` / `gds_add_project` / `gds_get_config` /
+> `gds_save_config` / `gds_list_projects` / `gds_list_git_repos`), `gds_git.rs`
 > (repo bare par projet, validation chemins), `gds_web.rs` (routes axum de base
-> + routes B/C réservées). Pas encore d'UI desktop (panneau « 🌐 GDS »).
+> + routes B/C réservées). **UI desktop** : onglet « 🌐 GDS » (`src/js/gds.js`,
+> bouton `btn-gds` dans la sidebar, branchement `tabs.js` mode `gds`) —
+> provision serveur, config projet, ajout projet, listes projets/dépôts,
+> bloc Phase B/C statique.
 >
 > **Arbitrages utilisateur intégrés (11/11)** : cf. §0.2 + §0.4.
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par
@@ -499,8 +503,8 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
-> ✅ **Implémentée (bloc serveur)** — `cargo test --lib` vert. Reste l'UI desktop
-> (panneau « 🌐 GDS ») et la gestion des clefs SSH serveur (Phase A3).
+> ✅ **Implémentée (bloc serveur + UI desktop)** — `cargo test --lib` vert.
+> Reste la gestion des clefs SSH serveur (Phase A3).
 
 **A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust

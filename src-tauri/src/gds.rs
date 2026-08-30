@@ -208,6 +208,47 @@ pub async fn gds_add_project(state: State<'_, AppState>, project: String, email:
     add_project_to_gds(&pool, &project, &email).await
 }
 
+/// Commande Tauri : lit la config GDS du projet (`.pilot/gds.json`).
+/// Retourne `null` si le fichier n'existe pas encore (projet non activé).
+#[tauri::command]
+pub fn gds_get_config(project: String) -> Result<Option<GdsConfig>, String> {
+    match read_gds_config(&project) {
+        Ok(cfg) => Ok(Some(cfg)),
+        Err(e) if e.starts_with("Lecture gds.json") => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Commande Tauri : écrit la config GDS du projet (`.pilot/gds.json`).
+#[tauri::command]
+pub fn gds_save_config(project: String, cfg: GdsConfig) -> Result<(), String> {
+    write_gds_config(&project, &cfg)
+}
+
+/// Commande Tauri : liste les projets enregistrés sur le serveur GDS.
+#[tauri::command]
+pub async fn gds_list_projects(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let pool = state
+        .gds_pool
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("GDS non provisionné")?;
+    gds_db::list_projects(&pool).await
+}
+
+/// Commande Tauri : liste les dépôts git (bare) enregistrés sur le serveur GDS.
+#[tauri::command]
+pub async fn gds_list_git_repos(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+    let pool = state
+        .gds_pool
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("GDS non provisionné")?;
+    gds_db::list_git_repos(&pool).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

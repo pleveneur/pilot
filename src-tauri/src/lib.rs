@@ -2369,6 +2369,10 @@ pub fn run() {
             gds::gds_provision,
             gds::gds_validate_user,
             gds::gds_add_project,
+            gds::gds_get_config,
+            gds::gds_save_config,
+            gds::gds_list_projects,
+            gds::gds_list_git_repos,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

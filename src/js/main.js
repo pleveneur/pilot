@@ -482,6 +482,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("Coffre", "vault");
   });
 
+  // 🌐 GDS : gestionnaire de sources (par projet) — spec_gds.md.
+  document.getElementById("btn-gds").addEventListener("click", () => {
+    tabs.openFile("GDS", "gds");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

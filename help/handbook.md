@@ -236,9 +236,19 @@ type GitHub.
   et **aucune configuration globale** pour le GDS.
 - **Sans activation** : le projet reste 100 % local, exactement comme
   aujourd'hui.
-- **Fonctionnalité en préparation** : le GDS n'est pas encore implémenté dans
-  cette version de Pilot. L'aide ci-dessus est **générale à Pilot** ; il
-  n'existe pas d'aide spécifique par projet.
+- **Onglet « 🌐 GDS »** : le bouton **GDS** du panneau **Vues** (sidebar)
+  ouvre un onglet dédié, **par projet**, pour piloter le GDS :
+  - **Provisionner le serveur** (adresse PostgreSQL, utilisateur/mot de passe
+    dédiés, email + mot de passe admin) → crée la base `pilot_gds`, les tables
+    et le premier compte admin, puis active le GDS pour le projet ;
+  - **Configurer le projet** (`.pilot/gds.json`) : activation on/off, URL du
+    serveur, email d'identité, dossier local de clonage, hôte SSH ;
+  - **Ajouter le projet au GDS** : crée un dépôt git bare sur le serveur,
+    ajoute le remote `origin` et pousse la branche courante ;
+  - **Consulter** la liste des projets et des dépôts git du serveur.
+- **Phase B/C à venir** : la synchronisation, les verrous et les tickets
+  (suivi des demandes clients) sont affichés comme « disponibles à la Phase
+  B/C » — non implémentés dans cette version.
 
 ---
 
