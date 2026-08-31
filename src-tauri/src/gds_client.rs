@@ -6,6 +6,7 @@
 // git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
 
 use crate::gds;
+use crate::gds_git;
 use crate::gds_ssh;
 use crate::gds_sync;
 use crate::git;
@@ -41,6 +42,27 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     };
     let url = gds::gds_remote_url(&cfg, &name);
 
+    // Etape 5 : le dossier cible existe sans `.git` → l'initialiser au lieu de
+    // `git_fetch` qui échoue (« git fetch a échoué (remote gds) »). (a)
+    // Vérification du repo bare serveur AVANT clone : projet jamais ajouté →
+    // message d'action clair + onboarding automatique si le projet de travail
+    // est un repo Git (c). On NE touche jamais au projet de travail de l'utilisateur
+    // (ex: testsnake2 sans `.git`) autrement que via gds_add_project (qui n'agit
+    // que si c'est un repo Git). (b) Le remote `gds` est ajouté s'il est absent.
+    if !gds_git::bare_repo_exists(&local_dir, &name) {
+        let work_is_repo = git::git_is_repo(project);
+        let email = cfg.identity_email.trim().to_string();
+        if work_is_repo && !email.is_empty() {
+            // Onboarding : projet de travail Git + config complète → ajout GDS.
+            gds::add_project_to_gds(pool, project, &email).await?;
+        } else {
+            return Err(
+                "Le projet n'a pas encore été ajouté au GDS. Ajoutez-le d'abord grâce à « Ajouter le projet au GDS » (section 3)."
+                    .to_string(),
+            );
+        }
+    }
+
     // Opérations git bloquantes (clone/fetch/pull) → spawn_blocking.
     let action = tokio::task::spawn_blocking(move || {
         if !dest.exists() {
@@ -49,6 +71,19 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
             // dédié `gds` pour que les fetch/pull suivants fonctionnent.
             git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
             return Ok::<String, String>("cloned".to_string());
+        }
+        if !git::git_is_repo(&dest_str) {
+            // (a) Dossier cible présent mais pas un work tree Git : l'initialiser
+            // puis connecter au remote gds (au lieu de git_fetch qui échoue).
+            git::git_init(&dest_str)?;
+            git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
+            let _ = git::git_fetch(&dest_str, GDS_REMOTE, &branch);
+            let _ = git::git_pull(&dest_str, GDS_REMOTE, &branch);
+            return Ok::<String, String>("initialized".to_string());
+        }
+        // (b) Remote dédié `gds` manquant → l'ajouter avant fetch/pull.
+        if !git::git_has_remote(&dest_str, GDS_REMOTE) {
+            git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
         }
         git::git_fetch(&dest_str, GDS_REMOTE, &branch)?;
         git::git_pull(&dest_str, GDS_REMOTE, &branch)?;

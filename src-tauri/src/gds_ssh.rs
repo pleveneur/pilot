@@ -300,12 +300,22 @@ pub(crate) fn git_user_home() -> String {
 }
 
 /// Résout le home réel du user `git` sur Windows. Le home consulté par sshd
-/// est le `ProfileImagePath` du registre (pas `C:\Users\git`). Priorité :
-/// 1. Registre ProfileImagePath (locale-indépendant) via PowerShell.
-/// 2. `net user git` (champ "Répertoire de base" / "Home directory", localisé).
+/// est le champ « Répertoire de base » / « Home directory » du compte
+/// (`net user git`), PAS le `ProfileImagePath` du registre : ce dernier pointe
+/// vers le profil de session interactive (ex: `C:\Users\TEMP`), souvent un
+/// dossier système restreint non accessible au poste dev — ce qui faisait
+/// échouer `create_dir_all` avec « Accès refusé (os error 5) ». Priorité :
+/// 1. `net user git` (champ "Répertoire de base" / "Home directory", localisé).
+/// 2. Registre ProfileImagePath (repli, locale-indépendant) via PowerShell.
 /// 3. Repli `C:\Users\git`.
 #[cfg(windows)]
 fn windows_git_user_home() -> String {
+    let out = run_captured("net", &["user", "git"], Duration::from_secs(5));
+    for line in out.lines() {
+        if let Some(p) = extract_windows_path(line) {
+            return p;
+        }
+    }
     let script = "$sid=(Get-WmiObject Win32_UserAccount -Filter \"Name='git'\").SID; if($sid){(Get-ItemProperty \"HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\$sid\").ProfileImagePath}";
     let out = run_captured(
         "powershell",
@@ -315,12 +325,6 @@ fn windows_git_user_home() -> String {
     let home = out.trim();
     if !home.is_empty() {
         return home.to_string();
-    }
-    let out = run_captured("net", &["user", "git"], Duration::from_secs(5));
-    for line in out.lines() {
-        if let Some(p) = extract_windows_path(line) {
-            return p;
-        }
     }
     "C:\\Users\\git".to_string()
 }
@@ -405,7 +409,9 @@ pub(crate) fn provision_server_ssh() -> Result<Value, String> {
     // 2. Créer ~git/.ssh/authorized_keys (700/600).
     let home = git_user_home();
     let ssh_dir = format!("{}/.ssh", home);
-    std::fs::create_dir_all(&ssh_dir).map_err(|e| format!("Création ~git/.ssh: {}", e))?;
+    std::fs::create_dir_all(&ssh_dir).map_err(|e| {
+        format!("Création ~git/.ssh ({}) : {} — vérifiez que le home du user `git` est accessible (champ « Répertoire de base » de `net user git`)", ssh_dir, e)
+    })?;
     let auth = format!("{}/authorized_keys", ssh_dir);
     if !std::path::Path::new(&auth).exists() {
         std::fs::write(&auth, "").map_err(|e| format!("Création authorized_keys: {}", e))?;
@@ -607,8 +613,8 @@ mod tests {
     fn extract_windows_path_finds_drive_path() {
         // Ligne `net user git` (champ "Répertoire de base" / "Home directory").
         assert_eq!(
-            extract_windows_path("R\u{e9}pertoire de base                             C:\\Users\\pldistance\\Pilot\\GDS\\repos"),
-            Some("C:\\Users\\pldistance\\Pilot\\GDS\\repos".to_string())
+            extract_windows_path("R\u{e9}pertoire de base                             C:\\GDS\\repos"),
+            Some("C:\\GDS\\repos".to_string())
         );
         // Ligne sans chemin → None.
         assert_eq!(extract_windows_path("Stations autoris\u{e9}es                            Tout"), None);

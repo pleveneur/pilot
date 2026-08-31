@@ -50,35 +50,62 @@ export function createGds(container) {
   const subtitleEl = container.querySelector("#gds-subtitle");
 
   // ── Section 1 : provisionnement du serveur ──
-  function renderProvision() {
+  // Champs séparés (hôte/port/utilisateur dédié/mdp dédié/email admin/mdp admin)
+  // au lieu d'une URL `postgres://user:pass@host`. Mots de passe masqués
+  // (type=password) avec toggle afficher/masquer ; pré-remplis depuis la config
+  // + les secrets connus ; ressaisie seulement si config/secret manque. Les mdp
+  // ne sont jamais écrits dans gds.json (stockés hors projet côté backend).
+  function renderProvision(cfg, secrets) {
     const panel = document.createElement("div");
     panel.className = "gds-panel";
+    const host = (cfg && cfg.db_host) || "";
+    const port = (cfg && cfg.db_port) || "5432";
+    const user = (cfg && cfg.db_user) || "";
+    const adminEmail = (cfg && cfg.identity_email) || "";
+    const hasDbPw = !!(secrets && secrets.db_password);
+    const hasAdminPw = !!(secrets && secrets.admin_password);
     panel.innerHTML = `
       <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> 1. Provisionner le serveur GDS</div>
       <div class="gds-panel-desc">
         Crée la base PostgreSQL <code>pilot_gds</code> + les tables + le premier
         compte admin, puis active le GDS pour ce projet (écrit <code>.pilot/gds.json</code>).
+        Les mots de passe sont stockés hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600)
+        et ne sont demandés qu'à la première configuration.
       </div>
-      <label class="gds-label">Adresse PostgreSQL (ex: postgres://postgres:pass@192.168.1.10:5432/postgres)</label>
-      <input id="gds-db-addr" class="gds-input" placeholder="postgres://user:pass@host:5432/postgres" autocomplete="off">
+      <div class="gds-grid2">
+        <div>
+          <label class="gds-label">Hôte PostgreSQL</label>
+          <input id="gds-db-host" class="gds-input" value="${esc(host)}" placeholder="192.168.1.10" autocomplete="off">
+        </div>
+        <div>
+          <label class="gds-label">Port</label>
+          <input id="gds-db-port" class="gds-input" value="${esc(port)}" placeholder="5432" autocomplete="off">
+        </div>
+      </div>
       <div class="gds-grid2">
         <div>
           <label class="gds-label">Utilisateur dédié</label>
-          <input id="gds-db-user" class="gds-input" placeholder="pilot" autocomplete="off">
+          <input id="gds-db-user" class="gds-input" value="${esc(user)}" placeholder="pilot" autocomplete="off">
         </div>
         <div>
-          <label class="gds-label">Mot de passe dédié</label>
-          <input id="gds-db-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
+          <label class="gds-label">Mot de passe dédié ${hasDbPw ? "<em style='color:#aaa'>(enregistré)</em>" : ""}</label>
+          <div class="gds-pw">
+            <input id="gds-db-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
+            <button type="button" class="gds-eye" data-target="gds-db-password" title="Afficher/masquer"><i data-lucide="eye" class="icon-sm"></i></button>
+          </div>
         </div>
       </div>
       <div class="gds-grid2">
         <div>
           <label class="gds-label">Email admin</label>
-          <input id="gds-admin-email" class="gds-input" placeholder="dev@kalico" autocomplete="off">
+          <input id="gds-admin-email" class="gds-input" value="${esc(adminEmail)}" placeholder="dev@kalico" autocomplete="off">
         </div>
         <div>
-          <label class="gds-label">Mot de passe admin</label>
-          <input id="gds-admin-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
+          <label class="gds-label">Mot de passe admin ${hasAdminPw ? "<em style='color:#aaa'>(enregistré)</em>" : ""}</label>
+          <div class="gds-pw">
+            <input id="gds-admin-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
+            <button type="button" class="gds-eye" data-target="gds-admin-password" title="Afficher/masquer"><i data-lucide="eye" class="icon-sm"></i></button>
+          </div>
         </div>
       </div>
       <div id="gds-provision-err" class="gds-error"></div>
@@ -90,19 +117,40 @@ export function createGds(container) {
     bodyEl.appendChild(panel);
     refreshIcons(container);
 
+    // Toggle afficher/masquer des mots de passe (jamais persistés en clair).
+    panel.querySelectorAll(".gds-eye").forEach((eye) => {
+      eye.addEventListener("click", () => {
+        const input = panel.querySelector("#" + eye.dataset.target);
+        if (!input) return;
+        const show = input.type === "password";
+        input.type = show ? "text" : "password";
+        eye.innerHTML = `<i data-lucide="${show ? "eye-off" : "eye"}" class="icon-sm"></i>`;
+        refreshIcons(container);
+      });
+    });
+
     const btn = panel.querySelector("#gds-provision-btn");
     const err = panel.querySelector("#gds-provision-err");
     const ok = panel.querySelector("#gds-provision-ok");
     btn.addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
-      const dbAddr = panel.querySelector("#gds-db-addr").value.trim();
+      const dbHost = panel.querySelector("#gds-db-host").value.trim();
+      const dbPort = panel.querySelector("#gds-db-port").value.trim();
       const dbUser = panel.querySelector("#gds-db-user").value.trim();
       const dbPassword = panel.querySelector("#gds-db-password").value;
       const adminEmail = panel.querySelector("#gds-admin-email").value.trim();
       const adminPassword = panel.querySelector("#gds-admin-password").value;
-      if (!dbAddr || !dbUser || !dbPassword) {
-        err.textContent = "Adresse, utilisateur et mot de passe PostgreSQL sont requis.";
+      if (!dbHost || !dbUser) {
+        err.textContent = "Hôte et utilisateur PostgreSQL sont requis.";
+        return;
+      }
+      if (!dbPassword && !hasDbPw) {
+        err.textContent = "Le mot de passe dédié est requis (ou déjà enregistré).";
+        return;
+      }
+      if (adminEmail && !adminPassword && !hasAdminPw) {
+        err.textContent = "Un mot de passe admin est requis pour l'email admin.";
         return;
       }
       err.textContent = "";
@@ -112,7 +160,7 @@ export function createGds(container) {
       refreshIcons(container);
       try {
         await invoke("gds_provision", {
-          project, dbAddr, dbUser, dbPassword, adminEmail, adminPassword,
+          project, dbHost, dbPort, dbUser, dbPassword, adminEmail, adminPassword,
         });
         err.textContent = "";
         await refresh();
@@ -134,6 +182,9 @@ export function createGds(container) {
     const panel = document.createElement("div");
     panel.className = "gds-panel";
     const enabled = cfg && cfg.enabled;
+    const host = (cfg && cfg.db_host) || "";
+    const port = (cfg && cfg.db_port) || "";
+    const user = (cfg && cfg.db_user) || "";
     panel.innerHTML = `
       <div class="gds-panel-title"><i data-lucide="settings-2" class="icon-sm"></i> 2. Configuration du projet (.pilot/gds.json)</div>
       <div class="gds-panel-desc">
@@ -143,14 +194,28 @@ export function createGds(container) {
       </div>
       <label class="gds-label">Activé</label>
       <label class="gds-check"><input type="checkbox" id="gds-cfg-enabled" ${enabled ? "checked" : ""}> Activer le GDS pour ce projet</label>
-      <label class="gds-label">URL du serveur</label>
-      <input id="gds-cfg-server" class="gds-input" value="${esc(cfg ? cfg.server_url : "")}" placeholder="postgres://user:pass@host:5432/postgres" autocomplete="off">
+      <div class="gds-grid3">
+        <div>
+          <label class="gds-label">Hôte PostgreSQL</label>
+          <input class="gds-input" value="${esc(host)}" readonly title="Géré lors du provisionnement (section 1)">
+        </div>
+        <div>
+          <label class="gds-label">Port</label>
+          <input class="gds-input" value="${esc(port)}" readonly title="Géré lors du provisionnement (section 1)">
+        </div>
+        <div>
+          <label class="gds-label">Utilisateur dédié</label>
+          <input class="gds-input" value="${esc(user)}" readonly title="Géré lors du provisionnement (section 1)">
+        </div>
+      </div>
       <label class="gds-label">Email d'identité</label>
       <input id="gds-cfg-email" class="gds-input" value="${esc(cfg ? cfg.identity_email : "")}" placeholder="dev@kalico" autocomplete="off">
       <div class="gds-panel-desc" style="margin-top:8px">
-        L'hôte SSH (<code>host:22</code>) est dérivé automatiquement de l'adresse du
-        serveur et le dossier local de clonage utilise le défaut
-        (<code>~/Pilot/GDS</code>).
+        L'hôte SSH (<code>host:22</code>) est dérivé automatiquement de l'hôte
+        PostgreSQL et le dossier local de clonage utilise le défaut
+        (<code>C:\GDS</code> sur Windows, <code>~/Pilot/GDS</code> ailleurs).
+        Les mots de passe ne sont jamais affichés ici ; ils restent dans
+        <code>~/.pilot/gds_secrets.json</code>.
       </div>
       <div id="gds-config-err" class="gds-error"></div>
       <div id="gds-config-ok" class="gds-ok"></div>
@@ -166,17 +231,17 @@ export function createGds(container) {
     panel.querySelector("#gds-config-save").addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      // Payload minimal : l'UI n'envoie plus d'URL à mot de passe. Le backend
+      // préserve db_host/db_port/db_user, gds_local_dir, urgent_email et
+      // ssh_host (normalize) quand le payload ne les inclut pas.
       const cfgPayload = {
         enabled: panel.querySelector("#gds-cfg-enabled").checked,
-        server_url: panel.querySelector("#gds-cfg-server").value.trim(),
         identity_email: panel.querySelector("#gds-cfg-email").value.trim(),
       };
       err.textContent = "";
       ok.textContent = "";
       try {
         await invoke("gds_save_config", { project, cfg: cfgPayload });
-        // Re-rendu avec les valeurs fraîches (le backend dérive ssh_host et
-        // préserve les champs non envoyés) — corrige le mauvais réaffichage.
         await refresh();
         const okEl = bodyEl.querySelector("#gds-config-ok");
         if (okEl) okEl.textContent = "✅ Configuration enregistrée.";
@@ -504,16 +569,19 @@ export function createGds(container) {
       return;
     }
 
-    // Config projet.
+    // Config projet (absente → champs vides, sans erreur).
     let cfg = null;
     try {
       cfg = await invoke("gds_get_config", { project });
-    } catch (e) {
-      bodyEl.innerHTML = `<div class="gds-error">${e}</div>`;
-      return;
-    }
+    } catch (_) { cfg = null; }
 
-    renderProvision();
+    // État des secrets (booleans uniquement — les valeurs ne remontent jamais).
+    let secrets = null;
+    try {
+      secrets = await invoke("gds_secrets_status", { project });
+    } catch (_) { secrets = null; }
+
+    renderProvision(cfg, secrets);
     renderConfig(cfg);
     renderAddProject();
 

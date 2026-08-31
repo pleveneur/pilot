@@ -2054,6 +2054,36 @@ pub fn run() {
             // Tâche 8 : surveillance arrière-plan des anomalies d'agents (bloqués
             // sans progression). Thread autonome, sans LLM, ne bloque pas l'interface.
             anomaly::start_monitor(handle.clone(), state.agent_anomaly.clone());
+            // GDS (chantier UX) : reconnecter le pool PostgreSQL en arrière-plan
+            // pour un projet déjà provisionné, sans refaire `gds_provision` (saisie
+            // des paramètres une seule fois). Fail-open : aucun serveur par défaut,
+            // l'échec (config absente, mdp non enregistré, serveur injoignable) ne
+            // bloque jamais le démarrage.
+            {
+                let cfg = state.config.lock().unwrap().clone();
+                let mut paths = cfg.open_projects.clone();
+                if let Some(p) = &cfg.active_open_project {
+                    if !paths.contains(p) {
+                        paths.push(p.clone());
+                    }
+                }
+                if !paths.is_empty() {
+                    let handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        for proj in paths {
+                            if let Ok(gcfg) = crate::gds::read_gds_config(&proj) {
+                                if gcfg.enabled && !gcfg.db_host.is_empty() {
+                                    if let Ok(pool) = crate::gds::restore_pool_for_project(&proj).await {
+                                        let st = handle.state::<AppState>();
+                                        *st.gds_pool.lock().unwrap() = Some(pool);
+                                    }
+                                    break; // pool global — une seule reconnexion suffit
+                                }
+                            }
+                        }
+                    });
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -2370,6 +2400,8 @@ pub fn run() {
             vault::vault_delete,
             // ── GDS (Gestionnaire de Sources, spec_gds.md) : Phase A serveur ──
             gds::gds_provision,
+            gds::gds_restore_pool,
+            gds::gds_secrets_status,
             gds::gds_validate_user,
             gds::gds_add_project,
             gds::gds_get_config,

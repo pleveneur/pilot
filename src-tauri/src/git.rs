@@ -51,13 +51,20 @@ pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Ajoute (ou met à jour) un remote à un dépôt local.
+/// Ajoute (ou met à jour) un remote à un dépôt local. `git remote add` réussit
+/// SANS produire de sortie stdout → on vérifie le code de sortie (pas stdout)
+/// via `run_captured_full` et on remonte le stderr dans le message d'erreur.
 pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
     // Retirer un remote existant du même nom pour être idempotent.
     run_captured("git", &["-C", cwd, "remote", "remove", name], Duration::from_secs(5));
-    let out = run_captured("git", &["-C", cwd, "remote", "add", name, url], Duration::from_secs(5));
-    if out.trim().is_empty() {
-        return Err(format!("git remote add a échoué: {}", name));
+    let (_, stderr, ok) =
+        crate::run_captured_full("git", &["-C", cwd, "remote", "add", name, url], Duration::from_secs(5));
+    if !ok {
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            return Err(format!("git remote add a échoué: {}", name));
+        }
+        return Err(format!("git remote add a échoué: {} — {}", name, detail));
     }
     Ok(())
 }
@@ -111,6 +118,29 @@ pub fn git_current_branch(cwd: &str) -> String {
     run_captured("git", &["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3))
         .trim()
         .to_string()
+}
+
+/// Vrai si `cwd` est un work tree Git (`rev-parse --is-inside-work-tree` == true).
+/// Utilisé par le GDS pour détecter un dossier cible existant sans `.git` et
+/// choisir entre fetch/pull et initialisation (chantier UX GDS, Etape 5).
+pub fn git_is_repo(cwd: &str) -> bool {
+    let out = run_captured("git", &["-C", cwd, "rev-parse", "--is-inside-work-tree"], Duration::from_secs(3));
+    out.trim().eq_ignore_ascii_case("true")
+}
+
+/// Vrai si le remote `name` est déclaré dans `cwd` (`git remote`).
+pub fn git_has_remote(cwd: &str, remote: &str) -> bool {
+    let out = run_captured("git", &["-C", cwd, "remote"], Duration::from_secs(3));
+    out.lines().any(|l| l.trim() == remote)
+}
+
+/// Initialise un dépôt local (work tree) dans `cwd` (`git init`).
+pub fn git_init(cwd: &str) -> Result<(), String> {
+    let out = run_captured("git", &["-C", cwd, "init"], Duration::from_secs(5));
+    if out.trim().is_empty() {
+        return Err("git init a échoué (git absent ?)".to_string());
+    }
+    Ok(())
 }
 
 /// Résultat de `git_status` : `is_repo` (faux → pas un work tree Git), et la map

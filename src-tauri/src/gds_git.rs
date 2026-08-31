@@ -21,6 +21,13 @@ pub(crate) fn repo_bare_path(gds_local_dir: &str, project_name: &str) -> PathBuf
     repos_dir(gds_local_dir).join(format!("{}.git", project_name))
 }
 
+/// Vrai si le repo bare d'un projet existe déjà sur le serveur GDS local
+/// (`<gds_local_dir>/repos/<projet>.git`). V1 = serveur local, le dossier des
+/// repos est sous `gds_local_dir` partagé (chantier UX GDS, Etape 5).
+pub(crate) fn bare_repo_exists(gds_local_dir: &str, project_name: &str) -> bool {
+    repo_bare_path(gds_local_dir, project_name).exists()
+}
+
 /// Valide un nom de projet (anti path traversal) : pas de séparateur, pas de `..`.
 pub(crate) fn validate_project_name(name: &str) -> Result<String, String> {
     let name = name.trim();

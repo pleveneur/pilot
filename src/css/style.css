@@ -7963,6 +7963,28 @@ body.pilot-loading *::after {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+.gds-grid3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.gds-pw {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.gds-pw .gds-input {
+  flex: 1;
+}
+.gds-eye {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #a0a6b4);
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+}
 .gds-check {
   display: flex;
   align-items: center;

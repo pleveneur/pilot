@@ -265,6 +265,19 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   serveur GDS n'existe pas encore, **la base se crée automatiquement**
   (provision PostgreSQL + migrations + repos). Aucune autre config n'existe :
   chaque projet fait son provisionment sur **son** serveur, explicitement.
+
+  **Évolution UX (chantier GDS) — saisie unique & secrets hors projet** :
+  l'adresse PostgreSQL se saisit en **champs séparés** (`db_host`, `db_port`,
+  `db_user`) au lieu d'une URL `postgres://user:pass@host`. Les **mots de passe**
+  (dédié + admin) sont stockés **hors du projet** dans `~/.pilot/gds_secrets.json`
+  (0600, jamais dans `.pilot/gds.json`) ; une URL à mot de passe n'est ni
+  affichée ni ressaisie après la première configuration (`gds_secrets_status`
+  ne remonte que des booléens). Au démarrage, Pilot **reconnecte** le pool en
+  arrière-plan depuis la config + les secrets (`gds_restore_pool` /
+  `restore_pool_for_project`, fail-open) — plus besoin de re-provision. Les
+  anciennes configs restent lues via `normalize()` (dérive `db_*` depuis
+  `server_url`, et re-écrit `server_url` SANS mot de passe) ; `gds_save_config`
+  préserve les champs non envoyés par l'UI.
 - **Modules** : `gds.rs` (lit `.pilot/gds.json`), `gds_db.rs`, commande desktop
   `gds_provision(...)` (paramètres issus de la config projet).
 - **Critère de fin** : `npm run tauri dev` → panneau « 🌐 GDS » du projet →

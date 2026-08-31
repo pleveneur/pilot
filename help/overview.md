@@ -235,23 +235,33 @@ base de données PostgreSQL unique), en remplacement d'un hébergement externe
 type GitHub.
 
 - **Activé projet par projet** : le GDS n'est jamais activé globalement.
-  Chaque projet choisit explicitement **son propre serveur** au moment de
-  l'activation (activation on/off, URL du serveur, identité), via un fichier
-  de configuration **dans le projet**. Il n'y a **aucun serveur par défaut**
-  et **aucune configuration globale** pour le GDS.
+  Chaque projet choisit explicitement son serveur via un fichier de
+  configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
+  aucune configuration globale.
+- **Saisie unique & secrets hors projet** : à la configuration, l'adresse
+  PostgreSQL se renseigne en **champs séparés** (hôte, port, utilisateur dédié) et
+  les **mots de passe sont stockés hors du projet** dans un fichier protégé
+  de l'utilisateur — ils ne figurent jamais dans `.pilot/gds.json`. Aucune URL à
+  mot de passe n'est affichée ni demandée à nouveau après la première saisie :
+  au démarrage, Pilot se **reconnecte automatiquement** au serveur déjà
+  configuré (sans re-provisionner).
 - **Sans activation** : le projet reste 100 % local, exactement comme
   aujourd'hui.
 - **Onglet « 🌐 GDS »** : le bouton **GDS** du panneau **Vues** (sidebar)
   ouvre un onglet dédié, **par projet**, pour piloter le GDS :
-  - **Provisionner le serveur** (adresse PostgreSQL, utilisateur/mot de passe
-    dédiés, email + mot de passe admin) → crée la base `pilot_gds`, les tables
+  - **Provisionner le serveur** (hôte, port, utilisateur dédié, mot de passe
+    dédié, email + mot de passe admin) → crée la base `pilot_gds`, les tables
     et le premier compte admin, puis active le GDS pour le projet ;
-  - **Configurer le projet** (`.pilot/gds.json`) : activation on/off, URL du
-    serveur, email d'identité, dossier local de clonage, hôte SSH ;
+  - **Configurer le projet** (`.pilot/gds.json`) : activation on/off et email
+    d'identité. L'hôte/port/utilisateur PostgreSQL s'affichent en lecture seule
+    (gérés lors du provisionnement) ; l'hôte SSH est dérivé automatiquement ;
   - **Ajouter le projet au GDS** : crée un dépôt git bare sur le serveur,
     ajoute le remote `gds` (sans toucher à un éventuel `origin` existant) et
-    pousse la branche courante ;
-  - **Consulter** la liste des projets et des dépôts git du serveur.
+    pousse la branche courante (projet déjà en Git) ;
+  - **Consulter** la liste des projets et des dépôts git du serveur ;
+  - **Synchroniser** un dossier existant sans `.git` : Pilot l'initialise au
+    lieu d'échouer, et rappelle d'ajouter le projet au GDS si le dépôt distant
+    n'existe pas encore.
 - **Clefs SSH (Phase A3)** : la section « Clefs SSH » de l'onglet GDS gère
   automatiquement l'accès SSH au serveur (utilisateur `git` + clefs publiques
   liées aux emails) :
