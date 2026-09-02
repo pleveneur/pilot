@@ -27,7 +27,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatRemin
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
-import { buildKanbanByClient } from "./super-agent-kanban.js";
+import { buildKanbanByClient, normalizeTaskStatus, columnToStatus } from "./super-agent-kanban.js";
 import { isProjectGds } from "./gds-status.js";
 import { isBusyStale } from "./exclusivity-queue.js";
 
@@ -814,6 +814,11 @@ function escapeHtmlForSuper(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Échappe une valeur pour un attribut HTML (guillemets inclus). */
+function escapeAttrForSuper(s) {
+  return escapeHtmlForSuper(s).replace(/"/g, "&quot;");
+}
+
 /**
  * Résume la mémoire de session (reprise) en une courte phrase pour le message
  * système « 🔁 Reprise de session — … ». Le résumé est un objet JSON structuré
@@ -1178,6 +1183,10 @@ export async function createSuperAgent(container) {
   // actif (classe `.active`).
   let superKanbanActive = false;
   let superViewsBtn = toolbar.querySelector('[data-action="views"]');
+  // Cache des tâches brutes du dernier Kanban chargé (id → task) : sert à
+  // préremplir le formulaire d'édition (get_super_agent_kanban ne retourne que
+  // les champs affichés, donc on garde la dernière réponse en mémoire).
+  let kanbanTasksById = new Map();
 
   // Rendu du tableau de bord de suivi multi-projets.
   async function loadSuperTracking() {
@@ -1242,6 +1251,12 @@ export async function createSuperAgent(container) {
           `<div class="dash-muted">Aucune tâche pour l'instant. Utilisez « Initialiser » ou « Projets & clients » pour démarrer le suivi.</div>`;
         return;
       }
+      kanbanTasksById.clear();
+      for (const client of (data.clients || [])) {
+        for (const t of (client.tasks || [])) {
+          if (t && t.id != null) kanbanTasksById.set(t.id, t);
+        }
+      }
       const byClient = buildKanbanByClient(clients);
       let html = "";
       for (const client of byClient) {
@@ -1249,20 +1264,36 @@ export async function createSuperAgent(container) {
           .map((col) => {
             const cards = (col.cards || [])
               .map((t) => {
-                const title = escapeHtmlForSuper(t.title || "Sans titre");
+                const rawTitle = t.title || "Sans titre";
+                const title = escapeHtmlForSuper(rawTitle);
                 const proj = escapeHtmlForSuper(t.project_name || "");
                 const desc = escapeHtmlForSuper((t.description || "").slice(0, 120));
-                return `<div class="super-kanban-card">
+                const selKey = normalizeTaskStatus(t.status);
+                const selOpts = [
+                  ["todo", "À faire"],
+                  ["progress", "En cours"],
+                  ["review", "À valider"],
+                  ["done", "Terminé"],
+                  ["cancelled", "Annulée"],
+                ]
+                  .map(([k, l]) => `<option value="${k}" ${k === selKey ? "selected" : ""}>${l}</option>`)
+                  .join("");
+                return `<div class="super-kanban-card" draggable="true" data-task-id="${t.id}">
                   <div class="super-kanban-card-title">${title}</div>
                   ${proj ? `<div class="super-kanban-card-proj"><i data-lucide="folder" class="icon-sm"></i> ${proj}</div>` : ""}
                   ${desc ? `<div class="super-kanban-card-desc">${desc}</div>` : ""}
+                  <div class="super-kanban-card-tools">
+                    <select class="kanban-status-select" data-task-id="${t.id}" title="Déplacer la carte">${selOpts}</select>
+                    <button type="button" class="kanban-icon-btn kanban-edit-btn" data-task-id="${t.id}" title="Éditer la carte"><i data-lucide="pencil" class="icon-sm"></i></button>
+                    <button type="button" class="kanban-icon-btn kanban-del-btn" data-task-id="${t.id}" data-title="${escapeAttrForSuper(rawTitle)}" title="Supprimer la carte"><i data-lucide="trash-2" class="icon-sm"></i></button>
+                  </div>
                 </div>`;
               })
               .join("");
             const empty = cards
               ? ""
               : `<div class="super-kanban-empty">Aucune tâche</div>`;
-            return `<div class="super-kanban-col tone-${col.tone}">
+            return `<div class="super-kanban-col tone-${col.tone}" data-col-key="${col.key}">
               <div class="super-kanban-col-head"><i data-lucide="${col.icon}" class="icon-sm"></i> ${col.label} <span class="super-kanban-col-count">${col.cards.length}</span></div>
               <div class="super-kanban-col-body">${cards}${empty}</div>
             </div>`;
@@ -1270,7 +1301,9 @@ export async function createSuperAgent(container) {
           .join("");
         const total = (client.columns || []).reduce((n, c) => n + (c.cards || []).length, 0);
         html += `<div class="super-kanban-client">
-          <div class="super-kanban-client-head"><i data-lucide="building-2" class="icon-sm"></i> ${escapeHtmlForSuper(client.name)} <span class="dash-muted">${total} tâche(s)</span></div>
+          <div class="super-kanban-client-head"><i data-lucide="building-2" class="icon-sm"></i> ${escapeHtmlForSuper(client.name)} <span class="dash-muted">${total} tâche(s)</span>
+            <button type="button" class="kanban-new-btn" title="Créer une nouvelle carte"><i data-lucide="plus" class="icon-sm"></i> Nouvelle carte</button>
+          </div>
           <div class="super-kanban-board">${cols}</div>
         </div>`;
       }
@@ -1299,6 +1332,205 @@ export async function createSuperAgent(container) {
     }
     if (superViewsBtn) superViewsBtn.classList.toggle("active", superKanbanActive);
   }
+
+  // ── Pilotage CRUD de la vue Kanban (création/édition/déplacement/suppression) ──
+  // Les écritures vont UNIQUEMENT dans la base de suivi de l'Assistant
+  // (~/.pilot/super-agent.db), jamais sur les fichiers projets.
+
+  // Déplace une carte vers une colonne (statut canonique via columnToStatus).
+  async function moveKanbanTask(taskId, status) {
+    try {
+      await invoke("super_agent_update_task_status", { taskId, status });
+      loadSuperKanban();
+    } catch (err) {
+      console.error("Erreur déplacement carte:", err);
+    }
+  }
+
+  // Supprime une carte (bouton en deux temps : 1er clic « arme », 2e clic confirme).
+  async function deleteKanbanTask(taskId, title) {
+    try {
+      await invoke("super_agent_delete_task", { taskId });
+      loadSuperKanban();
+    } catch (err) {
+      console.error("Erreur suppression carte:", err);
+    }
+    void title;
+  }
+
+  // Modale de création ou d'édition d'une carte. Les champs (titre, description,
+  // projet, échéance, statut) alimentent create_task / update_task. Une échéance
+  // laissée vide est effacée (chaîne vide passée à update_task).
+  async function openKanbanModal({ mode, task }) {
+    const isEdit = mode === "edit";
+    let projects = [];
+    try {
+      const data = await invoke("list_super_agent_projects");
+      projects = (data && data.projects) || [];
+    } catch (err) {
+      console.error("Erreur liste projets:", err);
+    }
+    const curProj = task ? (task.project_path || "") : "";
+    const projectOptions = projects.length
+      ? projects
+          .map((p) =>
+            `<option value="${escapeAttrForSuper(p.path || "")}" ${String(p.path || "") === curProj ? "selected" : ""}>${escapeHtmlForSuper(p.name || p.path || "")}</option>`
+          )
+          .join("")
+      : `<option value="">— aucun projet connu —</option>`;
+    const statusOptions = [
+      ["todo", "À faire"],
+      ["progress", "En cours"],
+      ["review", "À valider"],
+      ["done", "Terminé"],
+      ["cancelled", "Annulée"],
+    ]
+      .map(([k, l]) =>
+        `<option value="${k}" ${k === normalizeTaskStatus(task ? task.status : "") ? "selected" : ""}>${l}</option>`
+      )
+      .join("");
+    const overlay = document.createElement("div");
+    overlay.className = "modal";
+    overlay.innerHTML = `<div class="modal-content kanban-modal-content">
+      <h2><i data-lucide="${isEdit ? "pencil" : "plus"}" class="icon-lg"></i> ${isEdit ? "Éditer la carte" : "Nouvelle carte"}</h2>
+      <form class="kanban-task-form">
+        <label class="kanban-field">Titre <span class="dash-muted">*</span>
+          <input type="text" name="title" required value="${escapeAttrForSuper(task ? task.title : "")}">
+        </label>
+        <label class="kanban-field">Description
+          <textarea name="description" rows="3">${escapeHtmlForSuper(task ? task.description || "" : "")}</textarea>
+        </label>
+        <label class="kanban-field">Projet
+          <select name="project">${projectOptions}</select>
+        </label>
+        <label class="kanban-field">Échéance
+          <input type="date" name="deadline" value="${escapeAttrForSuper(task ? task.deadline || "" : "")}">
+        </label>
+        ${isEdit ? `<label class="kanban-field">Statut
+          <select name="status">${statusOptions}</select>
+        </label>` : ""}
+        <div class="modal-actions">
+          <button type="button" class="btn kanban-cancel-btn">Annuler</button>
+          <button type="submit" class="btn kanban-save-btn">${isEdit ? "Enregistrer" : "Créer"}</button>
+        </div>
+      </form>
+    </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.querySelector(".kanban-cancel-btn").addEventListener("click", close);
+    overlay.querySelector("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = e.currentTarget;
+      const title = (f.title.value || "").trim();
+      if (!title) return;
+      const description = (f.description.value || "").trim();
+      const deadline = f.deadline.value || ""; // "" efface l'échéance
+      try {
+        if (isEdit) {
+          await invoke("super_agent_update_task", {
+            taskId: task.id,
+            title,
+            description,
+            projectPath: f.project.value || null,
+            status: columnToStatus(f.status.value),
+            deadline,
+          });
+        } else {
+          const projectPath = f.project.value || (projects[0] && projects[0].path) || "";
+          if (!projectPath) {
+            f.title.setCustomValidity("Aucun projet connu : créez un projet suivi avant d'ajouter une carte.");
+            f.title.reportValidity();
+            return;
+          }
+          await invoke("super_agent_create_task", { projectPath, title, description, deadline });
+        }
+        close();
+        loadSuperKanban();
+      } catch (err) {
+        console.error("Erreur création/édition carte:", err);
+      }
+    });
+    refreshIcons(overlay);
+    const first = overlay.querySelector("input[name=title]");
+    if (first) first.focus();
+  }
+
+  // ── Listeners délégués du Kanban (résistants aux re-rendus : attachés une
+  // seule fois à `kanbanEl`, dont seul le contenu est remplacé à chaque load).
+  let dragTaskId = null;
+  const clearDragOver = () =>
+    kanbanEl.querySelectorAll(".super-kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
+
+  kanbanEl.addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".super-kanban-card");
+    if (!card) return;
+    dragTaskId = card.dataset.taskId;
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", String(dragTaskId)); } catch (err) { /* non supporté */ }
+  });
+  kanbanEl.addEventListener("dragover", (e) => {
+    const col = e.target.closest(".super-kanban-col");
+    if (col && dragTaskId) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      clearDragOver();
+      col.classList.add("drag-over");
+    }
+  });
+  kanbanEl.addEventListener("dragleave", (e) => {
+    const col = e.target.closest(".super-kanban-col");
+    if (col) col.classList.remove("drag-over");
+  });
+  kanbanEl.addEventListener("drop", (e) => {
+    const col = e.target.closest(".super-kanban-col");
+    clearDragOver();
+    if (!col || !dragTaskId) return;
+    e.preventDefault();
+    moveKanbanTask(Number(dragTaskId), columnToStatus(col.dataset.colKey));
+    dragTaskId = null;
+  });
+  kanbanEl.addEventListener("dragend", () => {
+    dragTaskId = null;
+    clearDragOver();
+  });
+  kanbanEl.addEventListener("change", (e) => {
+    const sel = e.target.closest(".kanban-status-select");
+    if (!sel) return;
+    moveKanbanTask(Number(sel.dataset.taskId), columnToStatus(sel.value));
+    sel.value = ""; // reset pour permettre une re-sélection identique plus tard
+  });
+  kanbanEl.addEventListener("click", (e) => {
+    const newBtn = e.target.closest(".kanban-new-btn");
+    if (newBtn) { openKanbanModal({ mode: "create" }); return; }
+    const delBtn = e.target.closest(".kanban-del-btn");
+    if (delBtn) {
+      if (delBtn.dataset.armed === "1") {
+        deleteKanbanTask(Number(delBtn.dataset.taskId), delBtn.dataset.title || "");
+        return;
+      }
+      delBtn.dataset.armed = "1";
+      delBtn.classList.add("armed");
+      const orig = delBtn.innerHTML;
+      delBtn.innerHTML = "Confirmer ?";
+      window.setTimeout(() => {
+        if (delBtn.isConnected) {
+          delete delBtn.dataset.armed;
+          delBtn.classList.remove("armed");
+          delBtn.innerHTML = orig;
+        }
+      }, 2500);
+      return;
+    }
+    const editBtn = e.target.closest(".kanban-edit-btn");
+    if (editBtn) {
+      const task = kanbanTasksById.get(Number(editBtn.dataset.taskId));
+      openKanbanModal({ mode: "edit", task: task || null });
+      return;
+    }
+  });
 
   // Recharger le suivi quand l'onglet Assistant devient actif (hook exposé
   // via le retour de createSuperAgent, appelé par tabs.js switchTab).

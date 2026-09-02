@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import {
   KANBAN_COLUMNS,
   normalizeTaskStatus,
+  columnToStatus,
   buildKanbanColumns,
   countByColumn,
   buildKanbanByClient,
@@ -52,6 +53,30 @@ describe("normalizeTaskStatus", () => {
     expect(normalizeTaskStatus(null)).toBe("todo");
   });
 });
+
+describe("columnToStatus", () => {
+  it("mappe chaque colonne vers son statut canonique en base", () => {
+    expect(columnToStatus("todo")).toBe("demande");
+    expect(columnToStatus("progress")).toBe("en_cours");
+    expect(columnToStatus("review")).toBe("a_valider");
+    expect(columnToStatus("done")).toBe("terminee");
+    expect(columnToStatus("cancelled")).toBe("annulee");
+  });
+
+  it("reste cohérent avec normalizeTaskStatus (aller-retour)", () => {
+    for (const c of KANBAN_COLUMNS) {
+      expect(normalizeTaskStatus(columnToStatus(c.key))).toBe(c.key);
+    }
+    expect(normalizeTaskStatus(columnToStatus("cancelled"))).toBe("cancelled");
+  });
+
+  it("retombe sur 'demande' pour une clé inconnue", () => {
+    expect(columnToStatus("")).toBe("demande");
+    expect(columnToStatus(undefined)).toBe("demande");
+    expect(columnToStatus("blabla")).toBe("demande");
+  });
+});
+
 
 describe("buildKanbanColumns", () => {
   it("répartit les tâches dans les 4 colonnes dans l'ordre stable", () => {

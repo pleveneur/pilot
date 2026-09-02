@@ -127,6 +127,30 @@ export function normalizeTaskStatus(status) {
 }
 
 /**
+ * Statut canonique à ÉCRIRE en base pour une colonne Kanban (inverse de
+ * normalizeTaskStatus) : quand l'utilisateur déplace une carte entre colonnes
+ * depuis la vue, on persiste le statut texte canonique du tableau (demande /
+ * en_cours / a_valider / terminee) ou la variante annulée. Une colonne
+ * inconnue retombe sur « demande » (À faire). Logique pure, sans DOM ni invoke.
+ */
+export function columnToStatus(key) {
+  switch (key) {
+    case "todo":
+      return "demande";
+    case "progress":
+      return "en_cours";
+    case "review":
+      return "a_valider";
+    case "done":
+      return "terminee";
+    case "cancelled":
+      return "annulee";
+    default:
+      return "demande";
+  }
+}
+
+/**
  * Répartit une liste de tâches brutes (telles que retournées par la commande
  * Rust `get_super_agent_kanban`) dans les 4 colonnes, dans l'ordre stable de
  * KANBAN_COLUMNS. Chaque colonne contient { key, label, icon, tone, cards }.

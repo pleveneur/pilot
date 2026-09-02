@@ -1955,6 +1955,96 @@ pub fn super_agent_create_task(
     Ok(serde_json::json!({ "ok": true, "task_id": conn.last_insert_rowid() }))
 }
 
+/// A4.1 — Met à jour les champs fournis (non-None) d'une tâche : titre,
+/// description, projet (via resolve_project_id), statut, échéance. Les champs
+/// absents (None) ne sont pas touchés ; `updated_at = datetime('now')`.
+/// Retourne `{ ok, task_id }`. Utilisé par la vue Kanban de l'Assistant pour
+/// piloter ses cartes en CRUD (création/édition/projet/échéance/statut).
+#[tauri::command]
+pub fn super_agent_update_task(
+    app: AppHandle,
+    task_id: i64,
+    title: Option<String>,
+    description: Option<String>,
+    project_path: Option<String>,
+    status: Option<String>,
+    deadline: Option<String>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let mut sets: Vec<String> = Vec::new();
+    // Valeurs SQL au bon ordre des `sets` (le 1er paramètre remplit '?' n°1).
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+
+    if let Some(t) = title {
+        let t = t.trim().to_string();
+        if t.is_empty() {
+            return Err("update_task : un titre est requis".to_string());
+        }
+        sets.push("title = ?".to_string());
+        params.push(rusqlite::types::Value::Text(t));
+    }
+    if let Some(d) = description {
+        sets.push("description = ?".to_string());
+        params.push(rusqlite::types::Value::Text(d));
+    }
+    if let Some(p) = project_path {
+        let pid = resolve_project_id(&conn, &p)?;
+        sets.push("project_id = ?".to_string());
+        params.push(rusqlite::types::Value::Integer(pid));
+    }
+    if let Some(s) = status {
+        let s = s.trim().to_string();
+        if s.is_empty() {
+            return Err("update_task : un statut est requis".to_string());
+        }
+        sets.push("status = ?".to_string());
+        params.push(rusqlite::types::Value::Text(s));
+    }
+    if let Some(d) = deadline {
+        sets.push("deadline = ?".to_string());
+        params.push(rusqlite::types::Value::Text(d));
+    }
+
+    if sets.is_empty() {
+        // Rien à mettre à jour : succès sans effet.
+        return Ok(serde_json::json!({ "ok": true, "task_id": task_id }));
+    }
+
+    let mut sql = String::from("UPDATE tasks SET ");
+    sql.push_str(&sets.join(", "));
+    sql.push_str(", updated_at = datetime('now') WHERE id = ?");
+    params.push(rusqlite::types::Value::Integer(task_id));
+
+    let n = conn
+        .execute(&sql, rusqlite::params_from_iter(params.iter()))
+        .map_err(|e| format!("Erreur mise à jour tâche: {}", e))?;
+    if n == 0 {
+        return Err(format!("Tâche {} introuvable", task_id));
+    }
+    Ok(serde_json::json!({ "ok": true, "task_id": task_id }))
+}
+
+/// A4.2 — Supprime une tâche de la base de suivi (et nettoie les références
+/// éventuelles dans `decisions` via task_id). Retourne `{ ok, task_id }` ou une
+/// erreur si la tâche n'existe pas.
+#[tauri::command]
+pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    // Nettoyage des références liées (fail-open : la colonne existe, mais on ne
+    // bloque jamais la suppression sur un souci de décisions).
+    let _ = conn.execute(
+        "DELETE FROM decisions WHERE task_id = ?1",
+        rusqlite::params![task_id],
+    );
+    let n = conn
+        .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![task_id])
+        .map_err(|e| format!("Erreur suppression tâche: {}", e))?;
+    if n == 0 {
+        return Err(format!("Tâche {} introuvable", task_id));
+    }
+    Ok(serde_json::json!({ "ok": true, "task_id": task_id }))
+}
+
 /// A4 — Met à jour le statut d'une tâche. Retourne `{ ok, task_id, status }`.
 #[tauri::command]
 pub fn super_agent_update_task_status(

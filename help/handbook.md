@@ -1064,8 +1064,21 @@ uniquement un bloc d'instructions dans le prompt système.
 - Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
   extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.
-- La vue est **lecture seule** : elle ne modifie rien, elle vous aide
-  uniquement à suivre visuellement l'avancement de chaque client.
+- **Pilotage complet (création / édition / déplacement / suppression)** :
+  - Un bouton **« + Nouvelle carte »** par client ouvre un formulaire
+    (projet, titre, description, échéance) → `super_agent_create_task`.
+  - Chaque carte a des boutons **éditer** (titre, description, projet,
+    échéance, statut) et **supprimer** (confirmation en deux temps) →
+    `super_agent_update_task` / `super_agent_delete_task`.
+  - Une carte se **déplace** entre colonnes par glisser-déposer **ou** via le
+    menu statut de la carte → `super_agent_update_task_status` avec le statut
+    canonique (`super-agent-kanban.js` : `columnToStatus`) ; le statut est
+    normalisé en colonne au prochain rechargement.
+  - Après chaque écriture, la vue se **recharge** automatiquement.
+- **Toutes les écritures vont UNIQUEMENT dans la base de suivi de l'Assistant**
+  (`~/.pilot/super-agent.db`) : l'Assistant reste **lecture seule** sur les
+  fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
+  la vue.
 
 ### Espace d'écriture dédié (fichiers de suivi)
 - L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`
