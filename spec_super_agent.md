@@ -237,6 +237,17 @@ uniquement un bloc d'instructions dans le prompt système.
 - Il construit **sa propre base de données locale** (SQLite) pour organiser
   clients, projets et tâches, et s'enrichit au fil du temps.
 
+### Visualiser les tâches (vue Kanban)
+- La barre d'outils de l'onglet 🧭 propose un bouton **« Vues »** qui
+  **bascule** entre la vue **liste** du suivi et la vue **Kanban** : les
+  tâches y sont affichées **par client**, chacune classée dans l'une des
+  **4 colonnes** « À faire / En cours / À valider / Terminé ».
+- Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
+  extrait de la **description**. Les tâches annulées ou abandonnées
+  n'apparaissent pas dans le tableau.
+- La vue est **lecture seule** : elle ne modifie rien, elle vous aide
+  uniquement à suivre visuellement l'avancement de chaque client.
+
 ### Espace d'écriture dédié (fichiers de suivi)
 - L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`
   pour ses **fichiers libres** (notes, analyses, exports), organisé par

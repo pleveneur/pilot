@@ -1516,6 +1516,80 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
     Ok(serde_json::json!({ "clients": result_clients }))
 }
 
+/// Lecture seule en vue Kanban de la base de suivi de l'assistant
+/// (~/.pilot/super-agent.db) : retourne TOUTES les tâches, aplaties, classées
+/// par client puis par projet, avec le statut BRUT (la normalisation en
+/// 4 colonnes est faite côté frontend par `super-agent-kanban.js`, qui reste
+/// une logique pure testable). Les tâches sans client associé tombent dans un
+/// pseudo-client « Sans client » pour rester visibles.
+#[tauri::command]
+pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.name, p.name, p.path, t.id, t.title, t.description, \
+                    t.status, t.created_at, t.updated_at \
+             FROM tasks t \
+             JOIN projects p ON p.id = t.project_id \
+             LEFT JOIN clients c ON c.id = p.client_id \
+             ORDER BY c.name, p.name, t.created_at",
+        )
+        .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
+
+    // Agrégeons par client pour que la vue « multi-projets par client » reste
+    // cohérente, même quand une tâche n'appartient à aucun client.
+    let mut by_client: Vec<(String, Vec<Value>)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for row in rows {
+        if let Ok((client, pname, ppath, tid, title, desc, status, created, updated)) = row {
+            let client_name = client.unwrap_or_else(|| "Sans client".to_string());
+            let task = serde_json::json!({
+                "id": tid,
+                "title": title,
+                "description": desc,
+                "status": status,
+                "created_at": created,
+                "updated_at": updated,
+                "project_name": pname,
+                "project_path": ppath,
+            });
+            match index.get(&client_name) {
+                Some(&i) => {
+                    by_client[i].1.push(task);
+                }
+                None => {
+                    index.insert(client_name.clone(), by_client.len());
+                    by_client.push((client_name, vec![task]));
+                }
+            }
+        }
+    }
+
+    let clients: Vec<Value> = by_client
+        .into_iter()
+        .map(|(name, tasks)| serde_json::json!({ "name": name, "tasks": tasks }))
+        .collect();
+
+    Ok(serde_json::json!({ "clients": clients }))
+}
+
 // ── Apprentissage : injection de résumé de session ──
 
 // P0-4 : borne de taille du résumé injecté à l'assistant. Un résumé de fin de

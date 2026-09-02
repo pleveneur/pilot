@@ -27,6 +27,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatRemin
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
+import { buildKanbanByClient } from "./super-agent-kanban.js";
 import { isProjectGds } from "./gds-status.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -1073,6 +1074,7 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="views" title="Basculer entre la vue liste et la vue Kanban du suivi"><i data-lucide="columns-3" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
@@ -1162,6 +1164,20 @@ export async function createSuperAgent(container) {
   trackingEl.className = "super-tracking hidden";
   container.appendChild(trackingEl);
 
+  // Vue Kanban multi-projets (get_super_agent_kanban) : basculée via le bouton
+  // « Vues » de la barre d'outils. Colonnes « À faire / En cours / À valider /
+  // Terminé » normalisées par super-agent-kanban.js.
+  const kanbanEl = document.createElement("div");
+  kanbanEl.id = "super-kanban";
+  kanbanEl.className = "super-kanban hidden";
+  container.appendChild(kanbanEl);
+
+  // État de la bascule liste ↔ Kanban (bouton « Vues »). `superViewsBtn` est
+  // résolu après la construction de la barre d'outils pour refléter l'état
+  // actif (classe `.active`).
+  let superKanbanActive = false;
+  let superViewsBtn = toolbar.querySelector('[data-action="views"]');
+
   // Rendu du tableau de bord de suivi multi-projets.
   async function loadSuperTracking() {
     if (!trackingEl) return;
@@ -1206,6 +1222,81 @@ export async function createSuperAgent(container) {
       console.error("Erreur get_project_tracking:", err);
       trackingEl.innerHTML = `<div class="dash-error">Erreur de chargement du suivi : ${escapeHtmlForSuper(String(err))}</div>`;
     }
+  }
+
+  // Rendu de la vue Kanban multi-projets (get_super_agent_kanban). Chaque
+  // client est affiché avec ses 4 colonnes (À faire / En cours / À valider /
+  // Terminé) et ses cartes de tâches. La structuration par colonne/client est
+  // déléguée à la logique pure super-agent-kanban.js (buildKanbanByClient) ;
+  // ici on ne fait que produire l'HTML.
+  async function loadSuperKanban() {
+    if (!kanbanEl) return;
+    if (kanbanEl.classList.contains("hidden")) return;
+    kanbanEl.innerHTML = `<div class="dash-loading">Chargement du Kanban…</div>`;
+    try {
+      const data = await invoke("get_super_agent_kanban");
+      const clients = (data && data.clients) || [];
+      if (!clients.length) {
+        kanbanEl.innerHTML =
+          `<div class="dash-muted">Aucune tâche pour l'instant. Utilisez « Initialiser » ou « Projets & clients » pour démarrer le suivi.</div>`;
+        return;
+      }
+      const byClient = buildKanbanByClient(clients);
+      let html = "";
+      for (const client of byClient) {
+        const cols = (client.columns || [])
+          .map((col) => {
+            const cards = (col.cards || [])
+              .map((t) => {
+                const title = escapeHtmlForSuper(t.title || "Sans titre");
+                const proj = escapeHtmlForSuper(t.project_name || "");
+                const desc = escapeHtmlForSuper((t.description || "").slice(0, 120));
+                return `<div class="super-kanban-card">
+                  <div class="super-kanban-card-title">${title}</div>
+                  ${proj ? `<div class="super-kanban-card-proj"><i data-lucide="folder" class="icon-sm"></i> ${proj}</div>` : ""}
+                  ${desc ? `<div class="super-kanban-card-desc">${desc}</div>` : ""}
+                </div>`;
+              })
+              .join("");
+            const empty = cards
+              ? ""
+              : `<div class="super-kanban-empty">Aucune tâche</div>`;
+            return `<div class="super-kanban-col tone-${col.tone}">
+              <div class="super-kanban-col-head"><i data-lucide="${col.icon}" class="icon-sm"></i> ${col.label} <span class="super-kanban-col-count">${col.cards.length}</span></div>
+              <div class="super-kanban-col-body">${cards}${empty}</div>
+            </div>`;
+          })
+          .join("");
+        const total = (client.columns || []).reduce((n, c) => n + (c.cards || []).length, 0);
+        html += `<div class="super-kanban-client">
+          <div class="super-kanban-client-head"><i data-lucide="building-2" class="icon-sm"></i> ${escapeHtmlForSuper(client.name)} <span class="dash-muted">${total} tâche(s)</span></div>
+          <div class="super-kanban-board">${cols}</div>
+        </div>`;
+      }
+      kanbanEl.innerHTML = html;
+      refreshIcons(kanbanEl);
+    } catch (err) {
+      console.error("Erreur get_super_agent_kanban:", err);
+      kanbanEl.innerHTML =
+        `<div class="dash-error">Erreur de chargement du Kanban : ${escapeHtmlForSuper(String(err))}</div>`;
+    }
+  }
+
+  // Bascule liste ↔ Kanban via le bouton « Vues » : quand le Kanban est actif,
+  // il masque la vue liste (suivi multi-projets) et vice-versa. Réflète l'état
+  // sur le bouton (classe `.active`).
+  function toggleSuperKanban() {
+    superKanbanActive = !superKanbanActive;
+    if (superKanbanActive) {
+      trackingEl.classList.add("hidden");
+      kanbanEl.classList.remove("hidden");
+      loadSuperKanban();
+    } else {
+      kanbanEl.classList.add("hidden");
+      trackingEl.classList.remove("hidden");
+      loadSuperTracking();
+    }
+    if (superViewsBtn) superViewsBtn.classList.toggle("active", superKanbanActive);
   }
 
   // Recharger le suivi quand l'onglet Assistant devient actif (hook exposé
@@ -1724,12 +1815,21 @@ export async function createSuperAgent(container) {
     } else if (action === "config") {
       window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
     } else if (action === "tracking") {
+      // Vue liste et vue Kanban s'excluent mutuellement : ouvrir la liste
+      // désactive le Kanban (et inversement, via toggleSuperKanban).
+      if (superKanbanActive) {
+        superKanbanActive = false;
+        kanbanEl.classList.add("hidden");
+        if (superViewsBtn) superViewsBtn.classList.remove("active");
+      }
       if (trackingEl.classList.contains("hidden")) {
         trackingEl.classList.remove("hidden");
         loadSuperTracking();
       } else {
         trackingEl.classList.add("hidden");
       }
+    } else if (action === "views") {
+      toggleSuperKanban();
     } else if (action === "voice") {
       toggleVoiceInput();
     }
