@@ -803,6 +803,27 @@ impl AgentService {
         }
     }
 
+    /// Bug #81 : indique si la session principale (mode `MainSession`, agent
+    /// standard du chat) est présente dans le registre ET que son processus
+    /// enfant est vivant (try_wait → None). Base de l'arrêt automatique de
+    /// l'agent standard figé (un process pi standard vivant ne doit plus
+    /// bloquer Pilot). Ne concerne QUE les sessions `MainSession` : une session
+    /// `AgentProcess` (run_agents) du même agent_id n'est PAS comptée (scope
+    /// run_agents inchangé), ni une session absente ou morte.
+    pub fn main_session_alive(&self, project: &str, agent_id: &str) -> bool {
+        let key = Self::session_key(project, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) if e.mode == SpawnMode::MainSession => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Exclusivité des spécialités par projet (T4) : un agent multi-rôles H2 V2
     /// est considéré « actif » (exclusif) s'il est vivant ET en train d'exécuter
     /// une tâche (busy=true dans la map d'anomalie, posé à `agent_start` et
@@ -2687,6 +2708,57 @@ mod tests {
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!svc.agent_process_alive(proj, "codeur"), "processus tué → plus vivante");
+    }
+
+    /// Bug #81 : `main_session_alive` détecte une session principale (mode
+    /// MainSession, agent standard du chat) vivante pour (project, agent_id).
+    /// Base de l'arrêt automatique de l'agent standard figé. Une session
+    /// `AgentProcess` (run_agents) du même agent_id n'est PAS comptée (scope
+    /// run_agents inchangé).
+    #[test]
+    fn main_session_alive_detects_standard_agent() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        // Aucune session → pas vivante.
+        assert!(!svc.main_session_alive(proj, "default"), "session absente → pas vivante");
+        // Session MainSession vivante → vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "default"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        assert!(svc.main_session_alive(proj, "default"), "session main vivante détectée");
+        // Une session AgentProcess du même agent_id n'est PAS comptée (scope
+        // run_agents inchangé : main_session_alive ne concerne que MainSession).
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        assert!(!svc.main_session_alive(proj, "codeur"), "session agent_process non concernée");
+        // Tuer le processus → plus vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&AgentService::session_key(proj, "default")) {
+                let _ = entry.session.child.kill();
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!svc.main_session_alive(proj, "default"), "processus tué → plus vivante");
     }
 
     /// `agent_process_busy` distingue une session vivante mais INACTIVE (settled,

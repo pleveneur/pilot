@@ -4785,12 +4785,38 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   window.addEventListener("pilot:rag-building", showRagBuilding);
   const unlistenRagDone = await listen("context-index-done", () => clearRagBuilding());
 
+  // Bug #81 : arrêt AUTOMATIQUE de l'agent standard (MainSession) par le
+  // moniteur Rust (process pi standard figé vivant). Met à jour l'UI (statut +
+  // état de streaming) quand CET onglet est l'agent standard arrêté. Les
+  // agents délégués (run_agents) sont gérés par agents-bus.js (ctx de run) ;
+  // ici on ne gère QUE l'agent standard, identifié par le reason dédié émis
+  // côté Rust et par l'agentId de cet onglet.
+  const unlistenAutoStop = await listen("agent-auto-stopped", (event) => {
+    try {
+      const p = event.payload || {};
+      const reason = p.reason || "";
+      // Ne gérer que l'arrêt auto de l'agent standard (reason dédié) et de CET
+      // onglet (agentId). Les agents délégués run_agents sont gérés par
+      // agents-bus.js.
+      if (!reason.includes("Agent standard")) return;
+      if (p.agent && p.agent !== agentId) return;
+      console.warn("[agent-pi] arrêt automatique de l'agent standard", p.agent, reason);
+      statusEl.textContent = "Arrêté";
+      statusEl.className = "agent-status agent-status-idle";
+      state.isStreaming = false;
+      appendSystemMessage(messagesEl, "⏱️ Agent arrêté automatiquement : bloqué (actif sans progression).");
+    } catch (err) {
+      console.error("[agent-auto-stopped] erreur (agent-pi):", err);
+    }
+  });
+
   return {
     wrapper,
     unlisten: () => {
       try { unlisten(); } catch (_) {}
       try { unlistenReviewer(); } catch (_) {}
       try { unlistenRagDone(); } catch (_) {}
+      try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
       window.removeEventListener("pilot:rag-building", showRagBuilding);
       // Chantier 5/5 : libérer l'entrée du registre de states de cet onglet

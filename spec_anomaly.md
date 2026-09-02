@@ -91,10 +91,13 @@ Le même moniteur implémente l'arrêt AUTOMATIQUE (`should_auto_stop`) : un age
 (défaut **10 min**, distinct de `anomaly_timeout_minutes` 30) et non déjà
 arrêté (`auto_stopped_reported`, réarmé à chaque `agent_start`) est candidat.
 
-**Scope restreint** : ne vise QUE les agents délégués `AgentProcess` (run_agents),
-filtrés par `agent_service.agent_process_alive(project, agent)`. Le chat
-principal, le reviewer (`orch-reviewer`, mode MainSession) et le super-agent ne
-sont **jamais** arrêtés automatiquement.
+**Scope** : vise les agents délégués `AgentProcess` (run_agents) ET, depuis le
+bug #81, l'**agent standard** (`MainSession`, chat principal) — un process pi
+standard figé vivant ne doit plus bloquer Pilot. Le routage se fait via
+`auto_stop_target` : `agent_process_alive(project, agent)` → agent délégué ;
+sinon `main_session_alive(project, agent)` → agent standard ; sinon rien. Le
+reviewer (`orch-reviewer`, mode MainSession) et le super-agent ne sont **jamais**
+arrêtés automatiquement (le super-agent a son plafond dédié, tâche #141).
 
 À l'arrêt, le moniteur :
 
@@ -103,7 +106,11 @@ sont **jamais** arrêtés automatiquement.
 2. émet l'événement **`agent-auto-stopped`** (`{ agent, project, reason,
    idleMinutes }`) → l'UI (anomaly.js) informe l'utilisateur et le bus d'agents
    (agents-bus.js) **libère le créneau d'exclusivité** (la file d'attente,
-   `launchNextQueued`) pour qu'un agent en attente prenne le relais (T5) ;
+   `launchNextQueued`) pour qu'un agent en attente prenne le relais (T5). Pour
+   l'agent standard, le `reason` dédié (« Agent standard arrêté automatiquement… »)
+   permet à super-agent.js de **libérer `delegationBusy` et flusher la file de
+   délégation** (la prochaine demande en attente est transmise à un agent
+   redémarré) et à agent-pi.js de mettre à jour l'UI (statut « Arrêté ») ;
 3. **PROPOSE automatiquement le diagnostic** en appelant
    `do_start_diagnostic_agent` (réutilise l'existant, aucune nouvelle logique).
 
@@ -175,7 +182,7 @@ callback de notification du bus (message ⏱️).
 |---|---|
 | `src-tauri/src/anomaly.rs` | Observateur combiné, moniteur, arrêt auto, commande diagnostic, tests |
 | `src-tauri/src/lib.rs` | `mod anomaly`, config (`anomaly_detection_enabled`, `anomaly_timeout_minutes`, `agent_auto_stop_enabled`, `agent_auto_stop_minutes`), état `agent_anomaly`, setup, commande |
-| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) |
+| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) |
 | `src-tauri/src/rpc.rs` | Suppression de l'ancien `make_project_activity_observer` (remplacé par l'observateur combiné) |
 | `src/js/anomaly.js` | Bandeau d'alerte, notification, arrêt auto (événement `agent-auto-stopped`), modale de diagnostic |
 | `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) |

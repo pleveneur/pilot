@@ -265,6 +265,38 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
     project.is_empty() && agent == crate::agent_service::SUPERAGENT_ID
 }
 
+/// Verrou de run fantôme (busy-stale) : décide si une entrée busy doit être
+/// repassée à false par le filet AUTORITAIRE, indépendant de l'arrêt auto (T2)
+/// et de la mort du process. Un process pi FIGÉ (vivant, ni settled ni exit)
+/// laisse `busy` à true sans jamais l'effacer : dès que la dernière activité est
+/// plus ancienne que `grace_minutes` (STALE_BUSY_GRACE, défaut 25), la session
+/// n'est plus un travail en cours → on libère la marque busy SANS tuer le
+/// process (le kill relève de l'arrêt auto T2). Pure et testable.
+fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
+    if !entry.busy {
+        return false;
+    }
+    let idle_secs = now.duration_since(entry.last_activity).as_secs();
+    idle_secs > (grace_minutes.max(1) as u64) * 60
+}
+
+/// Bug #81 : route l'arrêt auto d'une entrée non-super busy sans progression
+/// vers la bonne cible. Retourne :
+///  - `"agent_process"` : agent délégué (run_agents, mode `AgentProcess`) vivant ;
+///  - `"main_session"` : agent standard (chat principal, mode `MainSession`) vivant ;
+///  - `"none"` : session absente ou morte (rien à arrêter).
+/// Pure et testable — le moniteur l'utilise pour router l'arrêt automatique
+/// (scope run_agents préservé, arrêt auto étendu à l'agent standard).
+fn auto_stop_target(agent_process_alive: bool, main_session_alive: bool) -> &'static str {
+    if agent_process_alive {
+        "agent_process"
+    } else if main_session_alive {
+        "main_session"
+    } else {
+        "none"
+    }
+}
+
 /// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8) ET
 /// l'arrêt AUTOMATIQUE des agents délégués bloqués (T2).
 /// Thread autonome : toutes les 30 s, vérifie si un agent actif (busy) n'a pas
@@ -274,9 +306,10 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 ///     `agent_start`/`agent_settled`).
 ///  2. Arrêt auto (T2, `agent_auto_stop_minutes`, défaut 10) : si `busy` sans
 ///     progression depuis ce seuil DÉDIÉ, et que l'agent est un agent délégué
-///     (`AgentProcess`, scope restreint), arrête le processus pi, émet
-///     l'événement `agent-auto-stopped` (UI + libération du créneau
-///     d'exclusivité par agents-bus.js) puis PROPOSE automatiquement le
+///     (`AgentProcess`, scope restreint) OU l'agent standard (`MainSession`,
+///     bug #81), arrête le processus pi, émet l'événement `agent-auto-stopped`
+///     (UI + libération du créneau d'exclusivité par agents-bus.js / de la
+///     délégation par super-agent.js) puis PROPOSE automatiquement le
 ///     diagnostic (`do_start_diagnostic_agent`).
 /// Ne bloque jamais l'interface (thread dédié). Respecte les réglages
 /// `anomaly_detection_enabled` et `agent_auto_stop_enabled` (défauts activés).
@@ -285,7 +318,7 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<AppState>();
-            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes, super_stop_enabled, super_stop_minutes) = {
+            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes, super_stop_enabled, super_stop_minutes, stale_busy_grace) = {
                 let cfg = state.config.lock().unwrap();
                 (
                     cfg.anomaly_detection_enabled,
@@ -396,9 +429,14 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 );
             }
             for (project, agent, idle_min) in auto_stops {
-                // Scope restreint : ne viser QUE les agents délégués (AgentProcess).
-                // Ne touche jamais le chat principal, le reviewer ni le super-agent.
-                if !state.agent_service.agent_process_alive(&project, &agent) {
+                // Bug #81 : route l'arrêt auto vers l'agent délégué (AgentProcess,
+                // scope run_agents préservé) OU l'agent standard (MainSession). Le
+                // super-agent est exclu (is_super). Une session absente/morte → rien.
+                let target = auto_stop_target(
+                    state.agent_service.agent_process_alive(&project, &agent),
+                    state.agent_service.main_session_alive(&project, &agent),
+                );
+                if target == "none" {
                     continue;
                 }
                 // L'agent ne tourne plus : marquer busy=false pour ne pas re-détecter.
@@ -412,12 +450,20 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 let _ = state.agent_service.stop(&project, &agent);
                 // Événement Rust → JS : l'UI informe l'utilisateur (bandeau) et le
                 // bus d'agents libère le créneau d'exclusivité (la file d'attente).
+                // Bug #81 : reason dédié pour l'agent standard (le frontend s'en
+                // sert pour distinguer l'arrêt auto de l'agent standard de celui
+                // d'un agent délégué run_agents).
+                let reason = if target == "agent_process" {
+                    "Agent délégué arrêté automatiquement : bloqué (actif sans progression)."
+                } else {
+                    "Agent standard arrêté automatiquement : bloqué (actif sans progression)."
+                };
                 let _ = app.emit(
                     "agent-auto-stopped",
                     serde_json::json!({
                         "project": project,
                         "agent": agent,
-                        "reason": "Agent délégué arrêté automatiquement : bloqué (actif sans progression).",
+                        "reason": reason,
                         "idleMinutes": idle_min,
                     }),
                 );
@@ -838,6 +884,20 @@ mod tests {
         assert!(!is_super_agent_key("/proj", "superagent"));
         assert!(!is_super_agent_key("", "codeur"));
         assert!(!is_super_agent_key("/proj", "codeur"));
+    }
+
+    /// Bug #81 : `auto_stop_target` route l'arrêt auto vers l'agent délégué
+    /// (AgentProcess, scope run_agents préservé), l'agent standard (MainSession)
+    /// ou rien (session absente/morte). Une session ne peut pas être à la fois
+    /// AgentProcess et MainSession (même clé (projet, agent)) : le cas (true,
+    /// true) ne se produit pas, mais on privilégie l'agent délégué (comportement
+    /// historique).
+    #[test]
+    fn auto_stop_target_routes_to_agent_process_main_or_none() {
+        assert_eq!(auto_stop_target(true, false), "agent_process");
+        assert_eq!(auto_stop_target(false, true), "main_session");
+        assert_eq!(auto_stop_target(false, false), "none");
+        assert_eq!(auto_stop_target(true, true), "agent_process");
     }
 
     /// Bug #152 : l'observateur rafraîchit `last_progress` sur les événements

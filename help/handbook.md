@@ -1149,6 +1149,16 @@ uniquement un bloc d'instructions dans le prompt système.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **Bug #81 — Délégation débloquée après arrêt auto de l'agent standard** :
+  quand le moniteur d'anomalies **arrête automatiquement** l'agent standard
+  (process pi standard figé vivant, `agent-auto-stopped` avec reason dédié
+  « Agent standard »), super-agent.js **libère `delegationBusy` et flushe la
+  file de délégation** (`flushDelegationQueue`) : la prochaine demande en
+  attente est transmise à un agent **redémarré** (la session a été arrêtée
+  côté Rust, la délégation suivante la recrée). L'ordre de la file est
+  préservé. L'UI de l'onglet agent (agent-pi.js) passe à « Arrêté ».
+  Contrairement à un `stop_agent` explicite, l'arrêt auto **ne vide pas** la
+  file : les demandes en attente sont bien rejouées.
 - **Purge automatique avant chaque demande** : par défaut, avant chaque
   nouvelle demande déléguée à un agent (délégation directe **ou** demande mise
   en file), la conversation de cet agent est **purgée** si elle n'est pas déjà

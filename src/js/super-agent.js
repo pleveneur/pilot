@@ -1953,6 +1953,34 @@ export async function createSuperAgent(container) {
     }
   });
 
+  // Bug #81 : arrêt AUTOMATIQUE de l'agent standard (MainSession) par le
+  // moniteur Rust (process pi standard figé vivant). Les agents délégués
+  // (run_agents) sont gérés par agents-bus.js (ctx de run) ; ici on ne gère
+  // QUE l'agent standard, identifié par le reason dédié émis côté Rust. On
+  // libère le créneau de délégation et on flushe la file : la prochaine
+  // demande en attente sera transmise à un agent redémarré (la session a été
+  // arrêtée côté Rust, la délégation suivante la recrée).
+  const unlistenAutoStop = await listen("agent-auto-stopped", (event) => {
+    try {
+      const p = event.payload || {};
+      const agentId = p.agent;
+      const reason = p.reason || "";
+      // Ne gérer que l'arrêt auto de l'agent standard (reason dédié). Les
+      // agents délégués run_agents sont gérés par agents-bus.js.
+      if (!agentId || !reason.includes("Agent standard")) return;
+      console.warn("[super-agent] arrêt automatique de l'agent standard", agentId, reason);
+      // Libère delegationBusy et transmet la prochaine demande en file (si
+      // présente) à un agent redémarré. Ne casse pas l'ordre de la file.
+      flushDelegationQueue();
+      appendSystemMessage(
+        superMessagesEl,
+        `⏱️ L'agent du projet a été arrêté automatiquement (bloqué sans progression). Les demandes en file seront transmises à un agent redémarré.`
+      );
+    } catch (err) {
+      console.error("[agent-auto-stopped] erreur (super-agent):", err);
+    }
+  });
+
   // Badges par bulle : plus d'écoute de `project_changed` pour re-étiqueter
   // la bulle courante (ancien comportement `refreshSuperBubbleProject`, badge
   // « projet courant global » supprimé). Chaque bulle garde les badges FIGÉS
@@ -2049,6 +2077,7 @@ export async function createSuperAgent(container) {
       if (immersiveOverlay) exitImmersive();
       origUnlisten();
       unlistenStateChanged();
+      try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
