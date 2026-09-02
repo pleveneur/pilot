@@ -1037,6 +1037,11 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         // activé / 10 min, cf. lib.rs).
         super_agent_auto_stop_enabled: currentConfig?.super_agent_auto_stop_enabled !== false,
         super_agent_auto_stop_minutes: currentConfig?.super_agent_auto_stop_minutes || 10,
+        // ── Verrou de run fantôme (busy-stale) ──
+        // Pas d'UI dédiée : on préserve la valeur de la config courante pour
+        // qu'un enregistrement des Paramètres ne la réinitialise pas (défaut
+        // 25 min, cf. lib.rs).
+        stale_busy_grace_minutes: currentConfig?.stale_busy_grace_minutes || 25,
         pdf_md_model: inputPdfMdModel.value.trim(),
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,

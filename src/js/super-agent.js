@@ -29,6 +29,7 @@ import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-
 import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
 import { buildKanbanByClient } from "./super-agent-kanban.js";
 import { isProjectGds } from "./gds-status.js";
+import { isBusyStale } from "./exclusivity-queue.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -2761,8 +2762,26 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         try {
           const sessionsRes = await invoke("list_agent_sessions");
           const sessions = (sessionsRes && sessionsRes.sessions) || [];
+          // Verrou fantôme (busy-stale) : un agent busy retenu par un process pi
+          // figé (ni settled ni exit) est compté comme actif par le filtre brut
+          // `s.busy && mode==='agent_process'`, ce qui prévient l'assistant et met
+          // la demande en file derrière un fantôme. Une session busy-stale n'est
+          // plus exclusive (tâche 1) : on ne la compte PAS comme active.
+          const stale = sessions.some((s) => s.mode === "agent_process" && s.project === target && isBusyStale(s));
+          if (stale && (delegationBusy || delegationQueue.length > 0)) {
+            // C'est là qu'a échoué 205e417 (côté super-agent seulement) : le
+            // pré-check de run_agents ne libérait pas le flux de DÉLÉGATION. Un
+            // agent standard busy-stale retient delegationBusy=true sans jamais
+            // émettre agent_end → toutes les délégations suivantes s'empilent dans
+            // delegationQueue pour toujours. On libère le flag et on rejoue la
+            // demande suivante (flushDelegationQueue) pour ne pas laisser les
+            // demandes coincées derrière un fantôme.
+            appendSystemMessage(messagesEl, `🧹 ${delegationQueue.length} demande(s) en file de délégation libérée(s) : l'agent marqué actif est figé (busy-stale, sans progression).`);
+            delegationBusy = false;
+            flushDelegationQueue();
+          }
           const queuedIds = agentIds.filter((aid) =>
-            sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target)
+            sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target && !isBusyStale(s))
           );
           if (queuedIds.length > 0) {
             const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.`;

@@ -1623,6 +1623,11 @@ il propose des évolutions que vous validez vous-même.
 **Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
 run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
 depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+
+**Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
+pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
+(notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
+réinitialiser son processus. Aucun réglage utilisateur.
 Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent

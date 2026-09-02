@@ -606,6 +606,18 @@ struct AppConfig {
     super_agent_auto_stop_enabled: bool,
     #[serde(default = "default_agent_auto_stop_minutes")]
     super_agent_auto_stop_minutes: u32,
+    // ── Verrou de run fantôme (busy-stale) ──
+    // Filet de sécurité côté Rust, INDÉPENDANT de l'arrêt auto (T2) et de la
+    // mort du process : un process pi FIGÉ (vivant, ni settled ni exit) laisse
+    // `busy` à true dans la map d'anomalie sans jamais l'effacer. Quand une
+    // entrée non-super reste busy avec une dernière activité plus ancienne que
+    // ce seuil, le moniteur (anomaly.rs) repasse busy=false, réarme les
+    // drapeaux et émet `agent-stale-busy-released` SANS tuer le process (le
+    // kill relève de l'arrêt auto T2). Active aussi `agent_process_busy` pour
+    // les sessions vivantes mais inactives, même si `agent_auto_stop_enabled`
+    // est désactivé. Défaut 25 min (aligné sur la fenêtre busy-stale JS).
+    #[serde(default = "default_stale_busy_grace_minutes")]
+    stale_busy_grace_minutes: u32,
     // Tâche #160 : bandeau d'événements en PLEIN ÉCRAN (onglet assistant). Quand
     // activé, chaque événement du panneau cloche (notify, messages d'info,
     // erreurs…) s'affiche AUSSI en overlay temporaire au centre de l'écran
@@ -625,6 +637,7 @@ fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
 fn default_true() -> bool { true }
 fn default_anomaly_timeout_minutes() -> u32 { 30 }
 fn default_agent_auto_stop_minutes() -> u32 { 10 }
+fn default_stale_busy_grace_minutes() -> u32 { 25 }
 fn default_assistant_sound_volume() -> u32 { 100 }
 fn default_super_agent_name() -> String { "Assistant".to_string() }
 fn default_context_budget() -> u32 { 8000 }
@@ -843,6 +856,7 @@ impl Default for AppConfig {
             agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
             super_agent_auto_stop_enabled: true,
             super_agent_auto_stop_minutes: default_agent_auto_stop_minutes(),
+            stale_busy_grace_minutes: default_stale_busy_grace_minutes(),
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
         }

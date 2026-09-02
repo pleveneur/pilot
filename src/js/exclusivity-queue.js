@@ -58,18 +58,29 @@ export function dequeueExclusivity(queue, agentId, project) {
  * conflit (seule la même spécialité est exclusive).
  *
  * Un agent est « actif » (exclusif) s'il est `busy` (agent_start → true,
- * agent_settled → false) ET vivant. Une session vivante mais INACTIVE (settled,
- * run précédente terminée) n'est PAS exclusive : elle doit pouvoir être
- * réutilisée/redémarrée pour une nouvelle run (bug : run_agents sur un agent
- * déjà ouvert mais inactif ne démarrait pas).
+ * agent_settled → false) ET vivant ET non busy-stale. Une session busy-stale
+ * (busy retenu par un process pi figé, dernière activité plus ancienne que la
+ * fenêtre) n'est PAS exclusive : la demande doit pouvoir démarrer immédiatement
+ * au lieu de rester en file derrière un fantôme. Une session vivante mais
+ * INACTIVE (settled, run précédente terminée) n'est pas non plus exclusive :
+ * elle doit pouvoir être réutilisée/redémarrée pour une nouvelle run (bug :
+ * run_agents sur un agent déjà ouvert mais inactif ne démarrait pas).
  * @param {Array<{agent:string, alive:boolean, busy:boolean, mode:string, project:string}>} sessions
  * @param {string} agentId
  * @param {string} project
+ * @param {number} [now]
+ * @param {number} [staleWindowMs] - fenêtre busy-stale (défaut 25 min)
  * @returns {boolean}
  */
-export function isAgentActiveOnProject(sessions, agentId, project) {
+export function isAgentActiveOnProject(sessions, agentId, project, now = Date.now(), staleWindowMs = STALE_BUSY_WINDOW_MS) {
   return (sessions || []).some(
-    (s) => s.agent === agentId && s.busy && s.alive && s.mode === "agent_process" && s.project === project
+    (s) =>
+      s.agent === agentId &&
+      s.busy &&
+      s.alive &&
+      s.mode === "agent_process" &&
+      s.project === project &&
+      !isBusyStale(s, now, staleWindowMs)
   );
 }
 
@@ -81,25 +92,68 @@ export function isAgentActiveOnProject(sessions, agentId, project) {
 // ne doit JAMAIS maintenir un verrou de run (faux « Une run est déjà en cours »).
 export const RECENT_ACTIVITY_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
 
+// Chantier « verrou de run fantôme » : fenêtre busy-stale. Un processus pi
+// FIGÉ (vivant, ni settled ni exit) laisse `busy` à true alors qu'aucun travail
+// n'avance : agent_start pose busy=true et seule agent_settled/agent_end/
+// process_exit/process_error l'efface. Si la dernière activité est plus ancienne
+// que cette durée, la session est considérée « busy-stale » : elle ne doit plus
+// être un travail en cours (ni maintenir un verrou de run, ni bloquer
+// l'exclusivité de spécialité, ni être comptée comme agent actif). Alignée sur
+// le seuil d'arrêt auto / de grâce busy-stale Rust (STALE_BUSY_GRACE, défaut
+// 25 min).
+export const STALE_BUSY_WINDOW_MS = 25 * 60 * 1000; // 25 minutes
+
+/**
+ * Pure (testable) : indique si un agent `busy` est « busy-stale » — son `busy`
+ * est vrai mais sa dernière activité est trop ancienne (au-delà de la fenêtre
+ * busy-stale). Cause racine du verrou fantôme : un process pi figé (vivant, ni
+ * settled ni exit) laisse busy=true alors qu'aucun travail n'avance.
+ * Fail-open sûr : sans `lastActivity` exploitable, on ne peut pas PROUVER la
+ * staleness → retourne false (pas stale) pour ne pas libérer un verrou d'une
+ * run réellement active (risque de double run).
+ * @param {{alive?:boolean, busy?:boolean, lastActivity?:string}|null} session
+ * @param {number} [now] - timestamp de référence (ms)
+ * @param {number} [staleWindowMs] - fenêtre busy-stale (défaut 25 min)
+ * @returns {boolean}
+ */
+export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUSY_WINDOW_MS) {
+  if (!session || session.alive !== true || session.busy !== true) return false;
+  if (!session.lastActivity) return false;
+  const ts = Date.parse(session.lastActivity);
+  if (!Number.isFinite(ts)) return false;
+  return now - ts > staleWindowMs;
+}
+
 /**
  * Pure (testable) : indique si UNE session d'agent représente un travail
  * RÉELLEMENT en cours. Un agent travaille réellement si :
- *  - busy === true (agent_start reçu, aucun agent_settled depuis), OU
+ *  - busy === true (agent_start reçu, aucun agent_settled depuis) ET non
+ *    busy-stale (une session busy VIEILLE de plus de `staleWindowMs` sans
+ *    activité récente n'est plus un travail : process pi figé), OU
  *  - sa dernière activité (lastActivity ISO) date de moins de `windowMs`.
  * Une session « vivante mais inactive » (parkée après agent_settled, oubliée)
  * ne compte PAS : un processus vivant ≠ travail en cours.
  * Fail-open anti-verrou : en cas de donnée manquante ou illisible (session
  * absente/morte, busy absent ET lastActivity absente/non parsable), retourne
  * false — jamais de verrou sur incertitude (le bug historique était un FAUX
- * verrou ; il ne faut pas créer l'inverse, un verrou oublié).
+ * verrou ; il ne faut pas créer l'inverse, un verrou oublié). Pour busy-stale,
+ * le fail-open est inversé : busy SANS lastActivity exploitable → true (on ne
+ * peut pas prouver la staleness, donc pas de faux verrou libéré).
  * @param {{alive?:boolean, busy?:boolean, lastActivity?:string}|null} session
  * @param {number} [now] - timestamp de référence (ms)
  * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
+ * @param {number} [staleWindowMs] - fenêtre busy-stale (défaut 25 min)
  * @returns {boolean}
  */
-export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS, staleWindowMs = STALE_BUSY_WINDOW_MS) {
   if (!session || session.alive !== true) return false;
-  if (session.busy === true) return true;
+  if (session.busy === true) {
+    // busy-stale : un busy VIEUX de plus de la fenêtre n'est plus un travail.
+    // Fail-open : sans lastActivity exploitable, on ne peut pas prouver la
+    // staleness → on retombe sur l'historique (busy === vrai travail).
+    if (isBusyStale(session, now, staleWindowMs)) return false;
+    return true;
+  }
   if (!session.lastActivity) return false;
   const ts = Date.parse(session.lastActivity);
   if (!Number.isFinite(ts)) return false;

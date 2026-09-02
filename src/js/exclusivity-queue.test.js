@@ -6,6 +6,8 @@ import {
   dequeueExclusivity,
   isAgentActiveOnProject,
   RECENT_ACTIVITY_WINDOW_MS,
+  STALE_BUSY_WINDOW_MS,
+  isBusyStale,
   isSessionWorking,
   isAnyAgentWorking,
 } from "./exclusivity-queue.js";
@@ -93,6 +95,23 @@ describe("isAgentActiveOnProject", () => {
     expect(isAgentActiveOnProject(idle, "codeur", "/p/A")).toBe(false);
   });
 
+  it("une session busy-stale (busy retenu, activité très ancienne) n'est PAS exclusive", () => {
+    // Process pi figé : busy reste true sans progression. La demande à la MÊME
+    // spécialité sur le même projet ne doit pas rester en file derrière le fantôme
+    // → elle démarre immédiatement (exclusivité libérée).
+    const stale = [{
+      agent: "codeur", alive: true, busy: true, mode: "agent_process", project: "/p/A",
+      lastActivity: new Date(Date.now() - STALE_BUSY_WINDOW_MS - 60_000).toISOString(),
+    }];
+    expect(isAgentActiveOnProject(stale, "codeur", "/p/A")).toBe(false);
+    // Une session busy FRAÎCHE sur le même couple reste exclusive.
+    const fresh = [{
+      agent: "codeur", alive: true, busy: true, mode: "agent_process", project: "/p/A",
+      lastActivity: new Date(Date.now() - 30_000).toISOString(),
+    }];
+    expect(isAgentActiveOnProject(fresh, "codeur", "/p/A")).toBe(true);
+  });
+
   it("liste vide ou null → pas de conflit", () => {
     expect(isAgentActiveOnProject([], "codeur", "/p/A")).toBe(false);
     expect(isAgentActiveOnProject(null, "codeur", "/p/A")).toBe(false);
@@ -120,6 +139,25 @@ describe("isSessionWorking — « vraiment en activité » (chantier 6/6)", () =
     expect(isSessionWorking(parked, NOW)).toBe(false);
   });
 
+  it("busy-stale (busy=true retenu, MAIS dernière activité très ancienne > fenêtre) → PAS de verrou", () => {
+    // Process pi figé (vivant, ni settled ni exit) : busy reste true alors qu'aucun
+    // travail n'avance. Une session busy-stale n'est plus « un travail en cours ».
+    const stale = { alive: true, busy: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(stale, NOW)).toBe(false);
+  });
+
+  it("busy récent (activité rafraîchie dans la fenêtre busy-stale) → verrou (vraiment actif)", () => {
+    const active = { alive: true, busy: true, lastActivity: iso(60_000) }; // il y a 1 min
+    expect(isSessionWorking(active, NOW)).toBe(true);
+  });
+
+  it("busy-stale : fail-open — busy SANS lastActivity exploitable → verrou (on ne peut pas prouver la staleness)", () => {
+    // busy sans lastActivity → pas de preuve de staleness → vrai travail (fail-open).
+    expect(isSessionWorking({ alive: true, busy: true }, NOW)).toBe(true);
+    // lastActivity illisible → pas de preuve → vrai travail.
+    expect(isSessionWorking({ alive: true, busy: true, lastActivity: "bozo" }, NOW)).toBe(true);
+  });
+
   it("l'agent a une activité très récente (< fenêtre de grâce) → verrou (fenêtre de grâce)", () => {
     const recent = { alive: true, busy: false, lastActivity: iso(10_000) };
     expect(isSessionWorking(recent, NOW)).toBe(true);
@@ -132,6 +170,28 @@ describe("isSessionWorking — « vraiment en activité » (chantier 6/6)", () =
     expect(isSessionWorking(justUnder, NOW)).toBe(true);
     expect(isSessionWorking(atLimit, NOW)).toBe(false);
   });
+
+describe("isBusyStale — un busy VIEUX n'est plus un travail (verrou fantôme)", () => {
+  const NOW = 1700000000000;
+  const iso = (msBeforeNow) => new Date(NOW - msBeforeNow).toISOString();
+
+  it("busy + activité au-delà de la fenêtre → stale", () => {
+    expect(isBusyStale({ alive: true, busy: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 1) }, NOW)).toBe(true);
+  });
+
+  it("busy + activité dans la fenêtre → pas stale", () => {
+    expect(isBusyStale({ alive: true, busy: true, lastActivity: iso(STALE_BUSY_WINDOW_MS - 1) }, NOW)).toBe(false);
+    expect(isBusyStale({ alive: true, busy: true, lastActivity: iso(0) }, NOW)).toBe(false);
+  });
+
+  it("fail-open : sans preuve exploitable → jamais stale", () => {
+    expect(isBusyStale({ alive: true, busy: true }, NOW)).toBe(false); // pas de lastActivity
+    expect(isBusyStale({ alive: true, busy: true, lastActivity: "bozo" }, NOW)).toBe(false); // illisible
+    expect(isBusyStale({ alive: false, busy: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 1) }, NOW)).toBe(false); // mort
+    expect(isBusyStale({ alive: true, busy: false, lastActivity: iso(STALE_BUSY_WINDOW_MS + 1) }, NOW)).toBe(false); // pas busy
+    expect(isBusyStale(null, NOW)).toBe(false);
+  });
+});
 
   it("données manquantes → JAMAIS de verrou (fail-open)", () => {
     // Session vivante sans busy ni lastActivity (aucune donnée d'anomalie).

@@ -24,6 +24,11 @@ il propose des évolutions que vous validez vous-même.
 **Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
 run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
 depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+
+**Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
+pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
+(notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
+réinitialiser son processus. Aucun réglage utilisateur.
 Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
@@ -101,6 +106,37 @@ sont **jamais** arrêtés automatiquement.
    `launchNextQueued`) pour qu'un agent en attente prenne le relais (T5) ;
 3. **PROPOSE automatiquement le diagnostic** en appelant
    `do_start_diagnostic_agent` (réutilise l'existant, aucune nouvelle logique).
+
+### 2.4 Verrou de run fantôme — filet busy-stale (STALE_BUSY_GRACE)
+
+Le même moniteur implémente un filet AUTORITAIRE (`should_release_stale_busy`)
+INDÉPENDANT de l'arrêt auto T2 : un process pi **figé** (vivant, ni settled ni
+exit) laisse `busy` à true sans jamais l'effacer. Dès qu'une entrée non-super
+reste `busy` avec une dernière activité plus ancienne que
+dur `stale_busy_grace_minutes` (défaut **25 min**, aligné sur la fenêtre busy-stale
+JS `STALE_BUSY_WINDOW_MS`), le moniteur :
+
+1. **repasser `busy` à false** et **réarme** `blocked_reported`/
+   `auto_stopped_reported` dans la map d'anomalie (sans toucher au registre ni à
+   la session réelle) ;
+2. émet l'événement **`agent-stale-busy-released`** (`{ agent, project,
+   idleMinutes }`) → agents-bus.js termine le tour (`failAgentTurn`) : libère le
+   créneau d'exclusivité + la file (`launchNextQueued`) — **sans tuer le process**
+   (le kill relève de T2) ;
+3. corrige aussi les sessions `busy` vivantes mais inactives quand
+   `agent_auto_stop_enabled=false` (`agent_process_busy` est activé pour la file
+   d'attente même si l'arrêt auto est désactivé) ;
+4. **n'agit jamais** sur le super-agent (plafond dédié, tâche #141) ni sur la
+   session principale via simple inactivité (un seul repassage de la marque busy
+   de la map d'anomalie, pas de `stop`).
+
+Ce filet est la cause racine du **verrou de run fantôme** côté frontend :
+`isSessionWorking`/`isAgentActiveOnProject` (exclusivity-queue.js) traitent une
+session busy-stale comme NON-travailleuse ; le watchdog `releaseStuckRunLock`
+(agents-bus.js) et le pré-check `run_agents` (super-agent.js) drainent alors les
+files d'exclusivité/de délégation au lieu de laisser les demandes derrière un
+fantôme. Le champ `stale_busy_grace_minutes` est préservé dans settings.js
+(aucune UI dédiée).
 
 Respecte le réglage `agent_auto_stop_enabled` (défaut activé) et
 `agent_auto_stop_minutes` (défaut 10). Un outil qui démarre sans

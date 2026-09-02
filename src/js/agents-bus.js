@@ -148,6 +148,7 @@ function newRunCtx(project) {
 let busState = {
   listeners: null,
   autoStopListener: null,
+  staleBusyListener: null,
   registry: null,
   coordinator: null,
   agents: new Map(),
@@ -238,6 +239,19 @@ function clearAllRuns() {
 // train de streamer, le verrou de CE projet est bloqué. On force sa libération
 // (endRun) pour ne pas bloquer les appels suivants à run_agents sur ce projet.
 // Exportée pour les tests vitest (verrou fantôme, chantier 6/6).
+//
+// Verrou fantôme (busy-stale) : une session peut rester « busy » chez Rust
+// (process pi figé, ni settled ni exit) alors qu'aucun travail n'avance.
+// isAnyAgentWorking la considère désormais comme non-travailleuse (tâche 1),
+// donc le verrou est libéré — MAIS il faut AUSSI vider les files d'exclusivité
+// du projet : des demandes en attente (exclusivityQueue) derrière l'agent
+// fantôme resteraient coincées si l'on terminait la run sans les lancer. On
+// lance donc les demandes en file AVANT de libérer le verrou (la run redevient
+// alors réellement active) ; on ne libère le verrou QUE si plus rien n'est en
+// file.
+//
+// Tâche 2 : s'assure aussi que le cas 3 remonte bien le projet (key) pour
+// drainer la bonne file (les files d'exclusivité sont scopées PAR PROJET).
 export async function releaseStuckRunLock(project) {
   const key = runKey(project);
   if (getRunState(key) !== "running") return;
@@ -247,43 +261,85 @@ export async function releaseStuckRunLock(project) {
   //    verrou bloqué (fin normale/erreur sans libération).
   const noActive = ctx.activeAgents.size === 0;
   const noParallel = !ctx.parallelGroup || ctx.parallelGroup.pending <= 0;
-  if (noActive && noParallel) {
-    console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
-    endRun(key);
-    return;
-  }
-
   // 2. Groupe parallèle résiduel : objet non nul mais pending <= 0 (tous les
   //    agents ont terminé/échoué sans que onComplete n'ait libéré le verrou).
-  if (ctx.parallelGroup && ctx.parallelGroup.pending <= 0) {
-    console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
-    endRun(key);
+  const residualParallel = !!ctx.parallelGroup && ctx.parallelGroup.pending <= 0;
+  // 3. Agents fantômes / inactifs : activeAgents non vide mais plus AUCUN agent
+  //    réellement en activité (busy, ou dernière activité plus récente que la
+  //    fenêtre de grâce / non busy-stale — isAnyAgentWorking).
+  let ghosts = false;
+  if (!noActive) {
+    const working = await anyActiveAgentWorking(key);
+    ghosts = !working;
+  }
+
+  const stuck = (noActive && noParallel) || residualParallel || ghosts;
+  if (!stuck) {
+    // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
+    //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
+    if (ctx.lastActivityAt && Date.now() - ctx.lastActivityAt > busState.timeoutMs) {
+      const drained = await drainExclusivityQueues(ctx, key);
+      if (drained) {
+        console.warn("[agents-bus] watchdog : run inactive depuis trop longtemps mais demandes en file → relance.");
+        resetTimeout(ctx);
+        return;
+      }
+      console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
+      endRun(key);
+    }
     return;
   }
 
-  // 3. Agents fantômes / inactifs : activeAgents non vide mais plus AUCUN agent
-  //    réellement en activité (busy, ou dernière activité plus récente que la
-  //    fenêtre de grâce — isAnyAgentWorking). Une session peut rester « vivante »
-  //    chez Rust sans aucun travail en cours (parkée après agent_settled,
-  //    oubliée) : elle ne doit PAS maintenir le verrou — c'est le verrou
-  //    fantôme qui rejetait les délégations « Une run est déjà en cours sur ce
-  //    projet » (chantier 6/6). On se détache de la session : endRun libère le
-  //    verrou et la demande suivante démarre normalement.
-  if (ctx.activeAgents.size > 0) {
-    const working = await anyActiveAgentWorking(key);
-    if (!working) {
-      console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
-      endRun(key);
-      return;
+  // Verrou bloqué : avant de libérer, drainer les files d'exclusivité du projet.
+  // Des demandes en file (exclusivityQueue) derrière un agent fantôme/inactif
+  // doivent RÉELLEMENT démarrer au lieu de rester coincées (tâche 2).
+  // launchNextQueued réactive la run (runAgentTurn) → on conserve le verrou.
+  const drained = await drainExclusivityQueues(ctx, key);
+  if (drained) {
+    if (ghosts) {
+      console.warn("[agents-bus] watchdog : agents fantômes/inactifs mais demandes en file → relance des demandes en attente.");
+    } else if (residualParallel) {
+      console.warn("[agents-bus] watchdog : groupe parallèle résiduel mais demandes en file → relance des demandes en attente.");
+    } else {
+      console.warn("[agents-bus] watchdog : aucun agent actif mais demandes en file → relance des demandes en attente.");
     }
+    resetTimeout(ctx);
+    return;
   }
 
-  // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
-  //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
-  if (ctx.lastActivityAt && Date.now() - ctx.lastActivityAt > busState.timeoutMs) {
-    console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
-    endRun(key);
+  // Rien en file : libérer réellement le verrou (la vraie run est terminée).
+  if (noActive && noParallel) {
+    console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
+  } else if (residualParallel) {
+    console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
+  } else {
+    console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
   }
+  endRun(key);
+}
+
+// Tâche 2 (verrou fantôme) : lance les demandes en file d'exclusivité du projet
+// (exclusivityQueue) qui attendaient derrière un agent fantôme/inactif. Retourne
+// true si au moins une demande a été réellement lancée (la run redevient active)
+// ; false si la file est vide (rien à drainer → le verrou peut être libéré).
+// S'appuie sur launchNextQueued (getRunCtx(project)) qui démarre le tour de la
+// demande suivante et conserve le groupe parallèle (pending préservé).
+async function drainExclusivityQueues(ctx, project) {
+  const queue = ctx.exclusivityQueue || {};
+  const keys = Object.keys(queue);
+  if (keys.length === 0) return false;
+  let launched = false;
+  for (const key of keys) {
+    const idx = key.indexOf('\u{1f}');
+    if (idx < 0) continue;
+    const agentId = key.slice(idx + 1);
+    if (!agentId) continue;
+    if ((queue[key] || []).length > 0) {
+      await launchNextQueued(agentId, project);
+      launched = true;
+    }
+  }
+  return launched;
 }
 
 // Sonde « une run est-elle VRAIMENT en activité ? » : retourne true si au moins
@@ -547,6 +603,33 @@ export async function initAgentsBus(options = {}) {
     failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`, ctx);
   });
 
+  // Tâche 4 (verrou fantôme) : écouter la libération busy-stale côté Rust.
+  // `agent-stale-busy-released` est émis par le moniteur d'anomalie quand une
+  // session reste busy (process pi figé) sans progression depuis STALE_BUSY_GRACE
+  // — même quand l'arrêt auto est désactivé. Le process n'est PAS tué (kill = T2) :
+  // on termine juste le tour (failAgentTurn) pour libérer le créneau
+  // d'exclusivité + la file (launchNextQueued).
+  if (busState.staleBusyListener) {
+    busState.staleBusyListener();
+    busState.staleBusyListener = null;
+  }
+  busState.staleBusyListener = await listen("agent-stale-busy-released", (ev) => {
+    const p = ev.payload || {};
+    const agentId = p.agent;
+    if (!agentId) return;
+    let ctx = null;
+    for (const key of Object.keys(busState.runs)) {
+      if (busState.runs[key].activeAgents.has(agentId)) { ctx = busState.runs[key]; break; }
+    }
+    if (!ctx || ctx.runState !== "running") return;
+    console.warn("[agents-bus] busy-stale libéré pour l'agent", agentId);
+    emit("notify", {
+      agentId,
+      message: `🧹 L'agent ${agentId} était marqué actif sans progression (process figé). Le créneau et les demandes en file ont été libérés.`,
+    });
+    failAgentTurn(agentId, "Agent marqué actif sans progression (busy-stale), créneau libéré.", ctx);
+  });
+
   // T6-fix (fuite 2) : les réservations sont suivies en MÉMOIRE seule
   // (reservedProjects) → après un rechargement de la webview, plus aucun
   // nettoyage n'est possible et le fichier .pilot/reservations.json résiduel
@@ -665,6 +748,10 @@ export function destroyAgentsBus() {
   if (busState.autoStopListener) {
     busState.autoStopListener();
     busState.autoStopListener = null;
+  }
+  if (busState.staleBusyListener) {
+    busState.staleBusyListener();
+    busState.staleBusyListener = null;
   }
   stopAllAgentProcesses();
   clearAllRuns();

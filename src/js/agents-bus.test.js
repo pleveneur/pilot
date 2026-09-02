@@ -280,6 +280,16 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(getRunState("projetA")).toBe("idle");
   });
 
+  it("busy-stale (busy=true retenu par un process figé, dernière activité ancienne) → verrou libéré", async () => {
+    // Cause racine du verrou fantôme : un process pi FIGÉ (vivant, ni settled ni
+    // exit) laisse busy=true bien qu'aucun travail n'avance. isAnyAgentWorking le
+    // considère non-travailleur → aucun agent réellement actif → verrou libéré.
+    beginRunWithAgent();
+    mockSessions([session({ busy: true, lastActivity: new Date(Date.now() - 26 * 60 * 1000).toISOString() })]);
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
   it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
     beginRun("projetA");
     await releaseStuckRunLock("projetA");

@@ -294,12 +294,14 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     cfg.agent_auto_stop_minutes,
                     cfg.super_agent_auto_stop_enabled,
                     cfg.super_agent_auto_stop_minutes,
+                    cfg.stale_busy_grace_minutes,
                 )
             };
             let anomaly_timeout_secs = (timeout_minutes.max(1) as u64) * 60;
             let now = Instant::now();
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
             let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
+            let mut stale_releases: Vec<(String, String, u64)> = Vec::new();
             let mut super_stops: Vec<(String, u64)> = Vec::new();
             // Bug #152 : entrées busy dont la vivacité (process mort sans
             // événement de fin) sera vérifiée HORS verrou (try_wait sur le
@@ -340,6 +342,28 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         // Pas de double alerte (anomalie) pour un agent déjà arrêté.
                         entry.blocked_reported = true;
                         auto_stops.push((project.clone(), agent.clone(), idle_secs / 60));
+                    }
+                    // 2b. Verrou de run fantôme (busy-stale) : filet AUTORITAIRE,
+                    //    indépendant de l'arrêt auto (T2) et de la mort du process.
+                    //    Un process pi FIGÉ laisse busy=true (agent_start posé, jamais
+                    //    d'agent_settled/exit) : on repasse busy=false et on émet un
+                    //    événement pour que JS libère le créneau + la file. NE tue
+                    //    PAS le process (kill = T2). Correcte aussi quand
+                    //    `agent_auto_stop_enabled=false` (sessions vivantes mais
+                    //    inactives). Le super-agent est exclu (plafond #141) et la
+                    //    session principale n'est PAS touchée sur simple inactivité
+                    //    (on ne libère que la marque busy de la map d'anomalie).
+                    //    `auto_stopped_reported` est déjà true si l'arrêt auto a
+                    //    déclenché dans CE passage → pas de double traitement.
+                    if !is_super
+                        && entry.busy
+                        && !entry.auto_stopped_reported
+                        && should_release_stale_busy(entry, stale_busy_grace, now)
+                    {
+                        entry.busy = false;
+                        entry.blocked_reported = false;
+                        entry.auto_stopped_reported = false;
+                        stale_releases.push((project.clone(), agent.clone(), idle_secs / 60));
                     }
                     // Bug #152 : candidat à la purge si l'entrée reste busy — la
                     // vivacité est vérifiée hors verrou (has_dead_agent_process).
@@ -401,6 +425,21 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 let anomaly_val =
                     serde_json::json!({ "lastEvent": "arrêt automatique (bloqué)", "idleMinutes": idle_min });
                 let _ = do_start_diagnostic_agent(state.inner(), &app, &project, &agent, &anomaly_val);
+            }
+            // Verrou de run fantôme (busy-stale) : on a repassé busy=false sans
+            // tuer le process (dans la boucle ci-dessus). Événement Rust → JS :
+            // agents-bus libère le créneau d'exclusivité et lance les demandes en
+            // file (failAgentTurn → launchNextQueued), même quand l'arrêt auto T2
+            // est désactivé. Le process n'est PAS tué (le kill relève de T2).
+            for (project, agent, idle_min) in stale_releases {
+                let _ = app.emit(
+                    "agent-stale-busy-released",
+                    serde_json::json!({
+                        "project": project,
+                        "agent": agent,
+                        "idleMinutes": idle_min,
+                    }),
+                );
             }
             // Bug #152 : purge des agents délégués marqués « busy » alors que
             // leur processus est DÉJÀ MORT (aucun agent_end/process_exit traité,
@@ -890,5 +929,38 @@ mod tests {
             ..state(700, 30)
         };
         assert!(!should_auto_stop_on_progress(&e, true, 10, now));
+    }
+
+    /// Verrou fantôme (busy-stale) : `should_release_stale_busy` libère la marque
+    /// busy d'un agent figé (busy sans activité depuis > grace) SANS dépendre de
+    /// l'arrêt auto (T2). Gardes : non-busy → jamais, et inactivité < seuil → non.
+    #[test]
+    fn should_release_stale_busy_guards_busy_and_grace() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state_at = |idle_secs: u64, busy: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+        };
+
+        // Non busy → jamais libéré.
+        let e = state_at(6000, false);
+        assert!(!should_release_stale_busy(&e, 25, now));
+
+        // Inactivité < grace (ex: 5 min < 25) → pas de libération (outil long).
+        let e = state_at(300, true);
+        assert!(!should_release_stale_busy(&e, 25, now));
+
+        // Inactivité > grace, busy → libéré (process pi figé).
+        let e = state_at(26 * 60, true); // 26 min > 25 min
+        assert!(should_release_stale_busy(&e, 25, now));
+
+        // Seuil min 1 min : inactivité > 1 min suffit.
+        let e = state_at(90, true);
+        assert!(should_release_stale_busy(&e, 1, now));
     }
 }
