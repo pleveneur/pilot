@@ -7286,6 +7286,15 @@ body.pilot-loading *::after {
 .super-kanban.hidden {
   display: none;
 }
+/* Onglet dédié « Kanban » de l'Assistant (🧭) : le Kanban occupe tout
+   l'espace de l'onglet (hauteur 100 % + défilement vertical). La logique est
+   montée dans un onglet `superagent-kanban` (spec_super_agent.md). Le wrapper
+   hérite aussi de `.editor-wrapper` (height:100%, overflow:auto). */
+.superagent-kanban-wrapper {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
 .super-kanban-client {
   display: flex;
   flex-direction: column;

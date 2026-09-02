@@ -1057,10 +1057,17 @@ uniquement un bloc d'instructions dans le prompt système.
   clients, projets et tâches, et s'enrichit au fil du temps.
 
 ### Visualiser les tâches (vue Kanban)
-- La barre d'outils de l'onglet 🧭 propose un bouton **« Vues »** qui
-  **bascule** entre la vue **liste** du suivi et la vue **Kanban** : les
-  tâches y sont affichées **par client**, chacune classée dans l'une des
-  **4 colonnes** « À faire / En cours / À valider / Terminé ».
+- La barre d'outils de l'onglet 🧭 propose un bouton **« Vues »** qui **ouvre
+  la vue Kanban dans un onglet dédié de Pilot** (mode `superagent-kanban`, onglet
+  « 🗂 Kanban », même pattern que les onglets outil Review / Historique /
+  Dashboard / Coffre). Cliquer sur « Vues » focalise l'onglet Kanban s'il est
+  déjà ouvert, ou le crée sinon.
+- La vue **liste** du suivi multi-projets reste dans le **panneau inférieur** de
+  l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
+  bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
+- Dans l'onglet Kanban, les tâches sont affichées **par client**, chacune
+  classée dans l'une des **4 colonnes** « À faire / En cours / À valider /
+  Terminé ».
 - Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
   extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.

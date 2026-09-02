@@ -24,6 +24,7 @@ import { EditorView } from "@codemirror/view";
 import { getFileList } from "./file-list.js";
 import { createAgents } from "./agents-ui.js";
 import { createSuperAgent, superAgentDisplayLabel } from "./super-agent.js";
+import { createSuperKanban } from "./super-agent-kanban-view.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
@@ -306,6 +307,13 @@ class TabsManager {
     // Onglet Tableau de bord (📊) — issue #51 : vue détaillée du projet actif.
     if (mode === "dashboard") {
       await this._openDashboard(path || "Tableau de bord");
+      return;
+    }
+
+    // Onglet Kanban Assistant (🗂) — la vue Kanban de l'Assistant (🧭) s'ouvre
+    // dans un onglet dédié via le bouton « Vues » (spec_super_agent.md).
+    if (mode === "superagent-kanban") {
+      await this._openSuperKanban(path || "Kanban");
       return;
     }
 
@@ -1000,6 +1008,48 @@ class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">📊</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Tableau de bord</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet Kanban de l'Assistant (🗂) — la vue Kanban multi-projets de
+   * l'Assistant (🧭), ouverte dans un onglet dédié via le bouton « Vues »
+   * (spec_super_agent.md). Pattern identique aux onglets Review/Historique/
+   * Dashboard : test d'existence → création d'un onglet `superagent-kanban`
+   * → montage de createSuperKanban.
+   */
+  async _openSuperKanban(label = "Kanban") {
+    const existing = this.tabs.find((t) => t.mode === "superagent-kanban");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "superagent-kanban");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper superagent-kanban-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const result = createSuperKanban(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.superKanbanRefresh = result.refresh;
+      tab.unlistenSuperKanban = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet Kanban:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🗂</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Kanban</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -1724,6 +1774,11 @@ class TabsManager {
       tab.unlistenGds();
       tab.unlistenGds = null;
     }
+    // Nettoyage onglet Kanban Assistant (🗂)
+    if (tab.mode === "superagent-kanban" && tab.unlistenSuperKanban) {
+      tab.unlistenSuperKanban();
+      tab.unlistenSuperKanban = null;
+    }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
     }
@@ -1849,6 +1904,11 @@ class TabsManager {
     if (tab.mode === "gds" && tab.unlistenGds) {
       tab.unlistenGds();
       tab.unlistenGds = null;
+    }
+    // Nettoyage onglet Kanban Assistant (🗂)
+    if (tab.mode === "superagent-kanban" && tab.unlistenSuperKanban) {
+      tab.unlistenSuperKanban();
+      tab.unlistenSuperKanban = null;
     }
     if (tab.wrapper && tab.wrapper.parentNode) {
       tab.wrapper.remove();
@@ -2000,6 +2060,12 @@ class TabsManager {
     if (tab.mode === "dashboard") {
       if (tab.dashboardRefresh) tab.dashboardRefresh();
       if (tab.dashboardSetActive) tab.dashboardSetActive(true);
+    }
+
+    // Kanban Assistant : recharger la vue quand l'onglet redevient actif
+    // (les tâches peuvent évoluer depuis le dernier affichage).
+    if (tab.mode === "superagent-kanban") {
+      if (tab.superKanbanRefresh) tab.superKanbanRefresh();
     }
 
     // GDS : recharger si le projet actif a changé (par projet).
