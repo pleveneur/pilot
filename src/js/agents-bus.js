@@ -758,10 +758,12 @@ export function destroyAgentsBus() {
 }
 
 // Filet de sécurité par agent (en dernier recours) : la vraie boucle d'outils
-// est détectée en amont par maybeDetectAgentLoop. 60 tours pi par agent laisse
-// de la marge aux agents qui font beaucoup de tool calls légitimes sans les
-// couper à tort (le compteur global partagé les coupait dès 40 en run parallèle).
-const MAX_PI_TURNS_PER_AGENT = 60;
+// est détectée en amont par maybeDetectAgentLoop. Ce compteur laisse de la
+// marge aux agents qui font beaucoup de tool calls légitimes sans les couper à
+// tort (le compteur global partagé les coupait dès 40 en run parallèle).
+// Valeur par défaut 60 tours pi par agent (paramétrable via la config
+// `agent_max_turns` dans les réglages).
+const DEFAULT_MAX_PI_TURNS_PER_AGENT = 60;
 const MAX_TURNS = 50;
 
 /**
@@ -906,9 +908,10 @@ export function handleAgentEvent(ev) {
     // ce compteur n'est qu'un filet de sécurité en dernier recours.
     const count = (ctx.piTurnCountByAgent[agentId] || 0) + 1;
     ctx.piTurnCountByAgent[agentId] = count;
-    if (count > MAX_PI_TURNS_PER_AGENT) {
-      console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count);
-      emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${MAX_PI_TURNS_PER_AGENT}). Arrêt forcé.` });
+    const maxTurns = busState.config.agent_max_turns || DEFAULT_MAX_PI_TURNS_PER_AGENT;
+    if (count > maxTurns) {
+      console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count, "max", maxTurns);
+      emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${maxTurns}). Arrêt forcé.` });
       stopAgentsRun({ silent: true });
       return;
     }

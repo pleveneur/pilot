@@ -523,6 +523,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile(superAgentDisplayLabel(), "superagent");
   });
 
+  // 🗂️ Kanban : vue Kanban multi-projets dans un onglet dédié (mode
+  // `superagent-kanban`, implémenté dans tabs.js).
+  document.getElementById("btn-superkanban").addEventListener("click", () => {
+    tabs.openFile("Kanban", "superagent-kanban");
+  });
+
   document.getElementById("btn-scratchpad").addEventListener("click", () => {
     tabs._openScratchpad();
   });

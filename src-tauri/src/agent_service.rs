@@ -185,6 +185,43 @@ pub struct AgentService {
     superagent_ext: Mutex<Option<SuperAgentExtStatus>>,
 }
 
+/// P0 (issue #84) diagnostic d'échec rapide du super-agent : si `.pi/extensions/`
+/// contient au moins une extension projet, celle-ci (Pilot ne la charge PAS —
+/// pi la découvre) peut faire crasher le process pi à l'import si des
+/// dépendances npm manquent. Retourne un court avertissement, ou None. Fail-open :
+/// purement un indicateur de diagnostic, ne bloque jamais le lancement.
+fn project_extension_diag_hint(cwd: &str) -> Option<String> {
+    let ext_dir = std::path::Path::new(cwd).join(".pi").join("extensions");
+    if !ext_dir.is_dir() {
+        return None;
+    }
+    let has_ext = std::fs::read_dir(&ext_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .count()
+                > 0
+        })
+        .unwrap_or(false);
+    if !has_ext {
+        return None;
+    }
+    Some(
+        "Une ou plusieurs extensions projet (.pi/extensions) sont présentes. \
+         Si une extension déclare des dépendances npm manquantes, pi peut crasher \
+         à l'import (la cause est visible dans le stderr ci-dessus).".to_string(),
+    )
+}
+
+/// Ajoute (si pertinent) l'avertissement d'extensions projet au message d'erreur.
+/// Fail-open : sans `.pi/extensions`, renvoie le message tel quel.
+fn append_ext_diag_hint(cwd: &str, msg: String) -> String {
+    match project_extension_diag_hint(cwd) {
+        Some(hint) => format!("{} — {}", msg, hint),
+        None => msg,
+    }
+}
+
 impl AgentService {
     pub fn new() -> Self {
         AgentService {
@@ -1213,10 +1250,11 @@ impl AgentService {
             policy.blocked_remaining(Instant::now())
         };
         if let Some(secs) = blocked_secs {
-            return Err(format!(
+            let base = format!(
                 "Le super-agent (Assistant) a crashé plusieurs fois de suite. Redémarrage automatique bloqué pendant encore {} s pour éviter une boucle. Réessayez plus tard ou fermez/réouvrez l'onglet.",
                 secs
-            ));
+            );
+            return Err(append_ext_diag_hint(cwd, base));
         }
         // (Re)création de la session : réinitialiser l'entrée de surveillance
         // d'anomalie du super-agent (issue #141). Ne jamais laisser le flag
@@ -1230,7 +1268,12 @@ impl AgentService {
                 .unwrap()
                 .remove(&format!("\u{1f}{}", SUPERAGENT_ID));
         }
-        let session = Self::spawn_superagent_session(app, cwd, pi_path)?;
+        // P0 (issue #84) : sur échec de spawn, enrichir le diagnostic avec
+        // l'hypothèse d'extensions projet (.pi/extensions) si présentes.
+        let session = match Self::spawn_superagent_session(app, cwd, pi_path) {
+            Ok(s) => s,
+            Err(e) => return Err(append_ext_diag_hint(cwd, e)),
+        };
         {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.insert(
@@ -2321,6 +2364,7 @@ mod tests {
             stdin,
             running: Arc::new(AtomicBool::new(true)),
             pending: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            last_stderr: Arc::new(std::sync::Mutex::new(String::new())),
         }
     }
 

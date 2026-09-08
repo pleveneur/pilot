@@ -11,6 +11,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 // Réexports des helpers partagés extraits dans les modules (autres modules
 // les importent depuis `crate::`).
 pub(crate) use rpc::{kind_from_version_output, probe_backend, probe_extension_support, resolve_agent_home, run_captured, run_captured_full, BackendProbe};
+pub(crate) use rpc::run_pi_captured;
 // Réexports RPC utilisés par web_server.rs (canal distant).
 pub(crate) use rpc::{
     do_abort_agent, do_get_agent_messages, do_get_agent_state, do_get_session_stats,
@@ -435,6 +436,8 @@ struct AppConfig {
     agent_timeout_ms: u32,
     #[serde(default = "default_agent_max_result_tokens")]
     agent_max_result_tokens: u32,
+    #[serde(default = "default_agent_max_turns")]
+    agent_max_turns: u32,
     // ── Super-agent (spec_super_agent.md) ──
     // Assistant de suivi multi-projets, lecture seule. Nom configurable, liste
     // de clients, association projet → client. La base de suivi (clients,
@@ -677,6 +680,7 @@ fn default_agent_max_call_depth() -> u32 { 3 }
 fn default_agent_max_total_calls() -> u32 { 30 }
 fn default_agent_timeout_ms() -> u32 { 600000 }
 fn default_agent_max_result_tokens() -> u32 { 4000 }
+fn default_agent_max_turns() -> u32 { 60 }
 fn default_reviewer_critical_patterns() -> Vec<String> {
     vec![
         "src-tauri/src/**/*.rs".to_string(),
@@ -821,6 +825,7 @@ impl Default for AppConfig {
             agent_max_total_calls: default_agent_max_total_calls(),
             agent_timeout_ms: default_agent_timeout_ms(),
             agent_max_result_tokens: default_agent_max_result_tokens(),
+            agent_max_turns: default_agent_max_turns(),
             // ── Super-agent (spec_super_agent.md) ──
             super_agent_name: default_super_agent_name(),
             super_agent_clients: Vec::new(),
@@ -1395,7 +1400,7 @@ fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, S
         });
     }
     use std::time::Duration;
-    let out = run_captured(&pi_path, &["--version"], Duration::from_secs(10));
+    let out = run_pi_captured(&pi_path, &["--version"], Duration::from_secs(10));
     if out.trim().is_empty() {
         return Ok(PiHealth {
             ok: false,

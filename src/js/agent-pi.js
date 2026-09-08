@@ -1162,20 +1162,29 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
           }
           if (active && active !== expected) {
             const [p, ...rest] = expected.split("/");
+            let okResync = false;
             try {
-              await invoke("set_agent_model", { provider: p, modelId: rest.join("/") });
-              const confirmed = await confirmActiveModel(expected);
-              if (confirmed && confirmed !== expected) {
-                appendErrorMessage(messagesEl, "❌ Impossible de resynchroniser le modèle (actif: " + confirmed + ", attendu: " + expected + "). Prompt non envoyé.");
-                inputEl.value = text;
-                return;
-              }
-              appendSystemMessage(messagesEl, "🔄 Modèle resynchronisé : " + active + " → " + expected);
+              okResync = await setAgentModelSafe(state, p, rest.join("/"), "Le modèle n'a pas pu être basculé");
             } catch (err) {
+              // Échec non-connexion (pi vivant) : message d'erreur antérieur,
+              // on ne supprime pas le prompt utilisateur.
+              console.error("Erreur resynchronisation modèle:", err);
               appendErrorMessage(messagesEl, "❌ Échec de resynchronisation du modèle : " + err + ". Prompt non envoyé.");
               inputEl.value = text;
               return;
             }
+            if (!okResync) {
+              appendSystemMessage(messagesEl, "❌ Le processus IA s'est arrêté : modèle non resynchronisé. Prompt non envoyé, cliquez sur 🔄 pour reconnecter.");
+              inputEl.value = text;
+              return;
+            }
+            const confirmed = await confirmActiveModel(expected);
+            if (confirmed && confirmed !== expected) {
+              appendErrorMessage(messagesEl, "❌ Impossible de resynchroniser le modèle (actif: " + confirmed + ", attendu: " + expected + "). Prompt non envoyé.");
+              inputEl.value = text;
+              return;
+            }
+            appendSystemMessage(messagesEl, "🔄 Modèle resynchronisé : " + active + " → " + expected);
           }
         }
         // ── Contexte (H1) + Mémoire projet (H3) → system prompt via extension ──
@@ -2039,14 +2048,17 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     }
     const [provider, modelId] = value.split("/", 2);
     try {
-      await invoke("set_agent_model", { provider, modelId });
-      state.currentModel = value;
-      appendSystemMessage(messagesEl, `🔄 Modèle changé : ${provider}/${modelId}`);
-      updateStats();
+      const ok = await setAgentModelSafe(state, provider, modelId, "Le modèle n'a pas pu être basculé");
+      if (!ok) return; // perte de connexion : message déjà affiché
     } catch (err) {
+      // Échec non-connexion (pi vivant) : erreur claire, pas de silence.
       console.error("Erreur changement modèle:", err);
       appendErrorMessage(messagesEl, `❌ Impossible de changer de modèle : ${err}`);
+      return;
     }
+    state.currentModel = value;
+    appendSystemMessage(messagesEl, `🔄 Modèle changé : ${provider}/${modelId}`);
+    updateStats();
   });
 
   // ── Fonctions d'orchestration ──
@@ -5058,6 +5070,59 @@ function applyAcSelection() {
 }
 
 /** Applique un alias de modèle : bascule le modèle et retire /alias de l'input */
+/** Issue #83 : wrapper de set_agent_model qui distingue la VRAIE perte de
+ * connexion (processus pi mort) des échecs NON-connexion (pi vivant mais modèle
+ * refusé, ou simple timeout de réponse d'un processus vivant).
+ *
+ * - Bascule réussie → retourne `true`.
+ * - Connexion perdue (pi mort) → affiche le message explicite « ⚠️ Le processus
+ *   IA s'est arrêté … » et retourne `false` (message déjà affiché).
+ * - Échec non-connexion (pi vivant) → RETROUE l'erreur d'origine (`throw`) pour
+ *   que les appelants (select, /alias, resync) affichent leur message d'erreur
+ *   antérieur (ex. « ❌ Impossible de changer de modèle : <erreur> »), SANS
+ *   afficher « le processus s'est arrêté » ni supprimer le prompt utilisateur.
+ *
+ * La détection de connexion perdue est volontairement STRICTE : on ne matche que
+ * les signes réels de mort du processus pi (piDead déjà reflété, « Session
+ * arrêtée », erreur d'écriture stdin : os error / broken pipe / 232). Un
+ * « Timeout » ou un « canal fermé en attente de réponse » émis par Tauri n'est
+ * PAS une mort du processus — pi peut être vivant — et est donc traité comme un
+ * échec non-connexion (re-throw).
+ *
+ * @param {{piDead?: boolean}|null} st état agent (pour refléter piDead)
+ * @param {string} provider
+ * @param {string} modelId
+ * @param {string} label
+ * @returns {Promise<boolean>}
+ */
+async function setAgentModelSafe(st, provider, modelId, label) {
+  const wasDead = !!(st && st.piDead);
+  try {
+    await invoke("set_agent_model", { provider, modelId });
+    return true;
+  } catch (err) {
+    const raw = String((err && err.message) || err);
+    const connectionLost =
+      wasDead ||
+      /Session arrêtée|os error|broken pipe|stdin|232/i.test(raw);
+    if (connectionLost) {
+      console.error("[agent-pi] " + label + " (agent arrêté) :", err);
+      if (st) st.piDead = true;
+      const msgsEl = document.querySelector(".agent-chat-messages");
+      if (msgsEl) {
+        appendSystemMessage(
+          msgsEl,
+          "⚠️ Le processus IA s'est arrêté. " + label + ", cliquez sur 🔄 pour reconnecter."
+        );
+      }
+      return false;
+    }
+    // Échec non-connexion (pi vivant) : re-throw pour que l'appelant affiche
+    // son erreur antérieure sans supprimer le prompt utilisateur.
+    throw err;
+  }
+}
+
 async function applyModelAlias(cmd) {
   // Extraire le model depuis la description "→ provider/modelId"
   const modelValue = cmd.description.replace("→ ", "");
@@ -5080,24 +5145,35 @@ async function applyModelAlias(cmd) {
 
   // Basculer vers le modèle
   try {
-    await invoke("set_agent_model", { provider, modelId });
-    const st = window.__agentState;
-    if (st) st.currentModel = modelValue;
-    const modelSelect = document.getElementById("agent-model-select");
-    if (modelSelect) {
-      const opt = Array.from(modelSelect.options).find(o => o.value === modelValue);
-      if (opt) modelSelect.value = modelValue;
-    }
-    const messagesEl = document.querySelector(".agent-chat-messages");
-    if (messagesEl) {
-      appendSystemMessage(messagesEl, `🔄 Modèle changé : ${modelValue} (via /${cmd.name})`);
+    const ok = await setAgentModelSafe(window.__agentState, provider, modelId, "Le modèle n'a pas pu être basculé");
+    if (!ok) {
+      // perte de connexion : message déjà affiché, on restaure le select
+      const modelSelect = document.getElementById("agent-model-select");
+      if (modelSelect) {
+        const curOpt = Array.from(modelSelect.options).find(o => o.value === window.__agentState?.currentModel);
+        if (curOpt) modelSelect.value = curOpt.value;
+      }
+      return;
     }
   } catch (err) {
+    // Échec non-connexion (pi vivant) : erreur claire, pas de silence.
     console.error("Erreur changement modèle via alias:", err);
     const messagesEl = document.querySelector(".agent-chat-messages");
     if (messagesEl) {
       appendErrorMessage(messagesEl, `❌ Impossible de changer de modèle : ${err}`);
     }
+    return;
+  }
+  const st = window.__agentState;
+  if (st) st.currentModel = modelValue;
+  const modelSelect = document.getElementById("agent-model-select");
+  if (modelSelect) {
+    const opt = Array.from(modelSelect.options).find(o => o.value === modelValue);
+    if (opt) modelSelect.value = modelValue;
+  }
+  const messagesEl = document.querySelector(".agent-chat-messages");
+  if (messagesEl) {
+    appendSystemMessage(messagesEl, `🔄 Modèle changé : ${modelValue} (via /${cmd.name})`);
   }
 }
 

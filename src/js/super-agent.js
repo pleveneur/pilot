@@ -265,6 +265,14 @@ let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
 // isStreaming peut être en retard sur le backend réel).
 let backendBusy = false;
 
+// P0 (issue #84) : buffer borné des derniers `process_error` (stderr réel du
+// processus super-agent), drainé au fil de l'eau. Utilisé par le message
+// « Connexion au super-agent perdue » pour exposer la cause réelle (au lieu de
+// la masquer) quand la session reste morte après la fenêtre de grâce. Taille
+// bornée (jamais de stack complète).
+const SUPER_AGENT_STDERR_MAX = 6000;
+let superAgentStderrBuffer = "";
+
 // P1-6 + T5 : suivi des run_agents lancés par l'assistant, INDEXÉ PAR PROJET.
 // Deux runs vers des PROJETS DIFFÉRENTS ne se mettent PAS en file mutuellement
 // (parallélisme par projet) ; seules les runs vers le MÊME projet sont mises en
@@ -1079,7 +1087,6 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
-    <button class="agent-btn" data-action="views" title="Ouvrir la vue Kanban dans un onglet dédié (tâches de suivi)"><i data-lucide="columns-3" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
@@ -1169,9 +1176,10 @@ export async function createSuperAgent(container) {
   trackingEl.className = "super-tracking hidden";
   container.appendChild(trackingEl);
 
-  // La vue Kanban multi-projets (get_super_agent_kanban) s'ouvre désormais
-  // dans un ONGLET DÉDIÉ de Pilot (mode `superagent-kanban`, bouton « Vues »)
-  // via tabs.js (spec_super_agent.md). Elle n'occupe plus le panneau inférieur.
+  // La vue Kanban multi-projets (get_super_agent_kanban) s'ouvre dans un
+  // ONGLET DÉDIÉ de Pilot (mode `superagent-kanban`) via le bouton #btn-superkanban
+  // de la sidebar, onglet Assistant (spec_super_agent.md). Elle n'occupe plus
+  // le panneau inférieur.
 
   // Rendu du tableau de bord de suivi multi-projets.
   async function loadSuperTracking() {
@@ -1654,6 +1662,12 @@ export async function createSuperAgent(container) {
     // Ajustements A19 : si l'assistant réfléchissait déjà au moment de la
     // bascule, reporter l'indicateur sur le logo hero (et calmer la barre).
     applyReflecting();
+    // Issue #82 : la conversation (messagesEl déplacé dans l'overlay) ne
+    // réinitialisait jamais le scroll → mode immersif ouvert en haut au lieu
+    // du bas (dernier message) après une remontée de l'historique. Réarme le
+    // suivi automatique puis force le bas, en réutilisant scrollSuperToBottom.
+    superAtBottom = true;
+    scrollSuperToBottom(messagesEl);
   }
 
   function exitImmersive() {
@@ -1736,20 +1750,13 @@ export async function createSuperAgent(container) {
       window.dispatchEvent(new CustomEvent("pilot-open-settings", { detail: { tab: "superagent" } }));
     } else if (action === "tracking") {
       // La vue liste (suivi multi-projets) reste dans le panneau inférieur de
-      // l'onglet. La vue Kanban s'ouvre désormais dans un onglet dédié via le
-      // bouton « Vues » (spec_super_agent.md).
+      // l'onglet. La vue Kanban s'ouvre dans un onglet dédié via le bouton
+      // #btn-superkanban de la sidebar, onglet Assistant (spec_super_agent.md).
       if (trackingEl.classList.contains("hidden")) {
         trackingEl.classList.remove("hidden");
         loadSuperTracking();
       } else {
         trackingEl.classList.add("hidden");
-      }
-    } else if (action === "views") {
-      // Ouvre (ou focalise) l'onglet dédié « Kanban » de Pilot (mode
-      // `superagent-kanban`, implémenté dans tabs.js).
-      const tabs = window._pilotTabs;
-      if (tabs && typeof tabs.openFile === "function") {
-        tabs.openFile("Kanban", "superagent-kanban");
       }
     } else if (action === "voice") {
       toggleVoiceInput();
@@ -2459,16 +2466,60 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // réinitialise l'état immédiatement (onEnd) mais on DIFFÈRE l'affichage du
     // message d'alerte : si la session redevient vivante dans la fenêtre de
     // grâce, on ne montre rien ; sinon (vrai blocage) on déclenche l'alerte.
+    // P0 (issue #84) : bufferiser le stderr réel (process_error) pour pouvoir
+    // l'exposer dans le message si la session reste morte (onFail). Les bulles
+    // étant rendues via textContent, le texte est HTML-sûr.
+    if (type === "process_error" && payload && typeof payload.text === "string") {
+      superAgentStderrBuffer = (superAgentStderrBuffer + payload.text).slice(-SUPER_AGENT_STDERR_MAX);
+    }
     onEnd();
     scheduleTransientDisconnect(messagesEl, statusEl, () => {
-      appendSystemMessage(messagesEl, "⚠️ Connexion au super-agent perdue.");
+      const msg = buildSuperAgentDisconnectedMessage();
+      appendSystemMessage(messagesEl, msg);
       // Issue #16 : anomalie de suivi — notifier (si le réglage est activé).
-      notifySuperAgentDone({ title: "Pilot — Assistant", body: "⚠️ Connexion au super-agent perdue." }).catch(() => {});
+      notifySuperAgentDone({ title: "Pilot — Assistant", body: msg }).catch(() => {});
       // Son « point » : point important / anomalie (si le son est activé).
       playAssistantSound("point").catch(() => {});
     });
     return;
   }
+}
+
+/**
+ * Message « Connexion au super-agent perdue », enrichi d'un court extrait de
+ * stderr réel (issue #84) quand le buffer en contient un, pour révéler la cause
+ * au lieu de la masquer. Extrait borné (~500 chars), HTML-sûr (rendu via
+ * textContent), jamais de stack complète. Sans extrait, retourne le message
+ * générique seul (comportement d'avant). `buf` est optionnel : en prod, le
+ * buffer interne `superAgentStderrBuffer` est utilisé (module) ; fourni pour
+ * tester le formatage en isolation (vitest).
+ * @param {string|undefined} [buf]
+ * @returns {string}
+ */
+export function buildSuperAgentDisconnectedMessage(buf) {
+  const base = "⚠️ Connexion au super-agent perdue.";
+  const raw = buf !== undefined ? String(buf) : superAgentStderrBuffer || "";
+  const extract = superAgentStderrExtractFrom(raw);
+  if (!extract) return base;
+  return `${base} Cause probable : ${extract}`;
+}
+
+/**
+ * Extrait court (~500 chars) du dernier stderr super-agent, nettoyé des
+ * caractères de contrôle et des lignes vides (diagnostic lisible, pas de
+ * bruit). Retourne "" si aucun stderr n'a été capturé. Pure et testable.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function superAgentStderrExtractFrom(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const clean = s
+    .split(/\r?\n/)
+    .map((l) => l.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trimEnd())
+    .filter(Boolean)
+    .join(" | ");
+  return clean.length <= 500 ? clean : "…" + clean.slice(-500);
 }
 
 /**

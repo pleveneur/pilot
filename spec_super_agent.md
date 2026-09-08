@@ -35,6 +35,17 @@ apprend et répond.
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
 
+### Si l'assistant affiche « Connexion au super-agent perdue »
+- Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
+  Les **causes les plus fréquentes** : le chemin de l'agent (Réglages → Agent)
+  pointe vers un **shim npm** (`pi.cmd`) dont le paquet installé est **scopé**
+  (`@earendil-works/pi-coding-agent`), ou une **extension projet**
+  (`<projet>/.pi/extensions/`) déclare des dépendances manquantes.
+- Depuis la correction (issue #84), le message de connexion perdue affiche
+  désormais un **court extrait de la sortie d'erreur réelle** (« Cause probable :
+  … ») pour diagnostiquer l'échec au lieu de le masquer. Un faux départ unique
+  (relance automatique) n'affiche rien.
+
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
   vos clients.

@@ -23,7 +23,19 @@ pub struct RpcSession {
     pub running: Arc<AtomicBool>,
     /// Commandes synchrones en attente de réponse (id → oneshot sender)
     pub pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
+    /// P0 (issue #84) : dernier stderr brut du processus (borné ~8 ko), drainé
+    /// au fil de l'eau par le thread de lecture stderr. Permet de retrouver la
+    /// cause réelle d'un échec de lancement/arrêt rapide (`process_exit`) même
+    /// après coup, et de la diagnostiquer (le stderr est en plus émis sous forme
+    /// d'événements `process_error` vers le frontend). Jamais de stack complète
+    /// (taille bornée), pas de données sensibles.
+    #[allow(dead_code)] // réservé : exposé via la surface d'état de session/santé
+    pub last_stderr: Arc<Mutex<String>>,
 }
+
+/// Taille maximale (en octets) du buffer stderr conservé dans l'état de session.
+/// Borné pour ne pas exposer de données volumineuses ni saturer la mémoire.
+const STDERR_BUFFER_MAX: usize = 8192;
 
 /// Observateur d'événements RPC — appelé pour chaque événement JSONL parsé (hors
 /// réponses corrélées). Utilisé par l'indicateur d'activité par projet (issue #13)
@@ -94,7 +106,7 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Erreur lancement de pi: {}", e))?;
+        .map_err(|e| format!("Erreur lancement de pi (exe: {}): {}", pi_exe, e))?;
 
     let stdin = child
         .stdin
@@ -128,18 +140,23 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     };
     let observer_stdout = observer.clone();
 
+    // P0 (issue #84) : buffer stderr partagé, alimenté par le thread de lecture
+    // stderr et conservé dans l'état de session (`RpcSession.last_stderr`).
+    let last_stderr = Arc::new(Mutex::new(String::new()));
+    let last_stderr_reader = last_stderr.clone();
+
     // Thread de lecture stdout
     let app_exit = app_handle.clone();
-    let running_exit = running.clone();
     let channel_stdout = event_channel.to_string();
     let broadcast_channel_owned = broadcast_channel;
     std::thread::spawn(move || {
-        read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), project_owned.as_deref(), observer_stdout, broadcast_channel_owned);
-        // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash).
-        // Un arrêt volontaire (stop_session a passé running=false, ex. redémarrage
-        // pour un changement de projet distant) n'émet rien → le desktop
-        // n'affiche pas « Déconnecté » (le pi est redémarré juste après).
-        if running_exit.load(Ordering::Relaxed) {
+        let involuntary = read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), project_owned.as_deref(), observer_stdout, broadcast_channel_owned);
+        // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash),
+        // signalé par read_jsonl_loop (EOF/erreur alors que running était encore
+        // true). Un arrêt volontaire (stop_session a passé running=false, ex.
+        // redémarrage pour un changement de projet distant) n'émet rien → le
+        // desktop n'affiche pas « Déconnecté » (le pi est redémarré juste après).
+        if involuntary {
             let exit_event = serde_json::json!({"type": "process_exit", "reason": "stdout_closed"});
             app_exit.emit(&channel_stdout, &exit_event).ok();
         }
@@ -149,7 +166,7 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let app_stderr = app_handle.clone();
     let channel_stderr = event_channel.to_string();
     std::thread::spawn(move || {
-        read_stderr_loop(Box::new(stderr), app_stderr, running_stderr, &channel_stderr);
+        read_stderr_loop(Box::new(stderr), app_stderr, running_stderr, &channel_stderr, Some(last_stderr_reader));
     });
 
     Ok(RpcSession {
@@ -157,6 +174,7 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
         stdin,
         running,
         pending,
+        last_stderr,
     })
 }
 
@@ -233,6 +251,12 @@ pub fn stop_session(session: &mut RpcSession) {
 
 // ── JSONL Parser (thread stdout) ──
 
+/// Lit le stdout JSONL de pi jusqu'à EOF. Retourne `true` si la sortie est
+/// INVOLONTAIRE (pi mort/crash détecté sur EOF/erreur alors que `running`
+/// était encore true). Dans ce cas, `running` est passé à false ici, AVANT
+/// l'émission de process_exit par l'appelant, pour que send_command retourne
+/// proprement « Session arrêtée » au lieu d'écrire sur un stdin fermé
+/// (os error 232).
 fn read_jsonl_loop(
     mut reader: Box<dyn Read + Send>,
     app_handle: AppHandle,
@@ -244,13 +268,22 @@ fn read_jsonl_loop(
     project: Option<&str>,
     observer: Option<EventObserver>,
     broadcast_channel: Option<String>,
-) {
+) -> bool {
     let mut buffer = String::new();
     let mut buf = [0u8; 4096];
+    let mut involuntary_exit = false;
 
     loop {
         match reader.read(&mut buf) {
-            Ok(0) => break, // EOF (pi terminé)
+            Ok(0) => {
+                // EOF (pi terminé). Fin involontaire (running encore true) : on
+                // pose running=false pour que send_command échoue proprement.
+                if running.load(Ordering::Relaxed) {
+                    running.store(false, Ordering::Relaxed);
+                    involuntary_exit = true;
+                }
+                break;
+            }
             Ok(n) => {
                 // En cours d'arrêt (stop_session a passé running=false) : on draine
                 // le pipe sans traiter ni émettre, jusqu'à EOF. Cela garde le pipe
@@ -329,17 +362,27 @@ fn read_jsonl_loop(
                     }
                 }
             }
-            Err(_) => break,
+            Err(_) => {
+                // Erreur de lecture : même traitement qu'un EOF involontaire.
+                if running.load(Ordering::Relaxed) {
+                    running.store(false, Ordering::Relaxed);
+                    involuntary_exit = true;
+                }
+                break;
+            }
         }
     }
+    involuntary_exit
 }
 
 /// Thread de lecture stderr — émet les erreurs sous forme d'événements rpc-event
+/// et conserve un extrait borné dans l'état de session (`last_stderr`).
 fn read_stderr_loop(
     mut reader: Box<dyn Read + Send>,
     app_handle: AppHandle,
     running: Arc<AtomicBool>,
     event_channel: &str,
+    last_stderr: Option<Arc<Mutex<String>>>,
 ) {
     let mut buf = [0u8; 4096];
     loop {
@@ -353,6 +396,17 @@ fn read_stderr_loop(
                     continue;
                 }
                 let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                // P0 (issue #84) : conserver un extrait borné du stderr dans
+                // l'état de session pour le diagnostic (garde la fin, la plus
+                // pertinente pour un crash).
+                if let Some(sink) = &last_stderr {
+                    let mut sink = sink.lock().unwrap();
+                    sink.push_str(&text);
+                    if sink.len() > STDERR_BUFFER_MAX {
+                        let start = sink.len() - STDERR_BUFFER_MAX;
+                        *sink = sink[start..].to_string();
+                    }
+                }
                 let event = serde_json::json!({
                     "type": "process_error",
                     "text": text,

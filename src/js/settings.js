@@ -236,6 +236,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   const inputAgentMaxTotalCalls = document.getElementById("setting-agent-max-total-calls");
   const inputAgentTimeoutMs = document.getElementById("setting-agent-timeout-ms");
   const inputAgentMaxResultTokens = document.getElementById("setting-agent-max-result-tokens");
+  const inputAgentMaxTurns = document.getElementById("setting-agent-max-turns");
   // ── Agents du projet (issue #35) : config `.pilot/agents.json` ──
   const projectAgentsProject = document.getElementById("project-agents-project");
   const projectAgentsWarn = document.getElementById("project-agents-warn");
@@ -778,6 +779,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   if (inputAgentMaxTotalCalls) inputAgentMaxTotalCalls.value = currentConfig.agent_max_total_calls || 30;
   if (inputAgentTimeoutMs) inputAgentTimeoutMs.value = currentConfig.agent_timeout_ms || 600000;
   if (inputAgentMaxResultTokens) inputAgentMaxResultTokens.value = currentConfig.agent_max_result_tokens || 4000;
+  if (inputAgentMaxTurns) inputAgentMaxTurns.value = currentConfig.agent_max_turns || 60;
     webNetChanged = false;
     tailscaleChanged = false;
     rpcLaunchChanged = false;
@@ -1113,6 +1115,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         agent_max_total_calls: parseInt(inputAgentMaxTotalCalls.value, 10) || 30,
         agent_timeout_ms: parseInt(inputAgentTimeoutMs.value, 10) || 600000,
         agent_max_result_tokens: parseInt(inputAgentMaxResultTokens.value, 10) || 4000,
+        agent_max_turns: parseInt(inputAgentMaxTurns.value, 10) || 60,
         // ── Super-agent (spec_super_agent.md) ──
         super_agent_name: (inputSuperAgentName ? inputSuperAgentName.value : "Assistant").trim() || "Assistant",
         super_agent_clients: taSuperAgentClients

@@ -138,7 +138,7 @@ pub(crate) fn probe_extension_support(state: &AppState, pi_path: &str) -> bool {
 /// - "unknown" sinon. Timeout ~10s.
 fn run_version_probe(pi_path: &str) -> String {
     use std::time::Duration;
-    let out = run_captured(pi_path, &["--version"], Duration::from_secs(10));
+    let out = run_pi_captured(pi_path, &["--version"], Duration::from_secs(10));
     kind_from_version_output(&out)
 }
 
@@ -158,8 +158,24 @@ pub(crate) fn kind_from_version_output(out: &str) -> String {
 /// apparaît dans la sortie. Timeout ~10s (kill si dépassé).
 fn run_help_probe(pi_path: &str) -> bool {
     use std::time::Duration;
-    let out = run_captured(pi_path, &["--help"], Duration::from_secs(10));
+    let out = run_pi_captured(pi_path, &["--help"], Duration::from_secs(10));
     out.contains("--extension")
+}
+
+/// Lance un processus pi (en réutilisant la MÊME résolution que le lancement
+/// réel, `resolve_pi_executable`) et capture stdout. Le health-check / probe
+/// doit refléter fidèlement ce qui se passera au spawn RPC (issue #84 : un shim
+/// npm scopé `.cmd` non résolu échouait ici mais pas ailleurs, ou l'inverse).
+pub(crate) fn run_pi_captured(
+    pi_path: &str,
+    args: &[&str],
+    deadline_dur: std::time::Duration,
+) -> String {
+    let (exe, base_args) = crate::pi_update::resolve_pi_executable(pi_path);
+    let mut all: Vec<String> = base_args;
+    all.extend(args.iter().map(|s| s.to_string()));
+    let refs: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+    run_captured(&exe, &refs, deadline_dur)
 }
 
 /// Lance `<exe> <args...>`, capture stdout, kill si `deadline` dépassé.

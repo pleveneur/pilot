@@ -82,10 +82,11 @@
         <button id="btn-history" class="project-only hidden" title="Historique des sessions agent (H9)"><i data-lucide="history" class="icon"></i></button>
         <button id="btn-gds" class="project-only hidden" title="GDS (gestionnaire de sources)"><i data-lucide="database" class="icon"></i></button>
       </div>
-      <!-- Onglet Assistant : 3 boutons, 1 ligne -->
+      <!-- Onglet Assistant : 4 boutons, 1 ligne -->
       <div class="pj-panel" data-panel="assistant" style="display:none;">
         <button id="btn-agents" class="project-only hidden" title="Équipe d'agents multi-rôles (H2 V2)"><i data-lucide="users" class="icon"></i></button>
         <button id="btn-superagent" class="project-only hidden" title="Assistant : suivi multi-projets (lecture seule)"><i data-lucide="compass" class="icon"></i></button>
+        <button id="btn-superkanban" class="project-only hidden" title="Ouvrir la vue Kanban (tâches de suivi)"><i data-lucide="columns-3" class="icon"></i></button>
         <button id="btn-interproject" class="project-only hidden" title="Discussion inter-projets (lier des projets, envoyer une tâche)"><i data-lucide="link" class="icon"></i></button>
       </div>
     </div>
@@ -446,6 +447,10 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-agent-max-result-tokens">Taille max d'un résultat renvoyé (tokens) :</label>
               <input type="number" id="setting-agent-max-result-tokens" min="500" max="32000" value="4000" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-agent-max-turns">Tours pi max par agent :</label>
+              <input type="number" id="setting-agent-max-turns" min="10" max="500" step="5" value="60" />
             </div>
           </div>
 

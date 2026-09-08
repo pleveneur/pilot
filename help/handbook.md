@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-02 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -853,6 +853,17 @@ apprend et répond.
   multi-projets (pas l'agent d'un projet). Même sans prompt personnalisé, il
   reçoit un prompt système par défaut qui rappelle son rôle (suivi de plusieurs
   projets par client, lecture seule).
+
+### Si l'assistant affiche « Connexion au super-agent perdue »
+- Le processus de l'assistant n'a pas survécu à son lancement (ou s'est arrêté).
+  Les **causes les plus fréquentes** : le chemin de l'agent (Réglages → Agent)
+  pointe vers un **shim npm** (`pi.cmd`) dont le paquet installé est **scopé**
+  (`@earendil-works/pi-coding-agent`), ou une **extension projet**
+  (`<projet>/.pi/extensions/`) déclare des dépendances manquantes.
+- Depuis la correction (issue #84), le message de connexion perdue affiche
+  désormais un **court extrait de la sortie d'erreur réelle** (« Cause probable :
+  … ») pour diagnostiquer l'échec au lieu de le masquer. Un faux départ unique
+  (relance automatique) n'affiche rien.
 
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de
