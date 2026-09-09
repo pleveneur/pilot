@@ -31,7 +31,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { buildSuperAgentDisconnectedMessage, superAgentStderrExtractFrom } = await import("./super-agent.js");
+const { buildSuperAgentDisconnectedMessage, superAgentStderrExtractFrom, SUPER_AGENT_GRACE_WINDOW_MS, isSuperAgentDisconnectedMessage, shouldClearDisconnectedMessage } = await import("./super-agent.js");
 
 describe("buildSuperAgentDisconnectedMessage (issue #84)", () => {
   it("sans stderr capturé, retourne le message générique seul (sans régression)", () => {
@@ -68,5 +68,45 @@ describe("superAgentStderrExtractFrom (formatage pure)", () => {
 
   it("conserve un texte court intact", () => {
     expect(superAgentStderrExtractFrom("Error: command failed")).toBe("Error: command failed");
+  });
+});
+
+describe("SUPER_AGENT_GRACE_WINDOW_MS (correctif V2 — alignement fenêtre)", () => {
+  it("est aligné sur le cooldown anti-crash Rust (~30 s), pas sur l'ancien 8 s", () => {
+    // La politique Rust (agent_service.rs) : SUPERAGENT_CRASH_WINDOW=20 s +
+    // SUPERAGENT_RESTART_COOLDOWN=30 s. La fenêtre frontend doit couvrir le
+    // redémarrage/cooldown légitime pour ne pas déclarer « perdue » à tort.
+    expect(SUPER_AGENT_GRACE_WINDOW_MS).toBeGreaterThanOrEqual(30000);
+    expect(SUPER_AGENT_GRACE_WINDOW_MS).toBeGreaterThan(8000);
+  });
+});
+
+describe("isSuperAgentDisconnectedMessage (détection pure)", () => {
+  it("détecte le message générique", () => {
+    expect(isSuperAgentDisconnectedMessage("⚠️ Connexion au super-agent perdue.")).toBe(true);
+  });
+
+  it("détecte le message enrichi d'un extrait stderr", () => {
+    expect(isSuperAgentDisconnectedMessage("⚠️ Connexion au super-agent perdue. Cause probable : module introuvable")).toBe(true);
+  });
+
+  it("ne détecte pas un autre message", () => {
+    expect(isSuperAgentDisconnectedMessage("Projet ouvert : X")).toBe(false);
+    expect(isSuperAgentDisconnectedMessage("")).toBe(false);
+  });
+});
+
+describe("shouldClearDisconnectedMessage (correctif V2 — retrait du message)", () => {
+  it("retire le message quand le processus redevient vivant ET qu'il est présent", () => {
+    expect(shouldClearDisconnectedMessage(true, true)).toBe(true);
+  });
+
+  it("ne retire rien si la session reste morte (vrai blocage préservé)", () => {
+    expect(shouldClearDisconnectedMessage(false, true)).toBe(false);
+  });
+
+  it("ne retire rien s'il n'y a pas de message", () => {
+    expect(shouldClearDisconnectedMessage(true, false)).toBe(false);
+    expect(shouldClearDisconnectedMessage(false, false)).toBe(false);
   });
 });

@@ -10,7 +10,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 // Réexports des helpers partagés extraits dans les modules (autres modules
 // les importent depuis `crate::`).
-pub(crate) use rpc::{kind_from_version_output, probe_backend, probe_extension_support, resolve_agent_home, run_captured, run_captured_full, BackendProbe};
+pub(crate) use rpc::{kind_from_version_output, resolve_agent_home, run_captured, run_captured_full, BackendProbe};
 pub(crate) use rpc::run_pi_captured;
 // Réexports RPC utilisés par web_server.rs (canal distant).
 pub(crate) use rpc::{
@@ -38,6 +38,13 @@ use std::os::windows::process::CommandExt;
 const IGNORED_DIRS: &[&str] = &[
     "node_modules", ".git", ".svn", "target", "dist", "build", "__pycache__",
     ".next", ".nuxt", ".cache", ".vs", "vendor", "bundle",
+    // Environnements virtuels Python + caches d'outils : un seul `.venv` peut
+    // contenir 30 000+ fichiers (site-packages) — sans exclusion, l'arbre de
+    // l'explorateur et le poller les parcourent, et le rendu DOM synchrone de
+    // l'arborescence fige l'interface au démarrage (spinner de boot qui
+    // « mouline »). Même convention que node_modules : on n'affiche pas et on
+    // ne descend pas.
+    ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
 ];
 
 mod help;
@@ -131,10 +138,15 @@ struct AppState {
     /// Signal d'arrêt du serveur web distant : `Some(sender)` tant qu'un serveur tourne.
     /// Permet le rechargement à chaud (panneau Paramètres) sans relancer l'app.
     web_shutdown: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    /// Cache de la sonde du backend (pi/plh) : `(pi_path, probe)`.
-    /// Re-sondé quand `rpc_pi_path` change. Évite de planter un backend qui ne
-    /// supporte pas `--extension` (ex: plh sans le flag) en ne passant pas `-e`.
-    ext_gate_cache: std::sync::Mutex<Option<(String, BackendProbe)>>,
+    /// Cache de la sonde du backend (pi/plh) : `(pi_path, probe, instant)`.
+    /// Re-sondé quand `rpc_pi_path` change OU quand le cache a plus de
+    /// `PROBE_CACHE_TTL` (60s). Évite de planter un backend qui ne supporte pas
+    /// `--extension` (ex: plh sans le flag) en ne passant pas `-e`.
+    // `Arc` pour pouvoir être cloné dans les closures `'static` des commandes
+    // **async** (spawn_blocking) : la sonde `pi --version/--help` est déportée
+    // hors du main thread au boot (get_backend_info / pi_health_check /
+    // extension_gate_supported) pour ne jamais geler l'app au démarrage.
+    ext_gate_cache: std::sync::Arc<std::sync::Mutex<Option<(String, BackendProbe, std::time::Instant)>>>,
     /// Issue #13 : activité de l'agent par projet (path normalisé → SessionActivity).
     /// Mise à jour en arrière-plan par l'observateur RPC de chaque session projet.
     agent_activity: Arc<Mutex<HashMap<String, SessionActivity>>>,
@@ -1338,14 +1350,24 @@ fn open_system_terminal(path: &str, command: Option<&str>) -> Result<(), String>
 }
 
 #[tauri::command]
-fn extension_gate_supported(state: State<AppState>) -> Result<bool, String> {
-    let config = state.config.lock().unwrap();
-    let pi_path = config.rpc_pi_path.clone();
-    drop(config);
+async fn extension_gate_supported(state: State<'_, AppState>) -> Result<bool, String> {
+    let pi_path = {
+        let config = state.config.lock().unwrap();
+        config.rpc_pi_path.clone()
+    };
     if pi_path.is_empty() {
         return Ok(false);
     }
-    Ok(probe_extension_support(state.inner(), &pi_path))
+    // Sonde `pi --version/--help` déportée dans spawn_blocking : la commande
+    // est async mais un `Command` synchrone dans un corps async bloquerait
+    // aussi le runtime → on force le spawn_blocking pour dégager le main thread.
+    let cache = state.ext_gate_cache.clone();
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        rpc::probe_backend_with_cache(&cache, &pi_path)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) extension_gate_supported: {}", e))?;
+    Ok(probe.ext_supported)
 }
 
 /// Renvoie le genre du backend configuré ("pi", "plh" ou "unknown") + le support
@@ -1358,15 +1380,24 @@ struct BackendInfo {
 }
 
 #[tauri::command]
-fn get_backend_info(state: State<AppState>, app: AppHandle) -> Result<BackendInfo, String> {
+async fn get_backend_info(state: State<'_, AppState>, app: AppHandle) -> Result<BackendInfo, String> {
     ensure_config_loaded(&state, &app);
-    let config = state.config.lock().unwrap();
-    let pi_path = config.rpc_pi_path.clone();
-    drop(config);
+    let pi_path = {
+        let config = state.config.lock().unwrap();
+        config.rpc_pi_path.clone()
+    };
     if pi_path.is_empty() {
         return Ok(BackendInfo { kind: "unknown".to_string(), ext_supported: false });
     }
-    let probe = probe_backend(state.inner(), &pi_path);
+    // Sonde `pi --version/--help` déportée dans spawn_blocking : ne jamais
+    // geler le main thread au boot (le process pi peut mettre plusieurs
+    // secondes à répondre). Cache partagé conservé pour éviter de re-sonder.
+    let cache = state.ext_gate_cache.clone();
+    let probe = tauri::async_runtime::spawn_blocking(move || {
+        rpc::probe_backend_with_cache(&cache, &pi_path)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) get_backend_info: {}", e))?;
     Ok(BackendInfo { kind: probe.kind, ext_supported: probe.ext_supported })
 }
 
@@ -1385,11 +1416,12 @@ struct PiHealth {
 }
 
 #[tauri::command]
-fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, String> {
+async fn pi_health_check(state: State<'_, AppState>, app: AppHandle) -> Result<PiHealth, String> {
     ensure_config_loaded(&state, &app);
-    let config = state.config.lock().unwrap();
-    let pi_path = config.rpc_pi_path.clone();
-    drop(config);
+    let pi_path = {
+        let config = state.config.lock().unwrap();
+        config.rpc_pi_path.clone()
+    };
     if pi_path.is_empty() {
         return Ok(PiHealth {
             ok: false,
@@ -1399,9 +1431,20 @@ fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, S
             path: pi_path,
         });
     }
+    // Health check déporté dans spawn_blocking : la capture du process
+    // (`pi --version`, timeout 5s, attente par sleep boucle) est bloquante →
+    // l'exécuter sur un thread dédié pour ne jamais geler le boot de Pilot.
     use std::time::Duration;
-    let out = run_pi_captured(&pi_path, &["--version"], Duration::from_secs(10));
-    if out.trim().is_empty() {
+    let probed_path = pi_path.clone();
+    let version = tauri::async_runtime::spawn_blocking(move || {
+        // Timeout réduit à 5s (au lieu de 10s) : `pi_health_check` est appelé à
+        // l'ouverture de l'onglet agent (et au boot si `agent_start_on_launch`),
+        // il ne doit pas bloquer le démarrage de Pilot.
+        run_pi_captured(&probed_path, &["--version"], Duration::from_secs(5))
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) pi_health_check: {}", e))?;
+    if version.trim().is_empty() {
         return Ok(PiHealth {
             ok: false,
             kind: "unknown".to_string(),
@@ -1412,8 +1455,8 @@ fn pi_health_check(state: State<AppState>, app: AppHandle) -> Result<PiHealth, S
     }
     Ok(PiHealth {
         ok: true,
-        kind: kind_from_version_output(&out),
-        version: out.trim().to_string(),
+        kind: kind_from_version_output(&version),
+        version: version.trim().to_string(),
         error: String::new(),
         path: pi_path,
     })
@@ -2152,7 +2195,7 @@ pub fn run() {
                 guard: Arc::new(web_rate::WebGuard::new()),
                 audit: Arc::new(web_audit::WebAudit::new()),
                 web_shutdown: std::sync::Mutex::new(None),
-                ext_gate_cache: std::sync::Mutex::new(None),
+                ext_gate_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 agent_activity: Arc::new(Mutex::new(HashMap::new())),
                 agent_anomaly: Arc::new(Mutex::new(HashMap::new())),
                 web_runs: Mutex::new(HashMap::new()),

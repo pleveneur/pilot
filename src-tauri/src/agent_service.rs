@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::agent::{Agent, AgentProcessState, AgentView};
 use crate::anomaly;
 use crate::db;
-use crate::rpc::{agent_event_channel, probe_extension_support};
+use crate::rpc::{agent_event_channel, probe_backend, probe_extension_support};
 use crate::rpc_manager;
 use crate::session_history;
 use crate::{config_path, resolve_agent_home, AppState};
@@ -68,10 +68,14 @@ const SUPERAGENT_RESTART_COOLDOWN: Duration = Duration::from_secs(30);
 /// frontend de détecter une ABSENCE d'outils (anomalie) : si la porte
 /// `probe_extension_support` échoue ou qu'aucune extension assistant n'est
 /// construite, l'assistant n'a AUCUN outil et ne peut que réfléchir.
+/// `probe_failed` distingue « sonde échouée (statut indéterminé) » de
+/// « sonde OK mais 0 extension » : sur un statut indéterminé, le frontend
+/// n'affiche PAS la bannière d'anomalie (évite le faux positif).
 #[derive(Clone, Copy, Debug)]
 pub struct SuperAgentExtStatus {
     pub ext_supported: bool,
     pub extensions_built: usize,
+    pub probe_failed: bool,
 }
 
 /// Politique anti-boucle de redémarrage du super-agent. Logique PURE et
@@ -499,6 +503,14 @@ impl AgentService {
                     String::new()
                 }
             };
+            // Bug connu : hériter les modèles de la row GLOBALE (si elle existe)
+            // au lieu de coder_model — sinon le modèle configuré de l'agent est
+            // écrasé par le modèle par défaut du codeur (doublon projet-scopé
+            // sans modèles). Fallback coder_model si aucun agent global.
+            let (models_pi, models_plh) = match self.get_agent(app, agent_id, None)? {
+                Some(g) => (g.models.pi.clone(), g.models.plh.clone()),
+                None => (coder_model.clone(), coder_model),
+            };
             let agent = Agent {
                 id: agent_id.to_string(),
                 name: default_agent_name(agent_id),
@@ -506,8 +518,8 @@ impl AgentService {
                 description: String::new(),
                 role: String::new(),
                 models: crate::agent::AgentModels {
-                    pi: coder_model.clone(),
-                    plh: coder_model,
+                    pi: models_pi,
+                    plh: models_plh,
                 },
                 capabilities: Vec::new(),
                 readonly: false,
@@ -622,9 +634,16 @@ impl AgentService {
         };
         // Modèle du registre de l'agent (porté par le projet, comme le seed
         // de `start`). Lecture tolérante : agent absent → pas de modèle registre.
+        // Bug connu : si l'agent projet-scopé n'existe pas (ou n'a pas de
+        // modèles), retomber sur l'agent GLOBAL (get_agent(agent_id, None))
+        // pour lire ses modèles — évite le doublon projet-scopé sans modèles et
+        // le defaultModel erroné qui écrasait le modèle configuré de l'agent.
         let (models_pi, models_plh) = match self.get_agent(app, agent_id, Some(project)) {
             Ok(Some(a)) => (a.models.pi.clone(), a.models.plh.clone()),
-            _ => (String::new(), String::new()),
+            _ => match self.get_agent(app, agent_id, None) {
+                Ok(Some(g)) => (g.models.pi.clone(), g.models.plh.clone()),
+                _ => (String::new(), String::new()),
+            },
         };
         // defaultModel lu UNIQUEMENT si le registre ne fournit rien (une
         // lecture disque de moins dans le cas nominal).
@@ -632,6 +651,12 @@ impl AgentService {
         if let Some((provider, model_id)) =
             resolve_initial_model(&models_pi, &models_plh, &stem, default_model)
         {
+            // Observabilité : log du modèle résolu pour rendre le diagnostic
+            // trivial (le modèle effectif d'un agent au lancement).
+            eprintln!(
+                "[agent-service] modèle initial résolu pour l'agent {} : {}/{}",
+                agent_id, provider, model_id
+            );
             let cmd = serde_json::json!({
                 "type": "set_model",
                 "provider": provider,
@@ -1617,7 +1642,15 @@ impl AgentService {
         let state = app.state::<AppState>();
         let mcp_enabled = state.config.lock().unwrap().mcp_enabled;
         let mut extensions: Vec<String> = Vec::new();
-        let ext_supported = probe_extension_support(&state, pi_path);
+        let mut probe = probe_backend(&state, pi_path);
+        // Correctif démarrage lent : si la sonde échoue (timeout transitoire
+        // pendant le boot), re-sonder une fois avant de conclure
+        // `ext_supported=false`. `probe_backend` ne met pas en cache une sonde
+        // échouée, donc ce second appel relance réellement la sonde.
+        if probe.probe_failed {
+            probe = probe_backend(&state, pi_path);
+        }
+        let ext_supported = probe.ext_supported;
         // Tâche #136 : diagnostic — confirmer pourquoi la liste d'outils du
         // super-agent est vide sur certains backends (ex: plh). Journalise la
         // porte, le nombre d'extensions construites et le dossier utilisé.
@@ -1702,7 +1735,7 @@ impl AgentService {
         // de ses outils) pour que le frontend puisse détecter une absence
         // d'outils et l'afficher comme une anomalie.
         *state.agent_service.superagent_ext.lock().unwrap() =
-            Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len() });
+            Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len(), probe_failed: probe.probe_failed });
         // Assistant piloté MCP (brique A) : expose le chemin du mcp.json au process
         // pi de l'assistant via PILOT_MCP_CONFIG (uniquement si l'extension MCP est
         // bien chargée). L'extension lit cette env au démarrage.

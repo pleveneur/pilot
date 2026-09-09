@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-09 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -864,6 +864,15 @@ apprend et répond.
   désormais un **court extrait de la sortie d'erreur réelle** (« Cause probable :
   … ») pour diagnostiquer l'échec au lieu de le masquer. Un faux départ unique
   (relance automatique) n'affiche rien.
+- **Correctif V2 (démarrage lent + cycle « perdue »)** : la fenêtre de grâce
+  avant d'afficher l'alerte est alignée sur la politique anti-crash Rust
+  (~30 s, cooldown de redémarrage) au lieu de 8 s — un redémarrage/cooldown
+  légitime ne déclenche plus l'alerte à tort. De plus, si le processus
+  **redevient vivant** après un faux départ, le message « Connexion au
+  super-agent perdue » déjà affiché est **automatiquement retiré** (il ne
+  s'accumule plus et ne « apparaît/disparaît » plus à chaque crash). Un **vrai
+  blocage** (session restée morte après la fenêtre) n'est jamais masqué :
+  l'alerte reste affichée.
 
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de

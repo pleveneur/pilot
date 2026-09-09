@@ -237,6 +237,20 @@ function warnPiUnavailable(h) {
 document.addEventListener("DOMContentLoaded", async () => {
   console.log("🚀 Pilot: DOMContentLoaded");
 
+  // Filet de sécurité : l'écran de chargement (sablier) n'est masqué qu'à la
+  // fin de toute la chaîne d'init. Si une étape bloque anormalement (gros
+  // projet, disque lent…), l'utilisateur resterait derrière le spinner à
+  // l'infini. Après 30 s, on force le masquage : l'interface devient visible
+  // et utilisable pendant que l'init (restauration projet/onglets) se
+  // termine en arrière-plan. Sans effet si l'init s'est déjà terminée.
+  setTimeout(() => {
+    const boot = document.getElementById("boot-overlay");
+    if (boot && !boot.classList.contains("hidden")) {
+      console.warn("⏱️ Init Pilot toujours en cours après 30 s — masquage forcé de l'écran de chargement.");
+      boot.classList.add("hidden");
+    }
+  }, 30000);
+
   try {
   // 1. Initialiser le thème
   initTheme();

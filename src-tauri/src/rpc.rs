@@ -100,31 +100,79 @@ use crate::CREATE_NO_WINDOW;
 pub(crate) struct BackendProbe {
     pub(crate) kind: String,
     pub(crate) ext_supported: bool,
+    /// true si la sonde a ÉCHOUÉ (timeout / processus mort → sortie `--version`
+    /// vide). Permet au frontend de distinguer « sonde échouée (statut
+    /// indéterminé) » de « sonde OK mais 0 extension ».
+    pub(crate) probe_failed: bool,
 }
 
+/// Durée de validité du cache de sonde : au-delà, on re-sonde même si
+/// `pi_path` n'a pas changé. Évite de réutiliser un `false` transitoire
+/// (sonde échouée pendant un démarrage lent) pendant toute la session.
+const PROBE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Timeout de chaque commande de sonde (`--version` / `--help`). Réduit de 10s
+/// à 5s pour ne pas bloquer le boot ; les deux sondes tournent en parallèle.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Sondage du backend : exécute `<pi_path> --version` (genre : "pi" / "plh" /
-/// "unknown") et `--help` (présence de `--extension`). Mis en cache dans
-/// `ext_gate_cache` (re-sondé si `pi_path` change). Bloquant mais borné (~3s par
-/// commande). Évite de planter un backend qui ne supporte pas `--extension`
-/// (ex: plh sans le flag → clap rejette l'arg et sort → « pipe closed »).
+/// "unknown") et `--help` (présence de `--extension`). Les deux commandes sont
+/// lancées en PARALLÈLE (au lieu de séquentiel) pour ne pas bloquer le boot,
+/// chacune bornée à ~5s. Résultat mis en cache dans `ext_gate_cache` (re-sondé
+/// si `pi_path` change OU si le cache a plus de `PROBE_CACHE_TTL`). Une sonde
+/// ÉCHOUÉE (timeout / processus mort → sortie `--version` vide) n'est PAS mise
+/// en cache : on re-sonde au prochain appel. Évite de planter un backend qui ne
+/// supporte pas `--extension` (ex: plh sans le flag → clap rejette l'arg et
+/// sort → « pipe closed »).
 pub(crate) fn probe_backend(state: &AppState, pi_path: &str) -> BackendProbe {
+    probe_backend_with_cache(&state.ext_gate_cache, pi_path)
+}
+
+/// Variante de `probe_backend` sans `&AppState` : prend directement le cache
+/// partagé. Utilisée par les commandes Tauri **async** (spawn_blocking) qui ne
+/// peuvent pas transporter une référence `&AppState` dans un closure `'static`
+/// (évite de geler le thread au boot quand on lance `pi --version/--help`).
+pub(crate) fn probe_backend_with_cache(
+    cache_mutex: &std::sync::Mutex<Option<(String, BackendProbe, std::time::Instant)>>,
+    pi_path: &str,
+) -> BackendProbe {
     if pi_path.is_empty() {
-        return BackendProbe { kind: "unknown".to_string(), ext_supported: false };
+        return BackendProbe { kind: "unknown".to_string(), ext_supported: false, probe_failed: true };
     }
-    // Cache : re-sonder seulement si pi_path a changé depuis la dernière sonde.
+    // Cache borné dans le temps (TTL) : re-sonder si pi_path a changé ou si la
+    // sonde est trop ancienne.
     {
-        let cache = state.ext_gate_cache.lock().unwrap();
-        if let Some((cached_path, cached)) = cache.as_ref() {
-            if cached_path == pi_path {
+        let cache = cache_mutex.lock().unwrap();
+        if let Some((cached_path, cached, cached_at)) = cache.as_ref() {
+            if cached_path == pi_path && cached_at.elapsed() < PROBE_CACHE_TTL {
                 return cached.clone();
             }
         }
     }
-    let kind = run_version_probe(pi_path);
-    let ext_supported = run_help_probe(pi_path);
-    let probe = BackendProbe { kind, ext_supported };
-    *state.ext_gate_cache.lock().unwrap() = Some((pi_path.to_string(), probe.clone()));
+    let (kind, ext_supported, version_ok) = run_probes_parallel(pi_path);
+    let probe = BackendProbe { kind, ext_supported, probe_failed: !version_ok };
+    // Ne PAS mettre en cache une sonde échouée (timeout / processus mort) :
+    // `version_ok` est false si `--version` a échoué (sortie vide) → on ne fige
+    // pas un `false` transitoire pour toute la session.
+    if version_ok {
+        *cache_mutex.lock().unwrap() =
+            Some((pi_path.to_string(), probe.clone(), std::time::Instant::now()));
+    }
     probe
+}
+
+/// Lance `--version` et `--help` en PARALLÈLE (deux threads) et retourne
+/// `(kind, ext_supported, version_ok)`. `version_ok` est false si `--version` a
+/// échoué (sortie vide → timeout / processus mort).
+fn run_probes_parallel(pi_path: &str) -> (String, bool, bool) {
+    let p1 = pi_path.to_string();
+    let p2 = pi_path.to_string();
+    let version_handle = std::thread::spawn(move || run_version_probe(&p1));
+    let help_handle = std::thread::spawn(move || run_help_probe(&p2));
+    let version_out = version_handle.join().unwrap_or_default();
+    let ext_supported = help_handle.join().unwrap_or(false);
+    let kind = kind_from_version_output(&version_out);
+    let version_ok = !version_out.trim().is_empty();
+    (kind, ext_supported, version_ok)
 }
 
 /// Wrapper : support de `--extension` uniquement (gate pré-écriture).
@@ -135,11 +183,9 @@ pub(crate) fn probe_extension_support(state: &AppState, pi_path: &str) -> bool {
 /// Exécute `<pi_path> --version`, capture stdout, et déduit le genre.
 /// - "pi"  : sortie commençant par un numéro de version (ex: "0.80.10")
 /// - "plh" : sortie commençant par "plh" (ex: "plh 0.1.0")
-/// - "unknown" sinon. Timeout ~10s.
+/// - "unknown" sinon. Timeout ~5s.
 fn run_version_probe(pi_path: &str) -> String {
-    use std::time::Duration;
-    let out = run_pi_captured(pi_path, &["--version"], Duration::from_secs(10));
-    kind_from_version_output(&out)
+    run_pi_captured(pi_path, &["--version"], PROBE_TIMEOUT)
 }
 
 /// Déduplique le parsing du genre depuis la sortie `--version`.
@@ -155,10 +201,9 @@ pub(crate) fn kind_from_version_output(out: &str) -> String {
 }
 
 /// Exécute `<pi_path> --help`, capture stdout, et vérifie si `--extension`
-/// apparaît dans la sortie. Timeout ~10s (kill si dépassé).
+/// apparaît dans la sortie. Timeout ~5s (kill si dépassé).
 fn run_help_probe(pi_path: &str) -> bool {
-    use std::time::Duration;
-    let out = run_pi_captured(pi_path, &["--help"], Duration::from_secs(10));
+    let out = run_pi_captured(pi_path, &["--help"], PROBE_TIMEOUT);
     out.contains("--extension")
 }
 

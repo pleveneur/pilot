@@ -45,6 +45,15 @@ apprend et répond.
   désormais un **court extrait de la sortie d'erreur réelle** (« Cause probable :
   … ») pour diagnostiquer l'échec au lieu de le masquer. Un faux départ unique
   (relance automatique) n'affiche rien.
+- **Correctif V2 (démarrage lent + cycle « perdue »)** : la fenêtre de grâce
+  avant d'afficher l'alerte est alignée sur la politique anti-crash Rust
+  (~30 s, cooldown de redémarrage) au lieu de 8 s — un redémarrage/cooldown
+  légitime ne déclenche plus l'alerte à tort. De plus, si le processus
+  **redevient vivant** après un faux départ, le message « Connexion au
+  super-agent perdue » déjà affiché est **automatiquement retiré** (il ne
+  s'accumule plus et ne « apparaît/disparaît » plus à chaque crash). Un **vrai
+  blocage** (session restée morte après la fenêtre) n'est jamais masqué :
+  l'alerte reste affichée.
 
 ### Gérer les clients
 - **Paramètres ⚙️ → onglet « Assistant » → Clients** : saisissez la liste de

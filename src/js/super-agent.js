@@ -23,12 +23,13 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classi
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
-import { shouldScheduleTick, parseScheduleEvery, formatReminderDate, formatReminderQuietLabel } from "./super-agent-schedule.js";
+import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
 import { isProjectGds } from "./gds-status.js";
 import { isBusyStale } from "./exclusivity-queue.js";
+import { toastInfo } from "./toast.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -915,7 +916,7 @@ function formatSuperEventTime(d) {
  * @param {string} level
  * @param {string} text
  */
-function pushSuperAgentSystemEvent(level, text) {
+function pushSuperAgentSystemEvent(level, text, title) {
   const trimmed = String(text || "").trim();
   if (!trimmed || isBareProjectPath(trimmed)) return;
   // Tâche #160 : même source que le panneau cloche → overlay plein écran (si le
@@ -931,6 +932,8 @@ function pushSuperAgentSystemEvent(level, text) {
   const label = document.createElement("span");
   label.className = "sa-events-text";
   label.textContent = trimmed;
+  // Issue #36 : le prompt complet du rappel reste consultable au survol.
+  if (title) label.title = String(title);
   const time = document.createElement("span");
   time.className = "sa-events-time";
   time.textContent = formatSuperEventTime(new Date());
@@ -1017,6 +1020,11 @@ async function checkSuperAgentTools(bannerEl) {
     await new Promise((r) => setTimeout(r, 500));
   }
   if (!status || !status.known) return;
+  // Correctif démarrage lent : si la sonde a ÉCHOUÉ (statut indéterminé), on
+  // n'affiche PAS la bannière (évite le faux positif « l'assistant n'a aucun
+  // outil » pendant un démarrage lent). La bannière ne s'affiche que si la
+  // sonde est OK mais qu'aucune extension n'a été construite.
+  if (status.probe_failed) return;
   const noTools =
     !status.ext_supported || (Number(status.extensions_built) || 0) === 0;
   if (bannerEl) bannerEl.hidden = !noTools;
@@ -1933,6 +1941,11 @@ export async function createSuperAgent(container) {
       // (process_exit reçu, session non vivante) ne doit pas verrouiller la
       // saisie : l'utilisateur doit pouvoir resaisir.
       const alive = !!(agent && agent.alive);
+      // Correctif V2 : quand le processus redevient vivant après un faux
+      // départ/redémarrage, retirer le message « Connexion perdue » devenu
+      // obsolète (sinon il s'accumule et « apparaît/disparaît » à chaque crash).
+      // Ne retire rien si la session reste morte (vrai blocage préservé).
+      if (alive) removeSuperAgentDisconnectedEvent();
       const processing = alive && (agent.state === "running" || agent.state === "compacting");
       const isStreaming = statusEl.classList.contains("agent-status-streaming");
       const isError = statusEl.classList.contains("agent-status-error");
@@ -2056,29 +2069,6 @@ let scheduleTicker = null;
 // rappel est marqué livré.
 const pendingReminderIds = new Set();
 
-// Bulle de rappel : marque discrètement dans la conversation, au moment de
-// l'injection effective, une relance programmée. Retour utilisateur du
-// 29/08 : le prompt du rappel (consigne technique pour l'assistant) polluait
-// l'écran sans rien apporter — la bulle n'affiche plus qu'une ligne courte
-// « ⏰ relance — 29/08 à 14:30 » (formatReminderQuietLabel) ; le prompt
-// complet reste consultable au survol (title). Jamais « Invalid Date »/« NaN »
-// (formatReminderDate retourne ""). Fail-open : onglet 🧭 fermé (pas de zone
-// de messages) → rien. Cosmétique pur : injection/tick/marquage inchangés.
-function appendReminderBubble(prompt) {
-  const messagesEl = superMessagesEl;
-  if (!messagesEl) return;
-  const when = formatReminderDate(new Date());
-  const el = document.createElement("div");
-  el.className = "agent-message agent-message-reminder";
-  const bubble = document.createElement("div");
-  bubble.className = "agent-bubble agent-bubble-reminder";
-  bubble.textContent = formatReminderQuietLabel(when);
-  if (prompt && String(prompt).trim()) bubble.title = String(prompt);
-  el.appendChild(bubble);
-  messagesEl.appendChild(el);
-  scrollSuperToBottom(messagesEl);
-}
-
 async function scheduleTick() {
   if (!shouldScheduleTick(window._pilotSuperAgentOpen)) return;
   // Issue #134 : le réglage super_agent_auto_check_startup ne gouverne QUE le
@@ -2101,8 +2091,12 @@ async function scheduleTick() {
         await invoke("send_super_agent_command", {
           command: { type: "prompt", message: `[⏰ Rappel programmé] ${d.prompt}` },
         });
-        // Bulle de rappel avec la date + heure de déclenchement (locale).
-        appendReminderBubble(d.prompt);
+        // Issue #36 : le rappel s'affiche dans le panneau Événements (cloche)
+        // et via un toast discret, plus en bulle au milieu du fil. Le prompt
+        // complet reste consultable au survol (title de l'événement).
+        const reminderLabel = formatReminderNotificationLabel(new Date());
+        pushSuperAgentSystemEvent("info", reminderLabel, d.prompt);
+        toastInfo(reminderLabel);
         // Livraison effective → marquer le rappel comme exécuté (issue #135).
         try {
           await invoke("super_agent_schedule_mark_done", { id: d.id });
@@ -2523,18 +2517,53 @@ export function superAgentStderrExtractFrom(raw) {
 }
 
 /**
+ * Fenêtre de grâce (ms) après un faux départ du super-agent (correctif V2).
+ * Alignée sur la politique anti-crash Rust (agent_service.rs) :
+ * SUPERAGENT_CRASH_WINDOW=20 s + SUPERAGENT_RESTART_COOLDOWN=30 s. L'ancienne
+ * valeur (8 s) était inférieure au cooldown de redémarrage légitime : pendant
+ * un redémarrage/cooldown (>8 s), le frontend déclarait « perdue » à tort.
+ * Exportée pour les tests (vitest).
+ */
+export const SUPER_AGENT_GRACE_WINDOW_MS = 30000;
+
+/**
+ * Détecte un message « Connexion au super-agent perdue » (avec ou sans extrait
+ * de stderr). Pure et testable — utilisée pour retirer le message obsolète
+ * quand le processus redevient vivant (correctif V2).
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isSuperAgentDisconnectedMessage(text) {
+  return String(text || "").includes("Connexion au super-agent perdue");
+}
+
+/**
+ * Décide si le message « Connexion perdue » doit être retiré : uniquement si
+ * le processus est redevenu vivant (`alive`) ET qu'un tel message est présent.
+ * Pure et testable. Ne masque jamais un VRAI blocage : si la session reste
+ * morte (`alive=false`), on ne retire rien.
+ * @param {boolean} alive
+ * @param {boolean} hasDisconnectedMessage
+ * @returns {boolean}
+ */
+export function shouldClearDisconnectedMessage(alive, hasDisconnectedMessage) {
+  return !!alive && !!hasDisconnectedMessage;
+}
+
+/**
  * Délai de grâce après un faux départ du super-agent (onglet 🧭 Assistant).
  * Un `process_exit` au lancement est souvent transitoire : le processus pi meurt
  * une fois puis est relancé automatiquement (politique anti-boucle Rust). On
  * sonde la vivacité du super-agent via get_agent_supervision (agent
- * « Assistant (Magnus) », champ `alive`) toutes les 500 ms pendant ~8 s :
+ * « Assistant (Magnus) », champ `alive`) toutes les 500 ms pendant ~30 s
+ * (SUPER_AGENT_GRACE_WINDOW_MS, aligné sur le cooldown anti-crash Rust) :
  *   - redevient vivant  → reconnexion : PAS d'alerte, statut remis à « Prêt »
  *     (style idle, comme le poll de statut), trace console pour diagnostic.
  *   - toujours mort à l'expiration → onFail() qui déclenche l'alerte (message +
  *     notification + son) : on ne masque jamais un VRAI blocage.
  */
 function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
-  const GRACE_WINDOW_MS = 8000;
+  const GRACE_WINDOW_MS = SUPER_AGENT_GRACE_WINDOW_MS;
   const POLL_MS = 500;
   const start = Date.now();
   const timer = setInterval(async () => {
@@ -2560,6 +2589,25 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
       onFail();
     }
   }, POLL_MS);
+}
+
+/**
+ * Retire le message « Connexion au super-agent perdue » du panneau des
+ * événements quand le processus redevient vivant (correctif V2). Idempotent et
+ * fail-open : si le panneau n'existe pas (onglet fermé) ou qu'aucun message
+ * n'est présent, ne fait rien. Ne retire JAMAIS un message si la session reste
+ * morte (vrai blocage) — la décision est pilotée par `shouldClearDisconnectedMessage`
+ * côté appelant (superStatusPoll, `alive`).
+ */
+function removeSuperAgentDisconnectedEvent() {
+  if (!superEventsList) return;
+  const items = superEventsList.querySelectorAll(".sa-events-item");
+  for (const item of items) {
+    if (isSuperAgentDisconnectedMessage(item.textContent)) {
+      item.remove();
+      break;
+    }
+  }
 }
 
 // ── Questions posées par l'assistant (pilot-choices) ──

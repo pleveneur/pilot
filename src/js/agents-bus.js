@@ -115,6 +115,7 @@ function newRunCtx(project) {
     loopCorrectionCount: {}, // agentId → nb de stratégies d'escalade déjà appliquées
     loopAbandoned: {}, // agentId → true après abandon (toutes les stratégies épuisées)
     loopLastChecked: {}, // agentId → timestamp du dernier test
+    loopAbortReason: {}, // agentId → cause de l'abort par boucle (propagée au résultat agrégé)
     // Restitution fiable (fin de run → assistant) : marqueur « tour déjà
     // finalisé pour cet agent » (posé par le PREMIER agent_end final ou
     // agent_settled traité) + erreur pi en attente d'arbitrage (annulée si
@@ -597,9 +598,10 @@ export async function initAgentsBus(options = {}) {
     console.warn("[agents-bus] arrêt automatique de l'agent", agentId, reason);
     emit("notify", {
       agentId,
-      message: `⏱️ L'agent ${agentId} a été arrêté automatiquement (bloqué sans progression). Un agent en file d'attente peut prendre le relais.`,
+      message: `⏱️ L'agent ${agentId} a été arrêté automatiquement : ${reason}. Un agent en file d'attente peut prendre le relais.`,
     });
-    // Libère le créneau d'exclusivité (launchNextQueued) et fait échouer le tour.
+    // Restitution fiable : la cause (bloqué sans progression / timeout) est
+    // propagée au résultat agrégé visible de l'utilisateur et de l'assistant.
     failAgentTurn(agentId, `Agent arrêté automatiquement : ${reason}`, ctx);
   });
 
@@ -808,6 +810,9 @@ function maybeDetectAgentLoop(agentId, ctx) {
     ctx.loopCorrectionPending[agentId] = true;
     ctx.loopCorrectionCount[agentId] = (ctx.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle d'outils détectée", agentId);
+    // Bug : propager la cause réelle (boucle d'outils) au résultat agrégé —
+    // l'abort qui suit tue le process et le process_exit serait muet sinon.
+    ctx.loopAbortReason[agentId] = "boucle d'outils détectée (appels identiques répétés)";
     emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
     invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
     return;
@@ -824,6 +829,8 @@ function maybeDetectAgentLoop(agentId, ctx) {
     ctx.loopCorrectionPending[agentId] = true;
     ctx.loopCorrectionCount[agentId] = (ctx.loopCorrectionCount[agentId] || 0) + 1;
     console.warn("[agents-bus] boucle détectée", agentId);
+    // Bug : propager la cause réelle (boucle de réflexion) au résultat agrégé.
+    ctx.loopAbortReason[agentId] = "boucle de réflexion détectée (texte répété)";
     emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
     invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
   }
@@ -1018,6 +1025,9 @@ export function handleAgentEvent(ev) {
     // adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies, puis abandon.
     if (ctx.loopCorrectionPending[agentId]) {
       ctx.loopCorrectionPending[agentId] = false;
+      // La correction est envoyée (l'agent continue) : la cause de boucle ne
+      // doit plus être propagée à un éventuel process_exit ultérieur (genuine).
+      delete ctx.loopAbortReason[agentId];
       const streamed = ctx.streamingTextByAgent[agentId] || "";
       ctx.streamingTextByAgent[agentId] = "";
       ctx.toolCallsByAgent[agentId] = [];
@@ -1086,6 +1096,17 @@ export function handleAgentEvent(ev) {
     // finalisé (agent_end) ou non actif est ignoré.
     settleAgentTurn(agentId, ctx);
   } else if (type === "process_exit" || type === "process_error" || type === "extension_error") {
+    // Bug : un abort déclenché par la détection de boucle (maybeDetectAgentLoop)
+    // tue le process → process_exit arrive avec un reason muet (« processus
+    // arrêté »). On propage la cause réelle (boucle détectée) au résultat agrégé
+    // visible de l'utilisateur et de l'assistant, au lieu d'un arrêt muet.
+    const loopReason = ctx.loopAbortReason[agentId];
+    if (loopReason) {
+      delete ctx.loopAbortReason[agentId];
+      console.warn("[agents-bus] process exit après boucle", agentId, loopReason);
+      failAgentTurn(agentId, loopReason, ctx);
+      return;
+    }
     const reason = event.reason || event.message || event.error || "processus arrêté";
     console.log("[agents-bus] process error/exit", agentId, reason);
     failAgentTurn(agentId, reason, ctx);
@@ -1620,6 +1641,10 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
 
   emit("agentStart", { agentId: agent.id, model });
 
+  // Bug : après un échec post-spawn (set_model refusé, timeout), le process pi
+  // peut rester en état Running (orphelin) → mort silencieuse. On mémorise si
+  // le spawn a réussi pour tuer le process dans le catch.
+  let spawned = false;
   try {
     // #21 : héritage de contexte pour les agents spécifiques de l'assistant.
     // Quand le paramètre est activé, on écrit le handoff de contexte (comme
@@ -1705,6 +1730,7 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
         mcpServer: mcpServer || null,
       });
     }
+    spawned = true;
 
     // Anti-boucle (run_agents) : si `options.purge` est vrai, on purge la
     // conversation de l'agent AVANT la tâche (contexte vierge, comme le mode
@@ -1734,6 +1760,13 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     console.log("[agents-bus] prompt sent to", agent.id);
   } catch (err) {
     console.error("[agents-bus] runAgentTurn error", agent.id, err);
+    // Bug : après un échec post-spawn (set_model refusé, timeout), tuer le
+    // process orphelin pour ne pas le laisser en état Running (mort silencieuse).
+    // Uniquement pour les agents de projet (run_agents) : les agents d'assistant
+    // n'ont pas de commande stop dédiée.
+    if (spawned && !isAssistant) {
+      await invoke("stop_agent_process", { agentId: agent.id, project: cwd }).catch(() => {});
+    }
     failAgentTurn(agent.id, String(err), ctx);
   }
 }

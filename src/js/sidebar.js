@@ -551,17 +551,22 @@ class Sidebar {
 
     // Filtrer l'arbre si une query est active
     let children = this.treeData.children || [];
-    if (this.filterQuery) {
+    const filtering = !!this.filterQuery;
+    if (filtering) {
       children = children
         .map(c => this._filterNode(c, this.filterQuery.toLowerCase()))
         .filter(c => c !== null);
     }
 
     if (children.length > 0) {
+      // Correctif V2 (démarrage lent) : rendu LAZY. Sans filtre, on ne rend que
+      // le niveau racine ; les sous-dossiers sont rendus à l'expansion au clic
+      // (_populateChildren). En mode filtre, on rend tout (résultats de recherche).
+      const lazy = !filtering;
       for (const child of children) {
-        this._renderNode(this.treeContainer, child, 0);
+        this._renderNode(this.treeContainer, child, 0, lazy);
       }
-    } else if (this.filterQuery) {
+    } else if (filtering) {
       this.treeContainer.innerHTML = '<p class="empty-message">Aucun résultat</p>';
     } else {
       this.treeContainer.innerHTML = '<p class="empty-message">Dossier vide</p>';
@@ -583,7 +588,7 @@ class Sidebar {
     updateFileList(this.treeData.children || []);
   }
 
-  _renderNode(container, node, level) {
+  _renderNode(container, node, level, lazy = true) {
     const nodeDiv = document.createElement("div");
     nodeDiv.className = "tree-node";
 
@@ -592,6 +597,7 @@ class Sidebar {
     row.style.paddingLeft = 8 + level * 16 + "px";
     row.dataset.path = node.path;
     row.dataset.isDir = String(node.is_dir);
+    row.dataset.level = String(level);
 
     if (node.is_dir) {
       const hasChildren = node.children && node.children.length > 0;
@@ -604,6 +610,12 @@ class Sidebar {
         if (!hasChildren) return;
         const children = nodeDiv.querySelector(":scope > .tree-children");
         if (children) {
+          const willExpand = !children.classList.contains("expanded");
+          // Correctif V2 (démarrage lent) : peupler les enfants à la première
+          // expansion (rendu lazy) au lieu de matérialiser tout le DOM d'emblée.
+          if (willExpand && !children.dataset.populated) {
+            this._populateChildren(children, node, level + 1, lazy);
+          }
           children.classList.toggle("expanded");
           const icon = row.querySelector(".icon");
           setIcon(icon, children.classList.contains("expanded") ? "folder-open" : "folder");
@@ -643,13 +655,51 @@ class Sidebar {
     if (node.is_dir && node.children && node.children.length > 0) {
       const childrenDiv = document.createElement("div");
       childrenDiv.className = "tree-children";
-      for (const child of node.children) {
-        this._renderNode(childrenDiv, child, level + 1);
+      if (!lazy) {
+        // Mode filtre : rendu complet immédiat (résultats de recherche).
+        this._populateChildren(childrenDiv, node, level + 1, lazy);
       }
       nodeDiv.appendChild(childrenDiv);
     }
 
     container.appendChild(nodeDiv);
+  }
+
+  /**
+   * Peuple un conteneur `.tree-children` avec les enfants d'un dossier (rendu
+   * lazy, correctif V2). Marque le conteneur `dataset.populated` pour ne le
+   * remplir qu'une seule fois. Rafraîchit les icônes Lucide des nœuds insérés.
+   * @param {HTMLElement} childrenDiv
+   * @param {object} node Dossier parent (avec `.children`)
+   * @param {number} level Niveau de profondeur des enfants
+   * @param {boolean} lazy Rendu lazy (sous-dossiers rendus à l'expansion)
+   */
+  _populateChildren(childrenDiv, node, level, lazy) {
+    childrenDiv.innerHTML = "";
+    for (const child of node.children) {
+      this._renderNode(childrenDiv, child, level, lazy);
+    }
+    childrenDiv.dataset.populated = "1";
+    refreshIcons(childrenDiv);
+  }
+
+  /**
+   * Retrouve un nœud de l'arborescence par son chemin absolu (recherche
+   * récursive dans `this.treeData`). Retourne null si introuvable.
+   * @param {object|null} node
+   * @param {string} path
+   * @returns {object|null}
+   */
+  _findNodeByPath(node, path) {
+    if (!node) return null;
+    if (node.path === path) return node;
+    if (node.children) {
+      for (const child of node.children) {
+        const found = this._findNodeByPath(child, path);
+        if (found) return found;
+      }
+    }
+    return null;
   }
 
   /**
@@ -890,24 +940,46 @@ class Sidebar {
   }
 
   /**
-   * Restaure l'état d'expansion après un rebuild
+   * Restaure l'état d'expansion après un rebuild.
+   *
+   * Correctif V2 (rendu lazy) : seuls les dossiers racine sont matérialisés au
+   * départ ; les sous-dossiers sont peuplés à la première expansion via
+   * _populateChildren. Une NodeList statique (querySelectorAll) ne contient que
+   * les rows présentes au moment de l'appel → les dossiers imbriqués créés
+   * pendant _populateChildren seraient ignorés. On parcourt donc l'arbre de
+   * façon itérative : on étend un dossier, puis on re-requête les rows de son
+   * conteneur d'enfants (fraîchement matérialisées) pour restaurer l'expansion
+   * profonde (ex: src → src/js → src/js/foo).
    */
   _restoreExpandedState(expandedPaths) {
     if (!expandedPaths || expandedPaths.size === 0) return;
-    this.treeContainer.querySelectorAll(".tree-row").forEach((row) => {
-      if (expandedPaths.has(row.dataset.path)) {
+    // File d'attente des conteneurs à parcourir (racine puis enfants étendus).
+    const queue = [this.treeContainer];
+    while (queue.length > 0) {
+      const container = queue.shift();
+      container.querySelectorAll(":scope > .tree-node > .tree-row").forEach((row) => {
+        if (!expandedPaths.has(row.dataset.path)) return;
         const nodeDiv = row.parentElement;
         if (!nodeDiv) return;
         const children = nodeDiv.querySelector(":scope > .tree-children");
-        if (children) {
-          children.classList.add("expanded");
-          const icon = row.querySelector(".icon");
-          if (icon) setIcon(icon, "folder-open");
-          const arrowEl = row.querySelector(".arrow");
-          if (arrowEl) arrowEl.textContent = "▼";
+        if (!children) return;
+        // Correctif V2 (rendu lazy) : peupler les enfants avant d'étendre,
+        // sinon le dossier restauré serait vide (enfants non matérialisés).
+        if (!children.dataset.populated) {
+          const node = this._findNodeByPath(this.treeData, row.dataset.path);
+          const level = parseInt(row.dataset.level || "0", 10);
+          if (node) this._populateChildren(children, node, level + 1, true);
         }
-      }
-    });
+        children.classList.add("expanded");
+        const icon = row.querySelector(".icon");
+        if (icon) setIcon(icon, "folder-open");
+        const arrowEl = row.querySelector(".arrow");
+        if (arrowEl) arrowEl.textContent = "▼";
+        // Les enfants viennent d'être matérialisés (ou l'étaient déjà) : les
+        // traiter à leur tour pour restaurer l'expansion imbriquée.
+        queue.push(children);
+      });
+    }
   }
 
 

@@ -2,6 +2,23 @@
 
 import { imageToBase64 } from "./preview.js";
 
+// Bornes de zoom (identiques aux boutons +/−)
+export const ZOOM_MIN = 0.1;
+export const ZOOM_MAX = 5;
+export const ZOOM_STEP = 0.25;
+
+/**
+ * Calcule le nouveau zoom à partir du zoom courant et d'un delta (en pas).
+ * Fonction pure, bornée entre ZOOM_MIN et ZOOM_MAX.
+ * @param {number} scale - zoom courant (1 = 100%)
+ * @param {number} delta - nombre de pas (+1 = zoom avant, −1 = zoom arrière)
+ * @returns {number}
+ */
+export function computeZoom(scale, delta) {
+  const next = scale + delta * ZOOM_STEP;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+}
+
 /**
  * Crée un panneau de prévisualisation d'image
  * @param {HTMLElement} container
@@ -11,6 +28,8 @@ import { imageToBase64 } from "./preview.js";
 export async function createImageViewer(container, filePath) {
   const wrapper = document.createElement("div");
   wrapper.className = "image-viewer-wrapper";
+  // tabindex pour recevoir le focus clavier (nécessaire pour keydown)
+  wrapper.tabIndex = 0;
 
   // Barre d'outils
   const toolbar = document.createElement("div");
@@ -71,11 +90,11 @@ export async function createImageViewer(container, filePath) {
 
     switch (action) {
       case "zoom-out":
-        scale = Math.max(0.1, scale - 0.25);
+        scale = computeZoom(scale, -1);
         updateZoom();
         break;
       case "zoom-in":
-        scale = Math.min(5, scale + 0.25);
+        scale = computeZoom(scale, 1);
         updateZoom();
         break;
       case "fit":
@@ -86,16 +105,33 @@ export async function createImageViewer(container, filePath) {
 
   // Raccourcis clavier
   wrapper.addEventListener("keydown", (e) => {
+    // Ctrl+0 = ajuster à la fenêtre (comportement existant)
     if (e.key === "0" && e.ctrlKey) {
       e.preventDefault();
       fitToWindow();
+      return;
+    }
+    // + / = (Shift+=) et Ctrl+ = zoom avant ; − / _ (Shift+-) et Ctrl+- = zoom arrière
+    const isZoomIn = e.key === "+" || e.key === "=";
+    const isZoomOut = e.key === "-" || e.key === "_";
+    if (isZoomIn) {
+      e.preventDefault();
+      scale = computeZoom(scale, 1);
+      updateZoom();
+    } else if (isZoomOut) {
+      e.preventDefault();
+      scale = computeZoom(scale, -1);
+      updateZoom();
     }
   });
 
   container.appendChild(wrapper);
 
-  // Ajuster à la fenêtre au chargement
-  img.onload = () => fitToWindow();
+  // Ajuster à la fenêtre au chargement + focus clavier pour les raccourcis
+  img.onload = () => {
+    fitToWindow();
+    wrapper.focus();
+  };
 
   return wrapper;
 }

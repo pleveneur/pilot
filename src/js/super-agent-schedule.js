@@ -47,6 +47,14 @@ export function formatReminderQuietLabel(when) {
   return when ? `⏰ relance — ${when}` : "⏰ relance";
 }
 
+// Libellé de notification pour le panneau Événements / toast (issue #36).
+// Combine la date de déclenchement et le marqueur discret : « ⏰ relance —
+// 29/08 à 14:30 ». Le prompt complet reste consultable au survol (title, côté
+// super-agent.js), jamais affiché en clair dans le flux.
+export function formatReminderNotificationLabel(value) {
+  return formatReminderQuietLabel(formatReminderDate(value));
+}
+
 // Validation miroir de l'opération Rust schedule_set_enabled (désactivation /
 // réactivation d'un rappel sans le supprimer). Retourne null si valide, sinon
 // un message d'erreur. `id` doit être un entier positif, `enabled` un booléen.

@@ -1064,6 +1064,7 @@ pub fn get_super_agent_tools_status(state: State<AppState>) -> Result<Value, Str
         "known": status.is_some(),
         "ext_supported": status.map(|s| s.ext_supported).unwrap_or(false),
         "extensions_built": status.map(|s| s.extensions_built).unwrap_or(0),
+        "probe_failed": status.map(|s| s.probe_failed).unwrap_or(false),
     }))
 }
 

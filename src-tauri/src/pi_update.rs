@@ -184,7 +184,12 @@ fn run_update_captured(exe: &str, base_args: &[String], deadline_dur: Duration) 
 /// agent`), sans coder en dur le chemin de build interne du paquet (qui change
 /// entre versions : `dist/cli.js`, `dist/bundle/cli.js`, ...). Retourne le
 /// chemin absolu vers le script cli si trouvé et existant.
-fn package_bin_cli(pkg_dir: &std::path::Path) -> Option<String> {
+///
+/// `expected_name` est le nom attendu du bin (stem du shim : `pi.cmd` → `"pi"`,
+/// `plh.cmd` → `"plh"`). Seule une clé bin EXACTE égale à ce nom est acceptée
+/// (pas de repli « première clé »), et uniquement si elle pointe vers un script
+/// (`.js`/`.mjs`/`.cjs`) — jamais un binaire (`.exe`/`.cmd`/`.bat`).
+fn package_bin_cli(pkg_dir: &std::path::Path, expected_name: &str) -> Option<String> {
     use std::fs;
     let pkg_json = pkg_dir.join("package.json");
     let text = fs::read_to_string(&pkg_json).ok()?;
@@ -195,17 +200,20 @@ fn package_bin_cli(pkg_dir: &std::path::Path) -> Option<String> {
         serde_json::Value::String(s) => s.clone(),
         // bin sous forme d'objet : { "pi": "dist/cli.js", ... }
         serde_json::Value::Object(map) => {
-            // Préfère la clé "pi" (ou une clé contenant "pi"), sinon la première.
-            if let Some(pi) = map.get("pi").and_then(|x| x.as_str()) {
-                pi.to_string()
-            } else if let Some((_, x)) = map.iter().find(|(k, _)| k.contains("pi")) {
-                x.as_str()?.to_string()
-            } else {
-                map.iter().next().map(|(_, x)| x.as_str().unwrap_or("").to_string())?
-            }
+            // Seule une clé EXACTE = nom attendu est acceptée (ex. "pi" pour
+            // pi.cmd, "plh" pour plh.cmd). Pas de repli « première clé » : un
+            // paquet sans clé exacte (ex. `@anthropic-ai/claude-code` avec bin
+            // `{"claude": ...}`) est rejeté.
+            map.get(expected_name).and_then(|x| x.as_str())?.to_string()
         }
         _ => return None,
     };
+    // Rejette les binaires non-script (.exe/.cmd/.bat) : on veut un script
+    // exécutable via `node`.
+    let lower = rel.to_lowercase();
+    if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) {
+        return None;
+    }
     let full = pkg_dir.join(rel);
     if full.exists() {
         Some(full.to_string_lossy().to_string())
@@ -215,19 +223,37 @@ fn package_bin_cli(pkg_dir: &std::path::Path) -> Option<String> {
 }
 
 /// Recherche le vrai script cli de pi dans `node_modules` (1 niveau de scope
-/// `@scope/pkg`). Préfère un paquet dont le nom évoque pi pour éviter de
-/// ramasser un cli sans rapport. Retourne le chemin absolu du cli, ou None.
-fn find_pi_cli_in_node_modules(node_modules: &std::path::Path) -> Option<String> {
-    // D'abord le paquet non scopé `node_modules/pi` (ancienne structure).
-    if let Some(cli) = package_bin_cli(&node_modules.join("pi")) {
+/// `@scope/pkg`). `expected_name` est le nom attendu du bin (stem du shim).
+/// Teste d'abord explicitement le paquet scopé officiel `@earendil-works/pi-
+/// coding-agent` puis le paquet non scopé `pi`, avant de scanner le reste en
+/// préférant un paquet dont le nom contient le nom attendu. Retourne le chemin
+/// absolu du cli, ou None.
+fn find_pi_cli_in_node_modules(node_modules: &std::path::Path, expected_name: &str) -> Option<String> {
+    // (i) D'abord le paquet scopé officiel, puis le paquet non scopé `pi`.
+    if let Some(cli) = package_bin_cli(
+        &node_modules.join("@earendil-works").join("pi-coding-agent"),
+        expected_name,
+    ) {
+        return Some(cli);
+    }
+    if let Some(cli) = package_bin_cli(&node_modules.join("pi"), expected_name) {
         return Some(cli);
     }
     let rd = std::fs::read_dir(node_modules).ok()?;
     let mut best: Option<(usize, String)> = None;
-    let mut consider = |pkg_dir: &std::path::Path, score: usize| {
-        if best.as_ref().map_or(true, |(s, _)| score < *s) {
-            if let Some(cli) = package_bin_cli(pkg_dir) {
-                best = Some((score, cli));
+    let mut consider = |pkg_dir: &std::path::Path, score: usize, name: &str| {
+        // (ii) package_bin_cli rejette déjà les candidats dont le cli n'est pas
+        // un script (binaire .exe/.cmd/.bat) ou dont la clé bin n'est pas exacte.
+        if let Some(cli) = package_bin_cli(pkg_dir, expected_name) {
+            // (iv) égalité de score : départager par correspondance exacte du
+            // nom attendu (ex. paquet nommé exactement "pi").
+            let effective = if name.to_lowercase() == expected_name.to_lowercase() {
+                0
+            } else {
+                score
+            };
+            if best.as_ref().map_or(true, |(s, _)| effective < *s) {
+                best = Some((effective, cli));
             }
         }
     };
@@ -246,17 +272,22 @@ fn find_pi_cli_in_node_modules(node_modules: &std::path::Path) -> Option<String>
                         continue;
                     }
                     let n2 = e2.file_name().to_string_lossy().to_string();
-                    let score = if name.to_lowercase().contains("pi") || n2.to_lowercase().contains("pi") {
+                    // (iii) présence du nom attendu dans le nom du paquet.
+                    let score = if n2.to_lowercase().contains(&expected_name.to_lowercase()) {
                         0
                     } else {
                         1
                     };
-                    consider(&p2, score);
+                    consider(&p2, score, &n2);
                 }
             }
         } else {
-            let score = if name.to_lowercase().contains("pi") { 0 } else { 1 };
-            consider(&p, score);
+            let score = if name.to_lowercase().contains(&expected_name.to_lowercase()) {
+                0
+            } else {
+                1
+            };
+            consider(&p, score, &name);
         }
     }
     best.map(|(_, p)| p)
@@ -290,7 +321,12 @@ pub(crate) fn resolve_pi_executable(pi_path: &str) -> (String, Vec<String>) {
     // (ex. C:\Users\x\AppData\Roaming\npm\pi.cmd → ...\npm\node_modules\...).
     if let Some(parent) = std::path::Path::new(trimmed).parent() {
         let nm = parent.join("node_modules");
-        if let Some(cli) = find_pi_cli_in_node_modules(&nm) {
+        // Nom attendu = stem du shim (pi.cmd → "pi", plh.cmd → "plh").
+        let expected = std::path::Path::new(trimmed)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "pi".to_string());
+        if let Some(cli) = find_pi_cli_in_node_modules(&nm, &expected) {
             return ("node".to_string(), vec![cli]);
         }
         // Paquet non résolu (nom/scope non standard ou node_modules absent) :
@@ -492,9 +528,50 @@ mod tests {
         fs::create_dir_all(pi_cli.parent().unwrap()).unwrap();
         fs::write(&pi_cli, "#").unwrap();
 
-        let found = find_pi_cli_in_node_modules(&npm);
+        let found = find_pi_cli_in_node_modules(&npm, "pi");
         assert!(found.is_some(), "un cli doit être trouvé");
         assert!(found.unwrap().contains("pi-tool"), "le paquet nommé pi doit être préféré");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn exe_bin_in_pi_scope_is_rejected() {
+        let root = tmp_root("exereject");
+        let npm = root.join("npm");
+        fs::create_dir_all(&npm).unwrap();
+        let shim = npm.join("pi.cmd");
+        fs::write(&shim, "@echo off").unwrap();
+        // Paquet au scope contenant "pi" mais dont le bin est un .exe : rejeté.
+        let claude = npm.join("node_modules").join("@anthropic-ai").join("claude-code");
+        write_pkg(&claude, serde_json::json!({ "claude": "bin/claude.exe" }));
+        let exe = claude.join("bin").join("claude.exe");
+        fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fs::write(&exe, "MZ").unwrap();
+
+        // Le cli .exe ne doit pas être retenu (ni par clé bin inexacte, ni par
+        // binaire non-script).
+        let found = find_pi_cli_in_node_modules(&npm, "pi");
+        assert!(
+            found.is_none(),
+            "le bin .exe d'un scope contenant pi ne doit pas être retenu: {:?}",
+            found
+        );
+
+        // Avec le vrai paquet pi présent, c'est lui qui est retenu.
+        let pi_pkg = npm.join("node_modules").join("@earendil-works").join("pi-coding-agent");
+        write_pkg(&pi_pkg, serde_json::json!({ "pi": "dist/bundle/cli.js" }));
+        let cli = pi_pkg.join("dist").join("bundle").join("cli.js");
+        fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        fs::write(&cli, "#!/usr/bin/env node").unwrap();
+
+        let exe = resolve_pi_executable(shim.to_str().unwrap());
+        assert_eq!(exe.0, "node");
+        assert_eq!(exe.1.len(), 1);
+        assert!(
+            exe.1[0].contains("pi-coding-agent") && exe.1[0].ends_with("cli.js"),
+            "le vrai cli pi doit être retenu, pas claude.exe: {}",
+            exe.1[0]
+        );
         fs::remove_dir_all(&root).ok();
     }
 
