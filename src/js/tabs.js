@@ -28,6 +28,7 @@ import { createSuperKanban } from "./super-agent-kanban-view.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
+import { findAgentTab } from "./tab-scoping.js";
 
 const statusCursor = document.getElementById("status-cursor");
 const statusFiletype = document.getElementById("status-filetype");
@@ -460,8 +461,10 @@ class TabsManager {
    * visible=1 et reprend la vue. L'idempotence est gérée par l'AgentService :
    * jamais d'erreur « session déjà active ».
    */
-  async _openAgent(label, agentId = "default", runDefault = false, switchTo = true) {
-    const projectPath = window._pilotProjectPath || null;
+  async _openAgent(label, agentId = "default", runDefault = false, switchTo = true, projectPath = null) {
+    // Multi-projets : l'onglet agent est SCOPÉ par projet. `projectPath` explicite
+    // (restauration multi-projets T4) sinon le projet actif.
+    const projPath = projectPath || window._pilotProjectPath || null;
 
     // 3.2.1 : résoudre l'agent depuis la base. L'état logique (loaded/state)
     // vit sur l'objet, pas sur l'onglet. Si l'objet n'existe pas encore en base
@@ -469,14 +472,16 @@ class TabsManager {
     // session sera démarrée au besoin, sans vue d'erreur.
     let agentLoaded = false;
     try {
-      const agent = await invoke("get_agent", { agentId, projectPath });
+      const agent = await invoke("get_agent", { agentId, projectPath: projPath });
       if (agent) agentLoaded = !!agent.loaded;
     } catch (_) {
       // get_agent peut échouer (agent introuvable) → considéré non chargé.
     }
 
-    // Vérifier si un onglet agent avec CET id est déjà ouvert (entrée agent_views).
-    const existing = this.tabs.find((t) => t.mode === "agent" && t.agentId === agentId);
+    // Vérifier si un onglet agent avec CET id est déjà ouvert pour CE projet
+    // (entrée agent_views). Multi-projets : l'onglet est scopé par (projectPath,
+    // agentId) — deux projets peuvent avoir chacun leur onglet agent du même id.
+    const existing = findAgentTab(this.tabs, agentId, projPath);
     if (existing) {
       // Issue #65 : après un stop_agent, la session RPC est détruite mais
       // l'onglet peut rester ouvert (closeTab est asynchrone fire-and-forget,
@@ -487,17 +492,20 @@ class TabsManager {
       // n'est plus chargé (loaded=false après arrêt) : start_agent_session est
       // idempotent (reprend si vivante, relance si morte).
       if (!agentLoaded) {
-        try { await invoke("start_agent_session", { agentId, projectPath }); } catch (_) {}
+        try { await invoke("start_agent_session", { agentId, projectPath: projPath }); } catch (_) {}
       }
       // 3.2 : on ne démarre/parke rien — l'AgentService gère l'idempotence. On
       // pose simplement visible=1 sur l'objet et on reprend la vue.
-      try { await invoke("set_agent_visible", { agentId, projectPath, visible: true }); } catch (_) {}
+      try { await invoke("set_agent_visible", { agentId, projectPath: projPath, visible: true }); } catch (_) {}
       if (switchTo) {
         this.switchTab(existing.id);
       } else {
         // Issue #49 : ouvrir en arrière-plan SANS basculer sur l'onglet agent
         // (l'assistant reste sur son onglet pour attendre le retour).
-        if (existing.agentElements) activateAgentTab(existing.agentElements);
+        // Multi-projets : on n'active les globals d'UI que si l'onglet appartient
+        // au projet actif (restauration multi-projets T4 → on ne touche pas aux
+        // globals d'un agent d'un projet non actif).
+        if (existing.agentElements && projPath === (window._pilotProjectPath || "")) activateAgentTab(existing.agentElements);
       }
       return existing;
     }
@@ -505,6 +513,8 @@ class TabsManager {
     const id = ++tabIdCounter;
     const tab = new Tab(id, "", label || agentDisplayLabel(), "agent");
     tab.agentId = agentId;
+    // Multi-projets : l'onglet agent est scopé par projet.
+    tab.projectPath = projPath;
 
     tab.wrapper = document.createElement("div");
     tab.wrapper.className = "editor-wrapper";
@@ -517,11 +527,11 @@ class TabsManager {
     // la session en arrière-plan SANS rendre l'onglet agent actif — l'utilisateur
     // reste sur l'onglet Assistant pour attendre le retour de l'agent.
     if (switchTo) this.switchTab(id);
-    // Persister immédiatement la vue agent pour ce projet : sans cela, ouvrir
+    // Persister immédiatement la vue agent pour CE projet : sans cela, ouvrir
     // l'onglet agent ne déclenchait aucune sauvegarde et la vue n'était mise à
     // jour que si une autre sauvegarde survenait avant de quitter le projet →
     // un projet quitté après avoir ouvert l'agent perdait son onglet au retour.
-    this._scheduleSave();
+    this._scheduleSave(projPath);
 
     // ── E4 : health check de l'agent avant de tenter start_agent_session ──
     // Si l'exécutable configuré (pi/plh) est absent ou ne répond pas, on affiche
@@ -569,16 +579,20 @@ class TabsManager {
       // Retourne true si la session a été reprise, false si nouvelle.
       let resumed = false;
       if (shouldStart) {
-        resumed = await invoke("start_agent_session", { agentId });
+        resumed = await invoke("start_agent_session", { agentId, projectPath: projPath });
       }
 
       // Créer l'interface de chat (vue). Si l'objet était déjà chargé, la
       // conversation est relue depuis la session vivante (renderMessageHistory).
-      const result = await createAgentPi(tab.wrapper, resumed === true, agentId);
+      // Multi-projets : on passe `projPath` pour que le canal RPC écouté soit
+      // celui du projet de CET onglet (le canal est scopé par projet).
+      const result = await createAgentPi(tab.wrapper, resumed === true, agentId, projPath);
       tab.view = result.wrapper;
       tab.unlistenRpc = result.unlisten;
       tab.unlistenDragDrop = result.unlistenDragDrop;
       tab.agentElements = result.elements;
+      // Multi-projets : re-lie le canal RPC de l'onglet au projet cible (T3).
+      tab.relistenRpc = result.relisten;
       tab.agentReady = true;
       // Issue #49 : ne pas activer les globals d'UI de l'agent si on ne bascule
       // pas (l'onglet Assistant reste actif — ses globals d'autocomplétion ne
@@ -586,7 +600,7 @@ class TabsManager {
       if (switchTo) activateAgentTab(result.elements);
 
       // 3.2 : rendre l'objet visible (visible=1) après création de la vue.
-      try { await invoke("set_agent_visible", { agentId, projectPath, visible: true }); } catch (_) {}
+      try { await invoke("set_agent_visible", { agentId, projectPath: projPath, visible: true }); } catch (_) {}
 
       // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
       // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
@@ -1985,6 +1999,33 @@ class TabsManager {
   }
 
   /**
+   * Activation d'un onglet (clic utilisateur). Multi-projets (T3) : si on active
+   * un onglet agent d'un AUTRE projet, on bascule d'abord le projet actif
+   * (set_active_project + resync via _activateProject), puis on re-rend le chat
+   * et on ré-écoute le canal RPC du projet cible (le canal est scopé par projet).
+   * Évite les boucles de resync : _activateProject prélixe window._pilotProjectPath
+   * avant l'invoke, donc le listener project_changed (main.js) l'ignore.
+   */
+  async _activateTab(tab) {
+    if (tab.mode === "agent" && tab.projectPath && tab.projectPath !== (window._pilotProjectPath || "")) {
+      const sidebar = window._pilotGetSidebar ? window._pilotGetSidebar() : null;
+      if (sidebar) {
+        try { await sidebar._activateProject(tab.projectPath); } catch (_) {}
+      }
+      // Re-lier le canal RPC de l'onglet au projet cible (le canal est scopé par
+      // projet) puis re-rendre la discussion de l'agent de ce projet.
+      if (tab.relistenRpc) {
+        try { await tab.relistenRpc(tab.projectPath); } catch (_) {}
+      }
+      const msgContainer = tab.wrapper ? tab.wrapper.querySelector(".agent-chat-messages") : null;
+      if (msgContainer) {
+        try { await renderMessageHistory(msgContainer); } catch (_) {}
+      }
+    }
+    this.switchTab(tab.id);
+  }
+
+  /**
    * Bascule vers un onglet
    */
   switchTab(tabId) {
@@ -2452,10 +2493,12 @@ class TabsManager {
   }
 
   /**
-   * Délègue la sauvegarde de session (debounce)
+   * Délègue la sauvegarde de session (debounce). Multi-projets : un `projectPath`
+   * explicite permet de sauvegarder la vue d'un onglet agent d'un projet NON
+   * actif (restauration multi-projets T4) sous le bon projet.
    */
-  _scheduleSave() {
-    scheduleSave(this, window._pilotProjectPath);
+  _scheduleSave(projectPath) {
+    scheduleSave(this, projectPath || window._pilotProjectPath);
   }
 
   /**
@@ -2798,7 +2841,7 @@ class TabsManager {
         e.stopPropagation();
         this.closeTab(tab.id);
       } else {
-        this.switchTab(tab.id);
+        this._activateTab(tab);
       }
     });
 

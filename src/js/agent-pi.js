@@ -25,9 +25,9 @@ import { getTabsManager } from "./tabs.js";
  * Multi-onglets agents : `agentId` cible le canal de l'agent (l'agent par
  * défaut garde le canal du projet, les autres ont un canal dédié).
  */
-async function getAgentEventChannel(agentId = "default") {
+async function getAgentEventChannel(agentId = "default", projectPath = null) {
   try {
-    return await invoke("get_agent_event_channel", { agentId });
+    return await invoke("get_agent_event_channel", { agentId, projectPath });
   } catch (_) {
     return "rpc-event";
   }
@@ -172,7 +172,7 @@ function deleteContextHandoffFile() {
   } catch (_) {}
 }
 
-export async function createAgentPi(container, resumed = false, agentId = "default") {
+export async function createAgentPi(container, resumed = false, agentId = "default", projectPath = null) {
   // Charger la configuration show_thinking
   await refreshShowThinking();
   // Charger la configuration show_tools
@@ -1974,15 +1974,23 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   const orchFns = { renderOrchestrationPlan, executeNextTask, handleOrchestrationAgentEnd, handleOrchestrationTimeout, handleTaskFailure, handleOrchestrationConnectionError, switchToOrchestrator, switchToCoder, resetIdleTimer: resetOrchestrationIdleTimer, parsePlanResponse, validatePlan };
   // Multi-projets : chaque projet émet sur son propre canal (rpc-event-<hash>).
   // Multi-onglets agents : chaque agent émet sur son propre canal (agentId).
-  const rpcChannel = await getAgentEventChannel(agentId);
-  const unlisten = await listen(rpcChannel, (event) => {
-    const payload = event.payload;
-    try {
-      handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanResponse, orchFns);
-    } catch (err) {
-      console.error('[rpc-event] erreur dans handleRpcEvent:', err);
-    }
-  });
+  // Le canal est scopé par projet : on le lie au projet de CET onglet (explicite
+  // pour un onglet d'un projet non actif, sinon le projet actif). `relisten`
+  // permet de re-lier le canal quand le projet actif bascule (T3).
+  let unlistenRpc = null;
+  async function bindRpcChannel(projPath) {
+    if (unlistenRpc) { try { unlistenRpc(); } catch (_) {} unlistenRpc = null; }
+    const rpcChannel = await getAgentEventChannel(agentId, projPath);
+    unlistenRpc = await listen(rpcChannel, (event) => {
+      const payload = event.payload;
+      try {
+        handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanResponse, orchFns);
+      } catch (err) {
+        console.error('[rpc-event] erreur dans handleRpcEvent:', err);
+      }
+    });
+  }
+  await bindRpcChannel(projectPath);
 
   // ── H2 V1 : écoute des événements du reviewer (canal séparé) ──
   const unlistenReviewer = await listen("rpc-event-reviewer", (event) => {
@@ -4825,7 +4833,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   return {
     wrapper,
     unlisten: () => {
-      try { unlisten(); } catch (_) {}
+      try { if (unlistenRpc) unlistenRpc(); } catch (_) {}
       try { unlistenReviewer(); } catch (_) {}
       try { unlistenRagDone(); } catch (_) {}
       try { unlistenAutoStop(); } catch (_) {}
@@ -4835,6 +4843,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       // (fermeture de l'onglet → la purge Assistante ne la touchera plus).
       try { agentTabStates.delete(agentId); } catch (_) {}
     },
+    // Multi-projets (T3) : re-lie le canal RPC de l'onglet au projet cible.
+    relisten: async (projPath) => { await bindRpcChannel(projPath); },
     unlistenDragDrop,
     // Multi-onglets agents : éléments du chat de CET onglet, pour que tabs.js
     // puisse les réactiver (globals d'autocomplétion/popups) à la bascule.

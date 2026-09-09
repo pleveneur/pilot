@@ -10,6 +10,7 @@ import { convertPdfToMd } from "./pdf-to-markdown.js";
 import { agentDisplayLabel, agentDisplayPhrase } from "./backend-info.js";
 import { openGitDiffModal } from "./diff-view.js";
 import { restoreTabs, saveTabSession } from "./session-persistence.js";
+import { shouldCloseTab } from "./tab-scoping.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
@@ -408,8 +409,10 @@ class Sidebar {
     if (cur && cur !== folderPath) {
       await saveTabSession(this.tabs, cur);
     }
-    // Fermer tous les onglets du projet précédent (sans confirmation pour l'agent)
-    await this._closeAllTabs();
+    // Fermer les onglets du projet précédent (sans confirmation pour l'agent).
+    // Multi-projets (T2) : keepAgents=true → les onglets agents restent ouverts
+    // (scopés par projet), seuls les onglets edit/preview/terminal sont fermés.
+    await this._closeAllTabs(false, true);
 
     // Stocker le chemin du projet pour la résolution des images
     window._pilotProjectPath = folderPath;
@@ -1309,7 +1312,9 @@ class Sidebar {
         }
         // `parked=true` : ne pas émettre stop_agent_session pour l'agent (il est
         // parké, pas arrêté) — évite toute course avec start_agent_session.
-        await this._closeAllTabs(true);
+        // `keepAgents=true` : les onglets agents restent ouverts (scopés par
+        // projet) — seuls les onglets edit/preview/terminal sont fermés.
+        await this._closeAllTabs(true, true);
       }
       // Prélixer le projet cible AVANT l'invoke pour que le listener
       // `project_changed` ignore cet event (il ferait une double resync).
@@ -1386,8 +1391,12 @@ class Sidebar {
   /**
    * Ferme tous les onglets ouverts (utilisé lors du changement/fermeture de projet).
    * Retourne true si un onglet agent était ouvert (pour le rouvrir ensuite).
+   * Multi-projets (T2) : `keepAgents=true` conserve les onglets agents ouverts
+   * (scopés par projet) lors d'un changement de projet — seuls les onglets
+   * edit/preview/terminal sont fermés. `close_project` garde le comportement
+   * actuel (ferme tout, keepAgents=false).
    */
-  async _closeAllTabs(parked = false) {
+  async _closeAllTabs(parked = false, keepAgents = false) {
     const hadAgentTab = this.tabs.tabs.some((t) => t.mode === "agent");
       // ATTEND la fin de la fermeture de CHAQUE onglet : `closeTab` est async et
       // retarde le retrait de `this.tabs` (await de confirmation/sauvegarde/stop).
@@ -1408,7 +1417,7 @@ class Sidebar {
       // `dashboardRefresh` (appelé dans switchTab).
       await Promise.all(
         this.tabs.tabs
-          .filter((t) => t.mode !== "superagent" && t.mode !== "dashboard")
+          .filter((t) => shouldCloseTab(t, keepAgents))
           .map((tab) =>
             this.tabs.closeTab(tab.id, { skipConfirm: true, skipAgentStop: !!parked }).catch(() => {})
           )

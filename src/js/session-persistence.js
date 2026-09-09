@@ -82,9 +82,13 @@ export async function saveTabSession(tabs, projectPath) {
   // reconstruire la barre d'onglets à l'identique. La survie de l'agent est
   // garantie par la table `agents` ; `agent_views` ne stocke que la vue
   // (position, nom renommé, onglet actif).
+  // Multi-projets (T2) : les onglets agents des AUTRES projets restent ouverts
+  // dans `tabs.tabs` — on ne persiste que les vues du projet sauvegardé
+  // (`t.projectPath === projectPath`), sinon on écraserait les vues d'un autre
+  // projet sous le mauvais chemin.
   const views = [];
   tabs.tabs.forEach((t, idx) => {
-    if (t.mode === "agent") {
+    if (t.mode === "agent" && t.projectPath === projectPath) {
       views.push({
         agent_id: t.agentId || "default",
         project_path: projectPath,
@@ -237,23 +241,41 @@ export async function restoreTabs(tabs, projectPath, onProgress) {
   if (restoreAgentTabs) {
     // 5.2 : reconstruire la barre d'onglets agents depuis `agent_views` (vue
     // dissociée de l'objet). Chaque onglet démarre/reprent sa propre session.
-    for (const v of views) {
-      try {
-        await tabs._openAgent(v.name_override || agentDisplayLabel(), v.agent_id);
-      } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
-    }
-    // Restaurer l'ordre des onglets agents (positions persistées). Only runs
-    // when agent tabs were actually restored above — `_moveTabToIndex` is only
-    // called on an existing tab, so this loop would be a harmless no-op
-    // otherwise, but keeping it inside the same branch makes that explicit.
-    for (const v of views) {
-      if (typeof v.order_index === "number" && v.order_index >= 0) {
-        const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === v.agent_id);
-        if (t) {
-          const cur = tabs.tabs.indexOf(t);
-          if (cur !== -1 && cur !== v.order_index) tabs._moveTabToIndex(t.id, v.order_index);
+    // Multi-projets (T4) : on restaure les vues agents de TOUS les projets
+    // ouverts (list_open_projects), pas seulement le projet actif — pour que
+    // Pilot puisse travailler sur plusieurs projets en même temps. Les onglets
+    // des projets non actifs sont créés scopés à leur projet (switchTo=false,
+    // projectPath explicite) sans basculer le projet actif.
+    const restoreProjectViews = async (projPath) => {
+      const pviews = await invoke("list_agent_views", { projectPath: projPath }).catch(() => []);
+      for (const v of pviews) {
+        try {
+          await tabs._openAgent(v.name_override || agentDisplayLabel(), v.agent_id, false, false, projPath);
+        } catch (_) { /* agent indisponible (gate health E4) → on ignore */ }
+      }
+      // Restaurer l'ordre des onglets agents (positions persistées). Only runs
+      // when agent tabs were actually restored above — `_moveTabToIndex` is only
+      // called on an existing tab, so this loop would be a harmless no-op
+      // otherwise, but keeping it inside the same branch makes that explicit.
+      for (const v of pviews) {
+        if (typeof v.order_index === "number" && v.order_index >= 0) {
+          const t = tabs.tabs.find((tb) => tb.mode === "agent" && (tb.agentId || "default") === v.agent_id && tb.projectPath === projPath);
+          if (t) {
+            const cur = tabs.tabs.indexOf(t);
+            if (cur !== -1 && cur !== v.order_index) tabs._moveTabToIndex(t.id, v.order_index);
+          }
         }
       }
+    };
+
+    // Projet actif d'abord (ses vues agents, avec son ordre).
+    await restoreProjectViews(projectPath);
+
+    // Puis les autres projets ouverts (vues agents scopées à leur projet).
+    const openProjects = await invoke("list_open_projects").catch(() => []);
+    for (const p of openProjects) {
+      if (p === projectPath) continue;
+      await restoreProjectViews(p);
     }
   }
 }

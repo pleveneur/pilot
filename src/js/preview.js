@@ -370,11 +370,127 @@ function resolvePreviewPath(baseDir, rel) {
 }
 
 /**
- * Attache le handler de clic sur les liens de la prévisualisation (issue #22).
+ * Détecte si un href ressemble à un lien web écrit SANS protocole explicite
+ * (ex. `www.example.com`, `example.com/page`, `sub.domain.tld`).
+ *
+ * Un lien interne relatif (ex. `docs/guide.md`, `../README.md`, `readme.md`)
+ * ne doit PAS être classé comme web : on examine le premier segment (avant
+ * tout `/`) — un domaine y contient un point, alors qu'un chemin de fichier
+ * relatif a son point dans le dernier segment (l'extension).
+ * @param {string} href
+ * @returns {boolean}
+ */
+function looksLikeWebLink(href) {
+  // Préfixe www. explicite
+  if (/^www\./i.test(href)) return true;
+  const first = href.split(/[/\\]/)[0];
+  // Le premier segment doit ressembler à un domaine (au moins un point)
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(first)) return false;
+  const tld = first.split(".").pop();
+  // Un TLD qui est en réalité une extension de fichier → lien interne, pas web
+  if (/^(md|markdown|txt|html?|json|js|ts|css|png|jpe?g|gif|svg|pdf|docx?|xlsx?|pptx?|zip|py|rs|go|java|c|cpp|h|hpp|sh|yml|yaml|toml|ini|log|xml|sql|rb|php|vue|jsx|tsx)$/i.test(tld)) return false;
+  return true;
+}
+
+/**
+ * Résout un lien interne relatif de la prévisualisation vers un chemin absolu.
+ * @param {HTMLElement} wrapper - conteneur .preview-wrapper (dataset.sourcePath)
+ * @param {string} href - href du lien interne relatif
+ * @returns {string|null} chemin absolu résolu, ou null si non résolvable
+ */
+function resolveLinkPath(wrapper, href) {
+  const sourcePath = wrapper.dataset.sourcePath || "";
+  const projectPath = window._pilotProjectPath || "";
+  if (href.startsWith("/")) {
+    // Chemin absolu depuis la racine du projet
+    return resolvePreviewPath(projectPath, href);
+  }
+  // Sans fichier source, aucun répertoire de base pour résoudre un chemin
+  // relatif → on ne produit pas de chemin invalide.
+  if (!sourcePath) {
+    console.warn("[preview] Lien relatif sans fichier source, ignoré:", href);
+    return null;
+  }
+  const baseDir = sourcePath.replace(/[\\/][^\\/]*$/, "");
+  return resolvePreviewPath(baseDir, href);
+}
+
+// ── Menu contextuel des liens de prévisualisation (clic droit sur un lien
+//    interne vers un fichier .md) : choix « Ouvrir en édition » / « Ouvrir en
+//    prévisualisation ». Réutilise le style .context-menu de l'application. ──
+let previewLinkMenu = null;
+let previewLinkMenuPath = null;
+
+function hidePreviewLinkMenu() {
+  if (previewLinkMenu) previewLinkMenu.classList.add("hidden");
+  previewLinkMenuPath = null;
+}
+
+/**
+ * Récupère (et initialise une seule fois) le menu contextuel des liens de
+ * prévisualisation, puis le positionne au point du clic droit.
+ * @param {number} x - coordonnée X du clic
+ * @param {number} y - coordonnée Y du clic
+ * @param {string} absPath - chemin absolu du fichier .md cible
+ */
+function showPreviewLinkMenu(x, y, absPath) {
+  if (!previewLinkMenu) {
+    previewLinkMenu = document.getElementById("preview-link-context-menu");
+    if (!previewLinkMenu) return;
+    const btnEdit = document.getElementById("plink-edit");
+    const btnPreview = document.getElementById("plink-preview");
+    btnEdit.addEventListener("click", () => {
+      const p = previewLinkMenuPath;
+      hidePreviewLinkMenu();
+      if (p && window._pilotTabs) {
+        window._pilotTabs.openFile(p, "edit").catch((err) =>
+          console.error("[preview] Erreur ouverture en édition:", err)
+        );
+      }
+    });
+    btnPreview.addEventListener("click", () => {
+      const p = previewLinkMenuPath;
+      hidePreviewLinkMenu();
+      if (p && window._pilotTabs) {
+        window._pilotTabs.openFile(p, "preview").catch((err) =>
+          console.error("[preview] Erreur ouverture en prévisualisation:", err)
+        );
+      }
+    });
+    // Fermer au clic extérieur ou à Échap
+    document.addEventListener("click", (e) => {
+      if (previewLinkMenu && !previewLinkMenu.contains(e.target)) hidePreviewLinkMenu();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") hidePreviewLinkMenu();
+    });
+  }
+  previewLinkMenuPath = absPath;
+  previewLinkMenu.classList.remove("hidden");
+  // Positionnement avec clamp (menu position:fixed, enfant du body) : on borne
+  // par le viewport pour ne pas couper le menu près des bords.
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = x;
+  let top = y;
+  if (left + previewLinkMenu.offsetWidth > vw - 4) left = Math.max(4, vw - previewLinkMenu.offsetWidth - 4);
+  if (top + previewLinkMenu.offsetHeight > vh - 4) top = Math.max(4, vh - previewLinkMenu.offsetHeight - 4);
+  previewLinkMenu.style.left = left + "px";
+  previewLinkMenu.style.top = top + "px";
+}
+
+/**
+ * Attache les handlers de clic et de clic droit sur les liens de la
+ * prévisualisation (issue #22).
  * - Ancre (#id) : scroll dans la prévisualisation.
  * - Lien externe (http/https/mailto…) : ouverture dans le navigateur système.
+ * - Lien web sans protocole (www., domaine) : ouverture dans le navigateur système.
  * - Lien interne relatif : ouverture du fichier cible dans un nouvel onglet.
  * Empêche la navigation WebView (qui « relançait » Pilot et cassait la session agent).
+ *
+ * Clic droit sur un lien interne vers un fichier .md : menu contextuel avec le
+ * choix « Ouvrir en édition » / « Ouvrir en prévisualisation ». Le clic gauche
+ * conserve le comportement par défaut (ouverture en prévisualisation).
  * @param {HTMLElement} wrapper - conteneur .preview-wrapper
  */
 function attachPreviewLinkHandler(wrapper) {
@@ -398,26 +514,57 @@ function attachPreviewLinkHandler(wrapper) {
     // Lien externe (http, https, mailto, ftp…) : navigateur système
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) {
       e.preventDefault();
-      invoke("open_in_browser", { path: href }).catch(() => {});
+      invoke("open_in_browser", { path: href }).catch((err) =>
+        console.error("[preview] Erreur ouverture navigateur:", err)
+      );
       return;
     }
 
-    // Lien interne relatif : résoudre contre le dossier du fichier source
-    e.preventDefault();
-    const sourcePath = wrapper.dataset.sourcePath || "";
-    const projectPath = window._pilotProjectPath || "";
-    let absPath;
-    if (href.startsWith("/")) {
-      // Chemin absolu depuis la racine du projet
-      absPath = resolvePreviewPath(projectPath, href);
-    } else {
-      const baseDir = sourcePath.replace(/[\\/][^\\/]*$/, "");
-      absPath = resolvePreviewPath(baseDir, href);
+    // Lien web sans protocole explicite (www.example.com, example.com/page) :
+    // navigateur système (issue #85).
+    if (looksLikeWebLink(href)) {
+      e.preventDefault();
+      invoke("open_in_browser", { path: href }).catch((err) =>
+        console.error("[preview] Erreur ouverture navigateur:", err)
+      );
+      return;
     }
+
+    // Lien interne relatif : résoudre contre le dossier du fichier source.
+    // L'utilisateur est déjà en prévisualisation → ouverture en mode
+    // PRÉVISUALISATION (et non en édition, mode par défaut d'openFile).
+    e.preventDefault();
+    const absPath = resolveLinkPath(wrapper, href);
     const tabs = window._pilotTabs;
     if (tabs && absPath) {
-      tabs.openFile(absPath).catch(() => {});
+      tabs.openFile(absPath, "preview").catch((err) =>
+        console.error("[preview] Erreur ouverture fichier:", err)
+      );
     }
+  });
+
+  // Clic droit sur un lien interne vers un fichier .md → menu contextuel
+  // « Ouvrir en édition » / « Ouvrir en prévisualisation ». Uniquement pour les
+  // liens internes relatifs .md (pas les ancres, ni les liens web/externes).
+  wrapper.addEventListener("contextmenu", (e) => {
+    const link = e.target.closest("a");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (!href) return;
+    // Ancre interne : pas de menu
+    if (href.startsWith("#")) return;
+    // Lien externe (http, https, mailto…) : pas de menu
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return;
+    // Lien web sans protocole (www., domaine) : pas de menu
+    if (looksLikeWebLink(href)) return;
+    // Uniquement les liens vers des fichiers .md
+    if (!href.toLowerCase().endsWith(".md")) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    const absPath = resolveLinkPath(wrapper, href);
+    if (!absPath) return;
+    showPreviewLinkMenu(e.clientX, e.clientY, absPath);
   });
 }
 

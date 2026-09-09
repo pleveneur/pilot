@@ -147,6 +147,35 @@ struct AppState {
 - Au basculement (desktop), `_activateProject` : sauvegarde la session onglets,
   parke l'agent, ferme les onglets, invoque `set_active_project`, restaure les
   onglets du projet, rouvre l'onglet agent si le projet en avait un.
+- **Onglets agents scopés par projet (T1, 2026-08)** : chaque onglet agent porte
+  `tab.projectPath` (le projet auquel il appartient). La recherche d'onglet
+  existant se fait par `(projectPath, agentId)` (`findAgentTab`, logique pure
+  extraite dans `src/js/tab-scoping.js`) → deux projets peuvent avoir chacun leur
+  onglet agent du même id. `_openAgent` accepte un `projectPath` explicite (5e
+  argument) pour ouvrir l'onglet d'un projet non actif sans basculer le projet
+  actif (restauration multi-projets T4).
+- **Changement de projet ne ferme plus les agents (T2, 2026-08)** :
+  `_closeAllTabs(parked, keepAgents)` — `_activateProject` et `openProjectByPath`
+  passent `keepAgents=true` → les onglets agents restent ouverts (scopés par
+  projet), seuls les onglets edit/preview/terminal sont fermés. `close_project`
+  garde le comportement actuel (ferme tout, `keepAgents=false`). Le parking
+  explicite de l'agent sortant est conservé. `saveTabSession` ne persiste que les
+  vues agents du projet sauvegardé (`t.projectPath === projectPath`).
+- **Activation d'un onglet agent d'un autre projet (T3, 2026-08)** : au clic sur
+  un onglet agent d'un projet non actif, `_activateTab` bascule d'abord le projet
+  actif (`_activateProject` → `set_active_project` + resync), puis re-rend le chat
+  (`renderMessageHistory`) et ré-écoute le canal RPC du projet cible
+  (`tab.relistenRpc` → `bindRpcChannel(projectPath)`, le canal étant scopé par
+  projet). Les boucles de resync sont évitées : `_activateProject` prélixe
+  `window._pilotProjectPath` avant l'invoke, donc le listener `project_changed`
+  (main.js) l'ignore. La délégation headless (A13) et `run_agents` ne sont pas
+  affectées (elles passent par `_openAgent` avec le projet actif).
+- **Restauration multi-projets (T4, 2026-08)** : `restoreTabs` restaure les vues
+  agents (`list_agent_views`) de TOUS les projets ouverts (`list_open_projects`),
+  pas seulement le projet actif — les onglets des projets non actifs sont créés
+  scopés à leur projet (`switchTo=false`, `projectPath` explicite) sans basculer
+  le projet actif. Respecte `agent_start_on_launch` et l'ordre persisté
+  (`order_index`). Aucun onglet dupliqué (idempotence de `_openAgent`).
 - **Réouverture de l'onglet agent par projet (corrigé 2026-08)** : la décision de
   rouvrir l'onglet agent au retour sur un projet était basée sur les onglets du
   projet **sortant** (bug `hadAgentTab = _closeAllTabs()`), pas sur le projet
