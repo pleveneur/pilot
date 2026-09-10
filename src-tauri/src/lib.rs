@@ -90,6 +90,7 @@ mod gds_git;
 mod gds_sync;
 mod gds_ssh;
 mod gds_web;
+mod group_assistant;
 
 // ── État global de l'application ──
 
@@ -671,6 +672,13 @@ struct AppConfig {
     // le GDS actif.
     #[serde(default = "default_true")]
     gds_enabled: bool,
+    // ── Assistant de groupe (GDS Phase C2) ──
+    // Modèle actif de l'assistant de groupe (format "provider/modelId").
+    // Persisté pour l'appel bloquant (process frais par tour). Lecture seule
+    // stricte : répond aux questions sur les projets du groupe en lisant le
+    // suivi fusionné (clients, projets, tâches, décisions).
+    #[serde(default)]
+    group_assistant_model: String,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -921,6 +929,7 @@ impl Default for AppConfig {
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
             gds_enabled: true,
+            group_assistant_model: String::new(),
         }
     }
 }
@@ -2521,6 +2530,13 @@ pub fn run() {
             super_agent::get_super_agent_tracking,
             super_agent::get_super_agent_kanban,
             super_agent::query_super_agent,
+            // ── Assistant de groupe (GDS Phase C2, spec_gds.md §C2) ──
+            group_assistant::start_group_assistant_session,
+            group_assistant::stop_group_assistant_session,
+            group_assistant::send_group_assistant_prompt,
+            group_assistant::set_group_assistant_model,
+            group_assistant::get_group_assistant_state,
+            group_assistant::group_assistant_tracking_query,
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
             dashboard::get_project_tracking,

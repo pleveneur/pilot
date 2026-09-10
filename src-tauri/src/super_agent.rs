@@ -677,7 +677,7 @@ pub fn set_super_agent_working_project(state: State<AppState>, path: String) -> 
 // Le frontend intercepte les outils d'extension (sentinel) et appelle ces
 // commandes ; le résultat est renvoyé au LLM.
 
-fn sqlite_value_to_json(v: rusqlite::types::Value) -> Value {
+pub(crate) fn sqlite_value_to_json(v: rusqlite::types::Value) -> Value {
     match v {
         rusqlite::types::Value::Null => Value::Null,
         rusqlite::types::Value::Integer(i) => Value::Number(i.into()),

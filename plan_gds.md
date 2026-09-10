@@ -425,11 +425,15 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   CRUD liste `list_clients`/`list_tracking_projects`/`list_tasks`/
   `list_decisions`).
 
-**C2. Assistant de groupe (lecture seule)**
+**C2. Assistant de groupe (lecture seule)** ✅
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension
-  `pilot-group-assistant.ts`, canal `__channel: group`.
-- Dépendance : C1. Tests : session RPC, questions sur projets, lecture seule
-  stricte. Critère : assistant de groupe répond + lit le suivi sans modifier le code.
+  `pilot-group-assistant.ts`, canal `rpc-event-group` (`__channel: group`).
+  Moteur configurable (`group_assistant_model`).
+- **Implémenté** : session RPC dédiée globale (multi-projets), garde-fou
+  `gds_enabled`, prompt lecture seule stricte, modèle configurable, lecture du
+  suivi fusionné (Postgres via GDS, repli SQLite). Extension
+  `pilot-group-assistant.ts` : outil `group_tracking_query(scope)` (lecture
+  seule). `cargo test --lib` vert (209 tests).
 
 ### PHASE D — Composant web (issue #56) — UNIQUEMENT après A/B/C stables
 

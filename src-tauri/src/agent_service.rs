@@ -48,6 +48,18 @@ pub const ASSISTANT_SPACE: &str = "__assistant__";
 /// Canal d'événements dédié au super-agent (isolé des canaux projet/agents).
 const SUPERAGENT_CHANNEL: &str = "rpc-event-superagent";
 
+/// Id d'agent dédié de l'assistant de groupe (GDS Phase C2) dans le registre
+/// unique. Session RPC dédiée (canal `rpc-event-group`, extension
+/// pilot-group-assistant), globale (multi-projets) : stockée sous un projet
+/// pseudo-global "". Lecture seule stricte : répond aux questions sur les
+/// projets du groupe en lisant le suivi fusionné (clients, projets, tâches,
+/// décisions) sans jamais modifier le code.
+pub const GROUP_ASSISTANT_ID: &str = "groupassistant";
+
+/// Canal d'événements dédié à l'assistant de groupe (isolé des canaux
+/// projet/agents et du super-agent).
+const GROUP_ASSISTANT_CHANNEL: &str = "rpc-event-group";
+
 /// Fenêtre (s) dans laquelle la mort du processus super-agent après son
 /// démarrage est considérée comme un CRASH (mort anormale) plutôt qu'un arrêt
 /// volontaire ou une mort tardive. Anti-boucle de démarrage (bug onglet
@@ -1361,6 +1373,137 @@ impl AgentService {
         timeout_secs: u64,
     ) -> Result<Value, String> {
         self.send_sync_timeout("", SUPERAGENT_ID, command, timeout_secs)
+    }
+
+    // ── Assistant de groupe (GDS Phase C2) ──
+    // Session RPC dédiée (canal `rpc-event-group`, extension
+    // pilot-group-assistant), globale (multi-projets) : stockée sous un projet
+    // pseudo-global "". Lecture seule stricte : répond aux questions sur les
+    // projets du groupe en lisant le suivi fusionné (clients, projets, tâches,
+    // décisions) sans jamais modifier le code. Respecte `gds_enabled` (le
+    // démarrage est refusé si le GDS est désactivé globalement).
+
+    /// Démarre (ou reprend) la session de l'assistant de groupe. Idempotent :
+    /// si un processus vivant existe déjà, ne fait rien. Sinon lance un nouveau
+    /// processus pi `--no-session` avec l'extension pilot-group-assistant.
+    pub fn start_group_assistant(
+        &self,
+        app: &AppHandle,
+        cwd: &str,
+        pi_path: &str,
+        default_model: Option<(String, String)>,
+    ) -> Result<(), String> {
+        let key = Self::session_key("", GROUP_ASSISTANT_ID);
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(entry) = sessions.get_mut(&key) {
+                let alive = entry
+                    .session
+                    .child
+                    .try_wait()
+                    .map(|s| s.is_none())
+                    .unwrap_or(false);
+                if alive {
+                    return Ok(()); // déjà lancé (idempotent)
+                }
+                sessions.remove(&key);
+            }
+        }
+        let session = match Self::spawn_group_assistant_session(app, cwd, pi_path) {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            sessions.insert(
+                key,
+                SessionEntry {
+                    session,
+                    project: String::new(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        // Démarrer une nouvelle session (contexte vierge) puis appliquer le
+        // modèle par défaut pour répondre au 1er prompt.
+        let cmd = serde_json::json!({ "type": "new_session" });
+        self.send_group_assistant_sync(cmd).ok();
+        if let Some((provider, model_id)) = default_model {
+            let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
+            self.send_group_assistant_sync(cmd).ok();
+        }
+        Ok(())
+    }
+
+    /// Arrête la session de l'assistant de groupe (état Stopped, processus tué).
+    pub fn stop_group_assistant(&self) -> Result<(), String> {
+        self.stop("", GROUP_ASSISTANT_ID)
+    }
+
+    /// Indique si la session de l'assistant de groupe est vivante (déjà lancée).
+    pub fn group_assistant_alive(&self) -> bool {
+        let key = Self::session_key("", GROUP_ASSISTANT_ID);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get_mut(&key) {
+            Some(e) => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_none())
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Route une commande asynchrone vers la session de l'assistant de groupe.
+    pub fn send_group_assistant(&self, command: Value) -> Result<(), String> {
+        self.send("", GROUP_ASSISTANT_ID, command)
+    }
+
+    /// Route une commande synchrone vers la session de l'assistant de groupe.
+    pub fn send_group_assistant_sync(&self, command: Value) -> Result<Value, String> {
+        self.send_sync("", GROUP_ASSISTANT_ID, command)
+    }
+
+    /// Lance un nouveau processus pi --mode rpc pour l'assistant de groupe.
+    /// Reproduit la logique de `spawn_superagent_session` (canal
+    /// `rpc-event-group`, extension pilot-group-assistant, `--no-session`).
+    fn spawn_group_assistant_session(
+        app: &AppHandle,
+        cwd: &str,
+        pi_path: &str,
+    ) -> Result<rpc_manager::RpcSession, String> {
+        let state = app.state::<AppState>();
+        let mut extensions: Vec<String> = Vec::new();
+        if probe_extension_support(&state, pi_path) {
+            if let Ok(data_dir) = app.path().app_data_dir() {
+                let dir = data_dir.join("extensions");
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    let ext = dir.join("pilot-group-assistant.ts");
+                    if std::fs::write(&ext, include_str!("../extensions/pilot-group-assistant.ts")).is_ok() {
+                        extensions.push(ext.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        let session = rpc_manager::spawn_and_start(
+            cwd,
+            pi_path,
+            true, // no_session : contexte vierge, jetable
+            "",
+            None,
+            extensions,
+            app.clone(),
+            state.event_tx.clone(),
+            GROUP_ASSISTANT_CHANNEL,
+            None,
+            None,
+            Some(GROUP_ASSISTANT_ID.to_string()),
+            None,
+        )
+        .map_err(|e| format!("Erreur lancement de l'assistant de groupe : {}", e))?;
+        Ok(session)
     }
 
     // ── Agents d'assistant (tâche #140) ──

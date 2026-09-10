@@ -5,7 +5,7 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) implémentées — C2 à venir.**
+> **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) + C2 implémentées.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -719,13 +719,20 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
 - **CRUD liste** : `gds_db.rs` ajoute `list_clients`, `list_tracking_projects`,
   `list_tasks`, `list_decisions` (lecture complète pour l'API).
 
-**C2. Assistant de groupe (lecture seule)**
+**C2. Assistant de groupe (lecture seule)** ✅
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension
-  `pilot-group-assistant.ts`, canal `__channel: group`. Moteur configurable
-  (arbitrage 8).
-- Dépendance : C1. Tests : session RPC, questions sur projets, lecture seule
-  stricte. Critère : assistant de groupe répond + lit le suivi sans modifier le
-  code.
+  `pilot-group-assistant.ts`, canal `rpc-event-group` (`__channel: group`).
+  Moteur configurable (`group_assistant_model`, arbitrage 8).
+- **Implémenté** : session RPC dédiée globale (multi-projets) démarrée via
+  `start_group_assistant_session` (garde-fou `gds_enabled`), prompt lecture
+  seule stricte (`send_group_assistant_prompt`), modèle configurable
+  (`set_group_assistant_model`), état (`get_group_assistant_state`), lecture du
+  suivi fusionné (`group_assistant_tracking_query` : Postgres via le GDS quand
+  le pool est disponible, sinon repli SQLite du super-agent). Extension
+  `pilot-group-assistant.ts` : outil `group_tracking_query(scope)` (sentinel
+  `PILOT_GROUP_TRACKING_QUERY::`), lecture seule stricte.
+- Dépendance : C1. Tests : `cargo test --lib` vert (209 tests). Critère :
+  assistant de groupe répond + lit le suivi sans modifier le code.
 
 ---
 
