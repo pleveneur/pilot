@@ -238,6 +238,10 @@ type GitHub.
   Chaque projet choisit explicitement son serveur via un fichier de
   configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
   aucune configuration globale.
+- **Interrupteur global (Paramètres → GDS)** : un paramètre global **actif par
+  défaut** permet de **couper toutes les opérations GDS** (synchronisation,
+  verrous, suivi fusionné) d'un coup, indépendamment de l'activation par
+  projet. Quand il est désactivé, aucune opération GDS n'est permise.
 - **Saisie unique & secrets hors projet** : à la configuration, l'adresse
   PostgreSQL se renseigne en **champs séparés** (hôte, port, utilisateur dédié) et
   les **mots de passe sont stockés hors du projet** dans un fichier protégé

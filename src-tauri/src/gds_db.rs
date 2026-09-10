@@ -9,6 +9,7 @@
 // Règles : jamais de `.await` en tenant un Mutex std ; secrets hors code
 // (env/.env) — les mots de passe sont passés en paramètre, jamais codés.
 
+use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use std::time::Duration;
@@ -522,6 +523,402 @@ pub(crate) async fn audit_gds(
         .execute(pool)
         .await
         .map_err(|e| format!("Audit GDS: {}", e))?;
+    Ok(())
+}
+
+// ── Suivi fusionné (Phase C1.1, spec_gds.md §6) ──
+// Tables clients/projects/tasks/decisions alignées sur le schéma SQLite du
+// super-agent (~/.pilot/super-agent.db). `updated_at` = clé de résolution de
+// divergence (Option A : « dernier écrit gagne » + log des conflits, §6.1).
+// CRUD par updated_at : upsert, select modifiés depuis une date, delete.
+//
+// Clés d'upsert :
+//  - clients  → name (clé naturelle SQLite, UNIQUE)
+//  - projects → path (clé naturelle SQLite, UNIQUE ; la table GDS existante
+//    est étendue, les projets git ont path NULL)
+//  - tasks / decisions → id (pas de clé naturelle en SQLite ; le pont C1.2
+//    maintient la correspondance id SQLite ↔ id Postgres).
+//
+// API CRUD (Phase C1.1) — branchée par le pont bidirectionnel (C1.2).
+
+/// Ligne client (suivi).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ClientRow {
+    pub id: i64,
+    pub name: String,
+    pub notes: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Upsert un client par `name` (clé naturelle). Retourne l'id.
+pub(crate) async fn upsert_client(
+    pool: &PgPool,
+    name: &str,
+    notes: &str,
+    updated_at: DateTime<Utc>,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO clients (name, notes, updated_at) VALUES ($1, $2, $3) \
+         ON CONFLICT (name) DO UPDATE SET notes = EXCLUDED.notes, updated_at = EXCLUDED.updated_at \
+         RETURNING id",
+    )
+    .bind(name)
+    .bind(notes)
+    .bind(updated_at)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Upsert client: {}", e))?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne les clients modifiés depuis `since` (résolution de divergence).
+pub(crate) async fn get_clients_modified_since(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<Vec<ClientRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, name, notes, updated_at FROM clients WHERE updated_at > $1 ORDER BY id",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Lecture clients modifiés: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| ClientRow {
+            id: r.get::<i64, _>("id"),
+            name: r.get::<String, _>("name"),
+            notes: r.get::<String, _>("notes"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
+}
+
+/// Supprime un client par `name`.
+#[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
+pub(crate) async fn delete_client(pool: &PgPool, name: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM clients WHERE name = $1")
+        .bind(name)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression client: {}", e))?;
+    Ok(())
+}
+
+/// Ligne projet de suivi (path non NULL).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ProjectRow {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub client_id: Option<i64>,
+    pub status: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Upsert un projet de suivi par `path` (clé naturelle). Retourne l'id.
+/// `client_id` = id du client (None si non rattaché).
+pub(crate) async fn upsert_project(
+    pool: &PgPool,
+    path: &str,
+    name: &str,
+    client_id: Option<i64>,
+    status: &str,
+    updated_at: DateTime<Utc>,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO projects (path, name, client_id, status, updated_at) VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name, client_id = EXCLUDED.client_id, \
+             status = EXCLUDED.status, updated_at = EXCLUDED.updated_at \
+         RETURNING id",
+    )
+    .bind(path)
+    .bind(name)
+    .bind(client_id)
+    .bind(status)
+    .bind(updated_at)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Upsert projet: {}", e))?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne les projets de suivi (path non NULL) modifiés depuis `since`.
+pub(crate) async fn get_projects_modified_since(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<Vec<ProjectRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, path, name, client_id, status, updated_at FROM projects \
+         WHERE path IS NOT NULL AND updated_at > $1 ORDER BY id",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Lecture projets modifiés: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| ProjectRow {
+            id: r.get::<i64, _>("id"),
+            path: r.get::<String, _>("path"),
+            name: r.get::<String, _>("name"),
+            client_id: r.get::<Option<i64>, _>("client_id"),
+            status: r.get::<String, _>("status"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
+}
+
+/// Supprime un projet de suivi par `path`.
+#[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
+pub(crate) async fn delete_project(pool: &PgPool, path: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM projects WHERE path = $1")
+        .bind(path)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression projet: {}", e))?;
+    Ok(())
+}
+
+/// Ligne tâche (suivi).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct TaskRow {
+    pub id: i64,
+    pub project_id: i64,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub deadline: String,
+    pub blocker_reason: String,
+    pub source_task_id: Option<i64>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Upsert une tâche par `id` (pas de clé naturelle en SQLite). Retourne l'id.
+pub(crate) async fn upsert_task(
+    pool: &PgPool,
+    id: i64,
+    project_id: i64,
+    title: &str,
+    description: &str,
+    status: &str,
+    deadline: &str,
+    blocker_reason: &str,
+    source_task_id: Option<i64>,
+    updated_at: DateTime<Utc>,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO tasks (id, project_id, title, description, status, deadline, blocker_reason, source_task_id, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, title = EXCLUDED.title, \
+             description = EXCLUDED.description, status = EXCLUDED.status, deadline = EXCLUDED.deadline, \
+             blocker_reason = EXCLUDED.blocker_reason, source_task_id = EXCLUDED.source_task_id, \
+             updated_at = EXCLUDED.updated_at \
+         RETURNING id",
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(title)
+    .bind(description)
+    .bind(status)
+    .bind(deadline)
+    .bind(blocker_reason)
+    .bind(source_task_id)
+    .bind(updated_at)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Upsert tâche: {}", e))?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne les tâches modifiées depuis `since`.
+pub(crate) async fn get_tasks_modified_since(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<Vec<TaskRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, updated_at \
+         FROM tasks WHERE updated_at > $1 ORDER BY id",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Lecture tâches modifiées: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| TaskRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<i64, _>("project_id"),
+            title: r.get::<String, _>("title"),
+            description: r.get::<String, _>("description"),
+            status: r.get::<String, _>("status"),
+            deadline: r.get::<String, _>("deadline"),
+            blocker_reason: r.get::<String, _>("blocker_reason"),
+            source_task_id: r.get::<Option<i64>, _>("source_task_id"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
+}
+
+/// Supprime une tâche par `id`.
+#[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
+pub(crate) async fn delete_task(pool: &PgPool, id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM tasks WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression tâche: {}", e))?;
+    Ok(())
+}
+
+/// Ligne décision (suivi).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct DecisionRow {
+    pub id: i64,
+    pub project_id: Option<i64>,
+    pub task_id: Option<i64>,
+    pub summary: String,
+    pub source_session: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Upsert une décision par `id` (pas de clé naturelle en SQLite). Retourne l'id.
+pub(crate) async fn upsert_decision(
+    pool: &PgPool,
+    id: i64,
+    project_id: Option<i64>,
+    task_id: Option<i64>,
+    summary: &str,
+    source_session: &str,
+    updated_at: DateTime<Utc>,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO decisions (id, project_id, task_id, summary, source_session, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6) \
+         ON CONFLICT (id) DO UPDATE SET project_id = EXCLUDED.project_id, task_id = EXCLUDED.task_id, \
+             summary = EXCLUDED.summary, source_session = EXCLUDED.source_session, \
+             updated_at = EXCLUDED.updated_at \
+         RETURNING id",
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(task_id)
+    .bind(summary)
+    .bind(source_session)
+    .bind(updated_at)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Upsert décision: {}", e))?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne les décisions modifiées depuis `since`.
+pub(crate) async fn get_decisions_modified_since(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+) -> Result<Vec<DecisionRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, task_id, summary, source_session, updated_at \
+         FROM decisions WHERE updated_at > $1 ORDER BY id",
+    )
+    .bind(since)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Lecture décisions modifiées: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| DecisionRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<Option<i64>, _>("project_id"),
+            task_id: r.get::<Option<i64>, _>("task_id"),
+            summary: r.get::<String, _>("summary"),
+            source_session: r.get::<String, _>("source_session"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
+}
+
+/// `updated_at` d'un client par `name` (None si absent) — résolution de
+/// divergence « dernier écrit gagne » du pont C1.2.
+pub(crate) async fn get_client_updated_at(
+    pool: &PgPool,
+    name: &str,
+) -> Result<Option<DateTime<Utc>>, String> {
+    let row = sqlx::query("SELECT updated_at FROM clients WHERE name = $1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture updated_at client: {}", e))?;
+    Ok(row.map(|r| r.get::<DateTime<Utc>, _>("updated_at")))
+}
+
+/// `updated_at` d'un projet de suivi par `path` (None si absent).
+pub(crate) async fn get_project_updated_at(
+    pool: &PgPool,
+    path: &str,
+) -> Result<Option<DateTime<Utc>>, String> {
+    let row = sqlx::query("SELECT updated_at FROM projects WHERE path = $1")
+        .bind(path)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture updated_at projet: {}", e))?;
+    Ok(row.map(|r| r.get::<DateTime<Utc>, _>("updated_at")))
+}
+
+/// `updated_at` d'une tâche par `id` (None si absente).
+pub(crate) async fn get_task_updated_at(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<DateTime<Utc>>, String> {
+    let row = sqlx::query("SELECT updated_at FROM tasks WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture updated_at tâche: {}", e))?;
+    Ok(row.map(|r| r.get::<DateTime<Utc>, _>("updated_at")))
+}
+
+/// `updated_at` d'une décision par `id` (None si absente).
+pub(crate) async fn get_decision_updated_at(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<DateTime<Utc>>, String> {
+    let row = sqlx::query("SELECT updated_at FROM decisions WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture updated_at décision: {}", e))?;
+    Ok(row.map(|r| r.get::<DateTime<Utc>, _>("updated_at")))
+}
+
+/// Id d'un client par `name` (None si absent) — mapping client_id du pont C1.2.
+pub(crate) async fn get_client_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
+    let row = sqlx::query("SELECT id FROM clients WHERE name = $1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture client par nom: {}", e))?;
+    Ok(row.map(|r| r.get::<i64, _>("id")))
+}
+
+/// Nom d'un client par `id` (None si absent) — mapping client_id du pont C1.2.
+pub(crate) async fn get_client_by_id(pool: &PgPool, id: i64) -> Result<Option<String>, String> {
+    let row = sqlx::query("SELECT name FROM clients WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture client par id: {}", e))?;
+    Ok(row.map(|r| r.get::<String, _>("name")))
+}
+
+/// Supprime une décision par `id`.
+#[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
+pub(crate) async fn delete_decision(pool: &PgPool, id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM decisions WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression décision: {}", e))?;
     Ok(())
 }
 

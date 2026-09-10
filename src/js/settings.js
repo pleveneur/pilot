@@ -174,6 +174,8 @@ export async function initSettings() {
   const chkWebKeepalive = document.getElementById("setting-web-keepalive");
   // ── Tailscale Serve auto (spec_web_remote.md §14) ──
   const chkWebTailscaleServe = document.getElementById("setting-web-tailscale-serve");
+  // ── GDS (spec_gds.md) : paramètre GLOBAL d'activation/désactivation ──
+  const chkGdsEnabled = document.getElementById("setting-gds-enabled");
   // ── Context Engine (H1) ──
   const chkContextEngine = document.getElementById("setting-context-engine");
   const inputContextBudget = document.getElementById("setting-context-budget");
@@ -723,6 +725,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     taWebRoots.value = (currentConfig.web_browse_roots || []).join("\n");
     chkWebKeepalive.checked = currentConfig.web_keep_alive || false;
     chkWebTailscaleServe.checked = currentConfig.web_tailscale_serve || false;
+    // ── GDS : actif par défaut (rétrocompatibilité) ──
+    chkGdsEnabled.checked = currentConfig.gds_enabled !== false;
     // ── Context Engine ──
     chkContextEngine.checked = currentConfig.context_engine_enabled !== false;
     inputContextBudget.value = currentConfig.context_budget_tokens || 8000;
@@ -1087,6 +1091,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         web_keep_alive: chkWebKeepalive.checked,
         web_tailscale_serve: chkWebTailscaleServe.checked,
         web_password_hash: currentConfig?.web_password_hash || "",
+        // ── GDS : paramètre global d'activation ──
+        gds_enabled: chkGdsEnabled.checked,
         help_model: currentConfig?.help_model || "",
         // ── Context Engine (H1) ──
         context_engine_enabled: chkContextEngine.checked,

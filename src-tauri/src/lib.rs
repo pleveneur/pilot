@@ -663,6 +663,14 @@ struct AppConfig {
     // Paramètres → onglet « Assistant ». Borne côté JS (1-120 s).
     #[serde(default = "default_super_agent_events_overlay_seconds")]
     super_agent_events_overlay_seconds: u32,
+    // ── GDS (spec_gds.md) : paramètre GLOBAL d'activation/désactivation ──
+    // Distinct de l'activation par projet (.pilot/gds.json, décision 29/08/2026) :
+    // ce toggle global coupe TOUTES les opérations GDS (sync, verrous, suivi
+    // fusionné) quand désactivé. Actif par défaut (default_true) pour rester
+    // rétrocompatible (issue #75) : les anciennes configs sans ce champ gardent
+    // le GDS actif.
+    #[serde(default = "default_true")]
+    gds_enabled: bool,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -912,6 +920,7 @@ impl Default for AppConfig {
             stale_busy_grace_minutes: default_stale_busy_grace_minutes(),
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
+            gds_enabled: true,
         }
     }
 }
@@ -1543,6 +1552,13 @@ fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
 
     let _ = cmd.spawn();
     Ok(())
+}
+
+/// Retourne true si le GDS est activé GLOBALEMENT (paramètre global, actif par
+/// défaut). Distinct de l'activation par projet (`.pilot/gds.json`) : quand
+/// désactivé, AUCUNE opération GDS (sync, verrous, suivi fusionné) n'est permise.
+pub(crate) fn gds_globally_enabled(state: &AppState) -> bool {
+    state.config.lock().unwrap().gds_enabled
 }
 
 #[tauri::command]
@@ -2539,6 +2555,10 @@ pub fn run() {
             gds_sync::gds_release_lock,
             gds_sync::gds_urgent_lock,
             gds_sync::gds_get_lock,
+            // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
+            gds_sync::gds_sync_tracking,
+            // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
+            gds_sync::gds_sync_tracking,
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
             gds_ssh::gds_ssh_key,
             gds_ssh::gds_register_ssh_key,
@@ -2652,7 +2672,7 @@ fn rename_dir_fallback(source: &std::path::Path, dest: &std::path::Path) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_project_path;
+    use super::{normalize_project_path, AppConfig};
 
     #[test]
     fn normalize_handles_trailing_slash() {
@@ -2712,5 +2732,13 @@ mod tests {
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), 1, "toutes les formes doivent se dédupliquer");
+    }
+
+    #[test]
+    fn gds_enabled_defaults_to_true() {
+        // Rétrocompatibilité (issue #75) : une config sans le champ `gds_enabled`
+        // doit garder le GDS actif par défaut.
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(cfg.gds_enabled, "gds_enabled doit être actif par défaut");
     }
 }

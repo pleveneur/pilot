@@ -45,14 +45,15 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
 }
 
 /// Pool GDS depuis AppState (clone court, jamais tenu en lock pendant un await).
+/// Court-circuite toutes les routes GDS si le GDS est désactivé globalement
+/// (paramètre global `gds_enabled`, actif par défaut).
 fn gds_pool(ctx: &WebCtx) -> Result<PgPool, String> {
-    ctx.app_handle
-        .state::<AppState>()
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné".to_string())
+    let app_state = ctx.app_handle.state::<AppState>();
+    if !crate::gds_globally_enabled(&app_state) {
+        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
+    }
+    let pool = app_state.gds_pool.lock().unwrap().clone();
+    pool.ok_or("GDS non provisionné".to_string())
 }
 
 fn err_response(e: String) -> Response {

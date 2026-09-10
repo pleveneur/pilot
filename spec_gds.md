@@ -5,7 +5,7 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟢 Phases A + B implémentées — C à venir.**
+> **Statut : 🟢 Phases A + B + C1 implémentées — C2 à venir.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -628,13 +628,36 @@ sans implémentation) :
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 
-**C1. Migrer/synchroniser le suivi (SQLite → Postgres)**
+**C1. Migrer/synchroniser le suivi (SQLite → Postgres)** ✅
 - Modules : `gds_sync.rs` (pont bidirectionnel), `gds_db.rs`
   (clients/projects/tasks/decisions). Option A + mode déconnecté (arbitrage 1).
 - Dépendance : A1, B2. Tests : synchro SQLite↔Postgres, divergence résolue,
   forçage serveur par le titulaire du verrou.
 - Critère : le suivi desktop apparaît dans Postgres ; mode déconnecté + résumés
   visuels au tableau de bord (§7).
+
+**C1.1. CRUD suivi (Postgres)** ✅ — tables `clients`/`projects`/`tasks`/
+`decisions` (migration `0004_suivi.sql`), upserts par clé naturelle (name/path)
+ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
+
+**C1.2. Pont bidirectionnel SQLite↔Postgres** ✅ — `gds_sync.rs` :
+- **Couche d'accès SQLite** : ouverture `~/.pilot/super-agent.db`, ajout
+  idempotent de `updated_at` sur `decisions` (PRAGMA table_info, SANS toucher
+  `super_agent.rs`), tables `gds_id_map` (mapping id SQLite↔Postgres pour
+  tasks/decisions) et `gds_sync_state` (watermark).
+- **Pont bidirectionnel** : pousse les lignes SQLite modifiées (updated_at >
+  watermark) vers Postgres, rapatrie les lignes Postgres plus récentes, résout
+  les divergences par « dernier écrit gagne » (`resolve_conflict`), log des
+  conflits dans `audit_gds` (action `tracking.conflict`), watermark persisté.
+- **Branchement** : appelé par `sync_project` (gds_client.rs) après le verrou +
+  commande Tauri `gds_sync_tracking`.
+- **Paramètre global `gds_enabled`** (AppConfig, actif par défaut, issue #75) :
+  toggle global distinct de l'activation par projet (.pilot/gds.json) — quand
+  désactivé, AUCUNE opération GDS (sync, verrous, suivi fusionné) n'est permise
+  (court-circuit des commandes Tauri + routes web).
+- Tests : `resolve_conflict`, `parse_updated_at`, `pg_to_sqlite_dt`,
+  `ensure_sqlite_column` idempotent, `ensure_sqlite_schema`, mapping id,
+  watermark, défaut `gds_enabled`.
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

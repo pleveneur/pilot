@@ -95,18 +95,29 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // Verrou global projet (acquisition exclusive, TTL).
     let lock = gds_sync::acquire_project_lock(pool, project, "sync").await?;
 
+    // Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres (dernier écrit
+    // gagne). Non bloquant : une erreur de suivi ne casse pas la sync git.
+    let tracking = match gds_sync::sync_tracking(pool).await {
+        Ok(v) => v,
+        Err(e) => json!({ "ok": false, "error": e }),
+    };
+
     Ok(json!({
         "ok": true,
         "project": name,
         "local_dir": local_dir,
         "action": action,
         "lock": lock,
+        "tracking": tracking,
     }))
 }
 
 /// Commande Tauri : synchronise le projet courant depuis le remote GDS.
 #[tauri::command]
 pub async fn gds_sync_project(state: State<'_, AppState>, project: String) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
+    }
     let pool = state
         .gds_pool
         .lock()

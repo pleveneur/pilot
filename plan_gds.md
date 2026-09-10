@@ -392,10 +392,17 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 
-**C1. Migrer/synchroniser le suivi (SQLite → Postgres)**
+**C1. Migrer/synchroniser le suivi (SQLite → Postgres)** ✅
 - Modules : `gds_sync.rs` (pont bidirectionnel), `gds_db.rs` (clients/projects/tasks/decisions).
 - Dépendance : A1, B2. Tests : synchro SQLite↔Postgres, divergence résolue.
 - Critère : le suivi desktop apparaît dans Postgres (décision §6.1).
+- **C1.1 CRUD suivi** ✅ (migration 0004, upserts par clé naturelle/id,
+  `get_*_modified_since`, `delete_*`).
+- **C1.2 Pont bidirectionnel** ✅ (`gds_sync.rs` : couche d'accès SQLite avec
+  `updated_at` idempotent sur `decisions` + mapping id + watermark ; push/pull
+  « dernier écrit gagne » + log conflits audit_gds ; branché dans `sync_project`
+  + commande `gds_sync_tracking` ; paramètre global `gds_enabled` actif par
+  défaut qui coupe toutes les opérations GDS quand désactivé).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

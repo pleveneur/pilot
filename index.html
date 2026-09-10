@@ -682,6 +682,12 @@
               <label>Journal d'audit distant :</label>
               <button id="btn-web-audit" type="button" class="web-btn"><i data-lucide="scroll-text" class="icon-sm"></i> Ouvrir le journal</button>
             </div>
+            <hr class="settings-sep" />
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-gds-enabled" />
+              <label for="setting-gds-enabled">Activer le GDS (Gestionnaire de Sources) — synchronisation, verrous et suivi fusionné</label>
+              <small class="muted">Paramètre GLOBAL (actif par défaut). Distinct de l'activation par projet (.pilot/gds.json) : quand désactivé, aucune opération GDS (sync, verrous, suivi fusionné) n'est permise.</small>
+            </div>
             <div class="setting-row">
               <small class="muted">Après un changement d'activation / adresse / port, cliquez « Enregistrer » puis le serveur recharge à chaud automatiquement.</small>
             </div>
