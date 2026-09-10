@@ -404,6 +404,11 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   + commande `gds_sync_tracking` + déclenchement auto au démarrage ; paramètre
   global `gds_enabled` actif par défaut qui coupe toutes les opérations GDS
   quand désactivé).
+- **C1.3 Forçage serveur par titulaire du verrou** ✅ (`gds_sync.rs` :
+  `force_push_tracking` pousse TOUT le suivi local vers Postgres en écrasant les
+  données distantes, réservé au membre qui détient le verrou du projet — refus
+  sinon (audit `tracking.force.denied`) ; commande Tauri `gds_force_push_suivi`
+  + route web `POST /api/gds/tracking/force` ; respecte `gds_enabled`).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

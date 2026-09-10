@@ -39,6 +39,8 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
         .route("/api/gds/lock/release", post(gds_lock_release_web))
         .route("/api/gds/lock/urgent", post(gds_lock_urgent_web))
         .route("/api/gds/locks", get(gds_locks_web))
+        // ── Phase C1.3 : forçage serveur du suivi (titulaire du verrou) ──
+        .route("/api/gds/tracking/force", post(gds_tracking_force_web))
         // ── Réservées Phase C (suivi fusionné, tickets) ──
         .route("/api/gds/tracking", get(gds_phase_c))
         .route("/api/gds/tickets", get(gds_phase_c))
@@ -325,6 +327,31 @@ async fn gds_locks_web(State(ctx): State<Arc<WebCtx>>) -> Response {
     match gds_db::list_locks(&pool).await {
         Ok(list) => Json(json!({ "locks": list })).into_response(),
         Err(e) => err_response(e),
+    }
+}
+
+/// POST /api/gds/tracking/force — force la poussée du suivi local vers Postgres
+/// (réservé au titulaire du verrou de projet). Phase C1.3.
+async fn gds_tracking_force_web(
+    State(ctx): State<Arc<WebCtx>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<SyncBody>,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !ctx.guard.check_login(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
+        )
+            .into_response();
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_sync::force_push_tracking(&pool, &body.project).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
 }
 

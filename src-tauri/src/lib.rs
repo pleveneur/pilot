@@ -2561,6 +2561,8 @@ pub fn run() {
             gds_sync::gds_get_lock,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
+            // ── GDS Phase C1.3 : forçage serveur par titulaire du verrou ──
+            gds_sync::gds_force_push_suivi,
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
             gds_ssh::gds_ssh_key,
             gds_ssh::gds_register_ssh_key,

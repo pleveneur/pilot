@@ -930,6 +930,174 @@ pub async fn gds_sync_tracking(state: State<'_, AppState>) -> Result<Value, Stri
     sync_tracking(&pool).await
 }
 
+// ── Forçage serveur par titulaire du verrou (Phase C1.3, spec_gds.md §6) ──
+//
+// Le titulaire du verrou de projet peut forcer la poussée du suivi local vers
+// Postgres, en ÉCRASANT les données distantes (au lieu du « dernier écrit
+// gagne » du pont C1.2). Réservé au membre qui détient le verrou GDS du projet.
+
+/// Lit TOUT le suivi SQLite en mémoire (since 0) + mapping noms clients.
+/// La connexion est fermée avant tout await (rusqlite::Connection n'est pas
+/// Sync → ne peut pas être tenue à travers un await dans un futur Send).
+#[allow(clippy::type_complexity)]
+fn read_all_sqlite() -> Result<
+    (
+        Vec<SqliteClient>,
+        Vec<SqliteProject>,
+        Vec<SqliteTask>,
+        Vec<SqliteDecision>,
+        std::collections::HashMap<i64, String>,
+    ),
+    String,
+> {
+    let conn = open_sqlite()?;
+    let clients = read_clients_since(&conn, 0)?;
+    let projects = read_projects_since(&conn, 0)?;
+    let tasks = read_tasks_since(&conn, 0)?;
+    let decisions = read_decisions_since(&conn, 0)?;
+    let mut client_names = std::collections::HashMap::new();
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM clients")
+        .map_err(|e| format!("Préparation clients map: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Lecture clients map: {}", e))?;
+    for row in rows {
+        let (id, name) = row.map_err(|e| format!("Ligne client map: {}", e))?;
+        client_names.insert(id, name);
+    }
+    drop(stmt);
+    drop(conn);
+    Ok((clients, projects, tasks, decisions, client_names))
+}
+
+/// Force la poussée du suivi local vers Postgres, en ÉCRASANT les données
+/// distantes. Réservé au titulaire du verrou de projet (le membre courant doit
+/// détenir le verrou GDS du projet). Phase C1.3.
+pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<Value, String> {
+    let cfg = gds::read_gds_config(project)?;
+    if !cfg.enabled {
+        return Err("GDS non activé pour ce projet".to_string());
+    }
+    let name = gds::project_name(project);
+    let project_id = gds_db::get_project_by_name(pool, &name)
+        .await?
+        .ok_or("Projet non enregistré sur le serveur GDS")?;
+    // Vérifier que le membre courant est bien le titulaire du verrou.
+    let lock = gds_db::get_lock_by_project(pool, project_id).await?;
+    match lock {
+        Some(l) if l.email == cfg.identity_email => {}
+        Some(l) => {
+            gds_db::audit_gds(
+                pool,
+                "desktop",
+                &cfg.identity_email,
+                "tracking.force.denied",
+                &format!("lock held by {}", l.email),
+                false,
+            )
+            .await?;
+            return Err(format!(
+                "Forçage réservé au titulaire du verrou (détenu par {})",
+                l.email
+            ));
+        }
+        None => {
+            gds_db::audit_gds(
+                pool,
+                "desktop",
+                &cfg.identity_email,
+                "tracking.force.denied",
+                "no lock",
+                false,
+            )
+            .await?;
+            return Err(
+                "Aucun verrou détenu — synchronisez d'abord pour acquérir le verrou".to_string(),
+            );
+        }
+    }
+    // Lire tout le suivi local (since 0) en mémoire, puis pousser en écrasant.
+    let (clients, projects, tasks, decisions, client_names) = read_all_sqlite()?;
+    let mut pushed: i64 = 0;
+    for c in clients {
+        let _ = gds_db::upsert_client(pool, &c.name, &c.notes, ms_to_utc(c.updated_at)).await?;
+        pushed += 1;
+    }
+    for p in projects {
+        let client_id = p.client_id.and_then(|cid| client_names.get(&cid).cloned());
+        let client_id = match client_id {
+            Some(cname) => gds_db::get_client_by_name(pool, &cname).await?,
+            None => None,
+        };
+        let _ = gds_db::upsert_project(
+            pool,
+            &p.path,
+            &p.name,
+            client_id,
+            &p.status,
+            ms_to_utc(p.updated_at),
+        )
+        .await?;
+        pushed += 1;
+    }
+    for t in tasks {
+        let _ = gds_db::upsert_task(
+            pool,
+            t.id,
+            t.project_id,
+            &t.title,
+            &t.description,
+            &t.status,
+            "",
+            "",
+            None,
+            ms_to_utc(t.updated_at),
+        )
+        .await?;
+        pushed += 1;
+    }
+    for d in decisions {
+        let _ = gds_db::upsert_decision(
+            pool,
+            d.id,
+            d.project_id,
+            d.task_id,
+            &d.summary,
+            &d.source_session,
+            ms_to_utc(d.updated_at),
+        )
+        .await?;
+        pushed += 1;
+    }
+    gds_db::audit_gds(
+        pool,
+        "desktop",
+        &cfg.identity_email,
+        "tracking.force",
+        &format!("pushed {}", pushed),
+        true,
+    )
+    .await?;
+    Ok(json!({ "ok": true, "forced": true, "pushed": pushed }))
+}
+
+/// Commande Tauri : force la poussée du suivi local vers Postgres (réservé au
+/// titulaire du verrou de projet). Phase C1.3.
+#[tauri::command]
+pub async fn gds_force_push_suivi(state: State<'_, AppState>, project: String) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
+    }
+    let pool = state
+        .gds_pool
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("GDS non provisionné")?;
+    force_push_tracking(&pool, &project).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

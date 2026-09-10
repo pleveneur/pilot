@@ -660,6 +660,23 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
   `ensure_sqlite_column` idempotent, `ensure_sqlite_schema`, mapping id,
   watermark, défaut `gds_enabled`.
 
+**C1.3. Forçage serveur par titulaire du verrou** ✅ — `gds_sync.rs` :
+- **Principe** : le membre qui détient le verrou GDS du projet peut **forcer**
+  la poussée du suivi local vers Postgres, en **écrasant** les données distantes
+  (au lieu du « dernier écrit gagne » du pont C1.2). Utile pour imposer l'état
+  local quand le serveur a divergé.
+- **Vérification du titulaire** : `force_push_tracking` lit le verrou du projet
+  (`get_lock_by_project`) et refuse si le membre courant (`identity_email` de
+  `.pilot/gds.json`) n'est pas le titulaire, ou si aucun verrou n'est détenu
+  (message « synchronisez d'abord pour acquérir le verrou »). Refus journalisé
+  dans `audit_gds` (action `tracking.force.denied`).
+- **Poussée écrasante** : lit TOUT le suivi local (since 0) et upsert chaque
+  ligne vers Postgres sans tenir compte de `updated_at` distant. Succès
+  journalisé (`tracking.force`).
+- **Branchement** : commande Tauri `gds_force_push_suivi` + route web
+  `POST /api/gds/tracking/force` (gds_web.rs). Respecte le paramètre global
+  `gds_enabled` (court-circuit si désactivé).
+
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension
   `pilot-group-assistant.ts`, canal `__channel: group`. Moteur configurable
