@@ -650,7 +650,8 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
   les divergences par « dernier écrit gagne » (`resolve_conflict`), log des
   conflits dans `audit_gds` (action `tracking.conflict`), watermark persisté.
 - **Branchement** : appelé par `sync_project` (gds_client.rs) après le verrou +
-  commande Tauri `gds_sync_tracking`.
+  commande Tauri `gds_sync_tracking` + **déclenchement automatique au démarrage**
+  (setup de `lib.rs`, après reconnexion du pool GDS, fail-open).
 - **Paramètre global `gds_enabled`** (AppConfig, actif par défaut, issue #75) :
   toggle global distinct de l'activation par projet (.pilot/gds.json) — quand
   désactivé, AUCUNE opération GDS (sync, verrous, suivi fusionné) n'est permise

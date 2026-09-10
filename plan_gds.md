@@ -401,8 +401,9 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - **C1.2 Pont bidirectionnel** ✅ (`gds_sync.rs` : couche d'accès SQLite avec
   `updated_at` idempotent sur `decisions` + mapping id + watermark ; push/pull
   « dernier écrit gagne » + log conflits audit_gds ; branché dans `sync_project`
-  + commande `gds_sync_tracking` ; paramètre global `gds_enabled` actif par
-  défaut qui coupe toutes les opérations GDS quand désactivé).
+  + commande `gds_sync_tracking` + déclenchement auto au démarrage ; paramètre
+  global `gds_enabled` actif par défaut qui coupe toutes les opérations GDS
+  quand désactivé).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

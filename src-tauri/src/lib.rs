@@ -2214,7 +2214,11 @@ pub fn run() {
                                 if gcfg.enabled && !gcfg.db_host.is_empty() {
                                     if let Ok(pool) = crate::gds::restore_pool_for_project(&proj).await {
                                         let st = handle.state::<AppState>();
-                                        *st.gds_pool.lock().unwrap() = Some(pool);
+                                        *st.gds_pool.lock().unwrap() = Some(pool.clone());
+                                        // Phase C1.2 : déclenchement automatique du pont
+                                        // bidirectionnel suivi SQLite↔Postgres au démarrage
+                                        // (fail-open : une erreur de suivi ne bloque pas).
+                                        let _ = crate::gds_sync::sync_tracking(&pool).await;
                                     }
                                     break; // pool global — une seule reconnexion suffit
                                 }
@@ -2555,8 +2559,6 @@ pub fn run() {
             gds_sync::gds_release_lock,
             gds_sync::gds_urgent_lock,
             gds_sync::gds_get_lock,
-            // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
-            gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
