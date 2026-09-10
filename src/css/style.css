@@ -8281,6 +8281,26 @@ body.pilot-loading *::after {
   padding: 20px;
   text-align: center;
 }
+.gds-badge {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 20px;
+  padding: 2px 10px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.gds-badge-ok {
+  color: #052e16;
+  background: var(--success, #4ade80);
+}
+.gds-badge-warn {
+  color: #422006;
+  background: var(--warning, #fbbf24);
+}
+.gds-badge-off {
+  color: #450a0a;
+  background: var(--danger, #f87171);
+}
 .gds-phase {
   border-style: dashed;
   opacity: 0.85;

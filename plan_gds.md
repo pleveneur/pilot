@@ -409,6 +409,13 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   données distantes, réservé au membre qui détient le verrou du projet — refus
   sinon (audit `tracking.force.denied`) ; commande Tauri `gds_force_push_suivi`
   + route web `POST /api/gds/tracking/force` ; respecte `gds_enabled`).
+- **C1.4 Mode déconnecté + résumés visuels** ✅ (`gds_sync.rs` + `gds.js` :
+  accumulation locale en SQLite sans blocage quand le serveur est injoignable ;
+  état de synchro persisté dans `gds_sync_state` ; resynchronisation automatique
+  via la tâche de fond `start_gds_sync_monitor` (toutes les 30 s, reconnecte le
+  pool puis pousse via le pont C1.2 quand le serveur revient) ; résumés visuels
+  dans l'onglet GDS via la commande `gds_sync_status` (dernière synchro, en
+  attente, conflits, hors-ligne) ; respecte `gds_enabled`).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

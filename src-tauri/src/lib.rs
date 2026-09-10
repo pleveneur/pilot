@@ -2193,6 +2193,10 @@ pub fn run() {
             // Tâche 8 : surveillance arrière-plan des anomalies d'agents (bloqués
             // sans progression). Thread autonome, sans LLM, ne bloque pas l'interface.
             anomaly::start_monitor(handle.clone(), state.agent_anomaly.clone());
+            // GDS Phase C1.4 : surveillance du mode déconnecté — resynchronisation
+            // automatique du suivi quand le serveur redevient joignable (accumulation
+            // locale en mode déconnecté). Thread autonome, fail-open.
+            gds_sync::start_gds_sync_monitor(handle.clone());
             // GDS (chantier UX) : reconnecter le pool PostgreSQL en arrière-plan
             // pour un projet déjà provisionné, sans refaire `gds_provision` (saisie
             // des paramètres une seule fois). Fail-open : aucun serveur par défaut,
@@ -2561,6 +2565,8 @@ pub fn run() {
             gds_sync::gds_get_lock,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
+            // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──
+            gds_sync::gds_sync_status,
             // ── GDS Phase C1.3 : forçage serveur par titulaire du verrou ──
             gds_sync::gds_force_push_suivi,
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──

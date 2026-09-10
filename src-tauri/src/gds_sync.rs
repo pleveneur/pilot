@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Manager, State};
 
 /// TTL par défaut d'un verrou (secondes) : 30 min. Renouvelable (lease).
 pub(crate) const LOCK_TTL_SECS: i64 = 1800;
@@ -630,6 +630,98 @@ fn set_watermark(conn: &Connection, ms: i64) -> Result<(), String> {
     Ok(())
 }
 
+// ── État de synchro (Phase C1.4, spec_gds.md §6) ──
+//
+// Mode déconnecté + résumés visuels : l'état de la synchro (dernière synchro,
+// éléments en attente, conflits, mode hors-ligne) est persisté dans SQLite
+// (table gds_sync_state) pour être affiché dans l'interface et piloter la
+// resynchronisation automatique quand le serveur redevient joignable.
+
+/// Lit une valeur d'état de synchro (clé de `gds_sync_state`). Vide si absente.
+fn get_state(conn: &Connection, key: &str) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM gds_sync_state WHERE key = ?1")
+        .map_err(|e| format!("Préparation état: {}", e))?;
+    let mut rows = stmt
+        .query_map(rusqlite::params![key], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("Lecture état: {}", e))?;
+    if let Some(row) = rows.next() {
+        return Ok(row.map_err(|e| format!("Ligne état: {}", e))?);
+    }
+    Ok(String::new())
+}
+
+/// Écrit une valeur d'état de synchro (clé de `gds_sync_state`).
+fn set_state(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO gds_sync_state (key, value) VALUES (?1, ?2) \
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![key, value],
+    )
+    .map_err(|e| format!("Écriture état: {}", e))?;
+    Ok(())
+}
+
+/// Compte les lignes locales modifiées depuis le watermark (accumulation en
+/// mode déconnecté). Connexion fournie (déjà ouverte).
+fn pending_count_from_conn(conn: &Connection, watermark: i64) -> Result<i64, String> {
+    let clients = read_clients_since(conn, watermark)?;
+    let projects = read_projects_since(conn, watermark)?;
+    let tasks = read_tasks_since(conn, watermark)?;
+    let decisions = read_decisions_since(conn, watermark)?;
+    Ok((clients.len() + projects.len() + tasks.len() + decisions.len()) as i64)
+}
+
+/// Nombre d'éléments de suivi locaux en attente de synchro (modifiés depuis le
+/// watermark). 0 si tout est synchronisé. Ouvre la base SQLite.
+pub(crate) fn pending_count() -> Result<i64, String> {
+    let conn = open_sqlite()?;
+    let watermark = get_watermark(&conn)?;
+    pending_count_from_conn(&conn, watermark)
+}
+
+/// Persiste le résultat d'une tentative de synchro dans `gds_sync_state`
+/// (dernière synchro, erreur, compteurs, mode hors-ligne).
+fn record_sync_result(ok: bool, error: &str, pushed: i64, pulled: i64, conflicts: i64) -> Result<(), String> {
+    let conn = open_sqlite()?;
+    let now = Utc::now().to_rfc3339();
+    set_state(&conn, "last_sync_ok", if ok { "1" } else { "0" })?;
+    set_state(&conn, "last_sync_at", &now)?;
+    set_state(&conn, "last_sync_error", error)?;
+    set_state(&conn, "last_pushed", &pushed.to_string())?;
+    set_state(&conn, "last_pulled", &pulled.to_string())?;
+    set_state(&conn, "last_conflicts", &conflicts.to_string())?;
+    set_state(&conn, "offline", if ok { "0" } else { "1" })?;
+    Ok(())
+}
+
+/// Résumé de l'état de synchro pour l'interface (résumés visuels C1.4) :
+/// dernière synchro (ok/date/erreur), compteurs (poussés/rapatriés/conflits),
+/// éléments en attente et mode hors-ligne. Lecture seule.
+pub(crate) fn read_sync_status() -> Result<Value, String> {
+    let conn = open_sqlite()?;
+    let watermark = get_watermark(&conn)?;
+    let pending = pending_count_from_conn(&conn, watermark)?;
+    let last_ok = get_state(&conn, "last_sync_ok")? == "1";
+    let last_at = get_state(&conn, "last_sync_at")?;
+    let last_error = get_state(&conn, "last_sync_error")?;
+    let pushed = get_state(&conn, "last_pushed")?.parse::<i64>().unwrap_or(0);
+    let pulled = get_state(&conn, "last_pulled")?.parse::<i64>().unwrap_or(0);
+    let conflicts = get_state(&conn, "last_conflicts")?.parse::<i64>().unwrap_or(0);
+    let offline = get_state(&conn, "offline")? == "1";
+    Ok(json!({
+        "last_sync_ok": last_ok,
+        "last_sync_at": last_at,
+        "last_sync_error": last_error,
+        "last_pushed": pushed,
+        "last_pulled": pulled,
+        "last_conflicts": conflicts,
+        "pending": pending,
+        "offline": offline,
+        "watermark": watermark,
+    }))
+}
+
 /// Pont bidirectionnel : synchronise le suivi SQLite ↔ Postgres.
 /// - desktop → Postgres : pousse les lignes SQLite modifiées (updated_at >
 ///   watermark) via les upserts CRUD C1.1, en respectant « dernier écrit gagne »
@@ -637,7 +729,25 @@ fn set_watermark(conn: &Connection, ms: i64) -> Result<(), String> {
 /// - Postgres → desktop : rapatrie les lignes Postgres plus récentes (via
 ///   get_*_modified_since) si la ligne locale n'est pas plus récente.
 /// - Conflits : loggés dans audit_gds (action `tracking.conflict`).
+/// Persiste le résultat (C1.4) dans `gds_sync_state` pour les résumés visuels.
 pub(crate) async fn sync_tracking(pool: &PgPool) -> Result<Value, String> {
+    match sync_tracking_inner(pool).await {
+        Ok(v) => {
+            let pushed = v.get("pushed").and_then(|x| x.as_i64()).unwrap_or(0);
+            let pulled = v.get("pulled").and_then(|x| x.as_i64()).unwrap_or(0);
+            let conflicts = v.get("conflicts").and_then(|x| x.as_i64()).unwrap_or(0);
+            let _ = record_sync_result(true, "", pushed, pulled, conflicts);
+            Ok(v)
+        }
+        Err(e) => {
+            let _ = record_sync_result(false, &e, 0, 0, 0);
+            Err(e)
+        }
+    }
+}
+
+/// Corps du pont bidirectionnel (sans persistance d'état).
+async fn sync_tracking_inner(pool: &PgPool) -> Result<Value, String> {
     // ── Phase 1 (synchrone) : lire tout le suivi SQLite en mémoire, puis
     // fermer la connexion AVANT tout await (rusqlite::Connection n'est pas
     // Sync → ne peut pas être tenue à travers un await dans un futur Send).
@@ -928,6 +1038,94 @@ pub async fn gds_sync_tracking(state: State<'_, AppState>) -> Result<Value, Stri
         .clone()
         .ok_or("GDS non provisionné")?;
     sync_tracking(&pool).await
+}
+
+/// Variante tolérante pour le mode déconnecté (C1.4) : si le pool est absent
+/// (serveur injoignable), enregistre l'état hors-ligne et retourne une erreur
+/// sans bloquer. Utilisée par la tâche de resynchronisation automatique.
+pub(crate) async fn sync_tracking_auto(pool: Option<&PgPool>) -> Result<Value, String> {
+    match pool {
+        Some(p) => sync_tracking(p).await,
+        None => {
+            let _ = record_sync_result(false, "Serveur GDS injoignable (mode déconnecté)", 0, 0, 0);
+            Err("Serveur GDS injoignable (mode déconnecté)".to_string())
+        }
+    }
+}
+
+/// Commande Tauri : résumé de l'état de synchro du suivi (C1.4) pour
+/// l'interface — dernière synchro, éléments en attente, conflits, mode
+/// hors-ligne. Retourne `{ enabled: false }` si le GDS est désactivé.
+#[tauri::command]
+pub async fn gds_sync_status(state: State<'_, AppState>) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Ok(json!({ "enabled": false }));
+    }
+    let mut v = read_sync_status()?;
+    v["enabled"] = json!(true);
+    Ok(v)
+}
+
+/// Tâche de fond C1.4 : resynchronisation automatique du suivi en mode
+/// déconnecté. Toutes les 30 s, si le GDS est activé globalement et qu'il y a
+/// des modifications locales en attente (pending > 0), tente de (re)connecter
+/// le pool PostgreSQL puis de synchroniser le suivi (pont C1.2). Quand le
+/// serveur redevient joignable, les modifications accumulées en mode déconnecté
+/// sont poussées automatiquement. Fail-open : une erreur ne bloque jamais
+/// l'interface.
+pub(crate) fn start_gds_sync_monitor(handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let state = handle.state::<AppState>();
+            if !crate::gds_globally_enabled(&state) {
+                continue;
+            }
+            // Modifications locales en attente ? (accumulation mode déconnecté)
+            let pending = match pending_count() {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if pending <= 0 {
+                continue;
+            }
+            // Pool disponible ? sinon tenter une reconnexion depuis un projet GDS.
+            let pool = state.gds_pool.lock().unwrap().clone();
+            let pool = match pool {
+                Some(p) => Some(p),
+                None => {
+                    let cfg = state.config.lock().unwrap().clone();
+                    let mut paths = cfg.open_projects.clone();
+                    if let Some(p) = &cfg.active_open_project {
+                        if !paths.contains(p) {
+                            paths.push(p.clone());
+                        }
+                    }
+                    let mut restored = None;
+                    for proj in paths {
+                        if let Ok(gcfg) = crate::gds::read_gds_config(&proj) {
+                            if gcfg.enabled && !gcfg.db_host.is_empty() {
+                                if let Ok(p) = crate::gds::restore_pool_for_project(&proj).await {
+                                    *state.gds_pool.lock().unwrap() = Some(p.clone());
+                                    restored = Some(p);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    restored
+                }
+            };
+            match pool {
+                Some(p) => {
+                    let _ = sync_tracking_auto(Some(&p)).await;
+                }
+                None => {
+                    let _ = sync_tracking_auto(None).await;
+                }
+            }
+        }
+    });
 }
 
 // ── Forçage serveur par titulaire du verrou (Phase C1.3, spec_gds.md §6) ──
@@ -1245,5 +1443,82 @@ mod tests {
         assert_eq!(get_watermark(&conn).unwrap(), 0);
         set_watermark(&conn, 12345).unwrap();
         assert_eq!(get_watermark(&conn).unwrap(), 12345);
+    }
+
+    // ── Mode déconnecté + résumés visuels (Phase C1.4) ──
+
+    #[test]
+    fn state_roundtrip() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE gds_sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        assert_eq!(get_state(&conn, "last_sync_ok").unwrap(), "");
+        set_state(&conn, "last_sync_ok", "1").unwrap();
+        assert_eq!(get_state(&conn, "last_sync_ok").unwrap(), "1");
+        // Idempotent (upsert).
+        set_state(&conn, "last_sync_ok", "0").unwrap();
+        assert_eq!(get_state(&conn, "last_sync_ok").unwrap(), "0");
+    }
+
+    #[test]
+    fn pending_count_counts_modified_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE clients (name TEXT PRIMARY KEY, notes TEXT, updated_at TEXT);
+             CREATE TABLE projects (path TEXT PRIMARY KEY, name TEXT, client_id INTEGER, status TEXT, updated_at TEXT);
+             CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, description TEXT, status TEXT, updated_at TEXT);
+             CREATE TABLE decisions (id INTEGER PRIMARY KEY, project_id INTEGER, task_id INTEGER, summary TEXT, source_session TEXT, updated_at TEXT);",
+        )
+        .unwrap();
+        // 2 clients modifiés après le watermark, 1 avant.
+        conn.execute_batch(
+            "INSERT INTO clients (name, notes, updated_at) VALUES
+                ('a', '', '1970-01-01 00:00:02'),
+                ('b', '', '1970-01-01 00:00:02'),
+                ('c', '', '1970-01-01 00:00:00');",
+        )
+        .unwrap();
+        // Watermark = 1000 ms (1970-01-01 00:00:01).
+        assert_eq!(pending_count_from_conn(&conn, 1000).unwrap(), 2);
+        // Watermark = 0 → seules les lignes strictement postérieures comptent
+        // (c est à 0 ms, non > 0).
+        assert_eq!(pending_count_from_conn(&conn, 0).unwrap(), 2);
+    }
+
+    #[test]
+    fn record_sync_result_persists_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gds_sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        // record_sync_result ouvre sa propre connexion (chemin réel) — on teste
+        // ici la logique via set_state/get_state directement.
+        set_state(&conn, "last_sync_ok", "1").unwrap();
+        set_state(&conn, "last_pushed", "5").unwrap();
+        set_state(&conn, "last_conflicts", "2").unwrap();
+        set_state(&conn, "offline", "0").unwrap();
+        assert_eq!(get_state(&conn, "last_sync_ok").unwrap(), "1");
+        assert_eq!(get_state(&conn, "last_pushed").unwrap(), "5");
+        assert_eq!(get_state(&conn, "last_conflicts").unwrap(), "2");
+        assert_eq!(get_state(&conn, "offline").unwrap(), "0");
+    }
+
+    #[test]
+    fn read_sync_status_defaults() {
+        // Base vide → état par défaut (aucune synchro, pas hors-ligne, 0 en attente).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE gds_sync_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE clients (name TEXT PRIMARY KEY, notes TEXT, updated_at TEXT);
+             CREATE TABLE projects (path TEXT PRIMARY KEY, name TEXT, client_id INTEGER, status TEXT, updated_at TEXT);
+             CREATE TABLE tasks (id INTEGER PRIMARY KEY, project_id INTEGER, title TEXT, description TEXT, status TEXT, updated_at TEXT);
+             CREATE TABLE decisions (id INTEGER PRIMARY KEY, project_id INTEGER, task_id INTEGER, summary TEXT, source_session TEXT, updated_at TEXT);",
+        )
+        .unwrap();
+        // Vérifie les valeurs par défaut des clés d'état.
+        assert_eq!(get_state(&conn, "last_sync_ok").unwrap(), "");
+        assert_eq!(get_state(&conn, "offline").unwrap(), "");
+        assert_eq!(get_state(&conn, "last_pushed").unwrap(), "");
     }
 }

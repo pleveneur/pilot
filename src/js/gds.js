@@ -438,6 +438,7 @@ export function createGds(container) {
       </div>
       <div id="gds-sync-err" class="gds-error"></div>
       <div id="gds-sync-ok" class="gds-ok"></div>
+      <div id="gds-sync-status" class="gds-lock-state"></div>
       <div id="gds-lock-state" class="gds-lock-state"></div>
       <div class="gds-actions">
         <button id="gds-sync-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Synchroniser</button>
@@ -454,7 +455,49 @@ export function createGds(container) {
 
     const err = panel.querySelector("#gds-sync-err");
     const ok = panel.querySelector("#gds-sync-ok");
+    const syncStatus = panel.querySelector("#gds-sync-status");
     const lockState = panel.querySelector("#gds-lock-state");
+
+    // Résumé visuel de l'état de synchro du suivi (Phase C1.4) : dernière
+    // synchro, éléments en attente, conflits, mode hors-ligne.
+    async function refreshSyncStatus() {
+      try {
+        const s = await invoke("gds_sync_status");
+        if (!s.enabled) {
+          syncStatus.innerHTML = `<div class="gds-empty">GDS désactivé globalement — suivi fusionné inactif.</div>`;
+          return;
+        }
+        const pending = s.pending || 0;
+        const conflicts = s.last_conflicts || 0;
+        const pushed = s.last_pushed || 0;
+        const pulled = s.last_pulled || 0;
+        const lastAt = s.last_sync_at ? new Date(s.last_sync_at).toLocaleString() : "jamais";
+        let badge;
+        if (s.offline) {
+          badge = `<span class="gds-badge gds-badge-off">Hors-ligne</span>`;
+        } else if (s.last_sync_ok) {
+          badge = `<span class="gds-badge gds-badge-ok">Synchronisé</span>`;
+        } else {
+          badge = `<span class="gds-badge gds-badge-warn">En attente</span>`;
+        }
+        const pendingTxt = pending > 0
+          ? `<span class="gds-badge gds-badge-warn">${pending} en attente</span>`
+          : `<span class="gds-badge gds-badge-ok">À jour</span>`;
+        const conflictTxt = conflicts > 0
+          ? `<span class="gds-badge gds-badge-off">${conflicts} conflit(s)</span>`
+          : "";
+        syncStatus.innerHTML = `
+          <div class="gds-row">
+            <div class="gds-row-info">
+              <div class="gds-row-title">Suivi fusionné — ${badge} ${pendingTxt} ${conflictTxt}</div>
+              <div class="gds-row-sub">Dernière synchro : ${lastAt} — poussés ${pushed}, rapatriés ${pulled}${s.last_sync_error ? ` — ${esc(s.last_sync_error)}` : ""}</div>
+            </div>
+          </div>
+        `;
+      } catch (_) {
+        syncStatus.innerHTML = `<div class="gds-empty">État de synchro indisponible.</div>`;
+      }
+    }
 
     async function refreshLock() {
       const project = currentProjectPath();
@@ -496,6 +539,7 @@ export function createGds(container) {
           ok.textContent = `⚠️ Synchronisé (${res.action}) mais verrou détenu par ${lock.held_by || "un autre"} — conflit potentiel.`;
         }
         await refreshLock();
+        await refreshSyncStatus();
       } catch (e) {
         err.textContent = String(e);
       } finally {
@@ -535,6 +579,7 @@ export function createGds(container) {
     });
 
     refreshLock();
+    refreshSyncStatus();
   }
 
   // ── Section 7 : bloc Phase C (texte statique) ──

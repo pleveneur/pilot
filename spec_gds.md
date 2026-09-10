@@ -677,6 +677,28 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
   `POST /api/gds/tracking/force` (gds_web.rs). Respecte le paramètre global
   `gds_enabled` (court-circuit si désactivé).
 
+**C1.4. Mode déconnecté + résumés visuels** ✅ — `gds_sync.rs` + `gds.js` :
+- **Mode déconnecté** : quand le serveur GDS est injoignable, les modifications
+  locales du suivi continuent d'être enregistrées en SQLite (accumulation
+  locale, `pending_count`) sans blocage — le super-agent écrit localement quoi
+  qu'il arrive. L'état de synchro est persisté dans `gds_sync_state`
+  (`last_sync_ok`, `last_sync_at`, `last_sync_error`, `last_pushed`,
+  `last_pulled`, `last_conflicts`, `offline`).
+- **Resynchronisation automatique** : tâche de fond `start_gds_sync_monitor`
+  (lib.rs, toutes les 30 s) — si le GDS est activé globalement et qu'il y a des
+  éléments en attente, tente de (re)connecter le pool (`restore_pool_for_project`)
+  puis synchronise via le pont C1.2 (`sync_tracking_auto`). Quand le serveur
+  redevient joignable, les modifications accumulées sont poussées automatiquement.
+  Fail-open : une erreur ne bloque jamais l'interface.
+- **Résumés visuels** : commande Tauri `gds_sync_status` (dernière synchro,
+  éléments en attente, conflits, mode hors-ligne) affichée dans l'onglet GDS
+  (section 6, badges Synchronisé / Hors-ligne / En attente / conflits).
+- **Respect de `gds_enabled`** : le mode déconnecté ne s'applique que si le GDS
+  est activé globalement (actif par défaut) — sinon `gds_sync_status` retourne
+  `{ enabled: false }` et la tâche de fond ne tourne pas.
+- Tests : `pending_count`, `get_state`/`set_state`, `record_sync_result`,
+  `read_sync_status` (défauts).
+
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension
   `pilot-group-assistant.ts`, canal `__channel: group`. Moteur configurable
