@@ -16,6 +16,7 @@ import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
 import { initAgentActivity } from "./agent-activity.js";
 import { initProjectCommands } from "./project-commands.js";
+import { initGroupAssistant } from "./group-assistant.js";
 import { refreshIcons } from "./icons.js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -290,6 +291,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 3b-ter. Palette de commandes du projet (#17)
   initProjectCommands();
+  initGroupAssistant();
 
   // 3c. Initialiser le panneau Outline
   initOutline(tabs);

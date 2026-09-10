@@ -2537,6 +2537,10 @@ pub fn run() {
             group_assistant::set_group_assistant_model,
             group_assistant::get_group_assistant_state,
             group_assistant::group_assistant_tracking_query,
+            group_assistant::send_group_assistant_command,
+            group_assistant::group_assistant_ticket_create,
+            group_assistant::group_assistant_ticket_search,
+            group_assistant::group_assistant_project_query,
             // ── Tableau de bord projet (issue #51) ──
             dashboard::get_project_dashboard,
             dashboard::get_project_tracking,

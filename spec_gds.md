@@ -5,7 +5,7 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) + C2 implémentées.**
+> **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) + C2 (C2.1→C2.3) implémentées.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -474,8 +474,30 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   jamais sur le code), `ticket_search` (recherche de tickets par texte/statut/
   projet/client) et `project_query` (interrogation des projets du groupe).
   Lecture seule stricte sur le code, écriture limitée aux tickets. Respect de
-  `gds_enabled`. Les commandes Rust de traitement des sentinels tickets sont
-  livrées en C2.3.
+  `gds_enabled`.
+- **C2.3 (implémenté)** : modèle tickets + CRUD + routes + traitement des
+  sentinels côté Rust et frontend.
+  - **Migration `0005_tickets.sql`** : tables `tickets` (status/priority/source,
+    `resolved_at`), `ticket_comments`, `ticket_events` (audit visibilité) +
+    index sur `tickets.status` / `tickets.client_id`.
+  - **CRUD `gds_db.rs`** : `ticket_create`, `ticket_search` (texte/statut/
+    projet/client, tri `updated_at` DESC), `ticket_comment_add`,
+    `ticket_status_update` (pose `resolved_at` à la fermeture), `list_tickets`,
+    `ticket_event_add`, `get_ticket_by_id`.
+  - **Routes `gds_web.rs`** (remplacent la route réservée `gds_phase_c`) :
+    GET/POST `/api/gds/tickets`, POST `/api/gds/tickets/{id}/comments`,
+    POST `/api/gds/tickets/{id}/status` — derrière `auth_middleware`, rate
+    limiting `check_tracking`, audit `tracking_list`/`tracking_create`/
+    `tracking_update`, respect de `gds_enabled` via `gds_pool`.
+  - **Commandes Rust `group_assistant.rs`** (enregistrées dans `lib.rs`) :
+    `send_group_assistant_command` (réponse `extension_ui_response`),
+    `group_assistant_ticket_create`, `group_assistant_ticket_search`,
+    `group_assistant_project_query` (lecture suivi fusionné par scope) — toutes
+    refusent si le GDS est désactivé globalement.
+  - **Frontend `src/js/group-assistant.js`** (initialisé dans `main.js`) :
+    écoute `rpc-event-group`, traite les `extension_ui_request` `input`
+    préfixés `PILOT_GROUP_*` et renvoie le résultat JSON via
+    `send_group_assistant_command`.
 
 ### 8.4 Critère de fin
 

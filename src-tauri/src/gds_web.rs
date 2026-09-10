@@ -2,8 +2,8 @@
 //
 // Routes axum de base branchées sur le pool gds_db + config gds.rs. Réutilise
 // auth_middleware + AuthedClient (web_server.rs) et WebGuard (web_rate.rs).
-// Les routes B (sync, verrous) et C1.3/C1.5 (suivi fusionné) sont implémentées ;
-// les tickets restent RÉSERVÉS (répondent « disponible à la Phase C »).
+// Les routes B (sync, verrous), C1.3/C1.5 (suivi fusionné) et C2.3 (tickets)
+// sont implémentées.
 // Opérations bloquantes dans spawn_blocking.
 
 use crate::gds;
@@ -13,7 +13,7 @@ use crate::gds_sync;
 use crate::web_auth::WebAuth;
 use crate::web_server::{AuthedClient, WebCtx};
 use crate::AppState;
-use axum::extract::{ConnectInfo, Extension, State};
+use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -63,8 +63,10 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
             get(gds_tracking_decisions).post(gds_tracking_decision_upsert),
         )
         .route("/api/gds/tracking/decisions/delete", post(gds_tracking_decision_delete))
-        // ── Réservées Phase C (tickets) ──
-        .route("/api/gds/tickets", get(gds_phase_c))
+        // ── Phase C2.3 : tickets (modèle + CRUD + routes) ──
+        .route("/api/gds/tickets", get(gds_tickets).post(gds_ticket_create_web))
+        .route("/api/gds/tickets/{id}/comments", post(gds_ticket_comment_web))
+        .route("/api/gds/tickets/{id}/status", post(gds_ticket_status_web))
 }
 
 /// Pool GDS depuis AppState (clone court, jamais tenu en lock pendant un await).
@@ -759,12 +761,143 @@ async fn gds_tracking_decision_delete(
     }
 }
 
-// ── Routes réservées Phase C ──
+// ── Phase C2.3 : tickets (modèle + CRUD + routes) ──
+// Exposent le CRUD des tickets (création, liste, commentaires, changement de
+// statut) derrière auth_middleware. Rate limiting dédié (check_tracking) +
+// journalisation d'audit (ticket_*). Toutes les routes respectent `gds_enabled`
+// via `gds_pool` (court-circuit si désactivé).
 
-async fn gds_phase_c() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "Disponible à la Phase C" })),
+/// GET /api/gds/tickets — liste tous les tickets.
+async fn gds_tickets(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_tickets(&pool).await {
+        Ok(list) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_list", "tickets", true);
+            Json(json!({ "tickets": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TicketCreateBody {
+    title: String,
+    #[serde(default)]
+    description: String,
+    project_id: Option<i64>,
+    client_id: Option<i64>,
+    #[serde(default)]
+    priority: String,
+    #[serde(default)]
+    source: String,
+}
+
+/// POST /api/gds/tickets — crée un ticket.
+async fn gds_ticket_create_web(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<TicketCreateBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let title = body.title.trim().to_string();
+    if title.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Titre ticket vide" }))).into_response();
+    }
+    let priority = if body.priority.trim().is_empty() { "medium" } else { body.priority.trim() }.to_string();
+    let source = if body.source.trim().is_empty() { "web" } else { body.source.trim() }.to_string();
+    match gds_db::ticket_create(
+        &pool,
+        body.project_id,
+        body.client_id,
+        None, // reporter_user_id : non résolu côté web V1 (visiteur anonyme)
+        &title,
+        &body.description,
+        &priority,
+        &source,
     )
-        .into_response()
+    .await
+    {
+        Ok(id) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_create", &format!("tickets:{}", id), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TicketCommentBody {
+    body: String,
+    #[serde(default)]
+    author_label: String,
+}
+
+/// POST /api/gds/tickets/{id}/comments — ajoute un commentaire à un ticket.
+async fn gds_ticket_comment_web(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Path(id): Path<i64>,
+    Json(body): Json<TicketCommentBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let body_text = body.body.trim().to_string();
+    if body_text.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Commentaire vide" }))).into_response();
+    }
+    match gds_db::ticket_comment_add(&pool, id, None, &body_text, &body.author_label).await {
+        Ok(cid) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_update", &format!("tickets:{}:comment:{}", id, cid), true);
+            Json(json!({ "ok": true, "comment_id": cid })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TicketStatusBody {
+    status: String,
+}
+
+/// POST /api/gds/tickets/{id}/status — met à jour le statut d'un ticket.
+async fn gds_ticket_status_web(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Path(id): Path<i64>,
+    Json(body): Json<TicketStatusBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::ticket_status_update(&pool, id, &body.status).await {
+        Ok(()) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_update", &format!("tickets:{}:status:{}", id, body.status), true);
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
 }

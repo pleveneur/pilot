@@ -439,8 +439,17 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   autorisée sur le suivi, jamais sur le code), `ticket_search` (recherche de
   tickets par texte/statut/projet/client) et `project_query` (interrogation des
   projets du groupe). Lecture seule stricte sur le code, écriture limitée aux
-  tickets. Respect de `gds_enabled`. Les commandes Rust de traitement des
-  sentinels tickets sont livrées en C2.3.
+  tickets. Respect de `gds_enabled`.
+- **C2.3 Implémenté** : modèle tickets + CRUD + routes + traitement des
+  sentinels côté Rust et frontend — migration `0005_tickets.sql` (tickets,
+  ticket_comments, ticket_events + index status/client_id), CRUD `gds_db.rs`
+  (ticket_create/search/comment_add/status_update/list_tickets), routes
+  `gds_web.rs` (GET/POST `/api/gds/tickets`, POST `/{id}/comments`,
+  `/{id}/status`), commandes Rust `group_assistant.rs`
+  (`send_group_assistant_command`, `group_assistant_ticket_create`,
+  `group_assistant_ticket_search`, `group_assistant_project_query`),
+  frontend `src/js/group-assistant.js` (écoute `rpc-event-group`, sentinels
+  `PILOT_GROUP_*`). `cargo test --lib` vert (209 tests).
 
 ### PHASE D — Composant web (issue #56) — UNIQUEMENT après A/B/C stables
 

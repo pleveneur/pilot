@@ -1008,6 +1008,260 @@ pub(crate) async fn list_decisions(pool: &PgPool) -> Result<Vec<DecisionRow>, St
         .collect())
 }
 
+// ── Tickets (Phase C2.3, spec_gds.md §2.2) ──
+// Modèle de demandes/tickets : tickets + commentaires + événements (audit de
+// visibilité). `source` distingue l'origine ('web' | 'interne' | 'assistant').
+// `status` ∈ 'ouvert' | 'en cours' | 'en correction' | 'fermé' ; `priority` ∈
+// 'low' | 'medium' | 'high'. Respecte `gds_enabled` (les commandes/appels
+// refusent toute opération si le GDS est désactivé globalement).
+
+/// Ligne ticket (lecture).
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct TicketRow {
+    pub id: i64,
+    pub project_id: Option<i64>,
+    pub client_id: Option<i64>,
+    pub reporter_user_id: Option<i64>,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: String,
+    pub source: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolved_at: Option<DateTime<Utc>>,
+}
+
+/// Crée un ticket. Retourne l'id. `source` ∈ 'web' | 'interne' | 'assistant'.
+pub(crate) async fn ticket_create(
+    pool: &PgPool,
+    project_id: Option<i64>,
+    client_id: Option<i64>,
+    reporter_user_id: Option<i64>,
+    title: &str,
+    description: &str,
+    priority: &str,
+    source: &str,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO tickets (project_id, client_id, reporter_user_id, title, description, priority, source) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+    )
+    .bind(project_id)
+    .bind(client_id)
+    .bind(reporter_user_id)
+    .bind(title)
+    .bind(description)
+    .bind(priority)
+    .bind(source)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Création ticket: {}", e))?;
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Retourne un ticket par id (None si absent).
+#[allow(dead_code)] // API CRUD tickets (Phase C2.3) — exposée pour l'UI/API.
+pub(crate) async fn get_ticket_by_id(pool: &PgPool, id: i64) -> Result<Option<TicketRow>, String> {
+    let row = sqlx::query(
+        "SELECT id, project_id, client_id, reporter_user_id, title, description, status, priority, source, \
+                created_at, updated_at, resolved_at \
+         FROM tickets WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Lecture ticket: {}", e))?;
+    Ok(row.map(|r| TicketRow {
+        id: r.get::<i64, _>("id"),
+        project_id: r.get::<Option<i64>, _>("project_id"),
+        client_id: r.get::<Option<i64>, _>("client_id"),
+        reporter_user_id: r.get::<Option<i64>, _>("reporter_user_id"),
+        title: r.get::<String, _>("title"),
+        description: r.get::<String, _>("description"),
+        status: r.get::<String, _>("status"),
+        priority: r.get::<String, _>("priority"),
+        source: r.get::<String, _>("source"),
+        created_at: r.get::<DateTime<Utc>, _>("created_at"),
+        updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        resolved_at: r.get::<Option<DateTime<Utc>>, _>("resolved_at"),
+    }))
+}
+
+/// Recherche des tickets par filtres (texte libre, statut, projet, client).
+/// Tous les filtres sont optionnels (chaîne vide = non filtré). Retourne les
+/// tickets correspondants triés par `updated_at` décroissant (les plus récents
+/// d'abord).
+pub(crate) async fn ticket_search(
+    pool: &PgPool,
+    query: &str,
+    status: &str,
+    project_id: Option<i64>,
+    client_id: Option<i64>,
+) -> Result<Vec<TicketRow>, String> {
+    // Construit la clause WHERE avec des placeholders séquentiels $1..$n puis
+    // bind les valeurs dans l'ordre. `query`/`status` vides = non filtrés.
+    let mut sql = String::from(
+        "SELECT id, project_id, client_id, reporter_user_id, title, description, status, priority, source, \
+                created_at, updated_at, resolved_at \
+         FROM tickets WHERE 1=1",
+    );
+    let mut n = 0usize;
+    let mut binds: Vec<String> = Vec::new();
+    if !query.trim().is_empty() {
+        n += 1;
+        sql.push_str(&format!(" AND (title ILIKE ${} OR description ILIKE ${})", n, n + 1));
+        let like = format!("%{}%", query.trim());
+        binds.push(like.clone());
+        binds.push(like);
+        n += 1;
+    }
+    if !status.trim().is_empty() {
+        n += 1;
+        sql.push_str(&format!(" AND status = ${}", n));
+        binds.push(status.trim().to_string());
+    }
+    if let Some(pid) = project_id {
+        n += 1;
+        sql.push_str(&format!(" AND project_id = ${}", n));
+        binds.push(pid.to_string());
+    }
+    if let Some(cid) = client_id {
+        n += 1;
+        sql.push_str(&format!(" AND client_id = ${}", n));
+        binds.push(cid.to_string());
+    }
+    sql.push_str(" ORDER BY updated_at DESC");
+    let mut q = sqlx::query(&sql);
+    for b in &binds {
+        q = q.bind(b);
+    }
+    let rows = q
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Recherche tickets: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| TicketRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<Option<i64>, _>("project_id"),
+            client_id: r.get::<Option<i64>, _>("client_id"),
+            reporter_user_id: r.get::<Option<i64>, _>("reporter_user_id"),
+            title: r.get::<String, _>("title"),
+            description: r.get::<String, _>("description"),
+            status: r.get::<String, _>("status"),
+            priority: r.get::<String, _>("priority"),
+            source: r.get::<String, _>("source"),
+            created_at: r.get::<DateTime<Utc>, _>("created_at"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+            resolved_at: r.get::<Option<DateTime<Utc>>, _>("resolved_at"),
+        })
+        .collect())
+}
+
+/// Liste tous les tickets (API suivi fusionné, Phase C2.3).
+pub(crate) async fn list_tickets(pool: &PgPool) -> Result<Vec<TicketRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, client_id, reporter_user_id, title, description, status, priority, source, \
+                created_at, updated_at, resolved_at \
+         FROM tickets ORDER BY updated_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste tickets: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| TicketRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<Option<i64>, _>("project_id"),
+            client_id: r.get::<Option<i64>, _>("client_id"),
+            reporter_user_id: r.get::<Option<i64>, _>("reporter_user_id"),
+            title: r.get::<String, _>("title"),
+            description: r.get::<String, _>("description"),
+            status: r.get::<String, _>("status"),
+            priority: r.get::<String, _>("priority"),
+            source: r.get::<String, _>("source"),
+            created_at: r.get::<DateTime<Utc>, _>("created_at"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+            resolved_at: r.get::<Option<DateTime<Utc>>, _>("resolved_at"),
+        })
+        .collect())
+}
+
+/// Ajoute un commentaire à un ticket. Retourne l'id du commentaire.
+pub(crate) async fn ticket_comment_add(
+    pool: &PgPool,
+    ticket_id: i64,
+    user_id: Option<i64>,
+    body: &str,
+    author_label: &str,
+) -> Result<i64, String> {
+    let row = sqlx::query(
+        "INSERT INTO ticket_comments (ticket_id, user_id, body, author_label) VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(ticket_id)
+    .bind(user_id)
+    .bind(body)
+    .bind(author_label)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Ajout commentaire ticket: {}", e))?;
+    // Touche le ticket (updated_at) pour refléter l'activité.
+    sqlx::query("UPDATE tickets SET updated_at = now() WHERE id = $1")
+        .bind(ticket_id)
+        .execute(pool)
+        .await
+        .ok();
+    Ok(row.get::<i64, _>("id"))
+}
+
+/// Met à jour le statut d'un ticket. `status` ∈ 'ouvert' | 'en cours' |
+/// 'en correction' | 'fermé'. Quand le statut passe à 'fermé', `resolved_at`
+/// est posé à now() (sinon conservé).
+pub(crate) async fn ticket_status_update(pool: &PgPool, ticket_id: i64, status: &str) -> Result<(), String> {
+    let status = status.trim().to_string();
+    if status.is_empty() {
+        return Err("Statut ticket vide".to_string());
+    }
+    let resolved = if status == "fermé" {
+        "now()"
+    } else {
+        "NULL"
+    };
+    let sql = format!(
+        "UPDATE tickets SET status = $1, updated_at = now(), resolved_at = {} WHERE id = $2",
+        resolved
+    );
+    sqlx::query(&sql)
+        .bind(&status)
+        .bind(ticket_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Mise à jour statut ticket: {}", e))?;
+    Ok(())
+}
+
+/// Journalise un événement de ticket (audit visibilité).
+pub(crate) async fn ticket_event_add(
+    pool: &PgPool,
+    ticket_id: i64,
+    actor: &str,
+    action: &str,
+    detail: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO ticket_events (ticket_id, actor, action, detail) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(ticket_id)
+    .bind(actor)
+    .bind(action)
+    .bind(detail)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Journalisation événement ticket: {}", e))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

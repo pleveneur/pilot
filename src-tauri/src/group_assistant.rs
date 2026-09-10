@@ -266,6 +266,163 @@ fn query_rows(conn: &rusqlite::Connection, sql: &str) -> Result<Value, String> {
     Ok(serde_json::json!({ "rows": result, "count": result.len() }))
 }
 
+// ── Phase C2.3 : commandes de traitement des sentinels tickets ──
+// L'extension pilot-group-assistant émet des `extension_ui_request` de type
+// `input` préfixés par un sentinel (PILOT_GROUP_*). Le frontend (group-assistant.js)
+// intercepte ces sentinels et appelle les commandes Rust ci-dessous, qui
+// exécutent l'opération sur le suivi (tickets) et renvoient le résultat JSON
+// comme `value` de la réponse `extension_ui_response`. Chaque commande refuse
+// toute opération si le GDS est désactivé globalement (`gds_enabled`).
+
+/// Pool GDS depuis AppState (clone court). Court-circuite si le GDS est
+/// désactivé globalement (paramètre global `gds_enabled`, actif par défaut).
+fn gds_pool_from_state(state: &AppState) -> Result<sqlx::PgPool, String> {
+    if !crate::gds_globally_enabled(state) {
+        return Err(
+            "L'assistant de groupe nécessite le GDS (paramètre global désactivé)."
+                .to_string(),
+        );
+    }
+    state
+        .gds_pool
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "GDS non provisionné".to_string())
+}
+
+/// Envoie une commande arbitraire au processus pi de l'assistant de groupe
+/// (ex: `extension_ui_response` pour répondre aux requêtes d'outils).
+#[tauri::command]
+pub async fn send_group_assistant_command(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    command: Value,
+) -> Result<(), String> {
+    do_start_group_assistant_session(state.inner(), &app)?;
+    state.agent_service.send_group_assistant(command)
+}
+
+/// Traite le sentinel `PILOT_GROUP_TICKET_CREATE::` : crée un ticket dans le
+/// suivi fusionné (Postgres via GDS). `payload` = JSON {title, description,
+/// project_id, client_id, priority, type}. Écriture autorisée UNIQUEMENT sur le
+/// suivi (tickets) — jamais sur le code. Refuse si le GDS est désactivé.
+#[tauri::command]
+pub async fn group_assistant_ticket_create(
+    state: State<'_, AppState>,
+    payload: String,
+) -> Result<Value, String> {
+    let pool = gds_pool_from_state(state.inner())?;
+    let v: Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Payload ticket_create invalide: {}", e))?;
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        return Err("Titre ticket vide".to_string());
+    }
+    let description = v
+        .get("description")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let project_id = v.get("project_id").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok());
+    let client_id = v.get("client_id").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok());
+    let priority = v
+        .get("priority")
+        .and_then(|x| x.as_str())
+        .unwrap_or("medium")
+        .to_string();
+    // Source : l'assistant de groupe est l'émetteur → 'assistant'.
+    let id = crate::gds_db::ticket_create(
+        &pool,
+        project_id,
+        client_id,
+        None,
+        &title,
+        &description,
+        &priority,
+        "assistant",
+    )
+    .await?;
+    crate::gds_db::ticket_event_add(&pool, id, "assistant", "ticket.create", &title).await?;
+    Ok(serde_json::json!({ "ok": true, "id": id, "title": title }))
+}
+
+/// Traite le sentinel `PILOT_GROUP_TICKET_SEARCH::` : recherche des tickets par
+/// filtres (texte, statut, projet, client). `payload` = JSON {query, status,
+/// project_id, client_id}. Lecture seule stricte. Refuse si le GDS est désactivé.
+#[tauri::command]
+pub async fn group_assistant_ticket_search(
+    state: State<'_, AppState>,
+    payload: String,
+) -> Result<Value, String> {
+    let pool = gds_pool_from_state(state.inner())?;
+    let v: Value = serde_json::from_str(&payload)
+        .map_err(|e| format!("Payload ticket_search invalide: {}", e))?;
+    let query = v.get("query").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let project_id = v.get("project_id").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok());
+    let client_id = v.get("client_id").and_then(|x| x.as_str()).and_then(|s| s.parse::<i64>().ok());
+    let tickets = crate::gds_db::ticket_search(&pool, &query, &status, project_id, client_id).await?;
+    Ok(serde_json::json!({ "tickets": tickets, "count": tickets.len() }))
+}
+
+/// Traite le sentinel `PILOT_GROUP_PROJECT_QUERY::` : interroge les projets du
+/// groupe (lecture du suivi fusionné). `scope` : "projects" (défaut), "all",
+/// "clients", "tasks" ou "decisions". Lecture seule stricte. Refuse si le GDS
+/// est désactivé.
+#[tauri::command]
+pub async fn group_assistant_project_query(
+    state: State<'_, AppState>,
+    scope: String,
+) -> Result<Value, String> {
+    let scope = scope.trim().to_lowercase();
+    let scope = if scope.is_empty() { "projects" } else { scope.as_str() };
+    let pool = gds_pool_from_state(state.inner())?;
+    let mut out = serde_json::Map::new();
+    if scope == "projects" || scope == "all" {
+        let projects = crate::gds_db::list_tracking_projects(&pool)
+            .await
+            .map_err(|e| format!("Lecture projets GDS: {}", e))?;
+        out.insert(
+            "projects".to_string(),
+            serde_json::to_value(&projects).unwrap_or(Value::Null),
+        );
+    }
+    if scope == "clients" || scope == "all" {
+        let clients = crate::gds_db::list_clients(&pool)
+            .await
+            .map_err(|e| format!("Lecture clients GDS: {}", e))?;
+        out.insert(
+            "clients".to_string(),
+            serde_json::to_value(&clients).unwrap_or(Value::Null),
+        );
+    }
+    if scope == "tasks" || scope == "all" {
+        let tasks = crate::gds_db::list_tasks(&pool)
+            .await
+            .map_err(|e| format!("Lecture tâches GDS: {}", e))?;
+        out.insert(
+            "tasks".to_string(),
+            serde_json::to_value(&tasks).unwrap_or(Value::Null),
+        );
+    }
+    if scope == "decisions" || scope == "all" {
+        let decisions = crate::gds_db::list_decisions(&pool)
+            .await
+            .map_err(|e| format!("Lecture décisions GDS: {}", e))?;
+        out.insert(
+            "decisions".to_string(),
+            serde_json::to_value(&decisions).unwrap_or(Value::Null),
+        );
+    }
+    Ok(Value::Object(out))
+}
+
 // ── Tests ──
 
 #[cfg(test)]
