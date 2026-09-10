@@ -328,7 +328,9 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
 #[tauri::command]
 pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String> {
     let projects = state.projects.lock().unwrap();
-    let keys: Vec<String> = projects.keys().cloned().collect();
+    // Chemins originaux (affichage) — l'activité agent est indexée par le chemin
+    // utilisé par les sessions (chemin original), pas par la clé normalisée.
+    let keys: Vec<String> = projects.values().map(|ps| ps.path.clone()).collect();
     drop(projects);
     let activity = state.agent_activity.lock().unwrap();
     let now = std::time::Instant::now();

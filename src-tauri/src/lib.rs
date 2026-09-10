@@ -93,6 +93,24 @@ mod gds_web;
 
 // ── État global de l'application ──
 
+/// Normalise un chemin de projet pour servir de clé canonique de déduplication
+/// (multi-projets). Convertit les backslashes en slashes, retire les slashes
+/// finaux, et met en minuscules sur Windows (système de fichiers insensible à
+/// la casse) pour éviter les doublons (avec/sans slash final, casse différente,
+/// séparateur `\` vs `/`). La clé sert UNIQUEMENT à l'indexation ; le chemin
+/// d'affichage reste le chemin original (`ProjectState.path`).
+pub(crate) fn normalize_project_path(p: &str) -> String {
+    let mut s = p.replace('\\', "/");
+    while s.ends_with('/') {
+        s.pop();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        s = s.to_lowercase();
+    }
+    s
+}
+
 /// État d'un projet ouvert (spec_multiprojects.md). Un par projet ouvert :
 /// son agent RPC dédié + son watcher de fichiers.
 /// NB : à l'étape actuelle (adaptateur progressif) seul `path` est rempli ;
@@ -717,24 +735,42 @@ impl AppConfig {
         self.recent_projects.truncate(10);
     }
 
-    /// Ajoute un projet dans les récents (en tête, dédoublonné, max 10)
+    /// Ajoute un projet dans les récents (en tête, dédoublonné par chemin
+    /// normalisé, max 10). Conserve le chemin original pour l'affichage.
     fn add_recent(&mut self, path: &str) {
-        self.recent_projects.retain(|p| p != path);
+        let key = normalize_project_path(path);
+        self.recent_projects
+            .retain(|p| normalize_project_path(p) != key);
         self.recent_projects.insert(0, path.to_string());
         self.recent_projects.truncate(10);
     }
 
-    /// Multi-projets : enregistre un projet comme ouvert (dédoublonné).
+    /// Multi-projets : enregistre un projet comme ouvert (dédoublonné par
+    /// chemin normalisé). Conserve le chemin original pour l'affichage.
     fn add_open_project(&mut self, path: &str) {
-        if !self.open_projects.contains(&path.to_string()) {
+        let key = normalize_project_path(path);
+        if !self
+            .open_projects
+            .iter()
+            .any(|p| normalize_project_path(p) == key)
+        {
             self.open_projects.push(path.to_string());
         }
     }
 
-    /// Multi-projets : retire un projet fermé de la liste persistée.
+    /// Multi-projets : retire un projet fermé de la liste persistée (comparaison
+    /// par chemin normalisé).
     fn remove_open_project(&mut self, path: &str) {
-        self.open_projects.retain(|p| p != path);
-        if self.active_open_project.as_deref() == Some(path) {
+        let key = normalize_project_path(path);
+        self.open_projects
+            .retain(|p| normalize_project_path(p) != key);
+        if self
+            .active_open_project
+            .as_deref()
+            .map(normalize_project_path)
+            .as_deref()
+            == Some(key.as_str())
+        {
             self.active_open_project = None;
         }
     }
@@ -1220,38 +1256,48 @@ pub(crate) fn open_project_shared(app: &AppHandle, path: &str) -> Result<FileNod
     // Multi-projets (spec_multiprojects.md) : enregistrer le projet dans la
     // collection des projets ouverts (clé = chemin normalisé) s'il n'y est pas,
     // puis le rendre actif. `project_path`/`watch_state` restent l'état du projet
-    // actif (adaptateur progressif).
-    {
+    // actif (adaptateur progressif). Le chemin canonique (celui déjà enregistré
+    // si le projet est déjà ouvert sous une autre forme, sinon le chemin passé)
+    // est utilisé pour l'état actif et la persistance — évite les doublons
+    // (avec/sans slash final, casse, séparateur \ vs /).
+    let canonical = {
         let mut projects = state.projects.lock().unwrap();
-        projects
-            .entry(path.to_string())
-            .or_insert_with(|| ProjectState {
-                path: path.to_string(),
-                watcher: None,
-            });
-    }
+        let key = normalize_project_path(path);
+        if let Some(existing) = projects.get(&key) {
+            existing.path.clone()
+        } else {
+            projects.insert(
+                key,
+                ProjectState {
+                    path: path.to_string(),
+                    watcher: None,
+                },
+            );
+            path.to_string()
+        }
+    };
 
     // Arrêter l'ancien watcher proprement
     stop_watcher(&state);
 
     // Démarrer le nouveau watcher
-    start_watching(app, path, &state)?;
+    start_watching(app, &canonical, &state)?;
 
     // Stocker le chemin du projet (section critique courte)
-    *state.project_path.lock().unwrap() = Some(path.to_string());
-    *state.active_project.lock().unwrap() = Some(path.to_string());
+    *state.project_path.lock().unwrap() = Some(canonical.clone());
+    *state.active_project.lock().unwrap() = Some(canonical.clone());
 
     // Persister dans les projets récents (section critique courte)
     {
         let mut config = state.config.lock().unwrap();
-        config.add_recent(path);
-        config.add_open_project(path);
-        config.set_active_open_project(path);
+        config.add_recent(&canonical);
+        config.add_open_project(&canonical);
+        config.set_active_open_project(&canonical);
         save_config_disk(app, &config)?;
     }
 
     // Émettre l'événement project_changed (pour cohérence bidirectionnelle)
-    let payload = serde_json::json!({ "path": path });
+    let payload = serde_json::json!({ "path": canonical });
     app.emit("project_changed", &payload).ok();
 
     // build_tree est l'opération longue → on la fait HORS des locks
@@ -1700,7 +1746,13 @@ fn get_recent_projects(state: State<AppState>, app: AppHandle) -> Result<Vec<Str
     let mut config = state.config.lock().unwrap().clone();
     let before = config.recent_projects.len();
     config.recent_projects.retain(|p| std::path::Path::new(p).exists());
-    // Si on a retiré des projets inexistants, sauvegarder la config nettoyée
+    // Dédupliquer par chemin normalisé (avec/sans slash final, casse, \ vs /)
+    // pour éviter qu'un même projet apparaisse deux fois dans la liste.
+    let mut seen = std::collections::HashSet::new();
+    config
+        .recent_projects
+        .retain(|p| seen.insert(normalize_project_path(p)));
+    // Si on a retiré des projets inexistants ou doublons, sauvegarder la config nettoyée
     if config.recent_projects.len() < before {
         save_config_disk(&app, &config)?;
         *state.config.lock().unwrap() = config.clone();
@@ -1757,7 +1809,7 @@ fn close_project(state: State<AppState>, app: AppHandle, path: Option<String>) -
     state.agent_service.stop_project_sessions(&target);
     {
         let mut projects = state.projects.lock().unwrap();
-        projects.remove(&target);
+        projects.remove(&normalize_project_path(&target));
     }
 
     // Issue #13 : oublier l'activité de l'agent de CE projet (pas de fuite de map).
@@ -1817,8 +1869,13 @@ pub(crate) fn do_set_active_project(
     // processus pi/plh).
     park_previous_active_if_switching(state.inner(), path);
 
-    // Le projet doit être dans la collection des projets ouverts.
-    let registered = state.projects.lock().unwrap().contains_key(path);
+    // Le projet doit être dans la collection des projets ouverts (clé = chemin
+    // normalisé).
+    let registered = state
+        .projects
+        .lock()
+        .unwrap()
+        .contains_key(&normalize_project_path(path));
     if !registered {
         return Err("Projet non ouvert".to_string());
     }
@@ -1846,11 +1903,12 @@ pub(crate) fn do_set_active_project(
 }
 
 /// Multi-projets (spec_multiprojects.md) : liste les projets ouverts + le projet
-/// actif, pour l'afficheur UI et le web-remote.
+/// actif, pour l'afficheur UI et le web-remote. Retourne les chemins originaux
+/// (dédupliqués par clé normalisée) pour un affichage fidèle.
 #[tauri::command]
 fn list_open_projects(state: State<AppState>) -> Vec<String> {
     let projects = state.projects.lock().unwrap();
-    let mut list: Vec<String> = projects.keys().cloned().collect();
+    let mut list: Vec<String> = projects.values().map(|ps| ps.path.clone()).collect();
     list.sort();
     list
 }
@@ -1884,10 +1942,13 @@ fn restore_open_projects(state: State<AppState>) -> (Vec<String>, Option<String>
 
     // Enregistrer dans la collection sans watcher/session (l'actif sera rouvert
     // par le frontend via le flux normal → ceci devient l'état du projet actif).
+    // Clé = chemin normalisé (déduplication), chemin original conservé pour
+    // l'affichage.
     {
         let mut projects = state.projects.lock().unwrap();
         for p in &open {
-            projects.entry(p.clone()).or_insert_with(|| ProjectState {
+            let key = normalize_project_path(p);
+            projects.entry(key).or_insert_with(|| ProjectState {
                 path: p.clone(),
                 watcher: None,
             });
@@ -2587,4 +2648,69 @@ fn rename_dir_fallback(source: &std::path::Path, dest: &std::path::Path) -> Resu
 
     std::fs::remove_dir(source).map_err(|e| format!("Erreur suppression dossier source: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_project_path;
+
+    #[test]
+    fn normalize_handles_trailing_slash() {
+        assert_eq!(
+            normalize_project_path("G:/IA_PL/pilot/"),
+            normalize_project_path("G:/IA_PL/pilot")
+        );
+        assert_eq!(
+            normalize_project_path("G:/IA_PL/pilot//"),
+            normalize_project_path("G:/IA_PL/pilot")
+        );
+    }
+
+    #[test]
+    fn normalize_handles_backslashes() {
+        assert_eq!(
+            normalize_project_path("G:\\IA_PL\\pilot"),
+            normalize_project_path("G:/IA_PL/pilot")
+        );
+        assert_eq!(
+            normalize_project_path("G:\\IA_PL\\pilot\\"),
+            normalize_project_path("G:/IA_PL/pilot")
+        );
+    }
+
+    #[test]
+    fn normalize_is_case_insensitive_on_windows() {
+        // Sur Windows (système de fichiers insensible à la casse), deux formes
+        // d'un même chemin doivent produire la même clé de déduplication.
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                normalize_project_path("G:\\IA_PL\\pilot"),
+                normalize_project_path("g:\\ia_pl\\pilot")
+            );
+        }
+        // Sur les autres plateformes, la casse est préservée (système sensible).
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_ne!(
+                normalize_project_path("G:/IA_PL/pilot"),
+                normalize_project_path("g:/ia_pl/pilot")
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_dedups_equivalent_forms() {
+        // Toutes ces formes désignent le même projet → même clé.
+        let forms = [
+            "G:\\IA_PL\\pilot",
+            "G:/IA_PL/pilot",
+            "G:/IA_PL/pilot/",
+            "G:\\IA_PL\\pilot\\",
+        ];
+        let mut keys: Vec<String> = forms.iter().map(|f| normalize_project_path(f)).collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), 1, "toutes les formes doivent se dédupliquer");
+    }
 }

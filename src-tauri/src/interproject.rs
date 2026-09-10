@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
-use crate::{rpc, AppState, do_set_active_project, open_project_shared, save_config_disk};
+use crate::{rpc, AppState, do_set_active_project, normalize_project_path, open_project_shared, save_config_disk};
 
 /// Issue #15 : liste les projets liés à `project` (chemins normalisés).
 #[tauri::command]
@@ -129,7 +129,11 @@ pub fn interproject_handoff(
     //    (processus pi vivant en arrière-plan, conforme au multi-projets) pour ne
     //    pas bloquer le lancement de l'agent de la cible (« session déjà active »).
     let _ = rpc::do_park_agent_session(state.inner(), None);
-    let registered = state.projects.lock().unwrap().contains_key(&target);
+    let registered = state
+        .projects
+        .lock()
+        .unwrap()
+        .contains_key(&normalize_project_path(&target));
     if !registered {
         open_project_shared(&app, &target)?;
     } else {

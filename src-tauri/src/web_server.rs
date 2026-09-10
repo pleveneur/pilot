@@ -909,7 +909,13 @@ async fn project_info(State(ctx): State<Arc<WebCtx>>) -> Response {
         let state = app.state::<AppState>();
         let cfg = state.config.lock().unwrap().clone();
         let current = state.project_path.lock().unwrap().clone();
-        let open: Vec<String> = state.projects.lock().unwrap().keys().cloned().collect();
+        let open: Vec<String> = state
+            .projects
+            .lock()
+            .unwrap()
+            .values()
+            .map(|ps| ps.path.clone())
+            .collect();
         let active = state.active_project.lock().unwrap().clone();
         let roots = resolve_browse_roots(&cfg);
         Ok(json!({
