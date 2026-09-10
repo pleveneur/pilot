@@ -429,11 +429,18 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension
   `pilot-group-assistant.ts`, canal `rpc-event-group` (`__channel: group`).
   Moteur configurable (`group_assistant_model`).
-- **Implémenté** : session RPC dédiée globale (multi-projets), garde-fou
+- **C2.1 Implémenté** : session RPC dédiée globale (multi-projets), garde-fou
   `gds_enabled`, prompt lecture seule stricte, modèle configurable, lecture du
   suivi fusionné (Postgres via GDS, repli SQLite). Extension
   `pilot-group-assistant.ts` : outil `group_tracking_query(scope)` (lecture
   seule). `cargo test --lib` vert (209 tests).
+- **C2.2 Implémenté** : extension `pilot-group-assistant.ts` complétée avec les
+  outils `ticket_create` (ajout d'une demande/bug/évolution au suivi — écriture
+  autorisée sur le suivi, jamais sur le code), `ticket_search` (recherche de
+  tickets par texte/statut/projet/client) et `project_query` (interrogation des
+  projets du groupe). Lecture seule stricte sur le code, écriture limitée aux
+  tickets. Respect de `gds_enabled`. Les commandes Rust de traitement des
+  sentinels tickets sont livrées en C2.3.
 
 ### PHASE D — Composant web (issue #56) — UNIQUEMENT après A/B/C stables
 

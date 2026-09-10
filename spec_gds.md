@@ -468,6 +468,14 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - `group_assistant.rs` (dérivé de `super_agent.rs`), extension
   `pilot-group-assistant.ts` (outils `ticket_create`, `ticket_search`,
   `project_query`), canal d'événements dédié (`__channel: group`).
+- **C2.2 (implémenté)** : l'extension `pilot-group-assistant.ts` expose
+  `group_tracking_query(scope)` (lecture du suivi fusionné) + `ticket_create`
+  (ajout d'une demande/bug/évolution au suivi — écriture autorisée sur le suivi,
+  jamais sur le code), `ticket_search` (recherche de tickets par texte/statut/
+  projet/client) et `project_query` (interrogation des projets du groupe).
+  Lecture seule stricte sur le code, écriture limitée aux tickets. Respect de
+  `gds_enabled`. Les commandes Rust de traitement des sentinels tickets sont
+  livrées en C2.3.
 
 ### 8.4 Critère de fin
 
