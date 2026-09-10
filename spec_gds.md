@@ -5,7 +5,7 @@
 > dans **une base unique PostgreSQL**. Prérequis au composant web (issue #56,
 > voir `spec_web_component.md`).
 >
-> **Statut : 🟢 Phases A + B + C1 implémentées — C2 à venir.**
+> **Statut : 🟢 Phases A + B + C1 (C1.1→C1.5) implémentées — C2 à venir.**
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
@@ -698,6 +698,26 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
   `{ enabled: false }` et la tâche de fond ne tourne pas.
 - Tests : `pending_count`, `get_state`/`set_state`, `record_sync_result`,
   `read_sync_status` (défauts).
+
+**C1.5. Routes API suivi fusionné + rate/audit** ✅ — `gds_web.rs` +
+`web_rate.rs` + `web_audit.rs` + `gds_db.rs` :
+- **Routes REST** : lecture/écriture des 4 entités du suivi derrière
+  `auth_middleware` — `GET/POST /api/gds/tracking/clients` (+ `/delete`),
+  `GET/POST /api/gds/tracking/projects` (+ `/delete`),
+  `GET/POST /api/gds/tracking/tasks` (+ `/delete`),
+  `GET/POST /api/gds/tracking/decisions` (+ `/delete`). Les POST sont des
+  upserts (création si absent, mise à jour sinon) ; les `/delete` suppriment
+  par clé (name/path/id).
+- **Rate limiting dédié** : `WebGuard::check_tracking` (`web_rate.rs`, 60 op /
+  60 s / token) appliqué à toutes les routes de suivi via `tracking_allowed`
+  (429 + audit `rate_limited` si dépassé).
+- **Audit étendu** : `web_audit.rs` documente les actions `tracking_create` /
+  `tracking_update` / `tracking_delete` / `tracking_list` (détail
+  `"<entité>:<clé>"`), journalisées par chaque handler.
+- **Respect de `gds_enabled`** : toutes les routes passent par `gds_pool`
+  (court-circuit si le GDS est désactivé globalement).
+- **CRUD liste** : `gds_db.rs` ajoute `list_clients`, `list_tracking_projects`,
+  `list_tasks`, `list_decisions` (lecture complète pour l'API).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

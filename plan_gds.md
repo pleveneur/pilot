@@ -416,6 +416,14 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   pool puis pousse via le pont C1.2 quand le serveur revient) ; résumés visuels
   dans l'onglet GDS via la commande `gds_sync_status` (dernière synchro, en
   attente, conflits, hors-ligne) ; respecte `gds_enabled`).
+- **C1.5 Routes API suivi fusionné + rate/audit** ✅ (`gds_web.rs` +
+  `web_rate.rs` + `web_audit.rs` + `gds_db.rs` : routes REST lecture/écriture
+  des 4 entités du suivi — clients/projects/tasks/decisions — derrière
+  `auth_middleware` ; rate limiting dédié `check_tracking` (60 op / 60 s /
+  token) ; audit étendu `tracking_create`/`tracking_update`/`tracking_delete`/
+  `tracking_list` ; toutes les routes respectent `gds_enabled` via `gds_pool` ;
+  CRUD liste `list_clients`/`list_tracking_projects`/`list_tasks`/
+  `list_decisions`).
 
 **C2. Assistant de groupe (lecture seule)**
 - Modules : `group_assistant.rs` (dérivé de `super_agent.rs`), extension

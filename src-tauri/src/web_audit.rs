@@ -49,7 +49,10 @@ pub struct AuditEntry {
     /// Code action : "login" | "prompt" | "abort" | "new" | "compact"
     /// | "set_model" | "project_open" | "project_create" | "ws_open" | "ws_close"
     /// | "kick" | "set_password" | "rate_limited" | "file_save" | "file_create"
-    /// | "file_meta".
+    /// | "file_meta" | "tracking_create" | "tracking_update" | "tracking_delete"
+    /// | "tracking_list".
+    /// Les actions de suivi fusionné (GDS Phase C1.5) portent le détail
+    /// "<entité>:<clé>" (ex: "clients:Acme", "tasks:42").
     pub action: String,
     /// Détail court (ex: "127 car.", "provider/model", chemin projet/fichier).
     pub detail: String,

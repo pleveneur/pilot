@@ -605,6 +605,23 @@ pub(crate) async fn delete_client(pool: &PgPool, name: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Liste tous les clients (API suivi fusionné, Phase C1.5).
+pub(crate) async fn list_clients(pool: &PgPool) -> Result<Vec<ClientRow>, String> {
+    let rows = sqlx::query("SELECT id, name, notes, updated_at FROM clients ORDER BY name")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Liste clients: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| ClientRow {
+            id: r.get::<i64, _>("id"),
+            name: r.get::<String, _>("name"),
+            notes: r.get::<String, _>("notes"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
+}
+
 /// Ligne projet de suivi (path non NULL).
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct ProjectRow {
@@ -678,6 +695,28 @@ pub(crate) async fn delete_project(pool: &PgPool, path: &str) -> Result<(), Stri
         .await
         .map_err(|e| format!("Suppression projet: {}", e))?;
     Ok(())
+}
+
+/// Liste tous les projets de suivi (path non NULL) — API suivi fusionné, Phase C1.5.
+pub(crate) async fn list_tracking_projects(pool: &PgPool) -> Result<Vec<ProjectRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, path, name, client_id, status, updated_at FROM projects \
+         WHERE path IS NOT NULL ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste projets suivi: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| ProjectRow {
+            id: r.get::<i64, _>("id"),
+            path: r.get::<String, _>("path"),
+            name: r.get::<String, _>("name"),
+            client_id: r.get::<Option<i64>, _>("client_id"),
+            status: r.get::<String, _>("status"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
 }
 
 /// Ligne tâche (suivi).
@@ -769,6 +808,31 @@ pub(crate) async fn delete_task(pool: &PgPool, id: i64) -> Result<(), String> {
         .await
         .map_err(|e| format!("Suppression tâche: {}", e))?;
     Ok(())
+}
+
+/// Liste toutes les tâches — API suivi fusionné, Phase C1.5.
+pub(crate) async fn list_tasks(pool: &PgPool) -> Result<Vec<TaskRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, updated_at \
+         FROM tasks ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste tâches: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| TaskRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<i64, _>("project_id"),
+            title: r.get::<String, _>("title"),
+            description: r.get::<String, _>("description"),
+            status: r.get::<String, _>("status"),
+            deadline: r.get::<String, _>("deadline"),
+            blocker_reason: r.get::<String, _>("blocker_reason"),
+            source_task_id: r.get::<Option<i64>, _>("source_task_id"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
 }
 
 /// Ligne décision (suivi).
@@ -920,6 +984,28 @@ pub(crate) async fn delete_decision(pool: &PgPool, id: i64) -> Result<(), String
         .await
         .map_err(|e| format!("Suppression décision: {}", e))?;
     Ok(())
+}
+
+/// Liste toutes les décisions — API suivi fusionné, Phase C1.5.
+pub(crate) async fn list_decisions(pool: &PgPool) -> Result<Vec<DecisionRow>, String> {
+    let rows = sqlx::query(
+        "SELECT id, project_id, task_id, summary, source_session, updated_at \
+         FROM decisions ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste décisions: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| DecisionRow {
+            id: r.get::<i64, _>("id"),
+            project_id: r.get::<Option<i64>, _>("project_id"),
+            task_id: r.get::<Option<i64>, _>("task_id"),
+            summary: r.get::<String, _>("summary"),
+            source_session: r.get::<String, _>("source_session"),
+            updated_at: r.get::<DateTime<Utc>, _>("updated_at"),
+        })
+        .collect())
 }
 
 #[cfg(test)]

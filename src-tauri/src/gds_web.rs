@@ -2,22 +2,23 @@
 //
 // Routes axum de base branchées sur le pool gds_db + config gds.rs. Réutilise
 // auth_middleware + AuthedClient (web_server.rs) et WebGuard (web_rate.rs).
-// Les routes B/C (sync, verrous, suivi, tickets) sont RÉSERVÉES : elles
-// répondent « disponible à la Phase B/C ». Opérations bloquantes dans
-// spawn_blocking.
+// Les routes B (sync, verrous) et C1.3/C1.5 (suivi fusionné) sont implémentées ;
+// les tickets restent RÉSERVÉS (répondent « disponible à la Phase C »).
+// Opérations bloquantes dans spawn_blocking.
 
 use crate::gds;
 use crate::gds_client;
 use crate::gds_db;
 use crate::gds_sync;
 use crate::web_auth::WebAuth;
-use crate::web_server::WebCtx;
+use crate::web_server::{AuthedClient, WebCtx};
 use crate::AppState;
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
@@ -41,8 +42,28 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
         .route("/api/gds/locks", get(gds_locks_web))
         // ── Phase C1.3 : forçage serveur du suivi (titulaire du verrou) ──
         .route("/api/gds/tracking/force", post(gds_tracking_force_web))
-        // ── Réservées Phase C (suivi fusionné, tickets) ──
-        .route("/api/gds/tracking", get(gds_phase_c))
+        // ── Phase C1.5 : routes API suivi fusionné (lecture/écriture) ──
+        .route(
+            "/api/gds/tracking/clients",
+            get(gds_tracking_clients).post(gds_tracking_client_upsert),
+        )
+        .route("/api/gds/tracking/clients/delete", post(gds_tracking_client_delete))
+        .route(
+            "/api/gds/tracking/projects",
+            get(gds_tracking_projects).post(gds_tracking_project_upsert),
+        )
+        .route("/api/gds/tracking/projects/delete", post(gds_tracking_project_delete))
+        .route(
+            "/api/gds/tracking/tasks",
+            get(gds_tracking_tasks).post(gds_tracking_task_upsert),
+        )
+        .route("/api/gds/tracking/tasks/delete", post(gds_tracking_task_delete))
+        .route(
+            "/api/gds/tracking/decisions",
+            get(gds_tracking_decisions).post(gds_tracking_decision_upsert),
+        )
+        .route("/api/gds/tracking/decisions/delete", post(gds_tracking_decision_delete))
+        // ── Réservées Phase C (tickets) ──
         .route("/api/gds/tickets", get(gds_phase_c))
 }
 
@@ -352,6 +373,389 @@ async fn gds_tracking_force_web(
     match gds_sync::force_push_tracking(&pool, &body.project).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+// ── Phase C1.5 : routes API suivi fusionné (lecture/écriture) ──
+// Exposent les CRUD des 4 entités du suivi (clients, projects, tasks,
+// decisions) derrière auth_middleware. Rate limiting dédié (check_tracking,
+// 60 op / 60 s / token) + journalisation d'audit (tracking_*). Toutes les
+// routes respectent `gds_enabled` via `gds_pool` (court-circuit si désactivé).
+
+/// Rate limiting suivi : retourne None si autorisé, Some(429) sinon (avec
+/// entrée d'audit `rate_limited`).
+fn tracking_allowed(ctx: &WebCtx, authed: &AuthedClient) -> Option<Response> {
+    if !ctx.guard.check_tracking(&authed.key) {
+        ctx.audit.record(&authed.ip, &authed.key, "rate_limited", "tracking", false);
+        return Some(
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "Trop de requêtes suivi. Réessayez dans 1 min." })),
+            )
+                .into_response(),
+        );
+    }
+    None
+}
+
+// ── Clients ──
+
+async fn gds_tracking_clients(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_clients(&pool).await {
+        Ok(list) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_list", "clients", true);
+            Json(json!({ "clients": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ClientUpsertBody {
+    name: String,
+    #[serde(default)]
+    notes: String,
+}
+
+async fn gds_tracking_client_upsert(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ClientUpsertBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Nom client vide" }))).into_response();
+    }
+    let existing = gds_db::get_client_updated_at(&pool, &name).await;
+    let is_create = matches!(existing, Ok(None));
+    match gds_db::upsert_client(&pool, &name, &body.notes, Utc::now()).await {
+        Ok(id) => {
+            let action = if is_create { "tracking_create" } else { "tracking_update" };
+            ctx.audit.record(&authed.ip, &authed.key, action, &format!("clients:{}", name), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ClientDeleteBody {
+    name: String,
+}
+
+async fn gds_tracking_client_delete(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ClientDeleteBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::delete_client(&pool, &body.name).await {
+        Ok(()) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_delete", &format!("clients:{}", body.name), true);
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Projets (suivi) ──
+
+async fn gds_tracking_projects(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_tracking_projects(&pool).await {
+        Ok(list) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_list", "projects", true);
+            Json(json!({ "projects": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectUpsertBody {
+    path: String,
+    name: String,
+    client_id: Option<i64>,
+    #[serde(default)]
+    status: String,
+}
+
+async fn gds_tracking_project_upsert(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectUpsertBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let path = body.path.trim().to_string();
+    if path.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Chemin projet vide" }))).into_response();
+    }
+    let existing = gds_db::get_project_updated_at(&pool, &path).await;
+    let is_create = matches!(existing, Ok(None));
+    match gds_db::upsert_project(&pool, &path, &body.name, body.client_id, &body.status, Utc::now()).await {
+        Ok(id) => {
+            let action = if is_create { "tracking_create" } else { "tracking_update" };
+            ctx.audit.record(&authed.ip, &authed.key, action, &format!("projects:{}", path), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectDeleteBody {
+    path: String,
+}
+
+async fn gds_tracking_project_delete(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectDeleteBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::delete_project(&pool, &body.path).await {
+        Ok(()) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_delete", &format!("projects:{}", body.path), true);
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Tâches ──
+
+async fn gds_tracking_tasks(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_tasks(&pool).await {
+        Ok(list) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_list", "tasks", true);
+            Json(json!({ "tasks": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TaskUpsertBody {
+    id: i64,
+    project_id: i64,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    deadline: String,
+    #[serde(default)]
+    blocker_reason: String,
+    source_task_id: Option<i64>,
+}
+
+async fn gds_tracking_task_upsert(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<TaskUpsertBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let existing = gds_db::get_task_updated_at(&pool, body.id).await;
+    let is_create = matches!(existing, Ok(None));
+    match gds_db::upsert_task(
+        &pool,
+        body.id,
+        body.project_id,
+        &body.title,
+        &body.description,
+        &body.status,
+        &body.deadline,
+        &body.blocker_reason,
+        body.source_task_id,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(id) => {
+            let action = if is_create { "tracking_create" } else { "tracking_update" };
+            ctx.audit.record(&authed.ip, &authed.key, action, &format!("tasks:{}", id), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TaskDeleteBody {
+    id: i64,
+}
+
+async fn gds_tracking_task_delete(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<TaskDeleteBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::delete_task(&pool, body.id).await {
+        Ok(()) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_delete", &format!("tasks:{}", body.id), true);
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Décisions ──
+
+async fn gds_tracking_decisions(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_decisions(&pool).await {
+        Ok(list) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_list", "decisions", true);
+            Json(json!({ "decisions": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct DecisionUpsertBody {
+    id: i64,
+    project_id: Option<i64>,
+    task_id: Option<i64>,
+    summary: String,
+    #[serde(default)]
+    source_session: String,
+}
+
+async fn gds_tracking_decision_upsert(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<DecisionUpsertBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let existing = gds_db::get_decision_updated_at(&pool, body.id).await;
+    let is_create = matches!(existing, Ok(None));
+    match gds_db::upsert_decision(
+        &pool,
+        body.id,
+        body.project_id,
+        body.task_id,
+        &body.summary,
+        &body.source_session,
+        Utc::now(),
+    )
+    .await
+    {
+        Ok(id) => {
+            let action = if is_create { "tracking_create" } else { "tracking_update" };
+            ctx.audit.record(&authed.ip, &authed.key, action, &format!("decisions:{}", id), true);
+            Json(json!({ "ok": true, "id": id })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct DecisionDeleteBody {
+    id: i64,
+}
+
+async fn gds_tracking_decision_delete(
+    State(ctx): State<Arc<WebCtx>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<DecisionDeleteBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&ctx, &authed) {
+        return resp;
+    }
+    let pool = match gds_pool(&ctx) {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::delete_decision(&pool, body.id).await {
+        Ok(()) => {
+            ctx.audit.record(&authed.ip, &authed.key, "tracking_delete", &format!("decisions:{}", body.id), true);
+            Json(json!({ "ok": true })).into_response()
+        }
+        Err(e) => err_response(e),
     }
 }
 

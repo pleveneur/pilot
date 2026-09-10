@@ -26,6 +26,12 @@ const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 const PROMPT_MAX: usize = 10;
 const PROMPT_WINDOW: Duration = Duration::from_secs(60);
 
+/// Limite d'opérations suivi fusionné (GDS Phase C1.5) : max par fenêtre, par
+/// token. Garde-fou contre un client distant qui spammerait les routes de
+/// lecture/écriture du suivi (clients/projects/tasks/decisions).
+const TRACKING_MAX: usize = 60;
+const TRACKING_WINDOW: Duration = Duration::from_secs(60);
+
 /// Nombre max de WebSockets simultanés par token.
 const WS_MAX: usize = 3;
 
@@ -49,6 +55,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 pub struct WebGuard {
     login: Mutex<HashMap<String, Vec<Instant>>>,
     prompt: Mutex<HashMap<String, Vec<Instant>>>,
+    tracking: Mutex<HashMap<String, Vec<Instant>>>,
     ws_count: Mutex<HashMap<String, usize>>,
 }
 
@@ -57,6 +64,7 @@ impl WebGuard {
         Self {
             login: Mutex::new(HashMap::new()),
             prompt: Mutex::new(HashMap::new()),
+            tracking: Mutex::new(HashMap::new()),
             ws_count: Mutex::new(HashMap::new()),
         }
     }
@@ -71,6 +79,14 @@ impl WebGuard {
     /// ce token sur la fenêtre courante. `key` = `token_key(token)`.
     pub fn check_prompt(&self, key: &str) -> bool {
         self.check(&self.prompt, key, PROMPT_MAX, PROMPT_WINDOW)
+    }
+
+    /// Suivi fusionné (GDS Phase C1.5) : true si autorisé (et enregistre), false
+    /// si limite atteinte pour ce token sur la fenêtre courante. `key` =
+    /// `token_key(token)`. Couvre les routes de lecture/écriture du suivi
+    /// (clients/projects/tasks/decisions).
+    pub fn check_tracking(&self, key: &str) -> bool {
+        self.check(&self.tracking, key, TRACKING_MAX, TRACKING_WINDOW)
     }
 
     fn check(
@@ -122,6 +138,7 @@ impl WebGuard {
     /// sens ; on purge aussi le login pour repartir propre).
     pub fn reset_all(&self) {
         self.prompt.lock().unwrap().clear();
+        self.tracking.lock().unwrap().clear();
         self.ws_count.lock().unwrap().clear();
         // On conserve l'historique login (liée à l'IP, pas au token) pour ne pas
         // offrir une fenêtre de brute-force au moment d'une révocation.
@@ -165,6 +182,18 @@ mod tests {
         }
         assert!(!g.check_prompt(&key_a));
         assert!(g.check_prompt(&key_b));
+    }
+
+    #[test]
+    fn tracking_limit_is_per_key() {
+        let g = WebGuard::new();
+        let key_a = token_key("token-a");
+        let key_b = token_key("token-b");
+        for _ in 0..TRACKING_MAX {
+            assert!(g.check_tracking(&key_a));
+        }
+        assert!(!g.check_tracking(&key_a));
+        assert!(g.check_tracking(&key_b));
     }
 
     #[test]
