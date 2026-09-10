@@ -26,7 +26,7 @@ import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
-import { captureProjectBadgeNames, pathTailName } from "./super-agent-badges.js";
+import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isProjectGds } from "./gds-status.js";
 import { isBusyStale } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
@@ -704,16 +704,30 @@ function withTimeout(promise, ms, fallback) {
  * répondent en quelques ms → marge large. */
 const BADGE_PROJECTS_COLLECT_TIMEOUT_MS = 800;
 
+/** Retire le suffixe « - (GDS) » d'un nom de badge (format d'affichage Pilot).
+ * Utilisé avant d'étendre/re-suffixer les badges (chantier #15) pour éviter
+ * un double suffixe quand un badge déjà étiqueté GDS est réutilisé comme base. */
+function stripGdsSuffix(name) {
+  return String(name || "").replace(/\s*-\s*\(GDS\)\s*$/i, "");
+}
+
 /**
  * Snapshot des badges pour un envoi : projette la liste des projets
  * connus/ouverts côtés UI dans le module pur (captureProjectBadgeNames).
  * Candidats = projets ouverts (list_open_projects, chemins) + projets suivis
  * connus (list_super_agent_projects, {path, name}) ; dédupliqués par chemin.
  * Fail-open : toute erreur ou lenteur → projet actif seul, jamais bloquant.
- * @param {string} text - texte de la demande (déjà trimmé par l'appelant).
+ *
+ * Si `baseBadges` est fourni (bulle de RÉPONSE, chantier #15), on part de ces
+ * badges (snapshot de la demande) et on les étend avec les projets nommés dans
+ * `text` (texte de la réponse) via extendBadgesWithText, au lieu de repartir
+ * du projet actif. Les suffixes GDS sont retirés avant extension puis
+ * ré-appliqués une seule fois sur le résultat.
+ * @param {string} text - texte à scanner (demande ou réponse de l'assistant).
+ * @param {string[]|null} [baseBadges] - badges de base (null → snapshot classique).
  * @returns {Promise<string[]>} noms de badges (actif en tête).
  */
-async function collectBubbleBadgeProjects(text) {
+async function collectBubbleBadgeProjects(text, baseBadges = null) {
   const fallback = (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();
   try {
     const resolved = await withTimeout((async () => {
@@ -739,7 +753,10 @@ async function collectBubbleBadgeProjects(text) {
           if (p && (p.path || p.name)) push(p.path || "", p.name || null);
         }
       }
-      const names = captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
+      // baseBadges fourni → on étend (réponse) ; sinon snapshot classique (demande).
+      const names = baseBadges
+        ? extendBadgesWithText((baseBadges || []).map(stripGdsSuffix), text, candidates)
+        : captureProjectBadgeNames(text, getSuperActiveProjectName(), candidates);
       // Indicateur « (GDS) » : suffixe ajouté au nom du badge si le projet est
       // branché sur un GDS (config .pilot/gds.json activée). Fail-open : non
       // branché. Les invokes sont locaux/rapides ; toute lenteur → fallback.
@@ -751,11 +768,12 @@ async function collectBubbleBadgeProjects(text) {
             if (!display) return;
             if (await isProjectGds(c.path)) gdsByDisplay.set(display.toLowerCase(), true);
           }));
-          return names.map((n) =>
-            gdsByDisplay.has(String(n).trim().toLowerCase()) ? `${n} - (GDS)` : n
-          );
+          return names.map((n) => {
+            const raw = stripGdsSuffix(n);
+            return gdsByDisplay.has(raw.trim().toLowerCase()) ? `${raw} - (GDS)` : raw;
+          });
         } catch (_) {
-          return names; // fail-open : badges sans suffixe
+          return names.map(stripGdsSuffix); // fail-open : badges sans suffixe
         }
       }
       return names;
@@ -764,6 +782,27 @@ async function collectBubbleBadgeProjects(text) {
   } catch (_) {
     return fallback; // fail-open : jamais bloquant
   }
+}
+
+/**
+ * Chantier #15 : étend les badges de la bulle de RÉPONSE avec les projets
+ * nommés dans le texte de la réponse de l'assistant. Appelé à `agent_end`,
+ * quand le texte complet de la réponse est connu. Remplace la rangée de badges
+ * existante de la bulle (celle du snapshot de la demande) par la version
+ * étendue. Fire-and-forget (jamais bloquant) : en cas d'échec ou de lenteur,
+ * la bulle garde ses badges de la demande (fail-open).
+ * @param {HTMLElement} bubble - bulle de réponse (élément .agent-message-assistant).
+ * @param {string[]} baseBadges - badges du snapshot de la demande.
+ * @param {string} text - texte complet de la réponse de l'assistant.
+ */
+async function extendResponseBubbleBadges(bubble, baseBadges, text) {
+  if (!bubble || !Array.isArray(baseBadges) || !baseBadges.length) return;
+  if (!text || !String(text).trim()) return;
+  const extended = await collectBubbleBadgeProjects(String(text), baseBadges);
+  if (!extended.length) return;
+  const old = bubble.querySelector(".agent-project-badges");
+  if (old) old.remove();
+  renderProjectBadgesInto(bubble, extended);
 }
 
 /** Ajoute (ou réutilise) une section texte rendue en Markdown. */
@@ -2426,6 +2465,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
         currentFlow = currentBody.querySelector(".agent-stream-flow");
         appendSuperTextSection(text, false);
         pendingText = "";
+        // Chantier #15 : mémoriser le texte complet de la réponse (fallback non
+        // streamé) pour l'extension des badges à agent_end.
+        lastAssistantRawText = text;
       }
     }
     return;
@@ -2441,7 +2483,18 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
   }
   if (type === "agent_end") {
     statusEl.textContent = "Prêt";
+    // Chantier #15 : étendre les badges de la bulle de RÉPONSE avec les projets
+    // nommés dans le texte de la réponse (en plus du snapshot de la demande).
+    // On capture la bulle, les badges de base et le texte AVANT onEnd() (qui
+    // reset currentBody/currentTurnProjectBadges/lastAssistantRawText), puis on
+    // met à jour la bulle en fire-and-forget (jamais bloquant, fail-open).
+    const respBubble = currentBody;
+    const respBase = currentTurnProjectBadges;
+    const respText = lastAssistantRawText;
     onEnd();
+    if (respBubble && respBase && respText && String(respText).trim()) {
+      extendResponseBubbleBadges(respBubble, respBase, respText).catch((e) => console.error("extendResponseBubbleBadges erreur:", e));
+    }
     // Bug 2 (UX) : à la fin de la génération, redescendre en bas si l'utilisateur
     // était en bas (le contenu a fini de grandir). Ne force pas si l'utilisateur
     // a volontairement remonté pour relire.

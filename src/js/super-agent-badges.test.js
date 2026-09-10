@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   findNamedProjects,
   captureProjectBadgeNames,
+  extendBadgesWithText,
   pathTailName,
   pathSearchSuffixes,
 } from "./super-agent-badges.js";
@@ -127,5 +128,47 @@ describe("captureProjectBadgeNames (snapshot d'un envoi)", () => {
     const out = captureProjectBadgeNames("", null, []);
     expect(Array.isArray(out)).toBe(true);
     expect(out).toEqual([]);
+  });
+});
+
+describe("extendBadgesWithText (bulle de réponse, chantier #15)", () => {
+  it("réponse évoquant plusieurs projets → tous ajoutés après la base", () => {
+    // Demande sans projet nommé → base = projet actif seul.
+    const base = captureProjectBadgeNames("parles moi des projets que tu connais", "Pilot", PROJECTS);
+    expect(base).toEqual(["Pilot"]);
+    // La réponse évoque PLh et Site Vitrine → étendue.
+    const extended = extendBadgesWithText(
+      base,
+      "Voici les projets : PLh et le site vitrine d'Acme.",
+      PROJECTS
+    );
+    expect(extended).toEqual(["Pilot", "PLh", "Site Vitrine"]);
+  });
+  it("base en tête, ordre préservé, dédupliqué", () => {
+    const extended = extendBadgesWithText(
+      ["PLh", "Pilot"],
+      "on parle de pilot et encore de plh",
+      PROJECTS
+    );
+    expect(extended).toEqual(["PLh", "Pilot"]);
+  });
+  it("projet déjà dans la base → pas de doublon", () => {
+    const extended = extendBadgesWithText(["Pilot"], "Pilot est en cours", PROJECTS);
+    expect(extended).toEqual(["Pilot"]);
+  });
+  it("réponse sans projet nommé → base inchangée", () => {
+    const extended = extendBadgesWithText(["Pilot"], "Rien de spécial à signaler.", PROJECTS);
+    expect(extended).toEqual(["Pilot"]);
+  });
+  it("frontières de mots respectées dans la réponse", () => {
+    const extended = extendBadgesWithText(["Pilot"], "le pilotage est complexe", PROJECTS);
+    expect(extended).toEqual(["Pilot"]);
+  });
+  it("fail-open : base/text/projets invalides → jamais d'exception", () => {
+    expect(extendBadgesWithText(null, "Pilot", PROJECTS)).toEqual(["Pilot"]);
+    expect(extendBadgesWithText(["Pilot"], "", PROJECTS)).toEqual(["Pilot"]);
+    expect(extendBadgesWithText(["Pilot"], "PLh", null)).toEqual(["Pilot"]);
+    expect(extendBadgesWithText([], "PLh", PROJECTS)).toEqual(["PLh"]);
+    expect(extendBadgesWithText(undefined, undefined, undefined)).toEqual([]);
   });
 });

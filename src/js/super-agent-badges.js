@@ -6,11 +6,17 @@
 // nommé dans le texte. La bulle de demande ET la bulle de réponse portent ces
 // badges (figés pour toujours : aucun rafraîchissement rétrospectif).
 //
-// Détection SANS IA : comparaison pure du texte de la demande à la liste des
-// projets connus/ouverts côté UI. Correspondance insensible à la casse sur
+// Chantier #15 : la bulle de RÉPONSE est en plus étendue avec les projets
+// nommés dans le texte de la réponse de l'assistant (extendBadgesWithText),
+// pour refléter les projets réellement discutés même si la demande n'en nommait
+// aucun. Les badges de la demande restent en tête ; ceux détectés dans la
+// réponse s'ajoutent ensuite, dédupliqués.
+//
+// Détection SANS IA : comparaison pure du texte à la liste des projets
+// connus/ouverts côté UI. Correspondance insensible à la casse sur
 //   - le nom affiché du projet (ex: « PLh »),
 //   - la fin du chemin du projet (2-3 derniers segments, ex: « ia_pl/plh »).
-// Un match exige des FRONTIÈRES DE MOTS (une demande qui parle de « pilotage »
+// Un match exige des FRONTIÈRES DE MOTS (un texte qui parle de « pilotage »
 // ne doit pas matcher un projet « pilot »).
 // Module 100 % pur (aucun DOM, aucun invoke) → testable unitairement.
 
@@ -139,6 +145,38 @@ export function captureProjectBadgeNames(text, activeProjectName, projects) {
   };
   push(activeProjectName);
   // Texte vide/non string : matching sauté (projet actif seul).
+  if (typeof text === "string" && text.trim()) {
+    for (const name of findNamedProjects(text, projects)) push(name);
+  }
+  return out;
+}
+
+/**
+ * Étend une liste de badges existants avec les projets nommés dans un texte
+ * (pur, testable). Utilisé pour la bulle de RÉPONSE (chantier #15) : on part
+ * des badges de la demande (projet actif + projets nommés) et on y ajoute les
+ * projets évoqués dans le texte de la réponse de l'assistant. Les badges de
+ * base restent en tête (ordre préservé) ; les nouveaux suivent dans l'ordre de
+ * la liste des projets. Dédupliqués (insensible à la casse). Fail-open :
+ * base/text/projets invalides → jamais d'exception, jamais de doublon.
+ *
+ * @param {string[]} baseBadges - badges déjà capturés (ex: snapshot de la demande).
+ * @param {string} text - texte supplémentaire à scanner (ex: réponse de l'assistant).
+ * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
+ * @returns {string[]} badges étendus (base en tête, dédupliqués).
+ */
+export function extendBadgesWithText(baseBadges, text, projects) {
+  const out = [];
+  const seen = new Set();
+  const push = (name) => {
+    const key = String(name || "").trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(String(name).trim());
+  };
+  const base = Array.isArray(baseBadges) ? baseBadges : [];
+  for (const b of base) push(b);
+  // Texte vide/non string : matching sauté (base seule).
   if (typeof text === "string" && text.trim()) {
     for (const name of findNamedProjects(text, projects)) push(name);
   }
