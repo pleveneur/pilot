@@ -9,6 +9,19 @@
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
+> **Évolutions UX (implémentées)** : (1) **Mémoriser les connexions par serveur**
+> — map `servers` dans `~/.pilot/gds_secrets.json` (clé `user@host`, mots de
+> passe jamais remontés à l'UI), commandes `gds_list_saved_servers` /
+> `gds_apply_server`, sélecteur « Réutiliser un serveur » en section 1 ;
+> (2) **Bouton retirer du GDS** — commande `gds_remove_project(project,
+> purge_server)` (retire remote `gds` + supprime `.pilot/gds.json` ; purge du
+> bare `gds_git::remove_bare` + `gds_db::delete_project_by_name` uniquement si
+> `purge_server=true`, jamais par défaut), section config de l'onglet GDS ;
+> (3) **Bandeau connecté fiable** — commande `gds_connection_status(project)`
+> (`connected` | `error` | `not_configured`, reconnexion effective + dépôt bare
+> valide + remote `gds`), sidebar « - (GDS ✓) » / « - (GDS ✕) » via
+> `gds-status.js` (fail-open, `gds_enabled` respecté).
+>
 > **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
 > project_members, git_repos, audit_gds), `gds_db.rs` (pool, provision
