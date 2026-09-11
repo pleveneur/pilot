@@ -46,6 +46,18 @@ pub(crate) struct ServerCredentials {
     pub db_password: Option<String>,
     #[serde(default)]
     pub admin_password: Option<String>,
+    /// Vrai si la connexion au serveur a été VALIDÉE (test de connexion effectif
+    /// réussi à la provision). Seuls les serveurs validés sont proposés dans la
+    /// liste des serveurs mémorisés. Défaut true pour rétrocompatibilité des
+    /// serveurs déjà enregistrés (tous issus d'une provision réussie).
+    #[serde(default = "default_validated")]
+    pub validated: bool,
+}
+
+/// Défaut `validated = true` : les serveurs déjà enregistrés (Évolution 1)
+/// proviennent toujours d'une provision où le test de connexion a réussi.
+fn default_validated() -> bool {
+    true
 }
 
 /// Fichier de secrets global (`~/.pilot/gds_secrets.json`, 0600, hors git),
@@ -156,6 +168,10 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
     secrets
         .servers
         .iter()
+        // Seuls les serveurs dont la connexion a été VALIDÉE sont proposés :
+        // un serveur n'est ajouté à la liste qu'après un test de connexion
+        // effectif réussi (marqué validé à l'enregistrement).
+        .filter(|(_, c)| c.validated)
         .map(|(key, c)| {
             let (user, host) = match key.split_once('@') {
                 Some((u, h)) => (u.to_string(), h.to_string()),
@@ -165,6 +181,7 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "host": host,
                 "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
                 "user": user,
+                "validated": true,
             })
         })
         .collect()
@@ -195,6 +212,10 @@ pub(crate) fn save_server_credentials(
     if !admin_password.trim().is_empty() {
         entry.admin_password = Some(admin_password.trim().to_string());
     }
+    // L'enregistrement n'a lieu qu'APRÈS un test de connexion réussi (appelé
+    // depuis gds_provision, uniquement après provision_db qui connecte). On
+    // marque donc le serveur comme validé : seuls ces serveurs seront proposés.
+    entry.validated = true;
     write_gds_secrets(&secrets)
 }
 
@@ -221,6 +242,7 @@ pub fn gds_apply_server(
         return Err("Hôte et utilisateur requis".to_string());
     }
     let saved = get_saved_server(&host, &port, &user)?
+        .filter(|s| s.validated)
         .ok_or_else(|| {
             "Ce serveur n'est pas mémorisé (ressaisissez vos mots de passe une première fois)"
                 .to_string()
@@ -1258,6 +1280,39 @@ mod tests {
         assert!(!serialized.contains("dbpw"));
         assert!(!serialized.contains("adminpw"));
         assert!(list.iter().any(|v| v["host"] == "192.168.1.50" && v["user"] == "pilot"));
+        // Nettoyage : on retire l'entrée du fichier secrets réel.
+        let mut secrets = read_gds_secrets().unwrap();
+        secrets.servers.remove(&key);
+        write_gds_secrets(&secrets).unwrap();
+    }
+
+    #[test]
+    fn server_only_listed_and_appliable_when_validated() {
+        // Un serveur enregistré est toujours marqué validé (l'enregistrement
+        // n'a lieu qu'après un test de connexion réussi dans gds_provision).
+        let key = server_key("192.168.1.50", "pilot");
+        save_server_credentials("192.168.1.50", "5432", "pilot", "dbpw", "adminpw").unwrap();
+        let saved = get_saved_server("192.168.1.50", "5432", "pilot").unwrap().unwrap();
+        assert!(saved.validated);
+        // La liste ne contient QUE des serveurs validés (tous ici le sont).
+        let list = list_saved_servers();
+        assert!(list.iter().all(|v| v["validated"] == true));
+        assert!(list.iter().any(|v| v["host"] == "192.168.1.50" && v["user"] == "pilot"));
+        // Un serveur non validé (fichier édité à la main) est filtré de la liste.
+        let mut secrets = read_gds_secrets().unwrap();
+        if let Some(e) = secrets.servers.get_mut(&key) {
+            e.validated = false;
+        }
+        write_gds_secrets(&secrets).unwrap();
+        let list2 = list_saved_servers();
+        assert!(
+            !list2.iter().any(|v| v["host"] == "192.168.1.50"
+                && v["user"] == "pilot"),
+            "serveur non validé ne doit pas être proposé"
+        );
+        // gds_apply_server refuse un serveur non validé.
+        let res = gds_apply_server("proj".to_string(), "192.168.1.50".to_string(), "5432".to_string(), "pilot".to_string(), "dev@kalico".to_string());
+        assert!(res.is_err());
         // Nettoyage : on retire l'entrée du fichier secrets réel.
         let mut secrets = read_gds_secrets().unwrap();
         secrets.servers.remove(&key);

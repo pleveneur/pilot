@@ -142,7 +142,9 @@ export function createGds(container) {
     });
 
     // ── Évolution 1 : liste des serveurs mémorisés (hôte/port/user uniquement).
-    // Fail-open : échec de chargement → liste vide, jamais bloquant.
+    // Fail-open : échec de chargement → liste vide, jamais bloquant. La
+    // SÉLECTION applique automatiquement la connexion au projet (action
+    // principale) — aucun mot de passe n'est affiché ni ressaisi.
     const serverSelect = panel.querySelector("#gds-server-select");
     const serverApply = panel.querySelector("#gds-server-apply");
     async function loadSavedServers() {
@@ -161,18 +163,19 @@ export function createGds(container) {
         /* fail-open */
       }
     }
-    serverApply.addEventListener("click", async () => {
+    // Applique le serveur sélectionné au projet : le backend copie les mots de
+    // passe depuis les secrets (jamais remontés) et pré-remplit `.pilot/gds.json`.
+    async function applySelectedServer() {
       const project = currentProjectPath();
       if (!project) return;
       const opt = serverSelect.options[serverSelect.selectedIndex];
       if (!opt || !opt.dataset.host) return;
-      // Pré-remplir hôte/port/user dans le formulaire.
-      panel.querySelector("#gds-db-host").value = opt.dataset.host;
-      panel.querySelector("#gds-db-port").value = opt.dataset.port;
-      panel.querySelector("#gds-db-user").value = opt.dataset.user;
-      const email = panel.querySelector("#gds-admin-email").value.trim();
-      // Le backend copie les mots de passe dans les secrets du projet et
-      // pré-remplit .pilot/gds.json (hôte/port/user/email).
+      const emailEl = panel.querySelector("#gds-admin-email");
+      const email = (emailEl && emailEl.value.trim()) || (cfg && cfg.identity_email) || "";
+      const errEl = panel.querySelector("#gds-provision-err");
+      const okEl = panel.querySelector("#gds-provision-ok");
+      if (errEl) errEl.textContent = "";
+      if (okEl) okEl.textContent = "";
       try {
         const res = await invoke("gds_apply_server", {
           project,
@@ -181,15 +184,22 @@ export function createGds(container) {
           user: opt.dataset.user,
           email,
         });
-        // Pré-remplir aussi l'email si on vient de l'appliquer.
-        const emailEl = panel.querySelector("#gds-admin-email");
-        if (emailEl && !email && cfg && cfg.identity_email) emailEl.value = cfg.identity_email;
-        serverSelect.dataset.applied = res.ok ? "1" : "";
+        // Pré-remplir la connexion dans le formulaire (hôte/port/user/email).
+        panel.querySelector("#gds-db-host").value = res.db_host || opt.dataset.host;
+        panel.querySelector("#gds-db-port").value = res.db_port || opt.dataset.port;
+        panel.querySelector("#gds-db-user").value = res.db_user || opt.dataset.user;
+        if (emailEl && email && emailEl.value.trim() !== email) emailEl.value = email;
+        if (okEl) okEl.textContent = `✅ Serveur « ${opt.textContent} » appliqué à ce projet.`;
       } catch (e) {
-        const err = panel.querySelector("#gds-provision-err");
-        if (err) err.textContent = String(e);
+        if (errEl) errEl.textContent = String(e);
       }
+    }
+    // Sélection directe : applique automatiquement (action principale).
+    serverSelect.addEventListener("change", () => {
+      if (serverSelect.selectedIndex > 0) applySelectedServer();
     });
+    // Bouton fallback (re-appliquer manuellement quand un serveur est choisi).
+    serverApply.addEventListener("click", applySelectedServer);
     loadSavedServers();
 
     const btn = panel.querySelector("#gds-provision-btn");
