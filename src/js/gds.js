@@ -72,6 +72,18 @@ export function createGds(container) {
         Les mots de passe sont stockés hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600)
         et ne sont demandés qu'à la première configuration.
       </div>
+      <div class="gds-panel-desc" style="margin-top:8px"><strong>Réutiliser un serveur déjà mémorisé</strong> (les mots de passe restent hors projet, jamais affichés en clair) :</div>
+      <div class="gds-grid2">
+        <div>
+          <label class="gds-label">Serveur sauvegardé</label>
+          <select id="gds-server-select" class="gds-input">
+            <option value="">— Choisir un serveur —</option>
+          </select>
+        </div>
+        <div class="gds-actions" style="align-self:flex-end">
+          <button id="gds-server-apply" class="web-btn"><i data-lucide="rotate-ccw" class="icon-sm"></i> Réutiliser ce serveur</button>
+        </div>
+      </div>
       <div class="gds-grid2">
         <div>
           <label class="gds-label">Hôte PostgreSQL</label>
@@ -128,6 +140,57 @@ export function createGds(container) {
         refreshIcons(container);
       });
     });
+
+    // ── Évolution 1 : liste des serveurs mémorisés (hôte/port/user uniquement).
+    // Fail-open : échec de chargement → liste vide, jamais bloquant.
+    const serverSelect = panel.querySelector("#gds-server-select");
+    const serverApply = panel.querySelector("#gds-server-apply");
+    async function loadSavedServers() {
+      try {
+        const servers = await invoke("gds_list_saved_servers");
+        for (const s of servers || []) {
+          const opt = document.createElement("option");
+          opt.value = `${s.user}@${s.host}`;
+          opt.dataset.host = s.host;
+          opt.dataset.port = s.port || "5432";
+          opt.dataset.user = s.user;
+          opt.textContent = `${s.user}@${s.host}:${s.port || "5432"}`;
+          serverSelect.appendChild(opt);
+        }
+      } catch (_) {
+        /* fail-open */
+      }
+    }
+    serverApply.addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) return;
+      const opt = serverSelect.options[serverSelect.selectedIndex];
+      if (!opt || !opt.dataset.host) return;
+      // Pré-remplir hôte/port/user dans le formulaire.
+      panel.querySelector("#gds-db-host").value = opt.dataset.host;
+      panel.querySelector("#gds-db-port").value = opt.dataset.port;
+      panel.querySelector("#gds-db-user").value = opt.dataset.user;
+      const email = panel.querySelector("#gds-admin-email").value.trim();
+      // Le backend copie les mots de passe dans les secrets du projet et
+      // pré-remplit .pilot/gds.json (hôte/port/user/email).
+      try {
+        const res = await invoke("gds_apply_server", {
+          project,
+          host: opt.dataset.host,
+          port: opt.dataset.port,
+          user: opt.dataset.user,
+          email,
+        });
+        // Pré-remplir aussi l'email si on vient de l'appliquer.
+        const emailEl = panel.querySelector("#gds-admin-email");
+        if (emailEl && !email && cfg && cfg.identity_email) emailEl.value = cfg.identity_email;
+        serverSelect.dataset.applied = res.ok ? "1" : "";
+      } catch (e) {
+        const err = panel.querySelector("#gds-provision-err");
+        if (err) err.textContent = String(e);
+      }
+    });
+    loadSavedServers();
 
     const btn = panel.querySelector("#gds-provision-btn");
     const err = panel.querySelector("#gds-provision-err");

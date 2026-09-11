@@ -32,12 +32,31 @@ pub(crate) struct ProjectSecrets {
     pub admin_password: Option<String>,
 }
 
+/// Secrets d'un serveur GDS mémorisé (`~/.pilot/gds_secrets.json`, map
+/// `servers`), clé composite (db_host + db_user). Permet de réutiliser une
+/// connexion déjà configurée (Évolution 1) sans ressaisir les mots de passe.
+/// Jamais révélés à l'UI : la liste ne remonte que hôte/port/utilisateur.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub(crate) struct ServerCredentials {
+    #[serde(default)]
+    pub db_port: String,
+    #[serde(default)]
+    pub db_password: Option<String>,
+    #[serde(default)]
+    pub admin_password: Option<String>,
+}
+
 /// Fichier de secrets global (`~/.pilot/gds_secrets.json`, 0600, hors git),
-/// indexé par nom de projet (chaque projet a son propre serveur GDS).
+/// indexé par nom de projet (chaque projet a son propre serveur GDS). Évolution
+/// 1 : conserve le champ `projects` (rétrocompat) et ajoute une map `servers`
+/// mémorisant les connexions par serveur (clé db_host + db_user).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GdsSecrets {
     #[serde(default)]
     pub projects: BTreeMap<String, ProjectSecrets>,
+    /// Connexions mémorisées par serveur (Évolution 1) — clé `user@host`.
+    #[serde(default)]
+    pub servers: BTreeMap<String, ServerCredentials>,
 }
 
 /// Chemin du fichier de secrets (`~/.pilot/gds_secrets.json`).
@@ -92,6 +111,154 @@ pub(crate) fn save_project_secrets(
         entry.admin_password = Some(admin_password.to_string());
     }
     write_gds_secrets(&secrets)
+}
+
+// ── Mémorisation des connexions par serveur (Évolution 1) ──
+//
+// La map `servers` du fichier de secrets stocke les mots de passe d'un serveur
+// GDS indépendamment de l'activation par projet (clé `user@host`). Permet de
+// réutiliser un serveur déjà provisionné sur un autre projet sans ressaisir
+// les mots de passe. Les mots de passe ne sont JAMAIS remontés à l'UI.
+
+/// Clé composite d'un serveur : `user@host` (les mots de passe sont réutilisés
+/// quel que soit le port). Pure — testable.
+pub(crate) fn server_key(host: &str, user: &str) -> String {
+    format!("{}@{}", user.trim(), host.trim())
+}
+
+/// Retourne les mots de passe mémorisés pour un serveur (None si jamais vu).
+/// `port` n'est pas utilisé comme clé (les mots de passe sont réutilisés quel
+/// que soit le port d'un même hôte/utilisateur). Les valeurs ne doivent JAMAIS
+/// être renvoyées à l'UI (seulement au provision).
+pub(crate) fn get_saved_server(
+    host: &str,
+    port: &str,
+    user: &str,
+) -> Result<Option<ServerCredentials>, String> {
+    let _ = port;
+    let secrets = read_gds_secrets()?;
+    Ok(secrets
+        .servers
+        .get(&server_key(host, user))
+        .cloned()
+        .filter(|c| !c.db_password.as_deref().unwrap_or("").is_empty()))
+}
+
+/// Liste les serveurs mémorisés SANS les mots de passe (pour l'UI) :
+/// `[{ host, port, user }]`. Fail-open : erreur → liste vide.
+pub(crate) fn list_saved_servers() -> Vec<Value> {
+    let secrets = match read_gds_secrets() {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    secrets
+        .servers
+        .iter()
+        .map(|(key, c)| {
+            let (user, host) = match key.split_once('@') {
+                Some((u, h)) => (u.to_string(), h.to_string()),
+                None => (key.clone(), String::new()),
+            };
+            json!({
+                "host": host,
+                "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
+                "user": user,
+            })
+        })
+        .collect()
+}
+
+/// Mémorise les mots de passe d'un serveur GDS (indépendamment du projet).
+/// Seuls les mots de passe non vides sont enregistrés (ne les écrasent jamais).
+pub(crate) fn save_server_credentials(
+    host: &str,
+    port: &str,
+    user: &str,
+    db_password: &str,
+    admin_password: &str,
+) -> Result<(), String> {
+    let mut secrets = read_gds_secrets()?;
+    let entry = secrets
+        .servers
+        .entry(server_key(host, user))
+        .or_default();
+    if port.trim().is_empty() {
+        entry.db_port = "5432".to_string();
+    } else {
+        entry.db_port = port.trim().to_string();
+    }
+    if !db_password.trim().is_empty() {
+        entry.db_password = Some(db_password.trim().to_string());
+    }
+    if !admin_password.trim().is_empty() {
+        entry.admin_password = Some(admin_password.trim().to_string());
+    }
+    write_gds_secrets(&secrets)
+}
+
+/// Commande Tauri : liste les serveurs GDS mémorisés (hôte/port/utilisateur
+/// uniquement — jamais les mots de passe). Pour l'UI section 1 (Évolution 1).
+#[tauri::command]
+pub fn gds_list_saved_servers() -> Vec<Value> {
+    list_saved_servers()
+}
+
+/// Commande Tauri : applique un serveur mémorisé à un projet — pré-remplit la
+/// config `.pilot/gds.json` (hôte/port/utilisateur/email) et copie les mots de
+/// passe dans les secrets du projet pour que `gds_provision` n'exige pas de
+/// ressaisie. Échoue proprement si le serveur n'est pas mémorisé.
+#[tauri::command]
+pub fn gds_apply_server(
+    project: String,
+    host: String,
+    port: String,
+    user: String,
+    email: String,
+) -> Result<Value, String> {
+    if host.trim().is_empty() || user.trim().is_empty() {
+        return Err("Hôte et utilisateur requis".to_string());
+    }
+    let saved = get_saved_server(&host, &port, &user)?
+        .ok_or_else(|| {
+            "Ce serveur n'est pas mémorisé (ressaisissez vos mots de passe une première fois)"
+                .to_string()
+        })?;
+    // Copier les mots de passe dans les secrets du projet.
+    save_project_secrets(
+        &project,
+        saved.db_password.as_deref().unwrap_or(""),
+        saved.admin_password.as_deref().unwrap_or(""),
+    )?;
+    // Pré-remplir la config projet (jamais de mot de passe ici).
+    let local_dir = read_gds_config(&project)
+        .ok()
+        .and_then(|c| c.gds_local_dir)
+        .unwrap_or_else(default_gds_local_dir);
+    let cfg = GdsConfig {
+        enabled: true,
+        db_host: host.trim().to_string(),
+        db_port: if port.trim().is_empty() { "5432".to_string() } else { port.trim().to_string() },
+        db_user: user.trim().to_string(),
+        identity_email: email.trim().to_string(),
+        server_url: format!(
+            "postgres://{}@{}:{}/postgres",
+            user.trim(),
+            host.trim(),
+            if port.trim().is_empty() { "5432" } else { port.trim() }
+        ),
+        gds_local_dir: Some(local_dir.clone()),
+        ssh_host: format!("{}:22", host.trim()),
+        urgent_email: None,
+    };
+    write_gds_config(&project, &cfg)?;
+    Ok(json!({
+        "ok": true,
+        "db_host": cfg.db_host,
+        "db_port": cfg.db_port,
+        "db_user": cfg.db_user,
+        "gds_local_dir": local_dir,
+        "secrets": true,
+    }))
 }
 
 /// Pourcentage-encodage minimal (RFC 3986) d'un segment d'URL (ex: mot de
@@ -466,6 +633,9 @@ pub async fn gds_provision(
     write_gds_config(&project, &cfg)?;
     // Stocker les mots de passe hors projet (0600, hors git).
     save_project_secrets(&project, &db_password, &admin_password)?;
+    // Mémoriser la connexion par serveur (Évolution 1) : réutilisable sur un
+    // autre projet sans ressaisir les mots de passe.
+    save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
     // Stocker le pool dans AppState.
     *state.gds_pool.lock().unwrap() = Some(pool);
     Ok(json!({ "ok": true, "db": gds_db::GDS_DB_NAME, "repos_dir": repos.to_string_lossy() }))
@@ -815,5 +985,27 @@ mod tests {
         assert_eq!(saved.db_user, "postgres");
         assert_eq!(saved.server_url, "postgres://postgres@host:5432/postgres");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_server_credentials_memorizes_and_lists_without_pw() {
+        // S'appuie sur le fichier secrets réel (~/.pilot/gds_secrets.json) — on
+        // n'ajoute qu'une entrée et on la retire pour rester non destructif.
+        let key = server_key("192.168.1.50", "pilot");
+        save_server_credentials("192.168.1.50", "5432", "pilot", "dbpw", "adminpw").unwrap();
+        // get_saved_server retrouve les mots de passe.
+        let saved = get_saved_server("192.168.1.50", "5432", "pilot").unwrap().unwrap();
+        assert_eq!(saved.db_password.as_deref(), Some("dbpw"));
+        assert_eq!(saved.admin_password.as_deref(), Some("adminpw"));
+        // list_saved_servers NE révèle JAMAIS les mots de passe.
+        let list = list_saved_servers();
+        let serialized = serde_json::to_string(&list).unwrap();
+        assert!(!serialized.contains("dbpw"));
+        assert!(!serialized.contains("adminpw"));
+        assert!(list.iter().any(|v| v["host"] == "192.168.1.50" && v["user"] == "pilot"));
+        // Nettoyage : on retire l'entrée du fichier secrets réel.
+        let mut secrets = read_gds_secrets().unwrap();
+        secrets.servers.remove(&key);
+        write_gds_secrets(&secrets).unwrap();
     }
 }

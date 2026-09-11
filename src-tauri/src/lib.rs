@@ -2578,6 +2578,9 @@ pub fn run() {
             gds::gds_save_config,
             gds::gds_list_projects,
             gds::gds_list_git_repos,
+            // ── GDS Évolution 1 : mémoriser les connexions par serveur ──
+            gds::gds_list_saved_servers,
+            gds::gds_apply_server,
             // ── GDS Phase B : synchronisation + verrous (spec_gds.md §5) ──
             gds_client::gds_sync_project,
             gds_sync::gds_release_lock,
