@@ -637,6 +637,21 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
     enregistrer une clef de dev, affichage de l'état.
 
 **Périmètre de la Phase A** : elle livre **uniquement les fondations**
+
+> **Identité git automatique à l'ajout (implémenté)** : quand `gds_add_project`
+> (ou l'onboarding `gds_sync_project` / la route web) détecte une identité git
+> manquante (user.name/user.email, local ou global), Pilot la règle
+> **localement** (`.git/config`, jamais `--global`) :
+> - `user.email` = email du compte GDS connecté (paramètre `email`, aucune saisie) ;
+> - `user.name` = nom fourni une seule fois par l'utilisateur (`git_name`, UI) ou
+>   nom mémorisé (`gds_save_git_name`, `~/.pilot/gds_secrets.json.git_name`), sinon
+>   échec clair « nom git requis » ;
+> - module `git.rs` : `git_config_local_user_name/email` + helper partagé
+>   `ensure_git_repo_with_identity(cwd, email, name)` (init si non-repo + identité
+>   locale + premier commit), isolé en tests via `IsolatedGitConfig` (`GIT_CONFIG_GLOBAL`+
+>   tmp + mutex partagé) — ni les secrets réels (~/.pilot) ni la config globale
+>   utilisateur ne sont touchés en test. Commandes `gds_git_identity_prefs` (état +
+>   nom pré-rempli) et `gds_save_git_name` (mémorisation).
 (provision serveur, identité, activation par projet, dépôt git bare). Elle ne
 couvre **ni** la synchronisation / les verrous (Phase B), **ni** le suivi
 fusionné / l'assistant de groupe (Phase C).

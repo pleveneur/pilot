@@ -7,7 +7,7 @@
 use crate::gds_db;
 use crate::gds_git;
 use crate::gds_ssh;
-use crate::git::{ensure_git_repo_with_initial_commit, git_current_branch, git_push, git_remote_add, git_remote_remove};
+use crate::git::{ensure_git_repo_with_identity, git_config_user_email, git_config_user_name, git_current_branch, git_push, git_remote_add, git_remote_remove};
 use crate::web_auth::WebAuth;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,11 @@ fn default_validated() -> bool {
 /// indexé par nom de projet (chaque projet a son propre serveur GDS). Évolution
 /// 1 : conserve le champ `projects` (rétrocompat) et ajoute une map `servers`
 /// mémorisant les connexions par serveur (clé db_host + db_user).
+///
+/// `git_name` : nom git mémorisé (demandé UNE SEULE FOIS à l'utilisateur, puis
+/// pré-rempli/désactivé aux demandes suivantes) pour l'identité git auto à
+/// l'ajout d'un projet. Non sensible (pas un secret) — il vit dans la même
+/// structure de config, jamais de mot de passe en clair.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GdsSecrets {
     #[serde(default)]
@@ -71,6 +76,9 @@ pub(crate) struct GdsSecrets {
     /// Connexions mémorisées par serveur (Évolution 1) — clé `user@host`.
     #[serde(default)]
     pub servers: BTreeMap<String, ServerCredentials>,
+    /// Nom git mémorisé (identité git auto, GDS). Vide = jamais saisi.
+    #[serde(default)]
+    pub git_name: String,
 }
 
 /// Chemin du fichier de secrets (`~/.pilot/gds_secrets.json`).
@@ -249,6 +257,66 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Nom git mémorisé (vide si jamais saisi). Lecture de la config mémoire GDS.
+pub(crate) fn memorized_git_name() -> Option<String> {
+    read_gds_secrets()
+        .ok()
+        .map(|s| s.git_name.trim().to_string())
+        .filter(|n| !n.is_empty())
+}
+
+/// Résout le NOM GIT à utiliser pour configurer l'identité git locale d'un
+/// projet GDS : le nom fourni par l'UI (saisi UNE fois par l'utilisateur) PRIME,
+/// sinon le nom mémorisé. Échoue avec un message clair si le nom est requis et
+/// qu'aucune source n'est disponible. Pure + testable.
+pub(crate) fn effective_git_name(git_name: &Option<String>) -> Result<String, String> {
+    let provided = git_name.as_deref().map(|s| s.trim()).unwrap_or("");
+    if !provided.is_empty() {
+        return Ok(provided.to_string());
+    }
+    if let Some(pref) = memorized_git_name() {
+        return Ok(pref);
+    }
+    Err("Nom git requis : fournissez votre nom git une seule fois (il sera mémorisé et pré-rempli ensuite)."
+        .to_string())
+}
+
+/// Mémorise le nom git (une fois saisi par l'utilisateur) pour pré-remplissage
+/// / désactivation des demandes suivantes. Ne touche JAMAIS aux mots de passe.
+pub(crate) fn memorize_git_name(name: &str) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Ok(());
+    }
+    let mut secrets = read_gds_secrets()?;
+    if secrets.git_name != name {
+        secrets.git_name = name;
+        write_gds_secrets(&secrets)?;
+    }
+    Ok(())
+}
+
+/// Commande Tauri : état de l'identité git d'un projet (à l'ajout au GDS).
+/// Retourne `{ name_configured, email_configured, git_name }` — le nom mémorisé
+/// (pré-remplissage), sans exposer AUCUN secret.
+#[tauri::command]
+pub fn gds_git_identity_prefs(project: String) -> Result<Value, String> {
+    let n = git_config_user_name(&project);
+    let e = git_config_user_email(&project);
+    Ok(json!({
+        "name_configured": !n.is_empty(),
+        "email_configured": !e.is_empty(),
+        "git_name": memorized_git_name().unwrap_or_default(),
+    }))
+}
+
+/// Commande Tauri : mémorise le nom git de l'utilisateur (saisi une seule fois)
+/// pour pré-remplissage/désactivation des demandes suivantes. Non sensible.
+#[tauri::command]
+pub fn gds_save_git_name(name: String) -> Result<(), String> {
+    memorize_git_name(&name)
 }
 
 /// Mémorise les mots de passe d'un serveur GDS (indépendamment du projet).
@@ -607,12 +675,20 @@ pub(crate) async fn provision_db(
 /// remote add + push initial). Partagé entre la commande Tauri et la route web.
 ///
 /// Si le projet de travail n'est PAS encore un dépôt Git, Pilot l'initialise
-/// automatiquement (git init + premier commit) via
-/// `ensure_git_repo_with_initial_commit` AVANT de créer le bare serveur —
-/// plus aucune commande git manuelle. Ordre robuste : init local + premier
-/// commit → bare serveur → remote add + push. En cas d'échec intermédiaire,
-/// le bare serveur créé est retiré proprement (pas d'état « à moitié attaché »).
-pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str) -> Result<Value, String> {
+/// automatiquement (git init + premier commit) AVANT de créer le bare serveur —
+/// plus aucune commande git manuelle. Identité git auto : si `user.name`/`user.email`
+/// (local ou global) manquent, Pilot les règle en LOCAL (`.git/config`, jamais
+/// `--global`) — `user.email` = email du compte GDS connecté (`email`, aucune
+/// saisie), `user.name` = `git_name` fourni (saisi UNE fois) ou nom mémorisé.
+/// Ordre robuste : init local + identité + premier commit → bare serveur →
+/// remote add + push. En cas d'échec intermédiaire, le bare serveur créé est
+/// retiré proprement (pas d'état « à moitié attaché »).
+pub(crate) async fn add_project_to_gds(
+    pool: &PgPool,
+    project: &str,
+    email: &str,
+    git_name: Option<String>,
+) -> Result<Value, String> {
     let cfg = read_gds_config(project)?;
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
@@ -624,15 +700,39 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
     let name = project_name(project);
     let repo_url = gds_remote_url(&cfg, &name);
 
+    // ── Identité git automatique (avant init/commit) ──
+    // user.email (local ou global) manquant → réglé en LOCAL = email du compte
+    // GDS connecté (aucune saisie). user.name manquant → résolu depuis `git_name`
+    // (saisi une seule fois) ou mémorisé ; sinon message clair.
+    let current = tokio::task::spawn_blocking({
+        let p = project.to_string();
+        move || (git_config_user_name(&p), git_config_user_email(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let needs_name = current.0.is_empty();
+    let resolved_name: Option<String> = if needs_name {
+        Some(effective_git_name(&git_name)?)
+    } else {
+        None
+    };
+    let email_conn = email.trim().to_string();
+
     // Tâche 1 : si le projet n'est pas encore un dépôt Git, initialiser le
-    // dépôt local + premier commit (identité git vérifiée avec message CLAIR).
-    // Idempotent : un projet déjà repo renvoie false et ne refait rien.
+    // dépôt local + premier commit, en réglant l'identité git (auto) si absente.
+    // Idempotent : un projet déjà repo renvoie false et ne refait rien (mais
+    // l'identité manquante est quand même comblée).
     let project_init = project.to_string();
+    let name_for_identity = resolved_name.clone().unwrap_or_default();
     let initialized = tokio::task::spawn_blocking(move || {
-        ensure_git_repo_with_initial_commit(&project_init)
+        ensure_git_repo_with_identity(&project_init, &email_conn, &name_for_identity)
     })
     .await
     .map_err(|e| e.to_string())??;
+    // Mémoriser le nom utilisé (saisi une seule fois) pour la prochaine fois.
+    if let Some(n) = &resolved_name {
+        let _ = memorize_git_name(n);
+    }
 
     // Bare serveur + enregistrement en base (idempotent).
     let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
@@ -871,15 +971,23 @@ pub async fn gds_validate_user(state: State<'_, AppState>, email: String) -> Res
 }
 
 /// Commande Tauri : ajoute le projet courant au GDS (bare + remote + push).
+/// Configure l'identité git automatiquement si absente : `email` = compte GDS
+/// (réutilisé tel quel, aucune saisie), `git_name` = nom saisi UNE fois par
+/// l'utilisateur (sinon nom mémorisé).
 #[tauri::command]
-pub async fn gds_add_project(state: State<'_, AppState>, project: String, email: String) -> Result<Value, String> {
+pub async fn gds_add_project(
+    state: State<'_, AppState>,
+    project: String,
+    email: String,
+    git_name: Option<String>,
+) -> Result<Value, String> {
     let pool = state
         .gds_pool
         .lock()
         .unwrap()
         .clone()
         .ok_or("GDS non provisionné")?;
-    add_project_to_gds(&pool, &project, &email).await
+    add_project_to_gds(&pool, &project, &email, git_name).await
 }
 
 /// Commande Tauri : lit la config GDS du projet (`.pilot/gds.json`).
@@ -1201,6 +1309,7 @@ pub async fn gds_connection_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::ensure_git_repo_with_initial_commit;
 
     #[test]
     fn server_host_handles_http_https_ssh() {
@@ -1484,5 +1593,74 @@ mod tests {
         assert!(!bare.exists());
         crate::gds_git::remove_bare(&local.to_string_lossy(), "proj").unwrap();
         let _ = std::fs::remove_dir_all(&local);
+    }
+
+    #[test]
+    fn effective_git_name_prefers_supplied_name() {
+        // Le nom fourni par l'UI (saisi une seule fois) PRIME sur le mémorisé.
+        let res = effective_git_name(&Some("  Alice D.  ".to_string())).unwrap();
+        assert_eq!(res, "Alice D.");
+        assert!(effective_git_name(&Some(String::new())).is_err());
+        assert!(effective_git_name(&None).is_err());
+    }
+
+    #[test]
+    fn effective_git_name_falls_back_to_memorized_and_saves_are_isolated() {
+        // Secrets mémorisés isolés (jamais ~/.pilot réel).
+        let _guard = TestGdsSecretsGuard::new();
+        assert!(memorized_git_name().is_none());
+        memorize_git_name("Alice").unwrap();
+        // Sans nom fourni → repli sur le nom mémorisé (pré-rempli, plus de demande).
+        assert_eq!(effective_git_name(&None).unwrap(), "Alice");
+        assert_eq!(effective_git_name(&Some(" ".to_string())).unwrap(), "Alice");
+        // Le fichier temp de secrets ne contient AUCUN mot de passe.
+        let secrets = read_gds_secrets().unwrap();
+        assert_eq!(secrets.git_name, "Alice");
+        // Mémorisation idempotente : re-sauver le même nom ne change rien.
+        memorize_git_name("Alice").unwrap();
+        assert_eq!(read_gds_secrets().unwrap().git_name, "Alice");
+    }
+
+    #[test]
+    fn effective_git_name_errors_clean_when_name_required_but_unknown() {
+        // Aucun nom fourni ni mémorisé → message CLAIR (une seule demande).
+        let _guard = TestGdsSecretsGuard::new();
+        let err = effective_git_name(&None).unwrap_err();
+        assert!(err.contains("Nom git requis"), "message clair attendu: {}", err);
+        assert!(!err.contains("git config --global"), "pas de commande git à taper");
+    }
+
+    #[test]
+    fn git_identity_prefs_reports_isolated_state_and_memorized_name() {
+        // Identité git isolée (config globale vide) + secrets isolés : la commande
+        // `gds_git_identity_prefs` voit l'identité absente et pré-remplit le nom
+        // mémorisé. Ne touche jamais à la config utilisateur réelle ni aux secrets.
+        let _iso = crate::git::test_helpers::IsolatedGitConfig::new("");
+        let _guard = TestGdsSecretsGuard::new();
+        memorize_git_name("Alice").unwrap();
+        let dir = std::env::temp_dir().join(format!("pilot-gds-prefs-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        let v = gds_git_identity_prefs(project.clone()).unwrap();
+        assert_eq!(v["name_configured"], false);
+        assert_eq!(v["email_configured"], false);
+        assert_eq!(v["git_name"], "Alice", "nom mémorisé pré-rempli");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_identity_auto_sets_email_to_connected_account_and_name_local_only() {
+        // Identité git isolée (config globale vide) : à l'ajout au GDS, l'email
+        // du compte connecté (qu'il soit dev OU admin) est réglé en LOCAL, et le
+        // nom mémorisé/fourni aussi — sans toucher la config utilisateur réelle.
+        let _iso = crate::git::test_helpers::IsolatedGitConfig::new("");
+        let dir = std::env::temp_dir().join(format!("pilot-gds-idauto-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(std::path::Path::new(&project).join("a.txt"), "x").unwrap();
+        // email = compte GDS (ici admin : même chemin que dev) ; nom fourni une fois.
+        crate::git::ensure_git_repo_with_identity(&project, "admin@kalico", "Alice").unwrap();
+        assert_eq!(crate::git::git_config_user_email(&project), "admin@kalico");
+        assert_eq!(crate::git::git_config_user_name(&project), "Alice");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

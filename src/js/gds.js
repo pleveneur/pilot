@@ -31,17 +31,19 @@ function esc(s) {
 }
 
 /**
- * Traduit les erreurs git résiduelles (ex: identité git absente) en message
- * compréhensible plutôt que le texte brut de git. Les erreurs déjà claires
- * (messages Pilot) sont passées telles quelles.
+ * Traduit les erreurs git résiduelles en message compréhensible plutôt que le
+ * texte brut de git. Depuis l'identité git auto (GDS), les erreurs « identité
+ * non configurée » ne devraient plus survenir qu'en cas d'absence de nom saisi.
  */
 function friendlyGdsError(e) {
   const msg = String(e == null ? "" : e);
   const lower = msg.toLowerCase();
   if (lower.includes("identité git") || lower.includes("identity unknown") ||
       lower.includes("user.name") || lower.includes("user.email")) {
-    return "⚠️ Identité git non configurée : définissez votre nom et email git " +
-      "(`git config --global user.name` et `git config --global user.email`), puis réessayez.";
+    return "⚠️ Identité git incomplète : fournissez votre nom git (demandé une seule fois, il sera mémorisé).";
+  }
+  if (lower.includes("nom git requis")) {
+    return "⚠️ Ajout annulé : le nom git est requis. Fournissez-le une seule fois, il sera mémorisé et pré-rempli ensuite.";
   }
   // git remote add / push brute → cause lisible.
   if (lower.includes("remote add a échoué") && lower.includes("not a git repository")) {
@@ -439,17 +441,46 @@ export function createGds(container) {
       if (!email) { err.textContent = "L'email est requis."; return; }
       err.textContent = "";
       ok.textContent = "";
+      // ── Identité git automatique ──
+      // email = compte GDS connecté (aucune saisie). Nom git demandé UNE SEULE
+      // FOIS (dialog), pré-rempli s'il est mémorisé ; désactivation des demandes
+      // suivantes quand mémorisé. L'identité est réglée localement par le backend.
+      let gitName = null;
+      try {
+        const ident = await invoke("gds_git_identity_prefs", { project });
+        if (!ident.name_configured) {
+          gitName = (ident.git_name || "").trim() || null;
+          if (!gitName) {
+            gitName = window.prompt(
+              "Votre nom git (réglé localement pour ce projet, pas en global) :",
+              ""
+            );
+            if (gitName === null) {
+              err.textContent = "Ajout annulé : le nom git est requis.";
+              return;
+            }
+            gitName = gitName.trim();
+            if (!gitName) { err.textContent = "Le nom git est requis."; return; }
+          }
+          // Mémoriser le nom (une seule fois) pour pré-remplir la prochaine fois.
+          if (gitName !== ident.git_name) {
+            await invoke("gds_save_git_name", { name: gitName });
+          }
+        }
+      } catch (_) {
+        /* préfs indisponibles → on passe sans gitName, le backend tranche */
+      }
       btn.disabled = true;
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Ajout…';
       refreshIcons(container);
       try {
-        const res = await invoke("gds_add_project", { project, email });
+        const res = await invoke("gds_add_project", { project, email, gitName });
         err.textContent = "";
         await refresh();
         const okEl = bodyEl.querySelector("#gds-add-ok");
         if (okEl) {
           if (res && res.initialized) {
-            okEl.textContent = "✅ Projet ajouté au GDS. Le dossier a été initialisé en dépôt Git automatiquement (premier commit effectué).";
+            okEl.textContent = "✅ Projet ajouté au GDS. Le dossier a été initialisé en dépôt Git automatiquement (premier commit) et l'identité git réglée localement.";
           } else {
             okEl.textContent = "✅ Projet ajouté au GDS.";
           }

@@ -246,6 +246,7 @@ async fn gds_git_repos(State(ctx): State<Arc<WebCtx>>) -> Response {
 struct AddProjectBody {
     project: String,
     email: String,
+    git_name: Option<String>,
 }
 
 async fn gds_add_project_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<AddProjectBody>) -> Response {
@@ -253,7 +254,7 @@ async fn gds_add_project_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<Ad
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    match gds::add_project_to_gds(&pool, &body.project, &body.email).await {
+    match gds::add_project_to_gds(&pool, &body.project, &body.email, body.git_name).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }

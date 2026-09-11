@@ -262,6 +262,7 @@ type GitHub.
   - **Ajouter le projet au GDS** : crée un dépôt git bare sur le serveur,
     ajoute le remote `gds` (sans toucher à un éventuel `origin` existant) et
     pousse la branche courante (projet déjà en Git) ;
+  - **Identité git automatique** : à l'ajout, Pilot règle automatiquement une identité git manquante, **localement** pour ce projet (jamais en global) — l'email = email du compte GDS connecté (aucune saisie), le nom demandé **une seule fois** puis mémorisé et pré-rempli ensuite ;
   - **Consulter** la liste des projets et des dépôts git du serveur ;
   - **Synchroniser** un dossier existant sans `.git` : Pilot l'initialise au
     lieu d'échouer, et rappelle d'ajouter le projet au GDS si le dépôt distant

@@ -2576,6 +2576,9 @@ pub fn run() {
             gds::gds_add_project,
             gds::gds_get_config,
             gds::gds_save_config,
+            // Identité git automatique à l'ajout d'un projet GDS
+            gds::gds_git_identity_prefs,
+            gds::gds_save_git_name,
             gds::gds_list_projects,
             gds::gds_list_git_repos,
             // ── GDS Évolution 1 : mémoriser les connexions par serveur ──

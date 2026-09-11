@@ -54,7 +54,9 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         let email = cfg.identity_email.trim().to_string();
         if work_is_repo && !email.is_empty() {
             // Onboarding : projet de travail Git + config complète → ajout GDS.
-            gds::add_project_to_gds(pool, project, &email).await?;
+            // Aucun nom saisi ici (pas d'UI interactive) : l'identité est
+            // configurée depuis le nom mémorisé (ou l'identité déjà existante).
+            gds::add_project_to_gds(pool, project, &email, None).await?;
         } else {
             return Err(
                 "Le projet n'a pas encore été ajouté au GDS. Ajoutez-le d'abord grâce à « Ajouter le projet au GDS » (section 3)."
@@ -74,10 +76,12 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         }
         if !git::git_is_repo(&dest_str) {
             // (a) Dossier cible présent mais pas un work tree Git : l'initialiser
-            // avec un premier commit via l'helper partagé (même gestion identité +
-            // message clair que l'ajout GDS), puis connecter au remote gds (au lieu
-            // de git_fetch qui échoue).
-            git::ensure_git_repo_with_initial_commit(&dest_str)?;
+            // avec un premier commit via l'helper partagé (identité git auto :
+            // email du compte GDS + nom mémorisé, jamais la config globale), puis
+            // connecter au remote gds (au lieu de git_fetch qui échoue).
+            let ident_email = cfg.identity_email.trim().to_string();
+            let ident_name = gds::memorized_git_name().unwrap_or_default();
+            git::ensure_git_repo_with_identity(&dest_str, &ident_email, &ident_name)?;
             git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
             let _ = git::git_fetch(&dest_str, GDS_REMOTE, &branch);
             let _ = git::git_pull(&dest_str, GDS_REMOTE, &branch);

@@ -166,6 +166,42 @@ pub fn git_config_user_email(cwd: &str) -> String {
         .to_string()
 }
 
+/// Écrit `user.name` dans la config git LOCALE du dépôt (`--local`, donc
+/// `.git/config`), PAS `--global`. Non intrusif : ne touche jamais à la config
+/// globale de l'utilisateur réel (`~/.gitconfig`). Utilisé par le GDS pour
+/// régler l'identité git automatiquement à l'ajout d'un projet (email du compte
+/// GDS + nom mémorisé). Échoue si le dossier n'est pas un work tree Git.
+pub fn git_config_local_user_name(cwd: &str, name: &str) -> Result<(), String> {
+    git_config_local(cwd, "user.name", name)
+}
+
+/// Écrit `user.email` dans la config git LOCALE du dépôt (`--local`). Même
+/// convention que `git_config_local_user_name`.
+pub fn git_config_local_user_email(cwd: &str, email: &str) -> Result<(), String> {
+    git_config_local(cwd, "user.email", email)
+}
+
+/// Helper interne : `git config --local <key> <value>` dans `cwd`. `git config`
+/// sans `--global`/`--system` écrit déjà dans `.git/config` (local) quand on est
+/// dans un work tree ; on force `--local` pour être explicite et on vérifie le
+/// code de sortie (set config ne produit pas de sortie stdout).
+fn git_config_local(cwd: &str, key: &str, value: &str) -> Result<(), String> {
+    let (_, stderr, ok) = crate::run_captured_full(
+        "git",
+        &["-C", cwd, "config", "--local", key, value],
+        Duration::from_secs(5),
+    );
+    if !ok {
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            format!("git config {} a échoué", key)
+        } else {
+            format!("git config {} a échoué: {}", key, detail)
+        });
+    }
+    Ok(())
+}
+
 /// Vérifie que l'identité git (user.name/email local ou global) est configurée.
 /// Échoue avec un message CLAIR (guidant l'utilisateur) plutôt qu'une erreur
 /// git brute `Committer identity unknown` si elle est absente ou incomplète.
@@ -240,6 +276,43 @@ pub fn ensure_git_repo_with_initial_commit(cwd: &str) -> Result<bool, String> {
     }
     git_init(cwd)?;
     check_git_identity(cwd)?;
+    git_add_all(cwd)?;
+    git_commit(cwd, "initial commit")?;
+    Ok(true)
+}
+
+/// Ensure qu'un dossier est un dépôt Git local avec un premier commit, en
+/// configurant d'abord l'identité git LOCALE (nom + email) si elle est absente
+/// de la config effective (local ou global). Variante GDS : permet de
+/// configurer automatiquement l'identité à l'ajout d'un projet — `email` = email
+/// du compte GDS connecté, `name` = nom mémorisé/demandé une seule fois.
+///
+/// Règles :
+/// - `user.name`/`user.email` manquants (local ET global) → réglés en LOCAL
+///   (`.git/config`), JAMAIS `--global` (non intrusif, ne touche pas à la config
+///   utilisateur réelle). Une valeur déjà présente (local ou global) est
+///   respectée (on ne l'écrase pas).
+/// - Dépôt déjà existant → identité comblée si besoin, retourne `false` (pas de
+///   commit ajouté).
+/// - Dépôt absent → `git init` + identité + `git add -A` + premier commit,
+///   retourne `true`.
+///
+/// Retourne `true` si l'initialisation + premier commit ont eu lieu.
+pub fn ensure_git_repo_with_identity(cwd: &str, email: &str, name: &str) -> Result<bool, String> {
+    let is_repo = git_is_repo(cwd);
+    if !is_repo {
+        git_init(cwd)?;
+    }
+    // Combler uniquement les champs absents de la config effective (local+global).
+    if git_config_user_name(cwd).is_empty() && !name.trim().is_empty() {
+        git_config_local_user_name(cwd, name)?;
+    }
+    if git_config_user_email(cwd).is_empty() && !email.trim().is_empty() {
+        git_config_local_user_email(cwd, email)?;
+    }
+    if is_repo {
+        return Ok(false);
+    }
     git_add_all(cwd)?;
     git_commit(cwd, "initial commit")?;
     Ok(true)
@@ -387,6 +460,73 @@ mod tests {
         assert!(!err.contains("Committer identity unknown"), "pas d'erreur git brute: {}", err);
         // Pas d'état cassé : git init a eu lieu, le dossier reste un work tree valide.
         assert!(git_is_repo(&d));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_config_local_writes_only_local_config() {
+        // L'identification est écrite en LOCAL (`--local`, .git/config) et jamais
+        // dans la config globale (isolée par GIT_CONFIG_GLOBAL + fichier temp).
+        let _iso = IsolatedGitConfig::new("");
+        let (dir, d) = temp_work("conf-local");
+        crate::git::git_init(&d).unwrap();
+        git_config_local_user_name(&d, "Alice").unwrap();
+        git_config_local_user_email(&d, "alice@example.com").unwrap();
+        // La lecture effective renvoie ce qui est en locale.
+        assert_eq!(git_config_user_name(&d), "Alice");
+        assert_eq!(git_config_user_email(&d), "alice@example.com");
+        // Et c'est bien de la config LOCALE (présente dans .git/config).
+        let local = std::path::Path::new(&d).join(".git").join("config");
+        let content = std::fs::read_to_string(&local).unwrap();
+        assert!(content.contains("Alice") && content.contains("alice@example.com"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn configure_local_identity_does_not_override_global() {
+        // Une identité GLOBALE déjà présente est respectée (non intrusif) : elle
+        // n'est pas écrasée par l'identité GDS locale.
+        let _iso = identity_iso(); // config globale : Pilot Test <pilot-test@example.com>
+        let (dir, d) = temp_work("conf-keep");
+        crate::git::git_init(&d).unwrap();
+        // Tenter de régler l'identité GDS (autre nom/email) : la globale reste.
+        ensure_git_repo_with_identity(&d, "gds@example.com", "GDS User").unwrap();
+        assert_eq!(git_config_user_name(&d), "Pilot Test");
+        assert_eq!(git_config_user_email(&d), "pilot-test@example.com");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_git_repo_with_identity_configures_and_commits() {
+        // Sans identité globale (config vide) : l'identité GDS est réglée en LOCAL
+        // et le premier commit réussit — aucune config utilisateur réelle touchée.
+        let _iso = IsolatedGitConfig::new("");
+        let (dir, d) = temp_work("ident-commit");
+        std::fs::write(std::path::Path::new(&d).join("a.txt"), "hello").unwrap();
+        assert!(!git_is_repo(&d));
+        let ok = ensure_git_repo_with_identity(&d, "gds@example.com", "Alice").unwrap();
+        assert!(ok);
+        assert!(git_is_repo(&d));
+        assert_eq!(git_config_user_name(&d), "Alice");
+        assert_eq!(git_config_user_email(&d), "gds@example.com");
+        assert_eq!(commit_count(&d), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_git_repo_with_identity_is_idempotent_on_repo() {
+        // Dépôt déjà existant : identité comblée (si absente), retourne false,
+        // AUCUN commit supplémentaire.
+        let _iso = IsolatedGitConfig::new("");
+        let (dir, d) = temp_work("ident-idem");
+        std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
+        assert!(ensure_git_repo_with_identity(&d, "gds@example.com", "Bob").unwrap());
+        assert_eq!(commit_count(&d), 1);
+        // Rejouer sur le repo existant : identité déjà en place, false, pas de 2e commit.
+        assert!(!ensure_git_repo_with_identity(&d, "gds@example.com", "Bob").unwrap());
+        assert_eq!(commit_count(&d), 1);
+        assert_eq!(git_config_user_name(&d), "Bob");
+        assert_eq!(git_config_user_email(&d), "gds@example.com");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
