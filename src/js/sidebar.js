@@ -1270,9 +1270,13 @@ class Sidebar {
         const item = document.createElement("div");
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
-        // Indicateur « (GDS) » : ajouté après le nom si le projet est branché
-        // sur un GDS (config .pilot/gds.json activée). Fail-open : non branché.
-        const gdsSuffix = (await isProjectGds(p)) ? " - (GDS)" : "";
+        // Indicateur de connexion GDS (Évolution 3) : affiché après le nom selon
+        // l'état honnête rendu par gds_connection_status — « - (GDS ✓) » si
+        // connecté, « - (GDS ✕) » si erreur, rien si non configuré. Fail-open.
+        const gdsState = await isProjectGds(p);
+        let gdsSuffix = "";
+        if (gdsState === "connected") gdsSuffix = " - (GDS ✓)";
+        else if (gdsState === "error") gdsSuffix = " - (GDS ✕)";
         item.innerHTML =
           `<span class="open-project-name">${this._esc(name)}${this._esc(gdsSuffix)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;

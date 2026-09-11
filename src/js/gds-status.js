@@ -1,24 +1,40 @@
 // gds-status.js — Détection « projet branché sur un GDS » (spec_gds.md)
 //
 // Un projet est « branché sur un GDS » quand il a une configuration GDS
-// (`.pilot/gds.json` présent et activé). Réutilise la commande Tauri
-// `gds_get_config` (retourne `null` si le fichier n'existe pas, sinon la
-// config). Fail-open : toute erreur → non branché (jamais bloquant).
+// (`.pilot/gds.json` présent et activé). Évolution 3 : l'état est rendu
+// honnête via la commande Tauri `gds_connection_status` (retourne
+// 'connected' | 'error' | 'not_configured'), pour que le bandeau reflète la
+// réalité de la connexion (dépôt bare valide, remote `gds` présent, pool
+// joignable) et pas seulement la présence du fichier de config. Fail-open :
+// toute erreur → non branché (jamais bloquant).
 
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * Retourne `true` si le projet est branché sur un GDS (config `.pilot/gds.json`
- * présente et activée), `false` sinon. Fail-open : erreur → `false`.
+ * Mappe la réponse du backend (commande `gds_connection_status`) sur un état
+ * normalisé. Pure — testable. Toute valeur inattendue / manquante →
+ * `'not_configured'` (fail-open).
+ * @param {{status?: string} | null | undefined} v - réponse Tauri.
+ * @returns {string} `'connected'` | `'error'` | `'not_configured'`.
+ */
+export function mapGdsStatus(v) {
+  const s = v && v.status;
+  return s === "connected" || s === "error" ? s : "not_configured";
+}
+
+/**
+ * Retourne l'état de connexion GDS d'un projet : `'connected'` | `'error'` |
+ * `'not_configured'`. Fail-open : erreur d'appel → `'not_configured'`. Ne
+ * révèle jamais de mot de passe (le backend ne remonte que l'état).
  * @param {string} projectPath - chemin du projet.
- * @returns {Promise<boolean>}
+ * @returns {Promise<string>}
  */
 export async function isProjectGds(projectPath) {
-  if (!projectPath) return false;
+  if (!projectPath) return "not_configured";
   try {
-    const cfg = await invoke("gds_get_config", { project: projectPath });
-    return !!(cfg && cfg.enabled === true);
+    const res = await invoke("gds_connection_status", { project: projectPath });
+    return mapGdsStatus(res);
   } catch (_) {
-    return false; // fail-open : jamais bloquant
+    return "not_configured"; // fail-open : jamais bloquant
   }
 }

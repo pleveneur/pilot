@@ -916,6 +916,88 @@ pub async fn gds_remove_project(
     Ok(json!({ "ok": true, "project": name, "purged_server": purged }))
 }
 
+/// Décision d'état de connexion GDS d'un projet (Évolution 3) — pure et
+/// testable. `configured` = `.pilot/gds.json` présent, `enabled` = activé par
+/// projet, `has_pw` = mot de passe enregistré dans les secrets, `pool_ok` =
+/// pool joignable (reconnexion effective), `bare_ok` = dépôt bare valide,
+/// `remote_ok` = remote `gds` présent.
+///  - config absente (ou non activée) → `not_configured`
+///  - tout coché → `connected`
+///  - sinon → `error`
+pub(crate) fn connection_status_from_flags(
+    configured: bool,
+    enabled: bool,
+    has_pw: bool,
+    pool_ok: bool,
+    bare_ok: bool,
+    remote_ok: bool,
+) -> &'static str {
+    if !configured || !enabled {
+        return "not_configured";
+    }
+    if has_pw && pool_ok && bare_ok && remote_ok {
+        "connected"
+    } else {
+        "error"
+    }
+}
+
+/// Commande Tauri : état honnête de la connexion GDS d'un projet (Évolution 3).
+/// Retourne `{"status": "connected" | "error" | "not_configured"}`. Réutilise
+/// les infos de connexion (restore_pool_for_project pour la joignabilité).
+/// Fail-open : jamais bloquant ; ne révèle JAMAIS de secret.
+#[tauri::command]
+pub async fn gds_connection_status(
+    state: State<'_, AppState>,
+    project: String,
+) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Ok(json!({ "status": "not_configured" }));
+    }
+    let cfg = match read_gds_config(&project) {
+        Ok(c) => c,
+        Err(e) if e.starts_with("Lecture gds.json") => {
+            return Ok(json!({ "status": "not_configured" }));
+        }
+        Err(e) => return Err(e),
+    };
+    if !cfg.enabled {
+        return Ok(json!({ "status": "not_configured" }));
+    }
+    // Mot de passe enregistré dans les secrets (valeurs jamais révélées).
+    let secrets = read_gds_secrets().ok();
+    let has_pw = secrets
+        .as_ref()
+        .and_then(|s| s.projects.get(&project_name(&project)))
+        .and_then(|p| p.db_password.as_deref())
+        .map(|p| !p.is_empty())
+        .unwrap_or(false);
+    // Pool joignable : reconnexion effective (fail-open).
+    let pool_ok = if has_pw {
+        match restore_pool_for_project(&project).await {
+            Ok(p) => {
+                let _ = p.close().await;
+                true
+            }
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
+    // Dépôt bare valide sur le serveur GDS.
+    let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
+    let name = project_name(&project);
+    let project_owned = project.clone();
+    let bare_ok = gds_git::bare_repo_exists(&local_dir, &name);
+    // Remote `gds` présent dans le dépôt local.
+    let remote_ok = tokio::task::spawn_blocking(move || crate::git::git_has_remote(&project_owned, "gds"))
+        .await
+        .unwrap_or(false);
+    let status =
+        connection_status_from_flags(true, cfg.enabled, has_pw, pool_ok, bare_ok, remote_ok);
+    Ok(json!({ "status": status }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1070,6 +1152,21 @@ mod tests {
         assert_eq!(saved.db_user, "postgres");
         assert_eq!(saved.server_url, "postgres://postgres@host:5432/postgres");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn connection_status_flags_decision() {
+        // Config absente / non activée → not_configured (même si pool/bare ok).
+        assert_eq!(connection_status_from_flags(false, false, true, true, true, true), "not_configured");
+        assert_eq!(connection_status_from_flags(true, false, true, true, true, true), "not_configured");
+        // Tout est bon → connected.
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, true), "connected");
+        // testsnake2 (dépôt non valide → bare_ok=false) → error.
+        assert_eq!(connection_status_from_flags(true, true, true, true, false, true), "error");
+        // Chaque prérequis manquant → error.
+        assert_eq!(connection_status_from_flags(true, true, false, true, true, true), "error");
+        assert_eq!(connection_status_from_flags(true, true, true, false, true, true), "error");
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, false), "error");
     }
 
     #[test]

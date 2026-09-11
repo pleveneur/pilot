@@ -2597,6 +2597,8 @@ pub fn run() {
             gds_ssh::gds_register_ssh_key,
             // ── GDS Évolution 2 : retirer un projet du GDS ──
             gds::gds_remove_project,
+            // ── GDS Évolution 3 : bandeau connecté fiable ──
+            gds::gds_connection_status,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")
