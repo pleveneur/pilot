@@ -471,7 +471,7 @@ class Sidebar {
       this._renderTree();
       this._loadFavorites();
       this._showProjectButtons();
-      this._renderOpenProjectsBar();
+      await this._renderOpenProjectsBar();
       loadModelAliases();
       invoke("set_window_title", { title: "Pilot " + path }).catch(() => {});
     } catch (e) {
@@ -1325,7 +1325,6 @@ class Sidebar {
       window._pilotProjectPath = path;
       await invoke("set_active_project", { path });
       await this.resyncProjectFromRemote(path);
-      this._renderOpenProjectsBar();
       // Restaurer les onglets de CE projet — restoreTabs rouvre aussi son onglet
       // agent si la session persistée en avait un (la session parkée est alors
       // reprise et la conversation réaffichée).
