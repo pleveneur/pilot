@@ -295,17 +295,6 @@ pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Valu
         .collect())
 }
 
-/// Supprime un dépôt git (bare) par `project_id` (Évolution 2). Retourne le
-/// nombre de lignes supprimées.
-pub(crate) async fn delete_git_repo(pool: &PgPool, project_id: i64) -> Result<u64, String> {
-    let res = sqlx::query("DELETE FROM git_repos WHERE project_id = $1")
-        .bind(project_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Suppression git_repo: {}", e))?;
-    Ok(res.rows_affected())
-}
-
 /// Supprime un projet GDS par nom (Évolution 2). Les dépendances
 /// (git_repos, project_members, project_locks, tasks, decisions, tickets) sont
 /// purgées en cascade (tables au `ON DELETE CASCADE`). On cible uniquement le

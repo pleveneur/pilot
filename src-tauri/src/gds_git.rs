@@ -125,7 +125,6 @@ mod tests {
 
     #[test]
     fn remove_bare_never_leaves_repos_dir_and_is_idempotent() {
-        use std::path::PathBuf;
         let dir = std::env::temp_dir().join(format!("pilot-gds-rembare-{}", std::process::id()));
         let gds = dir.to_string_lossy().to_string();
         let repos = repos_dir(&gds);
