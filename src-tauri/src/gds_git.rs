@@ -41,6 +41,24 @@ pub(crate) fn validate_project_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// Supprime le repo bare d'un projet du serveur GDS (Évolution 2). Chemin
+/// validé via `validate_project_name` (anti path traversal) et verrouillé sur
+/// le dossier `repos` GDS : on ne supprime JAMAIS hors du dossier repos.
+pub(crate) fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(), String> {
+    let name = validate_project_name(project_name)?;
+    let bare = repo_bare_path(gds_local_dir, &name);
+    // Ceinture + bretelles : le chemin doit rester sous le dossier repos GDS.
+    let repos = repos_dir(gds_local_dir);
+    if !bare.starts_with(&repos) {
+        return Err(format!("Chemin bare invalide (hors repos GDS): {}", bare.display()));
+    }
+    if bare.exists() {
+        std::fs::remove_dir_all(&bare)
+            .map_err(|e| format!("Suppression du dépôt bare {}: {}", bare.display(), e))?;
+    }
+    Ok(())
+}
+
 /// Crée le repo bare + enregistre le projet et le repo en base. `git_init_bare`
 /// est bloquant → exécuté dans `spawn_blocking`. Retourne un résumé JSON.
 pub(crate) async fn add_project(
@@ -103,5 +121,27 @@ mod tests {
         assert!(validate_project_name("a\\b").is_err());
         assert!(validate_project_name("a b").is_err());
         assert!(validate_project_name("").is_err());
+    }
+
+    #[test]
+    fn remove_bare_never_leaves_repos_dir_and_is_idempotent() {
+        use std::path::PathBuf;
+        let dir = std::env::temp_dir().join(format!("pilot-gds-rembare-{}", std::process::id()));
+        let gds = dir.to_string_lossy().to_string();
+        let repos = repos_dir(&gds);
+        std::fs::create_dir_all(&repos).unwrap();
+        // 1. Chemin valide : supprime un dépôt existant, est idempotent.
+        let bare = repo_bare_path(&gds, "proj");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(bare.exists());
+        remove_bare(&gds, "proj").unwrap();
+        assert!(!bare.exists());
+        remove_bare(&gds, "proj").unwrap(); // idempotent (absent → ok)
+        // 2. Anti path traversal : refusé, ne supprime rien.
+        let evil = repos.join("..").join("outside");
+        std::fs::create_dir_all(&evil).unwrap();
+        assert!(remove_bare(&gds, "../outside").is_err());
+        assert!(evil.exists(), "le dossier externe ne doit JAMAIS être supprimé");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

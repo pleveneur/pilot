@@ -2595,6 +2595,8 @@ pub fn run() {
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
             gds_ssh::gds_ssh_key,
             gds_ssh::gds_register_ssh_key,
+            // ── GDS Évolution 2 : retirer un projet du GDS ──
+            gds::gds_remove_project,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

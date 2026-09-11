@@ -69,6 +69,13 @@ pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Retire un remote d'un dépôt local (Évolution 2, GDS). Idempotent : un
+/// remote absent ne produit pas d'erreur.
+pub fn git_remote_remove(cwd: &str, name: &str) -> Result<(), String> {
+    run_captured("git", &["-C", cwd, "remote", "remove", name], Duration::from_secs(5));
+    Ok(())
+}
+
 /// Pousse la branche courante (ou HEAD) vers un remote.
 pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
     let out = run_captured(

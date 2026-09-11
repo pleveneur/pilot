@@ -285,6 +285,27 @@ export function createGds(container) {
       <div class="gds-actions">
         <button id="gds-config-save" class="web-btn"><i data-lucide="check" class="icon-sm"></i> Enregistrer</button>
       </div>
+      <div class="gds-remove-block" style="margin-top:18px; border-top:1px solid var(--border,#333); padding-top:12px">
+        <div class="gds-panel-desc" style="margin-bottom:6px">
+          <strong>Retirer ce projet du GDS</strong> — retire le remote <code>gds</code>
+          local et supprime <code>.pilot/gds.json</code>. Vous pouvez aussi purger
+          le serveur (suppression du dépôt bare + entrées en base) en cochant la
+          case ci-dessous (jamais par défaut).
+        </div>
+        <div id="gds-remove-confirm" class="gds-panel" style="display:none; margin-top:8px">
+          <div class="gds-panel-desc">
+            Confirmez le retrait de ce projet du GDS. Cette action est <strong>destructive</strong>.
+          </div>
+          <label class="gds-check"><input type="checkbox" id="gds-purge-check"> Purger aussi le serveur (suppression du dépôt bare + entrées en base)</label>
+          <div id="gds-remove-err" class="gds-error"></div>
+          <div id="gds-remove-ok" class="gds-ok"></div>
+          <div class="gds-actions">
+            <button id="gds-remove-confirm-btn" class="web-btn danger"><i data-lucide="trash-2" class="icon-sm"></i> Confirmer le retrait</button>
+            <button id="gds-remove-cancel" class="web-btn">Annuler</button>
+          </div>
+        </div>
+        <button id="gds-remove-btn" class="web-btn"><i data-lucide="log-out" class="icon-sm"></i> Retirer du GDS</button>
+      </div>
     `;
     bodyEl.appendChild(panel);
     refreshIcons(container);
@@ -311,6 +332,47 @@ export function createGds(container) {
       } catch (e) {
         err.textContent = String(e);
         ok.textContent = "";
+      }
+    });
+
+    // ── Évolution 2 : bouton « Retirer du GDS » ──
+    const removeBtn = panel.querySelector("#gds-remove-btn");
+    const confirmBox = panel.querySelector("#gds-remove-confirm");
+    const purgeCheck = panel.querySelector("#gds-purge-check");
+    const removeErr = panel.querySelector("#gds-remove-err");
+    const removeOk = panel.querySelector("#gds-remove-ok");
+    // Jamais activé par défaut (purge destructive exigée par case explicite).
+    purgeCheck.checked = false;
+    removeBtn.addEventListener("click", () => {
+      removeOk.textContent = ""; removeErr.textContent = "";
+      confirmBox.style.display = confirmBox.style.display === "none" ? "block" : "none";
+    });
+    panel.querySelector("#gds-remove-cancel").addEventListener("click", () => {
+      confirmBox.style.display = "none";
+    });
+    panel.querySelector("#gds-remove-confirm-btn").addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { removeErr.textContent = "Aucun projet ouvert."; return; }
+      // La purge serveur n'est jamais par défaut : uniquement si la case est cochée.
+      const purgeServer = purgeCheck.checked;
+      removeErr.textContent = ""; removeOk.textContent = "";
+      const btn = panel.querySelector("#gds-remove-confirm-btn");
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Retrait…';
+      refreshIcons(container);
+      try {
+        const res = await invoke("gds_remove_project", { project, purgeServer });
+        removeOk.textContent = res.purged_server
+          ? "✅ Projet retiré du GDS (purge serveur effectuée)."
+          : "✅ Projet retiré du GDS (sans purge serveur).";
+        confirmBox.style.display = "none";
+        await refresh();
+      } catch (e) {
+        removeErr.textContent = String(e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="trash-2" class="icon-sm"></i> Confirmer le retrait';
+        refreshIcons(container);
       }
     });
   }

@@ -7,7 +7,7 @@
 use crate::gds_db;
 use crate::gds_git;
 use crate::gds_ssh;
-use crate::git::{git_current_branch, git_push, git_remote_add};
+use crate::git::{git_current_branch, git_push, git_remote_add, git_remote_remove};
 use crate::web_auth::WebAuth;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -829,6 +829,91 @@ pub async fn gds_list_git_repos(state: State<'_, AppState>) -> Result<Vec<Value>
         .clone()
         .ok_or("GDS non provisionné")?;
     gds_db::list_git_repos(&pool).await
+}
+
+/// Retire un projet du GDS (Évolution 2). Toujours : retire le remote `gds`
+/// local + supprime `.pilot/gds.json`. La purge serveur (suppression du dépôt
+/// bare + entrées en base) n'a lieu QUE si `purge_server=true` (jamais par
+/// défaut — destructive). Respecte `gds_enabled` (court-circuit). Netttoie le
+/// pool gds_pool si plus aucun projet configuré après retrait. Fail-open : on
+/// ne supprime JAMAIS le bare sans `purge_server=true` explicite.
+#[tauri::command]
+pub async fn gds_remove_project(
+    state: State<'_, AppState>,
+    project: String,
+    purge_server: bool,
+) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Err("GDS désactivé globalement".to_string());
+    }
+    // Capturer la config + un éventuel pool AVANT de supprimer gds.json
+    // (restore_pool_for_project en a besoin pour reconstruire le pool).
+    let name = project_name(&project);
+    let local_dir = read_gds_config(&project)
+        .ok()
+        .and_then(|c| c.gds_local_dir)
+        .unwrap_or_else(default_gds_local_dir);
+    let pool_for_purge = if purge_server {
+        let current = state.gds_pool.lock().unwrap().clone();
+        match current {
+            Some(p) => Some(p),
+            None => restore_pool_for_project(&project).await.ok(),
+        }
+    } else {
+        None
+    };
+
+    // 1. Retirer le remote `gds` local (pattern git_remote_add → remove).
+    let project_owned = project.clone();
+    tokio::task::spawn_blocking(move || git_remote_remove(&project_owned, "gds"))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    // 2. Supprimer .pilot/gds.json.
+    let cfg_path = gds_config_path(&project);
+    if cfg_path.exists() {
+        std::fs::remove_file(&cfg_path)
+            .map_err(|e| format!("Suppression gds.json: {}", e))?;
+    }
+
+    // 3. Purge serveur UNIQUEMENT si demandé explicitement.
+    let mut purged = false;
+    if purge_server {
+        gds_git::remove_bare(&local_dir, &name)?;
+        if let Some(pool) = pool_for_purge {
+            let _ = gds_db::delete_project_by_name(&pool, &name).await?;
+        }
+        purged = true;
+    }
+
+    // 4. Nettoyer le pool si plus aucun projet GDS configuré reste.
+    let state_ref = &state;
+    {
+        let cfg = state_ref.config.lock().unwrap().clone();
+        let mut paths = cfg.open_projects.clone();
+        if let Some(p) = &cfg.active_open_project {
+            if !paths.contains(p) {
+                paths.push(p.clone());
+            }
+        }
+        let mut orphan = true;
+        for proj in paths {
+            if proj == project {
+                continue;
+            }
+            if let Ok(gc) = read_gds_config(&proj) {
+                if gc.enabled && !gc.db_host.is_empty() {
+                    orphan = false;
+                    break;
+                }
+            }
+        }
+        if orphan {
+            *state_ref.gds_pool.lock().unwrap() = None;
+        }
+    }
+
+    Ok(json!({ "ok": true, "project": name, "purged_server": purged }))
 }
 
 #[cfg(test)]
