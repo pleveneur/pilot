@@ -30,6 +30,26 @@ function esc(s) {
   }[c]));
 }
 
+/**
+ * Traduit les erreurs git résiduelles (ex: identité git absente) en message
+ * compréhensible plutôt que le texte brut de git. Les erreurs déjà claires
+ * (messages Pilot) sont passées telles quelles.
+ */
+function friendlyGdsError(e) {
+  const msg = String(e == null ? "" : e);
+  const lower = msg.toLowerCase();
+  if (lower.includes("identité git") || lower.includes("identity unknown") ||
+      lower.includes("user.name") || lower.includes("user.email")) {
+    return "⚠️ Identité git non configurée : définissez votre nom et email git " +
+      "(`git config --global user.name` et `git config --global user.email`), puis réessayez.";
+  }
+  // git remote add / push brute → cause lisible.
+  if (lower.includes("remote add a échoué") && lower.includes("not a git repository")) {
+    return "⚠️ Le dossier ne contenait pas encore de dépôt Git valide pendant l'attache. Réessayez après l'initialisation automatique.";
+  }
+  return msg;
+}
+
 /** Crée l'onglet GDS dans `container`. */
 export function createGds(container) {
   container.classList.add("gds-view");
@@ -427,10 +447,16 @@ export function createGds(container) {
         err.textContent = "";
         await refresh();
         const okEl = bodyEl.querySelector("#gds-add-ok");
-        if (okEl) okEl.textContent = "✅ Projet ajouté au GDS.";
+        if (okEl) {
+          if (res && res.initialized) {
+            okEl.textContent = "✅ Projet ajouté au GDS. Le dossier a été initialisé en dépôt Git automatiquement (premier commit effectué).";
+          } else {
+            okEl.textContent = "✅ Projet ajouté au GDS.";
+          }
+        }
         return res;
       } catch (e) {
-        err.textContent = String(e);
+        err.textContent = friendlyGdsError(e);
         ok.textContent = "";
       } finally {
         btn.disabled = false;

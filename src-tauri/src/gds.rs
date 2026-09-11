@@ -7,7 +7,7 @@
 use crate::gds_db;
 use crate::gds_git;
 use crate::gds_ssh;
-use crate::git::{git_current_branch, git_push, git_remote_add, git_remote_remove};
+use crate::git::{ensure_git_repo_with_initial_commit, git_current_branch, git_push, git_remote_add, git_remote_remove};
 use crate::web_auth::WebAuth;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -603,8 +603,15 @@ pub(crate) async fn provision_db(
     Ok(pool)
 }
 
-/// Ajoute un projet au GDS (bare + enregistrement + remote add + push initial).
-/// Partagé entre la commande Tauri et la route web.
+/// Ajoute un projet au GDS (initialisation git auto + bare + enregistrement +
+/// remote add + push initial). Partagé entre la commande Tauri et la route web.
+///
+/// Si le projet de travail n'est PAS encore un dépôt Git, Pilot l'initialise
+/// automatiquement (git init + premier commit) via
+/// `ensure_git_repo_with_initial_commit` AVANT de créer le bare serveur —
+/// plus aucune commande git manuelle. Ordre robuste : init local + premier
+/// commit → bare serveur → remote add + push. En cas d'échec intermédiaire,
+/// le bare serveur créé est retiré proprement (pas d'état « à moitié attaché »).
 pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str) -> Result<Value, String> {
     let cfg = read_gds_config(project)?;
     if !cfg.enabled {
@@ -615,16 +622,29 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
     gds_ssh::ensure_poste_key(pool, email).await?;
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let name = project_name(project);
-    let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
-    // git remote add + push initial dans le projet local (bloquant → spawn_blocking).
     let repo_url = gds_remote_url(&cfg, &name);
+
+    // Tâche 1 : si le projet n'est pas encore un dépôt Git, initialiser le
+    // dépôt local + premier commit (identité git vérifiée avec message CLAIR).
+    // Idempotent : un projet déjà repo renvoie false et ne refait rien.
+    let project_init = project.to_string();
+    let initialized = tokio::task::spawn_blocking(move || {
+        ensure_git_repo_with_initial_commit(&project_init)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Bare serveur + enregistrement en base (idempotent).
+    let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
+
+    // git remote add + push initial dans le projet local (bloquant → spawn_blocking).
+    let repo_url_push = repo_url.clone();
     let project_owned = project.to_string();
-    let repo_url_owned = repo_url.clone();
-    // Remote dédié `gds` (et non `origin`) : préserve un éventuel remote
-    // `origin` existant (ex: GitHub) et reste idempotent — `git_remote_add`
-    // retire puis ré-ajoute le remote `gds` sans toucher aux autres.
-    tokio::task::spawn_blocking(move || {
-        git_remote_add(&project_owned, "gds", &repo_url_owned)?;
+    let remote_result = tokio::task::spawn_blocking(move || {
+        // Remote dédié `gds` (et non `origin`) : préserve un éventuel remote
+        // `origin` existant (ex: GitHub) et reste idempotent — `git_remote_add`
+        // retire puis ré-ajoute le remote `gds` sans toucher aux autres.
+        git_remote_add(&project_owned, "gds", &repo_url_push)?;
         let branch = git_current_branch(&project_owned);
         if !branch.is_empty() && branch != "HEAD" {
             git_push(&project_owned, "gds", &branch)?;
@@ -632,8 +652,29 @@ pub(crate) async fn add_project_to_gds(pool: &PgPool, project: &str, email: &str
         Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())??;
-    Ok(json!({ "ok": true, "project": name, "repo_url": repo_url, "bare": res }))
+    .map_err(|e| e.to_string());
+
+    // État partiel évité : un échec (remote add / push) laisse le bare serveur
+    // déjà créé → le retirer proprement pour ne pas rester « à moitié attaché ».
+    match remote_result {
+        Err(join_err) => {
+            let _ = gds_git::remove_bare(&local_dir, &name);
+            return Err(join_err);
+        }
+        Ok(Err(inner_err)) => {
+            let _ = gds_git::remove_bare(&local_dir, &name);
+            return Err(inner_err);
+        }
+        Ok(Ok(())) => {}
+    }
+
+    Ok(json!({
+        "ok": true,
+        "project": name,
+        "repo_url": repo_url,
+        "bare": res,
+        "initialized": initialized,
+    }))
 }
 
 /// Commande Tauri : provisionne le serveur GDS du projet (base + migrations +
@@ -1381,5 +1422,67 @@ mod tests {
         let res = gds_apply_server(proj, host.to_string(), "5432".to_string(), "pilot".to_string(), "dev@kalico".to_string());
         assert!(res.is_err());
         let _ = std::fs::remove_dir_all(&proj_dir);
+    }
+
+    #[test]
+    fn gds_init_flow_attaches_non_repo_to_bare_and_is_idempotent() {
+        // Task 5.1 + 5.2 : dossier non-repo → work tree git + premier commit,
+        // puis attaché (remote add + push) sur un bare de TEST ; idempotent au
+        // rejeu (déjà repo + remote → aucun 2e commit, aucune erreur).
+        // Identité git isolée : jamais la config utilisateur réelle.
+        let _iso = crate::git::test_helpers::IsolatedGitConfig::new(
+            "[user]\n name = Pilot Test\n email = pilot-test@example.com\n",
+        );
+        let work = std::env::temp_dir().join(format!("pilot-gds-wrk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).unwrap();
+        let work = work.to_string_lossy().to_string();
+        std::fs::write(std::path::Path::new(&work).join("main.rs"), "fn main() {}\n").unwrap();
+
+        let bare = std::env::temp_dir().join(format!("pilot-gds-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        let bare = bare.to_string_lossy().to_string();
+        crate::git::git_init_bare(&bare).unwrap();
+
+        // 1. invariant : non-repo → initialisé avec premier commit.
+        assert!(!crate::git::git_is_repo(&work));
+        assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
+        assert!(crate::git::git_is_repo(&work));
+
+        // 2. attaché sans erreur (remote add + push).
+        let branch = git_current_branch(&work);
+        git_remote_add(&work, "gds", &bare).unwrap();
+        git_push(&work, "gds", &branch).unwrap();
+
+        // 3. idempotence : rejouer init + remote + push ne crée aucun 2e commit.
+        assert!(!ensure_git_repo_with_initial_commit(&work).unwrap());
+        git_remote_add(&work, "gds", &bare).unwrap();
+        git_push(&work, "gds", &branch).unwrap();
+        let count = crate::run_captured(
+            "git",
+            &["-C", &work, "rev-list", "--count", "HEAD"],
+            Duration::from_secs(3),
+        );
+        assert_eq!(count.trim(), "1", "aucun 2e commit attendu");
+        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&work));
+        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&bare));
+    }
+
+    #[test]
+    fn partial_state_cleanup_removes_bare_after_failed_attach() {
+        // Task 5.3 : un échec d'attache (remote add / push) doit retirer le
+        // bare serveur créé → pas d'état « à moitié attaché » (remove_bare,
+        // pattern de add_project_to_gds). Purement local (tempdir).
+        let local = std::env::temp_dir().join(format!("pilot-gds-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&local);
+        std::fs::create_dir_all(crate::gds_git::repos_dir(&local.to_string_lossy())).unwrap();
+        let bare = crate::gds_git::repo_bare_path(&local.to_string_lossy(), "proj");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert!(bare.exists());
+        // Nettoyage propre + idempotent (absent → ok, comme sur un second essai).
+        crate::gds_git::remove_bare(&local.to_string_lossy(), "proj").unwrap();
+        assert!(!bare.exists());
+        crate::gds_git::remove_bare(&local.to_string_lossy(), "proj").unwrap();
+        let _ = std::fs::remove_dir_all(&local);
     }
 }

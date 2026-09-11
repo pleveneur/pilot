@@ -150,6 +150,247 @@ pub fn git_init(cwd: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Nom d'utilisateur git configuré (local ou global), vide si absent. Utilisé
+/// par l'initialisation automatique GDS pour vérifier l'identité AVANT de
+/// committer (message clair au lieu d'une erreur git brute).
+pub fn git_config_user_name(cwd: &str) -> String {
+    run_captured("git", &["-C", cwd, "config", "user.name"], Duration::from_secs(3))
+        .trim()
+        .to_string()
+}
+
+/// Email git configuré (local ou global), vide si absent.
+pub fn git_config_user_email(cwd: &str) -> String {
+    run_captured("git", &["-C", cwd, "config", "user.email"], Duration::from_secs(3))
+        .trim()
+        .to_string()
+}
+
+/// Vérifie que l'identité git (user.name/email local ou global) est configurée.
+/// Échoue avec un message CLAIR (guidant l'utilisateur) plutôt qu'une erreur
+/// git brute `Committer identity unknown` si elle est absente ou incomplète.
+pub fn check_git_identity(cwd: &str) -> Result<(), String> {
+    let name = git_config_user_name(cwd);
+    let email = git_config_user_email(cwd);
+    match (name.is_empty(), email.is_empty()) {
+        (true, true) => Err(
+            "Identité git non configurée : définissez `git config user.name` et `git config user.email`, puis réessayez."
+                .to_string(),
+        ),
+        (true, false) => Err("Identité git incomplète : `git config user.name` est manquant.".to_string()),
+        (false, true) => Err("Identité git incomplète : `git config user.email` est manquant.".to_string()),
+        (false, false) => Ok(()),
+    }
+}
+
+/// Stage tous les changements (`git add -A`). `git add` ne produit aucune sortie
+/// sur succès → on vérifie le code de sortie (et le stderr pour révéler la cause).
+pub fn git_add_all(cwd: &str) -> Result<(), String> {
+    let (_, stderr, ok) =
+        crate::run_captured_full("git", &["-C", cwd, "add", "-A"], Duration::from_secs(60));
+    if !ok {
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            "git add a échoué".to_string()
+        } else {
+            format!("git add a échoué: {}", detail)
+        });
+    }
+    Ok(())
+}
+
+/// Crée un commit (`git commit -m <msg>`). Retourne `true` si un commit a été
+/// créé, `false` s'il n'y avait rien à committer (dépôt vide / arbre identique
+/// à HEAD) — pas une erreur. `git commit` sans changement se termine avec un
+/// code non-nul mais n'est pas un échec : on ne le traite comme erreur que si
+/// le stderr contient une cause réelle (ex: identité manquante).
+pub fn git_commit(cwd: &str, msg: &str) -> Result<bool, String> {
+    let (out, stderr, ok) =
+        crate::run_captured_full("git", &["-C", cwd, "commit", "-m", msg], Duration::from_secs(60));
+    let combined = format!("{} {}", out, stderr);
+    // Rien à committer (dépôt vide ou working tree propre) : pas une erreur.
+    if !ok {
+        if combined.contains("nothing to commit") || combined.contains("no changes added to commit") {
+            return Ok(false);
+        }
+        let detail = stderr.trim();
+        return Err(if detail.is_empty() {
+            "git commit a échoué".to_string()
+        } else {
+            format!("git commit a échoué: {}", detail)
+        });
+    }
+    Ok(true)
+}
+
+/// Ensure qu'un dossier est un dépôt Git local avec un premier commit.
+///
+/// - Si `cwd` est DÉJÀ un work tree Git (`git_is_repo`), ne fait rien et
+///   retourne `false` (idempotent).
+/// - Sinon : `git init`, vérifie l'identité git (message CLAIR si absente,
+///   plutôt qu'une erreur git brute), `git add -A`, `git commit -m
+///   "initial commit"`. Un dépôt vide (aucun fichier) est géré (le commit
+///   renvoie `false`, pas une erreur).
+///
+/// Retourne `true` si l'initialisation + premier commit ont eu lieu, `false`
+/// s'il s'agissait déjà d'un dépôt.
+pub fn ensure_git_repo_with_initial_commit(cwd: &str) -> Result<bool, String> {
+    if git_is_repo(cwd) {
+        return Ok(false);
+    }
+    git_init(cwd)?;
+    check_git_identity(cwd)?;
+    git_add_all(cwd)?;
+    git_commit(cwd, "initial commit")?;
+    Ok(true)
+}
+
+#[cfg(test)]
+pub(crate) mod test_helpers {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, MutexGuard};
+
+    // L'environnement git est process-wide : on SÉRIE les tests qui isolent la
+    // config git globale via un mutex pour éviter les courses entre tests
+    // parallèles. Les seuls tests exécutant des sous-processus git du crate
+    // acquièrent ce verrou (aucun autre module ne lance git dans ses tests).
+    static GIT_ENV_LOCK: Mutex<()> = Mutex::new(());
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Guard posé au début des tests git : pointe la config git GLOBALE vers un
+    /// fichier temporaire jetable (retiré au Drop, même en cas de panique) pour
+    /// isoler l'identité git des TESTS sans jamais toucher à la configuration
+    /// utilisateur réelle (`~/.gitconfig` / `/etc/gitconfig`). `GIT_CONFIG_NOSYSTEM`
+    /// désactive la config système. Réutilisable depuis gds.rs (pub(crate)).
+    pub(crate) struct IsolatedGitConfig {
+        _lock: MutexGuard<'static, ()>,
+        marker: PathBuf,
+    }
+
+    impl IsolatedGitConfig {
+        /// `global_config` : contenu de la config git globale temporaire.
+        /// Avec identité → `"[user]\n name = Test\n email = test@example.com\n"`.
+        /// Vide (`""`) → AUCUNE identité (test d'échec clair).
+        pub(crate) fn new(global_config: &str) -> Self {
+            let _lock = GIT_ENV_LOCK.lock().unwrap();
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let marker = std::env::temp_dir().join(format!(
+                "pilot-git-iso-{}-{}",
+                std::process::id(),
+                n
+            ));
+            let _ = std::fs::write(&marker, global_config.as_bytes());
+            std::env::set_var("GIT_CONFIG_GLOBAL", &marker);
+            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+            IsolatedGitConfig { _lock, marker }
+        }
+    }
+
+    impl Drop for IsolatedGitConfig {
+        fn drop(&mut self) {
+            std::env::remove_var("GIT_CONFIG_NOSYSTEM");
+            std::env::remove_var("GIT_CONFIG_GLOBAL");
+            let _ = std::fs::remove_file(&self.marker);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_helpers::IsolatedGitConfig;
+    use super::*;
+
+    /// Config git globale temporaire qui fournit une identité (déterministe,
+    /// indépendante de la config utilisateur).
+    fn identity_iso() -> IsolatedGitConfig {
+        IsolatedGitConfig::new("[user]\n name = Pilot Test\n email = pilot-test@example.com\n")
+    }
+
+    fn temp_work(label: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("pilot-git-{}-{}", label, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (dir.clone(), dir.to_string_lossy().to_string())
+    }
+
+    fn commit_count(cwd: &str) -> usize {
+        run_captured("git", &["-C", cwd, "rev-list", "--count", "HEAD"], Duration::from_secs(3))
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn ensure_git_repo_with_initial_commit_initializes_a_non_repo() {
+        let _iso = identity_iso();
+        let (dir, d) = temp_work("init");
+        std::fs::write(std::path::Path::new(&d).join("a.txt"), "hello").unwrap();
+        assert!(!git_is_repo(&d));
+        let res = ensure_git_repo_with_initial_commit(&d).unwrap();
+        assert!(res, "un dossier non-repo doit être initialisé");
+        assert!(git_is_repo(&d));
+        // Premier commit + fichier suivi (git add -A + commit).
+        assert_eq!(commit_count(&d), 1);
+        let ls = run_captured("git", &["-C", &d, "ls-files"], Duration::from_secs(3));
+        assert!(ls.trim().contains("a.txt"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_git_repo_with_initial_commit_is_idempotent() {
+        let _iso = identity_iso();
+        let (dir, d) = temp_work("idem");
+        std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
+        assert!(ensure_git_repo_with_initial_commit(&d).unwrap());
+        assert_eq!(commit_count(&d), 1);
+        // Rejouer sans nouveau fichier : déjà repo → false, AUCUN 2e commit.
+        assert!(!ensure_git_repo_with_initial_commit(&d).unwrap());
+        assert_eq!(commit_count(&d), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_repo_becomes_work_tree_and_attaches_to_bare() {
+        // Task 1 : invariant — dossier non-repo → work tree + premier commit,
+        // puis attaché (remote add + push) sur un bare de TEST sans erreur.
+        let _iso = identity_iso();
+        let (wd, work) = temp_work("attach");
+        std::fs::write(std::path::Path::new(&work).join("app.txt"), "code").unwrap();
+        assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
+
+        let bare = std::env::temp_dir().join(format!("pilot-git-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        git_init_bare(&bare.to_string_lossy()).unwrap();
+        let branch = git_current_branch(&work);
+        assert!(!branch.is_empty() && branch != "HEAD");
+        git_remote_add(&work, "gds", &bare.to_string_lossy()).unwrap();
+        git_push(&work, "gds", &branch).unwrap();
+        // Le bare de test contient bien le commit initial.
+        let log = run_captured("git", &["-C", &bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
+        assert!(log.contains("initial commit"));
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn ensure_git_repo_fails_with_clear_message_when_identity_missing() {
+        // Task 4 : identité git absente → échec avec message CLAIR (pas une
+        // erreur git brute) et AUCUN état cassé.
+        let _iso = IsolatedGitConfig::new(""); // config globale vide → aucune identité
+        let (dir, d) = temp_work("identity");
+        std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
+        let res = ensure_git_repo_with_initial_commit(&d);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("Identité git non configurée"), "message clair attendu, obtenu: {}", err);
+        assert!(!err.contains("Committer identity unknown"), "pas d'erreur git brute: {}", err);
+        // Pas d'état cassé : git init a eu lieu, le dossier reste un work tree valide.
+        assert!(git_is_repo(&d));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Résultat de `git_status` : `is_repo` (faux → pas un work tree Git), et la map
 /// path → code porcelain v1 (`M`, `A`, `D`, `??`, …) pour les badges explorateur.
 #[derive(serde::Serialize)]

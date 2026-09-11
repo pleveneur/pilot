@@ -74,8 +74,10 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         }
         if !git::git_is_repo(&dest_str) {
             // (a) Dossier cible présent mais pas un work tree Git : l'initialiser
-            // puis connecter au remote gds (au lieu de git_fetch qui échoue).
-            git::git_init(&dest_str)?;
+            // avec un premier commit via l'helper partagé (même gestion identité +
+            // message clair que l'ajout GDS), puis connecter au remote gds (au lieu
+            // de git_fetch qui échoue).
+            git::ensure_git_repo_with_initial_commit(&dest_str)?;
             git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
             let _ = git::git_fetch(&dest_str, GDS_REMOTE, &branch);
             let _ = git::git_pull(&dest_str, GDS_REMOTE, &branch);
@@ -109,6 +111,7 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         "action": action,
         "lock": lock,
         "tracking": tracking,
+        "initialized": action == "initialized",
     }))
 }
 
