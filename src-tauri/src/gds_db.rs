@@ -286,7 +286,7 @@ pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Valu
             (SELECT u.email FROM project_members pm \
                JOIN users u ON u.id = pm.user_id \
               WHERE pm.project_id = g.project_id \
-              ORDER BY pm.id LIMIT 1) AS email \
+              ORDER BY pm.created_at LIMIT 1) AS email \
          FROM git_repos g \
          JOIN projects p ON p.id = g.project_id \
          ORDER BY g.id",
