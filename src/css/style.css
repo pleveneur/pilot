@@ -1085,13 +1085,15 @@ body.theme-light.theme-tokyo-day {
   text-align: center;
   border-radius: var(--radius-xs);
   font-size: 13px;
+  color: var(--text-muted);
   background: none;
   border: none;
-  opacity: 0;
-  transition: opacity var(--transition-fast), background var(--transition-fast);
+  opacity: 1;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 .open-project-item:hover .open-project-lock { opacity: 1; }
-.open-project-lock:hover { background: var(--surface-3); }
+.open-project-lock:hover { background: var(--surface-3); color: var(--accent); }
 
 /* --- File Tree --- */
 #file-tree {
