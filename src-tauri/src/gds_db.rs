@@ -274,10 +274,22 @@ pub(crate) async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value
         .collect())
 }
 
-/// Liste les dépôts git (id, project_id, path_on_server, bare_path).
+/// Liste les dépôts git (id, project_id, path_on_server, bare_path, name,
+/// email). Jointe la table `projects` pour remonter le nom LISIBLE du projet
+/// (affiché dans la modale « Ajouter un projet depuis le GDS ») et l'email
+/// d'identité de son membre (réutilisé par gds_clone_repo / gds_add_project).
+/// Les champs initiaux (id, project_id, path_on_server, bare_path) sont
+/// conservés ADDITIF pour ne pas casser le rendu existant de `src/js/gds.js`.
 pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
-        "SELECT id, project_id, path_on_server, bare_path FROM git_repos ORDER BY id",
+        "SELECT g.id, g.project_id, g.path_on_server, g.bare_path, p.name, \
+            (SELECT u.email FROM project_members pm \
+               JOIN users u ON u.id = pm.user_id \
+              WHERE pm.project_id = g.project_id \
+              ORDER BY pm.id LIMIT 1) AS email \
+         FROM git_repos g \
+         JOIN projects p ON p.id = g.project_id \
+         ORDER BY g.id",
     )
     .fetch_all(pool)
     .await
@@ -285,11 +297,14 @@ pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Valu
     Ok(rows
         .iter()
         .map(|r| {
+            let email: Option<String> = r.get("email");
             serde_json::json!({
                 "id": r.get::<i64, _>("id"),
                 "project_id": r.get::<i64, _>("project_id"),
                 "path_on_server": r.get::<String, _>("path_on_server"),
                 "bare_path": r.get::<String, _>("bare_path"),
+                "name": r.get::<String, _>("name"),
+                "email": email.unwrap_or_default(),
             })
         })
         .collect())

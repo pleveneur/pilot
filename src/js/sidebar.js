@@ -164,6 +164,7 @@ class Sidebar {
     this.btnOpen = document.getElementById("btn-open-project");
     this.dropdown = document.getElementById("projects-dropdown");
     this.ddNewProject = document.getElementById("dd-new-project");
+    this.ddAddGdsProject = document.getElementById("dd-add-gds-project");
     this.ddRecentList = document.getElementById("dd-recent-list");
     this.openProjectsBar = document.getElementById("open-projects-bar");
     this.ddCloseProject = document.getElementById("dd-close-project");
@@ -238,6 +239,17 @@ class Sidebar {
     this.ddNewProject.addEventListener("click", () => {
       this._hideProjectsDropdown();
       this.openProject();
+    });
+
+    // Dropdown : Ajouter un projet depuis le GDS (modale chargée à la demande)
+    this.ddAddGdsProject.addEventListener("click", async () => {
+      this._hideProjectsDropdown();
+      try {
+        const { openProjectFromGds } = await import("./gds-menu.js");
+        await openProjectFromGds(this);
+      } catch (e) {
+        console.error("Erreur ouverture modale « Ajouter un projet depuis le GDS » :", e);
+      }
     });
 
     // Dropdown : Fermer le projet

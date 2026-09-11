@@ -20,7 +20,22 @@
 > (3) **Bandeau connecté fiable** — commande `gds_connection_status(project)`
 > (`connected` | `error` | `not_configured`, reconnexion effective + dépôt bare
 > valide + remote `gds`), sidebar « - (GDS ✓) » / « - (GDS ✕) » via
-> `gds-status.js` (fail-open, `gds_enabled` respecté).
+> `gds_status.js` (fail-open, `gds_enabled` respecté) ;
+> (4) **Redessin UX (écran-état-machine, R1–R5)** — onglet GDS réécrit : badge
+> d'état « Connecté / En attente / À configurer » (`gds_connection_status`),
+> **Identité GLOBALE** (email + nom git) saisie une seule fois, pré-remplie
+> partout (`gds_identity_prefs` / `gds_save_identity`, `~/.pilot/gds_secrets.json`
+> 0600), plus aucun champ email dans l'interface simple, plus aucun
+> `window.prompt` de nom git ; étape « Connecter un serveur GDS » (réutiliser un
+> serveur mémorisé OU nouveau) → « Activer GDS » (`gds_provision`, email admin =
+> identité globale) ; badge « ✅ Déjà ajouté » + bouton d'ajout masqué quand
+> `on_server` (`gds_connection_status → on_server`) ; état connecté compact
+> (synchro, verrou/relâcher, retirer avec confirmation) ; bloc « ▶ Avancé »
+> replié (SSH, listes, purge, config en lecture seule) masqué tant que rien de
+> provisionné ; **auto-provisionnement background** à l'ouverture du projet
+> (`gds_auto_provision` → `auto_provision_pool`, fail-open, jamais bloquant,
+> n'écrase jamais un projet déjà lié) ; R5 pleine largeur + multi-colonnes
+> (`gds-cols`).
 >
 > **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
@@ -327,6 +342,31 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - **Modules** : `gds.rs`, `gds_db.rs` (table `users`), `gds_git.rs` (autorisations clefs).
 - **Critère de fin** : deux devs avec deux emails se connectent et voient le
   même ensemble de projets.
+
+### 3.4 Ajouter un projet depuis le GDS (menu projet)
+
+- **Objectif** : enrichir le menu d'ajout de projet — l'entrée « Nouveau projet »
+  devient « Ajouter ou créer un projet », et une nouvelle entrée
+  « Ajouter un projet depuis le GDS » ouvre une **modale listant les dépôts** du
+  serveur (`gds_list_git_repos`, enrichi : `name` lisible, `email`, `local_exists`,
+  `local_path`).
+- **Action a — Ouvrir un nouveau projet en local** : `gds_clone_repo(project,
+  repo_name)` clone le dépôt dans `<gds_local_dir>/<repo_name>`, écrit le
+  `.pilot/gds.json` local (même serveur/identité, `gds_remote_url`), l'enregistre
+  auprès du serveur via `add_project_to_gds` (idempotent, fail-open : ne supprime
+  **jamais** le bare serveur ni un worktree existant), puis ouvre le projet et le
+  connecte automatiquement au GDS (remote `gds`, clef SSH via `ensure_poste_key`).
+- **Action b — Ouvrir normalement un déjà en local** : si `local_exists` est vrai,
+  ouvre le clonage local (`local_path`) puis **propose une synchronisation**
+  automatique (`gds_sync_project`). L'action est désactivée sinon (message explicatif).
+- **GDS non provisionné / non connecté** : la modale s'affiche en **lecture** avec
+  un message clair (orientation vers l'onglet 🌐 GDS) — jamais de crash.
+- **Modules** : `gds.rs` (`gds_clone_repo`, `gds_list_git_repos`), `gds_db.rs`
+  (`list_git_repos` + join `projects` pour `name`/`email`), `src/js/gds-menu.js`
+  (modale lazy), `sidebar.js` (entrée du menu).
+- **Critère de fin** : depuis le menu projet, ajouter un dépôt distant GDS en
+  local (clone + connexion auto + remote `gds`) ; ré-ouvrir un dépôt déjà cloné
+  localement avec synchro optionnelle.
 
 ---
 

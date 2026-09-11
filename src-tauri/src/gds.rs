@@ -7,7 +7,7 @@
 use crate::gds_db;
 use crate::gds_git;
 use crate::gds_ssh;
-use crate::git::{ensure_git_repo_with_identity, git_config_user_email, git_config_user_name, git_current_branch, git_push, git_remote_add, git_remote_remove};
+use crate::git::{ensure_git_repo_with_identity, git_clone, git_config_user_email, git_config_user_name, git_current_branch, git_has_remote, git_is_repo, git_push, git_remote_add, git_remote_remove};
 use crate::web_auth::WebAuth;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -79,6 +79,14 @@ pub(crate) struct GdsSecrets {
     /// Nom git mémorisé (identité git auto, GDS). Vide = jamais saisi.
     #[serde(default)]
     pub git_name: String,
+    /// Email d'identité GLOBAL de l'utilisateur (saisi UNE SEULE fois, puis
+    /// pré-rempli dans tous les champs email de l'interface, et utilisé comme
+    /// admin email à la provision automatique). Vide = jamais saisi. Non
+    /// sensible (pas un secret) mais vit dans le fichier 0600. Migration
+    /// tolérante serde default : les anciens fichiers sans ce champ le lisent
+    /// comme vide.
+    #[serde(default)]
+    pub identity_email: String,
 }
 
 /// Chemin du fichier de secrets (`~/.pilot/gds_secrets.json`).
@@ -267,6 +275,27 @@ pub(crate) fn memorized_git_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
+/// Email d'identité GLOBAL mémorisé (vide si jamais saisi). Utilisé pour
+/// pré-remplir tous les champs email de l'UI (identité unique saisie une fois)
+/// et comme admin email à la provision automatique.
+pub(crate) fn global_identity_email() -> Option<String> {
+    read_gds_secrets()
+        .ok()
+        .map(|s| s.identity_email.trim().to_string())
+        .filter(|e| !e.is_empty())
+}
+
+/// Résout l'email à utiliser pour une opération GDS : l'email fourni par
+/// l'appelant PRIME, sinon repli sur l'identité globale mémorisée. Pure.
+pub(crate) fn effective_identity_email(email: &str) -> String {
+    let e = email.trim();
+    if !e.is_empty() {
+        e.to_string()
+    } else {
+        global_identity_email().unwrap_or_default()
+    }
+}
+
 /// Résout le NOM GIT à utiliser pour configurer l'identité git locale d'un
 /// projet GDS : le nom fourni par l'UI (saisi UNE fois par l'utilisateur) PRIME,
 /// sinon le nom mémorisé. Échoue avec un message clair si le nom est requis et
@@ -314,9 +343,36 @@ pub fn gds_git_identity_prefs(project: String) -> Result<Value, String> {
 
 /// Commande Tauri : mémorise le nom git de l'utilisateur (saisi une seule fois)
 /// pour pré-remplissage/désactivation des demandes suivantes. Non sensible.
+/// (Conservée pour rétrocompat ; l'UI utilise désormais gds_save_identity.)
 #[tauri::command]
 pub fn gds_save_git_name(name: String) -> Result<(), String> {
     memorize_git_name(&name)
+}
+
+/// Commande Tauri : état de l'identité GLOBALE (email + nom git), SANS aucun
+/// secret. Sert à pré-remplir tous les champs email (identité saisie une seule
+/// fois) et le nom git. Retourne `{ email, git_name }` (champ vide = jamais
+/// saisi).
+#[tauri::command]
+pub fn gds_identity_prefs() -> Result<Value, String> {
+    let secrets = read_gds_secrets()?;
+    Ok(json!({
+        "email": secrets.identity_email.trim().to_string(),
+        "git_name": secrets.git_name.trim().to_string(),
+    }))
+}
+
+/// Commande Tauri : mémorise l'identité GLOBALE de l'utilisateur (email + nom
+/// git, saisis UNE seule fois). Non sensible : vivent dans gds_secrets.json
+/// (0600), jamais dans .pilot/gds.json. Ne touche JAMAIS aux mots de passe.
+#[tauri::command]
+pub fn gds_save_identity(email: String, git_name: String) -> Result<(), String> {
+    let mut secrets = read_gds_secrets()?;
+    secrets.identity_email = email.trim().to_string();
+    if !git_name.trim().is_empty() {
+        secrets.git_name = git_name.trim().to_string();
+    }
+    write_gds_secrets(&secrets)
 }
 
 /// Mémorise les mots de passe d'un serveur GDS (indépendamment du projet).
@@ -939,6 +995,97 @@ pub(crate) async fn restore_pool_for_project(project: &str) -> Result<PgPool, St
     Ok(pool)
 }
 
+/// Provision automatique du GDS d'un projet à l'ouverture (R1). Fail-open et
+/// idempotent — ne bloque JAMAIS l'ouverture, n'écrase jamais un projet déjà
+/// relié. Ordre :
+///  - `.pilot/gds.json` absent ou non activé → Ok(None) (rien à faire).
+///  - config activée avec hôte/utilisateur → restore_pool_for_project.
+///  - config activée mais incomplète (hôte vide) → serveur VALIDÉ mémorisé +
+///    gds_apply_server (copie les mdp) + provision_db (admin email = identité
+///    globale). L'ajout du PROJET (bare + remote + push) reste MANUEL 1re fois.
+pub(crate) async fn auto_provision_pool(project: &str) -> Result<Option<PgPool>, String> {
+    let cfg = match read_gds_config(project) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    if !cfg.enabled {
+        return Ok(None);
+    }
+    if !cfg.db_host.is_empty() && !cfg.db_user.is_empty() {
+        return match restore_pool_for_project(project).await {
+            Ok(p) => Ok(Some(p)),
+            Err(e) => Err(format!(
+                "Reconnexion GDS impossible pour « {} » : {}",
+                project_name(project),
+                e
+            )),
+        };
+    }
+    if cfg.db_host.is_empty() {
+        for srv in list_saved_servers() {
+            let host = srv["host"].as_str().unwrap_or("").to_string();
+            let port = srv["port"].as_str().unwrap_or("5432").to_string();
+            let user = srv["user"].as_str().unwrap_or("").to_string();
+            if host.is_empty() || user.is_empty() {
+                continue;
+            }
+            let email = effective_identity_email("");
+            if email.is_empty() {
+                continue;
+            }
+            if let Err(_e) = gds_apply_server(
+                project.to_string(), host.clone(), port.clone(), user.clone(), email.clone(),
+            ) {
+                continue;
+            }
+            let secrets = read_gds_secrets()?;
+            let stored = secrets
+                .projects
+                .get(&project_name(project))
+                .cloned()
+                .unwrap_or_default();
+            let db_password = stored.db_password.clone().unwrap_or_default();
+            let admin_password = stored.admin_password.clone().unwrap_or_default();
+            if db_password.is_empty() || admin_password.is_empty() {
+                continue;
+            }
+            let db_addr = format!(
+                "postgres://{}:{}@{}:{}/postgres",
+                user,
+                url_encode(&db_password),
+                host,
+                port
+            );
+            let pool = provision_db(&db_addr, &user, &db_password, &email, &admin_password)
+                .await?;
+            return Ok(Some(pool));
+        }
+        return Err("Aucun serveur GDS mémorisé et validé — configurez-le une première fois dans l'onglet GDS.".to_string());
+    }
+    Ok(None)
+}
+
+/// Commande Tauri : provision automatique (R1). Reconnecte le pool ou provisionne
+/// depuis un serveur mémorisé. Fail-open, ne révèle aucun secret, stocke le
+/// pool dans AppState. Sert aussi de point d'appel pour l'UI (« Activer GDS »).
+#[tauri::command]
+pub async fn gds_auto_provision(
+    state: State<'_, AppState>,
+    project: String,
+) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Ok(json!({ "ok": true, "provisioned": false, "skipped": "global_disabled" }));
+    }
+    match auto_provision_pool(&project).await {
+        Ok(Some(pool)) => {
+            *state.gds_pool.lock().unwrap() = Some(pool);
+            Ok(json!({ "ok": true, "provisioned": true }))
+        }
+        Ok(None) => Ok(json!({ "ok": true, "provisioned": false, "skipped": "not_activated" })),
+        Err(e) => Err(e),
+    }
+}
+
 /// Commande Tauri : état des secrets d'un projet (SANS révéler les valeurs).
 /// L'UI l'utilise pour savoir si les champs mot de passe doivent être
 /// ressaisis ou pré-remplis (masqués).
@@ -1063,15 +1210,151 @@ pub async fn gds_list_projects(state: State<'_, AppState>) -> Result<Vec<Value>,
 }
 
 /// Commande Tauri : liste les dépôts git (bare) enregistrés sur le serveur GDS.
+/// Retour ADDITIF : en plus de id/project_id/path_on_server/bare_path, remonte
+/// `name` (nom lisible via join `projects`), `email` (identité du membre),
+/// `local_exists` (un clonage local `<gds_local_dir>/<name>` existe-t-il ?) et
+/// `local_path` (chemin du clonage local, pour l'action « Ouvrir normalement un
+/// déjà en local »). Le dossier local est lu depuis la config du projet courant
+/// (paramètre optionnel) avec repli sur le défaut — aucune I/O de clone ici.
 #[tauri::command]
-pub async fn gds_list_git_repos(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
+pub async fn gds_list_git_repos(
+    state: State<'_, AppState>,
+    project: Option<String>,
+) -> Result<Vec<Value>, String> {
     let pool = state
         .gds_pool
         .lock()
         .unwrap()
         .clone()
         .ok_or("GDS non provisionné")?;
-    gds_db::list_git_repos(&pool).await
+    // Dossier local où sont clonés les projets GDS (config du projet courant,
+    // sinon défaut) — détection de présence locale sans aucun clone.
+    let local_dir = project
+        .as_deref()
+        .and_then(|p| read_gds_config(p).ok())
+        .and_then(|c| c.gds_local_dir)
+        .unwrap_or_else(default_gds_local_dir);
+    // Email d'identité de repli (config du projet courant) si aucun membre en base.
+    let cfg_email = project
+        .as_deref()
+        .and_then(|p| read_gds_config(p).ok())
+        .map(|c| c.identity_email)
+        .unwrap_or_default();
+    let mut repos = gds_db::list_git_repos(&pool).await?;
+    for r in repos.iter_mut() {
+        let name = r["name"].as_str().unwrap_or("").to_string();
+        let local_path = std::path::Path::new(&local_dir)
+            .join(&name)
+            .to_string_lossy()
+            .to_string();
+        let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
+        r["local_exists"] = json!(local_exists);
+        r["local_path"] = json!(local_path);
+        if r["email"].as_str().unwrap_or("").is_empty() && !cfg_email.is_empty() {
+            r["email"] = json!(cfg_email);
+        }
+    }
+    Ok(repos)
+}
+
+/// Commande Tauri : clone un dépôt GDS en local, l'ouvre comme projet et le
+/// connecte automatiquement au GDS. `project` = projet courant de travail
+/// (fournit l'identité email + `gds_local_dir`) ; `repo_name` = dépôt GDS à
+/// cloner (ex: `myproj`) ; `local_dir_override` (optionnel) force un dossier de
+/// clonage. Retourne `{ path, already_existed }`.
+///
+/// Comportement : (1) config GDS + pool (repli `restore_pool_for_project`) ;
+/// (2) `dest = <gds_local_dir>/<repo_name>` ; (3) clone si absent (sinon, si le
+/// dossier existe déjà et est un dépôt Git, pas de clone ; le remote `gds` est
+/// ajouté si absent) ; (4) écrit le `.pilot/gds.json` du clone local (même
+/// serveur/identité que le projet courant) puis l'enregistre via
+/// `add_project_to_gds` (idempotent : associe le membre + remote + push).
+/// Fail-open : on ne supprime JAMAIS le bare serveur ni un worktree local existant.
+#[tauri::command]
+pub async fn gds_clone_repo(
+    state: State<'_, AppState>,
+    project: String,
+    repo_name: String,
+    local_dir_override: Option<String>,
+) -> Result<Value, String> {
+    let name = gds_git::validate_project_name(&repo_name)?;
+    // Config GDS du projet courant (email + dossier local + serveur SSH).
+    let cfg = read_gds_config(&project)?;
+    if !cfg.enabled {
+        return Err("GDS non activé pour ce projet".to_string());
+    }
+    let email = effective_identity_email(&cfg.identity_email);
+    if email.is_empty() {
+        return Err("Identité email manquante — configurez le bloc « Identité » du GDS.".to_string());
+    }
+    let local_dir = local_dir_override
+        .filter(|d| !d.trim().is_empty())
+        .or_else(|| cfg.gds_local_dir.clone())
+        .unwrap_or_else(default_gds_local_dir);
+    let dest = std::path::Path::new(&local_dir).join(&name);
+    let dest_str = dest.to_string_lossy().to_string();
+    let url = gds_remote_url(&cfg, &name);
+
+    // Pool : repli sur restore_pool_for_project si le pool AppState est vide.
+    // Le clone sort du garde Mutex AVANT l'await (garde non-Send à ne pas porter).
+    let pool_opt = state.gds_pool.lock().unwrap().clone();
+    let pool = match pool_opt {
+        Some(p) => p,
+        None => restore_pool_for_project(&project)
+            .await
+            .map_err(|_| "GDS non provisionné — provisionnez-le d'abord dans l'onglet GDS".to_string())?,
+    };
+    // Phase A3 : la clef du poste doit être enregistrée pour le remote SSH.
+    gds_ssh::ensure_poste_key(&pool, &email).await?;
+
+    // Opérations git bloquantes (clone / remote add) → spawn_blocking.
+    let url2 = url.clone();
+    let dest2 = dest_str.clone();
+    let already_existed = tokio::task::spawn_blocking(move || {
+        let existed = std::path::Path::new(&dest2).exists();
+        if !existed {
+            git_clone(&url2, &dest2)?;
+        } else if !git_is_repo(&dest2) {
+            let msg = "Le dossier local « ".to_string()
+                + &dest2
+                + " » existe mais n'est pas un dépôt Git — utilisez l'action « Ouvrir normalement un déjà en local » ou retirez-le manuellement.";
+            return Err(msg);
+        }
+        // Le remote dédié `gds` est garanti (le clone crée `origin`).
+        if !git_has_remote(&dest2, "gds") {
+            git_remote_add(&dest2, "gds", &url2)?;
+        }
+        Ok::<_, String>(existed)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Le clone local doit être « connecté au GDS » : lui écrire sa propre config
+    // `.pilot/gds.json` (même serveur/identité/dossier que le projet courant),
+    // nécessaire pour `add_project_to_gds` (qui exige une config activée) et pour
+    // que les sync/push suivants fonctionnent depuis le clone.
+    let dest_cfg = GdsConfig {
+        enabled: true,
+        db_host: cfg.db_host.clone(),
+        db_port: cfg.db_port.clone(),
+        db_user: cfg.db_user.clone(),
+        identity_email: email.clone(),
+        server_url: cfg.server_url.clone(),
+        gds_local_dir: Some(local_dir.clone()),
+        ssh_host: cfg.ssh_host.clone(),
+        urgent_email: cfg.urgent_email.clone(),
+    };
+    write_gds_config(&dest_str, &dest_cfg)?;
+
+    // Enregistrer la copie locale auprès du serveur (idempotent, fail-open) :
+    // bare/projet déjà présents sur le serveur → réutilisés, simple assoc. membre
+    // + remote + push. Ne touche JAMAIS au bare serveur ni au worktree local.
+    add_project_to_gds(&pool, &dest_str, &email, None).await?;
+
+    Ok(json!({
+        "path": dest_str,
+        "already_existed": already_existed,
+    }))
 }
 
 /// Retire un projet du GDS (Évolution 2). Toujours : retire le remote `gds`
@@ -1291,7 +1574,7 @@ pub async fn gds_connection_status(
         .map(|p| !p.is_empty())
         .unwrap_or(false);
     // Pool joignable : réutilise le pool AppState et un cache court (fail-open).
-    let pool_ok = pool_is_connected(state, &project, has_pw).await;
+    let pool_ok = pool_is_connected(state.clone(), &project, has_pw).await;
     // Dépôt bare valide sur le serveur GDS.
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let name = project_name(&project);
@@ -1303,7 +1586,19 @@ pub async fn gds_connection_status(
         .unwrap_or(false);
     let status =
         connection_status_from_flags(true, cfg.enabled, has_pw, pool_ok, bare_ok, remote_ok);
-    Ok(json!({ "status": status }))
+    // Présence du projet sur le serveur GDS (on_server) : R3 — quand déjà
+    // ajouté, on ne permet plus de l'ajouter (l'UI masque le bouton). Requiert
+    // un pool joignable (sinon fail-open : false). Aucun secret révélé.
+    let mut on_server = false;
+    if pool_ok {
+        let pool = state.gds_pool.lock().unwrap().clone();
+        if let Some(p) = pool {
+            if let Ok(id) = gds_db::get_project_by_name(&p, &name).await {
+                on_server = id.is_some();
+            }
+        }
+    }
+    Ok(json!({ "status": status, "on_server": on_server }))
 }
 
 #[cfg(test)]
@@ -1628,6 +1923,59 @@ mod tests {
         let err = effective_git_name(&None).unwrap_err();
         assert!(err.contains("Nom git requis"), "message clair attendu: {}", err);
         assert!(!err.contains("git config --global"), "pas de commande git à taper");
+    }
+
+    #[test]
+    fn global_identity_saved_and_read_without_secrets() {
+        // Identité globale (email + nom git) sauvegardée puis relue, sans
+        // aucun mot de passe. Secrets isolés dans un fichier temportaire.
+        let _guard = TestGdsSecretsGuard::new();
+        gds_save_identity(" dev@kalico ".to_string(), "Alice".to_string()).unwrap();
+        let v = gds_identity_prefs().unwrap();
+        assert_eq!(v["email"], "dev@kalico");
+        assert_eq!(v["git_name"], "Alice");
+        // Le nom git reste mémorisé (rétrocompat gds_git_identity_prefs).
+        assert_eq!(memorized_git_name().unwrap(), "Alice");
+        // Aucun mot de passe exposé / persistant.
+        assert_eq!(global_identity_email().unwrap(), "dev@kalico");
+        assert_eq!(effective_identity_email(""), "dev@kalico");
+        assert_eq!(effective_identity_email("other@x"), "other@x");
+        let content = std::fs::read_to_string(secrets_path().unwrap()).unwrap();
+        assert!(!content.contains("password"));
+    }
+
+    #[test]
+    fn auto_provision_skips_when_not_activated() {
+        // Projet sans .pilot/gds.json (ou désactivé) → Ok(None), jamais d'erreur.
+        let dir = std::env::temp_dir().join(format!("pilot-gds-autoprov-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        // Pas de config → Ok(None).
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let res = rt.block_on(crate::gds::auto_provision_pool(&project));
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_none());
+        // Config présente mais désactivée → Ok(None).
+        let mut cfg = GdsConfig {
+            enabled: false,
+            server_url: String::new(),
+            identity_email: String::new(),
+            gds_local_dir: None,
+            ssh_host: String::new(),
+            urgent_email: None,
+            db_host: String::new(),
+            db_port: String::new(),
+            db_user: String::new(),
+        };
+        let _ = write_gds_config(&project, &cfg);
+        let res = rt.block_on(crate::gds::auto_provision_pool(&project));
+        assert!(res.is_ok() && res.unwrap().is_none());
+        // Config activée mais hôte vide + aucun serveur mémorisé → erreur claire
+        // (fail-open pour l'ouverture : le hook ignore l'erreur).
+        cfg.enabled = true;
+        let _ = write_gds_config(&project, &cfg);
+        let res = rt.block_on(crate::gds::auto_provision_pool(&project));
+        assert!(res.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

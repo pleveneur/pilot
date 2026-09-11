@@ -2223,19 +2223,22 @@ pub fn run() {
                     let handle = handle.clone();
                     tauri::async_runtime::spawn(async move {
                         for proj in paths {
-                            if let Ok(gcfg) = crate::gds::read_gds_config(&proj) {
-                                if gcfg.enabled && !gcfg.db_host.is_empty() {
-                                    if let Ok(pool) = crate::gds::restore_pool_for_project(&proj).await {
-                                        let st = handle.state::<AppState>();
-                                        *st.gds_pool.lock().unwrap() = Some(pool.clone());
-                                        // Phase C1.2 : déclenchement automatique du pont
-                                        // bidirectionnel suivi SQLite↔Postgres au démarrage
-                                        // (fail-open : une erreur de suivi ne bloque pas).
-                                        let _ = crate::gds_sync::sync_tracking(&pool).await;
-                                    }
-                                    break; // pool global — une seule reconnexion suffit
-                                }
+                            // R1 : provision auto à l'ouverture (fail-open). Ne
+                            // tente rien si le projet n'est pas activé GDS.
+                            if !crate::gds::is_gds_enabled(&proj) {
+                                continue;
                             }
+                            if let Ok(Some(pool)) = crate::gds::auto_provision_pool(&proj).await {
+                                let st = handle.state::<AppState>();
+                                *st.gds_pool.lock().unwrap() = Some(pool.clone());
+                                // Phase C1.2 : déclenchement automatique du pont
+                                // bidirectionnel suivi SQLite↔Postgres au démarrage
+                                // (fail-open : une erreur de suivi ne bloque pas).
+                                let _ = crate::gds_sync::sync_tracking(&pool).await;
+                                break; // pool global — une seule reconnexion suffit
+                            }
+                            // fail-open : erreur (ou pas de serveur mémorisé) →
+                            // continue sans jamais bloquer l'ouverture.
                         }
                     });
                 }
@@ -2579,8 +2582,13 @@ pub fn run() {
             // Identité git automatique à l'ajout d'un projet GDS
             gds::gds_git_identity_prefs,
             gds::gds_save_git_name,
+            // Identité GLOBALE (R2 : email + nom git, saisie une seule fois)
+            gds::gds_identity_prefs,
+            gds::gds_save_identity,
             gds::gds_list_projects,
             gds::gds_list_git_repos,
+            // ── GDS : ajouter un projet depuis le GDS (clone → ouvrir → connecter) ──
+            gds::gds_clone_repo,
             // ── GDS Évolution 1 : mémoriser les connexions par serveur ──
             gds::gds_list_saved_servers,
             gds::gds_apply_server,
@@ -2602,6 +2610,8 @@ pub fn run() {
             gds::gds_remove_project,
             // ── GDS Évolution 3 : bandeau connecté fiable ──
             gds::gds_connection_status,
+            // ── GDS (R1) : provision automatique à l'ouverture / Activer GDS ──
+            gds::gds_auto_provision,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

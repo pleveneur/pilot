@@ -832,6 +832,95 @@ body.theme-light.theme-tokyo-day {
   color: var(--accent) !important;
 }
 
+#dd-add-gds-project {
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+}
+#dd-add-gds-project i { color: var(--text-muted); }
+
+/* Modale « Ajouter un projet depuis le GDS » (liste des dépôts + 2 actions) */
+.gds-menu-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 120;
+  animation: modal-fade-in var(--transition-normal);
+}
+.gds-menu-content {
+  background: var(--surface-floating);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+  width: 680px;
+  max-width: 92vw;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  animation: modal-pop-in var(--transition-smooth);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.gds-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.gds-menu-sub {
+  font-size: 12px;
+  color: var(--text-secondary, #a0a6b4);
+  margin-bottom: 12px;
+}
+.gds-menu-list {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+.gds-menu-item {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.gds-menu-item:last-child { border-bottom: none; }
+.gds-menu-item-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.gds-menu-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.gds-menu-state {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+}
+.gds-menu-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.gds-menu-actions .web-btn:first-child {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.gds-menu-actions .web-btn:first-child:hover { background: var(--accent-hover); }
+
 #dd-close-project {
   color: var(--danger) !important;
 }
@@ -8112,10 +8201,19 @@ body.pilot-loading *::after {
 .gds-header {
   margin-bottom: 16px;
 }
+.gds-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .gds-title {
   font-size: 20px;
   font-weight: 700;
   color: var(--text-primary, #e6e8ee);
+}
+.gds-title-row .gds-badge {
+  margin-left: 4px;
+  font-size: 12px;
 }
 .gds-subtitle {
   font-size: 12px;
@@ -8139,7 +8237,8 @@ body.pilot-loading *::after {
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
   border-radius: 10px;
   padding: 16px;
-  max-width: 640px;
+  width: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -8332,6 +8431,51 @@ body.pilot-loading *::after {
   min-height: 48px;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
+}
+
+/* === Redessin écran GDS (R1-R5) : pleine largeur + multi-colonnes + avancé === */
+.gds-warn {
+  color: #422006;
+  background: var(--warning, #fbbf24);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.gds-note-box {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.5;
+  align-self: flex-end;
+  padding-bottom: 8px;
+}
+.gds-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+}
+.gds-cols .gds-panel {
+  min-width: 0;
+}
+.gds-adv-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-primary, #e6e8ee);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+}
+.gds-adv-title i {
+  transition: transform 0.15s ease;
 }
 
 /* ================================================================

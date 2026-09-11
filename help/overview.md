@@ -238,6 +238,14 @@ type GitHub.
   Chaque projet choisit explicitement son serveur via un fichier de
   configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
   aucune configuration globale.
+- **Ajouter un projet depuis le GDS** : dans le menu **Projet**, les entrées
+  « Ajouter ou créer un projet » et « Ajouter un projet depuis le GDS »
+  permettent de rajouter une source. Cette dernière ouvre la **liste des dépôts
+  du GDS** avec deux actions : **ouvrir un nouveau projet local** (clone du
+  dépôt GDS dans votre dossier local, ouverture + connexion automatique au GDS)
+  ou, si un clonage local existe déjà, **l'ouvrir normalement puis le
+  synchroniser** automatiquement. Si le GDS n'est pas (encore) connecté pour le
+  projet courant, un message clair vous oriente vers l'onglet 🌐 GDS.
 - **Interrupteur global (Paramètres → GDS)** : un paramètre global **actif par
   défaut** permet de **couper toutes les opérations GDS** (synchronisation,
   verrous, suivi fusionné) d'un coup, indépendamment de l'activation par
@@ -247,42 +255,56 @@ type GitHub.
   les **mots de passe sont stockés hors du projet** dans un fichier protégé
   de l'utilisateur — ils ne figurent jamais dans `.pilot/gds.json`. Aucune URL à
   mot de passe n'est affichée ni demandée à nouveau après la première saisie :
-  au démarrage, Pilot se **reconnecte automatiquement** au serveur déjà
-  configuré (sans re-provisionner).
+  au démarrage, Pilot se **reconnecte automatiquement** (auto-provisionnement
+  en arrière-plan, sans jamais bloquer l'ouverture du projet) au serveur déjà
+  configuré (sans re-provisionner). L'ajout initial d'un projet au GDS reste
+  **manuel** : il n'est jamais automatisé à l'ouverture.
+- **Identité globale saisie UNE seule fois** : en haut de l'onglet GDS, un
+  bloc **Identité** recueille votre **email** (qui identifie votre compte GDS)
+  et votre **nom git**. Pré-rempli partout ensuite, plus aucun champ email
+  n'apparaît dans l'interface simple. Stockée hors projet
+  (`~/.pilot/gds_secrets.json`, permissions 0600), elle ne figure jamais dans
+  `.pilot/gds.json`.
 - **Sans activation** : le projet reste 100 % local, exactement comme
   aujourd'hui.
 - **Onglet « 🌐 GDS »** : le bouton **GDS** du panneau **Vues** (sidebar)
-  ouvre un onglet dédié, **par projet**, pour piloter le GDS :
-  - **Provisionner le serveur** (hôte, port, utilisateur dédié, mot de passe
-    dédié, email + mot de passe admin) → crée la base `pilot_gds`, les tables
-    et le premier compte admin, puis active le GDS pour le projet ;
-  - **Configurer le projet** (`.pilot/gds.json`) : activation on/off et email
-    d'identité. L'hôte/port/utilisateur PostgreSQL s'affichent en lecture seule
-    (gérés lors du provisionnement) ; l'hôte SSH est dérivé automatiquement ;
-  - **Ajouter le projet au GDS** : crée un dépôt git bare sur le serveur,
-    ajoute le remote `gds` (sans toucher à un éventuel `origin` existant) et
-    pousse la branche courante (projet déjà en Git) ;
-  - **Identité git automatique** : à l'ajout, Pilot règle automatiquement une identité git manquante, **localement** pour ce projet (jamais en global) — l'email = email du compte GDS connecté (aucune saisie), le nom demandé **une seule fois** puis mémorisé et pré-rempli ensuite ;
-  - **Consulter** la liste des projets et des dépôts git du serveur ;
-  - **Synchroniser** un dossier existant sans `.git` : Pilot l'initialise au
-    lieu d'échouer, et rappelle d'ajouter le projet au GDS si le dépôt distant
-    n'existe pas encore.
-- **Clefs SSH (Phase A3)** : la section « Clefs SSH » de l'onglet GDS gère
+  ouvre un onglet dédié, **par projet**, pour piloter le GDS. Son en-tête
+  affiche un **badge d'état** : « ● Connecté » / « ● En attente » /
+  « ○ À configurer ». Selon l'état, seuls les blocs utiles sont affichés :
+  - **À configurer / En attente** : bloc **Identité**, puis étape
+    **« Connecter un serveur GDS »** — réutiliser un **serveur mémorisé**
+    (sélecteur, mots de passe jamais affichés) ou renseigner un **nouveau
+    serveur** (hôte, port, utilisateur dédié, mot de passe dédié, mot de passe
+    admin), puis bouton **« Activer GDS »** → crée la base `pilot_gds`, les
+    tables et votre compte admin, puis active le GDS pour le projet ;
+  - **Ajouter ce projet au GDS** : une fois activé (si le projet n'est pas
+    déjà sur le serveur), crée un dépôt git bare sur le serveur, ajoute le
+    remote `gds` (sans toucher à un éventuel `origin`) et pousse la branche
+    courante. L'**identité git** (email + nom) est réglée automatiquement et
+    **localement**, depuis votre identité globale (aucune saisie) ;
+  - **Déjà sur le serveur** : badge **« ✅ Déjà ajouté »**, bouton d'ajout
+    masqué ;
+  - **Connecté** : bloc compact — statut, bouton **Synchroniser**, **Relâcher
+    le verrou**, **verrou urgent**, et **Retirer du GDS** (avec confirmation ;
+    purge serveur uniquement si cochée).
+  - **Bloc « ▶ Avancé »** (replié par défaut) : config projet en lecture
+    seule, liste des serveurs mémorisés (hôte/utilisateur seulement), liste
+    des projets/dépôts du serveur, clefs SSH et — hors connexion — retrait du
+    GDS. Masqué tant que le GDS n'est pas activé pour le projet.
+- **Clefs SSH (Phase A3)** : la section « Clefs SSH » du bloc **Avancé** gère
   automatiquement l'accès SSH au serveur (utilisateur `git` + clefs publiques
   liées aux emails) :
   - **Générer / afficher la clef du poste** (paire ed25519 créée dans `~/.ssh/`
     si absente, sans écraser une clef existante) ;
   - **Enregistrer une clef de dev** (email + clef publique) → Pilot l'ajoute à
     `authorized_keys` du serveur, liée à l'email.
-- **Synchronisation & verrous (Phase B)** : la section « Synchronisation &
-  verrous » de l'onglet GDS permet de :
-  - **Synchroniser** le projet depuis le remote `gds` (clone si absent, sinon
-    fetch/pull) et d'acquérir le **verrou global projet** (exclusif, TTL 30 min) ;
-  - **Consulter l'état du verrou** (titulaire, expiration) ;
-  - **Relâcher le verrou** en fin de travail ;
-  - **Verrou urgent** : passer outre un verrou détenu par un autre (réservé à
-    la personne désignée dans la config projet) — le projet devient « en
-    conflit potentiel » et les deux parties sont averties.
+- **Synchronisation & verrous (Phase B)** : une fois connecté, l'onglet GDS
+  permet de **Synchroniser** le projet depuis le remote `gds` (clone si
+  absent, sinon fetch/pull) et d'acquérir le **verrou global projet**
+  (exclusif, TTL 30 min), **consulter l'état du verrou** (titulaire,
+  expiration), le **Relâcher** en fin de travail, et poser un **verrou
+  urgent** (réservé à la personne désignée dans la config projet) — le projet
+  passe alors en « conflit potentiel » et les deux parties sont averties.
 - **Phase C à venir** : les tickets (suivi des demandes clients) et le suivi
   fusionné (contexte projet partagé) sont affichés comme « disponibles à la
   Phase C » — non implémentés dans cette version.
