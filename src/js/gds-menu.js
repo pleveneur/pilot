@@ -2,12 +2,22 @@
 //
 // Ouverte depuis le dropdown des projets (sidebar.js, entrée
 // « Ajouter un projet depuis le GDS »), chargée à la demande (import()
-// dynamique). Affiche la liste des dépôts du GDS et propose pour chacun :
-//   a) Ouvrir un nouveau projet en local : clone le dépôt localement
-//      (gds_clone_repo), l'ouvre comme projet et le connecte au GDS.
-//   b) Ouvrir normalement un déjà en local : si un clonage local existe
-//      (local_exists), l'ouvre et propose une synchronisation automatique
-//      (gds_sync_project).
+// dynamique). Affiche la liste des dépôts du GDS et propose pour chacun une
+// action MUTUELLEMENT EXCLUSIVE selon `r.local_exists` + `r.work_exists`
+// (refonte « un seul dossier local par projet ») :
+//   a) un PROJET DE TRAVAIL existe (`work_exists`) → « Connecter ce dossier au
+//      GDS » (gds_connect_existing sur work_path) : jamais de clone d'un doublon.
+//      Si un clone GDS redondant existe en parallèle (`local_exists`), un second
+//      bouton propose de le supprimer gds_remove_dup_worktree (confirmation +
+//      simulation/dry-run d'abord).
+//   b) sinon un clone GDS unique existe (`local_exists`, sans travail) →
+//      « Synchroniser » ce clone (dossier unique, fetch/pull sans écrasement).
+//   c) sinon → « Ramener en local » : clone le dépôt (gds_clone_repo), l'ouvre et
+//      le connecte au GDS.
+// Jamais de clone par-dessus un worktree existant, jamais d'écrasement, aucune
+// suppression destructive automatique (toujours confirm=true pour supprimer).
+// Réutilise `gds_sync_project` / `gds_clone_repo` / `gds_connect_existing` /
+// `gds_remove_dup_worktree` existants.
 // Réutilise le look de l'écran GDS (classes gds-panel / gds-*) et les helpers
 // globaux (toastSuccess/toastError, showLoading/hideLoading, refreshIcons).
 // GDS non provisionné / non connecté → modale en lecture avec message clair,
@@ -99,59 +109,162 @@ export async function openProjectFromGds(sidebar) {
 
   for (const r of repos || []) {
     const name = esc(r.name || r.path_on_server || r.bare_path || "");
-    const localExists = !!r.local_exists;
+    // Refonte « un seul dossier local par projet » : on regarde indépendamment
+    // la présence du projet de travail (work_exists) et du clone GDS (local_exists).
+    const hasLocal = !!r.local_exists;
+    const hasWork = !!r.work_exists;
+    const workPath = r.work_path || "";
+    const localPath = r.local_path || "";
+
+    // Actions MUTUELLEMENT EXCLUSIVES (refonte dossier-unique) :
+    //  a) un PROJET DE TRAVAIL existe (`work_exists`) → « Connecter ce dossier au
+    //     GDS » (gds_connect_existing sur workPath) : jamais de clone d'un doublon.
+    //     Si un clone GDS REDONDANT existe en parallèle (`local_exists`), un second
+    //     bouton propose de le supprimer avec confirmation (dry-run d'abord).
+    //  b) sinon un clone GDS unique existe (`local_exists`, sans travail) →
+    //     « Synchroniser » ce clone (dossier unique, fetch/pull sans écrasement).
+    //  c) sinon → « Ramener en local » (clone = dossier unique, jamais par-dessus
+    //     un dossier de travail).
+    const actions = [
+      {
+        act: hasWork ? "connect" : hasLocal ? "sync" : "clone",
+        label: hasWork ? "Connecter ce dossier au GDS" : hasLocal ? "Synchroniser" : "Ramener en local",
+        icon: hasWork ? "link" : hasLocal ? "refresh-cw" : "download",
+        title: hasWork
+          ? "Le projet existe déjà comme projet de travail : connecter CE dossier au GDS (dossier unique, jamais de clone d'un doublon)."
+          : hasLocal
+            ? "Ouvrir le clonage local puis synchroniser depuis le remote gds (fetch/pull, sans écrasement)."
+            : "Cloner le dépôt du GDS en local puis l'ouvrir comme projet (dossier unique).",
+      },
+    ];
+    if (hasWork && hasLocal) {
+      actions.push({
+        act: "rmdup",
+        label: "Supprimer la copie redondante",
+        icon: "trash-2",
+        title: "Un clone GDS redondant existe à côté du projet de travail : le supprimer (avec confirmation, jamais le dossier connecté ni le bare serveur).",
+      });
+    }
+    const chip = hasWork
+      ? ' <span class="gds-chip">projet de travail existant</span>'
+      : hasLocal
+        ? ' <span class="gds-chip">déjà en local</span>'
+        : "";
     const item = document.createElement("div");
     item.className = "gds-menu-item";
     item.innerHTML = `
-      <div class="gds-menu-item-name">${name}
-        ${localExists
-          ? ' <span class="gds-chip">déjà en local</span>'
-          : ""}
-      </div>
+      <div class="gds-menu-item-name">${name}${chip}</div>
       <div class="gds-menu-item-actions">
-        <button class="web-btn" data-act="clone">
-          <i data-lucide="copy-plus" class="icon-sm"></i> Ouvrir un nouveau projet en local
-        </button>
-        <button class="web-btn" data-act="open" ${localExists ? "" : "disabled"}
-          title="${localExists ? "" : "Aucun clonage local : utilisez « Ouvrir un nouveau projet en local » pour cloner le dépôt."}">
-          <i data-lucide="folder-open" class="icon-sm"></i> Ouvrir normalement un déjà en local
-        </button>
+        ${actions.map((a) => `<button class="web-btn" data-act="${a.act}" title="${esc(a.title)}"><i data-lucide="${a.icon}" class="icon-sm"></i> ${a.label}</button>`).join("")}
       </div>`;
     listEl.appendChild(item);
     refreshIcons(item);
 
-    // Action a) — cloner en local → ouvrir → connecter au GDS.
-    item.querySelector('[data-act="clone"]').addEventListener("click", async () => {
-      close();
-      showLoading("Clonage du dépôt " + r.name + " depuis le GDS…");
-      try {
-        const res = await invoke("gds_clone_repo", { project, repoName: r.name });
-        hideLoading();
-        await sidebar.openProjectByPath(res.path);
-        toastSuccess("Projet ajouté depuis le GDS : " + r.name);
-      } catch (e) {
-        hideLoading();
-        toastError("Échec de l'ajout depuis le GDS : " + String(e));
-      }
-    });
+    const btn = (act) => item.querySelector(`[data-act="${act}"]`);
 
-    // Action b) — ouvrir le clonage local existant + proposer une synchro auto.
-    item.querySelector('[data-act="open"]').addEventListener("click", async () => {
-      if (!r.local_exists || !r.local_path) return;
-      close();
-      try {
-        await sidebar.openProjectByPath(r.local_path);
-      } catch (e) {
-        toastError("Erreur à l'ouverture du projet local : " + String(e));
-        return;
-      }
-      // Proposer une synchronisation automatique depuis le remote `gds`.
-      try {
-        await invoke("gds_sync_project", { project: r.local_path });
-        toastSuccess("Projet local synchronisé avec le GDS : " + r.name);
-      } catch (e) {
-        toastError("Projet ouvert. Synchronisation GDS : " + String(e));
-      }
-    });
+    // Action CONNECT — connecter au GDS un dossier de travail existant (dossier
+    // unique, jamais de clone), puis l'ouvrir.
+    const connBtn = btn("connect");
+    if (connBtn) {
+      connBtn.addEventListener("click", async () => {
+        if (!workPath) return;
+        close();
+        showLoading("Connexion du dossier au GDS…");
+        try {
+          const res = await invoke("gds_connect_existing", { project, targetDir: workPath });
+          hideLoading();
+          await sidebar.openProjectByPath(res.path || workPath);
+          toastSuccess("Dossier connecté au GDS : " + r.name);
+        } catch (e) {
+          hideLoading();
+          toastError("Échec de la connexion du dossier au GDS : " + String(e));
+        }
+      });
+    }
+
+    // Action SYNC — ouvrir le worktree local existant (le clone GDS unique) PUIS
+    // synchroniser sans écrasement (fetch/pull depuis le remote `gds`).
+    const syncBtn = btn("sync");
+    if (syncBtn) {
+      syncBtn.addEventListener("click", async () => {
+        if (!localPath) return;
+        close();
+        try {
+          await sidebar.openProjectByPath(localPath);
+        } catch (e) {
+          toastError("Erreur à l'ouverture du projet local : " + String(e));
+          return;
+        }
+        try {
+          await invoke("gds_sync_project", { project: localPath });
+          toastSuccess("Projet synchronisé avec le GDS : " + r.name);
+        } catch (e) {
+          toastError("Projet ouvert. Synchronisation GDS : " + String(e));
+        }
+      });
+    }
+
+    // Action CLONE — ramener le dépôt en local (dossier unique), l'ouvrir, le connecter.
+    const cloneBtn = btn("clone");
+    if (cloneBtn) {
+      cloneBtn.addEventListener("click", async () => {
+        close();
+        showLoading("Clonage du dépôt " + r.name + " depuis le GDS…");
+        try {
+          const res = await invoke("gds_clone_repo", { project, repoName: r.name });
+          hideLoading();
+          await sidebar.openProjectByPath(res.path);
+          toastSuccess("Projet ajouté depuis le GDS : " + r.name);
+        } catch (e) {
+          hideLoading();
+          toastError("Échec de l'ajout depuis le GDS : " + String(e));
+        }
+      });
+    }
+
+    // Action RMDUP — nettoyage du doublon (clone redondant) : on présente d'abord
+    // la simulation (dry-run, confirm=false), puis sur confirmation de l'utilisateur
+    // la suppression réelle (confirm=true). Ne touche JAMAIS au dossier connecté
+    // (workPath) ni au bare serveur (le backend protège `<local_dir>/repos/`).
+    const rmdupBtn = btn("rmdup");
+    if (rmdupBtn) {
+      rmdupBtn.addEventListener("click", async () => {
+        const dupDir = localPath;
+        const connectedDir = workPath;
+        if (!dupDir || !connectedDir) return;
+        showLoading("Vérification de la copie redondante…");
+        let dry;
+        try {
+          dry = await invoke("gds_remove_dup_worktree", {
+            project, dupDir, connectedDir, confirm: false,
+          });
+        } catch (e) {
+          hideLoading();
+          toastError("Impossible de vérifier : " + String(e));
+          return;
+        }
+        hideLoading();
+        const planned = (dry && dry.path) || dupDir;
+        const ok = await window.confirm(
+          "Supprimer la copie redondante « " + planned + " » ?\n\nLe dossier connecté et le dépôt serveur (bare) ne seront pas touchés."
+        );
+        if (!ok) return;
+        showLoading("Suppression de la copie redondante…");
+        try {
+          const res = await invoke("gds_remove_dup_worktree", {
+            project, dupDir, connectedDir, confirm: true,
+          });
+          hideLoading();
+          if (res && res.removed) {
+            toastSuccess("Copie redondante supprimée : " + r.name);
+          } else {
+            toastError("Aucune copie à supprimer (absente ou protégée).");
+          }
+        } catch (e) {
+          hideLoading();
+          toastError("Suppression impossible : " + String(e));
+        }
+      });
+    }
   }
 }

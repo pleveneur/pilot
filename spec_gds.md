@@ -349,24 +349,58 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   devient « Ajouter ou créer un projet », et une nouvelle entrée
   « Ajouter un projet depuis le GDS » ouvre une **modale listant les dépôts** du
   serveur (`gds_list_git_repos`, enrichi : `name` lisible, `email`, `local_exists`,
-  `local_path`).
+  `local_path`, `work_exists`, `work_path`).
 - **Action a — Ouvrir un nouveau projet en local** : `gds_clone_repo(project,
-  repo_name)` clone le dépôt dans `<gds_local_dir>/<repo_name>`, écrit le
-  `.pilot/gds.json` local (même serveur/identité, `gds_remote_url`), l'enregistre
-  auprès du serveur via `add_project_to_gds` (idempotent, fail-open : ne supprime
-  **jamais** le bare serveur ni un worktree existant), puis ouvre le projet et le
-  connecte automatiquement au GDS (remote `gds`, clef SSH via `ensure_poste_key`).
-- **Action b — Ouvrir normalement un déjà en local** : si `local_exists` est vrai,
-  ouvre le clonage local (`local_path`) puis **propose une synchronisation**
-  automatique (`gds_sync_project`). L'action est désactivée sinon (message explicatif).
+  repo_name)` clone le dépôt dans `<gds_local_dir>/<repo_name>`, puis connecte le
+  clone au GDS via le helper partagé (`connect_dir_to_gds` : écrit le `.pilot/gds.json`
+  local (même serveur/identité, `gds_remote_url`), `ensure_poste_key`, l'enregistre
+  auprès du serveur via `add_project_to_gds` idempotent, fail-open — ne supprime
+  **jamais** le bare serveur ni un worktree existant), puis ouvre le projet.
+- **Refonte « un seul dossier local par projet » (gds-menu.js)** : chaque projet GDS
+  correspond à **UN SEUL dossier local** (aucune copie séparée type `C:\GDS\<name>`
+  dupliquant un dossier de travail existant). La liaison dossier ↔ projet GDS se
+  fait à l'action « Ajouter au GDS ». Actions **MUTUELLEMENT EXCLUSIVES** selon
+  `local_exists` + `work_exists` :
+  - **a)** si un **projet de travail** existe (`work_exists`) → « **Connecter ce
+    dossier au GDS** » (`gds_connect_existing` sur `work_path`) : (a) écrit le
+    `.pilot/gds.json` du dossier cible depuis la config du projet de référence,
+    (b) initialise le repo git si absent (`ensure_git_repo_with_identity`),
+    (c) connecte via `connect_dir_to_gds` (remote `gds` + clef SSH + add). Jamais de
+    clone d'un doublon. Si un clone GDS **redondant** existe en parallèle
+    (`local_exists`), un second bouton « Supprimer la copie redondante » mène à
+    `gds_remove_dup_worktree` : **simulation (dry-run) présentée d'abord**, puis
+    confirmation utilisateur avant la **suppression réelle** (`confirm=true`).
+  - **b)** sinon, un clone GDS **unique** existe (`local_exists` sans travail) →
+    « **Synchroniser** » ce clone (ouvrir le worktree local puis `gds_sync_project`
+    sans écrasement).
+  - **c)** sinon → « **Ramener en local** » (clone = dossier unique).
+  Jamais de clone par-dessus un worktree existant, jamais d'écrasement, aucune
+  suppression destructive automatique (`confirm=true` requis).
+- **`gds_sync_project` (gds_client.rs)** : quand le dossier local (`project`) est
+  DÉJÀ connecté au GDS (`.pilot/gds.json` présent) et ne se situe pas sous
+  `<gds_local_dir>/<name>`, la synchro se fait **directement sur CE dossier**
+  (fetch/pull via le remote `gds`, acquisition du verrou) au lieu de re-cloner un
+  doublon. Un dossier de travail **non connecté** (pas encore de `gds.json`) est
+  orienté vers « Connecter ce dossier au GDS » au lieu d'un échec « Lecture gds.json ».
+  L'onboarding auto existant (bare absent → `add_project_to_gds`) est conservé.
+- **`gds_remove_dup_worktree(project, dup_dir, connected_dir, confirm)`** : supprime
+  UNIQUEMENT le worktree dupliqué `<gds_local_dir>/<name>` — jamais le dossier
+  connecté (`connected_dir`), jamais le projet actuellement ouvert, jamais dans
+  `<local_dir>/repos/` (protection du bare). `confirm=false` → dry-run (removed=false
+  + chemin prévu) ; `confirm=true` → suppression réelle. Retourne `{ removed, path }`.
+- **Action b — Ouvrir normalement un déjà en local** : si `local_exists` est vrai
+  (et sans projet de travail en parallèle), ouvre le clonage local (`local_path`)
+  puis **propose une synchronisation** automatique (`gds_sync_project`).
 - **GDS non provisionné / non connecté** : la modale s'affiche en **lecture** avec
   un message clair (orientation vers l'onglet 🌐 GDS) — jamais de crash.
-- **Modules** : `gds.rs` (`gds_clone_repo`, `gds_list_git_repos`), `gds_db.rs`
-  (`list_git_repos` + join `projects` pour `name`/`email`), `src/js/gds-menu.js`
-  (modale lazy), `sidebar.js` (entrée du menu).
+- **Modules** : `gds.rs` (`gds_clone_repo`, `gds_connect_existing`,
+  `gds_remove_dup_worktree`, `connect_dir_to_gds`, `gds_list_git_repos`),
+  `gds_client.rs` (`sync_project`), `gds_db.rs` (`list_git_repos` + join `projects`
+  pour `name`/`email`), `src/js/gds-menu.js` (modale lazy), `sidebar.js` (entrée du menu).
 - **Critère de fin** : depuis le menu projet, ajouter un dépôt distant GDS en
-  local (clone + connexion auto + remote `gds`) ; ré-ouvrir un dépôt déjà cloné
-  localement avec synchro optionnelle.
+  local (clone + connexion auto + remote `gds`) ; connecter un dossier de travail
+  existant ; supprimer une copie redondante avec confirmation ; ré-ouvrir un dépôt
+  déjà cloné localement avec synchro optionnelle — toujours un seul dossier local.
 
 ---
 
@@ -394,6 +428,15 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   nettoyer les verrous orphelins (crash du dev) avec renouvellement périodique.
 - **Modules** : `gds_sync.rs`, `gds_web.rs`, `gds_client.rs`, commandes desktop
   `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock`.
+- **Évol 2/3/4 (verrouillage automatique + option UI)** : commande
+  `gds_lock_project(project, reason)` = synchronisation automatique (fetch/pull
+  sans écrasement) PUIS acquisition du verrou (refusée si détenu par un autre
+  non expiré), retourne l'état du verrou ; commande `gds_lock_state(project)` =
+  `{ locked, email, expires_at }` (fail-open). À l'ouverture d'un projet
+  connecté, `sidebar.js` verrouille automatiquement (fail-open non bloquant :
+  notification sans empêcher l'ouverture/lecture) ; la barre « Projets en
+  cours » affiche un bouton 🔒/🔓 par projet connecté (verrouiller →
+  `gds_lock_project`, déverrouiller → `gds_release_lock`).
 - **Critère de fin** : dev A sync → dev B voit le projet **verrouillé** et ne
   peut pas le modifier ; verrou expiré → récupéré automatiquement.
 

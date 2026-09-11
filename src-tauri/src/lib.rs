@@ -2589,6 +2589,9 @@ pub fn run() {
             gds::gds_list_git_repos,
             // ── GDS : ajouter un projet depuis le GDS (clone → ouvrir → connecter) ──
             gds::gds_clone_repo,
+            // ── GDS : refonte dossier-unique — connecter un dossier existant / retirer un doublon ──
+            gds::gds_connect_existing,
+            gds::gds_remove_dup_worktree,
             // ── GDS Évolution 1 : mémoriser les connexions par serveur ──
             gds::gds_list_saved_servers,
             gds::gds_apply_server,
@@ -2597,6 +2600,9 @@ pub fn run() {
             gds_sync::gds_release_lock,
             gds_sync::gds_urgent_lock,
             gds_sync::gds_get_lock,
+            // ── GDS Évol 2/3/4 : verrouillage (sync+lock) & état agrégé du verrou ──
+            gds_sync::gds_lock_project,
+            gds_sync::gds_lock_state,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──

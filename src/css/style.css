@@ -1076,6 +1076,23 @@ body.theme-light.theme-tokyo-day {
 .open-project-item.active .open-project-close { opacity: 1; color: var(--accent); }
 .open-project-item.active .open-project-close:hover { color: var(--danger); background: transparent; }
 
+/* Option verrouiller/déverrouiller d'un projet GDS connecté (Évol 3/4) */
+.open-project-lock {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: var(--radius-xs);
+  font-size: 13px;
+  background: none;
+  border: none;
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+.open-project-item:hover .open-project-lock { opacity: 1; }
+.open-project-lock:hover { background: var(--surface-3); }
+
 /* --- File Tree --- */
 #file-tree {
   flex: 1;

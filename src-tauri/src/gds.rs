@@ -1214,8 +1214,13 @@ pub async fn gds_list_projects(state: State<'_, AppState>) -> Result<Vec<Value>,
 /// `name` (nom lisible via join `projects`), `email` (identité du membre),
 /// `local_exists` (un clonage local `<gds_local_dir>/<name>` existe-t-il ?) et
 /// `local_path` (chemin du clonage local, pour l'action « Ouvrir normalement un
-/// déjà en local »). Le dossier local est lu depuis la config du projet courant
-/// (paramètre optionnel) avec repli sur le défaut — aucune I/O de clone ici.
+/// déjà en local »). En plus, `work_exists` / `work_path` signalent qu'un PROJET
+/// DE TRAVAIL existant (ouvert ou récent, AppConfig) porte un nom de dossier
+/// identique au dépôt GDS à un AUTRE chemin que le clone — l'UI synchronise alors
+/// ce projet au lieu de cloner un doublon (issue doublon GDS). Le dossier local
+/// est lu depuis la config du projet courant (paramètre optionnel) avec repli sur
+/// le défaut — aucune I/O de clone ici. Fail-open : une erreur de lecture des
+/// projets ouverts/récents laisse la détection `work_*` inerte (liste OK).
 #[tauri::command]
 pub async fn gds_list_git_repos(
     state: State<'_, AppState>,
@@ -1240,6 +1245,16 @@ pub async fn gds_list_git_repos(
         .and_then(|p| read_gds_config(p).ok())
         .map(|c| c.identity_email)
         .unwrap_or_default();
+    // Projets de travail connus (ouverts + récents) pour éviter de re-cloner un
+    // projet déjà présent comme projet de travail à un AUTRE chemin que le clone
+    // GDS (issue doublon GDS : ex. `G:\IA_PL\Kodali` + `C:\GDS\Kodali`).
+    // Fail-open : toute erreur de lecture laisse `work_projects` vide — la
+    // détection est alors inerte (pas de crash de la liste des dépôts).
+    let mut work_projects: Vec<String> = Vec::new();
+    if let Ok(cfg) = state.config.lock() {
+        work_projects.extend(cfg.open_projects.iter().cloned());
+        work_projects.extend(cfg.recent_projects.iter().cloned());
+    }
     let mut repos = gds_db::list_git_repos(&pool).await?;
     for r in repos.iter_mut() {
         let name = r["name"].as_str().unwrap_or("").to_string();
@@ -1250,11 +1265,220 @@ pub async fn gds_list_git_repos(
         let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
         r["local_exists"] = json!(local_exists);
         r["local_path"] = json!(local_path);
+        // Détection « existe comme projet de travail » : un projet ouvert/récent
+        // dont le NOM DE DOSSIER (que le chemin) correspond au dépôt GDS, à un
+        // chemin DIFFÉRENT du clone GDS (`local_path`). On prend le premier match
+        // (projets ouverts privilégiés car ajoutés en premier).
+        let mut work_exists = false;
+        let mut work_path = String::new();
+        if !name.is_empty() && !work_projects.is_empty() {
+            let name_lower = name.to_lowercase();
+            let clone_norm = crate::normalize_project_path(&local_path);
+            for wp in work_projects.iter() {
+                let wp_norm = crate::normalize_project_path(wp);
+                if wp_norm == clone_norm {
+                    continue; // c'est le clone GDS lui-même (cas local_exists).
+                }
+                let folder = wp_norm.rsplit('/').next().unwrap_or("");
+                if !folder.is_empty() && folder.to_lowercase() == name_lower {
+                    work_exists = true;
+                    work_path = wp.clone();
+                    break;
+                }
+            }
+        }
+        r["work_exists"] = json!(work_exists);
+        r["work_path"] = json!(work_path);
         if r["email"].as_str().unwrap_or("").is_empty() && !cfg_email.is_empty() {
             r["email"] = json!(cfg_email);
         }
     }
     Ok(repos)
+}
+
+/// Helper partagé « attache d'un dossier au GDS » (refonte dossier-unique).
+/// Connecte un dossier local cible (`target`) au GDS : lui écrit son propre
+/// `.pilot/gds.json` (même serveur/identité/dossier que la config de référence
+/// `cfg`), s'assure que la clef du poste est enregistrée et associe le dossier
+/// au serveur via `add_project_to_gds` (idempotent, fail-open). Utilisé par
+/// `gds_clone_repo` (non-régression) et par la commande `gds_connect_existing`.
+/// N'inclut AUCUNE suppression — c'est un attachement, pas une purge.
+async fn connect_dir_to_gds(
+    pool: &PgPool,
+    target: &str,
+    cfg: &GdsConfig,
+    email: &str,
+    local_dir: &str,
+) -> Result<(), String> {
+    // Écrire au dossier cible sa propre config `.pilot/gds.json` (même
+    // serveur/identité/dossier que le projet de référence) — nécessaire pour
+    // `add_project_to_gds` (qui exige une config activée) et pour que les
+    // sync/push suivants fonctionnent depuis ce dossier.
+    let target_cfg = GdsConfig {
+        enabled: true,
+        db_host: cfg.db_host.clone(),
+        db_port: cfg.db_port.clone(),
+        db_user: cfg.db_user.clone(),
+        identity_email: email.to_string(),
+        server_url: cfg.server_url.clone(),
+        gds_local_dir: Some(local_dir.to_string()),
+        ssh_host: cfg.ssh_host.clone(),
+        urgent_email: cfg.urgent_email.clone(),
+    };
+    write_gds_config(target, &target_cfg)?;
+    // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
+    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
+    gds_ssh::ensure_poste_key(pool, email).await?;
+    // Enregistrer le dossier auprès du serveur (idempotent, fail-open) :
+    // bare/projet déjà présents → réutilisés, simple assoc. membre + remote +
+    // push. Ne touche JAMAIS au bare serveur ni à un worktree local existant.
+    add_project_to_gds(pool, target, email, None).await?;
+    Ok(())
+}
+
+/// Commande Tauri : connecte un DOSSIER DE TRAVAIL EXISTANT au GDS (refonte
+/// dossier-unique). `project` = projet courant de travail (fournit la config
+/// GDS de référence + l'identité email) ; `target_dir` = dossier local existant
+/// à connecter. (a) écrit le `.pilot/gds.json` du dossier cible depuis la
+/// config du projet de référence ; (b) si le dossier n'est pas un repo git, il
+/// est initialisé via `ensure_git_repo_with_identity` (pattern add_project_to_gds) ;
+/// (c) connecte via le helper partagé (clef poste + remote gds + push initial).
+/// Retourne `{ path, initialized }`. Opérations git bloquantes → `spawn_blocking`.
+/// N'inclut AUCUNE suppression.
+#[tauri::command]
+pub async fn gds_connect_existing(
+    state: State<'_, AppState>,
+    project: String,
+    target_dir: String,
+) -> Result<Value, String> {
+    if target_dir.trim().is_empty() {
+        return Err("Dossier cible requis".to_string());
+    }
+    let target_dir = target_dir.trim().to_string();
+    // Config GDS du projet de référence (email + dossier local + serveur SSH).
+    let cfg = read_gds_config(&project)?;
+    if !cfg.enabled {
+        return Err("GDS non activé pour ce projet".to_string());
+    }
+    let email = effective_identity_email(&cfg.identity_email);
+    if email.is_empty() {
+        return Err("Identité email manquante — configurez le bloc « Identité » du GDS.".to_string());
+    }
+    let local_dir = cfg
+        .gds_local_dir
+        .clone()
+        .unwrap_or_else(default_gds_local_dir);
+    let pool_opt = state.gds_pool.lock().unwrap().clone();
+    let pool = match pool_opt {
+        Some(p) => p,
+        None => restore_pool_for_project(&project)
+            .await
+            .map_err(|_| "GDS non provisionné — provisionnez-le d'abord dans l'onglet GDS".to_string())?,
+    };
+
+    // (b) Si le dossier n'est pas encore un dépôt Git, initialiser le dépôt
+    // local + premier commit, en réglant l'identité git (auto) si absente.
+    // Idempotent : un dossier déjà repo renvoie false et ne refait rien.
+    let email_conn = email.trim().to_string();
+    let current = tokio::task::spawn_blocking({
+        let p = target_dir.clone();
+        move || (git_config_user_name(&p), git_config_user_email(&p))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let needs_name = current.0.is_empty();
+    let resolved_name: Option<String> = if needs_name {
+        Some(effective_git_name(&None)?)
+    } else {
+        None
+    };
+    let dir_init = target_dir.clone();
+    let name_for_identity = resolved_name.clone().unwrap_or_default();
+    let initialized = tokio::task::spawn_blocking(move || {
+        ensure_git_repo_with_identity(&dir_init, &email_conn, &name_for_identity)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // Mémoriser le nom utilisé (saisi une seule fois) pour la prochaine fois.
+    if let Some(n) = &resolved_name {
+        let _ = memorize_git_name(n);
+    }
+
+    // (a)+(c) Connecter le dossier au GDS via le helper partagé (gds.json +
+    // clef poste + add_project_to_gds). Aucune suppression.
+    connect_dir_to_gds(&pool, &target_dir, &cfg, &email, &local_dir).await?;
+
+    Ok(json!({ "path": target_dir, "initialized": initialized }))
+}
+
+/// Commande Tauri : supprime UNIQUEMENT le worktree dupliqué `<gds_local_dir>/<name>`
+/// (refonte dossier-unique). Sûre : ne touche JAMAIS au dossier connecté
+/// (`connected_dir`), jamais au projet actuellement ouvert, et jamais dans
+/// `<local_dir>/repos/` (protection du bare). **Non destructif par défaut** :
+/// si `confirm=false`, renvoie une simulation (dry-run, removed=false + chemin
+/// à supprimer prévu) ; la suppression réelle exige `confirm=true` (confirmation
+/// utilisateur gérée côté frontend). Retourne `{ removed, path }` (et `dry_run`
+/// en mode simulation). Opération fs → `spawn_blocking`.
+#[tauri::command]
+pub async fn gds_remove_dup_worktree(
+    state: State<'_, AppState>,
+    project: String,
+    dup_dir: String,
+    connected_dir: String,
+    confirm: bool,
+) -> Result<Value, String> {
+    if dup_dir.trim().is_empty() || connected_dir.trim().is_empty() {
+        return Err("Chemins requis".to_string());
+    }
+    let dup_dir = dup_dir.trim().to_string();
+    let connected_dir = connected_dir.trim().to_string();
+    let dup_norm = crate::normalize_project_path(&dup_dir);
+    let conn_norm = crate::normalize_project_path(&connected_dir);
+
+    // Jamais de suppression du dossier venant d'être connecté.
+    if dup_norm == conn_norm {
+        return Err("Le dossier dupliqué est le dossier connecté — rien à supprimer.".to_string());
+    }
+    // Jamais de suppression du dossier cible s'il est dans `repos/` (bare).
+    let local_dir = read_gds_config(&project)
+        .ok()
+        .and_then(|c| c.gds_local_dir)
+        .unwrap_or_else(default_gds_local_dir);
+    let repos = gds_git::repos_dir(&local_dir);
+    let repos_norm = crate::normalize_project_path(&repos.to_string_lossy());
+    if dup_norm.starts_with(&repos_norm) {
+        return Err("Le dossier cible se situe dans le dossier repos GDS (bare) — suppression refusée.".to_string());
+    }
+    // Jamais de suppression du projet actuellement ouvert.
+    if let Ok(gcfg) = state.config.lock() {
+        for p in gcfg.open_projects.iter().chain(gcfg.active_open_project.iter()) {
+            if crate::normalize_project_path(p) == dup_norm {
+                return Err("Impossible de supprimer le projet actuellement ouvert : « ".to_string()
+                    + &dup_dir + " ».");
+            }
+        }
+    }
+    // Absent → rien à supprimer (informatif, non bloquant).
+    if !std::path::Path::new(&dup_dir).exists() {
+        return Ok(json!({ "removed": false, "path": dup_dir, "absent": true }));
+    }
+
+    // Non destructif par défaut : simulation (dry-run) tant que confirm=false.
+    if !confirm {
+        return Ok(json!({ "removed": false, "path": dup_dir, "dry_run": true }));
+    }
+
+    // Suppression réelle (opération fs bloquante → spawn_blocking).
+    let dup_for_rm = dup_dir.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        std::fs::remove_dir_all(&dup_for_rm)
+            .map_err(|e| format!("Suppression de « {} » : {}", dup_for_rm, e))?;
+        Ok::<bool, String>(true)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(json!({ "removed": removed, "path": dup_dir }))
 }
 
 /// Commande Tauri : clone un dépôt GDS en local, l'ouvre comme projet et le
@@ -1329,27 +1553,11 @@ pub async fn gds_clone_repo(
     .await
     .map_err(|e| e.to_string())??;
 
-    // Le clone local doit être « connecté au GDS » : lui écrire sa propre config
-    // `.pilot/gds.json` (même serveur/identité/dossier que le projet courant),
-    // nécessaire pour `add_project_to_gds` (qui exige une config activée) et pour
-    // que les sync/push suivants fonctionnent depuis le clone.
-    let dest_cfg = GdsConfig {
-        enabled: true,
-        db_host: cfg.db_host.clone(),
-        db_port: cfg.db_port.clone(),
-        db_user: cfg.db_user.clone(),
-        identity_email: email.clone(),
-        server_url: cfg.server_url.clone(),
-        gds_local_dir: Some(local_dir.clone()),
-        ssh_host: cfg.ssh_host.clone(),
-        urgent_email: cfg.urgent_email.clone(),
-    };
-    write_gds_config(&dest_str, &dest_cfg)?;
-
-    // Enregistrer la copie locale auprès du serveur (idempotent, fail-open) :
-    // bare/projet déjà présents sur le serveur → réutilisés, simple assoc. membre
-    // + remote + push. Ne touche JAMAIS au bare serveur ni au worktree local.
-    add_project_to_gds(&pool, &dest_str, &email, None).await?;
+    // Connecter le clone au GDS (helper partagé) : lui écrire son `.pilot/gds.json`
+    // + clef du poste + enregistrement serveur (idempotent, fail-open). Le remote
+    // dédié `gds` est ajouté et un éventuel push initial est fait. Ne touche JAMAIS
+    // au bare serveur ni à un worktree local existant.
+    connect_dir_to_gds(&pool, &dest_str, &cfg, &email, &local_dir).await?;
 
     Ok(json!({
         "path": dest_str,

@@ -23,7 +23,19 @@ pub(crate) const GDS_REMOTE: &str = "gds";
 /// fetch/pull) puis acquiert le verrou global projet. Partagé entre la commande
 /// Tauri et la route web. `project` = chemin absolu du projet local.
 pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, String> {
-    let cfg = gds::read_gds_config(project)?;
+    // Refonte dossier-unique : un dossier de travail non connecté (pas encore de
+    // `.pilot/gds.json`) est ORIENTÉ vers la connexion (`gds_connect_existing`, via
+    // le menu « Ajouter un projet depuis le GDS ») au lieu d'un échec générique
+    // « Lecture gds.json » — jamais de clone d'un doublon sans connexion au préalable.
+    let cfg = match gds::read_gds_config(project) {
+        Ok(c) => c,
+        Err(_e) => {
+            return Err(
+                "Ce dossier n'est pas encore connecté au GDS. Connectez-le d'abord grâce à « Connecter ce dossier au GDS » (menu Ajouter un projet depuis le GDS)."
+                    .to_string(),
+            )
+        }
+    };
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
@@ -65,34 +77,53 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         }
     }
 
+    // Refonte « un seul dossier local par projet » : si le projet de travail
+    // (`project`) est DÉJÀ connecté au GDS (gds.json présent) et ne se situe PAS
+    // sous le dossier de clonage GDS (`<gds_local_dir>/<name>`), il est le dossier
+    // UNIQUE — on le synchronise directement (fetch/pull via le remote `gds`) au
+    // lieu de re-cloner un doublon dans `<gds_local_dir>/<name>`. Aucune écriture
+    // destructrice.
+    let proj_norm = crate::normalize_project_path(project);
+    let dest_norm = crate::normalize_project_path(&dest_str);
+    let sync_target = if proj_norm != dest_norm {
+        project.to_string()
+    } else {
+        dest_str.clone()
+    };
+
     // Opérations git bloquantes (clone/fetch/pull) → spawn_blocking.
     let action = tokio::task::spawn_blocking(move || {
-        if !dest.exists() {
-            git::git_clone(&url, &dest_str)?;
+        let target = &sync_target;
+        if !std::path::Path::new(target).exists() {
+            git::git_clone(&url, target)?;
             // Le clone crée le remote par défaut `origin` ; ajouter le remote
             // dédié `gds` pour que les fetch/pull suivants fonctionnent.
-            git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
+            if !git::git_has_remote(target, GDS_REMOTE) {
+                git::git_remote_add(target, GDS_REMOTE, &url)?;
+            }
             return Ok::<String, String>("cloned".to_string());
         }
-        if !git::git_is_repo(&dest_str) {
+        if !git::git_is_repo(target) {
             // (a) Dossier cible présent mais pas un work tree Git : l'initialiser
             // avec un premier commit via l'helper partagé (identité git auto :
             // email du compte GDS + nom mémorisé, jamais la config globale), puis
             // connecter au remote gds (au lieu de git_fetch qui échoue).
             let ident_email = cfg.identity_email.trim().to_string();
             let ident_name = gds::memorized_git_name().unwrap_or_default();
-            git::ensure_git_repo_with_identity(&dest_str, &ident_email, &ident_name)?;
-            git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
-            let _ = git::git_fetch(&dest_str, GDS_REMOTE, &branch);
-            let _ = git::git_pull(&dest_str, GDS_REMOTE, &branch);
+            git::ensure_git_repo_with_identity(target, &ident_email, &ident_name)?;
+            if !git::git_has_remote(target, GDS_REMOTE) {
+                git::git_remote_add(target, GDS_REMOTE, &url)?;
+            }
+            let _ = git::git_fetch(target, GDS_REMOTE, &branch);
+            let _ = git::git_pull(target, GDS_REMOTE, &branch);
             return Ok::<String, String>("initialized".to_string());
         }
         // (b) Remote dédié `gds` manquant → l'ajouter avant fetch/pull.
-        if !git::git_has_remote(&dest_str, GDS_REMOTE) {
-            git::git_remote_add(&dest_str, GDS_REMOTE, &url)?;
+        if !git::git_has_remote(target, GDS_REMOTE) {
+            git::git_remote_add(target, GDS_REMOTE, &url)?;
         }
-        git::git_fetch(&dest_str, GDS_REMOTE, &branch)?;
-        git::git_pull(&dest_str, GDS_REMOTE, &branch)?;
+        git::git_fetch(target, GDS_REMOTE, &branch)?;
+        git::git_pull(target, GDS_REMOTE, &branch)?;
         Ok::<String, String>("synced".to_string())
     })
     .await

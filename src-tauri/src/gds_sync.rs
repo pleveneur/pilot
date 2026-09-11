@@ -231,6 +231,75 @@ pub async fn gds_get_lock(state: State<'_, AppState>, project: String) -> Result
     }))
 }
 
+/// Commande Tauri : synchronise PUIS verrouille un projet GDS (Évol 2/3).
+/// 1) Synchronisation automatique (fetch/pull sans écrasement) via
+///    `gds_client::sync_project` — celle-ci réalise aussi l'acquisition du
+///    verrou (`acquire_project_lock`), refusée si détenu par un autre non
+///    expiré (HeldBy), avec TTL/orphelins + audit_gds.
+/// 2) Retourne l'état du verrou (satisfait « synchronisation automatique à
+///    l'appui » pour les boutons VERROUILLER et l'ouverture de projet GDS).
+/// On n'appelle PAS `acquire_project_lock` une seconde fois : la sync vient de
+/// l'acquérir → une 2e acquisition renverrait `HeldBy` par le titulaire
+/// lui-même (fausse négative). Fail-open pour le suivi (jamais bloquant),
+/// PAS pour le verrou (une erreur de sync/lock remonte en erreur).
+#[tauri::command]
+pub async fn gds_lock_project(
+    state: State<'_, AppState>,
+    project: String,
+    reason: String,
+) -> Result<Value, String> {
+    let _ = &reason; // raison conservée pour la signature de la commande (Tauri) ;
+    // l'acquisition du verrou est réalisée dans sync_project (raison "sync").
+    if !crate::gds_globally_enabled(&state) {
+        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
+    }
+    // Pool : repli `restore_pool_for_project` si le pool AppState est absent
+    // (sortie de garde AVANT l'await — garde non-Send à ne pas porter).
+    let pool_opt = state.gds_pool.lock().unwrap().clone();
+    let pool = match pool_opt {
+        Some(p) => p,
+        None => crate::gds::restore_pool_for_project(&project)
+            .await
+            .map_err(|e| format!("GDS non provisionné : {}", e))?,
+    };
+    // sync + acquisition du verrou (fetch/pull sans écrasement, HeldBy refusé).
+    let sync = crate::gds_client::sync_project(&pool, &project).await?;
+    Ok(sync.get("lock").cloned().unwrap_or(json!({ "acquired": false })))
+}
+
+/// Commande Tauri : état agrégé du verrou GDS d'un projet (Évol 3/4).
+/// Retourne `{ locked, email, expires_at, ... }` en agrégeant `gds_get_lock` :
+/// verrou absent / projet non enregistré → `{ locked: false, email, null,
+/// expires_at: null }`. Fail-open côté lecture (jamais bloquant).
+#[tauri::command]
+pub async fn gds_lock_state(state: State<'_, AppState>, project: String) -> Result<Value, String> {
+    if !crate::gds_globally_enabled(&state) {
+        return Ok(json!({ "locked": false, "email": null, "expires_at": null }));
+    }
+    let pool_opt = state.gds_pool.lock().unwrap().clone();
+    let pool = match pool_opt {
+        Some(p) => p,
+        None => crate::gds::restore_pool_for_project(&project)
+            .await
+            .map_err(|_| "GDS non provisionné".to_string())?,
+    };
+    let name = gds::project_name(&project);
+    let project_id = match gds_db::get_project_by_name(&pool, &name).await? {
+        Some(id) => id,
+        None => return Ok(json!({ "locked": false, "email": null, "expires_at": null })),
+    };
+    match gds_db::get_lock_by_project(&pool, project_id).await? {
+        Some(l) => Ok(json!({
+            "locked": true,
+            "email": l.email,
+            "expires_at": l.expires_at,
+            "urgent": l.urgent,
+            "reason": l.reason,
+        })),
+        None => Ok(json!({ "locked": false, "email": null, "expires_at": null })),
+    }
+}
+
 /// Commande Tauri : passe le verrou du projet en mode urgent (personne désignée).
 #[tauri::command]
 pub async fn gds_urgent_lock(state: State<'_, AppState>, project: String, reason: String) -> Result<Value, String> {

@@ -431,6 +431,39 @@ class Sidebar {
     // Notifier le badge 🔒 (H7 : projet sensible) — agent-pi.js écoute cet événement
     document.dispatchEvent(new CustomEvent("pilot-project-sensitivity", { detail: { path: folderPath } }));
 
+    // Verrou automatique à l'ouverture d'un projet GDS (Évol 3) : synchronise
+    // (fetch/pull sans écrasement) puis acquiert le verrou global. RÈGLE
+    // fail-open : feu-et-oubli NON bloquant — si la sync ou le verrou échoue
+    // (déjà verrouillé par un autre, GDS indisponible), on NOTIFIE mais on
+    // n'empêche jamais l'ouverture ni la lecture (on évite uniquement d'écraser).
+    const projName =
+      folderPath.replace(/\\/g, "/").split("/").pop() || folderPath;
+    (async () => {
+      let gstate;
+      try {
+        gstate = await isProjectGds(folderPath);
+      } catch (_) {
+        gstate = "not_configured";
+      }
+      if (gstate !== "connected") return; // non-GDS : rien à verrouiller
+      try {
+        const res = await invoke("gds_lock_project", {
+          project: folderPath,
+          reason: "open",
+        });
+        if (res && res.acquired) {
+          toastInfo("Verrou GDS acquis (" + projName + ")");
+        } else if (res && res.held_by) {
+          toastInfo(
+            "Projet déjà verrouillé GDS par « " + res.held_by + " » — synchronisation seule."
+          );
+        }
+      } catch (e) {
+        // Fail-open impératif : signaler sans jamais bloquer l'ouverture.
+        toastError("Verrou GDS non bloquant : " + String(e));
+      }
+    })();
+
     // Recharger les alias de modèles (model-switch.json)
     loadModelAliases();
 
@@ -1289,14 +1322,67 @@ class Sidebar {
         let gdsSuffix = "";
         if (gdsState === "connected") gdsSuffix = " - (GDS ✓)";
         else if (gdsState === "error") gdsSuffix = " - (GDS ✕)";
+        // Évol 3/4 : option verrouiller/déverrouiller, UNIQUEMENT pour les
+        // projets CONNECTÉS (jamais pour 'error'/'not_configured').
+        // État du verrou via gds_lock_state ; fail-open → déverrouillé si échec.
+        let lockState = { locked: false };
+        if (gdsState === "connected") {
+          try {
+            lockState = (await invoke("gds_lock_state", { project: p })) || {
+              locked: false,
+            };
+          } catch (_) {
+            lockState = { locked: false }; // fail-open
+          }
+        }
+        const lockHtml =
+          gdsState === "connected"
+            ? `<button class="open-project-lock" data-path="${this._esc(p)}" data-locked="${lockState.locked ? "true" : "false"}" title="${
+                lockState.locked
+                  ? "Déverrouiller le verrou GDS"
+                  : "Verrouiller le verrou GDS (synchronisation automatique)"
+              }">${lockState.locked ? "🔒" : "🔓"}</button>`
+            : "";
         item.innerHTML =
           `<span class="open-project-name">${this._esc(name)}${this._esc(gdsSuffix)}</span>` +
+          lockHtml +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;
-        // Clic sur la ligne → bascule vers ce projet (sauf sur le bouton fermer)
+        // Clic sur la ligne → bascule vers ce projet (sauf sur fermer/verrouiller)
         item.addEventListener("click", (e) => {
           if (e.target.closest(".open-project-close")) return;
+          if (e.target.closest(".open-project-lock")) return;
           if (!isActive) this._activateProject(p);
         });
+        // Bouton verrouiller/déverrouiller (Évol 3/4) : appel commande, rafraîchit
+        // l'état local + badge, toaste le résultat, sans toucher à la bascule.
+        const lockBtn = item.querySelector(".open-project-lock");
+        if (lockBtn) {
+          lockBtn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const path = lockBtn.dataset.path;
+            const wasLocked = lockBtn.dataset.locked === "true";
+            try {
+              if (wasLocked) {
+                await invoke("gds_release_lock", { project: path });
+                toastSuccess("Projet déverrouillé GDS");
+              } else {
+                const res = await invoke("gds_lock_project", {
+                  project: path,
+                  reason: "manual",
+                });
+                if (res && res.acquired) toastSuccess("Projet verrouillé GDS");
+                else if (res && res.held_by)
+                  toastInfo(
+                    "Verrou GDS détenu par « " + res.held_by + " » — synchronisation seule."
+                  );
+                else toastInfo("Verrou GDS non acquis.");
+              }
+              await this._renderOpenProjectsBar(); // rafraîchit état + badge
+            } catch (err) {
+              toastError("Verrou GDS : " + err);
+            }
+          });
+        }
         // Bouton fermer → ferme ce projet précis
         const closeBtn = item.querySelector(".open-project-close");
         closeBtn.addEventListener("click", (e) => {
