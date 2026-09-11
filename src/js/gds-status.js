@@ -23,6 +23,18 @@ export function mapGdsStatus(v) {
 }
 
 /**
+ * Décision de badge « connecté » : SEULE la valeur `'connected'` (évol 3)
+ * justifie le suffixe GDS. `'error'` et `'not_configured'` sont des chaînes
+ * TRUTHY mais ne doivent JAMAIS être traitées comme connectées (piège qui a
+ * causé une régression : tous les badges assistant suffixés `- (GDS)`). Pure.
+ * @param {string} status - résultat de `isProjectGds`.
+ * @returns {boolean} `true` uniquement si `status === "connected"`.
+ */
+export function isGdsConnected(status) {
+  return status === "connected";
+}
+
+/**
  * Retourne l'état de connexion GDS d'un projet : `'connected'` | `'error'` |
  * `'not_configured'`. Fail-open : erreur d'appel → `'not_configured'`. Ne
  * révèle jamais de mot de passe (le backend ne remonte que l'état).

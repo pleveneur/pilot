@@ -27,7 +27,7 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
-import { isProjectGds } from "./gds-status.js";
+import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
 
@@ -766,7 +766,7 @@ async function collectBubbleBadgeProjects(text, baseBadges = null) {
           await Promise.all(candidates.map(async (c) => {
             const display = (c.name && String(c.name).trim()) || pathTailName(c.path);
             if (!display) return;
-            if (await isProjectGds(c.path)) gdsByDisplay.set(display.toLowerCase(), true);
+            if (isGdsConnected(await isProjectGds(c.path))) gdsByDisplay.set(display.toLowerCase(), true);
           }));
           return names.map((n) => {
             const raw = stripGdsSuffix(n);

@@ -13,8 +13,10 @@ use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::{Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 /// Nom du fichier de secrets GDS (mots de passe), stocké HORS du projet
@@ -634,8 +636,14 @@ pub async fn gds_provision(
     // Stocker les mots de passe hors projet (0600, hors git).
     save_project_secrets(&project, &db_password, &admin_password)?;
     // Mémoriser la connexion par serveur (Évolution 1) : réutilisable sur un
-    // autre projet sans ressaisir les mots de passe.
-    save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
+    // autre projet sans ressaisir les mots de passe. Best-effort : une fois la
+    // base Postgres provisionnée, un échec d'écriture des secrets ne doit PAS
+    // faire échouer tout le provision (sinon état incohérent : Err renvoyé
+    // mais serveur déjà provisionné). On ne logue aucune valeur sensible —
+    // seul le message d'erreur (I/O secrets, jamais les mots de passe).
+    if let Err(e) = save_server_credentials(&host, &port, &user, &db_password, &admin_password) {
+        eprintln!("[gds] provision : mémorisation des connexions serveur ignorée ({})", e);
+    }
     // Stocker le pool dans AppState.
     *state.gds_pool.lock().unwrap() = Some(pool);
     Ok(json!({ "ok": true, "db": gds_db::GDS_DB_NAME, "repos_dir": repos.to_string_lossy() }))
@@ -942,6 +950,81 @@ pub(crate) fn connection_status_from_flags(
     }
 }
 
+/// Cache court (TTL ~5 s) de la joignabilité du pool GDS pour un projet.
+/// Évite les appels réseau répétés (timeouts) quand la sidebar interroge
+/// plusieurs projets à chaque rendu. Fail-open : un accès à ce cache ne
+/// bloque jamais l'UI. Aucune donnée sensible n'y est stockée (juste un booléen).
+fn gds_pool_cache() -> &'static StdMutex<HashMap<String, (Instant, bool)>> {
+    static CACHE: OnceLock<StdMutex<HashMap<String, (Instant, bool)>>> = OnceLock::new();
+    CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
+}
+
+/// Vérifie si le pool PostgreSQL d'un projet est joignable, en réutilisant le
+/// pool déjà présent dans `AppState.gds_pool` (ping léger `SELECT 1`) AVANT de
+/// tenter une reconnexion (`restore_pool_for_project` n'est plus appelé qu'en
+/// dernier recours). Un cache court (TTL ~5 s) par projet évite les appels
+/// réseau répétés de la sidebar. Fail-open : jamais bloquant pour l'UI.
+async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bool) -> bool {
+    if !has_pw {
+        return false;
+    }
+    let name = project_name(project);
+    let now = Instant::now();
+    // Cache court : réutiliser un résultat récent (< TTL) si possible.
+    if let Ok(lock) = gds_pool_cache().lock() {
+        if let Some((at, ok)) = lock.get(&name) {
+            if now.duration_since(*at) < Duration::from_secs(5) {
+                return *ok;
+            }
+        }
+    }
+    // Pool déjà présent dans AppState : ping léger, pas de reconnexion.
+    // On clone la référence hors du garde (garde Mutex non-Send, à ne pas
+    // porter à travers un await).
+    let existing = state.gds_pool.lock().ok().and_then(|g| g.clone());
+    if let Some(pool) = existing {
+        let alive = tokio::time::timeout(
+            Duration::from_secs(2),
+            sqlx::query("SELECT 1").execute(&pool),
+        )
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_some();
+        if alive {
+            if let Ok(mut lock) = gds_pool_cache().lock() {
+                lock.insert(name.clone(), (now, true));
+            }
+            return true;
+        }
+    }
+    // Aucun pool actif (ou devenu injoignable) → tentative de reconnexion en
+    // dernier recours, puis stockage du pool si elle réussit.
+    let ok = match restore_pool_for_project(project).await {
+        Ok(p) => {
+            let alive = tokio::time::timeout(
+                Duration::from_secs(2),
+                sqlx::query("SELECT 1").execute(&p),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .is_some();
+            if alive {
+                *state.gds_pool.lock().unwrap() = Some(p);
+            } else {
+                let _ = p.close().await;
+            }
+            alive
+        }
+        Err(_) => false,
+    };
+    if let Ok(mut lock) = gds_pool_cache().lock() {
+        lock.insert(name, (now, ok));
+    }
+    ok
+}
+
 /// Commande Tauri : état honnête de la connexion GDS d'un projet (Évolution 3).
 /// Retourne `{"status": "connected" | "error" | "not_configured"}`. Réutilise
 /// les infos de connexion (restore_pool_for_project pour la joignabilité).
@@ -972,18 +1055,8 @@ pub async fn gds_connection_status(
         .and_then(|p| p.db_password.as_deref())
         .map(|p| !p.is_empty())
         .unwrap_or(false);
-    // Pool joignable : reconnexion effective (fail-open).
-    let pool_ok = if has_pw {
-        match restore_pool_for_project(&project).await {
-            Ok(p) => {
-                let _ = p.close().await;
-                true
-            }
-            Err(_) => false,
-        }
-    } else {
-        false
-    };
+    // Pool joignable : réutilise le pool AppState et un cache court (fail-open).
+    let pool_ok = pool_is_connected(state, &project, has_pw).await;
     // Dépôt bare valide sur le serveur GDS.
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let name = project_name(&project);
