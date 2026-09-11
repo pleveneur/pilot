@@ -74,7 +74,16 @@ pub(crate) struct GdsSecrets {
 }
 
 /// Chemin du fichier de secrets (`~/.pilot/gds_secrets.json`).
+/// Sous `#[test]` uniquement : si un override thread-local GDS est posé, il est
+/// utilisé à la place pour que les tests n'écrivent JAMAIS dans le vrai fichier
+/// utilisateur.
 fn secrets_path() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    {
+        if let Some(p) = test_gds_secrets_override_path() {
+            return Ok(p);
+        }
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| "HOME/USERPROFILE introuvable".to_string())?;
@@ -84,6 +93,61 @@ fn secrets_path() -> Result<PathBuf, String> {
     let dir = PathBuf::from(&home).join(".pilot");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Création ~/.pilot: {}", e))?;
     Ok(dir.join(GDS_SECRETS_FILE))
+}
+
+// ── Isolation des tests GDS vis-à-vis du fichier secrets réel ──
+//
+// En mode test, un override thread-local (`TEST_GDS_SECRETS_OVERRIDE`)
+// redirige `secrets_path()` vers un fichier TEMPORAIRE dédié. Chaque test pose
+// son guard (Drop) : le fichier temporaire est retiré systématiquement, même en
+// cas de panique, et le vrai `~/.pilot/gds_secrets.json` n'est jamais touché.
+
+#[cfg(test)]
+thread_local! {
+    static TEST_GDS_SECRETS_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn test_gds_secrets_override_path() -> Option<PathBuf> {
+    TEST_GDS_SECRETS_OVERRIDE.with(|c| c.borrow().clone())
+}
+
+/// Compteur global pour rendre chaque fichier temporaire unique par test.
+#[cfg(test)]
+static TEST_GDS_SECRETS_COUNTER: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Guard posé au début des tests GDS : dirige les secrets vers un fichier
+/// temporaire (jetable, retiré au Drop, même en cas de panique) et ne touche
+/// jamais au vrai `~/.pilot/gds_secrets.json`.
+#[cfg(test)]
+#[derive(Default)]
+struct TestGdsSecretsGuard;
+
+#[cfg(test)]
+impl TestGdsSecretsGuard {
+    fn new() -> Self {
+        let n = TEST_GDS_SECRETS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "pilot-gds-secrets-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        TEST_GDS_SECRETS_OVERRIDE.with(|c| *c.borrow_mut() = Some(path));
+        TestGdsSecretsGuard
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestGdsSecretsGuard {
+    fn drop(&mut self) {
+        if let Some(p) = test_gds_secrets_override_path() {
+            let _ = std::fs::remove_file(&p);
+        }
+        TEST_GDS_SECRETS_OVERRIDE.with(|c| *c.borrow_mut() = None);
+    }
 }
 
 /// Lit les secrets GDS (fichier absent → defaults). Aucun secret dans les logs.
@@ -1266,9 +1330,9 @@ mod tests {
 
     #[test]
     fn save_server_credentials_memorizes_and_lists_without_pw() {
-        // S'appuie sur le fichier secrets réel (~/.pilot/gds_secrets.json) — on
-        // n'ajoute qu'une entrée et on la retire pour rester non destructif.
-        let key = server_key("192.168.1.50", "pilot");
+        // Secrets isolés dans un fichier TEMPORAIRE (jamais ~/.pilot réel) : le
+        // guard Drop retire le fichier même en cas de panique.
+        let _guard = TestGdsSecretsGuard::new();
         save_server_credentials("192.168.1.50", "5432", "pilot", "dbpw", "adminpw").unwrap();
         // get_saved_server retrouve les mots de passe.
         let saved = get_saved_server("192.168.1.50", "5432", "pilot").unwrap().unwrap();
@@ -1280,24 +1344,28 @@ mod tests {
         assert!(!serialized.contains("dbpw"));
         assert!(!serialized.contains("adminpw"));
         assert!(list.iter().any(|v| v["host"] == "192.168.1.50" && v["user"] == "pilot"));
-        // Nettoyage : on retire l'entrée du fichier secrets réel.
-        let mut secrets = read_gds_secrets().unwrap();
-        secrets.servers.remove(&key);
-        write_gds_secrets(&secrets).unwrap();
     }
 
     #[test]
     fn server_only_listed_and_appliable_when_validated() {
+        // Secrets isolés dans un fichier TEMPORAIRE (jamais ~/.pilot réel), avec
+        // une clé d'hôte PROPRES (distincte des autres tests GDS) + un projet
+        // dans le répertoire temp pour ne rien écrire dans le workspace.
+        let _guard = TestGdsSecretsGuard::new();
+        let host = "192.168.1.250";
+        let key = server_key(host, "pilot");
+        let proj_dir = std::env::temp_dir()
+            .join(format!("pilot-gds-apply-proj-{}", std::process::id()));
+        let proj = proj_dir.to_string_lossy().to_string();
         // Un serveur enregistré est toujours marqué validé (l'enregistrement
         // n'a lieu qu'après un test de connexion réussi dans gds_provision).
-        let key = server_key("192.168.1.50", "pilot");
-        save_server_credentials("192.168.1.50", "5432", "pilot", "dbpw", "adminpw").unwrap();
-        let saved = get_saved_server("192.168.1.50", "5432", "pilot").unwrap().unwrap();
+        save_server_credentials(host, "5432", "pilot", "dbpw", "adminpw").unwrap();
+        let saved = get_saved_server(host, "5432", "pilot").unwrap().unwrap();
         assert!(saved.validated);
         // La liste ne contient QUE des serveurs validés (tous ici le sont).
         let list = list_saved_servers();
         assert!(list.iter().all(|v| v["validated"] == true));
-        assert!(list.iter().any(|v| v["host"] == "192.168.1.50" && v["user"] == "pilot"));
+        assert!(list.iter().any(|v| v["host"] == host && v["user"] == "pilot"));
         // Un serveur non validé (fichier édité à la main) est filtré de la liste.
         let mut secrets = read_gds_secrets().unwrap();
         if let Some(e) = secrets.servers.get_mut(&key) {
@@ -1306,16 +1374,12 @@ mod tests {
         write_gds_secrets(&secrets).unwrap();
         let list2 = list_saved_servers();
         assert!(
-            !list2.iter().any(|v| v["host"] == "192.168.1.50"
-                && v["user"] == "pilot"),
+            !list2.iter().any(|v| v["host"] == host && v["user"] == "pilot"),
             "serveur non validé ne doit pas être proposé"
         );
         // gds_apply_server refuse un serveur non validé.
-        let res = gds_apply_server("proj".to_string(), "192.168.1.50".to_string(), "5432".to_string(), "pilot".to_string(), "dev@kalico".to_string());
+        let res = gds_apply_server(proj, host.to_string(), "5432".to_string(), "pilot".to_string(), "dev@kalico".to_string());
         assert!(res.is_err());
-        // Nettoyage : on retire l'entrée du fichier secrets réel.
-        let mut secrets = read_gds_secrets().unwrap();
-        secrets.servers.remove(&key);
-        write_gds_secrets(&secrets).unwrap();
+        let _ = std::fs::remove_dir_all(&proj_dir);
     }
 }
