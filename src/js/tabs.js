@@ -1193,8 +1193,10 @@ class TabsManager {
       (t) => t.mode === "terminal" && t.projectCommandId === cmd.id
     );
     if (existing) {
-      this.switchTab(existing.id);
-      return;
+      // Relance d'une commande projet : fermer l'onglet terminal dédié existant
+      // (tue proprement l'ancien PTY) puis continuer vers la création d'un onglet
+      // vierge. Ne touche jamais aux terminaux manuels ni aux terminaux d'agent.
+      await this.closeTab(existing.id);
     }
 
     const label = cmd.name || cmd.command;
