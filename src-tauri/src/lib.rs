@@ -576,7 +576,9 @@ struct AppConfig {
     super_agent_purge_before_delegate: bool,
     // Paramètre assistant : quand activé (défaut), chaque agent appelé par
     // l'assistant (delegate_to_coder / run_agents) intègre le protocole
-    // quality-gate dans son prompt (consigne + cargo test --lib).
+    // quality-gate dans son prompt. La consigne ajoutée est neutre : identique
+    // quel que soit le langage du projet, elle demande de lancer les tests du
+    // projet avant de committer.
     #[serde(default = "default_true")]
     super_agent_quality_gate: bool,
     // Paramètre assistant : quand activé (défaut), l'enveloppe de brief
