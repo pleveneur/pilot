@@ -594,7 +594,7 @@ const SUPER_LOOP_BUFFER_MIN = 200;
 // Issue #135 : map des suivis d'agents invisibles indexée par clé
 // (agentId, projectPath) — deux agents invisibles peuvent tourner en parallèle
 // sur deux projets différents sans s'écraser (perte d'événements du premier).
-const invisibleAgents = new Map(); // key -> { agentId, projectPath, messagesEl, banner, unlisten }
+const invisibleAgents = new Map(); // key -> { agentId, projectPath, messagesEl, unlisten }
 const INVISIBLE_LOOP_CHECK_INTERVAL_MS = 500;
 const INVISIBLE_LOOP_BUFFER_MIN = 200;
 
@@ -1690,11 +1690,6 @@ export async function createSuperAgent(container) {
     if (immersiveSuggestions) immInput.appendChild(immersiveSuggestions);
     if (busyHint && busyHint.parentNode) busyHint.parentNode.removeChild(busyHint);
     immInput.appendChild(busyHint);
-    // 4.3 : les notifications d'agents en arrière-plan suivent la discussion
-    // (hors flux) lors de la bascule en mode assistant seul.
-    for (const t of invisibleAgents.values()) {
-      if (t.banner && t.banner.isConnected) attachInvisibleBanner(t.banner);
-    }
     immInput.appendChild(inputBar);
     if (pendingBar) immInput.appendChild(pendingBar);
     // Disclaimer (maquette V4) : mention sous la barre de saisie.
@@ -1732,11 +1727,6 @@ export async function createSuperAgent(container) {
     // (sinon insertBefore lève une DOMException et le retour échoue).
     wrapper.appendChild(inputBar);
     wrapper.insertBefore(busyHint, inputBar);
-    // 4.3 : ré-attacher les notifications d'agents en arrière-plan (elles
-    // étaient dans l'overlay, détruit ci-dessous) au mode standard.
-    for (const t of invisibleAgents.values()) {
-      if (t.banner && t.banner.isConnected) attachInvisibleBanner(t.banner);
-    }
     // pendingBar revenait en fin de wrapper. (statusEl n'est plus déplacé : il
     // reste dans la toolbar, masqué par la règle T6 — l'indicateur d'activité
     // n'apparaît plus en mode immersif. Le panneau des événements n'est plus
@@ -3486,16 +3476,23 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      // 4.1 (R3) : résoudre l'agent cible de la délégation depuis l'objet
-      // persisté (get_agent) — jamais le littéral "default". Toute la délégation
-      // (start invisible, canal d'événements, envoi, arrêt) cible cet id résolu,
-      // aligné sur la vue affichée (règle de cohérence ecrans.md).
-      const agentId = await resolveDelegationAgentId(projectPath);
+      // 4.1 (R3) + tâche 209 : résoudre l'agent cible de la délégation depuis
+      // l'objet persisté (get_agent) — jamais le littéral "default". Ordre : (1)
+      // agent explicitement demandé (`agent_id` de l'outil), (2) codeur du projet,
+      // (3) agent par défaut en dernier recours. Toute la délégation (start
+      // invisible, canal d'événements, envoi, arrêt) cible cet id résolu, aligné
+      // sur la vue affichée (règle de cohérence ecrans.md).
+      const target = await resolveDelegationTarget(projectPath, info.agentId || null);
+      const agentId = target.id;
       if (!agentId) {
         appendSystemMessage(messagesEl, "❌ Impossible de résoudre l'agent cible de la délégation.");
         await respondSuperAgentAction(id, false);
         return;
       }
+      // Afficher l'agent finalement retenu (agent demandé, sinon codeur du projet,
+      // sinon agent par défaut) — le retour est explicite, pas de détournement
+      // silencieux vers un autre agent.
+      appendSystemMessage(messagesEl, `🤖 Agent retenu pour la délégation : « ${target.name} » (${target.id}).`);
       // Évolution 64 : « agent invisible ». Si l'option est activée (défaut),
       // on démarre la session agent en arrière-plan SANS créer d'onglet agent
       // (startAgentInvisible) et on met en place le suivi (bouton Arrêter,
@@ -3537,7 +3534,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      appendSystemMessage(messagesEl, "✅ Demande transmise à l'agent du projet (il travaille en arrière-plan, je reste ici pour son retour).");
+      appendSystemMessage(messagesEl, `✅ Demande transmise à l'agent « ${target.name} » (${target.id}) (il travaille en arrière-plan, je reste ici pour son retour).`);
       await respondSuperAgentAction(id, true);
     } else if (action === "purge_agent_conversation") {
       // Purge à la demande : l'Assistant appelle l'outil `purge_agent_conversation`
@@ -3810,42 +3807,18 @@ function flushDelegationQueue() {
 //
 // Quand l'option « agent invisible » est activée, l'Assistant délègue une
 // demande à l'agent SANS créer d'onglet agent. On écoute alors le canal
-// d'événements de l'agent en arrière-plan pour : (1) afficher une notification
-// discrète HORS du flux de discussion (bandeau au-dessus de la barre de
-// saisie, sans bouton — l'arrêt passe par l'outil stop_agent de l'Assistant),
-// (2) détecter une boucle de réflexion (loop-detection) et arrêter l'agent
-// automatiquement, (3) notifier l'utilisateur et injecter le feedback de
-// délégation à la fin de la tâche (agent_end).
+// d'événements de l'agent en arrière-plan pour : (1) détecter une boucle de
+// réflexion (loop-detection) et arrêter l'agent automatiquement, (2) notifier
+// l'utilisateur et injecter le feedback de délégation à la fin de la tâche
+// (agent_end). L'affichage d'un bandeau a été retiré (retour utilisateur) : le
+// suivi reste 100 % fonctionnel, seule la partie visuelle disparaît.
 
 /**
- * Attache une notification d'agent en arrière-plan HORS du flux de discussion
- * (retour utilisateur 30/08) : juste au-dessus de la barre de saisie, à côté
- * de l'indicateur busyHint. Fallback : en tête du conteneur courant du flux.
- * Utilisée à la création puis à chaque ré-affichage et bascule immersif.
- * @param {Element} banner
- * @returns {boolean} true si l'attache a réussi.
- */
-function attachInvisibleBanner(banner) {
-  if (!banner) return false;
-  const busyHintEl = document.querySelector(".agent-busy-hint");
-  if (busyHintEl && busyHintEl.parentNode) {
-    busyHintEl.parentNode.insertBefore(banner, busyHintEl);
-    return true;
-  }
-  const messagesEl = superMessagesEl;
-  if (messagesEl && messagesEl.parentNode) {
-    messagesEl.parentNode.insertBefore(banner, messagesEl);
-    return true;
-  }
-  return false;
-}
-
-/**
- * Démarre le suivi réactif de l'agent invisible (notification hors flux +
- * écoute du canal). 4.3 : la notification et la notification de fin sont
- * pilotées par l'état de l'objet (agent-state-changed + lecture get_agent),
- * plus par un état local non persisté. Le buffer de détection de boucle est
- * SCOPÉ au listener (closure), pas une variable de module transitoire.
+ * Démarre le suivi réactif de l'agent invisible (écoute du canal). 4.3 : la
+ * notification de fin est pilotée par l'état de l'objet (agent-state-changed +
+ * lecture get_agent), plus par un état local non persisté. Le buffer de
+ * détection de boucle est SCOPÉ au listener (closure), pas une variable de
+ * module transitoire.
  * @param {Element} messagesEl
  * @param {string} agentId - id résolu depuis l'objet (4.1).
  * @param {string|null} projectPath
@@ -3854,19 +3827,10 @@ function attachInvisibleBanner(banner) {
 async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, request) {
   // Issue #135 : on ne coupe plus les suivis précédents — chaque agent invisible
   // a son propre suivi dans la map invisibleAgents (clé agentId+projectPath).
-
-  // Notification hors flux (retour utilisateur 30/08) : un bandeau discret
-  // affiché AU-DESSUS de la barre de saisie — PAS un message du chat — et
-  // SANS bouton : l'arrêt passe par l'outil stop_agent de l'Assistant
-  // (stop_agent_session), pas par un bouton dans la discussion.
-  const statusEl = document.createElement("div");
-  statusEl.className = "agent-invisible-status";
-  statusEl.setAttribute("role", "status");
-  const label = document.createElement("span");
-  label.className = "agent-invisible-label";
-  label.textContent = "🤖 Agent en arrière-plan…";
-  statusEl.appendChild(label);
-  attachInvisibleBanner(statusEl);
+  //
+  // Retour utilisateur : plus aucun bandeau visuel « Agent en arrière-plan… »
+  // au-dessus de la barre de saisie. Le suivi reste identique (écoute du canal,
+  // détection de boucle, fin de tâche, arrêt via l'outil stop_agent).
 
   // Buffer de détection de boucle, SCOPÉ au listener (pas de variable de
   // module transitoire — issue #55, 4.3).
@@ -3887,7 +3851,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
   });
 
   invisibleAgents.set(invisibleAgentKey(agentId, projectPath), {
-    agentId, projectPath, messagesEl, banner: statusEl, unlisten,
+    agentId, projectPath, messagesEl, unlisten,
   });
 }
 
@@ -3955,7 +3919,7 @@ async function checkInvisibleAgentCompletion(messagesEl, agentId, projectPath) {
   );
 }
 
-/** Finalise le suivi (idempotent) : nettoie le bandeau, notifie, feedback délégation. */
+/** Finalise le suivi (idempotent) : notifie, feedback délégation. */
 function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   // Finaliser une seule fois (l'état de l'objet a déjà basculé).
   const key = invisibleAgentKey(agentId, projectPath);
@@ -4008,13 +3972,12 @@ function stopInvisibleAgent(agentId, projectPath) {
   }
 }
 
-/** Nettoie le suivi de l'agent invisible (unlisten + bandeau). */
+/** Nettoie le suivi de l'agent invisible (unlisten). */
 function stopInvisibleAgentMonitoring(agentId, projectPath) {
   // Sans clé : nettoyage global de tous les suivis (arrêt complet).
   if (agentId === undefined) {
     for (const t of Array.from(invisibleAgents.values())) {
       if (t.unlisten) { try { t.unlisten(); } catch (_) {} }
-      if (t.banner) { try { t.banner.remove(); } catch (_) {} }
     }
     invisibleAgents.clear();
     return;
@@ -4025,41 +3988,80 @@ function stopInvisibleAgentMonitoring(agentId, projectPath) {
   if (t.unlisten) {
     try { t.unlisten(); } catch (_) {}
   }
-  if (t.banner) {
-    try { t.banner.remove(); } catch (_) {}
-  }
   invisibleAgents.delete(key);
 }
 
 /**
- * 4.1 (R3) : résout l'id de l'agent cible d'une délégation depuis l'objet
- * persisté (get_agent), jamais depuis un littéral. Cible l'agent standard du
- * projet (id `default` dans le registre global) — aligné sur la vue affichée.
+ * 4.1 (R3) + tâche 209 : résout l'agent CIBLE d'une délégation depuis l'objet
+ * persisté (get_agent), jamais depuis un littéral, ET son libellé d'affichage.
+ * Ordre de résolution :
+ *   1. l'agent explicitement demandé par l'assistant (`agent_id`) ;
+ *   2. sinon le codeur du projet (agent du registre classé codeur, priorité à
+ *      l'id « codeur ») ;
+ *   3. sinon l'agent par défaut du projet (littéral `default`), dernier recours.
  * @param {string|null} projectPath
- * @returns {Promise<string|null>}
+ * @param {string|null} [requestedAgentId]
+ * @returns {Promise<{id: string, name: string}>}
  */
-async function resolveDelegationAgentId(projectPath) {
+async function resolveDelegationTarget(projectPath, requestedAgentId) {
+  // 1. Agent explicitement demandé par l'assistant (outil delegate_to_coder).
+  if (requestedAgentId) {
+    const found = await lookupAgent(requestedAgentId, projectPath);
+    if (found) return found;
+  }
+  // 2. Codeur du projet : agent du registre classé codeur (priorité id « codeur »).
   try {
-    const agent = await invoke("get_agent", { agentId: DEFAULT_AGENT_ID, projectPath: null });
-    if (agent && agent.id) return agent.id;
+    const registry = await loadAgentRegistry();
+    const agents = Array.isArray(registry && registry.agents) ? registry.agents : [];
+    const preferred = agents.find((a) => a && a.id === "codeur");
+    const coder = preferred || agents.find((a) => a && classifyAgent(normalizeAgent(a)).isCoder);
+    if (coder && coder.id) {
+      return { id: coder.id, name: coder.name || coder.id };
+    }
   } catch (_) {}
-  // Fallback : agent du projet (per-project) s'il existe.
-  try {
-    const agent = await invoke("get_agent", { agentId: DEFAULT_AGENT_ID, projectPath: projectPath || null });
-    if (agent && agent.id) return agent.id;
-  } catch (_) {}
-  // Dernier recours (Bug principal / Bug 5) : l'agent par défaut. start_agent_session
+  // 3. Agent par défaut du projet (dernier recours). start_agent_session
   // (AgentService::start) le seed automatiquement en base avec des valeurs par
-  // défaut, donc retourner "default" est sûr même sans objet existant. On ne
-  // désigne plus l'onglet agent affiché (3e repli) : il pouvait viser un agent
-  // différent de celui que l'utilisateur a configuré pour la délégation.
-  return DEFAULT_AGENT_ID;
+  // défaut, donc retourner "default" est sûr même sans objet existant.
+  const def = await lookupAgent(DEFAULT_AGENT_ID, projectPath);
+  if (def) return def;
+  return { id: DEFAULT_AGENT_ID, name: DEFAULT_AGENT_ID };
 }
 
 /**
- * 4.3 : piloté par l'événement `agent-state-changed` de Rust. Met à jour le
- * bandeau « Arrêter » selon l'état de l'objet et finalise quand l'objet n'est
- * plus actif (Stopped/Error/Unloaded) — plus par un état local transitoire.
+ * Résout un agent par id (base globale puis scope projet) avec libellé. Retourne
+ * null si introuvable dans les deux scopes.
+ * @param {string} agentId
+ * @param {string|null} projectPath
+ * @returns {Promise<{id: string, name: string}|null>}
+ */
+async function lookupAgent(agentId, projectPath) {
+  const scopes = projectPath ? [null, projectPath] : [null];
+  for (const scope of scopes) {
+    try {
+      const agent = await invoke("get_agent", { agentId, projectPath: scope });
+      if (agent && agent.id) return { id: agent.id, name: agent.name || agent.id };
+    } catch (_) {}
+  }
+  return null;
+}
+
+/**
+ * 4.1 (R3) : id seul de l'agent standard du projet (compat : arrêt ciblé
+ * `stop_agent`). Ordre inchangé : agent par défaut global, sinon agent par
+ * défaut projet, sinon littéral `default`. La résolution codeur de la tâche 209
+ * est réservée à `resolveDelegationTarget` (chemin de délégation).
+ * @param {string|null} projectPath
+ * @returns {Promise<string>}
+ */
+async function resolveDelegationAgentId(projectPath) {
+  const def = await lookupAgent(DEFAULT_AGENT_ID, projectPath);
+  return def ? def.id : DEFAULT_AGENT_ID;
+}
+
+/**
+ * 4.3 : piloté par l'événement `agent-state-changed` de Rust. Finalise quand
+ * l'objet n'est plus actif (Stopped/Error/Unloaded) — plus par un état local
+ * transitoire.
  * @param {object} payload - { agentId, projectPath, loaded, busy, procState, visible }.
  */
 function handleAgentStateChanged(payload) {
@@ -4071,11 +4073,6 @@ function handleAgentStateChanged(payload) {
   const active =
     payload.visible === false &&
     (state === "Running" || state === "Paused" || state === "Compacting" || !!payload.busy);
-  if (active && t.banner && !t.banner.isConnected) {
-    // La notification a été déconnectée (bascule de mode, purge de l'overlay)
-    // → la ré-attacher hors flux, dans le conteneur courant.
-    attachInvisibleBanner(t.banner);
-  }
   if (!active && (state === "Stopped" || state === "Error" || state === "Unloaded")) {
     // Fin pilotée par l'état de l'objet (si pas déjà finalisé).
     finalizeInvisibleAgent(

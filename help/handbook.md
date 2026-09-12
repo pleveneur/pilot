@@ -1201,10 +1201,12 @@ uniquement un bloc d'instructions dans le prompt système.
   **n'importe quel projet**, même s'il n'est **pas actif** (outil
   `delegate_to_coder` avec le paramètre `project`). L'agent de ce projet est
   alors **démarré en arrière-plan (invisible)** automatiquement, **sans ouvrir
-  le projet ni l'onglet**. Le suivi se matérialise par une **notification
-  discrète hors du flux de discussion** (bandeau au-dessus de la barre de
-  saisie, sans bouton : l'arrêt passe par l'outil `stop_agent` de l'Assistant),
-  une détection de boucle et une notification de fin. L'arrêt et
+  le projet ni l'onglet**. Le suivi se traduit par une **détection de boucle**
+  et une **notification de fin** (déposée dans le chat de l'Assistant) ; l'arrêt
+  passe par l'outil `stop_agent` de l'Assistant. Le suivi de l'agent en
+  arrière-plan (écoute des événements, détection de boucle, fin de tâche, arrêt
+  ciblé) est **purement interne** : aucun bandeau visuel ne s'affiche au-dessus
+  de la barre de saisie. L'arrêt et
   l'événementiel ciblent ce projet précis (canal d'événements et
   `stop_agent_session` routés par chemin de projet).
 - **#28 — Fermeture de l'onglet** : quand l'Assistant **arrête l'agent standard
