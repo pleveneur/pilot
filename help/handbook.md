@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-11 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1424,6 +1424,25 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   pas créé : il relance le rappel si nécessaire.
 - Une fois le AGENTS.md **créé (ou complété)**, il **désactive le rappel**
   correspondant (`schedule_set_enabled`).
+
+### Règle par défaut — anti-attente (ne pas surveiller un agent en temps réel)
+- Après un **lancement d'agent** (`run_agents` / délégation), l'Assistant
+  **rend immédiatement la main** à l'utilisateur avec un **statut court**
+  (« travail lancé en arrière-plan »). Il **ne surveille jamais** un agent en
+  temps réel et **ne bloque jamais** la conversation en attendant sa fin.
+- **Pas de boucle d'attente** : ni `sleep`/attente active, ni vérifications
+  répétées de `list_agent_sessions` / `get_delegation_result` / `git_status`
+  juste après un lancement.
+- Pour connaître l'avancement, il **programme UN seul rappel différé** non
+  bloquant (`schedule_create`) et le **désactive une fois le travail terminé**
+  (`schedule_set_enabled`).
+- Il ne consulte un **résultat de délégation** (`get_delegation_result`) que si
+  l'utilisateur le demande, ou quand il est déjà disponible.
+- Si l'utilisateur écrit pendant qu'un travail tourne, l'Assistant **répond
+  immédiatement** et **signale que le travail continue en arrière-plan**.
+- Le bloc système « **Supervision des agents** » reste distinct : il sert à
+  **décider si on ARRÊTE un agent** (ne pas couper un agent encore actif), pas à
+  le surveiller en continu.
 
 ### Poser des questions
 - Dans l'onglet 🧭, posez **n'importe quelle question sur tous les projets**

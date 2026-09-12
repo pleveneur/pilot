@@ -313,10 +313,23 @@ const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_ag
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : usage de
 /// l'outil `list_agent_sessions` et de la dernière activité (`lastActivity` /
-/// `lastActivityRelative` / `lastEvent`) pour juger si un agent progresse
-/// réellement avant de décider de l'arrêter. Un agent avec une dernière activité
-/// récente travaille encore, même sans sortie visible immédiate.
-const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nUtilise `list_agent_sessions` (et ses champs `lastActivity`/`lastActivityRelative`/`lastEvent`) pour juger si un agent progresse réellement avant de l'arrêter : une activité RÉCENTE signifie qu'il travaille encore (ne l'arrête pas sur la seule absence de sortie visible) ; n'envisage l'arrêt que pour un agent réellement inactif (dernière activité ancienne).\n";
+/// `lastActivityRelative` / `lastEvent`) pour décider si on ARRÊTE un agent
+/// (juger la progression pour ne pas couper un agent encore actif). Ce bloc NE
+/// sert PAS à surveiller un agent en continu (voir la règle anti-attente
+/// SUPER_AGENT_NO_WAIT_PROMPT). Un agent avec une dernière activité récente
+/// travaille encore, même sans sortie visible immédiate.
+const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nUtilise `list_agent_sessions` (et ses champs `lastActivity`/`lastActivityRelative`/`lastEvent`) pour juger si un agent progresse réellement avant de l'arrêter : une activité RÉCENTE signifie qu'il travaille encore (ne l'arrête pas sur la seule absence de sortie visible) ; n'envisage l'arrêt que pour un agent réellement inactif (dernière activité ancienne).\n\nCe bloc sert UNIQUEMENT à décider si tu ARRÊTES un agent (ne pas couper un agent encore actif) : il ne t'autorise PAS à le surveiller en continu (voir la règle anti-attente).\n";
+
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
+/// par défaut « anti-attente ». Après un lancement (`run_agents` / délégation),
+/// l'assistant doit rendre immédiatement la main à l'utilisateur (statut court
+/// « travail lancé en arrière-plan ») au lieu de surveiller l'agent en temps réel
+/// (sleep, relectures répétées de `list_agent_sessions`/`get_delegation_result`/
+/// `git_status`), ce qui bloquerait la conversation. Pour l'avancement : UN
+/// rappel différé non bloquant (`schedule_create`), désactivé une fois le travail
+/// terminé. Complète SUPER_AGENT_SESSIONS_PROMPT (décider d'ARRÊTER un agent) et
+/// SUPER_AGENT_RESILIENCE_PROMPT (ne pas rester bloqué).
+const SUPER_AGENT_NO_WAIT_PROMPT: &str = "\n\n## Règle anti-attente — ne pas surveiller un agent en temps réel\nNe surveille JAMAIS un agent en temps réel et ne bloque JAMAIS la conversation en attendant sa fin. Après un lancement (`run_agents` / délégation), rends immédiatement la main à l'utilisateur avec un statut court (« travail lancé en arrière-plan »).\n\nInterdiction des boucles d'attente : pas de `sleep` ni d'attente active, pas de vérifications répétées de `list_agent_sessions`, `get_delegation_result` ou `git_status` juste après un lancement. Pour connaître l'avancement, programme UN SEUL rappel différé non bloquant (`schedule_create`) et désactive-le une fois le travail terminé (`schedule_set_enabled`).\n\nNe consulte un résultat de délégation (`get_delegation_result`) QUE si l'utilisateur le demande, ou quand il est déjà disponible. Si l'utilisateur écrit pendant qu'un travail tourne, réponds-lui immédiatement et signale que le travail continue en arrière-plan.\n";
 
 /// Prompt guidant l'assistant sur la mémoire de session réinjectée au premier
 /// message après redémarrage. En-tête du bloc « Mémoire de session (reprise) »
@@ -490,8 +503,13 @@ pub(crate) fn do_send_super_agent_prompt(
     // la même tâche à l'identique (cause racine des boucles de run_agents).
     full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
     // Supervision des agents : juger la progression via la dernière activité
-    // (lastActivity) avant de décider d'arrêter un agent.
+    // (lastActivity) avant de décider d'ARRÊTER un agent (ne pas le surveiller
+    // en continu).
     full_system.push_str(SUPER_AGENT_SESSIONS_PROMPT);
+    // Règle par défaut anti-attente : après un lancement, rendre immédiatement
+    // la main à l'utilisateur (pas de surveillance temps réel ni de boucle
+    // sleep/poll) ; programmer au plus UN rappel différé pour l'avancement.
+    full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
     if !system_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
         full_system.push_str(system_prompt.trim());
