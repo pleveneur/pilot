@@ -196,7 +196,7 @@ jobs:
           # tauri-action : ce dernier utiliserait le releaseBody fixe (sans
           # changelog). Le job `latest-json` ci-dessous génère un latest.json
           # avec le changelog (depuis les commits) et l'upload lui-même.
-          updaterJson: false
+          includeUpdaterJson: false
           args: --target ${{ matrix.rust_target }}
 
   # ─────────────────────────────────────────────────────────────────────
