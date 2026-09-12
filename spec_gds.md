@@ -268,6 +268,25 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   schéma applicatif.
 - Migrations versionnées et appliquées **au démarrage du serveur GDS** (ou via
   une commande `gds_migrate`).
+- **Empreintes stables — octets figés en LF (`.gitattributes`)** : sqlx 0.8
+  compare une empreinte **SHA-384 du contenu** des fichiers de migration avec
+  celle stockée dans `_sqlx_migrations`. Le dépôt a `core.autocrlf=true`
+  (Windows) : sans `.gitattributes`, un même `.sql` serait embarqué en LF dans
+  les builds de dev et en **CRLF** dans la build installée/release, changeant
+  l'empreinte → `MigrateError::VersionMismatch(1)` (« migration 1 was previously
+  applied but has been modified ») et connexion GDS impossible. La racine du
+  dépôt contient donc `.gitattributes` (`*.sql text eol=lf`) et une garde CI
+  (`release.yml`) échoue si une migration n'est pas en `i/lf w/lf`. **Toute
+  future migration doit rester en LF.**
+- **Auto-réparation limitée aux fins de ligne** (`gds_db.rs::migrate`) : si un
+  `VersionMismatch` provient UNIQUEMENT d'un écart LF ↔ CRLF (comparaison
+  bidirectionnelle des empreintes), l'empreinte de `_sqlx_migrations` est
+  réalignée puis la migration est retentée **une seule fois** — **aucun SQL de
+  migration n'est rejoué** (pas de `DELETE` du registre, donc pas de dépendance
+  à l'idempotence ni de risque de perte de données). Une divergence de contenu
+  réel continue de remonter en erreur. **Règle : toute migration doit néanmoins
+  rester idempotente** (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`,
+  index idempotents), comme les migrations existantes.
 
 ### 2.4 Postgres local OU distant (arbitrage 3)
 

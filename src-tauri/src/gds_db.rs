@@ -10,8 +10,11 @@
 // (env/.env) — les mots de passe sont passés en paramètre, jamais codés.
 
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha384};
+use sqlx::migrate::{Migrate, MigrateError, Migrator};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// Nom de la base applicative GDS.
@@ -76,12 +79,169 @@ pub(crate) async fn provision(
     Ok(())
 }
 
-/// Applique les migrations embarquées (`migrations/0001_init.sql`).
+/// Nom de la table du registre des migrations appliquées. Valeur par défaut de
+/// sqlx 0.8 (`_sqlx_migrations`) ; on la nomme explicitement car la
+/// auto-réparation EOL y écrit directement une colonne.
+const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+
+/// Nature de la divergence entre l'empreinte d'une migration embarquée et celle
+/// enregistrée dans `_sqlx_migrations`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ChecksumDivergence {
+    /// Empreintes identiques (cas normal).
+    Identical,
+    /// Même SQL, seules les fins de ligne diffèrent (LF ↔ CRLF).
+    EolOnly,
+    /// Le SQL a réellement changé : la réparation est interdite.
+    ContentChanged,
+}
+
+/// SHA-384 d'un contenu (algorithme d'empreinte des migrations sqlx).
+pub(crate) fn sha384_bytes(data: &[u8]) -> Vec<u8> {
+    Sha384::digest(data).to_vec()
+}
+
+/// Classe une divergence d'empreinte (pure, testable sans base).
+///
+/// `stored` est comparé à `embedded_checksum` puis aux empreintes du SQL
+/// embarqué converti dans LES DEUX SENS (LF → CRLF et CRLF → LF) : une base
+/// écrite par une build CRLF peut recevoir une build LF (et inversement).
+pub(crate) fn classify_checksum_divergence(
+    embedded_checksum: &[u8],
+    embedded_sql: &str,
+    stored: &[u8],
+) -> ChecksumDivergence {
+    if stored == embedded_checksum {
+        return ChecksumDivergence::Identical;
+    }
+    let to_lf = embedded_sql.replace("\r\n", "\n");
+    let to_crlf = to_lf.replace('\n', "\r\n");
+    if stored == sha384_bytes(to_lf.as_bytes()) || stored == sha384_bytes(to_crlf.as_bytes()) {
+        ChecksumDivergence::EolOnly
+    } else {
+        ChecksumDivergence::ContentChanged
+    }
+}
+
+/// Applique les migrations embarquées (`migrations/0001_init.sql` …).
+///
+/// Auto-réparation ciblée (« self-heal ») : si sqlx détecte un
+/// `VersionMismatch` (empreinte SHA-384 divergente) dont l'écart provient
+/// UNIQUEMENT des fins de ligne (LF ↔ CRLF, cf. `.gitattributes`), les
+/// empreintes enregistrées sont réalignées sur celles du binaire et la migration
+/// est retentée UNE SEULE FOIS, **sans rejouer le moindre SQL**. Toute
+/// divergence de contenu réel continue de remonter en erreur ;
+/// `Dirty`/`VersionMissing` et les autres erreurs gardent leur comportement
+/// d'origine.
 pub(crate) async fn migrate(pool: &PgPool) -> Result<(), String> {
-    sqlx::migrate!()
-        .run(pool)
+    let migrator = sqlx::migrate!();
+    // Connexion dédiée : les deux tentatives doivent s'exécuter dans la MÊME
+    // session. En effet, `run_direct` laisse le verrou consultatif PostgreSQL
+    // (`pg_advisory_lock`, portée session) posé lorsqu'il échoue en
+    // `VersionMismatch` (retour anticipé, sans `unlock`). Réutiliser le pool
+    // pourrait prendre une AUTRE connexion et bloquer indéfiniment dessus.
+    let mut conn = pool
+        .acquire()
         .await
-        .map_err(|e| format!("Migration GDS: {}", e))
+        .map_err(|e| format!("Migration GDS: acquisition connexion: {}", e))?;
+    match migrator.run_direct(&mut *conn).await {
+        Ok(()) => Ok(()),
+        Err(MigrateError::VersionMismatch(v)) => {
+            // La tentative échouée a laissé le verrou posé : on le libère avant
+            // de retenter (no-op sans effet si le verrou n'est pas détenu).
+            let _ = Migrate::unlock(&mut *conn).await;
+            repair_eol_only_mismatch(&mut *conn, &migrator, v).await
+        }
+        Err(e) => Err(format!("Migration GDS: {}", e)),
+    }
+}
+
+/// Réaligne les empreintes de TOUTES les migrations dont l'écart est purement
+/// dû aux fins de ligne, puis retente la migration **UNE SEULE FOIS**. Aucun SQL
+/// de migration n'est rejoué : seule la colonne `checksum` est mise à jour
+/// (valeur idempotente). Dès qu'une migration a réellement changé de contenu,
+/// rien n'est réparé et l'erreur `VersionMismatch` remonte.
+///
+/// Une **passe unique** est nécessaire : une base écrite par une build CRLF a
+/// enregistré l'empreinte CRLF de TOUTES les migrations (`_sqlx_migrations`),
+/// donc le binaire LF doit toutes les réaligner d'un coup — sqlx ne signale que
+/// la première divergence (v1), et il n'y a **pas** de boucle
+/// réparation → retentative → réparation.
+async fn repair_eol_only_mismatch(
+    conn: &mut sqlx::postgres::PgConnection,
+    migrator: &Migrator,
+    reported_version: i64,
+) -> Result<(), String> {
+    // Empreintes enregistrées, indexées par version.
+    let rows = sqlx::query(&format!("SELECT version, checksum FROM {}", MIGRATIONS_TABLE))
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| format!("Migration GDS: lecture registre des migrations: {}", e))?;
+    let mut stored: HashMap<i64, Vec<u8>> = HashMap::with_capacity(rows.len());
+    for row in &rows {
+        let version: i64 = row
+            .try_get("version")
+            .map_err(|e| format!("Migration GDS: version du registre invalide: {}", e))?;
+        let checksum: Vec<u8> = row
+            .try_get("checksum")
+            .map_err(|e| format!("Migration GDS: empreinte v{} invalide: {}", version, e))?;
+        stored.insert(version, checksum);
+    }
+
+    // Passe unique : classe chaque migration déjà appliquée.
+    let mut to_repair: Vec<(i64, Vec<u8>)> = Vec::new();
+    for m in migrator.iter() {
+        let Some(stored_checksum) = stored.get(&m.version) else {
+            continue;
+        };
+        match classify_checksum_divergence(&m.checksum, &m.sql, stored_checksum) {
+            ChecksumDivergence::EolOnly => to_repair.push((m.version, m.checksum.to_vec())),
+            ChecksumDivergence::ContentChanged => {
+                // Contenu réellement modifié : NE JAMAIS réparer. L'erreur doit
+                // remonter (l'empreinte ne serait pas réalignable sans risque).
+                return Err(format!(
+                    "Migration GDS: {}",
+                    MigrateError::VersionMismatch(m.version)
+                ));
+            }
+            ChecksumDivergence::Identical => {}
+        }
+    }
+
+    if to_repair.is_empty() {
+        // Aucune divergence de fins de ligne : on n'a rien à réparer, on remonte
+        // l'erreur d'origine telle quelle.
+        return Err(format!(
+            "Migration GDS: {}",
+            MigrateError::VersionMismatch(reported_version)
+        ));
+    }
+
+    for (version, checksum) in &to_repair {
+        sqlx::query(&format!(
+            "UPDATE {} SET checksum = $1 WHERE version = $2",
+            MIGRATIONS_TABLE
+        ))
+        .bind(checksum.as_slice())
+        .bind(*version)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| format!("Migration GDS: réparation empreinte v{}: {}", version, e))?;
+        eprintln!(
+            "GDS: migration {} — empreinte réalignée (divergence de fins de ligne \
+             uniquement, AUCUN SQL rejoué)",
+            version
+        );
+    }
+
+    // UNE SEULE retentative après la passe de réparation (jamais de boucle).
+    migrator.run_direct(&mut *conn).await.map_err(|e| {
+        format!(
+            "Migration GDS (après réparation {}): {}",
+            reported_version, e
+        )
+    })
 }
 
 /// Construit l'URL applicative depuis l'URL admin (même hôte/port, base + user
@@ -1297,6 +1457,9 @@ pub(crate) async fn ticket_event_add(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::postgres::PgConnectOptions;
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn app_url_from_admin_replaces_user_and_db() {
@@ -1308,5 +1471,273 @@ mod tests {
         )
         .unwrap();
         assert_eq!(url, "postgres://pilot:pwd@192.168.1.10:5432/pilot_gds");
+    }
+
+    // ── T3(a) — invariant : les migrations embarquées sont figées en LF ──
+    // Gratuit en CI, casse le build si une machine de build réintroduit du CRLF
+    // (ce qui invaliderait l'empreinte SHA-384 du registre `_sqlx_migrations`).
+    #[test]
+    fn embedded_migrations_are_lf() {
+        let migrator = sqlx::migrate!();
+        let mut versions: Vec<i64> = Vec::new();
+        for m in migrator.iter() {
+            assert!(
+                !m.sql.contains('\r'),
+                "migration {} contient un CR (fins de ligne non figées en LF) — \
+                 vérifier .gitattributes puis `git add --renormalize .`",
+                m.version
+            );
+            versions.push(m.version);
+        }
+        assert!(!versions.is_empty(), "aucune migration embarquée trouvée");
+        let mut sorted = versions.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            versions, sorted,
+            "versions de migration non triées ou dupliquées"
+        );
+    }
+
+    // ── T3(c) — classification pure des divergences d'empreinte ──
+    #[test]
+    fn classify_checksum_identical() {
+        let sql = "CREATE TABLE t (id INT);\nSELECT 1;\n";
+        let checksum = sha384_bytes(sql.as_bytes());
+        assert_eq!(
+            classify_checksum_divergence(&checksum, sql, &checksum),
+            ChecksumDivergence::Identical
+        );
+    }
+
+    #[test]
+    fn classify_checksum_eol_only_both_directions() {
+        let lf = "CREATE TABLE t (id INT);\nSELECT 1;\n";
+        let crlf = lf.replace('\n', "\r\n");
+        // Base écrite par une build CRLF, binaire LF qui la relit.
+        assert_eq!(
+            classify_checksum_divergence(
+                &sha384_bytes(lf.as_bytes()),
+                lf,
+                &sha384_bytes(crlf.as_bytes())
+            ),
+            ChecksumDivergence::EolOnly
+        );
+        // Base écrite par une build LF, binaire CRLF qui la relit.
+        assert_eq!(
+            classify_checksum_divergence(
+                &sha384_bytes(crlf.as_bytes()),
+                &crlf,
+                &sha384_bytes(lf.as_bytes())
+            ),
+            ChecksumDivergence::EolOnly
+        );
+    }
+
+    #[test]
+    fn classify_checksum_content_changed() {
+        let sql = "CREATE TABLE t (id INT);\n";
+        let changed = "CREATE TABLE t (id BIGINT);\n";
+        assert_eq!(
+            classify_checksum_divergence(
+                &sha384_bytes(sql.as_bytes()),
+                sql,
+                &sha384_bytes(changed.as_bytes())
+            ),
+            ChecksumDivergence::ContentChanged
+        );
+    }
+
+    // ── T5 — réparation EOL de bout en bout (Postgres, facultatif/isolé) ──
+    //
+    // Ne s'exécute QUE si `PILOT_GDS_TEST_URL` est fournie par l'environnement
+    // (jamais `.pilot/gds.json`, jamais `~/.pilot/gds_secrets.json`). Sans elle,
+    // la CI reste verte. L'URL doit viser une base `pilot_gds_test_*` : la base
+    // réelle `pilot_gds` ne peut JAMAIS être ciblée.
+    //
+    // Isolation : ce test n'appelle AUCUNE fonction de config/secrets GDS (ni
+    // `read_gds_secrets` ni `write_gds_secrets`) — l'URL vient exclusivement de
+    // l'environnement. Le `TestGdsSecretsGuard` de `gds.rs` est privé à son
+    // module et non référençable ici sans modifier `gds.rs` (hors périmètre).
+
+    /// Nom de base de test unique (`pilot_gds_test_<pid>_<n>`).
+    fn unique_test_db_name() -> String {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("pilot_gds_test_{}_{}", std::process::id(), n)
+    }
+
+    /// Base jetable : `DROP DATABASE` garanti au Drop, même en cas de panique.
+    /// La suppression passe par un thread dédié (un `Drop` ne peut pas `.await`)
+    /// qui ouvre son propre runtime tokio.
+    struct GdsTestDbGuard {
+        admin_options: PgConnectOptions,
+        db_name: String,
+    }
+
+    impl Drop for GdsTestDbGuard {
+        fn drop(&mut self) {
+            let opts = self.admin_options.clone();
+            let name = self.db_name.clone();
+            let _ = std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    let _ = rt.block_on(async move {
+                        if let Ok(pool) = PgPoolOptions::new().connect_with(opts).await {
+                            // Coupe les connexions résiduelles avant le DROP
+                            // (portable, y compris PostgreSQL < 13).
+                            let _ = sqlx::query(
+                                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                                 WHERE datname = $1 AND pid <> pg_backend_pid()",
+                            )
+                            .bind(&name)
+                            .execute(&pool)
+                            .await;
+                            let _ = sqlx::query(&format!(
+                                "DROP DATABASE IF EXISTS \"{}\"",
+                                name
+                            ))
+                            .execute(&pool)
+                            .await;
+                            pool.close().await;
+                        }
+                    });
+                }
+            })
+            .join();
+        }
+    }
+
+    #[tokio::test]
+    async fn migrate_repairs_eol_checksum_mismatch() {
+        // Test d'intégration facultatif : sans serveur Postgres de test fourni
+        // par l'environnement, on sort proprement.
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "migrate_repairs_eol_checksum_mismatch: PILOT_GDS_TEST_URL absente \
+                     — test ignoré"
+                );
+                return;
+            }
+        };
+        // Garde-fou : l'URL NE DOIT JAMAIS viser la base réelle `pilot_gds`.
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        if !env_db.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_TEST_URL doit viser une base de test `pilot_gds_test_*` \
+                 (base visée: {:?}) — test ignoré",
+                env_db
+            );
+            return;
+        }
+        assert_ne!(env_db, GDS_DB_NAME, "la base réelle ne doit jamais être ciblée");
+
+        let test_db = unique_test_db_name();
+        assert!(test_db.starts_with("pilot_gds_test_"));
+
+        // Connexion admin (base de l'URL env) : sert à CREATE/DROP la base jetable.
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création base de test");
+        // Teardown garanti (Drop) même en cas de panique.
+        let _guard = GdsTestDbGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let app_options = base_opts.clone().database(&test_db);
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_options)
+            .await
+            .expect("connexion base de test");
+
+        // 1) Migration initiale : base vierge → toutes les migrations appliquées.
+        migrate(&pool).await.expect("migration initiale");
+
+        let migrator = sqlx::migrate!();
+        let v1 = migrator
+            .iter()
+            .find(|m| m.version == 1)
+            .expect("migration 1 embarquée");
+        let embedded_checksum = v1.checksum.to_vec();
+
+        // 2) Simule une empreinte écrite par une build aux fins de ligne
+        //    opposées (test valable en build LF comme CRLF).
+        let opposite_sql = if v1.sql.contains("\r\n") {
+            v1.sql.replace("\r\n", "\n")
+        } else {
+            v1.sql.replace('\n', "\r\n")
+        };
+        let opposite_checksum = sha384_bytes(opposite_sql.as_bytes());
+        assert_ne!(
+            opposite_checksum, embedded_checksum,
+            "le contenu opposé doit produire une empreinte différente"
+        );
+        sqlx::query(&format!(
+            "UPDATE {} SET checksum = $1 WHERE version = $2",
+            MIGRATIONS_TABLE
+        ))
+        .bind(opposite_checksum.as_slice())
+        .bind(1_i64)
+        .execute(&pool)
+        .await
+        .expect("écriture empreinte divergente");
+
+        // 3) La migration suivante doit auto-réparer (aucun SQL rejoué).
+        migrate(&pool).await.expect("migration après réparation");
+
+        let repaired: Vec<u8> = sqlx::query(&format!(
+            "SELECT checksum FROM {} WHERE version = $1",
+            MIGRATIONS_TABLE
+        ))
+        .bind(1_i64)
+        .fetch_one(&pool)
+        .await
+        .expect("lecture empreinte réparée")
+        .try_get("checksum")
+        .expect("checksum bytea");
+        assert_eq!(repaired, embedded_checksum, "empreinte non réalignée");
+
+        // 4) Les tables attendues existent (aucun SQL n'a été rejoué/modifié).
+        let users_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('users') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("to_regclass users");
+        let tickets_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('tickets') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("to_regclass tickets");
+        assert!(users_exists, "table `users` absente");
+        assert!(tickets_exists, "table `tickets` absente");
+
+        // 5) Toutes les migrations sont enregistrées.
+        let count: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", MIGRATIONS_TABLE))
+                .fetch_one(&pool)
+                .await
+                .expect("comptage migrations");
+        assert_eq!(count as usize, migrator.iter().count());
+
+        pool.close().await;
     }
 }

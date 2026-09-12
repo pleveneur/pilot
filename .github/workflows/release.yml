@@ -29,6 +29,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - name: Migration bytes must be LF (stable sqlx checksums)
+        # sqlx compare une empreinte SHA-384 du CONTENU des migrations. Un CRLF
+        # (worktree Windows avec core.autocrlf, sans .gitattributes) change
+        # l'empreinte embarquée et invalide `_sqlx_migrations`
+        # (MigrateError::VersionMismatch). Garde permanente : tout fichier de
+        # migration doit être en LF (index ET worktree).
+        shell: bash
+        run: |
+          echo "Vérification des fins de ligne des migrations (LF attendu)"
+          ! git ls-files --eol src-tauri/migrations | grep -v 'i/lf.*w/lf'
       - name: Switch apt mirror (azure → archive)
         # Le miroir par défaut des runners ubuntu-22.04 (azure.archive.ubuntu.com)
         # est mort : apt-get update bloquait le job 2h+ (suspendu indéfiniment).
