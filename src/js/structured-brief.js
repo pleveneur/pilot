@@ -12,7 +12,7 @@
 /** Consigne quality-gate à préfixer aux prompts (vide si désactivée). */
 export function qualityGateInstruction(enabled) {
   if (enabled === false) return "";
-  return "Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier. Lance cargo test --lib avant de committer.\n\n";
+  return "Respecte le protocole quality-gate (.pi/skills/quality-gate/SKILL.md) avant de modifier. Lance les tests du projet (selon son langage) avant de committer.\n\n";
 }
 
 /** Marqueurs de sections d'un brief structuré, pour la détection d'existant. */
@@ -64,7 +64,7 @@ export function buildStructuredBrief(task, qualityGateEnabled = true) {
     "## Consignes\n" +
     "- Analyse le projet avant d'agir : lis les fichiers concernés et l'arborescence.\n" +
     "- Modifie UNIQUEMENT ce qui est nécessaire à l'objectif.\n" +
-    "- Vérifie ton travail : compile (cargo test --lib si Rust) et tests avant de conclure.\n" +
+    "- Vérifie ton travail : compile et lance les tests du projet avant de conclure.\n" +
     "- Termine par un résumé concis de ce que tu as fait (DONE: ...).\n\n" +
     "## Ce qu'il ne faut PAS faire\n" +
     "- Ne pas modifier des fichiers hors de l'objectif.\n" +

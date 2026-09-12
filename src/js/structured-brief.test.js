@@ -12,7 +12,7 @@ describe("qualityGateInstruction", () => {
   it("retourne la consigne quality-gate quand activée", () => {
     const out = qualityGateInstruction(true);
     expect(out).toContain("quality-gate");
-    expect(out).toContain("cargo test --lib");
+    expect(out).toContain("tests du projet");
   });
 
   it("retourne une chaîne vide quand désactivée", () => {
@@ -52,7 +52,7 @@ describe("buildStructuredBrief", () => {
     expect(out).toContain("## Consignes");
     expect(out).toContain("## Ce qu'il ne faut PAS faire");
     expect(out).toContain("Corriger le bug X");
-    expect(out).toContain("cargo test --lib");
+    expect(out).toContain("tests du projet");
   });
 
   it("tâche vide → mention « (tâche non précisée) »", () => {
@@ -61,8 +61,8 @@ describe("buildStructuredBrief", () => {
 
   it("qualityGate désactivé → pas de consigne, sections présentes", () => {
     const out = buildStructuredBrief("T", false);
-    // La consigne quality-gate en tête n'est pas préfixée (la mention « cargo
-    // test --lib » de la section Consignes est distincte et reste).
+    // La consigne quality-gate en tête n'est pas préfixée (la mention « tests
+    // du projet » de la section Consignes est distincte et reste).
     expect(out).not.toContain("Respecte le protocole quality-gate");
     expect(out).toContain("## Objectif");
   });
@@ -78,7 +78,7 @@ describe("ensureStructuredBrief", () => {
   it("brief déjà structuré → ne duplique PAS les sections, garde la consigne", () => {
     const structured = "## Contexte\nC\n\n## Objectif\nO\n\n## Consignes\nS\n\n## Ce qu'il ne faut PAS faire\nD";
     const out = ensureStructuredBrief(structured, true);
-    expect(out).toContain("cargo test --lib"); // consigne préfixée
+    expect(out).toContain("tests du projet"); // consigne préfixée
     expect(out).toContain("## Objectif");
     // La consigne quality-gate précède, mais on ne ré-ajoute pas une 2e fois les sections.
     expect(out.split("## Objectif").length).toBe(2); // en-tête + occurrence dans le brief original
@@ -94,7 +94,7 @@ describe("applyAssistantBriefEnvelope", () => {
 
   it("forceStructured=false → seule la consigne quality-gate est préfixée", () => {
     const out = applyAssistantBriefEnvelope("Tâche brute", { forceStructured: false, qualityGate: true });
-    expect(out).toContain("cargo test --lib");
+    expect(out).toContain("tests du projet");
     expect(out).not.toContain("## Contexte");
     expect(out).toContain("Tâche brute");
   });
@@ -107,7 +107,7 @@ describe("applyAssistantBriefEnvelope", () => {
   it("brief déjà structuré → pas de double section, consigne préfixée", () => {
     const structured = "## Objectif\nO\n\n## Consignes\nS\n\n## Ce qu'il ne faut PAS faire\nD\n\n## Contexte\nC";
     const out = applyAssistantBriefEnvelope(structured);
-    expect(out).toContain("cargo test --lib");
+    expect(out).toContain("tests du projet");
     expect(out).toContain("## Objectif");
     expect(out.split("## Objectif").length - 1).toBe(1); // une seule fois
   });
@@ -115,6 +115,6 @@ describe("applyAssistantBriefEnvelope", () => {
   it("explicite forceStructured=true / qualityGate=true → enveloppe complète", () => {
     const out = applyAssistantBriefEnvelope("X", { forceStructured: true, qualityGate: true });
     expect(out).toContain("## Contexte");
-    expect(out).toContain("cargo test --lib");
+    expect(out).toContain("tests du projet");
   });
 });
