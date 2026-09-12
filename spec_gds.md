@@ -287,6 +287,16 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   réel continue de remonter en erreur. **Règle : toute migration doit néanmoins
   rester idempotente** (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`,
   index idempotents), comme les migrations existantes.
+- **Sérialisation & démarrages concurrents** : la réparation (lecture puis
+  `UPDATE` du registre) s'exécute **sous le verrou consultatif PostgreSQL**
+  (`pg_advisory_lock`) laissé posé par la tentative échouée — il n'est **pas**
+  relâché entre la classification et l'écriture. Deux instances démarrant en
+  parallèle ne peuvent donc **jamais** réparer en même temps (les valeurs
+  écrites restent déterministes et idempotentes). Si une autre instance a déjà
+  réaligné le registre (ou le fait entre-temps), la liste des empreintes à
+  réparer est **vide** : le code **relit de façon autoritaire** (`run_direct`)
+  au lieu de renvoyer l'erreur d'origine, et ne signale `VersionMismatch` que si
+  la divergence **persiste réellement** (aucun faux négatif sur une base saine).
 
 ### 2.4 Postgres local OU distant (arbitrage 3)
 

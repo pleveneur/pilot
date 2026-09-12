@@ -11,7 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha384};
-use sqlx::migrate::{Migrate, MigrateError, Migrator};
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use std::collections::HashMap;
@@ -145,16 +145,27 @@ pub(crate) async fn migrate(pool: &PgPool) -> Result<(), String> {
         .acquire()
         .await
         .map_err(|e| format!("Migration GDS: acquisition connexion: {}", e))?;
-    match migrator.run_direct(&mut *conn).await {
+    let result = match migrator.run_direct(&mut *conn).await {
         Ok(()) => Ok(()),
         Err(MigrateError::VersionMismatch(v)) => {
-            // La tentative échouée a laissé le verrou posé : on le libère avant
-            // de retenter (no-op sans effet si le verrou n'est pas détenu).
-            let _ = Migrate::unlock(&mut *conn).await;
+            // Ne PAS libérer ici le verrou consultatif laissé posé par la
+            // tentative échouée (retour anticipé sans `unlock`) : le conserver
+            // pendant la réparation SÉRIALISE la relecture puis la mise à jour
+            // des empreintes de `_sqlx_migrations` vis-à-vis des autres
+            // instances. Sans cela, deux instances pourraient réparer en
+            // parallèle entre le `unlock` et le re-`lock` de la retentative.
             repair_eol_only_mismatch(&mut *conn, &migrator, v).await
         }
         Err(e) => Err(format!("Migration GDS: {}", e)),
-    }
+    };
+    // Balayage défensif : aucun verrou consultatif ne doit rester posé sur la
+    // connexion rendue au pool (la retentative interne laisse le sien lorsqu'elle
+    // échoue à son tour). No-op si aucun verrou n'est détenu ; sans effet en cas
+    // de succès (le verrou a déjà été relâché).
+    let _ = sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut *conn)
+        .await;
+    result
 }
 
 /// Réaligne les empreintes de TOUTES les migrations dont l'écart est purement
@@ -210,12 +221,18 @@ async fn repair_eol_only_mismatch(
     }
 
     if to_repair.is_empty() {
-        // Aucune divergence de fins de ligne : on n'a rien à réparer, on remonte
-        // l'erreur d'origine telle quelle.
-        return Err(format!(
-            "Migration GDS: {}",
-            MigrateError::VersionMismatch(reported_version)
-        ));
+        // Course au démarrage concurrent : une autre instance a pu réaligner le
+        // registre ENTRE la tentative initiale et la classification ci-dessus.
+        // La base est alors saine (toutes les empreintes sont identiques) → on
+        // retente de façon AUTORITAIRE (`run_direct` relit le registre) au lieu
+        // de renvoyer l'erreur d'origine. L'erreur n'est propagée que si la
+        // divergence persiste réellement. `run_direct` ré-acquiert le verrou
+        // consultatif (ré-entrant sur cette session) et le relâche en cas de
+        // succès.
+        return migrator
+            .run_direct(&mut *conn)
+            .await
+            .map_err(|e| format!("Migration GDS: {}", e));
     }
 
     for (version, checksum) in &to_repair {
@@ -1737,6 +1754,102 @@ mod tests {
                 .await
                 .expect("comptage migrations");
         assert_eq!(count as usize, migrator.iter().count());
+
+        pool.close().await;
+    }
+
+    // ── T5(b) — « to_repair vide » : relecture autoritaire sous verrou ──
+    //
+    // Course au démarrage : si le registre a déjà été réaligné par une autre
+    // instance (ou l'est entre-temps), la classification ne trouve PLUS aucune
+    // divergence de fins de ligne (`to_repair` vide). Le code doit alors
+    // RETENTER `run_direct` (autoritaire) et réussir au lieu de renvoyer
+    // l'erreur `VersionMismatch` d'origine. Test de bout en bout facultatif :
+    // même isolation que `migrate_repairs_eol_checksum_mismatch` (base jetable
+    // `pilot_gds_test_*`, URL exclusivement issue de `PILOT_GDS_TEST_URL`).
+    #[tokio::test]
+    async fn repair_with_empty_to_repair_retries_run_direct() {
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "repair_with_empty_to_repair_retries_run_direct: \
+                     PILOT_GDS_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        if !env_db.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_TEST_URL doit viser une base de test \
+                 `pilot_gds_test_*` (base visée: {:?}) — test ignoré",
+                env_db
+            );
+            return;
+        }
+        assert_ne!(env_db, GDS_DB_NAME);
+
+        let test_db = unique_test_db_name();
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création base de test");
+        let _guard = GdsTestDbGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let app_options = base_opts.clone().database(&test_db);
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_options)
+            .await
+            .expect("connexion base de test");
+
+        // Registre sain : migration initiale complète.
+        migrate(&pool).await.expect("migration initiale");
+        let migrator = sqlx::migrate!();
+
+        let read_checksums = |pool: PgPool| async move {
+            sqlx::query(&format!(
+                "SELECT version, checksum FROM {} ORDER BY version",
+                MIGRATIONS_TABLE
+            ))
+            .fetch_all(&pool)
+            .await
+            .expect("lecture empreintes")
+            .iter()
+            .map(|r| (r.get::<i64, _>("version"), r.get::<Vec<u8>, _>("checksum")))
+            .collect::<Vec<(i64, Vec<u8>)>>()
+        };
+        let before = read_checksums(pool.clone()).await;
+
+        // Appel direct avec un `reported_version` alors que le registre est déjà
+        // aligné → `to_repair` vide → doit retenter et réussir.
+        let mut conn = pool.acquire().await.expect("acquisition connexion");
+        repair_eol_only_mismatch(&mut *conn, &migrator, 1)
+            .await
+            .expect("registre aligné → la retentative doit réussir");
+        drop(conn);
+
+        let after = read_checksums(pool.clone()).await;
+        assert_eq!(before, after, "le registre ne doit pas être modifié");
 
         pool.close().await;
     }
