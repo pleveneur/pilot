@@ -2100,6 +2100,8 @@ mod tests {
 
     #[test]
     fn effective_git_name_prefers_supplied_name() {
+        // Secrets mémorisés isolés (jamais ~/.pilot réel).
+        let _guard = TestGdsSecretsGuard::new();
         // Le nom fourni par l'UI (saisi une seule fois) PRIME sur le mémorisé.
         let res = effective_git_name(&Some("  Alice D.  ".to_string())).unwrap();
         assert_eq!(res, "Alice D.");
@@ -2154,6 +2156,8 @@ mod tests {
 
     #[test]
     fn auto_provision_skips_when_not_activated() {
+        // Secrets mémorisés isolés (jamais ~/.pilot réel).
+        let _guard = TestGdsSecretsGuard::new();
         // Projet sans .pilot/gds.json (ou désactivé) → Ok(None), jamais d'erreur.
         let dir = std::env::temp_dir().join(format!("pilot-gds-autoprov-{}", std::process::id()));
         let project = dir.to_string_lossy().to_string();
