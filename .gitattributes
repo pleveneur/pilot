@@ -1,0 +1,5 @@
+# Migrations sqlx : octets figés en LF sur toutes les plateformes.
+# L'empreinte SHA-384 des migrations déjà appliquées doit être stable,
+# même avec core.autocrlf=true (Windows) : un CRLF dans le worktree
+# invalide le registre _sqlx_migrations (MigrateError::VersionMismatch).
+*.sql text eol=lf
