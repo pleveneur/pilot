@@ -762,8 +762,14 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 //   - `every` >= 60 s (borne minimale, évite le spam),
 //   - max 20 planifications en parallèle,
 //   - 1 exécution max par planification et par tick (last_run_at marqué
-//     atomiquement lors de l'émission),
+//     après livraison effective, issue #135),
 //   - session super-agent morte = pas de tick (super_agent_schedule_tick).
+//
+// Échéance d'un rappel : `datetime(référence, '+' || every || ' seconds')` où
+// la référence est `last_run_at` s'il a déjà été livré, sinon `created_at`
+// (jamais exécuté). Un rappel fraîchement créé n'est donc JAMAIS dû avant
+// `created_at + every` — l'ancien `last_run_at IS NULL` le rendait dû au tick
+// suivant (déclenchement quasi immédiat).
 
 pub(crate) const SCHEDULE_MIN_EVERY_SECS: i64 = 60;
 pub(crate) const SCHEDULE_MAX: i64 = 20;
@@ -878,8 +884,44 @@ pub(crate) fn schedule_list(conn: &Connection) -> Result<Vec<Value>, String> {
     Ok(result)
 }
 
+/// Calcule l'échéance suivante (UTC SQLite « YYYY-MM-DD HH:MM:SS ») à partir
+/// d'une référence temporelle et d'un intervalle. Fonction pure (aucune horloge
+/// implicite) : elle est testable avec des dates explicites et sert de même
+/// vérité que `schedule_due` pour annoncer `nextFireAt` à la création.
+pub(crate) fn schedule_next_fire_at(
+    conn: &Connection,
+    reference: &str,
+    every: i64,
+) -> Result<String, String> {
+    conn.query_row(
+        "SELECT datetime(?1, '+' || CAST(?2 AS TEXT) || ' seconds')",
+        rusqlite::params![reference, every],
+        |r| r.get(0),
+    )
+    .map_err(|e| format!("Erreur SQL : {}", e))
+}
+
+/// Échéance suivante d'une planification par id : `last_run_at` si elle a déjà
+/// été livrée, sinon `created_at` (jamais exécutée). Retourne None si l'id est
+/// inconnu. Expose exactement la référence utilisée par `schedule_due`.
+pub(crate) fn schedule_next_fire(conn: &Connection, id: i64) -> Result<Option<String>, String> {
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT datetime(COALESCE(last_run_at, created_at), \
+           '+' || CAST(every AS TEXT) || ' seconds') \
+         FROM assistant_schedules WHERE id = ?1",
+        rusqlite::params![id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("Erreur SQL : {}", e))
+}
+
 /// Retourne les planifications dues à `now` (format datetime('now') UTC) SANS
-/// les marquer comme exécutées (issue #135). Le marquage (`last_run_at`) est
+/// les marquer comme exécutées (issue #135). La référence de l'échéance est
+/// `last_run_at` (dernière livraison) ou, pour un rappel encore jamais exécuté,
+/// `created_at` : un rappel fraîchement créé n'est donc dû qu'après son
+/// intervalle, jamais au tick suivant sa création. Le marquage (`last_run_at`) est
 /// différé et déclenché par le frontend via `schedule_mark_done` UNIQUEMENT une
 /// fois le rappel effectivement injecté (assistant libre). Tant qu'un rappel n'a
 /// pas été livré, il reste « dû » et est re-renvoyé aux ticks suivants — un
@@ -888,8 +930,8 @@ pub(crate) fn schedule_due(conn: &Connection, now: &str) -> Result<Vec<DueSchedu
     let mut stmt = conn
         .prepare(
             "SELECT id, name, prompt, every FROM assistant_schedules \
-             WHERE enabled = 1 AND (last_run_at IS NULL \
-               OR last_run_at <= datetime(?1, '-' || CAST(every AS TEXT) || ' seconds')) \
+             WHERE enabled = 1 AND datetime(COALESCE(last_run_at, created_at), \
+               '+' || CAST(every AS TEXT) || ' seconds') <= ?1 \
              ORDER BY id",
         )
         .map_err(|e| format!("Erreur SQL : {}", e))?;
@@ -937,7 +979,11 @@ pub fn super_agent_schedule_create(
 ) -> Result<Value, String> {
     let conn = open_db(&app)?;
     let id = schedule_insert(&conn, &name, &prompt, every)?;
-    Ok(serde_json::json!({ "ok": true, "id": id }))
+    // Annonce l'échéance réelle du premier déclenchement (created_at + every),
+    // calculée par la même expression que le tick de décision.
+    let next_fire_at = schedule_next_fire(&conn, id)?
+        .map(|s| s.replace(' ', "T") + "Z");
+    Ok(serde_json::json!({ "ok": true, "id": id, "nextFireAt": next_fire_at }))
 }
 
 /// Supprime une planification d'action récurrente.
@@ -3278,9 +3324,10 @@ pub fn import_super_agent_memory(
 mod tests {
     use super::{
         build_project_context, init_db, parse_session_memory, replace_tracking, schedule_delete,
-        schedule_due, schedule_insert, schedule_list, schedule_mark_done, schedule_set_enabled,
-        serialize_session_memory, serialize_tracking, validate_export_json, MEMORY_FORMAT,
-        MEMORY_VERSION, SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
+        schedule_due, schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
+        schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
+        validate_export_json, MEMORY_FORMAT, MEMORY_VERSION, SESSION_MEMORY_FORMAT,
+        SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
 
@@ -3525,23 +3572,98 @@ mod tests {
     }
 
     #[test]
+    fn schedule_next_fire_at_is_pure_arithmetic() {
+        let conn = mem_conn();
+        // Intervalle respecté, y compris à cheval sur minuit.
+        assert_eq!(
+            schedule_next_fire_at(&conn, "2025-01-01 00:00:00", 600).unwrap(),
+            "2025-01-01 00:10:00"
+        );
+        assert_eq!(
+            schedule_next_fire_at(&conn, "2025-01-01 23:59:30", 60).unwrap(),
+            "2025-01-02 00:00:30"
+        );
+    }
+
+    #[test]
+    fn schedule_is_never_due_before_its_interval() {
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "s1", "prompt", 600).unwrap();
+        // Bug corrigé : la création ne rend PAS le rappel dû (last_run_at NULL
+        // ne doit pas valoir « dû maintenant »).
+        let now: String = conn
+            .query_row("SELECT datetime('now')", [], |r| r.get(0))
+            .unwrap();
+        assert!(schedule_due(&conn, &now).unwrap().is_empty());
+        // L'échéance annoncée est strictement future et cohérente avec l'intervalle.
+        let created: String = conn
+            .query_row(
+                "SELECT created_at FROM assistant_schedules WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let next = schedule_next_fire(&conn, id).unwrap().unwrap();
+        assert_eq!(next, schedule_next_fire_at(&conn, &created, 600).unwrap());
+        let is_future: bool = conn
+            .query_row("SELECT ?1 > datetime('now')", [&next], |r| r.get(0))
+            .unwrap();
+        assert!(is_future);
+        // Un tick juste avant l'échéance ne la déclenche pas ; à l'échéance, si.
+        let before: String = schedule_next_fire_at(&conn, &created, 599).unwrap();
+        assert!(schedule_due(&conn, &before).unwrap().is_empty());
+        let at: String = schedule_next_fire_at(&conn, &created, 600).unwrap();
+        assert_eq!(schedule_due(&conn, &at).unwrap().len(), 1);
+    }
+
+    #[test]
     fn schedule_due_returns_due_until_marked() {
         let conn = mem_conn();
         let id = schedule_insert(&conn, "s1", "prompt", 60).unwrap();
-        // Premier tick : jamais exécutée → due (non marquée, issue #135).
-        let due = schedule_due(&conn, "2025-01-01 00:00:00").unwrap();
+        // Référence fixe : jamais exécutée, l'échéance est created_at + 60 s.
+        conn.execute(
+            "UPDATE assistant_schedules SET created_at = '2025-01-01 00:00:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        // Pas encore dû à 00:00:05 / 00:00:59.
+        assert!(schedule_due(&conn, "2025-01-01 00:00:05").unwrap().is_empty());
+        assert!(schedule_due(&conn, "2025-01-01 00:00:59").unwrap().is_empty());
+        // Dû à partir de 00:01:00 (non marquée, issue #135).
+        let due = schedule_due(&conn, "2025-01-01 00:01:00").unwrap();
         assert_eq!(due.len(), 1);
         // Tant qu'elle n'est pas livrée (assistant occupé), elle reste due.
-        let due2 = schedule_due(&conn, "2025-01-01 00:00:05").unwrap();
+        let due2 = schedule_due(&conn, "2025-01-01 00:01:05").unwrap();
         assert_eq!(due2.len(), 1);
         // Livraison effective → mark_done → plus due.
-        assert!(schedule_mark_done(&conn, id, "2025-01-01 00:00:06").unwrap());
-        assert!(schedule_due(&conn, "2025-01-01 00:00:07").unwrap().is_empty());
-        // Avance de plus de 60 s → due à nouveau.
-        let due3 = schedule_due(&conn, "2025-01-01 00:01:06").unwrap();
+        assert!(schedule_mark_done(&conn, id, "2025-01-01 00:01:06").unwrap());
+        assert!(schedule_due(&conn, "2025-01-01 00:01:07").unwrap().is_empty());
+        // Avance de plus de 60 s après la livraison → due à nouveau.
+        let due3 = schedule_due(&conn, "2025-01-01 00:02:06").unwrap();
         assert_eq!(due3.len(), 1);
-        // Marquer avec une date dans le futur ne change rien à la re-due.
+        // Marquer avec un id inconnu ne fait rien.
         assert!(schedule_mark_done(&conn, 9999, "2025-01-01 00:00:08").unwrap() == false);
+    }
+
+    #[test]
+    fn schedule_next_fire_is_rescheduled_from_last_run() {
+        let conn = mem_conn();
+        let id = schedule_insert(&conn, "s1", "prompt", 300).unwrap();
+        conn.execute(
+            "UPDATE assistant_schedules SET created_at = '2025-01-01 00:00:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        // Premier déclenchement à 00:05:00.
+        assert_eq!(schedule_due(&conn, "2025-01-01 00:05:00").unwrap().len(), 1);
+        // Livraison à 00:05:10 → échéance suivante repoussée de 300 s depuis la livraison.
+        schedule_mark_done(&conn, id, "2025-01-01 00:05:10").unwrap();
+        assert!(schedule_due(&conn, "2025-01-01 00:10:09").unwrap().is_empty());
+        assert_eq!(schedule_due(&conn, "2025-01-01 00:10:10").unwrap().len(), 1);
+        assert_eq!(
+            schedule_next_fire(&conn, id).unwrap().unwrap(),
+            "2025-01-01 00:10:10"
+        );
     }
 
     #[test]
@@ -3558,10 +3680,17 @@ mod tests {
     fn schedule_set_enabled_toggles_and_ignores_unknown_id() {
         let conn = mem_conn();
         let id = schedule_insert(&conn, "s1", "prompt", 120).unwrap();
-        // Désactivation : le rappel n'est plus dû (enabled = 0).
+        // Référence fixe pour comparer à une date déterministe : échéance
+        // 23:57:00 + 120 s = 23:59:00, donc due à 00:00:00 (si activée).
+        conn.execute(
+            "UPDATE assistant_schedules SET created_at = '2024-12-31 23:57:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        // Désactivation : le rappel n'est plus dû (enabled = 0) même après échéance.
         assert!(schedule_set_enabled(&conn, id, false).unwrap());
         assert!(schedule_due(&conn, "2025-01-01 00:00:00").unwrap().is_empty());
-        // Réactivation : le rappel redevient dû.
+        // Réactivation : le rappel redevient dû (échéance 23:59:00 dépassée).
         assert!(schedule_set_enabled(&conn, id, true).unwrap());
         assert_eq!(schedule_due(&conn, "2025-01-01 00:00:00").unwrap().len(), 1);
         // Id inexistant : retourne false, pas d'erreur.

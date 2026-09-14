@@ -554,6 +554,10 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   désactivé ne compte pas et libère sa place), **1 fire** par
   planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
   morte — les rappels `every` accumulent un retard, repris à la reprise).
+- **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
+  première fois **N secondes après sa création** (référence `created_at` tant
+  qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
+  `nextFireAt` (ISO 8601 UTC) : **aucun déclenchement avant l'échéance demandée**.
 - **Issue #77 — pas de lancement automatique au démarrage** : par défaut,
   l'Assistant **ne lance pas automatiquement** un rappel dû à l'ouverture de sa
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage
