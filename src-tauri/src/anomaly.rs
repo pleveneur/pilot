@@ -299,12 +299,25 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 /// plus ancienne que `grace_minutes` (STALE_BUSY_GRACE, défaut 25), la session
 /// n'est plus un travail en cours → on libère la marque busy SANS tuer le
 /// process (le kill relève de l'arrêt auto T2). Pure et testable.
-fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
+pub(crate) fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
     if !entry.busy || entry.awaiting_user {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
     idle_secs > (grace_minutes.max(1) as u64) * 60
+}
+
+/// Décision pure (garde d'exclusivité MOTEUR) : une entrée d'anomalie rend-elle
+/// la session exclusive ? Un agent n'est exclusif que s'il TRAVAILLE RÉELLEMENT :
+/// `busy=true` ET non périmé (`should_release_stale_busy`). Un `busy` fantôme
+/// (process pi figé, ni settled ni exit) ne doit pas bloquer la relance — même
+/// politique que le frontend (`isSessionWorking`/`isBusyStale`).
+pub(crate) fn busy_entry_is_exclusive(
+    entry: &AgentAnomalyState,
+    grace_minutes: u32,
+    now: Instant,
+) -> bool {
+    entry.busy && !should_release_stale_busy(entry, grace_minutes, now)
 }
 
 /// Bug #81 : route l'arrêt auto d'une entrée non-super busy sans progression
@@ -1055,6 +1068,35 @@ mod tests {
         // Seuil min 1 min : inactivité > 1 min suffit.
         let e = state_at(90, true);
         assert!(should_release_stale_busy(&e, 1, now));
+    }
+
+    /// Garde d'exclusivité moteur : `busy_entry_is_exclusive` n'accorde
+    /// l'exclusivité qu'au TRAVAIL RÉEL (busy non périmé). Un busy fantôme
+    /// (process figé) libère le verrou → la relance démarre réellement au lieu
+    /// d'être refusée par la garde Rust (faux « lancé »). Une attente de réponse
+    /// utilisateur reste exclusive (état légitime, pas un blocage).
+    #[test]
+    fn busy_entry_is_exclusive_requires_fresh_work() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state_at = |idle_secs: u64, busy: bool, awaiting_user: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "agent_start".to_string(),
+            busy,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user,
+        };
+
+        // busy frais (< grace) → exclusif : une run réellement en cours.
+        assert!(busy_entry_is_exclusive(&state_at(10, true, false), 25, now));
+        // busy périmé (> grace) → non exclusif : verrou libéré, relance autorisée.
+        assert!(!busy_entry_is_exclusive(&state_at(26 * 60, true, false), 25, now));
+        // Attente de réponse utilisateur → jamais périmé (état légitime).
+        assert!(busy_entry_is_exclusive(&state_at(26 * 60, true, true), 25, now));
+        // settled (busy=false) → non exclusif, réutilisable.
+        assert!(!busy_entry_is_exclusive(&state_at(10, false, false), 25, now));
     }
 
     /// Bug « question sans réponse > seuil » : une question interactive

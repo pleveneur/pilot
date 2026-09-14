@@ -914,10 +914,20 @@ impl AgentService {
         if !self.agent_process_alive(project, agent_id) {
             return false;
         }
+        // Verrou de run fantôme : un `busy` PÉRIMÉ (process pi figé, ni settled
+        // ni exit, dernière activité au-delà de la fenêtre de grâce) n'est plus
+        // un travail en cours. Sans cette vérification, la garde moteur refusait
+        // la relance (« Un agent … est déjà actif ») alors que le frontend, lui,
+        // considère la session périmée et tente de lancer — d'où un faux
+        // « lancé » suivi d'un échec. Même politique que le filet autoritaire du
+        // moniteur d'anomalies (`should_release_stale_busy`, `awaiting_user`
+        // respecté) et que le frontend (`isSessionWorking`/`isBusyStale`).
+        let grace = crate::default_stale_busy_grace_minutes();
         let m = anomaly_map.lock().unwrap();
-        m.get(&format!("{}\u{1f}{}", project, agent_id))
-            .map(|a| a.busy)
-            .unwrap_or(false)
+        match m.get(&format!("{}\u{1f}{}", project, agent_id)) {
+            Some(a) => anomaly::busy_entry_is_exclusive(a, grace, Instant::now()),
+            None => false,
+        }
     }
 
     /// Bug #152 : indique si un agent délégué (mode `AgentProcess`) a une
