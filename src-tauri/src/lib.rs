@@ -1528,41 +1528,82 @@ async fn pi_health_check(state: State<'_, AppState>, app: AppHandle) -> Result<P
     })
 }
 
+/// Script PowerShell embarqué (Magnus) installé automatiquement au premier
+/// usage. L'utilisateur peut le personnaliser : il n'est JAMAIS écrasé s'il
+/// existe déjà.
+const ASSISTANT_NOTIFY_SCRIPT: &str = include_str!("../assets/notify.ps1");
+
+/// Installe le script de notification embarqué dans `dir` s'il est absent et
+/// retourne le chemin du script.
+///
+/// Le script n'est jamais écrasé : un script déjà présent (personnalisé par
+/// l'utilisateur ou l'assistant) est conservé tel quel. Écrit en UTF-8 **avec
+/// BOM** car PowerShell 5.1 lit mal les accents sans BOM.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn ensure_assistant_notify_script(dir: &std::path::Path) -> Result<PathBuf, String> {
+    let script = dir.join("notify.ps1");
+    if script.exists() {
+        return Ok(script);
+    }
+    fs::create_dir_all(dir)
+        .map_err(|e| format!("Impossible de créer le dossier {} : {}", dir.display(), e))?;
+    // Préfixe BOM (U+FEFF) : indispensable pour que PowerShell 5.1 lise
+    // correctement les accents des commentaires du script.
+    let content = format!("\u{feff}{}", ASSISTANT_NOTIFY_SCRIPT);
+    fs::write(&script, content).map_err(|e| {
+        format!(
+            "Impossible d'écrire le script de notification {} : {}",
+            script.display(),
+            e
+        )
+    })?;
+    Ok(script)
+}
+
 /// Joue le son de notification de l'assistant (Magnus) via le script PowerShell
 /// `~/.pilot/assistant/notify.ps1`. `sound_type` : "attention" | "point" | "fin".
 /// `volume` : 0-100 (appliqué à l'amplitude des notes par le script). Le process
 /// est détaché (fire-and-forget) : on ne bloque pas l'UI.
+///
+/// Le script est installé automatiquement s'il est absent (jamais écrasé).
 #[tauri::command]
 fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "Impossible de trouver le home dir".to_string())?;
-    let script = std::path::PathBuf::from(&home)
-        .join(".pilot")
-        .join("assistant")
-        .join("notify.ps1");
-    if !script.exists() {
-        return Err(format!("Script de notification introuvable: {}", script.display()));
+    // La lecture s'appuie sur PowerShell + System.Media.SoundPlayer : Windows
+    // uniquement. Sur macOS/Linux, on renvoie un message clair plutôt qu'une
+    // erreur « script introuvable » trompeuse.
+    #[cfg(not(windows))]
+    {
+        let _ = (sound_type, volume);
+        return Err(
+            "Le son de notification n'est pas disponible sur cette plateforme (PowerShell requis, Windows uniquement)."
+                .to_string(),
+        );
     }
-    let vol = volume.min(100);
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-File")
-        .arg(&script)
-        .arg(&sound_type)
-        .arg(vol.to_string());
 
-    // Évite qu'une fenêtre console noire n'apparaisse/disparaisse fugacement
-    // à l'écran pendant la lecture du son (PlaySync() bloquant).
     #[cfg(windows)]
     {
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .map_err(|_| "Impossible de trouver le home dir".to_string())?;
+        let dir = PathBuf::from(&home).join(".pilot").join("assistant");
+        let script = ensure_assistant_notify_script(&dir)?;
+        let vol = volume.min(100);
+        let mut cmd = std::process::Command::new("powershell");
+        cmd.arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&script)
+            .arg(&sound_type)
+            .arg(vol.to_string());
 
-    let _ = cmd.spawn();
-    Ok(())
+        // Évite qu'une fenêtre console noire n'apparaisse/disparaisse fugacement
+        // à l'écran pendant la lecture du son (PlaySync() bloquant).
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let _ = cmd.spawn();
+        Ok(())
+    }
 }
 
 /// Retourne true si le GDS est activé GLOBALEMENT (paramètre global, actif par
@@ -2730,7 +2771,7 @@ fn rename_dir_fallback(source: &std::path::Path, dest: &std::path::Path) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_project_path, AppConfig};
+    use super::{ensure_assistant_notify_script, normalize_project_path, AppConfig};
 
     #[test]
     fn normalize_handles_trailing_slash() {
@@ -2790,6 +2831,33 @@ mod tests {
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), 1, "toutes les formes doivent se dédupliquer");
+    }
+
+    #[test]
+    fn ensure_assistant_notify_script_installs_when_absent() {
+        let dir = std::env::temp_dir().join(format!("pilot-notify-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let script = ensure_assistant_notify_script(&dir).expect("installation du script");
+        let content = std::fs::read(&script).expect("lecture du script installé");
+        assert!(script.exists(), "le script doit exister après installation");
+        assert!(!content.is_empty(), "le script installé ne doit pas être vide");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_assistant_notify_script_preserves_existing() {
+        let dir = std::env::temp_dir()
+            .join(format!("pilot-notify-custom-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("création du dossier de test");
+        let script = dir.join("notify.ps1");
+        let custom = "# script personnalisé de l'utilisateur\nWrite-Output 'hi'\n";
+        std::fs::write(&script, custom).expect("écriture du script personnalisé");
+        let returned = ensure_assistant_notify_script(&dir).expect("appel sur script existant");
+        assert_eq!(returned, script, "le chemin retourné doit être celui du script");
+        let content = std::fs::read_to_string(&script).expect("relecture du script personnalisé");
+        assert_eq!(content, custom, "un script existant ne doit jamais être écrasé");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
