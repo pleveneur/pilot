@@ -6,7 +6,6 @@
 // git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
 
 use crate::gds;
-use crate::gds_git;
 use crate::gds_ssh;
 use crate::gds_sync;
 use crate::git;
@@ -42,8 +41,16 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(gds::default_gds_local_dir);
     let name = gds::project_name(project);
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
-    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
-    gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
+    // remote SSH soit utilisable. Serveur LOCAL : enregistrement + synchro
+    // `authorized_keys` (historique inchangé). Serveur DISTANT : enregistrement
+    // en base uniquement — la clef est ajoutée MANUELLEMENT sur le serveur
+    // (docs/gds-linux-setup.md) : on n'administre JAMAIS une machine distante.
+    let is_local = gds::is_local_gds_server(&cfg);
+    if is_local {
+        gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
+    } else {
+        gds_ssh::ensure_poste_key_remote(pool, &cfg.identity_email).await?;
+    }
     let dest = std::path::Path::new(&local_dir).join(&name);
     let dest_str = dest.to_string_lossy().to_string();
     let branch = git::git_current_branch(project);
@@ -61,7 +68,9 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // est un repo Git (c). On NE touche jamais au projet de travail de l'utilisateur
     // (ex: testsnake2 sans `.git`) autrement que via gds_add_project (qui n'agit
     // que si c'est un repo Git). (b) Le remote `gds` est ajouté s'il est absent.
-    if !gds_git::bare_repo_exists(&local_dir, &name) {
+    // Serveur LOCAL : test du disque (historique inchangé). Serveur DISTANT : la
+    // base `git_repos` fait foi (jamais d'accès au disque distant).
+    if !gds::server_bare_exists(Some(pool), &cfg, &name).await {
         let work_is_repo = git::git_is_repo(project);
         let email = cfg.identity_email.trim().to_string();
         if work_is_repo && !email.is_empty() {

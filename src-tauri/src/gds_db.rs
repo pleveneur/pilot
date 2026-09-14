@@ -388,6 +388,21 @@ pub(crate) async fn get_git_repo_by_project(pool: &PgPool, project_id: i64) -> R
     Ok(row.map(|r| r.get::<i64, _>("id")))
 }
 
+/// Vrai si un dépôt git (bare) est enregistré pour un projet donné par NOM.
+/// Utilisé pour les serveurs GDS DISTANTS : la base fait foi (on ne teste pas
+/// le disque distant). Fail-open côté appelant (erreur → false).
+pub(crate) async fn project_has_git_repo(pool: &PgPool, name: &str) -> Result<bool, String> {
+    let row = sqlx::query(
+        "SELECT 1 FROM git_repos g JOIN projects p ON p.id = g.project_id \
+         WHERE p.name = $1 LIMIT 1",
+    )
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Lecture git_repo: {}", e))?;
+    Ok(row.is_some())
+}
+
 /// Enregistre un dépôt git (bare) pour un projet.
 pub(crate) async fn create_git_repo(
     pool: &PgPool,

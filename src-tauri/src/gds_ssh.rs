@@ -475,15 +475,57 @@ pub(crate) async fn register_ssh_key(
 /// synchro pour que le remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
 pub(crate) async fn ensure_poste_key(pool: &PgPool, email: &str) -> Result<Value, String> {
     let key = ensure_ssh_key()?;
-    let (_, key_part) = split_public_key(&key.public_key)?;
+    record_poste_key(pool, email, &key.public_key).await?;
+    sync_authorized_keys(pool).await?;
+    Ok(poste_key_response(&key.public_key, &key.path, key.generated, false))
+}
+
+/// Enregistre la clef publique du poste en base (idempotent), liée à l'email.
+/// Ne touche à AUCUN fichier : c'est le seul point commun entre le chemin LOCAL
+/// (qui synchronise ensuite `authorized_keys` du poste) et le chemin DISTANT
+/// (qui n'écrit rien et laisse l'administrateur copier la clef).
+async fn record_poste_key(pool: &PgPool, email: &str, public_key: &str) -> Result<(), String> {
+    let (_, key_part) = split_public_key(public_key)?;
     let full = format_authorized_key("ssh-ed25519", &key_part, email);
     if let Some(user) = gds_db::get_user_by_email(pool, email).await? {
         if gds_db::get_ssh_key_by_key(pool, &full).await?.is_none() {
             gds_db::create_ssh_key(pool, user.id, &full).await?;
         }
     }
-    sync_authorized_keys(pool).await?;
-    Ok(json!({ "ok": true, "public_key": key.public_key, "path": key.path, "generated": key.generated }))
+    Ok(())
+}
+
+/// Réponse JSON des chemins « clef du poste ». `manual = true` (serveur
+/// DISTANT) indique à l'UI que la clef doit être copiée À LA MAIN dans
+/// `~git/.ssh/authorized_keys` du serveur (aucune écriture à distance).
+pub(crate) fn poste_key_response(
+    public_key: &str,
+    path: &str,
+    generated: bool,
+    manual: bool,
+) -> Value {
+    let mut v = json!({
+        "ok": true,
+        "public_key": public_key,
+        "path": path,
+        "generated": generated,
+    });
+    if manual {
+        v["manual"] = json!(true);
+    }
+    v
+}
+
+/// Comme `ensure_poste_key`, mais pour un serveur GDS DISTANT : la clef du poste
+/// est générée localement puis enregistrée en BASE uniquement. AUCUNE écriture
+/// dans `~git/.ssh/authorized_keys` (celle-ci vit sur la machine distante et est
+/// ajoutée MANUELLEMENT par l'administrateur, cf. docs/gds-linux-setup.md) : on
+/// n'administre jamais un serveur distant depuis le poste. La clef publique est
+/// retournée (`manual: true`) pour être copiée sur le serveur.
+pub(crate) async fn ensure_poste_key_remote(pool: &PgPool, email: &str) -> Result<Value, String> {
+    let key = ensure_ssh_key()?;
+    record_poste_key(pool, email, &key.public_key).await?;
+    Ok(poste_key_response(&key.public_key, &key.path, key.generated, true))
 }
 
 // ── Commandes Tauri ──
@@ -516,6 +558,21 @@ pub async fn gds_register_ssh_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poste_key_response_marks_remote_as_manual() {
+        // LOCAL : pas de drapeau `manual` (clef synchronisée automatiquement).
+        let local = poste_key_response("ssh-ed25519 AAAAkey", "/home/me/.ssh/id_ed25519", true, false);
+        assert_eq!(local["ok"], json!(true));
+        assert!(local.get("manual").is_none(), "le chemin local ne doit pas être marqué manuel");
+        assert_eq!(local["public_key"], json!("ssh-ed25519 AAAAkey"));
+        assert_eq!(local["generated"], json!(true));
+        // DISTANT : `manual: true` → l'administrateur copie la clef lui-même.
+        let remote = poste_key_response("ssh-ed25519 AAAAkey", "/home/me/.ssh/id_ed25519", false, true);
+        assert_eq!(remote["manual"], json!(true));
+        assert_eq!(remote["path"], json!("/home/me/.ssh/id_ed25519"));
+        assert_eq!(remote["generated"], json!(false));
+    }
 
     #[test]
     fn detect_os_returns_something() {

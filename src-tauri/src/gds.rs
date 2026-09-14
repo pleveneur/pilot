@@ -459,6 +459,8 @@ pub fn gds_apply_server(
             if port.trim().is_empty() { "5432" } else { port.trim() }
         ),
         gds_local_dir: Some(local_dir.clone()),
+        ssh_port: 22,
+        gds_server_repos: None,
         ssh_host: format!("{}:22", host.trim()),
         urgent_email: None,
     };
@@ -527,7 +529,18 @@ pub(crate) struct GdsConfig {
     pub server_url: String,
     #[serde(default)]
     pub gds_local_dir: Option<String>,
-    /// Hôte SSH (host:22) du serveur GDS, dérivé de `db_host` à la provision.
+    /// Port SSH du serveur GDS (défaut 22). Rétrocompat : absent d'un ancien
+    /// `.pilot/gds.json` → 0, normalisé en 22 (comportement historique
+    /// inchangé). 0 = « non fourni » dans `gds_save_config` (préserve l'existant).
+    #[serde(default)]
+    pub ssh_port: u16,
+    /// Racine des dépôts bare CÔTÉ SERVEUR (ex: `/home/git/repos`), utile pour
+    /// un serveur GDS distant. Vide/absent (serveur local historique) → l'URL du
+    /// remote reste `ssh://git@<host>:<port>/<nom>.git` : sur le serveur local,
+    /// le home du user `git` EST le dossier des repos. Rétrocompatible.
+    #[serde(default)]
+    pub gds_server_repos: Option<String>,
+    /// Hôte SSH (host:port) du serveur GDS, dérivé de `db_host` à la provision.
     /// Utilisé pour construire l'URL du remote git (transport SSH).
     #[serde(default)]
     pub ssh_host: String,
@@ -566,10 +579,18 @@ impl GdsConfig {
                 self.db_user, self.db_host, self.db_port
             );
         }
+        if self.ssh_port == 0 {
+            self.ssh_port = default_ssh_port();
+        }
         if self.ssh_host.is_empty() && !self.db_host.is_empty() {
-            self.ssh_host = format!("{}:22", self.db_host);
+            self.ssh_host = ssh_host_from_db_host(&self.db_host, self.ssh_port);
         }
     }
+}
+
+/// Port SSH par défaut (historique) : 22.
+fn default_ssh_port() -> u16 {
+    22
 }
 
 /// Dossier local par défaut des projets GDS (clonage).
@@ -639,7 +660,7 @@ fn server_host(server_url: &str) -> String {
 /// - `http://host:8080` → `host:22`
 /// - `https://host` → `host:22`
 /// - `ssh://git@host` → `host:22`
-fn ssh_host_from_server_url(server_url: &str) -> String {
+fn ssh_host_from_server_url(server_url: &str, ssh_port: u16) -> String {
     let s = server_url.trim();
     // Retire le schéma.
     let s = s
@@ -655,23 +676,124 @@ fn ssh_host_from_server_url(server_url: &str) -> String {
     let host_port = after_at.split('/').next().unwrap_or(after_at);
     // Retire le port éventuel (5432, 8080…).
     let host = host_port.split(':').next().unwrap_or(host_port);
-    format!("{}:22", host)
+    format!("{}:{}", host, effective_ssh_port(ssh_port))
 }
 
-/// Hôte SSH (host:22) dérivé de l'hôte PostgreSQL du serveur GDS.
+/// Hôte SSH (host:<port>) dérivé de l'hôte PostgreSQL du serveur GDS.
 /// `host` → `host:22` (port SSH 22, pas le port PostgreSQL 5432).
-fn ssh_host_from_db_addr(db_addr: &str) -> String {
-    ssh_host_from_server_url(db_addr)
+fn ssh_host_from_db_addr(db_addr: &str, ssh_port: u16) -> String {
+    ssh_host_from_server_url(db_addr, ssh_port)
 }
 
-/// Hôte SSH (host:22) dérivé de l'hôte PostgreSQL (`db_host`).
-fn ssh_host_from_db_host(db_host: &str) -> String {
+/// Hôte SSH (host:<port>) dérivé de l'hôte PostgreSQL (`db_host`).
+fn ssh_host_from_db_host(db_host: &str, ssh_port: u16) -> String {
     let host = db_host.trim();
     if host.is_empty() {
         String::new()
     } else {
-        format!("{}:22", host)
+        format!("{}:{}", host, effective_ssh_port(ssh_port))
     }
+}
+
+/// Port SSH effectif (0/absent → 22). Pure — testable.
+pub(crate) fn effective_ssh_port(ssh_port: u16) -> u16 {
+    if ssh_port == 0 {
+        default_ssh_port()
+    } else {
+        ssh_port
+    }
+}
+
+/// Nom de la machine locale (best-effort, jamais bloquant).
+fn local_hostname() -> String {
+    for key in ["HOSTNAME", "COMPUTERNAME"] {
+        if let Ok(v) = std::env::var(key) {
+            let v = v.trim().to_ascii_lowercase();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    if let Ok(v) = std::fs::read_to_string("/etc/hostname") {
+        let v = v.trim().to_ascii_lowercase();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    String::new()
+}
+
+/// Vrai si `host` désigne la machine locale (127.0.0.1, localhost, ::1, nom de
+/// la machine, vide). Cœur PUR : `hostname` est injectable pour les tests.
+/// Retire un éventuel `[ipv6]` et un `:port`. Pure — testable.
+pub(crate) fn is_local_host_with(host: &str, hostname: &str) -> bool {
+    let raw = host.trim();
+    if raw.is_empty() {
+        return true;
+    }
+    // Retire `[ipv6]` puis un éventuel `:port` (un IPv6 nu contient ≥2 ':' → gardé).
+    let h = if let Some(rest) = raw.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else if raw.matches(':').count() == 1 {
+        raw.split(':').next().unwrap_or(raw)
+    } else {
+        raw
+    };
+    let h = h.trim().to_ascii_lowercase();
+    if h.is_empty() {
+        return true;
+    }
+    if h == "localhost" || h == "::1" || h == "0.0.0.0" {
+        return true;
+    }
+    if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    let hostname = hostname.trim().to_ascii_lowercase();
+    if !hostname.is_empty() && (h == hostname || h == format!("{}.local", hostname)) {
+        return true;
+    }
+    false
+}
+
+/// Vrai si `host` désigne la machine locale (cf. `is_local_host_with`).
+pub(crate) fn is_local_host(host: &str) -> bool {
+    is_local_host_with(host, &local_hostname())
+}
+
+/// Vrai si le serveur GDS configuré est le serveur LOCAL (même machine que
+/// Pilot) : on garde alors STRICTEMENT le comportement historique (bare local,
+/// provision SSH locale, URL sans préfixe de repos). Sinon (serveur DISTANT),
+/// aucune administration ni création sur le poste. Pure — testable.
+pub(crate) fn is_local_gds_server(cfg: &GdsConfig) -> bool {
+    let host = if !cfg.db_host.trim().is_empty() {
+        cfg.db_host.trim().to_string()
+    } else {
+        server_host(&cfg.server_url)
+    };
+    is_local_host(&host)
+}
+
+/// Joint deux segments de chemin POSIX (serveur distant), en normalisant les
+/// séparateurs. Pure — testable.
+pub(crate) fn join_posix_path(base: &str, child: &str) -> String {
+    let base = base.trim().replace('\\', "/");
+    let child = child.trim().replace('\\', "/");
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        child.trim_start_matches('/')
+    )
+}
+
+/// Chemin du dépôt bare CÔTÉ SERVEUR pour un serveur DISTANT, depuis la racine
+/// `gds_server_repos`. `None` si aucune racine n'est renseignée. Pure — testable.
+pub(crate) fn server_repo_path(cfg: &GdsConfig, project_name: &str) -> Option<String> {
+    cfg.gds_server_repos
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|repos| join_posix_path(repos, &format!("{}.git", project_name)))
 }
 
 /// Nom de projet (dernier segment du chemin) — ex: `/path/to/proj` → `proj`.
@@ -682,19 +804,41 @@ pub(crate) fn project_name(project: &str) -> String {
         .unwrap_or_default()
 }
 
-/// URL du remote git GDS d'un projet (`ssh://git@<host>/<name>.git`).
+/// URL du remote git GDS d'un projet.
+/// - Serveur **local** (historique) : `ssh://git@<host>:<port>/<nom>.git`.
+/// - Serveur **distant** : `ssh://git@<host>:<port><gds_server_repos>/<nom>.git`
+///   (chemin **absolu**), repli sur la forme locale si la racine est absente.
 /// Hôte SSH dédié (renseigné à la provision) ; repli sur server_url si absent
 /// (configs anciennes). Évite d'embarquer le port PostgreSQL 5432 dans l'URL SSH.
 pub(crate) fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
+    let ssh_port = effective_ssh_port(cfg.ssh_port);
     let host = if cfg.ssh_host.is_empty() {
         if cfg.db_host.is_empty() {
-            server_host(&cfg.server_url)
+            ssh_host_from_server_url(&cfg.server_url, ssh_port)
         } else {
-            format!("{}:22", cfg.db_host)
+            ssh_host_from_db_host(&cfg.db_host, ssh_port)
         }
     } else {
         cfg.ssh_host.clone()
     };
+    // Serveur LOCAL (historique) : le home du user `git` EST le dossier des
+    // repos → URL inchangée `ssh://git@<host>:<port>/<nom>.git`.
+    // Serveur DISTANT : chemin ABSOLU sous la racine des repos serveur
+    // (`gds_server_repos`) — la sémantique `ssh://` de git est absolue (vérifié :
+    // git passe `git-upload-pack '/chemin'`). Aucun repli local n'est tenté.
+    if !is_local_gds_server(cfg) {
+        if let Some(path) = server_repo_path(cfg, project_name) {
+            // Chemin ABSOLU obligatoire : la sémantique `ssh://` de git est
+            // absolue (vérifié : `git-upload-pack '/chemin'`). On préfixe donc
+            // par `/` si la racine fournie est relative.
+            let abs = if path.starts_with('/') {
+                path
+            } else {
+                format!("/{}", path)
+            };
+            return format!("ssh://git@{}{}", host, abs);
+        }
+    }
     format!("ssh://git@{}/{}.git", host, project_name)
 }
 
@@ -750,8 +894,17 @@ pub(crate) async fn add_project_to_gds(
         return Err("GDS non activé pour ce projet".to_string());
     }
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
-    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
-    gds_ssh::ensure_poste_key(pool, email).await?;
+    // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable. Serveur
+    // LOCAL : clef enregistrée en base ET synchronisée dans authorized_keys.
+    // Serveur DISTANT : clef enregistrée en base UNIQUEMENT (l'ajout à
+    // `authorized_keys` est MANUEL sur le serveur, voir docs/gds-linux-setup.md) —
+    // on n'administre JAMAIS une machine distante depuis le poste.
+    let is_local = is_local_gds_server(&cfg);
+    if is_local {
+        gds_ssh::ensure_poste_key(pool, email).await?;
+    } else {
+        gds_ssh::ensure_poste_key_remote(pool, email).await?;
+    }
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let name = project_name(project);
     let repo_url = gds_remote_url(&cfg, &name);
@@ -790,8 +943,21 @@ pub(crate) async fn add_project_to_gds(
         let _ = memorize_git_name(n);
     }
 
-    // Bare serveur + enregistrement en base (idempotent).
-    let res = gds_git::add_project(pool, &local_dir, &name, email, "").await?;
+    // Bare serveur + enregistrement en base (idempotent). Serveur LOCAL : bare
+    // créé sur le poste (`<gds_local_dir>/repos/<nom>.git`), comportement
+    // INCHANGÉ. Serveur DISTANT : AUCUN bare local ; on enregistre seulement le
+    // projet/le dépôt en base avec le chemin POSIX côté serveur (le bare est créé
+    // manuellement sur le serveur, docs/gds-linux-setup.md).
+    let res = if is_local {
+        gds_git::add_project(pool, &local_dir, &name, email, "").await?
+    } else {
+        let path_on_server = server_repo_path(&cfg, &name).ok_or_else(|| {
+            "Racine des dépôts serveur non renseignée (champ « Racine des dépôts \
+             serveur », onglet GDS) — requise pour un serveur distant"
+                .to_string()
+        })?;
+        gds_git::add_project_remote(pool, &name, &path_on_server, &repo_url, email, "").await?
+    };
 
     // git remote add + push initial dans le projet local (bloquant → spawn_blocking).
     let repo_url_push = repo_url.clone();
@@ -810,16 +976,28 @@ pub(crate) async fn add_project_to_gds(
     .await
     .map_err(|e| e.to_string());
 
-    // État partiel évité : un échec (remote add / push) laisse le bare serveur
-    // déjà créé → le retirer proprement pour ne pas rester « à moitié attaché ».
+    // État partiel évité (serveur LOCAL uniquement) : un échec (remote add /
+    // push) laisse le bare local déjà créé → le retirer proprement pour ne pas
+    // rester « à moitié attaché ». Serveur DISTANT : rien n'a été créé sur le
+    // poste, on ne supprime RIEN (le dépôt serveur est sous responsabilité
+    // manuelle) et on renvoie un message orientant vers la préparation serveur.
     match remote_result {
         Err(join_err) => {
-            let _ = gds_git::remove_bare(&local_dir, &name);
+            if is_local {
+                let _ = gds_git::remove_bare(&local_dir, &name);
+            }
             return Err(join_err);
         }
         Ok(Err(inner_err)) => {
-            let _ = gds_git::remove_bare(&local_dir, &name);
-            return Err(inner_err);
+            if is_local {
+                let _ = gds_git::remove_bare(&local_dir, &name);
+                return Err(inner_err);
+            }
+            return Err(format!(
+                "{} — vérifiez que le dépôt bare existe sur le serveur \
+                 (docs/gds-linux-setup.md)",
+                inner_err
+            ));
         }
         Ok(Ok(())) => {}
     }
@@ -890,19 +1068,16 @@ pub async fn gds_provision(
     );
     let pool =
         provision_db(&db_addr, &user, &db_password, &admin_email, &admin_password).await?;
-    // Phase A3 : provision SSH serveur (user git + authorized_keys + sshd) puis
-    // générer la clef du poste et l'enregistrer automatiquement.
-    gds_ssh::provision_server_ssh()?;
-    gds_ssh::ensure_poste_key(&pool, &admin_email).await?;
-    // Dossier des repos. Préserve un `gds_local_dir` existant (re-provision
-    // idempotent) : on ne réinitialise pas vers `~/Pilot/GDS` si l'utilisateur
-    // a déplacé le dossier (ex: hors du profil, `C:\GDS`).
+    // Configuration existante : préserve `gds_local_dir`, le PORT SSH et la
+    // racine des dépôts serveur (re-provision idempotent — ne réinitialise JAMAIS
+    // vers `~/Pilot/GDS` ni le port 22 si l'utilisateur les a personnalisés).
     let existing = read_gds_config(&project).ok();
     let local_dir = existing
-        .and_then(|c| c.gds_local_dir)
+        .as_ref()
+        .and_then(|c| c.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
-    let repos = gds_git::repos_dir(&local_dir);
-    std::fs::create_dir_all(&repos).map_err(|e| format!("Création dossier repos: {}", e))?;
+    let ssh_port = existing.as_ref().map(|c| c.ssh_port).unwrap_or(22);
+    let gds_server_repos = existing.as_ref().and_then(|c| c.gds_server_repos.clone());
     // Écrire la config projet (activation) SANS mot de passe.
     let cfg = GdsConfig {
         enabled: true,
@@ -911,10 +1086,31 @@ pub async fn gds_provision(
         db_user: user.clone(),
         identity_email: admin_email.trim().to_string(),
         server_url: format!("postgres://{}@{}:{}/postgres", user, host, port),
-        gds_local_dir: Some(local_dir),
-        ssh_host: ssh_host_from_db_host(&host),
+        gds_local_dir: Some(local_dir.clone()),
+        ssh_port,
+        gds_server_repos,
+        ssh_host: ssh_host_from_db_host(&host, ssh_port),
         urgent_email: None,
     };
+    // Serveur LOCAL : provision SSH locale (user git + authorized_keys + sshd) et
+    // dossier des repos local — comportement historique INCHANGÉ. Serveur
+    // DISTANT : AUCUNE administration ni création sur le poste (la préparation
+    // du serveur est MANUELLE, voir docs/gds-linux-setup.md) ; on génère
+    // seulement la clef du poste et on l'enregistre en base pour affichage.
+    let is_local = is_local_gds_server(&cfg);
+    let mut repos_dir_str = String::new();
+    let ssh_public_key: String;
+    if is_local {
+        gds_ssh::provision_server_ssh()?;
+        let key = gds_ssh::ensure_poste_key(&pool, &admin_email).await?;
+        ssh_public_key = key["public_key"].as_str().unwrap_or("").to_string();
+        let repos = gds_git::repos_dir(&local_dir);
+        std::fs::create_dir_all(&repos).map_err(|e| format!("Création dossier repos: {}", e))?;
+        repos_dir_str = repos.to_string_lossy().to_string();
+    } else {
+        let key = gds_ssh::ensure_poste_key_remote(&pool, &admin_email).await?;
+        ssh_public_key = key["public_key"].as_str().unwrap_or("").to_string();
+    }
     write_gds_config(&project, &cfg)?;
     // Stocker les mots de passe hors projet (0600, hors git).
     save_project_secrets(&project, &db_password, &admin_password)?;
@@ -929,7 +1125,13 @@ pub async fn gds_provision(
     }
     // Stocker le pool dans AppState.
     *state.gds_pool.lock().unwrap() = Some(pool);
-    Ok(json!({ "ok": true, "db": gds_db::GDS_DB_NAME, "repos_dir": repos.to_string_lossy() }))
+    Ok(json!({
+        "ok": true,
+        "db": gds_db::GDS_DB_NAME,
+        "repos_dir": repos_dir_str,
+        "manual_setup": !is_local,
+        "ssh_public_key": ssh_public_key,
+    }))
 }
 
 /// Reconnexion automatique : reconstruit le pool PostgreSQL d'un projet GDS
@@ -954,7 +1156,8 @@ pub async fn gds_restore_pool(state: State<'_, AppState>, project: String) -> Re
         .and_then(|p| p.db_password.as_deref())
         .filter(|p| !p.is_empty())
         .ok_or(
-            "Mot de passe PostgreSQL non enregistré — ressaisissez-le dans la section 1 (Provisionner)."
+            "Mot de passe PostgreSQL non enregistré — ressaisissez-le dans l'onglet GDS \
+             (bouton « Enregistrer les mots de passe », sans refaire l'activation)."
                 .to_string(),
         )?;
     let app_url = format!(
@@ -1157,7 +1360,12 @@ pub fn gds_get_config(project: String) -> Result<Option<GdsConfig>, String> {
 /// - L'UI n'envoie plus jamais d'URL à mot de passe : `server_url` est toujours
 ///   reconstruit SANS mot de passe par `write_gds_config` (normalize).
 #[tauri::command]
-pub fn gds_save_config(project: String, mut cfg: GdsConfig) -> Result<(), String> {
+pub fn gds_save_config(
+    project: String,
+    mut cfg: GdsConfig,
+    db_password: Option<String>,
+    admin_password: Option<String>,
+) -> Result<(), String> {
     let existing = read_gds_config(&project).ok();
     if cfg.urgent_email.is_none() {
         if let Some(ex) = &existing {
@@ -1169,30 +1377,63 @@ pub fn gds_save_config(project: String, mut cfg: GdsConfig) -> Result<(), String
             cfg.gds_local_dir = ex.gds_local_dir.clone();
         }
     }
-    // Préserve les champs PostgreSQL non envoyés par l'UI (hôte/port/user).
-    if cfg.db_host.is_empty() {
+    // Préserve le port SSH (0 = non fourni par l'UI) et la racine des dépôts
+    // serveur (None = non fournie), comme les autres champs.
+    if cfg.ssh_port == 0 {
+        if let Some(ex) = &existing {
+            cfg.ssh_port = ex.ssh_port;
+        }
+    }
+    if cfg.gds_server_repos.is_none() {
+        if let Some(ex) = &existing {
+            cfg.gds_server_repos = ex.gds_server_repos.clone();
+        }
+    }
+    // Préserve les champs PostgreSQL non envoyés par l'UI (hôte/port/user) —
+    // SAUF si une NOUVELLE `server_url` est fournie (elle fait alors autorité :
+    // `normalize()` en dérive l'hôte/port/utilisateur).
+    let server_changed = existing
+        .as_ref()
+        .map(|ex| !cfg.server_url.trim().is_empty() && ex.server_url != cfg.server_url)
+        .unwrap_or(false);
+    if cfg.db_host.is_empty() && !server_changed {
         if let Some(ex) = &existing {
             cfg.db_host = ex.db_host.clone();
         }
     }
-    if cfg.db_port.is_empty() {
+    if cfg.db_port.is_empty() && !server_changed {
         if let Some(ex) = &existing {
             cfg.db_port = ex.db_port.clone();
         }
     }
-    if cfg.db_user.is_empty() {
+    if cfg.db_user.is_empty() && !server_changed {
         if let Some(ex) = &existing {
             cfg.db_user = ex.db_user.clone();
         }
     }
-    // Recalcule ssh_host si vide ou si l'adresse a changé (via server_url dérivé).
-    let recompute = cfg.ssh_host.is_empty()
-        || existing
-            .as_ref()
-            .map(|ex| ex.server_url != cfg.server_url)
-            .unwrap_or(true);
+    // Recalcule ssh_host si vide ou si l'adresse a changé : hôte PostgreSQL en
+    // priorité, sinon `server_url`, sinon valeur inchangée.
+    let recompute = cfg.ssh_host.is_empty() || server_changed;
     if recompute {
-        cfg.ssh_host = ssh_host_from_server_url(&cfg.server_url);
+        cfg.ssh_host = if !cfg.db_host.trim().is_empty() {
+            ssh_host_from_db_host(&cfg.db_host, cfg.ssh_port)
+        } else if !cfg.server_url.trim().is_empty() {
+            ssh_host_from_server_url(&cfg.server_url, cfg.ssh_port)
+        } else {
+            cfg.ssh_host.clone()
+        };
+    }
+    // Ressaisie de mot de passe SANS refaire `gds_provision` (T5) : les mots de
+    // passe sont écrits HORS projet (`~/.pilot/gds_secrets.json`, 0600) — jamais
+    // dans `.pilot/gds.json`. Un champ vide PRÉSERVE la valeur existante.
+    if db_password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
+        || admin_password.as_deref().map(|p| !p.is_empty()).unwrap_or(false)
+    {
+        save_project_secrets(
+            &project,
+            db_password.as_deref().unwrap_or(""),
+            admin_password.as_deref().unwrap_or(""),
+        )?;
     }
     write_gds_config(&project, &cfg)
 }
@@ -1322,13 +1563,21 @@ async fn connect_dir_to_gds(
         identity_email: email.to_string(),
         server_url: cfg.server_url.clone(),
         gds_local_dir: Some(local_dir.to_string()),
+        ssh_port: cfg.ssh_port,
+        gds_server_repos: cfg.gds_server_repos.clone(),
         ssh_host: cfg.ssh_host.clone(),
         urgent_email: cfg.urgent_email.clone(),
     };
     write_gds_config(target, &target_cfg)?;
-    // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
-    // remote `ssh://git@<host>:22/<projet>.git` soit utilisable.
-    gds_ssh::ensure_poste_key(pool, email).await?;
+    // Clef du poste : enregistrée + synchronisée dans `authorized_keys` pour un
+    // serveur LOCAL ; enregistrée en base seulement pour un serveur DISTANT (la
+    // clef est ajoutée manuellement sur le serveur) — `add_project_to_gds`
+    // refait la même chose de façon idempotente.
+    if is_local_gds_server(&target_cfg) {
+        gds_ssh::ensure_poste_key(pool, email).await?;
+    } else {
+        gds_ssh::ensure_poste_key_remote(pool, email).await?;
+    }
     // Enregistrer le dossier auprès du serveur (idempotent, fail-open) :
     // bare/projet déjà présents → réutilisés, simple assoc. membre + remote +
     // push. Ne touche JAMAIS au bare serveur ni à un worktree local existant.
@@ -1529,7 +1778,14 @@ pub async fn gds_clone_repo(
             .map_err(|_| "GDS non provisionné — provisionnez-le d'abord dans l'onglet GDS".to_string())?,
     };
     // Phase A3 : la clef du poste doit être enregistrée pour le remote SSH.
-    gds_ssh::ensure_poste_key(&pool, &email).await?;
+    // Serveur LOCAL : enregistrement + synchro `authorized_keys` (historique
+    // inchangé). Serveur DISTANT : enregistrement en base uniquement, la clef
+    // est ajoutée MANUELLEMENT sur le serveur (docs/gds-linux-setup.md).
+    if is_local_gds_server(&cfg) {
+        gds_ssh::ensure_poste_key(&pool, &email).await?;
+    } else {
+        gds_ssh::ensure_poste_key_remote(&pool, &email).await?;
+    }
 
     // Opérations git bloquantes (clone / remote add) → spawn_blocking.
     let url2 = url.clone();
@@ -1583,9 +1839,10 @@ pub async fn gds_remove_project(
     // Capturer la config + un éventuel pool AVANT de supprimer gds.json
     // (restore_pool_for_project en a besoin pour reconstruire le pool).
     let name = project_name(&project);
-    let local_dir = read_gds_config(&project)
-        .ok()
-        .and_then(|c| c.gds_local_dir)
+    let purge_cfg = read_gds_config(&project).ok();
+    let local_dir = purge_cfg
+        .as_ref()
+        .and_then(|c| c.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
     let pool_for_purge = if purge_server {
         let current = state.gds_pool.lock().unwrap().clone();
@@ -1613,7 +1870,13 @@ pub async fn gds_remove_project(
     // 3. Purge serveur UNIQUEMENT si demandé explicitement.
     let mut purged = false;
     if purge_server {
-        gds_git::remove_bare(&local_dir, &name)?;
+        // Serveur LOCAL : suppression du bare sur le poste. Serveur DISTANT :
+        // on ne touche JAMAIS au disque (ni local ni distant) — la préparation
+        // et le nettoyage du serveur sont manuels (docs/gds-linux-setup.md) ; on
+        // purge seulement les entrées de la base GDS.
+        if purge_cfg.as_ref().map(is_local_gds_server).unwrap_or(true) {
+            gds_git::remove_bare(&local_dir, &name)?;
+        }
         if let Some(pool) = pool_for_purge {
             let _ = gds_db::delete_project_by_name(&pool, &name).await?;
         }
@@ -1751,6 +2014,29 @@ async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bo
     ok
 }
 
+/// Vrai si le dépôt bare d'un projet existe côté serveur GDS. Serveur LOCAL :
+/// test du système de fichiers (`<gds_local_dir>/repos/<nom>.git`), comportement
+/// historique INCHANGÉ. Serveur DISTANT : la base PostgreSQL `git_repos` fait
+/// foi — on ne suppose rien du disque distant et on n'y accède jamais depuis le
+/// poste. Fail-open : erreur DB ou pool absent → false. Aucun secret révélé.
+pub(crate) async fn server_bare_exists(
+    pool: Option<&PgPool>,
+    cfg: &GdsConfig,
+    name: &str,
+) -> bool {
+    if is_local_gds_server(cfg) {
+        let local_dir = cfg
+            .gds_local_dir
+            .clone()
+            .unwrap_or_else(default_gds_local_dir);
+        return gds_git::bare_repo_exists(&local_dir, name);
+    }
+    match pool {
+        Some(p) => gds_db::project_has_git_repo(p, name).await.unwrap_or(false),
+        None => false,
+    }
+}
+
 /// Commande Tauri : état honnête de la connexion GDS d'un projet (Évolution 3).
 /// Retourne `{"status": "connected" | "error" | "not_configured"}`. Réutilise
 /// les infos de connexion (restore_pool_for_project pour la joignabilité).
@@ -1783,11 +2069,15 @@ pub async fn gds_connection_status(
         .unwrap_or(false);
     // Pool joignable : réutilise le pool AppState et un cache court (fail-open).
     let pool_ok = pool_is_connected(state.clone(), &project, has_pw).await;
-    // Dépôt bare valide sur le serveur GDS.
-    let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
+    // Dépôt bare valide côté serveur GDS : test du système de fichiers pour un
+    // serveur LOCAL (historique inchangé), sinon la base PostgreSQL `git_repos`
+    // fait foi (serveur DISTANT — on ne suppose rien du disque distant).
     let name = project_name(&project);
     let project_owned = project.clone();
-    let bare_ok = gds_git::bare_repo_exists(&local_dir, &name);
+    let bare_ok = {
+        let pool = state.gds_pool.lock().unwrap().clone();
+        server_bare_exists(pool.as_ref(), &cfg, &name).await
+    };
     // Remote `gds` présent dans le dépôt local.
     let remote_ok = tokio::task::spawn_blocking(move || crate::git::git_has_remote(&project_owned, "gds"))
         .await
@@ -1825,23 +2115,28 @@ mod tests {
     fn ssh_host_from_postgres_url_uses_ssh_port() {
         // Le bug bloquant : le port PostgreSQL 5432 ne doit pas être embarqué.
         assert_eq!(
-            ssh_host_from_db_addr("postgres://postgres:secret@192.168.1.10:5432/postgres"),
+            ssh_host_from_db_addr("postgres://postgres:secret@192.168.1.10:5432/postgres", 22),
             "192.168.1.10:22"
         );
         assert_eq!(
-            ssh_host_from_db_addr("postgres://user:pw@db.local:5432/pilot_gds"),
+            ssh_host_from_db_addr("postgres://user:pw@db.local:5432/pilot_gds", 22),
             "db.local:22"
         );
     }
 
     #[test]
     fn ssh_host_derived_from_http_https_ssh_urls() {
-        assert_eq!(ssh_host_from_server_url("http://192.168.1.10:8080"), "192.168.1.10:22");
-        assert_eq!(ssh_host_from_server_url("https://gds.example.com"), "gds.example.com:22");
-        assert_eq!(ssh_host_from_server_url("ssh://git@192.168.1.10"), "192.168.1.10:22");
+        assert_eq!(ssh_host_from_server_url("http://192.168.1.10:8080", 22), "192.168.1.10:22");
+        assert_eq!(ssh_host_from_server_url("https://gds.example.com", 22), "gds.example.com:22");
+        assert_eq!(ssh_host_from_server_url("ssh://git@192.168.1.10", 22), "192.168.1.10:22");
         assert_eq!(
-            ssh_host_from_server_url("postgres://postgres:secret@192.168.1.10:5432/postgres"),
+            ssh_host_from_server_url("postgres://postgres:secret@192.168.1.10:5432/postgres", 22),
             "192.168.1.10:22"
+        );
+        // Port SSH personnalisé : le port PostgreSQL (5432) est ignoré.
+        assert_eq!(
+            ssh_host_from_server_url("postgres://postgres:secret@host:5432/postgres", 2222),
+            "host:2222"
         );
     }
 
@@ -1854,6 +2149,8 @@ mod tests {
             server_url: "postgres://postgres:secret@old.host:5432/postgres".to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: "old.host:22".to_string(),
             urgent_email: Some("admin@kalico".to_string()),
             db_host: String::new(),
@@ -1867,13 +2164,15 @@ mod tests {
             server_url: "https://new.host".to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: String::new(),
             urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
         };
-        gds_save_config(project.clone(), new_cfg).unwrap();
+        gds_save_config(project.clone(), new_cfg, None, None).unwrap();
         let saved = read_gds_config(&project).unwrap();
         // ssh_host recalculé depuis la nouvelle URL.
         assert_eq!(saved.ssh_host, "new.host:22");
@@ -1891,6 +2190,8 @@ mod tests {
             server_url: "postgres://postgres:secret@host:5432/postgres".to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: Some("/custom/dir".to_string()),
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: "custom:2222".to_string(),
             urgent_email: None,
             db_host: String::new(),
@@ -1904,13 +2205,15 @@ mod tests {
             server_url: "postgres://postgres:secret@host:5432/postgres".to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: String::new(),
             urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
         };
-        gds_save_config(project.clone(), new_cfg).unwrap();
+        gds_save_config(project.clone(), new_cfg, None, None).unwrap();
         let saved = read_gds_config(&project).unwrap();
         // ssh_host recalculé (vide → dérivé), gds_local_dir préservé.
         assert_eq!(saved.ssh_host, "host:22");
@@ -1926,7 +2229,9 @@ mod tests {
             server_url: db_addr.to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
-            ssh_host: ssh_host_from_db_addr(db_addr),
+            ssh_port: 22,
+            gds_server_repos: None,
+            ssh_host: ssh_host_from_db_addr(db_addr, 22),
             urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
@@ -1934,6 +2239,148 @@ mod tests {
         };
         let repo_url = format!("ssh://git@{}/{}", cfg.ssh_host, "proj.git");
         assert_eq!(repo_url, "ssh://git@192.168.1.10:22/proj.git");
+    }
+
+    // ── T10 : non-régression serveur LOCAL vs serveur DISTANT (purs) ──
+
+    #[test]
+    fn is_local_host_detects_loopback_and_machine_name() {
+        let machine = "buildbox";
+        // Loopback / noms réservés → local.
+        for h in [
+            "127.0.0.1",
+            "127.0.0.5",
+            "localhost",
+            "LocalHost",
+            "::1",
+            "[::1]",
+            "localhost:5432",
+            "127.0.0.1:22",
+            "",
+            "   ",
+            "buildbox",
+            "BUILDBOX",
+            "buildbox.local",
+        ] {
+            assert!(is_local_host_with(h, machine), "{} doit être local", h);
+        }
+        // Hôtes distants → non local.
+        for h in [
+            "192.168.1.10",
+            "10.0.0.42",
+            "gds.example.com",
+            "buildbox2",
+            "db.local:5432",
+        ] {
+            assert!(!is_local_host_with(h, machine), "{} doit être distant", h);
+        }
+    }
+
+    #[test]
+    fn local_server_keeps_historical_remote_url() {
+        // Serveur LOCAL : URL STRICTEMENT inchangée (pas de préfixe de repos),
+        // même si une racine serveur est renseignée par erreur.
+        let cfg = GdsConfig {
+            enabled: true,
+            server_url: String::new(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: Some("/home/git/repos".to_string()),
+            ssh_host: "127.0.0.1:22".to_string(),
+            urgent_email: None,
+            db_host: "127.0.0.1".to_string(),
+            db_port: "5432".to_string(),
+            db_user: "postgres".to_string(),
+        };
+        assert!(is_local_gds_server(&cfg));
+        assert_eq!(
+            gds_remote_url(&cfg, "proj"),
+            "ssh://git@127.0.0.1:22/proj.git"
+        );
+        // Racine serveur jamais utilisée en local.
+        assert!(server_repo_path(&cfg, "proj").is_some());
+    }
+
+    #[test]
+    fn distant_server_url_uses_ssh_port_and_server_repos() {
+        let cfg = GdsConfig {
+            enabled: true,
+            server_url: String::new(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_port: 2222,
+            gds_server_repos: Some("/home/git/repos".to_string()),
+            ssh_host: String::new(),
+            urgent_email: None,
+            db_host: "gds.example.com".to_string(),
+            db_port: "5432".to_string(),
+            db_user: "postgres".to_string(),
+        };
+        assert!(!is_local_gds_server(&cfg));
+        // Chemin ABSOLU côté serveur (sémantique `ssh://` vérifiée).
+        assert_eq!(
+            server_repo_path(&cfg, "proj").as_deref(),
+            Some("/home/git/repos/proj.git")
+        );
+        assert_eq!(
+            gds_remote_url(&cfg, "proj"),
+            "ssh://git@gds.example.com:2222/home/git/repos/proj.git"
+        );
+        // Racine avec slash final / séparateur Windows normalisés.
+        assert_eq!(
+            join_posix_path("/home/git/repos/", "/proj.git"),
+            "/home/git/repos/proj.git"
+        );
+        assert_eq!(
+            join_posix_path("C:\\GDS\\repos", "proj.git"),
+            "C:/GDS/repos/proj.git"
+        );
+    }
+
+    #[test]
+    fn distant_server_without_repos_root_falls_back_to_historical_url() {
+        // Racine non renseignée → repli sur l'URL historique (aucune régression
+        // pour une config distante incomplète), pas de panique.
+        let cfg = GdsConfig {
+            enabled: true,
+            server_url: String::new(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
+            ssh_host: "gds.example.com:22".to_string(),
+            urgent_email: None,
+            db_host: "gds.example.com".to_string(),
+            db_port: "5432".to_string(),
+            db_user: "postgres".to_string(),
+        };
+        assert!(server_repo_path(&cfg, "proj").is_none());
+        assert_eq!(
+            gds_remote_url(&cfg, "proj"),
+            "ssh://git@gds.example.com:22/proj.git"
+        );
+    }
+
+    #[test]
+    fn old_gds_json_without_new_fields_is_loaded_with_ssh_port_22() {
+        // Rétrocompat : un `.pilot/gds.json` écrit AVANT ce chantier (sans
+        // `ssh_port` ni `gds_server_repos`) doit se charger sans erreur, avec un
+        // port SSH à 22 (comportement historique) et aucune racine serveur.
+        let dir = std::env::temp_dir().join(format!("pilot-gds-retro-{}", std::process::id()));
+        let project = dir.to_string_lossy().to_string();
+        std::fs::create_dir_all(dir.join(".pilot")).unwrap();
+        std::fs::write(
+            gds_config_path(&project),
+            "{\n  \"enabled\": true,\n  \"db_host\": \"192.168.1.10\",\n  \"db_port\": \"5432\",\n  \"db_user\": \"postgres\",\n  \"identity_email\": \"dev@kalico\",\n  \"server_url\": \"postgres://postgres@192.168.1.10:5432/postgres\",\n  \"ssh_host\": \"192.168.1.10:22\"\n}\n",
+        )
+        .unwrap();
+        let cfg = read_gds_config(&project).unwrap();
+        assert_eq!(cfg.ssh_port, 22);
+        assert_eq!(cfg.gds_server_repos, None);
+        assert_eq!(cfg.ssh_host, "192.168.1.10:22");
+        assert_eq!(gds_remote_url(&cfg, "proj"), "ssh://git@192.168.1.10:22/proj.git");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1947,6 +2394,8 @@ mod tests {
             server_url: "postgres://postgres:SUPERSECRET@host:5432/postgres".to_string(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: String::new(),
             urgent_email: None,
             db_host: "host".to_string(),
@@ -2172,6 +2621,8 @@ mod tests {
             server_url: String::new(),
             identity_email: String::new(),
             gds_local_dir: None,
+            ssh_port: 0,
+            gds_server_repos: None,
             ssh_host: String::new(),
             urgent_email: None,
             db_host: String::new(),

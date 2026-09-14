@@ -72,6 +72,9 @@ export function createGds(container) {
   const bodyEl = container.querySelector("#gds-body");
   const subtitleEl = container.querySelector("#gds-subtitle");
   const badgeEl = container.querySelector("#gds-state-badge");
+  // Message affiché au rendu suivant (ex: préparation serveur MANUELLE pour un
+  // serveur GDS distant — cf. docs/gds-linux-setup.md). Jamais de secret.
+  let pendingNotice = "";
 
   // ── Badge d'état global (Connecté / En attente / À configurer) ──
   function setStateBadge(status, onServer) {
@@ -174,6 +177,12 @@ export function createGds(container) {
     const hasDbPw = !!(secrets && secrets.db_password);
     const hasAdminPw = !!(secrets && secrets.admin_password);
     const emailOk = !!(identity.email);
+    // Nouveaux champs (serveur GDS distant) : port SSH, racine des dépôts
+    // CÔTÉ SERVEUR et dossier local de clonage (éditable).
+    const sshPort = (cfg && cfg.ssh_port) || 22;
+    const serverRepos = (cfg && cfg.gds_server_repos) || "";
+    const localDir = (cfg && cfg.gds_local_dir) || "";
+    const missingPw = provisioned && (!hasDbPw || !hasAdminPw);
 
     panel.innerHTML = `
       <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> Connecter un serveur GDS</div>
@@ -232,8 +241,31 @@ export function createGds(container) {
       </div>
       <div id="gds-provision-err" class="gds-error"></div>
       <div id="gds-provision-ok" class="gds-ok"></div>
+      <div class="gds-panel-desc" style="margin-top:10px"><strong>Connexion SSH &amp; dépôts</strong> — à renseigner pour un serveur <em>distant</em> :</div>
+      <div class="gds-grid2">
+        <div>
+          <label class="gds-label">Port SSH du serveur</label>
+          <input id="gds-ssh-port" class="gds-input" value="${esc(String(sshPort))}" placeholder="22" autocomplete="off">
+        </div>
+        <div>
+          <label class="gds-label">Racine des dépôts serveur</label>
+          <input id="gds-server-repos" class="gds-input" value="${esc(serverRepos)}" placeholder="/home/git/repos" autocomplete="off">
+        </div>
+      </div>
+      <div class="gds-grid2">
+        <div>
+          <label class="gds-label">Dossier local de clonage</label>
+          <input id="gds-local-dir" class="gds-input" value="${esc(localDir)}" placeholder="(défaut : ~/Pilot/GDS)" autocomplete="off">
+        </div>
+        <div class="gds-note-box">
+          <em>Serveur <strong>distant</strong> : indiquez la racine des dépôts (ex. <code>/home/git/repos</code>) et le port SSH. La préparation du serveur (utilisateur <code>git</code>, dépôt bare, clefs) est <strong>manuelle</strong> — voir <code>docs/gds-linux-setup.md</code>.</em>
+        </div>
+      </div>
+      ${missingPw ? `<div class="gds-warn">⚠️ Mot de passe manquant (projet déjà provisionné) : ressaisissez-le puis cliquez « Enregistrer les mots de passe » — <strong>aucune nouvelle activation n'est nécessaire</strong>.</div>` : ""}
       <div class="gds-actions">
+        <button id="gds-save-cfg-btn" class="web-btn"><i data-lucide="save" class="icon-sm"></i> Enregistrer la configuration</button>
         <button id="gds-activate-btn" class="web-btn"><i data-lucide="rocket" class="icon-sm"></i> Activer GDS</button>
+        ${provisioned ? `<button id="gds-save-secrets-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Enregistrer les mots de passe</button>` : ""}
       </div>
     `;
     bodyEl.appendChild(panel);
@@ -254,6 +286,80 @@ export function createGds(container) {
     const serverSelect = panel.querySelector("#gds-server-select");
     const serverApply = panel.querySelector("#gds-server-apply");
     const email = (identity.email || "").trim();
+
+    // Construit la config à persister depuis le formulaire (snake_case : les
+    // champs de `GdsConfig` sont sérialisés tels quels). Ne contient JAMAIS de
+    // mot de passe (ceux-ci vivent hors projet, ~/.pilot/gds_secrets.json 0600).
+    function readConfig() {
+      const sshRaw = parseInt(panel.querySelector("#gds-ssh-port").value.trim(), 10);
+      return {
+        enabled: true,
+        identity_email: email,
+        db_host: panel.querySelector("#gds-db-host").value.trim(),
+        db_port: panel.querySelector("#gds-db-port").value.trim(),
+        db_user: panel.querySelector("#gds-db-user").value.trim(),
+        ssh_port: Number.isFinite(sshRaw) && sshRaw > 0 ? sshRaw : 22,
+        gds_server_repos: panel.querySelector("#gds-server-repos").value.trim() || null,
+        gds_local_dir: panel.querySelector("#gds-local-dir").value.trim() || null,
+      };
+    }
+
+    // Persiste la config projet (`.pilot/gds.json`) SANS re-provisionner.
+    // `withPasswords` écrit EN PLUS les mots de passe dans les secrets (hors
+    // projet) — chemin de ressaisie seule (T5), jamais un affichage.
+    async function persists(withPasswords) {
+      const project = currentProjectPath();
+      if (!project) throw new Error("Aucun projet ouvert.");
+      if (!email) throw new Error("Définissez d'abord votre email d'identité (bloc « Identité » en haut).");
+      const args = { project, cfg: readConfig() };
+      if (withPasswords) {
+        args.dbPassword = panel.querySelector("#gds-db-password").value;
+        args.adminPassword = panel.querySelector("#gds-admin-password").value;
+      }
+      await invoke("gds_save_config", args);
+    }
+
+    // « Enregistrer la configuration » (port SSH, racine des dépôts, dossier local).
+    const saveCfgBtn = panel.querySelector("#gds-save-cfg-btn");
+    saveCfgBtn.addEventListener("click", async () => {
+      const errEl = panel.querySelector("#gds-provision-err");
+      const okEl = panel.querySelector("#gds-provision-ok");
+      errEl.textContent = ""; okEl.textContent = "";
+      saveCfgBtn.disabled = true;
+      try {
+        await persists(false);
+        okEl.textContent = "✅ Configuration enregistrée (port SSH, racine des dépôts, dossier local).";
+      } catch (e) {
+        errEl.textContent = friendlyGdsError(e);
+      } finally {
+        saveCfgBtn.disabled = false;
+      }
+    });
+
+    // « Enregistrer les mots de passe » : ressaisie SEULE, sans re-provision.
+    const saveSecBtn = panel.querySelector("#gds-save-secrets-btn");
+    if (saveSecBtn) {
+      saveSecBtn.addEventListener("click", async () => {
+        const errEl = panel.querySelector("#gds-provision-err");
+        const okEl = panel.querySelector("#gds-provision-ok");
+        errEl.textContent = ""; okEl.textContent = "";
+        const dbPw = panel.querySelector("#gds-db-password").value;
+        const adminPw = panel.querySelector("#gds-admin-password").value;
+        if (!dbPw && !adminPw) {
+          errEl.textContent = "Saisissez au moins un mot de passe à enregistrer.";
+          return;
+        }
+        saveSecBtn.disabled = true;
+        try {
+          await persists(true);
+          okEl.textContent = "✅ Mot(s) de passe enregistré(s) hors projet — aucune nouvelle activation effectuée.";
+        } catch (e) {
+          errEl.textContent = friendlyGdsError(e);
+        } finally {
+          saveSecBtn.disabled = false;
+        }
+      });
+    }
 
     // Applique le serveur mémorisé au projet (pré-remplit le formulaire).
     async function applySelectedServer() {
@@ -314,13 +420,26 @@ export function createGds(container) {
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Activation…';
       refreshIcons(container);
       try {
-        await invoke("gds_provision", {
+        // Persiste d'abord port SSH / racine des dépôts / dossier local (champs
+        // non portés par `gds_provision`), puis provisionne. `gds_provision`
+        // PRÉSERVE ces valeurs (re-provision idempotent).
+        await persists(false);
+        const res = await invoke("gds_provision", {
           project, dbHost, dbPort, dbUser, dbPassword,
           adminEmail: email, adminPassword,
         });
+        if (res && res.manual_setup) {
+          // Serveur DISTANT : préparation MANUELLE (docs/gds-linux-setup.md).
+          pendingNotice =
+            "✅ Base provisionnée. Serveur GDS DISTANT : préparez-le manuellement " +
+            "(utilisateur git, dépôt bare, authorized_keys — docs/gds-linux-setup.md) " +
+            "puis ajoutez la clef publique du poste (bloc « Avancé » → Clefs SSH).";
+        }
         await refresh();
         const okEl = bodyEl.querySelector("#gds-provision-ok");
-        if (okEl) okEl.textContent = "✅ Serveur provisionné et GDS activé pour ce projet.";
+        if (okEl && !(res && res.manual_setup)) {
+          okEl.textContent = "✅ Serveur provisionné et GDS activé pour ce projet.";
+        }
       } catch (e) {
         err.textContent = String(e);
         ok.textContent = "";
@@ -684,6 +803,11 @@ export function createGds(container) {
           <div><label class="gds-label">Port</label><input class="gds-input" value="${esc(port)}" readonly></div>
           <div><label class="gds-label">Utilisateur</label><input class="gds-input" value="${esc(user)}" readonly></div>
         </div>
+        <div class="gds-grid3">
+          <div><label class="gds-label">Port SSH</label><input class="gds-input" value="${esc(String((cfg && cfg.ssh_port) || 22))}" readonly></div>
+          <div><label class="gds-label">Racine des dépôts serveur</label><input class="gds-input" value="${esc((cfg && cfg.gds_server_repos) || "—")}" readonly></div>
+          <div><label class="gds-label">Dossier local</label><input class="gds-input" value="${esc((cfg && cfg.gds_local_dir) || "—")}" readonly></div>
+        </div>
         ` : ""}
         <div class="gds-panel-desc" style="margin-top:12px; margin-bottom:6px"><strong>Serveurs GDS mémorisés</strong> (hôte/utilisateur uniquement — jamais les mots de passe) :</div>
         <div id="gds-adv-servers" class="gds-list"></div>
@@ -737,6 +861,7 @@ export function createGds(container) {
   function renderSshHtml() {
     return `
       <div class="gds-panel-desc" style="margin-top:14px; margin-bottom:6px"><strong>Clefs SSH</strong> (gérées automatiquement ; utile pour une clef de dev externe) :</div>
+      <div class="gds-note-box" style="margin-bottom:6px"><em>Serveur <strong>distant</strong> : les clefs publiques s'ajoutent <strong>manuellement</strong> dans <code>~git/.ssh/authorized_keys</code> du serveur (voir <code>docs/gds-linux-setup.md</code>) — le bouton « Enregistrer la clef » ne vaut que pour un serveur local.</em></div>
       <div id="gds-ssh-poste" class="gds-ssh-poste"></div>
       <div class="gds-actions">
         <button id="gds-ssh-key-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Générer / afficher la clef du poste</button>
@@ -825,6 +950,15 @@ export function createGds(container) {
 
     setStateBadge(status, onServer);
     renderIdentity(identity);
+
+    if (pendingNotice) {
+      const notice = document.createElement("div");
+      notice.className = "gds-ok";
+      notice.style.margin = "0 0 10px 0";
+      notice.textContent = pendingNotice;
+      bodyEl.appendChild(notice);
+      pendingNotice = "";
+    }
 
     if (status === "connected") {
       renderConnected(cfg, identity);

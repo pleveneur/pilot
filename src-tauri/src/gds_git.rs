@@ -41,6 +41,13 @@ pub(crate) fn validate_project_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// Nom du dépôt bare (`<nom>.git`) — nom validé (anti path traversal).
+/// Partagé par les deux modes : LOCAL (`add_project`) et DISTANT
+/// (`add_project_remote`), pour garantir le MÊME contrat de nommage.
+pub(crate) fn repo_name_for(project_name: &str) -> Result<String, String> {
+    Ok(format!("{}.git", validate_project_name(project_name)?))
+}
+
 /// Supprime le repo bare d'un projet du serveur GDS (Évolution 2). Chemin
 /// validé via `validate_project_name` (anti path traversal) et verrouillé sur
 /// le dossier `repos` GDS : on ne supprime JAMAIS hors du dossier repos.
@@ -69,6 +76,7 @@ pub(crate) async fn add_project(
     description: &str,
 ) -> Result<Value, String> {
     let name = validate_project_name(name)?;
+    let repo_name = repo_name_for(&name)?;
     let dir = repos_dir(gds_local_dir);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Création dossier repos: {}", e))?;
     let bare = repo_bare_path(gds_local_dir, &name);
@@ -83,7 +91,6 @@ pub(crate) async fn add_project(
     .await
     .map_err(|e| e.to_string())??;
 
-    let repo_name = format!("{}.git", name);
     let path_on_server = bare.to_string_lossy().to_string();
     // Idempotent : si le projet existe déjà en base (ex: tentative précédente
     // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
@@ -105,6 +112,50 @@ pub(crate) async fn add_project(
     Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
 }
 
+/// Serveur DISTANT : enregistre le projet et le dépôt en base SANS RIEN créer
+/// ni administrer sur le poste (aucun bare local). Le dépôt bare est créé
+/// MANUELLEMENT sur le serveur (docs/gds-linux-setup.md). `path_on_server` est
+/// le chemin POSIX du bare côté serveur, `remote_url` l'URL git SSH.
+/// Idempotent (projet/dépôt déjà en base → réutilisés).
+pub(crate) async fn add_project_remote(
+    pool: &PgPool,
+    name: &str,
+    path_on_server: &str,
+    remote_url: &str,
+    email: &str,
+    description: &str,
+) -> Result<Value, String> {
+    let name = validate_project_name(name)?;
+    let repo_name = repo_name_for(&name)?;
+    let project_id = match gds_db::get_project_by_name(pool, &name).await? {
+        Some(id) => id,
+        None => {
+            gds_db::create_project(
+                pool,
+                &name,
+                &repo_name,
+                remote_url,
+                path_on_server,
+                "active",
+                description,
+            )
+            .await?
+        }
+    };
+    if gds_db::get_git_repo_by_project(pool, project_id).await?.is_none() {
+        gds_db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
+    }
+    if let Ok(Some(user)) = gds_db::get_user_by_email(pool, email).await {
+        let _ = gds_db::create_project_member(pool, project_id, user.id, "dev").await;
+    }
+    Ok(json!({
+        "project_id": project_id,
+        "name": name,
+        "bare_path": path_on_server,
+        "remote_url": remote_url,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +172,15 @@ mod tests {
         assert!(validate_project_name("a\\b").is_err());
         assert!(validate_project_name("a b").is_err());
         assert!(validate_project_name("").is_err());
+    }
+
+    #[test]
+    fn repo_name_for_validates_and_appends_git() {
+        // Contrat de nommage PARTAGÉ local/distant : nom validé + suffixe .git.
+        assert_eq!(repo_name_for("  myproj  ").unwrap(), "myproj.git");
+        assert!(repo_name_for("../evil").is_err());
+        assert!(repo_name_for("a/b").is_err());
+        assert!(repo_name_for("").is_err());
     }
 
     #[test]
