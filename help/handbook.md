@@ -1027,6 +1027,14 @@ apprend et répond.
   aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
   « fin »), **point important / anomalie** (son « point »), **question posée**
   (son « attention »).
+- **Installation automatique** : le script est **créé tout seul** au premier
+  usage (dossier `~/.pilot/assistant/` créé si besoin). Aucune intervention
+  manuelle n'est requise : le bouton « Tester » fonctionne dès l'installation.
+- **Personnalisable** : vous pouvez **modifier** `~/.pilot/assistant/notify.ps1`
+  à votre goût (mélodies, sons). Pilot ne l'**écrase jamais** : un script
+  existant est toujours utilisé tel quel.
+- **Disponible sur Windows uniquement** : la lecture s'appuie sur PowerShell
+  (absent sur macOS/Linux) ; sur ces plateformes, un message clair l'indique.
 - **Volume réglable (0-100 %, défaut 100 %)** : appliqué à **tous** les types de
   sons. Un bouton **« Tester »** joue immédiatement le son « point » pour
   vérifier le réglage.
@@ -1423,6 +1431,10 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   désactivé ne compte pas et libère sa place), **1 fire** par
   planification et par tick, **pas de tick** si l'onglet 🧭 est fermé (session
   morte — les rappels `every` accumulent un retard, repris à la reprise).
+- **Échéance** : un rappel créé avec `everySeconds = N` se déclenche pour la
+  première fois **N secondes après sa création** (référence `created_at` tant
+  qu'il n'a jamais été livré, puis `last_run_at`). `schedule_create` renvoie
+  `nextFireAt` (ISO 8601 UTC) : **aucun déclenchement avant l'échéance demandée**.
 - **Issue #77 — pas de lancement automatique au démarrage** : par défaut,
   l'Assistant **ne lance pas automatiquement** un rappel dû à l'ouverture de sa
   session (démarrage de Pilot). Ce comportement est contrôlé par le réglage

@@ -204,6 +204,7 @@ pilot/
     ├── capabilities/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
+    ├── assets/                # Ressources embarquées (include_str!) : notify.ps1 (son de notification de l'assistant, installé automatiquement, jamais écrasé)
     ├── extensions/            # Extensions pi embarquées (incluses via include_str!)
     │   ├── mcp-client.src.ts # POC MCP : source extension client MCP (SDK bundlé · génère pilot-mcp-client.ts)
     │   ├── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)

@@ -158,6 +158,14 @@ apprend et répond.
   aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
   « fin »), **point important / anomalie** (son « point »), **question posée**
   (son « attention »).
+- **Installation automatique** : le script est **créé tout seul** au premier
+  usage (dossier `~/.pilot/assistant/` créé si besoin). Aucune intervention
+  manuelle n'est requise : le bouton « Tester » fonctionne dès l'installation.
+- **Personnalisable** : vous pouvez **modifier** `~/.pilot/assistant/notify.ps1`
+  à votre goût (mélodies, sons). Pilot ne l'**écrase jamais** : un script
+  existant est toujours utilisé tel quel.
+- **Disponible sur Windows uniquement** : la lecture s'appuie sur PowerShell
+  (absent sur macOS/Linux) ; sur ces plateformes, un message clair l'indique.
 - **Volume réglable (0-100 %, défaut 100 %)** : appliqué à **tous** les types de
   sons. Un bouton **« Tester »** joue immédiatement le son « point » pour
   vérifier le réglage.
