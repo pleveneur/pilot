@@ -3019,6 +3019,7 @@ mod tests {
                 busy: true,
                 blocked_reported: false,
                 auto_stopped_reported: false,
+                awaiting_user: false,
             },
         );
         assert!(

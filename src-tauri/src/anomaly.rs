@@ -57,6 +57,15 @@ pub struct AgentAnomalyState {
     /// Réarmé à false au prochain `agent_start`/`agent_settled`. Empêche de
     /// ré-arrêter un agent déjà arrêté dans la même exécution.
     pub auto_stopped_reported: bool,
+    /// Attente de réponse utilisateur (bug « question sans réponse > seuil »).
+    /// Posé quand une `extension_ui_request` interactive est émise (choix,
+    /// multi-choix, confirmation, saisie, éditeur/gate) ; levé dès le PREMIER
+    /// événement d'activité suivant (la réponse a été traitée, le tour a repris)
+    /// ou sur les événements de cycle de vie / mort du process. Tant qu'il est
+    /// posé, l'arrêt automatique (T2), le plafond « réfléchit » de l'Assistant
+    /// et la libération du créneau « run fantôme » sont SUSPENDUS : une attente
+    /// d'utilisateur n'est pas un blocage, c'est un état légitime (nuit, réunion).
+    pub awaiting_user: bool,
 }
 
 /// Événements RPC considérés comme une activité de l'agent (rafraîchissent
@@ -85,6 +94,14 @@ const ACTIVITY_EVENTS: &[&str] = &[
 /// jamais si le process meurt en pleine génération (issue #141).
 const RESET_EVENTS: &[&str] = &["process_exit", "process_error"];
 
+/// Événements d'interface interactive : l'agent attend une réponse de
+/// l'utilisateur (choix, multi-choix, confirmation, saisie, éditeur/gate).
+/// L'événement lui-même est une progression légitime (l'agent a posé une
+/// question) mais la période d'attente qui suit ne produit AUCUN autre
+/// événement : sans ce marqueur, elle serait prise à tort pour un blocage et
+/// l'agent serait arrêté automatiquement (bug « question sans réponse > seuil »).
+const USER_REQUEST_EVENTS: &[&str] = &["extension_ui_request"];
+
 /// Événements d'activité qui NE SONT PAS une progression réelle de la tâche
 /// (bug #152) : les réessais provider. pi peut boucler sur `auto_retry` quand
 /// le fournisseur est indisponible : ces événements rafraîchissent
@@ -112,7 +129,8 @@ pub fn make_observer(
         // activité de génération, on efface `busy` pour ne pas bloquer
         // l'indicateur. Un reset ne CRÉE pas d'entrée (pas d'agent à suivre).
         let is_reset = RESET_EVENTS.contains(&t);
-        if !is_reset && !ACTIVITY_EVENTS.contains(&t) {
+        let is_user_request = USER_REQUEST_EVENTS.contains(&t);
+        if !is_reset && !is_user_request && !ACTIVITY_EVENTS.contains(&t) {
             return;
         }
         let now = Instant::now();
@@ -159,6 +177,8 @@ pub fn make_observer(
                     entry.last_progress = now;
                     entry.last_activity_wall = Some(SystemTime::now());
                     entry.last_event = t.to_string();
+                    // Mort du process : aucune attente d'utilisateur ne subsiste.
+                    entry.awaiting_user = false;
                 }
             } else {
                 let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
@@ -169,6 +189,7 @@ pub fn make_observer(
                     busy: false,
                     blocked_reported: false,
                     auto_stopped_reported: false,
+                    awaiting_user: is_user_request,
                 });
                 if t == "agent_start" {
                     entry.busy = true;
@@ -186,6 +207,12 @@ pub fn make_observer(
                     entry.blocked_reported = false;
                     entry.auto_stopped_reported = false;
                 }
+                // Marqueur « en attente de réponse utilisateur » : posé par une
+                // question interactive, levé par le premier événement d'activité
+                // suivant (réponse traitée / tour repris) et par tout événement de
+                // cycle de vie (agent_start/end/settled). Anti-fuite : un marqueur
+                // coincé ne doit jamais empêcher à jamais l'arrêt automatique.
+                entry.awaiting_user = is_user_request;
                 entry.last_activity = now;
                 // Bug #152 : les réessais provider ne sont pas une progression —
                 // ils ne repoussent pas le plafond de l'arrêt automatique.
@@ -230,7 +257,7 @@ pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<
 /// via `agent_service.agent_process_alive` (l'observateur de la map d'anomalie
 /// couvre aussi la session principale, le reviewer et le super-agent).
 fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u32, now: Instant) -> bool {
-    if !enabled || !entry.busy || entry.auto_stopped_reported {
+    if !enabled || !entry.busy || entry.auto_stopped_reported || entry.awaiting_user {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -251,7 +278,7 @@ fn should_auto_stop_on_progress(
     timeout_minutes: u32,
     now: Instant,
 ) -> bool {
-    if !enabled || !entry.busy || entry.auto_stopped_reported {
+    if !enabled || !entry.busy || entry.auto_stopped_reported || entry.awaiting_user {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_progress).as_secs();
@@ -273,7 +300,7 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 /// n'est plus un travail en cours → on libère la marque busy SANS tuer le
 /// process (le kill relève de l'arrêt auto T2). Pure et testable.
 fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
-    if !entry.busy {
+    if !entry.busy || entry.awaiting_user {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -354,6 +381,7 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     if anomaly_enabled
                         && entry.busy
                         && !entry.blocked_reported
+                        && !entry.awaiting_user
                         && idle_secs > anomaly_timeout_secs
                     {
                         entry.blocked_reported = true;
@@ -806,6 +834,7 @@ mod tests {
             busy: true,
             blocked_reported: false,
             auto_stopped_reported: false,
+            awaiting_user: false,
         };
         let (iso, relative) = last_activity_info(&state);
         // ISO présent et au format RFC3339 (ex: 2024-01-15T10:30:00+00:00).
@@ -824,6 +853,7 @@ mod tests {
             busy: true,
             blocked_reported: false,
             auto_stopped_reported: false,
+            awaiting_user: false,
         };
         let (iso2, relative2) = last_activity_info(&no_wall);
         assert!(iso2.is_none(), "ISO absent sans activité wall-clock");
@@ -848,6 +878,7 @@ mod tests {
             busy,
             blocked_reported: false,
             auto_stopped_reported: reported,
+            awaiting_user: false,
         };
 
         // Désactivé → jamais arrêté, même très inactif.
@@ -965,6 +996,7 @@ mod tests {
             busy: true,
             blocked_reported: false,
             auto_stopped_reported: false,
+            awaiting_user: false,
         };
 
         // Boucle de réessais fraîche (il y a 30 s) mais AUCUNE progression depuis
@@ -1005,6 +1037,7 @@ mod tests {
             busy,
             blocked_reported: false,
             auto_stopped_reported: false,
+            awaiting_user: false,
         };
 
         // Non busy → jamais libéré.
@@ -1022,5 +1055,101 @@ mod tests {
         // Seuil min 1 min : inactivité > 1 min suffit.
         let e = state_at(90, true);
         assert!(should_release_stale_busy(&e, 1, now));
+    }
+
+    /// Bug « question sans réponse > seuil » : une question interactive
+    /// (`extension_ui_request`) pose le marqueur `awaiting_user`, qui SUSPEND
+    /// l'arrêt automatique (T2), le plafond de l'Assistant (via should_auto_stop)
+    /// et la libération du créneau « run fantôme ». Le marqueur est levé par le
+    /// premier événement d'activité suivant (réponse traitée) ou par un
+    /// événement de cycle de vie (agent_start/agent_end/agent_settled).
+    #[test]
+    fn observer_marks_and_clears_awaiting_user_on_ui_request() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        // agent_start puis question interactive → marqueur posé, agent toujours busy.
+        obs(&ev("agent_start"));
+        obs(&ev("extension_ui_request"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(s.awaiting_user, "question posée → attente utilisateur marquée");
+            assert!(s.busy, "l'agent reste actif pendant l'attente");
+            assert_eq!(s.last_event, "extension_ui_request");
+        }
+
+        // Réponse traitée → le tour reprend : le prochain événement lève le marqueur.
+        obs(&ev("tool_execution_end"));
+        {
+            let a = anomaly.lock().unwrap();
+            assert!(
+                !a.get("/proj\u{1f}codeur").unwrap().awaiting_user,
+                "activité suivante → attente levée (réponse traitée)"
+            );
+        }
+
+        // Fin de tour → marqueur levé même sans événement intermédiaire.
+        obs(&ev("extension_ui_request"));
+        obs(&ev("agent_settled"));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(!s.awaiting_user, "agent_settled → attente levée");
+            assert!(!s.busy, "agent_settled → plus busy");
+        }
+    }
+
+    /// Bug « question sans réponse > seuil » : tant que `awaiting_user` est posé,
+    /// AUCUNE décision automatique (arrêt T2, plafond Assistant, libération du
+    /// créneau fantôme) ne se déclenche, même après une inactivité très longue.
+    /// Dès que le marqueur est levé, l'arrêt redevient déclenchable au-delà du
+    /// seuil (aucune régression du filet de sécurité).
+    #[test]
+    fn awaiting_user_suspends_auto_stop_and_stale_release() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // 100 min d'inactivité, busy, non arrêté, selon l'attente utilisateur.
+        let state = |awaiting_user: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(6000),
+            last_progress: now - Duration::from_secs(6000),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "extension_ui_request".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user,
+        };
+
+        // (a) En attente de réponse utilisateur → aucune décision automatique.
+        let waiting = state(true);
+        assert!(!should_auto_stop(&waiting, true, 10, now), "attente → pas d'arrêt T2");
+        assert!(
+            !should_auto_stop_on_progress(&waiting, true, 10, now),
+            "attente → pas d'arrêt (progression)"
+        );
+        assert!(
+            !should_release_stale_busy(&waiting, 25, now),
+            "attente → créneau fantôme non libéré"
+        );
+
+        // (b) Après la réponse (marqueur levé) → arrêt redevient déclenchable.
+        let answered = state(false);
+        assert!(should_auto_stop(&answered, true, 10, now), "réponse puis blocage → arrêt");
+        assert!(
+            should_auto_stop_on_progress(&answered, true, 10, now),
+            "réponse puis blocage → arrêt (progression)"
+        );
+        assert!(
+            should_release_stale_busy(&answered, 25, now),
+            "réponse puis blocage → créneau libéré"
+        );
+
+        // (c) Non-régression : une session bloquée SANS question en attente est
+        // toujours traitée comme avant (filet de sécurité intact).
+        let blocked = state(false);
+        assert!(should_auto_stop(&blocked, true, 10, now));
     }
 }
