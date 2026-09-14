@@ -728,7 +728,7 @@ fn default_agent_max_call_depth() -> u32 { 3 }
 fn default_agent_max_total_calls() -> u32 { 30 }
 fn default_agent_timeout_ms() -> u32 { 600000 }
 fn default_agent_max_result_tokens() -> u32 { 4000 }
-fn default_agent_max_turns() -> u32 { 60 }
+fn default_agent_max_turns() -> u32 { 200 }
 fn default_reviewer_critical_patterns() -> Vec<String> {
     vec![
         "src-tauri/src/**/*.rs".to_string(),

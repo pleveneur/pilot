@@ -765,7 +765,7 @@ export function destroyAgentsBus() {
 // tort (le compteur global partagé les coupait dès 40 en run parallèle).
 // Valeur par défaut 60 tours pi par agent (paramétrable via la config
 // `agent_max_turns` dans les réglages).
-const DEFAULT_MAX_PI_TURNS_PER_AGENT = 60;
+const DEFAULT_MAX_PI_TURNS_PER_AGENT = 200;
 const MAX_TURNS = 50;
 
 /**
