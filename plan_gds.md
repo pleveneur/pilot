@@ -350,7 +350,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
-> ✅ **Implémentée (bloc serveur + clefs SSH)** — `cargo test --lib` vert.
+> ✅ **Implémentée (bloc serveur + clefs SSH + serveur distant)** — `cargo test --lib` vert.
 
 **A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust.
@@ -375,6 +375,25 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   + `authorized_keys` (700/600), clefs liées aux emails (table `ssh_keys`,
   migration 0003), synchro DB → authorized_keys, enregistrement auto à la
   provision / add_project / sync. UI desktop : section « Clefs SSH » de l'onglet GDS.
+
+**A4. GDS sur serveur Linux DISTANT** ✅ (chantier « serveur distant »)
+- Objectif : rendre le GDS utilisable avec un PostgreSQL + dépôts bare sur une
+  **machine distante**, sans rien administrer à distance, et **sans aucune
+  régression** du mode local (`localhost`).
+- Modules : `gds.rs` (champs `ssh_port` / `gds_server_repos`, `is_local_host`,
+  `join_posix_path`, `server_repo_path`, `gds_remote_url`, `server_bare_exists`,
+  `gds_save_config` + mots de passe optionnels, provision / add_project /
+  connect / clone / remove branchés local/distant), `gds_git.rs`
+  (`add_project_remote`, `repo_name_for`), `gds_ssh.rs`
+  (`ensure_poste_key_remote`, `poste_key_response`, `record_poste_key`),
+  `gds_db.rs` (`project_has_git_repo`), `gds_client.rs` (sync), `src/js/gds.js`
+  (port SSH, racine serveur, dossier local, enregistrement config, ressaisie des
+  mots de passe, instructions manuelles).
+- Docs : `docs/gds-linux-setup.md` (procédure serveur + protocole de test).
+- Tests : purs (is_local_host, URL locale inchangée / URL distante, rétrocompat
+  `gds.json` ancien, `join_posix_path`, `repo_name_for`, `poste_key_response`).
+  Critère : serveur distant provisionnable/ajoutable manuellement, local inchangé,
+  `cargo test --lib` + `npm test` verts.
 
 ### PHASE B — GDS : synchronisation & verrous
 

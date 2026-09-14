@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-12 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -252,7 +252,10 @@ type GitHub.
   mot de passe n'est affichée ni demandée à nouveau après la première saisie :
   au démarrage, Pilot se **reconnecte automatiquement** (auto-provisionnement
   en arrière-plan, sans jamais bloquer l'ouverture du projet) au serveur déjà
-  configuré (sans re-provisionner). L'ajout initial d'un projet au GDS reste
+  configuré (sans re-provisionner). Un **mot de passe manquant** (secrets perdus
+  ou poste changé) se **ressaisit seul** avec le bouton **« Enregistrer les mots
+  de passe »** : **aucune nouvelle activation** n'est nécessaire, la base n'est
+  jamais recréée. L'ajout initial d'un projet au GDS reste
   **manuel** : il n'est jamais automatisé à l'ouverture.
 - **Identité globale saisie UNE seule fois** : en haut de l'onglet GDS, un
   bloc **Identité** recueille votre **email** (qui identifie votre compte GDS)
@@ -270,13 +273,27 @@ type GitHub.
     **« Connecter un serveur GDS »** — réutiliser un **serveur mémorisé**
     (sélecteur, mots de passe jamais affichés) ou renseigner un **nouveau
     serveur** (hôte, port, utilisateur dédié, mot de passe dédié, mot de passe
-    admin), puis bouton **« Activer GDS »** → crée la base `pilot_gds`, les
-    tables et votre compte admin, puis active le GDS pour le projet ;
+    admin). Deux boutons : **« Enregistrer la configuration »** (mémorise les
+    champs **sans rien créer**) et **« Activer GDS »** (crée la base
+    `pilot_gds`, les tables et votre compte admin, puis active le GDS pour le
+    projet). Un bouton **« Enregistrer les mots de passe »** permet de
+    (re)saisir un mot de passe **sans refaire l'activation** ;
+  - **Serveur GDS local ou distant** : juste sous le formulaire, réglez si besoin
+    le **Port SSH du serveur** (22 par défaut) et la **Racine des dépôts
+    serveur** (ex. `/home/git/repos`) — ces deux champs servent quand votre GDS
+    est hébergé sur une **machine distante** (VPS, serveur Linux) ; le **Dossier
+    local de clonage** est également modifiable. Pour un serveur **distant**, la
+    préparation de la machine (utilisateur `git`, dépôt bare, clefs SSH) est
+    **manuelle** — Pilot n'administre jamais une machine distante ;
   - **Ajouter ce projet au GDS** : une fois activé (si le projet n'est pas
     déjà sur le serveur), crée un dépôt git bare sur le serveur, ajoute le
     remote `gds` (sans toucher à un éventuel `origin`) et pousse la branche
     courante. L'**identité git** (email + nom) est réglée automatiquement et
-    **localement**, depuis votre identité globale (aucune saisie) ;
+    **localement**, depuis votre identité globale (aucune saisie). Sur un
+    serveur **local**, Pilot crée le dépôt bare lui-même ; sur un serveur
+    **distant**, le dépôt bare doit avoir été créé **au préalable** sur la
+    machine (sinon le push échoue avec un message vous indiquant la marche à
+    suivre) ;
   - **Déjà sur le serveur** : badge **« ✅ Déjà ajouté »**, bouton d'ajout
     masqué ;
   - **Connecté** : bloc compact — statut, bouton **Synchroniser**, **Relâcher
@@ -292,7 +309,9 @@ type GitHub.
   - **Générer / afficher la clef du poste** (paire ed25519 créée dans `~/.ssh/`
     si absente, sans écraser une clef existante) ;
   - **Enregistrer une clef de dev** (email + clef publique) → Pilot l'ajoute à
-    `authorized_keys` du serveur, liée à l'email.
+    `authorized_keys` du serveur, liée à l'email. Sur un serveur **distant**,
+    cette clef doit être copiée **à la main** dans `~git/.ssh/authorized_keys`
+    de la machine (le bouton ne vaut que pour un serveur local).
 - **Synchronisation & verrous (Phase B)** : une fois connecté, l'onglet GDS
   permet de **Synchroniser** le projet depuis le remote `gds` (clone si
   absent, sinon fetch/pull) et d'acquérir le **verrou global projet**
@@ -303,6 +322,10 @@ type GitHub.
 - **Phase C à venir** : les tickets (suivi des demandes clients) et le suivi
   fusionné (contexte projet partagé) sont affichés comme « disponibles à la
   Phase C » — non implémentés dans cette version.
+- **Documentation technique** : la procédure complète de préparation d'un
+  serveur Linux distant (PostgreSQL, utilisateur `git`, dépôts bare, clefs SSH,
+  protocole de test, dépannage) se trouve dans `docs/gds-linux-setup.md` du
+  dépôt Pilot.
 
 ---
 

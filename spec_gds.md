@@ -9,6 +9,15 @@
 > Chaque chantier (phases A→B→C) passe au **protocole quality-gate**
 > (`.pi/skills/quality-gate/SKILL.md`) avant validation.
 >
+> **Serveur Linux distant (implémenté)** : GDS utilisable avec un PostgreSQL +
+> dépôts bare sur une **machine distante**, sans aucune administration à
+> distance. Champs rétrocompatibles `ssh_port` / `gds_server_repos`, helper pur
+> `is_local_host`, mode distant (clef SSH/DB + bare manuels, existence du bare
+> vérifiée en base, aucune suppression distante), ressaisie de mot de passe sans
+> re-provision, UI (port SSH, racine serveur, dossier local) — contrat détaillé
+> §0.4 et §4.1. Procédure serveur + protocole de test :
+> `docs/gds-linux-setup.md`. Le mode **localhost reste strictement inchangé**.
+>
 > **Évolutions UX (implémentées)** : (1) **Mémoriser les connexions par serveur**
 > — map `servers` dans `~/.pilot/gds_secrets.json` (clé `user@host`, mots de
 > passe jamais remontés à l'UI), commandes `gds_list_saved_servers` /
@@ -111,12 +120,37 @@ stable.
   deux projets peuvent viser deux serveurs différents.
 - **Config simplifiée (UI)** : l'interface ne demande que l'**adresse du serveur**
   (`server_url`) et l'**email d'identité** (`identity_email`). L'hôte SSH
-  (`ssh_host`, `host:22`) est **dérivé automatiquement** de `server_url` à la
-  sauvegarde (schémas `postgres://`, `http://`, `https://`, `ssh://`), et le
-  dossier local de clonage (`gds_local_dir`) utilise le **défaut** `~/Pilot/GDS`.
-  Les champs `ssh_host` / `gds_local_dir` / `urgent_email` restent présents dans
-  `.pilot/gds.json` (compat) mais ne sont **plus édités dans l'UI** ; le backend
-  les **préserve** à la sauvegarde (pas de perte de données → réaffichage correct).
+  (`ssh_host`, `host:<port>`) est **dérivé automatiquement** de `db_host`
+  (prioritaire) ou de `server_url` à la sauvegarde (schémas `postgres://`,
+  `http://`, `https://`, `ssh://`), et le dossier local de clonage
+  (`gds_local_dir`) utilise le **défaut** `~/Pilot/GDS` (`C:\GDS` sous Windows).
+  Les champs `ssh_host` / `urgent_email` restent présents dans `.pilot/gds.json`
+  (compat) mais ne sont **plus édités dans l'UI** ; le backend les **préserve**
+  à la sauvegarde (pas de perte de données → réaffichage correct).
+- **Serveur distant (chantier « serveur Linux distant »)** : deux champs
+  **optionnels et rétrocompatibles** ont été ajoutés à `.pilot/gds.json` :
+  - `ssh_port` (`u16`, absent ⇒ **22**) : port SSH du serveur GDS, utilisé pour
+    construire l'URL du remote (`ssh://git@hôte:<ssh_port>/…`). `0` en entrée =
+    « non fourni » ⇒ la valeur existante est **préservée** (idem pour les autres
+    champs non envoyés par l'UI) ;
+  - `gds_server_repos` (`Option<String>`, absent ⇒ `None`) : **racine absolue des
+    dépôts bare CÔTÉ SERVEUR** (ex. `/home/git/repos`), utilisée uniquement pour
+    un serveur **distant**.
+  Un `.pilot/gds.json` écrit avant ce chantier se charge sans erreur (défauts
+  serde) ⇒ port SSH 22 et aucune racine → **comportement historique inchangé**.
+- **Serveur local vs distant** : `is_local_host(host)` (helper pur) décide du
+  mode à partir de `db_host` (sinon de l'hôte de `server_url`) : `localhost`,
+  `127.0.0.0/8`, `::1`, `0.0.0.0`, le **nom de la machine** (+ `.local`) et la
+  valeur vide ⇒ **LOCAL** ; toute autre valeur ⇒ **DISTANT**. Le mode LOCAL garde
+  un comportement **strictement inchangé** (voir §4.1).
+- **Ressaisie de mot de passe sans re-provision** : `gds_save_config` accepte
+  désormais deux arguments optionnels `db_password` / `admin_password`
+  (`Option<String>`). Un mot de passe non vide est écrit **hors projet** dans
+  `~/.pilot/gds_secrets.json` (0600) — **jamais** dans `.pilot/gds.json` ni dans
+  un log ; un champ vide **préserve** le secret existant. L'UI expose un bouton
+  « Enregistrer les mots de passe » : plus besoin de refaire « Activer GDS »
+  (la base n'est jamais recréée). Les mots de passe ne **remontent jamais** à
+  l'UI (seulement des booléens `gds_secrets_status`).
 - **Aucun serveur GDS par défaut** et **aucune config GDS globale** de Pilot
   (pas de champ `gds_*` dans la config applicative). Sans activation, le projet
   reste 100 % local (cf. §7.1).
@@ -442,6 +476,37 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   déclencher des notifications/CI).
 - **Critère de fin** : clone/fetch/push fonctionnel entre poste et serveur.
 
+### 4.1 Serveur **distant** (Linux) vs serveur **local** — contrat
+
+Le GDS peut viser un PostgreSQL + repos bare **sur une machine distante**
+(VPS, serveur Linux). Décision structurante : **Pilot n'administre JAMAIS une
+machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
+
+| Étape | Serveur LOCAL | Serveur DISTANT |
+|---|---|---|
+| Utilisateur système `git`, dossier de repos, `authorized_keys`, `sshd` | préparés par Pilot (`gds_ssh`) | **manuels** (procédure : `docs/gds-linux-setup.md`) |
+| `ensure_poste_key` / `ensure_poste_key_remote` | clef en base **+** synchro `authorized_keys` locale | clef en base **uniquement** (`manual: true`) |
+| Dépôt bare du projet | créé par Pilot sous `<gds_local_dir>/repos/` | **créé manuellement** sur le serveur, sous `gds_server_repos` |
+| `gds_provision` | provision + préparation serveur locale | provision DB seulement (`manual_setup: true` dans la réponse) |
+| `add_project_to_gds` | `gds_git::add_project` (bare + DB) | `gds_git::add_project_remote` (DB seulement, chemin POSIX enregistré) |
+| URL du remote | `ssh://git@hôte:22/<nom>.git` (**inchangée**) | `ssh://git@hôte:<ssh_port>/<gds_server_repos>/<nom>.git` (**chemin absolu**) |
+| Existence du bare (`gds_connection_status`, sync) | test **fichier** (`gds_git::bare_repo_exists`) | requête **PostgreSQL** (`gds_db::project_has_git_repo`, fail-open `false`) |
+| Rollback en cas d'échec push | `remove_bare` (nettoyage local) | **aucune suppression** (dépôt sous responsabilité manuelle) |
+| `gds_remove_project(purge_server=true)` | retire le bare local + la base | retire **uniquement** les lignes en base |
+
+- **Sémantique d'URL vérifiée** (git 2.5x, `GIT_SSH_VARIANT=ssh`) :
+  `ssh://git@hôte:port/<chemin>` passe **toujours un chemin ABSOLU**
+  (`git-upload-pack '/chemin'`). D'où le préfixe `/` forcé sur `gds_server_repos`
+  pour un serveur distant ; un chemin relatif au `$HOME` de `git` n'est pas
+  exprimable dans ce schéma. Le mode LOCAL conserve **byte-for-byte** l'URL
+  historique (même si `gds_server_repos` est renseigné par erreur).
+- **Nom du dépôt** : contrat partagé `gds_git::repo_name_for(name)` →
+  `<nom validé (anti path traversal)>.git`, identique dans les deux modes.
+- **Limite connue / assumée** : `gds_register_ssh_key` (commande « enregistrer
+  une clef de dev ») n'a ni projet ni config pour décider local/distant : il
+  continue de synchroniser `authorized_keys` **du poste** et n'est donc
+  pertinent que pour un serveur local (mention dans l'UI et la procédure).
+
 ---
 
 ## 5. Synchronisation, verrou global projet & mode urgent
@@ -470,6 +535,13 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   peut pas le modifier ; verrou expiré → récupéré automatiquement.
 
 ### 5.2 Dossier des projets GDS paramétrable
+
+- Le dossier local de clonage (`gds_local_dir`, **éditable dans l'UI** du bloc
+  « Connecter un serveur GDS »), par défaut `~/Pilot/GDS` (`C:\GDS` sous
+  Windows), sert de racine aux dépôts bare **du serveur LOCAL**
+  (`<gds_local_dir>/repos/<projet>.git`). Pour un serveur **distant**, ce champ
+  ne désigne que le dossier de travail local et la racine serveur est
+  `gds_server_repos` (voir §4.1).
 
 - **Objectif** : le dossier local où les projets GDS sont clonés est configurable
   (champ `gds_local_dir` de la **config projet** `.pilot/gds.json`, défaut
