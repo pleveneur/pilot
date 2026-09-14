@@ -3831,7 +3831,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
 
   // Buffer de détection de boucle, SCOPÉ au listener (pas de variable de
   // module transitoire — issue #55, 4.3).
-  const loop = { buffer: "", lastChecked: 0, stopped: false, toolCalls: [] };
+  const loop = { buffer: "", lastText: "", lastChecked: 0, stopped: false, toolCalls: [] };
 
   // Écouter le canal d'événements de l'agent (même canal que l'onglet agent),
   // en utilisant l'id RÉSOLU (4.1).
@@ -3848,7 +3848,7 @@ async function startInvisibleAgentMonitoring(messagesEl, agentId, projectPath, r
   });
 
   invisibleAgents.set(invisibleAgentKey(agentId, projectPath), {
-    agentId, projectPath, messagesEl, unlisten,
+    agentId, projectPath, messagesEl, unlisten, loop,
   });
 }
 
@@ -3860,12 +3860,22 @@ function invisibleAgentKey(agentId, projectPath) {
 /** Traite un événement du canal de l'agent invisible. */
 function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, loop) {
   const type = payload.type;
+  // Restitution fiable : nouveau message assistant → repartir d'un texte vide
+  // (le compte rendu de fin ne doit contenir que le DERNIER message de l'agent).
+  if (type === "message_start") {
+    const m = payload.message;
+    if (m && m.role === "assistant") loop.lastText = "";
+    return;
+  }
   if (type === "message_update") {
     const delta = payload.assistantMessageEvent;
     if (!delta) return;
     // Accumuler le flux streamé dans le buffer scpé pour la détection de boucle.
     if (delta.type === "text_delta" && typeof delta.delta === "string") {
       loop.buffer += delta.delta;
+      // Restitution fiable : mémoriser le texte assistant (hors réflexion) pour
+      // le compte rendu de fin de tâche transmis à l'assistant.
+      loop.lastText += delta.delta;
       maybeDetectInvisibleAgentLoop(messagesEl, loop, agentId, projectPath);
     } else if (delta.type === "thinking_delta" && typeof delta.delta === "string") {
       loop.buffer += delta.delta;
@@ -3916,16 +3926,37 @@ async function checkInvisibleAgentCompletion(messagesEl, agentId, projectPath) {
   );
 }
 
+/**
+ * Compose le compte rendu de fin de tâche d'un agent invisible (fonction pure).
+ * Le RÉSULTAT réel (dernier message assistant de l'agent) est inclus ; s'il est
+ * vide (agent sans texte final), on retombe sur un libellé générique. Sans ce
+ * texte, l'assistant coordinateur reçoit un compte rendu vide et croit que rien
+ * n'a été fait, ce qui le pousse à relancer inutilement.
+ * @param {unknown} finalText - dernier message assistant de l'agent (peut être "").
+ * @returns {string}
+ */
+export function buildInvisibleAgentFinalSummary(finalText) {
+  const text = typeof finalText === "string" ? finalText.trim() : "";
+  return text
+    ? `Résultat de l'agent : ${text}`
+    : "L'agent a terminé la tâche déléguée en arrière-plan.";
+}
+
 /** Finalise le suivi (idempotent) : notifie, feedback délégation. */
 function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   // Finaliser une seule fois (l'état de l'objet a déjà basculé).
   const key = invisibleAgentKey(agentId, projectPath);
-  if (!invisibleAgents.has(key)) return;
+  const t = invisibleAgents.get(key);
+  if (!t) return;
+  // Récupérer le DERNIER message assistant réellement produit AVANT de supprimer
+  // le suivi (le loop est porté par l'entrée de la map).
+  const finalText = t.loop && typeof t.loop.lastText === "string" ? t.loop.lastText : "";
   stopInvisibleAgentMonitoring(agentId, projectPath);
   appendSystemMessage(messagesEl, message);
-  // Injecter le feedback de délégation (consomme pendingDelegation → notification).
+  // Injecter le feedback de délégation (consomme pendingDelegation → notification
+  // + consignation dans le suivi de l'assistant), avec le RÉSULTAT de l'agent.
   injectSessionSummaryToSuperAgent(
-    "L'agent a terminé la tâche déléguée en arrière-plan.",
+    buildInvisibleAgentFinalSummary(finalText),
     projectPath
   ).catch(() => {});
 }

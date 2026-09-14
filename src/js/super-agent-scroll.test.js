@@ -33,7 +33,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { shouldScrollSuperToBottom, truncateSuperAgentSummary, computeSuperAtBottomFlag } = await import("./super-agent.js");
+const { shouldScrollSuperToBottom, truncateSuperAgentSummary, computeSuperAtBottomFlag, buildInvisibleAgentFinalSummary } = await import("./super-agent.js");
 
 // Fenêtre d'exemple : scrollHeight = 1000, clientHeight = 500.
 const SCROLL_HEIGHT = 1000;
@@ -117,5 +117,27 @@ describe("truncateSuperAgentSummary (P0-4 : résumé de fin de tâche borné)", 
   it("laisse un résumé à la borne tel quel", () => {
     const big = "y".repeat(8000);
     expect(truncateSuperAgentSummary(big)).toBe(big);
+  });
+});
+
+describe("buildInvisibleAgentFinalSummary (compte rendu de fin d'agent invisible)", () => {
+  it("inclut le RÉSULTAT réel de l'agent (dernier message assistant)", () => {
+    expect(buildInvisibleAgentFinalSummary("J'ai corrigé le bug et lancé les tests.")).toBe(
+      "Résultat de l'agent : J'ai corrigé le bug et lancé les tests."
+    );
+  });
+
+  it("rogne les espaces autour du résultat", () => {
+    expect(buildInvisibleAgentFinalSummary("  travail fait  ")).toBe(
+      "Résultat de l'agent : travail fait"
+    );
+  });
+
+  it("retombe sur un libellé générique si l'agent n'a pas produit de texte", () => {
+    const ge = "L'agent a terminé la tâche déléguée en arrière-plan.";
+    expect(buildInvisibleAgentFinalSummary("")).toBe(ge);
+    expect(buildInvisibleAgentFinalSummary("   \n ")).toBe(ge);
+    expect(buildInvisibleAgentFinalSummary(null)).toBe(ge);
+    expect(buildInvisibleAgentFinalSummary(undefined)).toBe(ge);
   });
 });
