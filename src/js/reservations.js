@@ -217,26 +217,58 @@ export async function deleteReservations(project) {
   }
 }
 
+// Arrêt CIBLÉ de la session plan-maker abandonnée (timeout d'estimation). Sans
+// cet arrêt, le process pi du planificateur reste vivant et conserve le VERROU
+// de run du projet : le lancement réel du codeur est ensuite refusé (« Une run
+// est déjà en cours sur ce projet ») alors que l'assistant a déjà répondu
+// « lancé ». On ne cible QUE la session (projet, plan-maker) lancée ici.
+// Fail-open : toute erreur est ignorée (le lancement réel reste prioritaire).
+// `releaseRunLock` / `isRunInProgress` sont injectés via `deps` (agents-bus.js,
+// pour éviter une dépendance circulaire) et servent à libérer le verrou laissé
+// par la run d'estimation, borné à ~2 s pour ne jamais bloquer longtemps.
+async function stopAbandonedEstimation(project, releaseRunLock, isRunInProgress) {
+  if (!project) return;
+  try {
+    await invoke("stop_agent_process", { agentId: "plan-maker", project }).catch(() => {});
+    if (typeof releaseRunLock === "function" && typeof isRunInProgress === "function") {
+      for (let i = 0; i < 20 && isRunInProgress(project); i++) {
+        try {
+          await releaseRunLock(project);
+        } catch (_) {
+          // fail-open : le lancement réel retentera la libération.
+        }
+        if (isRunInProgress(project)) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+    }
+  } catch (_) {
+    // fail-open : on ne bloque jamais le lancement du codeur.
+  }
+}
+
 /**
  * Flux d'estimation préalable (T6). Si `coderIds` contient au moins un codeur,
  * lance l'agent `plan-maker` (lecture seule) sur la tâche pour obtenir un plan,
  * extrait les fichiers et écrit `.pilot/reservations.json` du projet concerné.
  * Fail-open : en cas d'échec, n'écrit rien et ne bloque pas le lancement du
- * codeur.
+ * codeur ; en cas de TIMEOUT, la session plan-maker abandonnée est arrêtée pour
+ * libérer le verrou de run du projet.
  *
  * `deps` est injecté par l'appelant (super-agent.js) pour éviter une dépendance
- * circulaire avec agents-bus.js : { runAgentsForAssistant, loadAgentRegistry }.
+ * circulaire avec agents-bus.js : { runAgentsForAssistant, loadAgentRegistry,
+ * releaseStuckRunLock, isRunInProgress }.
  *
  * @param {string} project - chemin absolu du projet cible
  * @param {string} task - la demande confiée au codeur
  * @param {string[]} coderIds - ids des agents codeurs de la run
- * @param {{runAgentsForAssistant: Function, loadAgentRegistry: Function}} deps
+ * @param {{runAgentsForAssistant: Function, loadAgentRegistry: Function, releaseStuckRunLock?: Function, isRunInProgress?: Function}} deps
  * @param {string[]} [participantIds] - ids de TOUS les agents de la run (ex:
  *   reservations.agents côté gate). Absent → fallback sur coderIds seul.
  * @returns {Promise<{reserved: boolean, coderId: string, files: string[]}>}
  */
 export async function estimateAndReserve(project, task, coderIds, deps, participantIds) {
-  const { runAgentsForAssistant, loadAgentRegistry } = deps || {};
+  const { runAgentsForAssistant, loadAgentRegistry, releaseStuckRunLock, isRunInProgress } = deps || {};
   const firstCoder = (Array.isArray(coderIds) ? coderIds : []).find(Boolean);
   const empty = { reserved: false, coderId: firstCoder || "", files: [] };
   if (!project || !firstCoder || !runAgentsForAssistant || !loadAgentRegistry) {
@@ -256,17 +288,27 @@ export async function estimateAndReserve(project, task, coderIds, deps, particip
   } catch (_) {
     return empty;
   }
+  let timedOut = false;
   try {
     const result = await Promise.race([
       runAgentsForAssistant([{ agentId: "plan-maker", brief: task, project }]),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("estimation timeout")), ESTIMATION_TIMEOUT_MS)),
+      new Promise((_, rej) => setTimeout(() => { timedOut = true; rej(new Error("estimation timeout")); }, ESTIMATION_TIMEOUT_MS)),
     ]);
     const files = parsePlanFiles(result);
     if (files.length === 0) return empty;
     const ok = await writeReservations(project, firstCoder, files, participantIds);
     return { reserved: ok, coderId: firstCoder, files };
   } catch (e) {
-    console.warn("[reservations] estimation échouée (fail-open, le codeur n'est pas bloqué) :", e);
+    if (timedOut) {
+      // Arrêt CIBLÉ du planificateur abandonné : sans cela, il garde le verrou
+      // de run du projet et le lancement réel échoue (« Une run est déjà en
+      // cours »). On continue quand même (fail-open) : l'estimation ne bloque
+      // jamais le codeur, mais il ne reste plus de run fantôme.
+      await stopAbandonedEstimation(project, releaseStuckRunLock, isRunInProgress);
+      console.warn("[reservations] estimation abandonnée (timeout) : session plan-maker arrêtée pour libérer le verrou de run.");
+    } else {
+      console.warn("[reservations] estimation échouée (fail-open, le codeur n'est pas bloqué) :", e);
+    }
     return empty;
   }
 }

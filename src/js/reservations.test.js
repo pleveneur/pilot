@@ -213,6 +213,42 @@ describe("estimateAndReserve (flux d'estimation préalable)", () => {
     expect(store.has(reservationsPath("/proj/"))).toBe(false);
   });
 
+  it("timeout : arrête la session plan-maker abandonnée (arrêt ciblé) et libère le verrou de run", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = baseDeps();
+      // plan-maker ne répond jamais → déclenche le timeout d'estimation.
+      deps.runAgentsForAssistant.mockReturnValue(new Promise(() => {}));
+      const releaseStuckRunLock = vi.fn(async () => {});
+      const isRunInProgress = vi.fn(() => false);
+      const cmds = [];
+      vi.mocked(invoke).mockImplementation(async (cmd, args = {}) => {
+        cmds.push(cmd);
+        if (cmd === "write_file_content") store.set(args.path, args.content);
+        if (cmd === "file_exists") return store.has(args.path);
+        if (cmd === "delete_file_or_dir") store.delete(args.path);
+        return undefined;
+      });
+      const p = estimateAndReserve(
+        "/proj/",
+        "tâche",
+        ["codeur1"],
+        { ...deps, releaseStuckRunLock, isRunInProgress },
+        ["codeur1"]
+      );
+      await vi.advanceTimersByTimeAsync(60000);
+      const r = await p;
+      expect(r).toEqual({ reserved: false, coderId: "codeur1", files: [] });
+      // Arrêt CIBLÉ de la session plan-maker du projet (et d'aucune autre).
+      expect(cmds).toContain("stop_agent_process");
+      const stopCall = vi.mocked(invoke).mock.calls.find((c) => c[0] === "stop_agent_process");
+      expect(stopCall[1]).toEqual({ agentId: "plan-maker", project: "/proj/" });
+      expect(store.has(reservationsPath("/proj/"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fail-open : plan-maker absent du registre → aucune écriture", async () => {
     const deps = baseDeps();
     deps.loadAgentRegistry.mockResolvedValueOnce({ agents: [{ id: "autre" }] });

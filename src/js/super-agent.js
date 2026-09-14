@@ -2956,6 +2956,32 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           return raw ? classifyAgent(normalizeAgent(raw)).isCoder : false;
         });
         // Étape 1 : estimation plan-maker (si codeur) puis lancement réel.
+        // Retest du verrou au moment du LANCEMENT RÉEL (pas seulement avant
+        // l'estimation) : l'estimation plan-maker (T6) occupe le verrou de run
+        // du projet pendant son exécution ; s'il est resté occupé (timeout) ou
+        // si une autre run a pris le projet entre-temps, `launchRun` lèverait
+        // « Une run est déjà en cours » APRÈS que l'assistant ait répondu
+        // « lancé » (faux succès, lancement perdu). On met alors la demande en
+        // FILE (mécanisme existant) — elle démarrera dès la fin de la run en
+        // cours — au lieu de la perdre. Retourne true si mise en file, false si
+        // réellement lancée.
+        const launchOrQueue = async () => {
+          await releaseStuckRunLock(target);
+          if (isRunInProgress(target)) {
+            // Verrou occupé par une AUTRE run : renoncer au flag in-flight de
+            // CETTE demande (il repassera à true au vrai lancement depuis la
+            // file) et désarmer son watchdog.
+            runAgentsInFlightByProject[target] = false;
+            const wd = runAgentsWatchdogByProject[target];
+            if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
+            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+            runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
+            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
+          }
+          launchRun();
+          return false; // run réellement lancée
+        };
         const launchWithEstimate = () => {
           if (coderIds.length > 0 && targetProject) {
             // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
@@ -2964,23 +2990,24 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // avant que les spécialistes travaillent). Fail-open : si l'estimation
             // échoue, on lance quand même le codeur sans réservations.
             appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
-            estimateAndReserve(targetProject, task, coderIds, {
+            return estimateAndReserve(targetProject, task, coderIds, {
               runAgentsForAssistant,
               loadAgentRegistry,
+              releaseStuckRunLock,
+              isRunInProgress,
             }, agentIds)
               .then((r) => {
                 if (r.reserved && r.files.length > 0) {
                   appendSystemMessage(messagesEl, `🔒 ${r.files.length} fichier(s) réservé(s) au codeur ${r.coderId}. Les autres spécialistes seront bloqués en écriture dessus.`);
                 }
-                launchRun();
+                return launchOrQueue();
               })
               .catch(() => {
                 // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
-                launchRun();
+                return launchOrQueue();
               });
-          } else {
-            launchRun();
           }
+          return launchOrQueue();
         };
         // Étape 2 : garde anti-chevauchement (P1-6 + T5) — met en file si une run
         // est déjà en cours sur CE projet, sinon lance immédiatement. La détection
@@ -3052,8 +3079,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
-          launchWithEstimate();
-          return false; // run réellement lancée
+          return await launchWithEstimate(); // true = mise en file, false = réellement lancée
         };
         const queued = await startRun();
         await respondSuperAgent(id, JSON.stringify({ ok: true, launched: !queued, queued }), false);
