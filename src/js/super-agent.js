@@ -28,7 +28,7 @@ import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
-import { isBusyStale } from "./exclusivity-queue.js";
+import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -295,8 +295,12 @@ const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
  * donné, pour ne JAMAIS couper une tâche légitime longue qui progresse encore.
  *   - Source de vérité du verrou : si le bus d'agents exécute encore une run
  *     sur ce projet (`isRunInProgress(runProject)`), l'agent travaille → actif.
- *   - Sinon, on sonde la supervision (`get_agent_supervision`) : si un agent
- *     du projet cible est encore vivant (`alive`), la run est considérée active.
+ *   - Sinon, on sonde les sessions (`list_agent_sessions`) : la run est
+ *     considérée active uniquement si un agent du projet cible TRAVAILLE
+ *     RÉELLEMENT (`isSessionWorking` : busy non périmé, ou activité récente).
+ *     Un processus simplement VIVANT mais au repos (agent settled, busy périmé)
+ *     ne compte PAS : sinon le verrou de run ne se libère jamais et les
+ *     demandes suivantes restent en file (faux « lancé »).
  *   - Fail-open : en cas d'erreur de supervision, on renvoie `true` (actif) —
  *     une erreur de supervision ne doit JAMAIS couper une run saine.
  * @param {string} [runProject]
@@ -305,17 +309,9 @@ const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
 async function isRunStillActive(runProject) {
   if (isRunInProgress(runProject)) return true;
   try {
-    const sup = await invoke("get_agent_supervision");
-    if (!sup || !sup.projects) return false;
-    for (const proj of sup.projects) {
-      // T6 : sonde scopée au projet — ne considérer que les agents vivants du
-      // projet cible, pour ne pas confondre une run d'un autre projet.
-      if (runProject && proj && proj.path && proj.path !== runProject) continue;
-      for (const agent of proj.agents || []) {
-        if (agent && agent.alive) return true;
-      }
-    }
-    return false;
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    return isProjectWorking(sessions, runProject);
   } catch (_) {
     return true; // fail-open : ne jamais couper une run saine par erreur
   }
@@ -3017,7 +3013,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
-            return;
+            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
           }
           runAgentsInFlightByProject[target] = true;
           // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine
@@ -3057,9 +3053,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           launchWithEstimate();
+          return false; // run réellement lancée
         };
-        await startRun();
-        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
+        const queued = await startRun();
+        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: !queued, queued }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);
@@ -3133,7 +3130,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           }
           if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
             appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file et se lancera automatiquement.");
-            return;
+            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
           }
           runAgentsInFlightByProject[target] = true;
           runAgentsForAssistantAsync(
@@ -3154,8 +3151,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             settleRun(false, `[Échec de la préparation de la run d'assistant] ${e}`);
           });
         };
-        await startRun();
-        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: true }), false);
+        const queuedAssist = await startRun();
+        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: !queuedAssist, queued: queuedAssist }), false);
       } catch (e) {
         console.error("Erreur run_assistant_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run d'assistant : ${e}`);

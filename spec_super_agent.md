@@ -1151,6 +1151,14 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   `agents.js`. `ask_pi_caged_timed` (partagé par help/review/agents_md) n'est
   pas modifié. Toutes les sessions passent par l'AgentService (le champ
   `rpc_superagent` d'`AppState` a été retiré en phase 2).
+- **Anti-faux-« lancé » (garde de run)** : une demande de run n'est annoncée
+  comme lancée que si elle démarre réellement. Les gardes d'occupation
+  exigent le **travail réel** (`isSessionWorking` : busy non périmé ou activité
+  récente), pas la simple **vivacité** du processus. Un agent vivant mais au
+  repos (session settled, busy périmé) ne bloque plus le créneau : le verrou
+  périmé est libéré et la demande démarre. Quand une demande est réellement
+  mise en file, le retour de `run_agents` / `run_assistant_agents` l'indique
+  honnêtement (`launched: false, queued: true`).
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant

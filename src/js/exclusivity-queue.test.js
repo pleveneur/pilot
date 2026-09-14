@@ -10,6 +10,8 @@ import {
   isBusyStale,
   isSessionWorking,
   isAnyAgentWorking,
+  classifyExclusivitySession,
+  isProjectWorking,
 } from "./exclusivity-queue.js";
 
 describe("exclusivityKey", () => {
@@ -273,5 +275,80 @@ describe("isAnyAgentWorking — au moins un agent réellement en activité ?", (
       { agent: "magnus", project: "/p/A", mode: "agent_process", alive: true },
     ];
     expect(isAnyAgentWorking(sessions, ["magnus"], getProj, NOW)).toBe(false);
+  });
+});
+
+describe("classifyExclusivitySession — verrou local : travail réel vs simple vivacité", () => {
+  const NOW = 1700000000000;
+  const oldIso = new Date(NOW - 30 * 60 * 1000).toISOString(); // 30 min (> fenêtre busy-stale 25 min)
+
+  it("sonde indisponible (undefined) → \"unknown\" (prudence, on ne libère pas)", () => {
+    expect(classifyExclusivitySession(undefined, NOW)).toBe("unknown");
+  });
+
+  it("session absente (null) → \"ghost\" (tour fantôme à purger)", () => {
+    expect(classifyExclusivitySession(null, NOW)).toBe("ghost");
+  });
+
+  it("processus VIVANT mais au repos (busy=false, activité ancienne) → \"stale\" (verrou périmé)", () => {
+    // Cœur du bug : un process vivant n'est PAS un travail en cours.
+    expect(
+      classifyExclusivitySession({ alive: true, busy: false, lastActivity: oldIso }, NOW)
+    ).toBe("stale");
+  });
+
+  it("busy périmé (inactif depuis > 25 min) → \"stale\"", () => {
+    expect(
+      classifyExclusivitySession({ alive: true, busy: true, lastActivity: oldIso }, NOW)
+    ).toBe("stale");
+  });
+
+  it("agent réellement occupé (busy frais) → \"working\" (mise en file légitime)", () => {
+    expect(
+      classifyExclusivitySession(
+        { alive: true, busy: true, lastActivity: new Date(NOW - 5_000).toISOString() },
+        NOW
+      )
+    ).toBe("working");
+  });
+
+  it("activité très récente même sans busy → \"working\" (fenêtre de grâce)", () => {
+    expect(
+      classifyExclusivitySession(
+        { alive: true, busy: false, lastActivity: new Date(NOW - 30_000).toISOString() },
+        NOW
+      )
+    ).toBe("working");
+  });
+});
+
+describe("isProjectWorking — garde de fin de run (travail réel, pas vivacité)", () => {
+  const NOW = 1700000000000;
+  const oldIso = new Date(NOW - 30 * 60 * 1000).toISOString();
+
+  it("aucune session / liste nulle → pas de run active", () => {
+    expect(isProjectWorking([], "/p/A", NOW)).toBe(false);
+    expect(isProjectWorking(null, "/p/A", NOW)).toBe(false);
+  });
+
+  it("agent du projet VIVANT mais au repos → run non active (verrou libéré, pas de faux « lancé »)", () => {
+    const sessions = [
+      { agent: "magnus", project: "/p/A", mode: "agent_process", alive: true, busy: false, lastActivity: oldIso },
+    ];
+    expect(isProjectWorking(sessions, "/p/A", NOW)).toBe(false);
+  });
+
+  it("agent du projet vraiment occupé → run active (on ne coupe pas une tâche saine)", () => {
+    const sessions = [
+      { agent: "magnus", project: "/p/A", mode: "agent_process", alive: true, busy: true, lastActivity: new Date(NOW - 1_000).toISOString() },
+    ];
+    expect(isProjectWorking(sessions, "/p/A", NOW)).toBe(true);
+  });
+
+  it("agent occupé d'un AUTRE projet → ne rend pas ce projet actif", () => {
+    const sessions = [
+      { agent: "magnus", project: "/p/B", mode: "agent_process", alive: true, busy: true, lastActivity: new Date(NOW - 1_000).toISOString() },
+    ];
+    expect(isProjectWorking(sessions, "/p/A", NOW)).toBe(false);
   });
 });

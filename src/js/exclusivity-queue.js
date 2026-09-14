@@ -187,3 +187,44 @@ export function isAnyAgentWorking(sessions, agentIds, getAgentProject, now = Dat
   }
   return false;
 }
+
+/**
+ * Pure : décision de la garde d'exclusivité pour la session d'un agent mappé
+ * localement (résultat de la sonde côté agents-bus.js).
+ *
+ * Point clé : un processus simplement VIVANT mais au repos (session settled /
+ * ancienne, busy périmé) ne constitue PAS un travail en cours. L'exiger évite
+ * les verrous périmés qui bloquent indéfiniment un projet.
+ *
+ * Retourne :
+ *  - `"working"` : la session travaille RÉELLEMENT (busy non périmé, ou
+ *    activité récente) → le créneau est occupé, la mise en file est légitime ;
+ *  - `"stale"`   : session vivante mais au repos → verrou périmé à libérer ;
+ *  - `"ghost"`   : session morte/absente → tour fantôme à purger ;
+ *  - `"unknown"` : sonde indisponible (`undefined`) → prudence, on ne libère pas
+ *    (jamais de double run sur incertitude).
+ * @param {object|null|undefined} session
+ * @param {number} [now]
+ * @returns {"working"|"stale"|"ghost"|"unknown"}
+ */
+export function classifyExclusivitySession(session, now = Date.now()) {
+  if (session === undefined) return "unknown";
+  if (!session) return "ghost";
+  return isSessionWorking(session, now) ? "working" : "stale";
+}
+
+/**
+ * Pure : au moins une session du projet donné travaille réellement
+ * (`isSessionWorking`) ? Utilisé pour la garde de fin de run : un process
+ * simplement vivant mais au repos ne doit pas être considéré comme une run
+ * encore active (sinon le verrou de run ne se libère jamais).
+ * @param {Array} sessions - sortie `list_agent_sessions`
+ * @param {string} project
+ * @param {number} [now]
+ * @param {number} [windowMs]
+ * @returns {boolean}
+ */
+export function isProjectWorking(sessions, project, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS) {
+  return (sessions || []).some((s) => s && s.project === project && isSessionWorking(s, now, windowMs));
+}
+

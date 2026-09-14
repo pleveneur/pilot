@@ -42,6 +42,7 @@ import {
   dequeueExclusivity,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
   isAnyAgentWorking,
+  classifyExclusivitySession,
 } from "./exclusivity-queue.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
 
@@ -375,47 +376,51 @@ function emit(event, data) {
 }
 
 /**
- * Bug #152 : sonde de vivacité d'un agent (pour la garde d'exclusivité).
- * Interroge `list_agent_sessions` et retourne true si une session vivante
- * existe pour cet agent — même (agent, projet) en priorité, sinon n'importe
- * quel projet par prudence (même politique de matching que anyActiveAgentWorking).
- * Fail-open : en cas d'erreur de sonde, retourne true (on ne purge pas).
+ * Bug #152 : sonde l'état de la session d'un agent (pour la garde
+ * d'exclusivité). Interroge `list_agent_sessions` et retourne la session
+ * vivante pour cet agent — même (agent, projet) en priorité, sinon n'importe
+ * quel projet par prudence (même politique de matching que
+ * anyActiveAgentWorking).
+ * Retourne `null` si aucune session vivante, `undefined` en cas d'erreur de
+ * sonde (l'appelant applique alors la prudence : ne rien libérer).
  * @param {string} agentId
  * @param {object} ctx - contexte de run du projet
- * @returns {Promise<boolean>}
+ * @returns {Promise<object|null|undefined>}
  */
-async function isAgentSessionAlive(agentId, ctx) {
+async function findAgentSession(agentId, ctx) {
   try {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
     const proj = ctx.agentProject[agentId] || ctx.project || null;
     const byProject = sessions.find((s) => s.agent === agentId && s.alive && (proj === null || s.project === proj));
-    if (byProject) return true;
-    return sessions.some((s) => s.agent === agentId && s.alive);
+    if (byProject) return byProject;
+    return sessions.find((s) => s.agent === agentId && s.alive) || null;
   } catch (e) {
-    return true; // sonde indisponible → prudence (pas de purge)
+    return undefined; // sonde indisponible → prudence (pas de purge)
   }
 }
 
 /**
  * Bug #152 : purge un tour fantôme — l'agent est marqué actif dans la run
  * (activeAgents) mais son processus est déjà mort (aucun agent_end ni
- * process_exit traité). On le retire des agents actifs et on enregistre une
- * erreur dans le groupe parallèle (sinon `pending` ne descend jamais et la
- * run reste bloquée). Ne lance PAS la file d'attente ici : la demande courante
- * démarre immédiatement (isAgentActiveOnProject retourne false) et la file
- * sera vidée à la fin de son tour (launchNextQueued), ce qui évite deux runs
- * concurrentes sur le même créneau d'exclusivité.
+ * process_exit traité), OU vivant mais au repos (verrou périmé). On le retire
+ * des agents actifs et on enregistre une erreur dans le groupe parallèle
+ * (sinon `pending` ne descend jamais et la run reste bloquée). Ne lance PAS la
+ * file d'attente ici : la demande courante démarre immédiatement
+ * (isAgentActiveOnProject retourne false) et la file sera vidée à la fin de son
+ * tour (launchNextQueued), ce qui évite deux runs concurrentes sur le même
+ * créneau d'exclusivité.
  * @param {string} agentId
  * @param {object} ctx - contexte de run du projet
+ * @param {string} [reason] - message d'erreur du groupe parallèle (défaut : mort)
  */
-function purgeGhostTurn(agentId, ctx) {
+function purgeGhostTurn(agentId, ctx, reason) {
   ctx.activeAgents.delete(agentId);
   delete ctx.agentProject[agentId];
   if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
     ctx.parallelGroup.results[agentId] = {
       status: "error",
-      text: `Processus de l'agent ${agentId} mort (tour fantôme purgé).`,
+      text: reason || `Processus de l'agent ${agentId} mort (tour fantôme purgé).`,
     };
     ctx.parallelGroup.pending--;
     // Le cas pending<=0 est géré par dispatchParallel après la boucle de lancement.
@@ -428,10 +433,11 @@ function purgeGhostTurn(agentId, ctx) {
  * vivantes via `list_agent_sessions` (agents de runs précédentes encore actifs).
  * Fail-open : en cas d'erreur de sonde, on ne bloque pas (prudence).
  *
- * Bug #152 : un agent « actif » localement doit avoir un processus VIVANT.
- * S'il est fantôme (processus mort sans agent_end/process_exit traité), son
- * tour est purgé (purgeGhostTurn) et la demande courante est lancée
- * immédiatement au lieu d'être empilée derrière un agent qui ne finira jamais.
+ * Bug #152 : un agent « actif » localement doit TRAVAILLER RÉELLEMENT, pas
+ * seulement avoir un processus vivant. S'il est fantôme (processus mort sans
+ * agent_end/process_exit traité) OU vivant mais au repos (busy périmé), son tour
+ * est purgé (purgeGhostTurn) et la demande courante est lancée immédiatement au
+ * lieu d'être empilée derrière un agent qui ne finira jamais (faux « lancé »).
  * @param {string} agentId
  * @param {string} project
  * @returns {Promise<boolean>}
@@ -441,11 +447,20 @@ async function isAgentActiveOnProject(agentId, project) {
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
     if (ctx.activeAgents.has(agentId) && ctx.project === project) {
-      const alive = await isAgentSessionAlive(agentId, ctx);
-      if (!alive) {
+      const session = await findAgentSession(agentId, ctx);
+      const status = classifyExclusivitySession(session);
+      // Sonde indisponible : prudence, on ne libère pas (pas de double run).
+      if (status === "unknown") return true;
+      if (status === "ghost") {
         console.warn("[agents-bus] exclusivité : processus de l'agent", agentId, "mort → purge du tour fantôme.");
         emit("notify", { agentId, message: `⚠️ L'agent ${agentId} était bloqué (processus terminé sans retour d'état). Le créneau a été libéré et la demande démarre immédiatement.` });
         purgeGhostTurn(agentId, ctx);
+        return false;
+      }
+      if (status === "stale") {
+        console.warn("[agents-bus] exclusivité : agent", agentId, "vivant mais au repos → verrou périmé libéré.");
+        emit("notify", { agentId, message: `♻️ L'agent ${agentId} était marqué actif mais ne travaillait plus (session au repos) : le créneau a été libéré et la demande démarre immédiatement.` });
+        purgeGhostTurn(agentId, ctx, `L'agent ${agentId} était marqué actif mais au repos (verrou périmé libéré).`);
         return false;
       }
       return true;
