@@ -30,6 +30,7 @@ import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
+import { createReportDeliveryGate } from "./super-agent-reports.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -44,6 +45,25 @@ export function truncateSuperAgentSummary(summary) {
   const text = String(summary || "");
   if (text.length <= SUPER_AGENT_SUMMARY_MAX_CHARS) return text;
   return text.slice(0, SUPER_AGENT_SUMMARY_MAX_CHARS) + SUMMARY_TRUNCATION_MARKER;
+}
+
+/**
+ * Verdict de lancement d'une run d'agents (défaut « faux succès de lancement »).
+ * `launched` reflète le DÉMARRAGE RÉEL rapporté par le bus (onStart) — jamais la
+ * simple intention de lancer. Un lancement refusé (verrou déjà pris) ou une
+ * erreur de préparation avant démarrage ne doit JAMAIS être annoncé comme un
+ * succès. `queued` signale une mise en file (pas un lancement).
+ * @param {{started?: boolean, queued?: boolean, error?: string|null}} launchResult
+ * @returns {{ok: boolean, launched: boolean, queued: boolean, error: string|null}}
+ */
+export function computeRunLaunchVerdict(launchResult) {
+  const r = launchResult || {};
+  return {
+    ok: true,
+    launched: !!r.started,
+    queued: !!r.queued,
+    error: r.error || null,
+  };
 }
 
 // 4.1 (R3) : id de l'agent standard du projet dans le registre (base `agents`).
@@ -258,6 +278,20 @@ let pendingDelegation = null;
 // finalizeInvisibleAgent — les deux appellent flushDelegationQueue).
 let delegationBusy = false;
 let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
+
+// Anti-« compte rendu marqué transmis avant lecture » : les comptes rendus de
+// run / délégation passent par une PORTE D'ACCUSÉ DE LECTURE (module pur
+// `super-agent-reports.js`). Quand l'assistant est occupé, transmettre le compte
+// rendu le ferait marquer « livré » côté Rust (inject_session_summary) alors que
+// pi, en pleine génération, ignore le nouveau prompt : le compte rendu serait
+// perdu ET réputé reçu. On ne transmet donc QUE si l'assistant est libre (flag
+// front `backendBusy`, fiable car posé dès l'envoi utilisateur) ; sinon l'entrée
+// reste en file (NON transmise, marqueur de délégation NON consommé) et est
+// rejouée dès la libération. `sendSuperAgentReport` fait la livraison réelle.
+const superAgentReportGate = createReportDeliveryGate({
+  isBusy: () => backendBusy,
+  send: (entry) => sendSuperAgentReport(entry),
+});
 
 // P0-1 : état RÉEL du backend super-agent (busy / libre), maintenu par
 // get_agent_supervision (poll) et les événements agent_start/agent_end. La garde
@@ -1572,6 +1606,9 @@ export async function createSuperAgent(container) {
         superLoopBuffer = "";
         superLoopToolCalls = [];
         superLoopStopped = false;
+        // Assistant libéré → rejouer les comptes rendus mis en attente (fin de
+        // run survenue pendant que l'assistant rédigeait).
+        flushPendingSuperAgentReports().catch(() => {});
       });
     } catch (err) {
       console.error("[rpc-event-superagent] erreur:", err);
@@ -2011,6 +2048,9 @@ export async function createSuperAgent(container) {
         // rester bloqué quand l'assistant ne réfléchit plus.
         setReflecting(false);
       }
+      // Filet périodique : si l'assistant est libre (aucun traitement) et que
+      // des comptes rendus sont en attente, en rejouer un (no-op si occupé).
+      flushPendingSuperAgentReports().catch(() => {});
     } catch (_) { /* ignore */ }
   }, 2000);
 
@@ -3101,12 +3141,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           return await launchWithEstimate(); // { queued, started, error } : résultat de lancement réel
         };
         const launchResult = await startRun();
-        await respondSuperAgent(id, JSON.stringify({
-          ok: true,
-          launched: !!launchResult.started,
-          queued: !!launchResult.queued,
-          error: launchResult.error || null,
-        }), false);
+        await respondSuperAgent(id, JSON.stringify(computeRunLaunchVerdict(launchResult)), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);
@@ -4483,20 +4518,30 @@ function warnInjectionFailure(status, detail, category) {
   }
 }
 
-export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
-  // Issue #47 : si une délégation est en attente (delegate_to_coder), marquer le
-  // résumé comme un feedback de tâche déléguée pour que l'assistant mette à jour
-  // son suivi et décide des prochaines étapes. On consomme le tracker (une seule
-  // fois) pour ne pas marquer les sessions suivantes.
-  // P0-4 : borne la taille du résumé avant injection (ne pas encombrer le
-  // contexte de l'assistant).
-  let finalSummary = truncateSuperAgentSummary(summary);
-  if (pendingDelegation) {
-    const del = pendingDelegation;
-    pendingDelegation = null;
+export async function flushPendingSuperAgentReports() {
+  return superAgentReportGate.flush();
+}
+
+/**
+ * Livraison RÉELLE d'un compte rendu à l'assistant (invoke `inject_session_summary`).
+ * Appelée par la porte `superAgentReportGate` uniquement quand l'assistant est
+ * libre. Consomme le marqueur de délégation éventuel AU MOMENT de la livraison
+ * (jamais avant : un compte rendu mis en file sans être transmis ne doit ni
+ * marquer le marqueur consommé, ni déclencher notification/notification).
+ * @param {{summary: string, projectPath: string|null, category: string, delegation?: object|null}} entry
+ * @returns {Promise<unknown>} résultat de `inject_session_summary`.
+ */
+async function sendSuperAgentReport(entry) {
+  let summary = entry.summary;
+  if (entry.delegation) {
+    const del = entry.delegation;
+    // Consommer le marqueur SEULEMENT à la livraison effective (et seulement si
+    // c'est toujours le même marqueur : une délégation plus récente ne doit pas
+    // être écrasée par une livraison tardive).
+    if (pendingDelegation === del) pendingDelegation = null;
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
-    finalSummary = marker + finalSummary;
+    summary = marker + summary;
     // Issue #16 : tâche déléguée terminée → notification native (si activée).
     notifySuperAgentDone({
       title: "Pilot — Assistant",
@@ -4505,16 +4550,34 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
     // Son « fin » : tâche d'agent terminée (si le son est activé).
     playAssistantSound("fin").catch(() => {});
   }
-  try {
-    const res = await invoke("inject_session_summary", {
-      projectPath: projectPath || null,
-      sessionId: null,
-      summary: finalSummary,
-    });
-    warnInjectionFailure(res && res.status, res && res.detail, "session");
-  } catch (err) {
-    warnInjectionFailure("error", err, "session");
-  }
+  const res = await invoke("inject_session_summary", {
+    projectPath: entry.projectPath || null,
+    sessionId: null,
+    summary,
+  });
+  warnInjectionFailure(res && res.status, res && res.detail, entry.category || "session");
+  return res;
+}
+
+/**
+ * File d'attente de la porte : rejoue un compte rendu en attente dès que
+ * l'assistant est libre (appelée à la fin de tour et par le poll d'état).
+ * @returns {Promise<unknown>}
+ */
+export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
+  // Issue #47 : si une délégation est en attente (delegate_to_coder), le résumé
+  // sera marqué comme feedback de tâche déléguée pour que l'assistant mette à
+  // jour son suivi. Le marqueur n'est PAS consommé ici : il l'est à la livraison
+  // réelle (sendSuperAgentReport), pour ne pas le perdre si le compte rendu est
+  // mis en attente (assistant occupé).
+  // P0-4 : borne la taille du résumé avant injection.
+  const entry = {
+    summary: truncateSuperAgentSummary(summary),
+    projectPath: projectPath || null,
+    category: "session",
+    delegation: pendingDelegation,
+  };
+  await superAgentReportGate.deliver(entry);
   // Issue #66 : l'agent a terminé sa tâche — vider la file des délégations
   // en attente (transmettre la demande suivante mise en file, s'il y en a).
   // Appelé aussi bien pour l'agent_end visible (agent-pi.js) que pour l'agent
@@ -4538,18 +4601,13 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
  * @param {string|null} projectPath - chemin du projet actif.
  */
 async function injectRunAgentsResultToSuperAgent(result, projectPath) {
-  try {
-    const res = await invoke("inject_session_summary", {
-      projectPath: projectPath || null,
-      sessionId: null,
-      // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le
-      // contexte de l'assistant).
-      summary: truncateSuperAgentSummary(buildRunAgentsSummary(result)),
-    });
-    warnInjectionFailure(res && res.status, res && res.detail, "runagents");
-  } catch (err) {
-    warnInjectionFailure("error", err, "runagents");
-  }
+  // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le contexte
+  // de l'assistant). Porte d'accusé de lecture via superAgentReportGate.
+  await superAgentReportGate.deliver({
+    summary: truncateSuperAgentSummary(buildRunAgentsSummary(result)),
+    projectPath: projectPath || null,
+    category: "runagents",
+  });
 }
 
 /**

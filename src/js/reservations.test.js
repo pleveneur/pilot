@@ -249,6 +249,36 @@ describe("estimateAndReserve (flux d'estimation préalable)", () => {
     }
   });
 
+  it("timeout + verrou encore 'running' → libération de FORCE (forceEndRun) : pas de planificateur fantôme", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = baseDeps();
+      // plan-maker ne répond jamais → timeout d'estimation.
+      deps.runAgentsForAssistant.mockReturnValue(new Promise(() => {}));
+      const releaseStuckRunLock = vi.fn(async () => {});
+      // Le verrou reste marqué "running" malgré la libération « douce » (agent
+      // fraîchement arrêté encore vu actif) → forceEndRun doit être appelé.
+      const isRunInProgress = vi.fn(() => true);
+      const forceEndRun = vi.fn();
+      const p = estimateAndReserve(
+        "/proj/",
+        "tâche",
+        ["codeur1"],
+        { ...deps, releaseStuckRunLock, isRunInProgress, forceEndRun },
+        ["codeur1"]
+      );
+      // 60 s de timeout d'estimation PUIS la boucle de libération « douce »
+      // (20 × 100 ms, le verrou restant vu « running ») : avancer au-delà.
+      await vi.advanceTimersByTimeAsync(70000);
+      const r = await p;
+      expect(r).toEqual({ reserved: false, coderId: "codeur1", files: [] });
+      // « arrêt réellement appelé » : le verrou du projet est libéré de force.
+      expect(forceEndRun).toHaveBeenCalledWith("/proj/");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fail-open : plan-maker absent du registre → aucune écriture", async () => {
     const deps = baseDeps();
     deps.loadAgentRegistry.mockResolvedValueOnce({ agents: [{ id: "autre" }] });

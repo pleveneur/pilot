@@ -80,10 +80,18 @@ const AGENT_READ_ONLY_TOOLS = new Set([
 // `busState.runs[project]`. Deux runs sur des projets DIFFÉRENTS ont donc des
 // contextes indépendants (même type d'agent autorisé en parallèle sur des
 // projets distincts). `maxDepth` et `timeoutMs` restent globaux (config).
+// Compteur monotone d'identifiants de run (génération). Sert à empêcher une run
+// ABANDONNÉE de supprimer, à sa fin tardive, le contexte d'une run NOUVELLE
+// démarrée entre-temps (protection par génération dans endRun).
+let runGenerationSeq = 0;
+
 function newRunCtx(project) {
   return {
     project,
     runState: "idle", // "idle" | "running" | "stopping"
+    // Identifiant de run (posé par beginRun). endRun(project, generation) refuse
+    // de libérer si la génération ne correspond pas.
+    generation: 0,
     callStack: [],
     budgetTotal: DEFAULT_TOTAL_BUDGET,
     budgetByAgent: {},
@@ -211,6 +219,9 @@ export function beginRun(project) {
   for (const k of Object.keys(fresh)) if (k !== "project") ctx[k] = fresh[k];
   ctx.budgetTotal = (busState.config && busState.config.agent_max_total_calls) || DEFAULT_TOTAL_BUDGET;
   ctx.runState = "running";
+  // Génération NEUVE : les fins de run antérieures (endRun tardif portant
+  // l'ancienne génération) ne pourront plus supprimer ce contexte.
+  ctx.generation = ++runGenerationSeq;
   return ctx;
 }
 
@@ -219,10 +230,17 @@ export function beginRun(project) {
  * verrou de run projet-scopé). Ne touche PAS aux runs des autres projets.
  * @param {string} [project]
  */
-export function endRun(project) {
-  const ctx = busState.runs[runKey(project)];
-  if (ctx && ctx.timeoutId) clearTimeout(ctx.timeoutId);
-  delete busState.runs[runKey(project)];
+export function endRun(project, generation) {
+  const key = runKey(project);
+  const ctx = busState.runs[key];
+  if (!ctx) return;
+  // Protection par génération (fin de run tardive) : une run abandonnée qui se
+  // termine APRÈS le démarrage d'une nouvelle run porte l'ANCIENNE génération ;
+  // son endRun ne doit PAS supprimer le contexte de la nouvelle. `generation`
+  // omise (appel legacy / libération forcée) → comportement inchangé.
+  if (generation !== undefined && ctx.generation !== generation) return;
+  if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+  delete busState.runs[key];
 }
 
 // Réinitialise tous les contextes de run (utilisé par destroyAgentsBus et
@@ -287,7 +305,7 @@ export async function releaseStuckRunLock(project) {
         return;
       }
       console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
-      endRun(key);
+      endRun(key, ctx.generation);
     }
     return;
   }
@@ -317,7 +335,7 @@ export async function releaseStuckRunLock(project) {
   } else {
     console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
   }
-  endRun(key);
+  endRun(key, ctx.generation);
 }
 
 // Tâche 2 (verrou fantôme) : lance les demandes en file d'exclusivité du projet
@@ -1300,11 +1318,11 @@ async function finishAgentTurn(agentId, ctx) {
     // QUE la run de ce projet, sans toucher aux runs d'autres projets (T4).
     if (!text || !text.trim()) {
       emit("error", { message: `L'agent ${agentId} n'a produit aucune réponse textuelle. Il a peut-être utilisé des outils sans générer de texte final. Réessayez en reformulant votre demande.` });
-      endRun(ctx.project);
+      endRun(ctx.project, ctx.generation);
       return;
     }
     emit("done", { agentId, text });
-    endRun(ctx.project);
+    endRun(ctx.project, ctx.generation);
   }
 }
 
@@ -1366,7 +1384,7 @@ async function failAgentTurn(agentId, reason, ctx) {
     await runAgentTurn(busState.agents.get(caller.agentId), result);
   } else {
     emit("error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
-    endRun(ctx.project);
+    endRun(ctx.project, ctx.generation);
   }
 }
 
@@ -1434,11 +1452,13 @@ export async function startParallelRun(assignments, projectContext = "", options
       emit("done", { agentId: "parallel", text: aggregated });
       // Bug #9 + T4 : libérer le verrou de run de CE PROJET à la fin normale (ou
       // erreur agrégée) de la run parallèle, sans toucher aux autres projets.
-      endRun(runProject);
+      // Protection par génération : un onComplete TARDIF (run abandonnée) ne
+      // supprime pas le contexte d'une run plus récente (ctx.generation).
+      endRun(runProject, ctx.generation);
     }, options, runProject, ctx);
   } catch (e) {
     // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
-    endRun(runProject);
+    endRun(runProject, ctx.generation);
     throw e;
   }
 }

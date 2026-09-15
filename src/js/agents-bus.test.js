@@ -33,6 +33,30 @@ describe("isRunInProgress — source de vérité « run occupée ou non » (par 
   });
 });
 
+describe("endRun — protection par génération (fin de run tardive)", () => {
+  it("un endRun tardif (ancienne génération) ne supprime PAS le contexte d'une run plus récente", () => {
+    const oldCtx = beginRun("projetGen");
+    const genOld = oldCtx.generation;
+    // Une NOUVELLE run démarre sur le même projet avant que l'ancienne (abandonnée)
+    // ne se termine : chaque beginRun pose une génération neuve.
+    const newCtx = beginRun("projetGen");
+    expect(newCtx.generation).not.toBe(genOld);
+    expect(getRunState("projetGen")).toBe("running");
+    // Fin TARDIVE de l'ancienne run → ignorée, la nouvelle reste intacte.
+    endRun("projetGen", genOld);
+    expect(getRunState("projetGen")).toBe("running");
+    // Fin de la run COURANTE → libère bien le contexte.
+    endRun("projetGen", newCtx.generation);
+    expect(getRunState("projetGen")).toBe("idle");
+  });
+
+  it("endRun sans génération (appel legacy / libération forcée) reste inconditionnel", () => {
+    beginRun("projetGen");
+    endRun("projetGen");
+    expect(getRunState("projetGen")).toBe("idle");
+  });
+});
+
 describe("needsFreshAgentSession — contexte vierge pour relance d'agents secondaires (restitution fiable)", () => {
   const keep = { id: "code", keep_context: true };
   const noKeep = { id: "review", keep_context: false }; // défaut des agents secondaires
