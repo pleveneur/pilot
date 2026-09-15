@@ -1026,8 +1026,10 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         dashboard_auto_refresh_seconds: inputDashboardAutoRefreshSeconds ? (parseInt(inputDashboardAutoRefreshSeconds.value, 10) || 120) : 120,
         session_retention_days: inputSessionRetention ? (parseInt(inputSessionRetention.value, 10) || 15) : 15,
         quality_gate_enabled: currentConfig?.quality_gate_enabled || false,
-        // POC MCP : pas d'UI Paramètres (conservation silencieuse).
-        mcp_enabled: currentConfig?.mcp_enabled || false,
+        // MCP : lire la case à cocher vivante. L'onglet MCP persiste déjà le
+        // flag via mcp_set_enabled ; relire currentConfig (instantané pris à
+        // l'ouverture de la modale) écraserait par une valeur périmée.
+        mcp_enabled: chkMcpEnabled ? chkMcpEnabled.checked : (currentConfig?.mcp_enabled || false),
         show_thinking: chkShowThinking.checked,
         show_tools: chkShowTools.checked,
         notify_agent_done: chkNotifyAgentDone ? chkNotifyAgentDone.checked : false,
