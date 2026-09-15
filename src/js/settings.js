@@ -11,6 +11,7 @@ import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT, parseArgs, formatArgs, validateServer, newServerId, testResult } from "./mcp-utils.js";
+import { plfaceOutcomeMessage } from "./plface-utils.js";
 
 let currentConfig = null;
 
@@ -118,6 +119,12 @@ export async function initSettings() {
   const chkAutoRun = document.getElementById("setting-auto-run");
   const chkAgentStartOnLaunch = document.getElementById("setting-agent-start-on-launch");
   const chkSuperAgentStartOnLaunch = document.getElementById("setting-super-agent-start-on-launch");
+  // ── PLface : lancer mon avatar au démarrage ──
+  const chkPlfaceAutostart = document.getElementById("setting-plface-autostart");
+  const inputPlfacePath = document.getElementById("setting-plface-path");
+  const btnPlfaceBrowse = document.getElementById("btn-plface-browse");
+  const btnPlfaceTest = document.getElementById("btn-plface-test");
+  const plfaceTestStatus = document.getElementById("plface-test-status");
   const chkIntegratedTerminal = document.getElementById("setting-integrated-terminal");
   const chkRpcAgent = document.getElementById("setting-rpc-agent");
   const inputRpcPath = document.getElementById("setting-rpc-path");
@@ -651,6 +658,9 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     // Start assistant on launch: DEFAULT ENABLED (undefined = true for old
     // configs without the super_agent_start_on_launch field).
     if (chkSuperAgentStartOnLaunch) chkSuperAgentStartOnLaunch.checked = currentConfig.super_agent_start_on_launch !== false;
+    // ── PLface : lancement de l'avatar au démarrage (désactivé par défaut) ──
+    if (chkPlfaceAutostart) chkPlfaceAutostart.checked = currentConfig.plface_autostart_enabled === true;
+    if (inputPlfacePath) inputPlfacePath.value = currentConfig.plface_exe_path || "";
     chkIntegratedTerminal.checked = currentConfig.integrated_terminal || false;
     chkRpcAgent.checked = currentConfig.rpc_agent_enabled || false;
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
@@ -897,6 +907,66 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       }
     });
   }
+  // ── PLface : lancer mon avatar au démarrage ──
+  // Le moteur Rust lit la configuration ENREGISTRÉE. Pour que le test reflète ce
+  // que l'utilisateur vient de saisir, on enregistre d'abord les deux champs
+  // PLface (fusion sur la config courante, sans toucher aux autres réglages).
+  async function persistPlfaceSettings() {
+    if (!chkPlfaceAutostart && !inputPlfacePath) return;
+    try {
+      const cfg = await invoke("get_config");
+      if (chkPlfaceAutostart) cfg.plface_autostart_enabled = chkPlfaceAutostart.checked;
+      if (inputPlfacePath) cfg.plface_exe_path = inputPlfacePath.value.trim();
+      await invoke("save_config", { config: cfg });
+      currentConfig = cfg;
+    } catch (_) {}
+  }
+  if (btnPlfaceBrowse) {
+    btnPlfaceBrowse.addEventListener("click", async () => {
+      try {
+        const picked = await dialogOpen({
+          multiple: false,
+          directory: false,
+          filters: [
+            { name: "Exécutables", extensions: ["exe", "bin", "app", "command", "sh"] },
+            { name: "Tous les fichiers", extensions: ["*"] },
+          ],
+        });
+        if (!picked) return; // annulé
+        if (inputPlfacePath) inputPlfacePath.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du fichier : " + e, "error");
+      }
+    });
+  }
+  if (btnPlfaceTest) {
+    btnPlfaceTest.addEventListener("click", async () => {
+      if (plfaceTestStatus) {
+        plfaceTestStatus.textContent = "Test en cours…";
+        plfaceTestStatus.style.color = "var(--text-muted)";
+      }
+      await persistPlfaceSettings();
+      let outcome = "";
+      try {
+        outcome = await invoke("check_and_launch_plface");
+      } catch (_) {
+        outcome = "";
+      }
+      const { text, kind } = plfaceOutcomeMessage(outcome);
+      const colors = {
+        success: "var(--success)",
+        info: "var(--text-secondary)",
+        warning: "var(--warning)",
+        error: "var(--danger)",
+      };
+      if (plfaceTestStatus) {
+        plfaceTestStatus.textContent = text;
+        plfaceTestStatus.style.color = colors[kind] || "var(--text-muted)";
+      }
+      showToast(text, kind);
+    });
+  }
+
   if (btnMemImport) {
     btnMemImport.addEventListener("click", async () => {
       try {
@@ -1015,6 +1085,9 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         auto_run_command: chkAutoRun.checked,
         agent_start_on_launch: chkAgentStartOnLaunch.checked,
         super_agent_start_on_launch: chkSuperAgentStartOnLaunch ? chkSuperAgentStartOnLaunch.checked : true,
+        // ── PLface : lancement de l'avatar au démarrage ──
+        plface_autostart_enabled: chkPlfaceAutostart ? chkPlfaceAutostart.checked : false,
+        plface_exe_path: inputPlfacePath ? inputPlfacePath.value.trim() : "",
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),

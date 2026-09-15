@@ -91,6 +91,13 @@ externe.
 - **Paramètres ⚙️** : onglet de configuration modale (thème, éditeur, agent Pi,
   accès distant, etc.). Toute la configuration est persistée dans un fichier
   JSON (`app_data_dir/com.pilot.editor/config.json`).
+- **Lancer mon avatar (PLface) au démarrage** : dans **Paramètres ⚙️ → Général**,
+  cochez « Lancer mon avatar (PLface) au démarrage » et indiquez le **chemin de
+  l'exécutable** (bouton « Parcourir… »). Au démarrage de Pilot, si l'avatar n'est
+  pas déjà lancé, il est démarré automatiquement — il reste ouvert même si vous
+  fermez Pilot. Le bouton « Tester maintenant » vérifie tout de suite et vous
+  indique clairement ce qui s'est passé. Sans effet si l'avatar n'est pas
+  installé.
 - **Palette de commandes** (`Ctrl+Shift+P`) : accès rapide à toutes les
   commandes (sauvegarder, ouvrir, fermer, basculer split/outline/recherche, etc.).
 <!-- /HELP:theme-parametres -->

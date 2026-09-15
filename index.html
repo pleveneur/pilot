@@ -324,6 +324,21 @@
               <input type="checkbox" id="setting-super-agent-start-on-launch" />
               <label for="setting-super-agent-start-on-launch">Démarrer l'assistant au lancement de Pilot</label>
             </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-plface-autostart" />
+              <label for="setting-plface-autostart" title="Lance votre avatar (PLface) au démarrage de Pilot, seulement si son API locale ne répond pas déjà. Sans effet si l'avatar n'est pas installé.">Lancer mon avatar (PLface) au démarrage</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-plface-path">Chemin de l'exécutable PLface :</label>
+              <input type="text" id="setting-plface-path" placeholder="ex: C:\\Program Files\\PLface\\PLface.exe" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <button id="btn-plface-browse" type="button" class="settings-btn">Parcourir…</button>
+              <button id="btn-plface-test" type="button" class="settings-btn" style="margin-left:10px;">Tester maintenant</button>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="plface-test-status" style="font-size:11px;color:var(--text-muted);"></span>
+            </div>
           </div>
 
           </div>

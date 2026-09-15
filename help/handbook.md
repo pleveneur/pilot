@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-15 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -85,6 +85,13 @@ externe.
 - **Paramètres ⚙️** : onglet de configuration modale (thème, éditeur, agent Pi,
   accès distant, etc.). Toute la configuration est persistée dans un fichier
   JSON (`app_data_dir/com.pilot.editor/config.json`).
+- **Lancer mon avatar (PLface) au démarrage** : dans **Paramètres ⚙️ → Général**,
+  cochez « Lancer mon avatar (PLface) au démarrage » et indiquez le **chemin de
+  l'exécutable** (bouton « Parcourir… »). Au démarrage de Pilot, si l'avatar n'est
+  pas déjà lancé, il est démarré automatiquement — il reste ouvert même si vous
+  fermez Pilot. Le bouton « Tester maintenant » vérifie tout de suite et vous
+  indique clairement ce qui s'est passé. Sans effet si l'avatar n'est pas
+  installé.
 - **Palette de commandes** (`Ctrl+Shift+P`) : accès rapide à toutes les
   commandes (sauvegarder, ouvrir, fermer, basculer split/outline/recherche, etc.).
 
