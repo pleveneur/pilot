@@ -1414,6 +1414,17 @@ export async function startParallelRun(assignments, projectContext = "", options
   const ctx = beginRun(runProject);
   ctx.callStack = [];
   ctx.turnCount = 0;
+  // Signal « la run a réellement démarré » (défaut « faux succès de lancement ») :
+  // appelé APRÈS la garde de verrou et beginRun, donc uniquement quand une run
+  // est effectivement marquée « running ». Permet à l'appelant (assistant) de
+  // rapporter un lancement réel au lieu d'un succès optimiste.
+  if (options && typeof options.onStart === "function") {
+    try {
+      options.onStart(runProject);
+    } catch (_) {
+      // fail-open : un hook défaillant ne doit pas casser la run.
+    }
+  }
 
   emit("start", { agentId: "parallel", prompt: assignments.map((a) => a.agentId).join(", ") });
   try {

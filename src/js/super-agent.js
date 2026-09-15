@@ -20,7 +20,7 @@ import {
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
-import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, ASSISTANT_SPACE } from "./agents-bus.js";
+import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
@@ -2919,7 +2919,20 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             delete runAgentsQueueByProject[target];
           }
         };
-        const launchRun = () => {
+        // Renvoie une promesse résolue avec le RÉSULTAT DU DÉMARRAGE
+        // ({ started, error }) : `started` ne vaut true que si la run est
+        // réellement marquée « running » par le bus (hook `onStart`), pas
+        // seulement parce qu'on a appelé la fonction. Si le verrou est refusé ou
+        // la préparation échoue, on rapporte un ÉCHEC DE LANCEMENT (défaut « faux
+        // succès de lancement » : l'assistant annonçait « lancé » alors que rien
+        // n'avait démarré).
+        const launchRun = () => new Promise((resolve) => {
+          let startReported = false;
+          const reportStart = (started, error) => {
+            if (startReported) return;
+            startReported = true;
+            resolve({ started, error: error ? String(error) : null });
+          };
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
@@ -2927,22 +2940,25 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               // desktop + son + consignation dans le suivi.
               appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
               settleRun(true, result);
+              reportStart(true, null);
             },
             (err) => {
               const msg = err && err.message ? err.message : String(err);
               // T7 : fin de tâche (échec) → compte-rendu + notification + son.
               appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${msg}`);
               settleRun(false, `[Échec de la run agents] ${msg}`);
+              reportStart(false, msg);
             },
-            { purge: true }
+            { purge: true, onStart: () => reportStart(true, null) }
           ).catch((e) => {
             // Erreur de PRÉPARATION (initAgentsBus / reloadAgentsRegistry) : la
             // run n'a pas abouti. T7 : fin de tâche (échec) → notification + son.
             console.error("Erreur préparation run_agents (assistant):", e);
             appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run agents : ${e}`);
             settleRun(false, `[Échec de la préparation de la run agents] ${e}`);
+            reportStart(false, e && e.message ? e.message : String(e));
           });
-        };
+        });
 
         // T6 : estimation préalable (fichiers réservés au codeur). Si la run
         // contient un CODEUR, on déclenche en amont l'agent plan-maker (lecture
@@ -2977,10 +2993,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
-            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
+            return { queued: true, started: false, error: null }; // mise en file : PAS un lancement
           }
-          launchRun();
-          return false; // run réellement lancée
+          const launched = await launchRun();
+          // `started` provient du bus (onStart / onError) : il reflète le
+          // DÉMARRAGE RÉEL, pas l'intention de lancer.
+          return { queued: false, started: !!launched.started, error: launched.error || null };
         };
         const launchWithEstimate = () => {
           if (coderIds.length > 0 && targetProject) {
@@ -2995,6 +3013,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               loadAgentRegistry,
               releaseStuckRunLock,
               isRunInProgress,
+              forceEndRun: endRun,
             }, agentIds)
               .then((r) => {
                 if (r.reserved && r.files.length > 0) {
@@ -3079,10 +3098,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
-          return await launchWithEstimate(); // true = mise en file, false = réellement lancée
+          return await launchWithEstimate(); // { queued, started, error } : résultat de lancement réel
         };
-        const queued = await startRun();
-        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: !queued, queued }), false);
+        const launchResult = await startRun();
+        await respondSuperAgent(id, JSON.stringify({
+          ok: true,
+          launched: !!launchResult.started,
+          queued: !!launchResult.queued,
+          error: launchResult.error || null,
+        }), false);
       } catch (e) {
         console.error("Erreur run_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run agents : ${e}`);

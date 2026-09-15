@@ -226,20 +226,38 @@ export async function deleteReservations(project) {
 // `releaseRunLock` / `isRunInProgress` sont injectés via `deps` (agents-bus.js,
 // pour éviter une dépendance circulaire) et servent à libérer le verrou laissé
 // par la run d'estimation, borné à ~2 s pour ne jamais bloquer longtemps.
-async function stopAbandonedEstimation(project, releaseRunLock, isRunInProgress) {
+async function stopAbandonedEstimation(project, releaseRunLock, isRunInProgress, forceEndRun) {
   if (!project) return;
   try {
+    // 1. Arrêter le process pi du planificateur : sans cela, il continue
+    //    d'occuper le projet et peut avaler les lancements suivants.
     await invoke("stop_agent_process", { agentId: "plan-maker", project }).catch(() => {});
-    if (typeof releaseRunLock === "function" && typeof isRunInProgress === "function") {
-      for (let i = 0; i < 20 && isRunInProgress(project); i++) {
-        try {
-          await releaseRunLock(project);
-        } catch (_) {
-          // fail-open : le lancement réel retentera la libération.
-        }
-        if (isRunInProgress(project)) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
+    if (typeof isRunInProgress !== "function") return;
+    // 2. Libération « douce » bornée : releaseStuckRunLock ne libère le verrou
+    //    que si plus aucun agent n'est réellement en activité (fenêtre de grâce)
+    //    — un planificateur fraîchement arrêté peut encore être vu « actif »,
+    //    donc la boucle seule ne garantit pas la libération.
+    for (let i = 0; i < 20 && isRunInProgress(project); i++) {
+      try {
+        if (typeof releaseRunLock === "function") await releaseRunLock(project);
+      } catch (_) {
+        // fail-open : le lancement réel retentera la libération.
+      }
+      if (isRunInProgress(project)) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    // 3. GARANTIE anti-fantôme (défaut « planificateur fantôme ») : si le verrou
+    //    est ENCORE marqué « running » après l'arrêt ciblé de la session, on le
+    //    libère de force. Un planificateur abandonné ne doit jamais conserver le
+    //    projet : sinon la run demandée reste en file et n'atteint jamais les
+    //    agents, alors que l'assistant l'a déjà annoncée.
+    if (typeof forceEndRun === "function" && isRunInProgress(project)) {
+      try {
+        forceEndRun(project);
+        console.warn("[reservations] verrou de run du planificateur abandonné libéré de force (endRun).");
+      } catch (_) {
+        // fail-open.
       }
     }
   } catch (_) {
@@ -268,7 +286,7 @@ async function stopAbandonedEstimation(project, releaseRunLock, isRunInProgress)
  * @returns {Promise<{reserved: boolean, coderId: string, files: string[]}>}
  */
 export async function estimateAndReserve(project, task, coderIds, deps, participantIds) {
-  const { runAgentsForAssistant, loadAgentRegistry, releaseStuckRunLock, isRunInProgress } = deps || {};
+  const { runAgentsForAssistant, loadAgentRegistry, releaseStuckRunLock, isRunInProgress, forceEndRun } = deps || {};
   const firstCoder = (Array.isArray(coderIds) ? coderIds : []).find(Boolean);
   const empty = { reserved: false, coderId: firstCoder || "", files: [] };
   if (!project || !firstCoder || !runAgentsForAssistant || !loadAgentRegistry) {
@@ -304,7 +322,7 @@ export async function estimateAndReserve(project, task, coderIds, deps, particip
       // de run du projet et le lancement réel échoue (« Une run est déjà en
       // cours »). On continue quand même (fail-open) : l'estimation ne bloque
       // jamais le codeur, mais il ne reste plus de run fantôme.
-      await stopAbandonedEstimation(project, releaseStuckRunLock, isRunInProgress);
+      await stopAbandonedEstimation(project, releaseStuckRunLock, isRunInProgress, forceEndRun);
       console.warn("[reservations] estimation abandonnée (timeout) : session plan-maker arrêtée pour libérer le verrou de run.");
     } else {
       console.warn("[reservations] estimation échouée (fail-open, le codeur n'est pas bloqué) :", e);
