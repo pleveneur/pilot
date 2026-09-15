@@ -91,6 +91,7 @@ mod gds_sync;
 mod gds_ssh;
 mod gds_web;
 mod group_assistant;
+mod plface;
 
 // ── État global de l'application ──
 
@@ -681,6 +682,16 @@ struct AppConfig {
     // suivi fusionné (clients, projets, tâches, décisions).
     #[serde(default)]
     group_assistant_model: String,
+    // ── PLface (avatar assistant) : lancement automatique au démarrage ──
+    // Si activé ET qu'un chemin d'exécutable est renseigné, Pilot sonde l'API
+    // locale (127.0.0.1:3000, route /status) au démarrage. Si elle ne répond
+    // pas, il lance l'exécutable en tâche de fond détachée (sans console sous
+    // Windows). Défaut désactivé : un utilisateur sans PLface ne voit aucune
+    // différence au démarrage.
+    #[serde(default)]
+    plface_autostart_enabled: bool,
+    #[serde(default)]
+    plface_exe_path: String,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -932,6 +943,8 @@ impl Default for AppConfig {
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
             gds_enabled: true,
             group_assistant_model: String::new(),
+            plface_autostart_enabled: false,
+            plface_exe_path: String::new(),
         }
     }
 }
@@ -1631,6 +1644,24 @@ fn save_config(
     Ok(())
 }
 
+/// PLface : exécute à la demande le contrôle de lancement (activé + API muette
+/// + exécutable existant → lancement détaché) et renvoie un état lisible.
+/// Utilisée par le contrôle au démarrage (via `plface::launch_if_needed`) et
+/// par l'interface (seconde moitié de la mission). Jamais bloquant au-delà du
+/// timeout de sonde (< 1 s), ne remonte jamais d'erreur.
+#[tauri::command]
+fn check_and_launch_plface(
+    state: State<AppState>,
+    app: AppHandle,
+) -> plface::PlfaceLaunchOutcome {
+    ensure_config_loaded(&state, &app);
+    let (enabled, path) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.plface_autostart_enabled, cfg.plface_exe_path.clone())
+    };
+    plface::launch_if_needed(enabled, &path)
+}
+
 #[tauri::command]
 fn add_favorite(state: State<AppState>, app: AppHandle, path: String) -> Result<(), String> {
     let mut config = state.config.lock().unwrap().clone();
@@ -2249,6 +2280,19 @@ pub fn run() {
             // automatique du suivi quand le serveur redevient joignable (accumulation
             // locale en mode déconnecté). Thread autonome, fail-open.
             gds_sync::start_gds_sync_monitor(handle.clone());
+            // PLface : lancement automatique au démarrage. Thread dédié pour ne
+            // JAMAIS bloquer l'ouverture de Pilot (la sonde réseau a un timeout
+            // court et l'échec est silencieux). Un utilisateur sans PLface ne
+            // voit aucune différence.
+            {
+                let cfg = state.config.lock().unwrap().clone();
+                if cfg.plface_autostart_enabled && !cfg.plface_exe_path.trim().is_empty() {
+                    let path = cfg.plface_exe_path.clone();
+                    std::thread::spawn(move || {
+                        let _ = plface::launch_if_needed(true, &path);
+                    });
+                }
+            }
             // GDS (chantier UX) : reconnecter le pool PostgreSQL en arrière-plan
             // pour un projet déjà provisionné, sans refaire `gds_provision` (saisie
             // des paramètres une seule fois). Fail-open : aucun serveur par défaut,
@@ -2661,6 +2705,8 @@ pub fn run() {
             gds::gds_connection_status,
             // ── GDS (R1) : provision automatique à l'ouverture / Activer GDS ──
             gds::gds_auto_provision,
+            // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
+            check_and_launch_plface,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")
