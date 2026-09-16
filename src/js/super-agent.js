@@ -280,17 +280,20 @@ let delegationBusy = false;
 let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
 
 // Anti-« compte rendu marqué transmis avant lecture » : les comptes rendus de
-// run / délégation passent par une PORTE D'ACCUSÉ DE LECTURE (module pur
-// `super-agent-reports.js`). Quand l'assistant est occupé, transmettre le compte
-// rendu le ferait marquer « livré » côté Rust (inject_session_summary) alors que
-// pi, en pleine génération, ignore le nouveau prompt : le compte rendu serait
-// perdu ET réputé reçu. On ne transmet donc QUE si l'assistant est libre (flag
-// front `backendBusy`, fiable car posé dès l'envoi utilisateur) ; sinon l'entrée
-// reste en file (NON transmise, marqueur de délégation NON consommé) et est
-// rejouée dès la libération. `sendSuperAgentReport` fait la livraison réelle.
+// run / délégation passent par une PORTE (module pur `super-agent-reports.js`).
+// `inject_session_summary` (Rust) écrit TOUJOURS le compte rendu dans la table
+// durable `session_summaries` (`delivered=0`) avant toute tentative d'injection :
+// la porte confie donc TOUJOURS l'entrée à cette remise, même quand l'assistant
+// est occupé. Dans ce cas elle transmet `defer: true` (flag front `backendBusy`,
+// fiable car posé dès l'envoi utilisateur) : la ligne est écrite mais NON marquée
+// livrée, car pi, en pleine génération, ignorerait le nouveau prompt → le rejeu
+// Rust la délivre dès la libération. Plus aucune perte au redémarrage / à la
+// fermeture de l'onglet (l'ancienne file en mémoire n'était pas durable).
+// `sendSuperAgentReport` fait la remise réelle ; `replay` déclenche le rejeu.
 const superAgentReportGate = createReportDeliveryGate({
   isBusy: () => backendBusy,
-  send: (entry) => sendSuperAgentReport(entry),
+  send: (entry, opts) => sendSuperAgentReport(entry, opts),
+  replay: () => invoke("replay_superagent_summaries"),
 });
 
 // P0-1 : état RÉEL du backend super-agent (busy / libre), maintenu par
@@ -4523,21 +4526,24 @@ export async function flushPendingSuperAgentReports() {
 }
 
 /**
- * Livraison RÉELLE d'un compte rendu à l'assistant (invoke `inject_session_summary`).
- * Appelée par la porte `superAgentReportGate` uniquement quand l'assistant est
- * libre. Consomme le marqueur de délégation éventuel AU MOMENT de la livraison
- * (jamais avant : un compte rendu mis en file sans être transmis ne doit ni
- * marquer le marqueur consommé, ni déclencher notification/notification).
+ * Remise RÉELLE d'un compte rendu à l'assistant (invoke `inject_session_summary`).
+ * Appelée par la porte `superAgentReportGate` à CHAQUE compte rendu (durable).
+ * `opts.defer` (assistant occupé) : la ligne est écrite en base mais l'injection
+ * immédiate n'est pas tentée → `delivered=0`, rejouée plus tard. Le marqueur de
+ * délégation éventuel est consommé ICI : son texte est figé dans le compte rendu
+ * (donc persisté en base) et n'est jamais perdu, même en remise différée.
  * @param {{summary: string, projectPath: string|null, category: string, delegation?: object|null}} entry
+ * @param {{defer?: boolean}} [opts]
  * @returns {Promise<unknown>} résultat de `inject_session_summary`.
  */
-async function sendSuperAgentReport(entry) {
+async function sendSuperAgentReport(entry, opts = {}) {
   let summary = entry.summary;
   if (entry.delegation) {
     const del = entry.delegation;
-    // Consommer le marqueur SEULEMENT à la livraison effective (et seulement si
-    // c'est toujours le même marqueur : une délégation plus récente ne doit pas
-    // être écrasée par une livraison tardive).
+    // Consommer le marqueur AU MOMENT de la remise (et seulement si c'est
+    // toujours le même marqueur : une délégation plus récente ne doit pas être
+    // écrasée par une remise tardive). Le texte du marqueur est inclus dans le
+    // compte rendu, donc persisté en base même si la remise est différée.
     if (pendingDelegation === del) pendingDelegation = null;
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
@@ -4554,6 +4560,7 @@ async function sendSuperAgentReport(entry) {
     projectPath: entry.projectPath || null,
     sessionId: null,
     summary,
+    defer: !!opts.defer,
   });
   warnInjectionFailure(res && res.status, res && res.detail, entry.category || "session");
   return res;

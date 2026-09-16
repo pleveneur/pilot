@@ -1693,7 +1693,11 @@ fn truncate_summary(summary: &str) -> String {
 }
 
 /// Enregistre un résumé de session dans la base et l'injecte au super-agent
-/// (s'il est démarré) pour qu'il apprenne en continu.
+/// (s'il est démarré) pour qu'il apprenne en continu. La ligne est TOUJOURS
+/// écrite (`delivered=0` par défaut → aucune perte). `defer = Some(true)`
+/// demande une remise différée : la ligne est écrite mais l'injection immédiate
+/// n'est pas tentée (l'assistant est occupé côté interface) ; le rejeu la
+/// délivrera plus tard.
 #[tauri::command]
 pub fn inject_session_summary(
     state: State<AppState>,
@@ -1701,6 +1705,7 @@ pub fn inject_session_summary(
     project_path: Option<String>,
     session_id: Option<String>,
     summary: String,
+    defer: Option<bool>,
 ) -> Result<Value, String> {
     // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
     // contexte de l'assistant. Tronqué ici à la source, le marqueur de
@@ -1734,6 +1739,27 @@ pub fn inject_session_summary(
     )
     .map_err(|e| format!("Erreur enregistrement résumé: {}", e))?;
     let summary_rowid = conn.last_insert_rowid();
+
+    // Remise DIFFÉRÉE demandée par l'appelant (assistant occupé côté interface) :
+    // la ligne est déjà écrite avec delivered=0, on ne tente PAS l'injection
+    // immédiate. Sans cela, un compte rendu confié pendant la fenêtre où le
+    // backend se croit encore libre serait marqué « livré » alors que pi, en
+    // pleine génération, l'ignorerait. Le rejeu
+    // (`replay_pending_superagent_summaries`) le délivrera dès la libération.
+    if defer.unwrap_or(false) {
+        log_injection(
+            &conn,
+            project_id,
+            "queued",
+            true,
+            "remise différée demandée (assistant occupé) — sera rejoué",
+        );
+        drop(conn);
+        return Ok(serde_json::json!({
+            "status": "queued",
+            "detail": "remise différée demandée (assistant occupé) — sera rejoué"
+        }));
+    }
 
     // Injecter au super-agent s'il est vivant ET non occupé. Sinon le laisser
     // en attente (delivered=0) : le rejeu le délivrera à la prochaine
