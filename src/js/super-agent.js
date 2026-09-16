@@ -62,6 +62,11 @@ export function computeRunLaunchVerdict(launchResult) {
     ok: true,
     launched: !!r.started,
     queued: !!r.queued,
+    // `preparing` : le lancement est EN COURS en arrière-plan (estimation
+    // plan-maker d'une run avec codeur). La réponse à l'outil part
+    // immédiatement pour ne pas bloquer le tour de l'assistant ; le résultat
+    // réel (échec / mise en file) est déposé dans la remontée durable.
+    preparing: !!r.preparing,
     error: r.error || null,
   };
 }
@@ -3043,15 +3048,36 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // DÉMARRAGE RÉEL, pas l'intention de lancer.
           return { queued: false, started: !!launched.started, error: launched.error || null };
         };
+        // Dépose dans la remontée durable le résultat d'un lancement DIFFÉRÉ
+        // (après estimation) que l'assistant n'a pas pu attendre : échec du
+        // lancement ou mise en file d'attente. Un succès est déjà rapporté par la
+        // fin de run (`settleRun`) → pas de doublon.
+        const reportDeferredLaunch = (verdict) => {
+          const v = verdict || {};
+          if (v.queued) {
+            injectRunAgentsResultToSuperAgent(
+              `[Info run_agents] La tâche a été mise en file d'attente sur le projet ${target} (une run était déjà en cours) : elle démarrera automatiquement à la fin de la tâche en cours.`,
+              projectPath,
+            );
+          } else if (!v.started) {
+            injectRunAgentsResultToSuperAgent(
+              `[Échec du lancement run_agents] ${v.error || "le lancement n'a pas démarré après l'estimation des fichiers."}`,
+              projectPath,
+            );
+          }
+        };
         const launchWithEstimate = () => {
           if (coderIds.length > 0 && targetProject) {
-            // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
-            // on lance d'abord plan-maker, on écrit les réservations, puis on ne
-            // lance le codeur QU'APRÈS (les réservations doivent être en place
-            // avant que les spécialistes travaillent). Fail-open : si l'estimation
+            // NON BLOQUANT : l'estimation plan-maker (T6) peut durer jusqu'à 60 s.
+            // L'assistant ne doit PAS rester occupé (saisie utilisateur bloquée)
+            // pendant ce temps. On lance donc l'estimation EN ARRIÈRE-PLAN et on
+            // rend la main immédiatement (accusé de lancement `preparing`). Le
+            // résultat réel du lancement (échec / mise en file) est déposé dans
+            // la remontée durable dès qu'il est connu ; un succès est déjà
+            // rapporté par la fin de run (settleRun). Fail-open : si l'estimation
             // échoue, on lance quand même le codeur sans réservations.
             appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
-            return estimateAndReserve(targetProject, task, coderIds, {
+            estimateAndReserve(targetProject, task, coderIds, {
               runAgentsForAssistant,
               loadAgentRegistry,
               releaseStuckRunLock,
@@ -3067,7 +3093,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               .catch(() => {
                 // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
                 return launchOrQueue();
-              });
+              })
+              .then(reportDeferredLaunch)
+              .catch((e) => reportDeferredLaunch({ started: false, queued: false, error: e && e.message ? e.message : String(e) }));
+            return { queued: false, started: false, preparing: true, error: null };
           }
           return launchOrQueue();
         };
@@ -3141,8 +3170,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
-          return await launchWithEstimate(); // { queued, started, error } : résultat de lancement réel
+          return await launchWithEstimate(); // { queued, started, preparing, error } : résultat de lancement (ou accusé si estimation en cours)
         };
+        // Réponse à l'outil : quand une estimation plan-maker est nécessaire
+        // (run avec codeur), `startRun` rend la main IMMÉDIATEMENT avec
+        // `preparing: true` — l'assistant finit son tour et reste disponible, le
+        // lancement réel se poursuit en arrière-plan.
         const launchResult = await startRun();
         await respondSuperAgent(id, JSON.stringify(computeRunLaunchVerdict(launchResult)), false);
       } catch (e) {
