@@ -32,8 +32,13 @@ describe("agent_max_turns — cohérence moteur / affichage", () => {
 
   it("les replis JS des Paramètres utilisent la même valeur", () => {
     const js = read("src/js/settings.js");
-    const values = [...js.matchAll(/agent_max_turns[^,\n]*\|\|\s*(\d+)/g)].map((x) => x[1]);
-    expect(values.length, "aucun repli agent_max_turns trouvé dans settings.js").toBeGreaterThan(0);
+    // Motif volontairement large : autorise une virgule entre le nom du champ
+    // et le repli, sinon le repli de SAUVEGARDE
+    // (`parseInt(inputAgentMaxTurns.value, 10) || 200`, settings.js:1126) est
+    // ignoré et une dérive y passerait inaperçue. Reste borné à la ligne.
+    const values = [...js.matchAll(/agent_max_turns[^\n]*\|\|\s*(\d+)/g)].map((x) => x[1]);
+    // Doit couvrir le repli de CHARGEMENT ET celui de SAUVEGARDE.
+    expect(values.length, "replis agent_max_turns insuffisants dans settings.js").toBeGreaterThanOrEqual(2);
     for (const v of values) {
       expect(v).toBe("200");
     }

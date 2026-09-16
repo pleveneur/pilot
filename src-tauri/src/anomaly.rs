@@ -436,10 +436,11 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         entry.blocked_reported = true;
                         alerts.push((project.clone(), agent.clone(), entry.last_event.clone(), idle_secs / 60));
                     }
-                    // 2. Arrêt auto (T2) : agents délégués uniquement (le super-agent
-                    //    est exclu, cf. `is_super`). Le scope (AgentProcess) est filtré
-                    //    après (agent_process_alive). Bug #152 : le calcul d'inactivité
-                    //    ignore les réessais provider (should_auto_stop_on_progress).
+                    // 2. Arrêt auto (T2) : agents délégués ET agent standard (session
+                    //    principale) ; seul le super-agent est exclu (cf. `is_super`). Le scope
+                    //    (AgentProcess) est filtré après (agent_process_alive). Bug #152 : le
+                    //    calcul d'inactivité ignore les réessais provider
+                    //    (should_auto_stop_on_progress).
                     if !is_super
                         && should_auto_stop_on_progress(
                             entry,

@@ -61,7 +61,7 @@ réinitialiser son processus. Aucun réglage utilisateur.
   périmé » libère le créneau **sans tuer l'agent**.
 - **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
-  délégués bloqués** (seuil 10 min ; couvre aussi l'agent standard). Activés par
+  bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis

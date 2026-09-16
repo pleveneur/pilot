@@ -389,10 +389,10 @@
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-auto-stop-enabled" />
-              <label for="setting-auto-stop-enabled" title="Arrêter automatiquement un agent DÉLÉGUÉ (run_agents) détecté bloqué (actif mais sans progression). Après l'arrêt, un agent de diagnostic est proposé automatiquement (aucune action automatique : vous validez ses propositions).">Arrêt auto des agents délégués bloqués</label>
+              <label for="setting-auto-stop-enabled" title="Arrêter automatiquement un agent DÉLÉGUÉ (run_agents) ou l'agent standard (session principale) détecté bloqué (actif mais sans progression). Après l'arrêt, un agent de diagnostic est proposé automatiquement (aucune action automatique : vous validez ses propositions).">Arrêt auto des agents bloqués (délégués + standard)</label>
             </div>
             <div class="setting-row setting-row-indent">
-              <label for="setting-auto-stop-minutes" title="Durée sans progression (en minutes) au-delà de laquelle un agent délégué est arrêté automatiquement. Seuil distinct du seuil de blocage (alerte).">Seuil d'arrêt auto (minutes) :</label>
+              <label for="setting-auto-stop-minutes" title="Durée sans progression (en minutes) au-delà de laquelle un agent délégué ou l'agent standard est arrêté automatiquement. Seuil distinct du seuil de blocage (alerte).">Seuil d'arrêt auto (minutes) :</label>
               <input type="number" id="setting-auto-stop-minutes" min="1" max="600" step="1" value="10" />
             </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
