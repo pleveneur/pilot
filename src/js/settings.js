@@ -11,7 +11,7 @@ import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT, parseArgs, formatArgs, validateServer, newServerId, testResult } from "./mcp-utils.js";
-import { plfaceOutcomeMessage } from "./plface-utils.js";
+import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage } from "./plface-utils.js";
 
 let currentConfig = null;
 
@@ -122,9 +122,13 @@ export async function initSettings() {
   // ── PLface : lancer mon avatar au démarrage ──
   const chkPlfaceAutostart = document.getElementById("setting-plface-autostart");
   const inputPlfacePath = document.getElementById("setting-plface-path");
+  const inputPlfaceAvatar = document.getElementById("setting-plface-avatar");
   const btnPlfaceBrowse = document.getElementById("btn-plface-browse");
+  const btnPlfaceAvatarBrowse = document.getElementById("btn-plface-avatar-browse");
   const btnPlfaceTest = document.getElementById("btn-plface-test");
+  const btnPlfaceStop = document.getElementById("btn-plface-stop");
   const plfaceTestStatus = document.getElementById("plface-test-status");
+  const plfaceState = document.getElementById("plface-runtime-state");
   const chkIntegratedTerminal = document.getElementById("setting-integrated-terminal");
   const chkRpcAgent = document.getElementById("setting-rpc-agent");
   const inputRpcPath = document.getElementById("setting-rpc-path");
@@ -661,6 +665,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     // ── PLface : lancement de l'avatar au démarrage (désactivé par défaut) ──
     if (chkPlfaceAutostart) chkPlfaceAutostart.checked = currentConfig.plface_autostart_enabled === true;
     if (inputPlfacePath) inputPlfacePath.value = currentConfig.plface_exe_path || "";
+    if (inputPlfaceAvatar) inputPlfaceAvatar.value = currentConfig.plface_avatar_path || "";
+    refreshPlfaceState();
     chkIntegratedTerminal.checked = currentConfig.integrated_terminal || false;
     chkRpcAgent.checked = currentConfig.rpc_agent_enabled || false;
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
@@ -917,9 +923,25 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       const cfg = await invoke("get_config");
       if (chkPlfaceAutostart) cfg.plface_autostart_enabled = chkPlfaceAutostart.checked;
       if (inputPlfacePath) cfg.plface_exe_path = inputPlfacePath.value.trim();
+      if (inputPlfaceAvatar) cfg.plface_avatar_path = inputPlfaceAvatar.value.trim();
       await invoke("save_config", { config: cfg });
       currentConfig = cfg;
     } catch (_) {}
+  }
+  // Indicateur d'état lisible : « Votre avatar est lancé / est arrêté ». Sondé
+  // à l'ouverture de la modale et après chaque action. Fail-open : un échec de
+  // sonde affiche simplement « arrêté » (aucune erreur bloquante).
+  async function refreshPlfaceState() {
+    if (!plfaceState) return;
+    let running = false;
+    try {
+      running = await invoke("plface_status");
+    } catch (_) {
+      running = false;
+    }
+    const { text, kind } = plfaceStateMessage(running === true);
+    plfaceState.textContent = text;
+    plfaceState.style.color = kind === "success" ? "var(--success)" : "var(--text-muted)";
   }
   if (btnPlfaceBrowse) {
     btnPlfaceBrowse.addEventListener("click", async () => {
@@ -964,6 +986,66 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         plfaceTestStatus.style.color = colors[kind] || "var(--text-muted)";
       }
       showToast(text, kind);
+      await refreshPlfaceState();
+    });
+  }
+  if (btnPlfaceAvatarBrowse) {
+    btnPlfaceAvatarBrowse.addEventListener("click", async () => {
+      try {
+        const picked = await dialogOpen({
+          multiple: false,
+          directory: false,
+          filters: [
+            { name: "Modèle d'avatar", extensions: ["vrm"] },
+            { name: "Tous les fichiers", extensions: ["*"] },
+          ],
+        });
+        if (!picked) return; // annulé
+        if (inputPlfaceAvatar) inputPlfaceAvatar.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du fichier : " + e, "error");
+      }
+    });
+  }
+  // Arrêt propre à la demande : demande au visage de se fermer (`GET /close`).
+  // Discret si l'avatar ne tourne pas ou ne répond pas (aucune erreur angoissante).
+  if (btnPlfaceStop) {
+    btnPlfaceStop.addEventListener("click", async () => {
+      if (plfaceTestStatus) {
+        plfaceTestStatus.textContent = "Arrêt en cours…";
+        plfaceTestStatus.style.color = "var(--text-muted)";
+      }
+      let outcome = "";
+      try {
+        outcome = await invoke("stop_plface");
+      } catch (_) {
+        outcome = "";
+      }
+      const { text, kind } = plfaceStopMessage(outcome);
+      const colors = {
+        success: "var(--success)",
+        info: "var(--text-secondary)",
+        warning: "var(--warning)",
+        error: "var(--danger)",
+      };
+      if (plfaceTestStatus) {
+        plfaceTestStatus.textContent = text;
+        plfaceTestStatus.style.color = colors[kind] || "var(--text-muted)";
+      }
+      showToast(text, kind);
+      await refreshPlfaceState();
+    });
+  }
+  // Désactivation de l'avatar (case décochée) : arrêt propre, discret. L'événement
+  // `change` ne se déclenche que sur action de l'utilisateur (pas au remplissage
+  // programmatique de la modale).
+  if (chkPlfaceAutostart) {
+    chkPlfaceAutostart.addEventListener("change", async () => {
+      if (chkPlfaceAutostart.checked) return; // activation : rien à arrêter ici
+      try {
+        await invoke("stop_plface");
+      } catch (_) {}
+      await refreshPlfaceState();
     });
   }
 
@@ -1088,6 +1170,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         // ── PLface : lancement de l'avatar au démarrage ──
         plface_autostart_enabled: chkPlfaceAutostart ? chkPlfaceAutostart.checked : false,
         plface_exe_path: inputPlfacePath ? inputPlfacePath.value.trim() : "",
+        plface_avatar_path: inputPlfaceAvatar ? inputPlfaceAvatar.value.trim() : "",
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),

@@ -251,6 +251,7 @@
       <div class="settings-layout">
         <nav class="settings-tabs" role="tablist" aria-label="Catégories de paramètres">
           <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
+          <button class="settings-tab" data-settings-tab="avatar" role="tab" aria-selected="false"><i data-lucide="user-round" class="icon"></i> Avatar</button>
           <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
           <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
           <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
@@ -324,23 +325,40 @@
               <input type="checkbox" id="setting-super-agent-start-on-launch" />
               <label for="setting-super-agent-start-on-launch">Démarrer l'assistant au lancement de Pilot</label>
             </div>
+          </div>
+
+          </div>
+
+          <div class="settings-panel" data-settings-panel="avatar" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="user-round" class="icon-sm"></i> Avatar (PLface)</h3>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-plface-autostart" />
               <label for="setting-plface-autostart" title="Lance votre avatar (PLface) au démarrage de Pilot, seulement si son API locale ne répond pas déjà. Sans effet si l'avatar n'est pas installé.">Lancer mon avatar (PLface) au démarrage</label>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-plface-path">Chemin de l'exécutable PLface :</label>
-              <input type="text" id="setting-plface-path" placeholder="ex: C:\\Program Files\\PLface\\PLface.exe" />
+              <input type="text" id="setting-plface-path" placeholder="laisser vide pour le programme fourni par Pilot" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-plface-avatar">Modèle d'avatar (.vrm) :</label>
+              <input type="text" id="setting-plface-avatar" placeholder="laisser vide pour le modèle fourni par Pilot" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="plface-runtime-state" style="font-size:12px;color:var(--text-muted);"></span>
             </div>
             <div class="setting-row setting-row-indent">
               <button id="btn-plface-browse" type="button" class="settings-btn">Parcourir…</button>
-              <button id="btn-plface-test" type="button" class="settings-btn" style="margin-left:10px;">Tester maintenant</button>
+              <button id="btn-plface-avatar-browse" type="button" class="settings-btn" style="margin-left:10px;">Choisir un modèle…</button>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <button id="btn-plface-test" type="button" class="settings-btn">Tester maintenant</button>
+              <button id="btn-plface-stop" type="button" class="settings-btn" style="margin-left:10px;">Arrêter mon avatar</button>
             </div>
             <div class="setting-row setting-row-indent">
               <span id="plface-test-status" style="font-size:11px;color:var(--text-muted);"></span>
             </div>
           </div>
-
           </div>
 
           <div class="settings-panel" data-settings-panel="agent" role="tabpanel">

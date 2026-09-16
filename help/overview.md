@@ -91,13 +91,23 @@ externe.
 - **Paramètres ⚙️** : onglet de configuration modale (thème, éditeur, agent Pi,
   accès distant, etc.). Toute la configuration est persistée dans un fichier
   JSON (`app_data_dir/com.pilot.editor/config.json`).
-- **Lancer mon avatar (PLface) au démarrage** : dans **Paramètres ⚙️ → Général**,
-  cochez « Lancer mon avatar (PLface) au démarrage » et indiquez le **chemin de
-  l'exécutable** (bouton « Parcourir… »). Au démarrage de Pilot, si l'avatar n'est
-  pas déjà lancé, il est démarré automatiquement — il reste ouvert même si vous
-  fermez Pilot. Le bouton « Tester maintenant » vérifie tout de suite et vous
-  indique clairement ce qui s'est passé. Sans effet si l'avatar n'est pas
-  installé.
+- **Avatar (PLface)** : dans **Paramètres ⚙️ → Avatar**, cochez « Lancer mon
+  avatar (PLface) au démarrage ». Le **programme du visage est fourni avec
+  Pilot** : laissez le **chemin de l'exécutable** vide pour l'utiliser tel quel,
+  ou indiquez votre propre programme (bouton « Parcourir… »). Quand Pilot lance
+  l'avatar, celui-ci **n'apparaît pas dans la barre des tâches** (mode discret) ;
+  lancé à la main, il reste visible comme avant. Au démarrage de Pilot, si
+  l'avatar n'est pas déjà
+  lancé, il est démarré automatiquement — il reste ouvert même si vous fermez
+  Pilot. Vous pouvez aussi **choisir le modèle d'avatar** (`.vrm`, bouton
+  « Choisir un modèle… ») : il est affiché au lancement. Laissez le champ vide
+  pour utiliser le **modèle fourni par Pilot** ; si celui-ci est indisponible,
+  le visage reprend son **modèle intégré** (aucune erreur). Le **bouton
+  « Tester maintenant »** vérifie
+  tout de suite et vous indique clairement ce qui s'est passé ; le **bouton
+  « Arrêter mon avatar »** demande à votre avatar de se fermer proprement
+  (décocher la case l'arrête aussi), et une indication vous dit s'il est lancé
+  ou arrêté. Si aucun programme n'est trouvé, rien n'est lancé, sans message.
 - **Palette de commandes** (`Ctrl+Shift+P`) : accès rapide à toutes les
   commandes (sauvegarder, ouvrir, fermer, basculer split/outline/recherche, etc.).
 <!-- /HELP:theme-parametres -->

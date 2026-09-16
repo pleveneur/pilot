@@ -692,6 +692,11 @@ struct AppConfig {
     plface_autostart_enabled: bool,
     #[serde(default)]
     plface_exe_path: String,
+    // Modèle d'avatar (`.vrm`) à afficher au lancement. Vide = modèle intégré du
+    // visage (aucun `--avatar` transmis). Un réglage vide garantit un comportement
+    // strictement identique à avant.
+    #[serde(default)]
+    plface_avatar_path: String,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -945,6 +950,7 @@ impl Default for AppConfig {
             group_assistant_model: String::new(),
             plface_autostart_enabled: false,
             plface_exe_path: String::new(),
+            plface_avatar_path: String::new(),
         }
     }
 }
@@ -1644,6 +1650,68 @@ fn save_config(
     Ok(())
 }
 
+/// PLface : résout le chemin du **modèle d'avatar par défaut livré par Pilot**
+/// (`PilotBase.vrm`, ressource embarquée via `bundle.resources`).
+///
+/// Résolution dynamique par le dossier de ressources de l'application :
+/// - en développement, `tauri-build` copie la ressource dans
+///   `target/<profil>/PilotBase.vrm` (dossier de l'exécutable) ;
+/// - en version installée, elle est dans le dossier de ressources du bundle.
+/// Aucun chemin en dur, aucune dépendance à un autre dépôt.
+///
+/// Retourne `None` si la ressource est absente ou n'est pas un fichier : le
+/// visage se rabat alors sur son modèle intégré, sans erreur.
+fn default_avatar_path(app: &AppHandle) -> Option<String> {
+    let path = app
+        .path()
+        .resolve(
+            plface::DEFAULT_AVATAR_RESOURCE,
+            tauri::path::BaseDirectory::Resource,
+        )
+        .ok()?;
+    if path.is_file() {
+        Some(path.to_string_lossy().into_owned())
+    } else {
+        None
+    }
+}
+
+/// PLface : résout le chemin du **programme du visage livré par Pilot**
+/// (`plface.exe`, ressource embarquée via `bundle.resources`), utilisé quand le
+/// réglage « Chemin de l'exécutable PLface » est vide (installation clé en main).
+///
+/// Même résolution dynamique que le modèle d'avatar :
+/// - en développement, `tauri-build` copie la ressource dans
+///   `target/<profil>/plface.exe` ;
+/// - en version installée, elle est dans le dossier de ressources du bundle.
+/// Aucun chemin en dur, aucune dépendance à un autre dossier du disque.
+///
+/// PLface est un binaire Windows (WebView2) : sur les autres plateformes, rien
+/// n'est proposé (aucun lancement, aucun message). Retourne `None` si la
+/// ressource est absente : aucun lancement, en silence.
+fn default_plface_exe_path(app: &AppHandle) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        None
+    }
+    #[cfg(windows)]
+    {
+        let path = app
+            .path()
+            .resolve(
+                plface::DEFAULT_EXE_RESOURCE,
+                tauri::path::BaseDirectory::Resource,
+            )
+            .ok()?;
+        if path.is_file() {
+            Some(path.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+}
+
 /// PLface : exécute à la demande le contrôle de lancement (activé + API muette
 /// + exécutable existant → lancement détaché) et renvoie un état lisible.
 /// Utilisée par le contrôle au démarrage (via `plface::launch_if_needed`) et
@@ -1655,11 +1723,39 @@ fn check_and_launch_plface(
     app: AppHandle,
 ) -> plface::PlfaceLaunchOutcome {
     ensure_config_loaded(&state, &app);
-    let (enabled, path) = {
+    let (enabled, path, avatar) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.plface_autostart_enabled, cfg.plface_exe_path.clone())
+        (
+            cfg.plface_autostart_enabled,
+            cfg.plface_exe_path.clone(),
+            cfg.plface_avatar_path.clone(),
+        )
     };
-    plface::launch_if_needed(enabled, &path)
+    // Champ renseigné → chemin utilisateur ; champ vide → programme livré avec
+    // Pilot ; les deux absents → aucun lancement (silencieux).
+    let default_exe = default_plface_exe_path(&app);
+    let effective_exe = plface::resolve_exe(&path, default_exe.as_deref()).unwrap_or_default();
+    // Idem pour le modèle d'avatar : champ vide → modèle livré avec Pilot ; les
+    // deux absents → aucun `--avatar` (modèle intégré du visage).
+    let default_avatar = default_avatar_path(&app);
+    let effective_avatar = plface::resolve_avatar(&avatar, default_avatar.as_deref());
+    plface::launch_if_needed(enabled, &effective_exe, effective_avatar.as_deref())
+}
+
+/// PLface : demande au visage de se fermer proprement (`GET /close`). Renvoie un
+/// état lisible (`closed`, `notRunning`, `failed`). Jamais bloquant au-delà du
+/// timeout de sonde (< 1 s), ne remonte jamais d'erreur. N'est **jamais** appelée
+/// à la fermeture de Pilot : l'arrêt est déclenché par l'utilisateur.
+#[tauri::command]
+fn stop_plface() -> plface::PlfaceStopOutcome {
+    plface::stop_if_running()
+}
+
+/// PLface : indique si le visage tourne (sonde `/status`, timeout court) pour
+/// l'indicateur d'état de l'onglet Avatar. Fail-open : toute erreur = `false`.
+#[tauri::command]
+fn plface_status() -> bool {
+    plface::is_running()
 }
 
 #[tauri::command]
@@ -2286,10 +2382,24 @@ pub fn run() {
             // voit aucune différence.
             {
                 let cfg = state.config.lock().unwrap().clone();
-                if cfg.plface_autostart_enabled && !cfg.plface_exe_path.trim().is_empty() {
+                if cfg.plface_autostart_enabled {
                     let path = cfg.plface_exe_path.clone();
+                    let avatar = cfg.plface_avatar_path.clone();
+                    let handle = handle.clone();
                     std::thread::spawn(move || {
-                        let _ = plface::launch_if_needed(true, &path);
+                        // Résolution des ressources livrées dans le thread (jamais
+                        // bloquant pour l'ouverture de Pilot), fail-open.
+                        let default_exe = default_plface_exe_path(&handle);
+                        let effective_exe = plface::resolve_exe(&path, default_exe.as_deref())
+                            .unwrap_or_default();
+                        let default_avatar = default_avatar_path(&handle);
+                        let effective_avatar =
+                            plface::resolve_avatar(&avatar, default_avatar.as_deref());
+                        let _ = plface::launch_if_needed(
+                            true,
+                            &effective_exe,
+                            effective_avatar.as_deref(),
+                        );
                     });
                 }
             }
@@ -2707,6 +2817,9 @@ pub fn run() {
             gds::gds_auto_provision,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
+            // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──
+            stop_plface,
+            plface_status,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")

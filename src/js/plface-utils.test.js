@@ -1,6 +1,12 @@
 // Tests unitaires — plface-utils.js (réglage PLface : messages utilisateur purs)
 import { describe, it, expect } from "vitest";
-import { PLFACE_OUTCOMES, plfaceOutcomeMessage } from "./plface-utils.js";
+import {
+  PLFACE_OUTCOMES,
+  PLFACE_STOP_OUTCOMES,
+  plfaceOutcomeMessage,
+  plfaceStopMessage,
+  plfaceStateMessage,
+} from "./plface-utils.js";
 
 describe("PLFACE_OUTCOMES", () => {
   it("couvre exactement les 5 états renvoyés par le moteur", () => {
@@ -11,6 +17,12 @@ describe("PLFACE_OUTCOMES", () => {
       "disabled",
       "launchFailed",
     ]);
+  });
+});
+
+describe("PLFACE_STOP_OUTCOMES", () => {
+  it("couvre exactement les 3 états d'arrêt renvoyés par le moteur", () => {
+    expect(PLFACE_STOP_OUTCOMES).toEqual(["closed", "notRunning", "failed"]);
   });
 });
 
@@ -56,5 +68,52 @@ describe("plfaceOutcomeMessage", () => {
       const { text } = plfaceOutcomeMessage(outcome);
       expect(text).not.toMatch(/plface|outcome|camelCase|error|exception|undefined/i);
     }
+  });
+});
+
+describe("plfaceStopMessage", () => {
+  it("fermé proprement → succès", () => {
+    const r = plfaceStopMessage("closed");
+    expect(r.kind).toBe("success");
+    expect(r.text).toMatch(/fermé/i);
+  });
+
+  it("pas lancé → information discrète (pas d'erreur)", () => {
+    const r = plfaceStopMessage("notRunning");
+    expect(r.kind).toBe("info");
+    expect(r.text).toMatch(/pas lancé/i);
+  });
+
+  it("échec → avertissement, jamais angoissant", () => {
+    const r = plfaceStopMessage("failed");
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/n'a pas pu se fermer/i);
+  });
+
+  it("état inconnu → message générique (jamais de crash)", () => {
+    const r = plfaceStopMessage("somethingElse");
+    expect(r.kind).toBe("warning");
+    expect(r.text.length).toBeGreaterThan(0);
+  });
+
+  it("aucun message d'arrêt ne contient de nom de code technique", () => {
+    for (const outcome of PLFACE_STOP_OUTCOMES) {
+      const { text } = plfaceStopMessage(outcome);
+      expect(text).not.toMatch(/plface|outcome|camelCase|error|exception|undefined/i);
+    }
+  });
+});
+
+describe("plfaceStateMessage", () => {
+  it("lancé → état lisible de succès", () => {
+    const r = plfaceStateMessage(true);
+    expect(r.kind).toBe("success");
+    expect(r.text).toMatch(/lancé/i);
+  });
+
+  it("arrêté → état lisible informatif", () => {
+    const r = plfaceStateMessage(false);
+    expect(r.kind).toBe("info");
+    expect(r.text).toMatch(/arrêté/i);
   });
 });

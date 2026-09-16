@@ -1684,6 +1684,9 @@ impl AgentService {
             ("pilot-assistant-schedule.ts", include_str!("../extensions/pilot-assistant-schedule.ts")),
             ("pilot-assistant-tools.ts", include_str!("../extensions/pilot-assistant-tools.ts")),
             ("pilot-assistant-session-memory.ts", include_str!("../extensions/pilot-assistant-session-memory.ts")),
+            // Passerelle du visage : outils set_expression/get_status/set_position/
+            // reset fournis par Pilot (aucun processus externe, ni Node ni MCP).
+            ("pilot-face.ts", include_str!("../extensions/pilot-face.ts")),
         ];
         // Assistant piloté MCP (brique B) : extension client MCP ajoutée à la
         // demande uniquement (serveur cible désigné + MCP activé).
@@ -1699,6 +1702,13 @@ impl AgentService {
                 extensions.push(file.to_string_lossy().to_string());
             }
         }
+        // Cœur de la passerelle du visage : module importé par pilot-face.ts
+        // (`./face-gateway.js`). Écrit à côté MAIS pas passé en --extension
+        // (ce n'est pas une extension, seulement un module résolu par import).
+        let _ = std::fs::write(
+            dir.join("face-gateway.js"),
+            include_str!("../../src/js/face-gateway.js"),
+        );
         extensions
     }
 
@@ -1856,6 +1866,18 @@ impl AgentService {
                     if std::fs::write(&session_memory, include_str!("../extensions/pilot-assistant-session-memory.ts")).is_ok() {
                         extensions.push(session_memory.to_string_lossy().to_string());
                     }
+                    // Passerelle du visage : outils de pilotage de PLface fournis
+                    // par Pilot (aucun processus externe, ni Node ni MCP). Le
+                    // module `face-gateway.js` (cœur pur) est écrit à côté mais
+                    // n'est PAS passé en --extension (ce n'est pas une extension).
+                    let face = dir.join("pilot-face.ts");
+                    if std::fs::write(&face, include_str!("../extensions/pilot-face.ts")).is_ok() {
+                        extensions.push(face.to_string_lossy().to_string());
+                    }
+                    let _ = std::fs::write(
+                        dir.join("face-gateway.js"),
+                        include_str!("../../src/js/face-gateway.js"),
+                    );
                     // Assistant piloté MCP (brique A) : si MCP est activé, l'assistant
                     // charge l'extension client MCP (comme l'agent standard) pour
                     // découvrir les serveurs avec ses outils mcp_<serveur>_<outil>.

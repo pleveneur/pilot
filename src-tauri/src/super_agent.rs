@@ -823,8 +823,14 @@ pub(crate) fn schedule_insert(
             SCHEDULE_MAX
         ));
     }
+    // Initialise EXPLICITEMENT l'heure de création (et `updated_at`) avec la
+    // même horloge UTC que `schedule_due`/`schedule_next_fire`. L'échéance
+    // (created_at + every) est ainsi toujours présente et cohérente dès la
+    // création, sans dépendre du DEFAULT du schéma (un created_at NULL rendrait
+    // la comparaison `datetime(COALESCE(...), ...)` indéfinie → jamais dû).
     conn.execute(
-        "INSERT INTO assistant_schedules (name, prompt, every) VALUES (?1, ?2, ?3)",
+        "INSERT INTO assistant_schedules (name, prompt, every, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
         rusqlite::params![name, prompt, every],
     )
     .map_err(|e| {
@@ -3614,6 +3620,59 @@ mod tests {
         assert!(schedule_due(&conn, &before).unwrap().is_empty());
         let at: String = schedule_next_fire_at(&conn, &created, 600).unwrap();
         assert_eq!(schedule_due(&conn, &at).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn schedule_survives_restart_without_firing_early() {
+        // Simule un redémarrage : base fichier, création, fermeture, réouverture.
+        let path = std::env::temp_dir().join(format!(
+            "pilot-schedule-restart-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let created: String;
+        let next: String;
+        {
+            let conn = Connection::open(&path).unwrap();
+            init_db(&conn).unwrap();
+            let id = schedule_insert(&conn, "restart", "prompt", 600).unwrap();
+            created = conn
+                .query_row(
+                    "SELECT created_at FROM assistant_schedules WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            next = schedule_next_fire(&conn, id).unwrap().unwrap();
+            drop(conn);
+        }
+        // Réouverture (= redémarrage) : la planification et son échéance survivent.
+        let conn = Connection::open(&path).unwrap();
+        init_db(&conn).unwrap();
+        let now: String = conn
+            .query_row("SELECT datetime('now')", [], |r| r.get(0))
+            .unwrap();
+        // L'échéance annoncée est strictement future et cohérente avec l'intervalle.
+        assert_eq!(next, schedule_next_fire_at(&conn, &created, 600).unwrap());
+        let is_future: bool = conn
+            .query_row("SELECT ?1 > datetime('now')", [&next], |r| r.get(0))
+            .unwrap();
+        assert!(is_future);
+        // Un rappel non échu ne se déclenche pas après redémarrage.
+        assert!(schedule_due(&conn, &now).unwrap().is_empty());
+        // Un tick juste avant l'échéance ne le déclenche pas non plus.
+        assert!(schedule_due(&conn, &schedule_next_fire_at(&conn, &created, 599).unwrap())
+            .unwrap()
+            .is_empty());
+        // À l'échéance, il est bien dû.
+        assert_eq!(
+            schedule_due(&conn, &schedule_next_fire_at(&conn, &created, 600).unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
   "productName": "Pilot",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "identifier": "com.pilot.editor",
   "bundle": {
     "active": true,
@@ -16,6 +16,10 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "resources": {
+      "assets/PilotBase.vrm": "PilotBase.vrm",
+      "assets/plface.exe": "plface.exe"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
