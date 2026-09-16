@@ -11,7 +11,7 @@ import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT, parseArgs, formatArgs, validateServer, newServerId, testResult } from "./mcp-utils.js";
-import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage } from "./plface-utils.js";
+import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
 
 let currentConfig = null;
 
@@ -950,11 +950,12 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
           multiple: false,
           directory: false,
           filters: [
-            { name: "Exécutables", extensions: ["exe", "bin", "app", "command", "sh"] },
+            { name: "Programme de l'avatar (exécutable)", extensions: ["exe", "bin", "app", "command", "sh"] },
             { name: "Tous les fichiers", extensions: ["*"] },
           ],
         });
         if (!picked) return; // annulé
+        // Remplit UNIQUEMENT le champ du programme (jamais celui du modèle).
         if (inputPlfacePath) inputPlfacePath.value = Array.isArray(picked) ? picked[0] : picked;
       } catch (e) {
         showToast("Sélection du fichier : " + e, "error");
@@ -996,12 +997,20 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
           multiple: false,
           directory: false,
           filters: [
-            { name: "Modèle d'avatar", extensions: ["vrm"] },
-            { name: "Tous les fichiers", extensions: ["*"] },
+            { name: "Modèle d'avatar (.vrm)", extensions: ["vrm"] },
           ],
         });
-        if (!picked) return; // annulé
-        if (inputPlfaceAvatar) inputPlfaceAvatar.value = Array.isArray(picked) ? picked[0] : picked;
+        if (!picked) return; // annulé : aucune erreur
+        const filePath = Array.isArray(picked) ? picked[0] : picked;
+        // Refus propre : un fichier non-.vrm ne remplit jamais le champ du modèle
+        // (et n'atterrit jamais dans celui du programme).
+        if (!isVrmPath(filePath)) {
+          const { text, kind } = avatarRejectedMessage(filePath);
+          showToast(text, kind);
+          return;
+        }
+        // Remplit UNIQUEMENT le champ du modèle.
+        if (inputPlfaceAvatar) inputPlfaceAvatar.value = filePath;
       } catch (e) {
         showToast("Sélection du fichier : " + e, "error");
       }

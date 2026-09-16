@@ -337,19 +337,21 @@
               <label for="setting-plface-autostart" title="Lance votre avatar (PLface) au démarrage de Pilot, seulement si son API locale ne répond pas déjà. Sans effet si l'avatar n'est pas installé.">Lancer mon avatar (PLface) au démarrage</label>
             </div>
             <div class="setting-row setting-row-indent">
-              <label for="setting-plface-path">Chemin de l'exécutable PLface :</label>
-              <input type="text" id="setting-plface-path" placeholder="laisser vide pour le programme fourni par Pilot" />
+              <label for="setting-plface-path">Programme de l'avatar (exécutable PLface) :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-plface-path" placeholder="laisser vide pour le programme fourni par Pilot" />
+                <button id="btn-plface-browse" type="button" class="settings-btn">Choisir le programme…</button>
+              </div>
             </div>
             <div class="setting-row setting-row-indent">
-              <label for="setting-plface-avatar">Modèle d'avatar (.vrm) :</label>
-              <input type="text" id="setting-plface-avatar" placeholder="laisser vide pour le modèle fourni par Pilot" />
+              <label for="setting-plface-avatar">Fichier du modèle d'avatar (.vrm) :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-plface-avatar" placeholder="laisser vide pour le modèle fourni par Pilot" />
+                <button id="btn-plface-avatar-browse" type="button" class="settings-btn">Choisir le modèle (.vrm)…</button>
+              </div>
             </div>
             <div class="setting-row setting-row-indent">
               <span id="plface-runtime-state" style="font-size:12px;color:var(--text-muted);"></span>
-            </div>
-            <div class="setting-row setting-row-indent">
-              <button id="btn-plface-browse" type="button" class="settings-btn">Parcourir…</button>
-              <button id="btn-plface-avatar-browse" type="button" class="settings-btn" style="margin-left:10px;">Choisir un modèle…</button>
             </div>
             <div class="setting-row setting-row-indent">
               <button id="btn-plface-test" type="button" class="settings-btn">Tester maintenant</button>

@@ -6,6 +6,8 @@ import {
   plfaceOutcomeMessage,
   plfaceStopMessage,
   plfaceStateMessage,
+  isVrmPath,
+  avatarRejectedMessage,
 } from "./plface-utils.js";
 
 describe("PLFACE_OUTCOMES", () => {
@@ -115,5 +117,48 @@ describe("plfaceStateMessage", () => {
     const r = plfaceStateMessage(false);
     expect(r.kind).toBe("info");
     expect(r.text).toMatch(/arrêté/i);
+  });
+});
+
+describe("isVrmPath", () => {
+  it("accepte un fichier .vrm (toutes casses)", () => {
+    expect(isVrmPath("C:\\models\\Alice.vrm")).toBe(true);
+    expect(isVrmPath("/home/user/Alice.VRM")).toBe(true);
+    expect(isVrmPath("Alice.Vrm")).toBe(true);
+  });
+
+  it("accepte un chemin entre guillemets (sélecteur Windows)", () => {
+    expect(isVrmPath('"C:\\models\\Alice.vrm"')).toBe(true);
+  });
+
+  it("refuse les autres extensions", () => {
+    expect(isVrmPath("C:\\models\\Alice.glb")).toBe(false);
+    expect(isVrmPath("C:\\models\\Alice.exe")).toBe(false);
+    expect(isVrmPath("note.txt")).toBe(false);
+  });
+
+  it("refuse un chemin vide, sans extension ou finissant par un point", () => {
+    expect(isVrmPath("")).toBe(false);
+    expect(isVrmPath("   ")).toBe(false);
+    expect(isVrmPath("C:\\models\\Alice")).toBe(false);
+    expect(isVrmPath("C:\\models\\Alice.")).toBe(false);
+    expect(isVrmPath(null)).toBe(false);
+    expect(isVrmPath(undefined)).toBe(false);
+  });
+});
+
+describe("avatarRejectedMessage", () => {
+  it("cite le nom du fichier refusé et rappelle l'extension attendue", () => {
+    const r = avatarRejectedMessage("C:\\models\\Alice.glb");
+    expect(r.kind).toBe("warning");
+    expect(r.text).not.toMatch(/plface|camelCase|undefined/i);
+    expect(r.text).toContain("Alice.glb");
+    expect(r.text).toMatch(/\.vrm/);
+  });
+
+  it("ne casse pas sur un chemin vide", () => {
+    const r = avatarRejectedMessage("");
+    expect(r.kind).toBe("warning");
+    expect(r.text.length).toBeGreaterThan(0);
   });
 });

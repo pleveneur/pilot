@@ -2549,6 +2549,24 @@ mark.search-highlight {
   margin-left: 4px;
 }
 
+/* Ligne « champ + bouton » (onglet Avatar) : le champ occupe la largeur, le
+   bouton reste compact à droite, dans la MÊME ligne que son champ → le rôle du
+   bouton est sans ambiguïté. */
+.setting-row-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.setting-row-field input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+.setting-row-field .settings-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* --- Context Menu --- */
 .context-menu {
   position: fixed;
