@@ -21,14 +21,28 @@ avertit (bandeau + notification native). Le bandeau propose un bouton
 **🔍 Diagnostiquer** qui lance un agent d'analyse **sans action automatique** :
 il propose des évolutions que vous validez vous-même.
 
-**Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
-run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
-depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
-Une **opération longue en cours** (un outil démarré qui tourne encore : longue
-construction, longue série de tests, longue analyse) **n'est jamais coupée** :
-tant qu'un outil s'exécute, l'agent est considéré comme en train de travailler.
-Seul un agent **réellement figé** (aucun outil en cours, plus aucune
-progression) est arrêté.
+**Arrêt automatique des agents bloqués (T2)** : un agent **bloqué** — actif mais
+**sans progression** depuis le seuil dédié (défaut : **10 minutes**) — est
+**arrêté automatiquement**. Cela concerne les **agents délégués** (lancés via
+run_agents, ex. par l'Assistant 🧭) **et l'agent standard** du projet (session
+principale), pour qu'un process figé ne bloque plus Pilot. Le reviewer et
+l'Assistant ne sont **jamais** arrêtés automatiquement.
+
+**Opération longue en cours** (un outil démarré qui tourne encore : longue
+construction, longue série de tests, longue analyse) : tant qu'un outil
+s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
+automatique (T2) ne le coupe pas**. Attention : cela ne protège pas une opération
+**totalement silencieuse** (aucun événement pendant plus de **10 minutes**) du
+délai d'inactivité côté interface, qui met fin à la run **sans tuer l'agent** ;
+et au bout de **25 minutes** d'absence d'activité, le filet « occupé périmé »
+(ci-dessous) libère le créneau **sans tuer l'agent**. Seul un agent
+**réellement figé** (aucun outil en cours, plus aucune progression) est arrêté
+par T2.
+
+**Question posée à l'utilisateur** : quand un agent attend votre réponse (choix,
+confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique
+(T2) est **mis en pause** tant que la réponse n'est pas donnée, même très
+longtemps.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
 pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
@@ -41,11 +55,14 @@ réinitialiser son processus. Aucun réglage utilisateur.
 - **Diagnostic automatique** : après l'arrêt, un **agent de diagnostic est lancé
   automatiquement** pour **proposer** des évolutions (lecture seule, validation
   utilisateur requise — aucune action automatique).
-- **Scope restreint** : seuls les agents délégués sont arrêtés ; le chat
-  principal, le reviewer et l'Assistant ne sont jamais arrêtés automatiquement.
+- **Scope restreint** : sont arrêtés automatiquement les agents **délégués** ET
+  l'**agent standard** du projet (session principale) ; le reviewer et
+  l'Assistant ne sont **jamais** arrêtés automatiquement. Le filet « occupé
+  périmé » libère le créneau **sans tuer l'agent**.
 - **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
-  délégués bloqués** (seuil 10 min). Activés par défaut.
+  délégués bloqués** (seuil 10 min ; couvre aussi l'agent standard). Activés par
+  défaut.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
@@ -88,12 +105,14 @@ pas déjà signalé. Il émet alors l'événement `agent-anomaly`
 Respecte le réglage `anomaly_detection_enabled` (défaut activé) et
 `anomaly_timeout_minutes` (défaut 30).
 
-### 2.3 Arrêt automatique des agents délégués bloqués (T2)
+### 2.3 Arrêt automatique des agents bloqués (T2)
 
 Le même moniteur implémente l'arrêt AUTOMATIQUE (`should_auto_stop`) : un agent
 `busy` sans progression depuis le seuil **dédié** `agent_auto_stop_minutes`
 (défaut **10 min**, distinct de `anomaly_timeout_minutes` 30) et non déjà
 arrêté (`auto_stopped_reported`, réarmé à chaque `agent_start`) est candidat.
+Respecte le réglage `agent_auto_stop_enabled` (défaut activé) et
+`agent_auto_stop_minutes` (défaut 10).
 
 **Scope** : vise les agents délégués `AgentProcess` (run_agents) ET, depuis le
 bug #81, l'**agent standard** (`MainSession`, chat principal) — un process pi
@@ -117,6 +136,38 @@ arrêtés automatiquement (le super-agent a son plafond dédié, tâche #141).
    redémarré) et à agent-pi.js de mettre à jour l'UI (statut « Arrêté ») ;
 3. **PROPOSE automatiquement le diagnostic** en appelant
    `do_start_diagnostic_agent` (réutilise l'existant, aucune nouvelle logique).
+
+**Pause pendant une attente de réponse utilisateur** : une question posée par
+l'agent (choix, confirmation, saisie — événement `extension_ui_request`) n'est
+pas un blocage mais un état légitime (nuit, réunion…). L'observateur pose alors
+le marqueur `awaiting_user` : tant qu'il est posé, l'arrêt automatique T2, le
+plafond « réfléchit » de l'Assistant et la libération du créneau « run fantôme »
+sont **suspendus**, quelle que soit la durée de l'attente. Le marqueur est levé
+dès le premier événement d'activité suivant (la réponse a été traitée) ou sur
+tout événement de cycle de vie (`agent_start`/`agent_end`/`agent_settled`) / mort
+du process (anti-fuite).
+
+**Passage 3 du lot 1 — un travail long qui avance n'est plus coupé** :
+l'observateur suit un marqueur `tool_in_progress` (posé sur
+`tool_execution_start`, levé sur `tool_execution_end` — et sur toute fin de tour
+/ mort du process, anti-fuite). Tant qu'une opération d'outil est EN COURS,
+`should_auto_stop_on_progress` renvoie `false` : un long build, une longue série
+de tests ou une longue analyse (aucun événement entre le start et le end de
+l'outil) n'est plus arrêté à tort au bout du seuil. Un agent **réellement figé**
+(aucun outil en cours, plus aucune progression) est toujours arrêté exactement
+comme avant : le seuil, le réglage d'activation et la proposition de diagnostic
+restent inchangés.
+
+**Nuance — une opération longue et silencieuse n'est pas protégée partout** :
+cette pause ne concerne que **l'arrêt automatique du moteur (T2)**. Une opération
+longue qui n'émet **aucun** événement pendant plus de **10 minutes** reste
+exposée au **délai d'inactivité côté interface** (`agent_timeout_ms`, défaut
+10 min, agents-bus.js) qui termine la run **sans tuer l'agent** ; et au bout de
+**25 minutes** d'absence d'activité, le filet « occupé périmé » (busy-stale,
+§2.4) **libère le créneau mais ne tue pas l'agent**. Il est donc inexact de dire
+qu'une opération longue « n'est jamais coupée » : elle ne l'est jamais **par
+l'arrêt automatique T2** tant que l'outil tourne, mais elle reste soumise aux
+garde-fous d'inactivité décrits ci-dessus.
 
 ### 2.4 Verrou de run fantôme — filet busy-stale (STALE_BUSY_GRACE)
 
@@ -149,21 +200,7 @@ files d'exclusivité/de délégation au lieu de laisser les demandes derrière u
 fantôme. Le champ `stale_busy_grace_minutes` est préservé dans settings.js
 (aucune UI dédiée).
 
-Respecte le réglage `agent_auto_stop_enabled` (défaut activé) et
-`agent_auto_stop_minutes` (défaut 10).
-
-**Passage 3 du lot 1 — un travail long qui avance n'est plus coupé** :
-l'observateur suit un marqueur `tool_in_progress` (posé sur
-`tool_execution_start`, levé sur `tool_execution_end` — et sur toute fin de tour
-/ mort du process, anti-fuite). Tant qu'une opération d'outil est EN COURS,
-`should_auto_stop_on_progress` renvoie `false` : un long build, une longue série
-de tests ou une longue analyse (aucun événement entre le start et le end de
-l'outil) n'est plus arrêté à tort au bout du seuil. Un agent **réellement figé**
-(aucun outil en cours, plus aucune progression) est toujours arrêté exactement
-comme avant. Le seuil, le réglage d'activation, le filet busy-stale (25 min,
-§2.4) et la proposition de diagnostic restent inchangés.
-
-### 2.4 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
+### 2.5 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 
 Commande Tauri : lance un processus agent dédié (`diagnostic`, canal
 `rpc-event-agents`) et lui envoie un prompt d'analyse. Le prompt décrit
@@ -208,14 +245,23 @@ callback de notification du bus (message ⏱️).
 
 ## 5. Vérifications
 
-- `cargo test --lib` passe (anti-régression, dont tests `anomaly` + `should_auto_stop`).
+- `cargo test --lib` passe (anti-régression, dont tests `anomaly` :
+  `should_auto_stop`, `should_auto_stop_on_progress` — marqueur `tool_in_progress`
+  — et `awaiting_user_suspends_auto_stop_and_stale_release`).
 - `npm run build` (vite) passe.
 - `npm test` (vitest) passe (agents-bus : aucune régression).
-- Test manuel : simuler un agent délégué bloqué (seuil auto-stop réduit à 1 min)
-  → après le seuil, l'agent est arrêté, l'événement UI + bandeau apparaissent,
-  la file d'exclusivité est libérée (un agent en attente prend le relais) et
-  l'agent de diagnostic est lancé automatiquement.
+- Correctif « opération longue » couvert par les tests : tant qu'un outil est EN
+  COURS (`tool_in_progress`), `should_auto_stop_on_progress` renvoie `false` ;
+  un agent figé (aucun outil, plus de progression) est arrêté comme avant.
+- Pause « attente de réponse utilisateur » couverte par les tests : tant que
+  `awaiting_user` est posé, l'arrêt T2, le plafond de l'Assistant et la
+  libération du créneau fantôme ne se déclenchent pas ; dès que le marqueur est
+  levé (réponse traitée ou fin de tour), l'arrêt redevient déclenchable au-delà
+  du seuil (aucune régression du filet de sécurité).
+- Test manuel : simuler un agent bloqué (seuil auto-stop réduit à 1 min) → après
+  le seuil, l'agent est arrêté, l'événement UI + bandeau apparaissent, la file
+  d'exclusivité est libérée (un agent en attente prend le relais) et l'agent de
+  diagnostic est lancé automatiquement.
 - **Ne casse pas** la surveillance existante (pastille d'activité par projet), ni
-  le bouton manuel « 🔍 Diagnostiquer », ni la file d'attente d'exclusivité.
-- **Ne casse pas** la surveillance existante (pastille d'activité par projet) ni
-  ne déclenche d'action automatique non validée.
+  le bouton manuel « 🔍 Diagnostiquer », ni la file d'attente d'exclusivité, ni
+  le filet busy-stale (25 min, sans kill).

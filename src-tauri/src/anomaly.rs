@@ -240,8 +240,9 @@ pub fn make_observer(
                 entry.last_activity_wall = Some(SystemTime::now());
                 entry.last_event = t.to_string();
                 // Distinction « opération d'outil en cours » vs « agent figé » :
-                // un `tool_execution_end` clôt l'opération ; un
-                // `tool_execution_start` (ou `tool_execution_update`) l'ouvre.
+                // un `tool_execution_end` clôt l'opération ; SEUL un
+                // `tool_execution_start` l'ouvre (`tool_execution_update` ne fait
+                // que rafraîchir l'activité, il ne marque pas l'ouverture).
                 // Les autres événements d'activité ne changent pas ce marqueur.
                 if t == "tool_execution_end" {
                     entry.tool_in_progress = false;
