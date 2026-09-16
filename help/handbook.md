@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-14 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1756,12 +1756,16 @@ il propose des évolutions que vous validez vous-même.
 **Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
 run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
 depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+Une **opération longue en cours** (un outil démarré qui tourne encore : longue
+construction, longue série de tests, longue analyse) **n'est jamais coupée** :
+tant qu'un outil s'exécute, l'agent est considéré comme en train de travailler.
+Seul un agent **réellement figé** (aucun outil en cours, plus aucune
+progression) est arrêté.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
 pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
 (notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
 réinitialiser son processus. Aucun réglage utilisateur.
-Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un

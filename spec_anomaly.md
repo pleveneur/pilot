@@ -24,12 +24,16 @@ il propose des évolutions que vous validez vous-même.
 **Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
 run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
 depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+Une **opération longue en cours** (un outil démarré qui tourne encore : longue
+construction, longue série de tests, longue analyse) **n'est jamais coupée** :
+tant qu'un outil s'exécute, l'agent est considéré comme en train de travailler.
+Seul un agent **réellement figé** (aucun outil en cours, plus aucune
+progression) est arrêté.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
 pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
 (notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
 réinitialiser son processus. Aucun réglage utilisateur.
-Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
@@ -67,7 +71,7 @@ reviewer, super-agent), il met à jour **deux** maps :
 - la map d'activité par projet (issue #13, pastille « travaille en
   arrière-plan ») — comportement identique à l'ancien `make_project_activity_observer` ;
 - la map de surveillance d'anomalie par agent, clé composite
-  `project\u{1f}agent` → `AgentAnomalyState { last_activity, last_event, busy, blocked_reported, auto_stopped_reported }`.
+  `project\u{1f}agent` → `AgentAnomalyState { last_activity, last_progress, last_event, busy, blocked_reported, auto_stopped_reported, awaiting_user, tool_in_progress }`.
 
 `agent_start` → `busy=true` (et réarme `blocked_reported` + `auto_stopped_reported`) ;
 `agent_settled` → `busy=false`. Tout événement d'activité (`ACTIVITY_EVENTS`)
@@ -146,8 +150,18 @@ fantôme. Le champ `stale_busy_grace_minutes` est préservé dans settings.js
 (aucune UI dédiée).
 
 Respecte le réglage `agent_auto_stop_enabled` (défaut activé) et
-`agent_auto_stop_minutes` (défaut 10). Un outil qui démarre sans
-`tool_execution_end` depuis le seuil est considéré bloqué (scénario visé).
+`agent_auto_stop_minutes` (défaut 10).
+
+**Passage 3 du lot 1 — un travail long qui avance n'est plus coupé** :
+l'observateur suit un marqueur `tool_in_progress` (posé sur
+`tool_execution_start`, levé sur `tool_execution_end` — et sur toute fin de tour
+/ mort du process, anti-fuite). Tant qu'une opération d'outil est EN COURS,
+`should_auto_stop_on_progress` renvoie `false` : un long build, une longue série
+de tests ou une longue analyse (aucun événement entre le start et le end de
+l'outil) n'est plus arrêté à tort au bout du seuil. Un agent **réellement figé**
+(aucun outil en cours, plus aucune progression) est toujours arrêté exactement
+comme avant. Le seuil, le réglage d'activation, le filet busy-stale (25 min,
+§2.4) et la proposition de diagnostic restent inchangés.
 
 ### 2.4 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 

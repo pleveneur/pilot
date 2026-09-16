@@ -3030,6 +3030,7 @@ mod tests {
                 blocked_reported: false,
                 auto_stopped_reported: false,
                 awaiting_user: false,
+                tool_in_progress: false,
             },
         );
         assert!(
