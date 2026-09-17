@@ -1,7 +1,9 @@
 // anomaly.js — Détection d'anomalies des agents (tâche 8).
 //
 // Côté frontend : écoute l'événement `agent-anomaly` (émis par le moniteur Rust
-// quand un agent est actif mais sans progression depuis le seuil), affiche un
+// quand un agent est actif mais sans progression depuis le seuil) et l'événement
+// `agent-silent` (lot 3, défaut A : une session qui ne produit RIEN et reste
+// inactive), affiche un
 // bandeau d'alerte persistant, envoie une notification desktop + son, et permet
 // de lancer l'agent de diagnostic dédié (`diagnostic`) qui PROPOSE des évolutions
 // (validation utilisateur requise — aucune action automatique).
@@ -15,6 +17,7 @@ import { notifyAnomaly } from "./desktop-notify.js";
 
 let _unlisten = null;
 let _autoStopUnlisten = null;
+let _silentUnlisten = null;
 let _diagUnlisten = null;
 let _diagBuffer = "";
 let _banner = null;
@@ -32,6 +35,10 @@ export async function initAnomalyDetection() {
   // T2 : arrêt automatique d'un agent délégué bloqué (émis par le moniteur Rust).
   _autoStopUnlisten = await listen("agent-auto-stopped", (event) => {
     handleAutoStopped(event.payload || {});
+  });
+  // Lot 3 (défaut A) : session d'agent MUETTE (aucun résultat produit, inactive).
+  _silentUnlisten = await listen("agent-silent", (event) => {
+    handleSilentSession(event.payload || {});
   });
   // Sortie de l'agent de diagnostic (canal unifié des agents, agent_id "diagnostic").
   _diagUnlisten = await listen("rpc-event-agents", (ev) => {
@@ -78,6 +85,25 @@ function handleAutoStopped(a) {
   showAnomalyBanner({ agent, project, idle, lastEvent: "arrêt automatique", msg });
   // PROPOSE automatiquement le diagnostic (moniteur Rust : déjà lancé).
   showDiagnosticModal("🔍 Agent arrêté pour blocage.\n\nAgent de diagnostic lancé automatiquement — analyse en cours. Les évolutions proposées seront à valider par vous (aucune action automatique).");
+}
+
+/**
+ * Lot 3 (défaut A) : traite une session d'agent MUETTE ET INACTIVE (émis par le
+ * moniteur Rust : la session tourne mais n'a produit AUCUN résultat et n'a plus
+ * d'activité réelle depuis le seuil). Le libellé est déjà en français et explicite
+ * (fourni par Rust) ; on l'affiche sans arrêter l'agent : la session est DITE, pas
+ * tuée silencieusement.
+ */
+function handleSilentSession(a) {
+  const agent = a.agent || "agent";
+  const project = a.project || "";
+  const idle = a.idleMinutes || 0;
+  const msg = a.message ||
+    `⚠️ L'agent « ${agent} » ne produit rien depuis ${idle} min (projet : ${project}, dernier événement : ${a.lastEvent || "inconnu"}).`;
+  // Notification desktop native (même famille que les avis de fin de run).
+  notifyAnomaly({ title: "Pilot — Agent silencieux", body: msg }).catch(() => {});
+  // Bandeau d'alerte persistant (réutilise l'existant).
+  showAnomalyBanner({ agent, project, idle, lastEvent: a.lastEvent || "aucun", msg });
 }
 
 /** Affiche (ou met à jour) le bandeau d'alerte d'anomalie. */

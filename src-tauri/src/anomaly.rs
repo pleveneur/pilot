@@ -75,6 +75,12 @@ pub struct AgentAnomalyState {
     /// automatique T2 est suspendu (un long travail qui avance ne doit plus être
     /// coupé à tort).
     pub tool_in_progress: bool,
+    /// Lot 3 (défaut A) : l'exécution EN COURS a-t-elle déjà produit un RÉSULTAT
+    /// visible (`message_end`, `tool_execution_end`, `compaction_end`) ? Réarmé à
+    /// false à chaque `agent_start`. Une session qui n'a RIEN produit ET qui est
+    /// inactive est signalée comme muette ; une session qui a déjà livré quelque
+    /// chose ne l'est JAMAIS (pas de faux positif « en échec après avoir livré »).
+    pub produced_output: bool,
 }
 
 /// Événements RPC considérés comme une activité de l'agent (rafraîchissent
@@ -117,6 +123,15 @@ const USER_REQUEST_EVENTS: &[&str] = &["extension_ui_request"];
 /// `last_activity` (alerte/pastille inchangées) mais PAS `last_progress`, pour
 /// que l'arrêt automatique anti-inactivité (T2) reste déclenchable.
 const NO_PROGRESS_EVENTS: &[&str] = &["auto_retry_start", "auto_retry_end"];
+
+/// Événements qui PRODUISENT un résultat visible (lot 3, défaut A).
+/// `message_end` : un message (réponse) est terminé ; `tool_execution_end` : un
+/// outil a rendu son résultat ; `compaction_end` : la compaction a abouti.
+/// `agent_end` n'est pas listé : il sort de l'état busy (session au repos).
+/// Marque `AgentAnomalyState::produced_output` de façon COLLANTE jusqu'au
+/// prochain `agent_start` : base de la distinction « session muette » (jamais
+/// rien produit) vs « session qui a livré quelque chose ».
+const OUTPUT_EVENTS: &[&str] = &["message_end", "tool_execution_end", "compaction_end"];
 
 /// Construit l'observateur combiné : met à jour la map d'activité par projet
 /// (issue #13, pastille « travaille en arrière-plan ») ET la map de surveillance
@@ -203,6 +218,8 @@ pub fn make_observer(
                     awaiting_user: is_user_request,
                     // Posé si cet événement fondateur est déjà un start d'outil.
                     tool_in_progress: t == "tool_execution_start",
+                    // Un événement fondateur peut déjà être un résultat.
+                    produced_output: OUTPUT_EVENTS.contains(&t),
                 });
                 if t == "agent_start" {
                     entry.busy = true;
@@ -212,6 +229,10 @@ pub fn make_observer(
                     // Nouvelle exécution : aucun outil en cours (anti-fuite si un
                     // `tool_execution_end` de la run précédente a été perdu).
                     entry.tool_in_progress = false;
+                    // Lot 3 (défaut A) : nouvelle exécution → rien n'a encore été
+                    // produit. Le marqueur sera posé au premier `message_end` /
+                    // `tool_execution_end` / `compaction_end`.
+                    entry.produced_output = false;
                 } else if t == "agent_settled" || t == "agent_end" {
                     // `agent_end` marque la fin d'un tour (le frontend considère
                     // l'agent « au repos » dès cet événement). On repasse busy=false
@@ -236,6 +257,14 @@ pub fn make_observer(
                 // ils ne repoussent pas le plafond de l'arrêt automatique.
                 if !NO_PROGRESS_EVENTS.contains(&t) {
                     entry.last_progress = now;
+                }
+                // Lot 3 (défaut A) : marqueur COLLANT « cette exécution a produit
+                // un résultat ». Un `message_end`/`tool_execution_end` ne sera
+                // jamais requalifié en session muette, même si le dernier
+                // événement suivant est un simple `message_start` (faux positif
+                // « déclarée en échec après avoir livré »).
+                if OUTPUT_EVENTS.contains(&t) {
+                    entry.produced_output = true;
                 }
                 entry.last_activity_wall = Some(SystemTime::now());
                 entry.last_event = t.to_string();
@@ -319,6 +348,37 @@ fn should_auto_stop_on_progress(
     }
     let idle_secs = now.duration_since(entry.last_progress).as_secs();
     idle_secs > (timeout_minutes.max(1) as u64) * 60
+}
+
+/// Lot 3 (défaut A) : décide si une session d'agent doit être signalée comme
+/// MUETTE ET INACTIVE (« elle démarre, ne produit rien et reste silencieuse »).
+///
+/// Critère fondé sur la DERNIÈRE ACTIVITÉ réelle (`last_activity`), jamais sur la
+/// durée totale : l'appelant compare l'inactivité au seuil. Ne signale JAMAIS :
+///  - une session non busy (terminée ou au repos) ;
+///  - une session qui a déjà produit un résultat (`produced_output`) — le faux
+///    positif « en échec après avoir livré » est ainsi impossible ;
+///  - une session avec une activité récente (inactivité sous le seuil) :
+///    « longue mais qui travaille » n'est pas muette ;
+///  - une session en attente de l'utilisateur ou avec une opération d'outil en
+///    cours (silence légitime) ;
+///  - une session déjà signalée pour cette exécution (`blocked_reported` sert de
+///    verrou « un seul signalement » : aucune répétition en boucle).
+/// Pure et testable.
+fn should_report_silent_session(
+    entry: &AgentAnomalyState,
+    enabled: bool,
+    silent_minutes: u32,
+    now: Instant,
+) -> bool {
+    if !enabled || !entry.busy || entry.blocked_reported || entry.awaiting_user || entry.tool_in_progress {
+        return false;
+    }
+    if entry.produced_output {
+        return false;
+    }
+    let idle_secs = now.duration_since(entry.last_activity).as_secs();
+    idle_secs > (silent_minutes.max(1) as u64) * 60
 }
 
 /// Identifie la clé d'anomalie du super-agent (projet pseudo-global `""`).
@@ -499,6 +559,8 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
             let anomaly_timeout_secs = (timeout_minutes.max(1) as u64) * 60;
             let now = Instant::now();
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
+            // Lot 3 (défaut A) : sessions muettes détectées dans ce passage.
+            let mut silent_alerts: Vec<(String, String, String, u64)> = Vec::new();
             let mut auto_stops: Vec<(String, String, u64)> = Vec::new();
             let mut stale_releases: Vec<(String, String, u64)> = Vec::new();
             let mut super_stops: Vec<(String, u64)> = Vec::new();
@@ -516,6 +578,24 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     // Le super-agent (Assistant 🧭) est géré par un plafond dédié
                     // (tâche #141) et NON par l'arrêt auto T2 (scope agents délégués).
                     let is_super = is_super_agent_key(&project, &agent);
+                    // 0. Lot 3 (défaut A) : session MUETTE ET INACTIVE — elle tourne
+                    //    (busy) mais n'a JAMAIS produit de résultat et n'a plus
+                    //    aucune activité réelle depuis le seuil (seuil partagé avec
+                    //    l'alerte d'anomalie : aucun réglage nouveau). Le verrou
+                    //    `blocked_reported` assure UN SEUL signalement par exécution
+                    //    et neutralise l'alerte d'anomalie générique (pas de double
+                    //    message). Le super-agent est exclu (plafond dédié #141).
+                    if !is_super
+                        && should_report_silent_session(entry, anomaly_enabled, timeout_minutes, now)
+                    {
+                        entry.blocked_reported = true;
+                        silent_alerts.push((
+                            project.clone(),
+                            agent.clone(),
+                            entry.last_event.clone(),
+                            idle_secs / 60,
+                        ));
+                    }
                     // 1. Anomalie (lecture seule, tâche 8) : agent busy sans progression.
                     if anomaly_enabled
                         && entry.busy
@@ -593,6 +673,32 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         "agent": agent,
                         "lastEvent": last_event,
                         "idleMinutes": idle_min,
+                    }),
+                );
+            }
+            // Lot 3 (défaut A) : trace horodatée + alerte explicite en français
+            // (même famille que les autres alertes d'agent), remontée à l'UI et à
+            // l'assistant via l'événement `agent-silent`. AUCUN arrêt silencieux :
+            // la session n'est pas tuée, elle est DITE.
+            for (project, agent, last_event, idle_min) in silent_alerts {
+                let detected_at = chrono::Utc::now().to_rfc3339();
+                eprintln!(
+                    "[anomaly] {} session muette : l'agent « {} » (projet {}) ne produit \
+                     rien depuis {} min (dernier événement : {}) — signalée une seule fois.",
+                    detected_at, agent, project, idle_min, last_event
+                );
+                let _ = app.emit(
+                    "agent-silent",
+                    serde_json::json!({
+                        "project": project,
+                        "agent": agent,
+                        "lastEvent": last_event,
+                        "idleMinutes": idle_min,
+                        "detectedAt": detected_at,
+                        "message": format!(
+                            "⚠️ L'agent « {} » ne produit rien depuis {} min (projet : {}, dernier événement : {}).",
+                            agent, idle_min, project, last_event
+                        ),
                     }),
                 );
             }
@@ -1111,6 +1217,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         };
         let (iso, relative) = last_activity_info(&state);
         // ISO présent et au format RFC3339 (ex: 2024-01-15T10:30:00+00:00).
@@ -1131,6 +1238,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         };
         let (iso2, relative2) = last_activity_info(&no_wall);
         assert!(iso2.is_none(), "ISO absent sans activité wall-clock");
@@ -1157,6 +1265,7 @@ mod tests {
             auto_stopped_reported: reported,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         };
 
         // Désactivé → jamais arrêté, même très inactif.
@@ -1276,6 +1385,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         };
 
         // Boucle de réessais fraîche (il y a 30 s) mais AUCUNE progression depuis
@@ -1321,6 +1431,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress,
+            produced_output: false,
         };
 
         // Outil en cours → pas d'arrêt (long build / longue série de tests).
@@ -1363,6 +1474,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         };
 
         // Non busy → jamais libéré.
@@ -1400,6 +1512,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user,
             tool_in_progress: false,
+            produced_output: false,
         };
 
         // busy frais (< grace) → exclusif : une run réellement en cours.
@@ -1477,6 +1590,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user,
             tool_in_progress: false,
+            produced_output: false,
         };
 
         // (a) En attente de réponse utilisateur → aucune décision automatique.

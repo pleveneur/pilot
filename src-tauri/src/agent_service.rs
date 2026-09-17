@@ -3212,6 +3212,7 @@ mod tests {
                 auto_stopped_reported: false,
                 awaiting_user: false,
                 tool_in_progress: false,
+                produced_output: false,
             },
         );
         assert!(
@@ -3429,6 +3430,7 @@ mod tests {
             auto_stopped_reported: false,
             awaiting_user: false,
             tool_in_progress: false,
+            produced_output: false,
         }
     }
 
