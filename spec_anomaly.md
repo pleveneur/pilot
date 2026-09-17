@@ -54,8 +54,10 @@ réinitialiser son processus. Aucun réglage utilisateur.
 **remet son état à zéro** au passage suivant du moniteur (≤ 30 s) : son
 processus n'étant plus vivant, son créneau et son verrou d'exécution sont
 **libérés automatiquement** et les lancements suivants sur ce projet
-**repartent normalement** — sans redémarrer Pilot. Une exécution réellement en
-cours n'est jamais touchée.
+**repartent normalement** — sans redémarrer Pilot. C'est vrai aussi pour un
+**agent global** (espace assistant, sans projet) resté « en cours » alors que
+son processus est mort : il est relançable au lieu de rester bloqué en silence.
+Une exécution réellement en cours n'est jamais touchée.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
@@ -240,9 +242,13 @@ contournait le verrou, clé = chemin).
 À chaque passage du moniteur (30 s), `AgentService::purge_ghost_running_states`
 (agent_service.rs) :
 
-1. sélectionne les lignes `agents` en `proc_state='Running'` avec un
-   `project_path` non vide (les agents **globaux**, `project_path` NULL, sont hors
-   périmètre : ils ne portent pas de verrou de projet) ;
+1. sélectionne les lignes `agents` en `proc_state='Running'`, **de projet
+   comme globales** (`project_path` NULL/'' : agents de l'espace assistant, qui
+   n'ont pas de verrou de projet mais dont la ligne `Running`/`loaded=1`
+   fantôme bloquait silencieusement leur redémarrage) ; les agents globaux sont
+   résolus sous la clé de session/map réservée `ASSISTANT_SPACE`
+   (`__assistant__`), et la remise à zéro cible `project_path IS NULL OR ''`
+   (une égalité de chemin ne peut pas cibler NULL en SQL) ;
 2. **vérifie la vivacité réelle** du processus (`agent_alive` → `try_wait`) : une
    session vivante (parkée ou en cours) est **laissée intacte** ;
 3. pour chaque fantôme : remise à `proc_state='Unloaded'`, `loaded=0`, `busy=0`,

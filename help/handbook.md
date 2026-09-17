@@ -1853,8 +1853,10 @@ réinitialiser son processus. Aucun réglage utilisateur.
 **remet son état à zéro** au passage suivant du moniteur (≤ 30 s) : son
 processus n'étant plus vivant, son créneau et son verrou d'exécution sont
 **libérés automatiquement** et les lancements suivants sur ce projet
-**repartent normalement** — sans redémarrer Pilot. Une exécution réellement en
-cours n'est jamais touchée.
+**repartent normalement** — sans redémarrer Pilot. C'est vrai aussi pour un
+**agent global** (espace assistant, sans projet) resté « en cours » alors que
+son processus est mort : il est relançable au lieu de rester bloqué en silence.
+Une exécution réellement en cours n'est jamais touchée.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
