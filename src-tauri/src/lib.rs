@@ -2392,6 +2392,11 @@ pub fn run() {
             // l'émission des événements `agent-state-changed` depuis les transitions
             // de session (start/pause/stop).
             state.agent_service.set_app_handle(handle.clone());
+            // Défaut B : partager la map d'état du moniteur d'anomalies avec
+            // l'AgentService pour purger la marque `busy` du couple
+            // (projet, agent) à l'arrêt d'une session (une session arrêtée
+            // n'est plus un travail en cours).
+            state.agent_service.set_anomaly_map(state.agent_anomaly.clone());
             // 5.2 : remettre l'état d'exécution des agents à « non chargé » au
             // démarrage (les processus pi sont morts après `shutdown_all` ;
             // `loaded` est un état runtime, pas une vérité persistée). Sans ce

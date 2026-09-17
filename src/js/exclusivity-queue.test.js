@@ -352,3 +352,34 @@ describe("isProjectWorking — garde de fin de run (travail réel, pas vivacité
     expect(isProjectWorking(sessions, "/p/A", NOW)).toBe(false);
   });
 });
+
+// Défaut B (garde de non-régression) — la mise en file ne doit plus se
+// déclencher « pour rien » après l'arrêt d'une session.
+//
+// Cause racine côté Rust : `AgentService::stop` ne purgeait pas la marque
+// d'occupation `busy` du couple (projet, agent) dans la map d'anomalie (un
+// arrêt volontaire n'émet pas `process_exit`). La sonde `list_agent_sessions`
+// renvoyait donc `busy: true` avec un `lastActivity` récent APRÈS l'arrêt →
+// la garde ci-dessous considérait la session « déjà active » et mettait la
+// demande en file d'attente (résultat `queued`, jamais démarré) tout en
+// maintenant le faux verrou « Une run est déjà en cours sur ce projet ».
+//
+// Ces assertions verrouillent le contrat JS : seul un `busy` NON purgé est
+// exclusif. Le correctif Rust (`stop` → busy=false) garantit l'entrée.
+describe("défaut B — une session arrêtée n'est plus mise en file", () => {
+  it("busy purgé à l'arrêt → la demande démarre (plus d'exclusivité)", () => {
+    const project = "/p/A";
+    const agentId = "codeur";
+    const recentIso = new Date().toISOString();
+    // État AVANT purge (comportement fautif) : busy=true + activité récente.
+    const beforeStop = [
+      { agent: agentId, project, mode: "agent_process", alive: true, busy: true, lastActivity: recentIso },
+    ];
+    expect(isAgentActiveOnProject(beforeStop, agentId, project)).toBe(true);
+    // État APRÈS arrêt (correctif) : busy purgé à false.
+    const afterStop = [
+      { agent: agentId, project, mode: "agent_process", alive: true, busy: false, lastActivity: recentIso },
+    ];
+    expect(isAgentActiveOnProject(afterStop, agentId, project)).toBe(false);
+  });
+});

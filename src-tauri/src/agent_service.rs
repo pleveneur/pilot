@@ -199,6 +199,14 @@ pub struct AgentService {
     // (source des outils de l'assistant). None tant que la session n'a jamais
     // été lancée. Lu par le frontend pour détecter une absence d'outils.
     superagent_ext: Mutex<Option<SuperAgentExtStatus>>,
+    // Défaut B : map d'état du moniteur d'anomalies partagée avec l'AppState
+    // (clé composite `project\u{1f}agent`). Posée au setup par
+    // `set_anomaly_map`. Sert à purger la marque d'occupation `busy` À L'ARRÊT
+    // d'une session : sans cette purge, une session arrêtée (volontairement ou
+    // automatiquement) reste comptée « travailleuse » (busy=true + lastActivity
+    // récent), ce qui met les demandes suivantes en file d'attente au lieu de
+    // les démarrer et maintient le faux verrou « Une run est déjà en cours ».
+    anomaly_map: Mutex<Option<Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>>>,
 }
 
 /// P0 (issue #84) diagnostic d'échec rapide du super-agent : si `.pi/extensions/`
@@ -251,6 +259,7 @@ impl AgentService {
             }),
             superagent_start_lock: Mutex::new(()),
             superagent_ext: Mutex::new(None),
+            anomaly_map: Mutex::new(None),
         }
     }
 
@@ -259,6 +268,45 @@ impl AgentService {
     /// de session (start/pause/stop).
     pub fn set_app_handle(&self, app: AppHandle) {
         *self.app.lock().unwrap() = Some(app);
+    }
+
+    /// Défaut B : partage la map d'état du moniteur d'anomalies avec
+    /// l'`AppState` (appelé au setup), pour pouvoir purger la marque
+    /// d'occupation `busy` à l'arrêt d'une session.
+    pub fn set_anomaly_map(
+        &self,
+        map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+    ) {
+        *self.anomaly_map.lock().unwrap() = Some(map);
+    }
+
+    /// Défaut B : remet à zéro la marque d'occupation `busy` du couple
+    /// `(projet, agent)` dans la map d'anomalie (clé `project\u{1f}agent`).
+    /// Appelé à l'arrêt d'une session (volontaire ou automatique) : une session
+    /// arrêtée n'est plus un travail en cours, donc elle ne doit plus être
+    /// comptée comme exclusive par la file d'attente ni maintenir le verrou de
+    /// run. Ne crée AUCUNE entrée (idempotent si le couple est inconnu) et ne
+    /// touche PAS aux seuils d'anomalie (25 min / 2 min).
+    pub fn clear_anomaly_busy(
+        map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+        project: &str,
+        agent_id: &str,
+    ) {
+        let now = Instant::now();
+        let wall = std::time::SystemTime::now();
+        let mut m = map.lock().unwrap();
+        if let Some(e) = m.get_mut(&format!("{}\u{1f}{}", project, agent_id)) {
+            e.busy = false;
+            e.blocked_reported = false;
+            e.auto_stopped_reported = false;
+            e.last_activity = now;
+            e.last_progress = now;
+            e.last_activity_wall = Some(wall);
+            // Session arrêtée : plus aucune attente d'utilisateur ni outil en
+            // cours ne subsiste (anti-fuite des marqueurs).
+            e.awaiting_user = false;
+            e.tool_in_progress = false;
+        }
     }
 
     /// Retourne le statut d'extensions du dernier spawn de la session
@@ -871,6 +919,16 @@ impl AgentService {
                 stopped_mode = Some(entry.mode);
                 rpc_manager::stop_session(&mut entry.session);
             }
+        }
+        // Défaut B : purger la marque d'occupation du couple (projet, agent)
+        // dans la map d'anomalie AVANT de toucher au pointeur actif. Une
+        // session arrêtée (volontairement ou automatiquement) n'est plus un
+        // travail en cours : sans cette purge, `busy` reste à true avec un
+        // `lastActivity` récent, ce qui bloque les gardes d'exclusivité
+        // (« Une run est déjà en cours ») et met les demandes suivantes en file
+        // au lieu de les démarrer.
+        if let Some(map) = self.anomaly_map.lock().unwrap().clone() {
+            Self::clear_anomaly_busy(&map, project, agent_id);
         }
         // Si l'agent arrêté était l'agent actif, réinitialiser le pointeur.
         let mut active = self.active.lock().unwrap();
@@ -3372,6 +3430,86 @@ mod tests {
         *svc.active.lock().unwrap() = Some("default".to_string());
         svc.stop(proj, "default").unwrap();
         assert_eq!(svc.active_agent(), None, "stop nettoie le pointeur même sans session");
+    }
+
+    /// Défaut B — GARDE ANTI-RÉGRESSION : l'ARRÊT d'une session doit purger la
+    /// marque d'occupation `busy` du couple (projet, agent) dans la map
+    /// d'anomalie. Sans cette purge, une session arrêtée (volontairement ou
+    /// automatiquement) reste comptée « travailleuse » (busy=true avec un
+    /// `lastActivity` récent car un arrêt volontaire n'émet PAS de
+    /// `process_exit`) : la garde d'exclusivité met alors la demande suivante
+    /// EN FILE au lieu de la démarrer et le faux verrou « Une run est déjà en
+    /// cours sur ce projet » ne se libère jamais.
+    /// Ce test ÉCHOUE sur le code d'avant correctif (busy retenu) et PASSE
+    /// après.
+    #[test]
+    fn stop_clears_anomaly_busy_for_couple() {
+        let svc = AgentService::new();
+        let proj = "/p/A";
+        let agent = "codeur";
+        let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // État posé par un `agent_start` jamais suivi d'`agent_settled` : le
+        // couple est « busy » avec une activité toute récente au moment de
+        // l'arrêt (cas exact du défaut B).
+        {
+            let mut m = anomaly_map.lock().unwrap();
+            m.insert(
+                format!("{}\u{1f}{}", proj, agent),
+                anomaly::AgentAnomalyState {
+                    last_activity: Instant::now(),
+                    last_progress: Instant::now(),
+                    last_activity_wall: Some(std::time::SystemTime::now()),
+                    last_event: "agent_start".to_string(),
+                    busy: true,
+                    blocked_reported: false,
+                    auto_stopped_reported: false,
+                    awaiting_user: false,
+                    tool_in_progress: true,
+                    produced_output: false,
+                },
+            );
+        }
+        // Le service partage la map (comme au setup réel).
+        svc.set_anomaly_map(anomaly_map.clone());
+        svc.stop(proj, agent).unwrap();
+        // Après arrêt : plus « busy » → la session n'est plus exclusive, donc
+        // plus aucune demande n'est mise en file pour cette raison.
+        {
+            let m = anomaly_map.lock().unwrap();
+            let e = m
+                .get(&format!("{}\u{1f}{}", proj, agent))
+                .expect("entrée d'anomalie conservée (mise à zéro, pas suppression)");
+            assert!(!e.busy, "après arrêt, le couple ne doit plus être « busy »");
+            assert!(!e.tool_in_progress, "plus d'outil en cours après arrêt");
+            assert!(!e.awaiting_user, "plus d'attente utilisateur après arrêt");
+            assert!(!e.auto_stopped_reported, "marqueur d'arrêt auto réarmé");
+        }
+        // Contre-épreuve : un couple DIFFÉRENT n'est pas touché.
+        {
+            let mut m = anomaly_map.lock().unwrap();
+            m.insert(
+                format!("{}\u{1f}{}", proj, "reviewer"),
+                anomaly::AgentAnomalyState {
+                    last_activity: Instant::now(),
+                    last_progress: Instant::now(),
+                    last_activity_wall: Some(std::time::SystemTime::now()),
+                    last_event: "agent_start".to_string(),
+                    busy: true,
+                    blocked_reported: false,
+                    auto_stopped_reported: false,
+                    awaiting_user: false,
+                    tool_in_progress: true,
+                    produced_output: false,
+                },
+            );
+        }
+        svc.stop(proj, agent).unwrap();
+        let m = anomaly_map.lock().unwrap();
+        assert!(
+            m.get(&format!("{}\u{1f}{}", proj, "reviewer")).unwrap().busy,
+            "la purge cible le couple arrêté, pas les autres agents"
+        );
     }
 
     /// Anti-boucle de redémarrage du super-agent (bug onglet Assistant) : une
