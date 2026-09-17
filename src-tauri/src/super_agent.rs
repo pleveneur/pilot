@@ -374,6 +374,11 @@ const SUPER_AGENT_NO_WAIT_PROMPT: &str = "\n\n## Règle anti-attente — ne pas 
 const SUPER_AGENT_SESSION_MEMORY_PROMPT: &str =
     "## Mémoire de session (reprise)\nVoici où on en était à la fin de ta dernière session. Utilise ce résumé pour reprendre naturellement la discussion et le suivi en cours, sans redemander ce que tu sais déjà :\n";
 
+/// Bloc d'instructions figé : documenter l'outil `schedule` (relances différées
+/// ou périodiques). Extrait du corps de `do_send_super_agent_prompt` pour être
+/// mesurable et couvert par le garde-fou anti-regonflement du prompt.
+const SUPER_AGENT_SCHEDULE_PROMPT: &str = "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs. Désactive automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au lieu de le supprimer, et réactive-le si le besoin revient.";
+
 
 #[tauri::command]
 pub async fn start_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
@@ -488,6 +493,66 @@ fn build_project_context(active: Option<&str>, working: Option<&str>) -> String 
     ctx
 }
 
+/// Blocs du prompt système de l'assistant, dans leur ordre d'injection.
+/// Regroupés pour permettre un assemblage PUR (testé : mesure par bloc et
+/// garde-fou anti-regonflement) sans dépendre de `AppState`/`AppHandle`.
+struct SuperAgentPromptBlocks<'a> {
+    role: &'a str,
+    project_context: &'a str,
+    known_projects: &'a str,
+    available_agents: &'a str,
+    custom_prompt: &'a str,
+    user_memory: &'a str,
+    session_memory: &'a str,
+    concise: bool,
+    coordinator: bool,
+    user_friendly: bool,
+    adaptive_personality: bool,
+    personality: &'a str,
+}
+
+/// Assemble le prompt système de l'assistant en concaténant ses blocs dans
+/// l'ordre d'injection historique : rôle, contexte projet, listes (projets,
+/// agents), règles figées, prompt personnalisé, mémoire utilisateur,
+/// personnalité, mémoire de session, schedule, puis guidelines de style.
+/// Fonction PURE : source unique partagée par l'envoi réel et par les tests de
+/// mesure / anti-regonflement, afin que le total mesuré soit bien le total réel.
+fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String {
+    let mut full_system = String::from(blocks.role);
+    full_system.push_str(blocks.project_context);
+    full_system.push_str(blocks.known_projects);
+    full_system.push_str(blocks.available_agents);
+    full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
+    full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
+    full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
+    full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
+    full_system.push_str(SUPER_AGENT_SESSIONS_PROMPT);
+    full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
+    if !blocks.custom_prompt.trim().is_empty() {
+        full_system.push_str("\n\n");
+        full_system.push_str(blocks.custom_prompt.trim());
+    }
+    if !blocks.user_memory.trim().is_empty() {
+        full_system.push_str("\n\nMémoire sur l'utilisateur (profil/notes appris au fil des discussions) :\n");
+        full_system.push_str(blocks.user_memory.trim());
+    }
+    full_system.push_str(&personality_guideline(
+        blocks.adaptive_personality,
+        blocks.personality,
+    ));
+    if !blocks.session_memory.trim().is_empty() {
+        full_system.push_str("\n\n");
+        full_system.push_str(SUPER_AGENT_SESSION_MEMORY_PROMPT);
+        full_system.push_str(blocks.session_memory);
+    }
+    full_system.push_str(SUPER_AGENT_SCHEDULE_PROMPT);
+    full_system.push_str(&concise_guideline(blocks.concise));
+    full_system.push_str(&coordinator_guideline(blocks.coordinator));
+    full_system.push_str(&user_friendly_guideline(blocks.user_friendly));
+    full_system.push_str(&voice_guideline());
+    full_system
+}
+
 /// Envoie un prompt au super-agent (session RPC dédiée). Helper réutilisable par
 /// la commande Tauri desktop et par le web remote (évolution 2). Démarre
 /// paresseusement la session si nécessaire.
@@ -511,7 +576,7 @@ pub(crate) fn do_send_super_agent_prompt(
         (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
-    let mut full_system = format!(
+    let role_text = format!(
         "Tu es « {} », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.",
         name
     );
@@ -520,74 +585,41 @@ pub(crate) fn do_send_super_agent_prompt(
     // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
     let active_project = state.active_project.lock().unwrap().clone();
     let working_project = state.working_project.lock().unwrap().clone();
-    full_system.push_str(&build_project_context(active_project.as_deref(), working_project.as_deref()));
+    let project_context =
+        build_project_context(active_project.as_deref(), working_project.as_deref());
     // Apprendre où se trouvent les projets : injecter la liste des projets
     // connus de la base (s'enrichit au fil des discussions / sessions).
-    full_system.push_str(&known_projects_context(app));
+    let known_projects = known_projects_context(app);
     // Agents du registre + outils d'agents + flux « plan-maker » : l'assistant
     // doit connaître les agents disponibles et la procédure de planification
     // avant délégation au codeur.
-    full_system.push_str(&available_agents_context(state, app));
-    full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
-    // Règle de résilience / anti-blocage (évolution 1) : l'assistant relance au
-    // moins une fois en changeant d'approche avant de solliciter l'utilisateur.
-    // Distinct de la détection de boucle technique (issue #55).
-    full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
-    // Règle par défaut sur le fichier AGENTS.md des projets : signaler à
-    // l'utilisateur + programmer un rappel tant que le AGENTS.md n'est pas créé.
-    full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
-    // Règle anti-boucle `run_agents` : prompts structurés + ne jamais relancer
-    // la même tâche à l'identique (cause racine des boucles de run_agents).
-    full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
-    // Supervision des agents : juger la progression via la dernière activité
-    // (lastActivity) avant de décider d'ARRÊTER un agent (ne pas le surveiller
-    // en continu).
-    full_system.push_str(SUPER_AGENT_SESSIONS_PROMPT);
-    // Règle par défaut anti-attente : après un lancement, rendre immédiatement
-    // la main à l'utilisateur (pas de surveillance temps réel ni de boucle
-    // sleep/poll) ; programmer au plus UN rappel différé pour l'avancement.
-    full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
-    if !system_prompt.trim().is_empty() {
-        full_system.push_str("\n\n");
-        full_system.push_str(system_prompt.trim());
-    }
-    // A17 : mémoire utilisateur persistée (profil/notes sur l'utilisateur ou
-    // développeur de Pilot). Injectée comme le prompt personnalisé pour que
-    // l'assistant prenne en compte durablement les préférences et le contexte.
-    if !user_memory.trim().is_empty() {
-        full_system.push_str("\n\nMémoire sur l'utilisateur (profil/notes appris au fil des discussions) :\n");
-        full_system.push_str(user_memory.trim());
-    }
-    // A18 : personnalité adaptée à l'utilisateur (déduite en arrière-plan de la
-    // conversation). Injectée comme la mémoire utilisateur A17.
-    full_system.push_str(&personality_guideline(adaptive_personality, &personality));
+    let available_agents = available_agents_context(state, app);
     // Mémoire de session (reprise) : après un redémarrage de Pilot, la session
     // repart de zéro. On réinjecte le résumé de la dernière session pour que
-    // l'assistant reprenne naturellement là où on en était (sujet en cours,
-    // chantiers en cours) dès le premier message. Fail-open : sans mémoire, on
-    // n'injecte rien.
-    if let Some(session_memory) = read_session_memory(app) {
-        if !session_memory.trim().is_empty() {
-            full_system.push_str("\n\n");
-            full_system.push_str(SUPER_AGENT_SESSION_MEMORY_PROMPT);
-            full_system.push_str(&session_memory);
-        }
-    }
-    // Chantier #13 : documenter l'outil schedule (relances différées/périodiques).
-    full_system.push_str(
-        "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs. Désactive automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au lieu de le supprimer, et réactive-le si le besoin revient.",
-    );
-    // Évolution 3 : mode « réponses courtes » (désactivé par défaut).
-    full_system.push_str(&concise_guideline(concise));
-    // Mode « Assistant coordinateur pur » (désactivé par défaut) : l'assistant
-    // propose les étapes et les agents, l'utilisateur valide avant lancement ; il
-    // répond lui-même aux questions simples et délègue dès qu'il faut réfléchir.
-    full_system.push_str(&coordinator_guideline(coordinator));
-    // Issue #16 : mode « user-friendly » (désactivé par défaut).
-    full_system.push_str(&user_friendly_guideline(user_friendly));
-    // Voix de l'assistant : style de réponse permanent, TOUJOURS actif
-    // (indépendant des toggles concise / user-friendly).
-    full_system.push_str(&voice_guideline());
+    // l'assistant reprenne naturellement là où on en était dès le premier
+    // message. Fail-open : sans mémoire, on n'injecte rien.
+    let session_memory = read_session_memory(app)
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_default();
+    // Assemblage du prompt système : les règles figées (outils, résilience,
+    // AGENTS.md, anti-boucle, supervision, anti-attente, schedule) et les
+    // guidelines de style vivent dans `assemble_super_agent_system_prompt`,
+    // fonction pure partagée avec les tests de mesure / anti-regonflement.
+    let blocks = SuperAgentPromptBlocks {
+        role: &role_text,
+        project_context: &project_context,
+        known_projects: &known_projects,
+        available_agents: &available_agents,
+        custom_prompt: &system_prompt,
+        user_memory: &user_memory,
+        session_memory: &session_memory,
+        concise,
+        coordinator,
+        user_friendly,
+        adaptive_personality,
+        personality: &personality,
+    };
+    let full_system = assemble_super_agent_system_prompt(&blocks);
     let full_message = format!("{}\n\n{}", full_system, message);
     let cmd = serde_json::json!({"type": "prompt", "message": full_message});
     state.agent_service.send_superagent(cmd)
@@ -4905,5 +4937,89 @@ mod tests {
             )
             .unwrap();
         assert_eq!(queued, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Prompt de l'assistant : mesure par bloc (base du garde-fou anti-
+    // regonflement). Les blocs dynamiques sont représentatifs (3 projets,
+    // 2 agents) ; les toggles sont à leur défaut (désactivés).
+    // ---------------------------------------------------------------------
+    #[test]
+    fn super_agent_prompt_is_measured_block_by_block() {
+        let role = String::from(
+            "Tu es « Assistant », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.",
+        );
+        let project_context = build_project_context(Some("/proj/actif"), Some("/proj/ancien"));
+        let known_projects = format!(
+            "\n\nProjets que tu connais :\n- {}",
+            ["/proj/actif (Actif)", "/proj/ancien (Ancien)", "/proj/tiers (Tiers)"].join("\n- ")
+        );
+        let available_agents = format!(
+            "\n\nAgents disponibles dans le registre (utilisables via `run_agents`) :\n- {}",
+            [
+                "codeur (🔨) : modifie le code du projet",
+                "plan-maker (🧩) : découpe une demande en tâches"
+            ]
+            .join("\n- ")
+        );
+        let session_memory = String::from("Chantier en cours : alléger le prompt de l'assistant.");
+        let blocks = super::SuperAgentPromptBlocks {
+            role: &role,
+            project_context: &project_context,
+            known_projects: &known_projects,
+            available_agents: &available_agents,
+            custom_prompt: "",
+            user_memory: "",
+            session_memory: &session_memory,
+            concise: false,
+            coordinator: false,
+            user_friendly: false,
+            adaptive_personality: false,
+            personality: "",
+        };
+        let full = super::assemble_super_agent_system_prompt(&blocks);
+        let session_memory_block = format!(
+            "\n\n{}{}",
+            super::SUPER_AGENT_SESSION_MEMORY_PROMPT, session_memory
+        );
+        let fixed = super::SUPER_AGENT_TOOLS_PROMPT.chars().count()
+            + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
+            + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
+            + super::SUPER_AGENT_ANTILOOP_PROMPT.chars().count()
+            + super::SUPER_AGENT_SESSIONS_PROMPT.chars().count()
+            + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
+            + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
+            + super::voice_guideline().chars().count();
+        let fixed_parts: Vec<(&str, usize)> = vec![
+            ("TOOLS", super::SUPER_AGENT_TOOLS_PROMPT.chars().count()),
+            ("RESILIENCE", super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()),
+            ("AGENTSMD", super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()),
+            ("ANTILOOP", super::SUPER_AGENT_ANTILOOP_PROMPT.chars().count()),
+            ("SESSIONS", super::SUPER_AGENT_SESSIONS_PROMPT.chars().count()),
+            ("NO_WAIT", super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()),
+            ("SCHEDULE", super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()),
+            ("VOICE", super::voice_guideline().chars().count()),
+        ];
+        for (name, n) in &fixed_parts {
+            eprintln!("prompt assistant — texte fige {name} : {n} caracteres");
+        }
+        let parts: Vec<(&str, usize)> = vec![
+            ("role", role.chars().count()),
+            ("contexte projet", project_context.chars().count()),
+            ("liste projets", known_projects.chars().count()),
+            ("liste agents", available_agents.chars().count()),
+            ("textes figés + voix", fixed),
+            ("memoire de session", session_memory_block.chars().count()),
+        ];
+        let total = full.chars().count();
+        for (name, n) in &parts {
+            eprintln!("prompt assistant — bloc {name} : {n} caracteres");
+        }
+        eprintln!("prompt assistant — TOTAL (3 projets, 2 agents) : {total} caracteres");
+        assert_eq!(
+            total,
+            parts.iter().map(|(_, n)| *n).sum::<usize>(),
+            "le total assemble doit etre la somme exacte des blocs mesures"
+        );
     }
 }
