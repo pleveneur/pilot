@@ -14,26 +14,41 @@
 // reconnect, restart, orchestration off). As long as the file exists, the context
 // is appended on every turn, preserving the previous behaviour where the injected
 // context remained available for the whole session.
+//
+// It also reads `.pilot/work-state.md`: a short, bounded snapshot of the current
+// work state (last user request, last agent answer, current orchestration task)
+// written by Pilot at the START of a compaction, so the agent does not lose track
+// of what it was doing once the history is cut. Same mechanism as the handoff
+// (system prompt only, deleted on session boundaries, dated freshness warning in
+// the content itself).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const HANDOFF_FILE = join(".pilot", "context-inject.md");
+const WORK_STATE_FILE = join(".pilot", "work-state.md");
+
+/** Reads an injectable file (handoff or work-state); "" when absent/empty. */
+function readInjectable(cwd: string, relPath: string): string {
+  try {
+    const content = readFileSync(join(cwd, relPath), "utf8");
+    return content && content.trim() ? content.trim() : "";
+  } catch {
+    return "";
+  }
+}
 
 export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", (event, ctx) => {
     try {
-      const abs = join(ctx.cwd, HANDOFF_FILE);
-      let content: string;
-      try {
-        content = readFileSync(abs, "utf8");
-      } catch {
-        return; // no handoff file → nothing to inject
-      }
-      if (!content || !content.trim()) return;
+      const parts = [
+        readInjectable(ctx.cwd, HANDOFF_FILE),
+        readInjectable(ctx.cwd, WORK_STATE_FILE),
+      ].filter(Boolean);
+      if (parts.length === 0) return; // nothing to inject
       return {
-        systemPrompt: event.systemPrompt + "\n\n" + content.trim() + "\n",
+        systemPrompt: event.systemPrompt + "\n\n" + parts.join("\n\n") + "\n",
       };
     } catch (err) {
       // Fail-open: never crash pi, never break the prompt.

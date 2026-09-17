@@ -563,6 +563,10 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 - **Une fois par session** : le contexte est réinjecté automatiquement après un
   nouveau chat (➕), une compaction (📦), une reconnexion (🔄) ou un changement
   de projet.
+- **Après une compaction** : juste avant de résumer l'historique, Pilot enregistre
+  (puis vous réinjecte) un **état de travail** court — tâche en cours, dernière
+  demande, dernière réponse — pour que l'agent ne perde pas le fil de ce qu'il
+  faisait quand l'historique est coupé.
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `.pilot/context.md`.

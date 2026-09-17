@@ -32,6 +32,22 @@ RAG local via embeddings pi.
   (Rust, `files.rs`) préfixe donc le contenu d'une ligne d'avertissement courte
   (« instantané pris maintenant, des fichiers ont pu changer depuis, vérifie le
   disque avant d'agir ») pour éviter que l'agent fasse confiance à un contexte périmé.
+- **État de travail conservé avant une compaction** : quand l'historique devient
+  trop long, pi le compacte et seul un résumé est produit (affiché dans le chat,
+  non conservé) — l'agent peut perdre de vue la tâche en cours. Au **début** de la
+  compaction (événement `compaction_start`, chat standard comme orchestration),
+  Pilot écrit donc un instantané **court et borné**
+  (`buildWorkStateSnapshot`, `src/js/work-state.js`, **600 caractères max**) :
+  tâche d'orchestration en cours (lecture seule du plan, sans effet sur le Mode
+  Orchestration), dernière demande utilisateur, dernière réponse utile. Il est
+  écrit dans `.pilot/work-state.md`, fichier **distinct** du handoff.
+  L'extension `pilot-context` le relit au même endroit que le handoff et le
+  réinjecte dans le system prompt après la coupe. Le contenu porte une **phrase de
+  fraîcheur datée**, et le fichier est supprimé aux **frontières de session**
+  (nouvelle session, reconnexion, orchestration off, purge, redémarrage à chaud) :
+  il ne peut donc pas être injecté dans une nouvelle session. Il **survit en
+  revanche à la compaction** (sinon il serait supprimé aussitôt écrit). Aucune
+  nouvelle commande Rust : réutilise `create_file` + `write_file_content`.
 - Chat standard uniquement ; le mode Orchestration construit déjà son propre
   contexte via `buildPlanPrompt`.
 - Format du bloc injecté (dans le system prompt) :
@@ -311,6 +327,10 @@ specs référencées dans AGENTS.md, fichiers récemment édités — dans un bu
 - **Une fois par session** : le contexte est réinjecté automatiquement après un
   nouveau chat (➕), une compaction (📦), une reconnexion (🔄) ou un changement
   de projet.
+- **Après une compaction** : juste avant de résumer l'historique, Pilot enregistre
+  (puis vous réinjecte) un **état de travail** court — tâche en cours, dernière
+  demande, dernière réponse — pour que l'agent ne perde pas le fil de ce qu'il
+  faisait quand l'historique est coupé.
 - **`.pilot/context.md`** : déposez un fichier contextuel à la racine du projet
   pour ajouter vos propres instructions permanentes (conventions, pièges à
   éviter) — il est injecté en priorité juste après `.pilot/context.md`.

@@ -37,6 +37,7 @@ import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js"
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
+import { buildWorkStateSnapshot } from "./work-state.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -171,6 +172,57 @@ function deleteContextHandoffFile() {
     const abs = window._pilotProjectPath.replace(/[\\/]+$/, "") + "/.pilot/context-inject.md";
     invoke("delete_file_or_dir", { path: abs }).catch(() => {});
   } catch (_) {}
+}
+
+// Instantané d'état de travail (`.pilot/work-state.md`) — écrit au DÉBUT d'une
+// compaction (voir writeWorkStateFile) et relu par l'extension pilot-context au même
+// endroit que le handoff de contexte : l'agent sait ainsi sur quoi il travaillait
+// après la coupe de l'historique. Fichier DISTINCT du handoff, supprimé aux
+// frontières de session (nouvelle session, reconnexion, orchestration off,
+// purge) pour ne jamais injecter un état périmé. Il survit en revanche à la
+// compaction, sinon il serait supprimé aussitôt qu'écrit.
+function workStateAbsPath() {
+  if (!window._pilotProjectPath) return null;
+  return window._pilotProjectPath.replace(/[\\/]+$/, "") + "/.pilot/work-state.md";
+}
+
+function deleteWorkStateFile() {
+  try {
+    const abs = workStateAbsPath();
+    if (!abs) return;
+    invoke("delete_file_or_dir", { path: abs }).catch(() => {});
+  } catch (_) {}
+}
+
+// Écrit l'instantané COURT de l'état de travail avant la coupe de l'historique
+// (compaction), à partir de l'état de l'onglet `state`. Lecture seule de l'état :
+// en Mode Orchestration on lit simplement le plan en cours pour indiquer la tâche
+// en cours, sans rien modifier. Réutilise les commandes existantes create_file +
+// write_file_content (aucune nouvelle commande Rust). Version module-level :
+// appelée depuis handleRpcEvent (cas `compaction_start`), hors de la closure de
+// createAgentPi.
+async function writeWorkStateFile(state) {
+  try {
+    const abs = workStateAbsPath();
+    if (!abs) return;
+    const plan = state && state.orchestrationPlan;
+    const progress = plan && plan.progress;
+    const task = plan && progress
+      ? (plan.plan || []).find((t) => t && t.id === progress.current_task)
+      : null;
+    const content = buildWorkStateSnapshot({
+      userPrompt: state && state.lastUserPrompt,
+      assistantText: (state && (state.lastAssistantText || state.lastAssistantRawText)) || "",
+      orchestrationTask: task ? `#${task.id} ${task.title || ""}`.trim() : "",
+    });
+    if (!content) return;
+    // create_file crée le dossier .pilot parent si nécessaire ; il échoue si le
+    // fichier existe déjà (sans conséquence, on écrase ensuite le contenu).
+    await invoke("create_file", { path: abs }).catch(() => {});
+    await invoke("write_file_content", { path: abs, content });
+  } catch (e) {
+    console.warn("[agent] instantané d'état de travail non écrit:", e);
+  }
 }
 
 export async function createAgentPi(container, resumed = false, agentId = "default", projectPath = null) {
@@ -407,6 +459,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // seul bloc mis à jour, transformé en message + bouton « Réessayer » sur
     // agent_end si aucune réponse n'est revenue.
     lastUserPrompt: "",     // dernier prompt utilisateur (chat standard, pour retry 1-clic)
+    // Instantané d'état de travail (`.pilot/work-state.md`) : dernière réponse
+    // utile de l'agent, conservée APRÈS la remise à zéro de lastAssistantRawText
+    // en fin d'agent_end — sert à l'instantané écrit avant une compaction.
+    lastAssistantText: "",
     lastPromptAnswered: false, // true si le dernier prompt a reçu un agent_end (évite de re-émettre après une compaction de fond, issue #31)
     lastRetryImages: [],    // images du dernier prompt (pour retry 1-clic)
     lastPromptOrigin: null,  // D1 : origine du dernier prompt ("remote" | "desktop" | null) → notification desktop si "remote" à l'agent_end
@@ -939,7 +995,14 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // contexte stale soit injecté par l'extension pilot-context sur un prompt suivant.
   // Chantier 5/5 : délègue à la version module-level (partagée avec
   // purgeAgentTabView — purge de l'Assistant avant délégation).
-  const clearContextHandoff = () => deleteContextHandoffFile();
+  // Supprime aussi l'instantané d'état de travail (et la copie en mémoire de la
+  // dernière réponse) : une nouvelle session repart d'un état vierge (aucune
+  // injection d'un état périmé).
+  const clearContextHandoff = () => {
+    deleteContextHandoffFile();
+    deleteWorkStateFile();
+    state.lastAssistantText = "";
+  };
 
   // Envoi du message
   const sendPrompt = async () => {
@@ -1579,7 +1642,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
           state.contextInjected = false;
           state.memoryInjected = false;
           state.graphInjected = false;
-          clearContextHandoff();
+          // Handoff uniquement : l'instantané d'état de travail doit survivre à
+          // la compaction (il vient d'être écrit par compaction_start) — il sera
+          // supprimé à la prochaine frontière de session.
+          deleteContextHandoffFile();
         } catch (err) {
           console.error("Erreur compact:", err);
         }
@@ -4908,10 +4974,15 @@ export function purgeAgentTabView(agentId, projectPath = null) {
     state.contextRefreshRequested = false;
     state.memoryInjected = false;
     state.graphInjected = false;
+    // Frontière de session : oublier aussi la dernière réponse conservée pour
+    // l'instantané d'état de travail.
+    state.lastAssistantText = "";
   }
   // Supprimer le handoff de contexte restant (l'extension pilot-context
-  // réinjecterait un contexte stale sur le prochain prompt).
+  // réinjecterait un contexte stale sur le prochain prompt) ainsi que
+  // l'instantané d'état de travail (frontière de session).
   deleteContextHandoffFile();
+  deleteWorkStateFile();
   // Vider le DOM de la discussion de l'onglet agent (s'il existe).
   const tm = getTabsManager();
   const tab = tm && Array.isArray(tm.tabs)
@@ -6010,6 +6081,13 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       state.currentToolBlocks.clear();
       state.pendingToolCalls.clear();
       state.pendingText = "";
+      // Conserver la dernière réponse utile AVANT la remise à zéro de
+      // lastAssistantRawText (faite plus bas dans ce handler) : elle servira à
+      // l'instantané d'état de travail si une compaction survient avant le
+      // prochain tour (cas le plus courant : compaction au début du prompt).
+      if (state.lastAssistantRawText && state.lastAssistantRawText.trim()) {
+        state.lastAssistantText = state.lastAssistantRawText;
+      }
       // Mettre à jour les stats
       updateStats();
 
@@ -6723,6 +6801,10 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       // orchestration) — sinon le parsing de DONE / blocs search/replace
       // échoue → handleTaskFailure → boucle de retry → arrêt perçu.
       state.isCompacting = true;
+      // Conserver un court état de travail AVANT que l'historique ne soit coupé :
+      // il sera relu par l'extension pilot-context et réinjecté après la coupe,
+      // pour que l'agent ne perde pas de vue la tâche en cours.
+      await writeWorkStateFile(state);
       break;
 
     case "compaction_end": {
