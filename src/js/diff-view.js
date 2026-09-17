@@ -7,6 +7,7 @@
 // Algorithme : LCS ligne à ligne (Myers simplifié), sans dépendance.
 
 import { invoke } from "@tauri-apps/api/core";
+import { decideEditGate } from "./agent-hardening.js";
 
 /** Échappe le HTML pour injection sûre dans innerHTML. */
 function esc(s) {
@@ -299,10 +300,14 @@ export function renderEditGateDialog(opts) {
 
   let resolved = false;
   function decide(accepted) {
-    if (resolved) return;
+    // R2 (idée 2 de l'étude oh-my-pi) : la décision (accepter/refuser, écriture
+    // ou non) est calculée par une fonction pure et testable ; l'effet de bord
+    // (classes CSS, libellés, callback) reste ici.
+    const plan = decideEditGate(accepted, { resolved });
+    if (!plan.apply) return;
     resolved = true;
     btnAccept.disabled = btnReject.disabled = true;
-    if (accepted) {
+    if (plan.decision === "accept") {
       el.classList.add("resolved-accept");
       header.querySelector(".agent-diff-toggle").textContent = "✓";
       btnAccept.textContent = "✓ Accepté";
