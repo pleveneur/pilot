@@ -192,6 +192,42 @@ struct AppState {
     gds_pool: Mutex<Option<sqlx::PgPool>>,
 }
 
+impl AppState {
+    /// Lecture de la configuration qui **ne bloque jamais** et **ne panique
+    /// jamais** (issue #89). Un `panic` survenu dans un autre thread en tenant
+    /// le verrou ne doit plus faire mourir tous les lecteurs :
+    ///   - `Ok` → valeur fraîche (clone léger) ;
+    ///   - `Poisoned` → les données sont intactes, on les lit via
+    ///     `into_inner()` après une trace ;
+    ///   - `WouldBlock` → repli tracé sur la configuration par défaut, aucune
+    ///     attente (jamais de blocage).
+    pub(crate) fn config_snapshot(&self) -> AppConfig {
+        config_snapshot_locked(&self.config)
+    }
+}
+
+/// Implémentation testable du helper `AppState::config_snapshot` (issue #89).
+/// Prend le verrou brut pour rester vérifiable sans construire tout `AppState`.
+fn config_snapshot_locked(config: &Mutex<AppConfig>) -> AppConfig {
+    match config.try_lock() {
+        Ok(cfg) => cfg.clone(),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            eprintln!(
+                "[config] verrou empoisonné par un panic antérieur : lecture directe, \
+                 la valeur reste utilisable (issue #89)."
+            );
+            poisoned.into_inner().clone()
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!(
+                "[config] configuration momentanément illisible (verrou pris) : repli sur \
+                 la configuration par défaut, aucune attente (issue #89)."
+            );
+            AppConfig::default()
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct AppConfig {
     // Issue #75 : `#[serde(default)]` sur TOUS les champs — un champ ABSENT d'un
@@ -3037,5 +3073,33 @@ mod tests {
         // doit garder le GDS actif par défaut.
         let cfg: AppConfig = serde_json::from_str("{}").unwrap();
         assert!(cfg.gds_enabled, "gds_enabled doit être actif par défaut");
+    }
+
+    #[test]
+    fn config_snapshot_reads_free_lock() {
+        // (a) Lecture normale sur un verrou libre : valeur fraîche.
+        let config = std::sync::Mutex::new(AppConfig {
+            theme: "light".to_string(),
+            ..AppConfig::default()
+        });
+        assert_eq!(super::config_snapshot_locked(&config).theme, "light");
+    }
+
+    #[test]
+    fn config_snapshot_reads_poisoned_lock_without_panic() {
+        // (b) Après empoisonnement (panic dans un thread tenant le verrou), la
+        // lecture doit réussir et ne jamais paniquer (issue #89).
+        let config = std::sync::Arc::new(std::sync::Mutex::new(AppConfig {
+            theme: "light".to_string(),
+            ..AppConfig::default()
+        }));
+        let locked = std::sync::Arc::clone(&config);
+        let _ = std::thread::spawn(move || {
+            let _guard = locked.lock().unwrap();
+            panic!("empoisonnement volontaire du verrou de configuration");
+        })
+        .join();
+        assert!(config.lock().is_err(), "le verrou doit être empoisonné");
+        assert_eq!(super::config_snapshot_locked(&config).theme, "light");
     }
 }
