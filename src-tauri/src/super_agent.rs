@@ -288,10 +288,63 @@ fn known_projects_context(app: &AppHandle) -> String {
 
 /// Liste les agents disponibles dans le registre global (base SQLite,
 /// alimentée par `~/.pilot/agents.json`) et produit un résumé compact
-/// (id, icône, description courte) injecté dans le prompt système de
-/// l'assistant pour qu'il sache quels agents il peut piloter via `run_agents`.
+/// (id, icône, description tronquée à `SUPER_AGENT_AGENT_DESC_MAX`) injecté dans
+/// le prompt système de l'assistant pour qu'il sache quels agents il peut
+/// piloter via `run_agents`.
+/// Les identifiants et icônes ne sont JAMAIS tronqués (le routage des
+/// `run_agents` en dépend).
 /// Garde-fou : retourne une chaîne vide si le registre est vide ou illisible
 /// (ne plante jamais).
+
+/// Longueur maximale (en caractères) d'une description d'agent injectée dans le
+/// prompt système. Au-delà, la description est tronquée proprement (fin de mot
+/// suivie de `…`).
+const SUPER_AGENT_AGENT_DESC_MAX: usize = 100;
+
+/// Tronque `s` à `max` caractères au plus en coupant en fin de mot, et ajoute
+/// `…` si (et seulement si) une coupe a eu lieu. Un mot unique plus long que
+/// `max` est coupé brutalement (pire cas) plutôt que renvoyé entier.
+fn truncate_words(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut len = 0usize;
+    for word in s.split_whitespace() {
+        let extra = if out.is_empty() { 0 } else { 1 };
+        let add = extra + word.chars().count();
+        if len + add > max {
+            break;
+        }
+        if extra == 1 {
+            out.push(' ');
+        }
+        out.push_str(word);
+        len += add;
+    }
+    if out.is_empty() {
+        out = s.chars().take(max).collect();
+    }
+    out.push('…');
+    out
+}
+
+/// Formate un agent du registre en une ligne compacte
+/// `- id (icône) : description-tronquée`, sans jamais perdre l'identifiant ni
+/// l'icône (utilisés pour le routage `run_agents`).
+fn format_agent_line(id: &str, icon: &str, description: &str) -> String {
+    let desc = description.trim();
+    if desc.is_empty() {
+        return format!("- {} ({})", id, icon);
+    }
+    format!(
+        "- {} ({}) : {}",
+        id,
+        icon,
+        truncate_words(desc, SUPER_AGENT_AGENT_DESC_MAX)
+    )
+}
+
 fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
     let agents = match state.agent_service.list_agents(app, None) {
         Ok(a) => a,
@@ -302,14 +355,7 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
     }
     let items: Vec<String> = agents
         .iter()
-        .map(|a| {
-            let desc = a.description.trim();
-            if desc.is_empty() {
-                format!("- {} ({})", a.id, a.icon)
-            } else {
-                format!("- {} ({}) : {}", a.id, a.icon, desc)
-            }
-        })
+        .map(|a| format_agent_line(&a.id, &a.icon, &a.description))
         .collect();
     format!(
         "\n\nAgents disponibles dans le registre (utilisables via `run_agents`) :\n{}",
@@ -5001,5 +5047,41 @@ mod tests {
             parts.iter().map(|(_, n)| *n).sum::<usize>(),
             "le total assemble doit etre la somme exacte des blocs mesures"
         );
+    }
+
+    #[test]
+    fn agent_line_never_truncates_id_and_cuts_description_at_word_boundary() {
+        // 11 agents dont un avec une description de ~424 caracteres : tous les
+        // identifiants restent presents, les descriptions longues sont coupees.
+        let long = "Cette description est volontairement tres longue ".repeat(8);
+        let mut ids: Vec<String> = (0..10).map(|i| format!("agent-{i}")).collect();
+        ids.push("codeur".to_string());
+        let mut ctx = String::from(
+            "\n\nAgents disponibles dans le registre (utilisables via `run_agents`) :",
+        );
+        for id in &ids {
+            let desc = if id == "codeur" { long.as_str() } else { "courte" };
+            ctx.push('\n');
+            ctx.push_str(&super::format_agent_line(id, "🧩", desc));
+        }
+        for id in &ids {
+            assert!(ctx.contains(&format!("- {id} (")), "identifiant {id} perdu");
+        }
+        let codeur_line = ctx.lines().find(|l| l.starts_with("- codeur (")).unwrap();
+        assert!(codeur_line.ends_with('…'));
+        let desc = codeur_line.split(" : ").nth(1).unwrap();
+        assert!(desc.chars().count() <= super::SUPER_AGENT_AGENT_DESC_MAX + 1);
+        assert!(!desc.trim_end_matches('…').ends_with(' '));
+        // Gain mesure : description de ~424 caracteres ramenee a ~100.
+        assert!(long.chars().count() - desc.chars().count() > 250);
+    }
+
+    #[test]
+    fn truncate_words_is_a_no_op_below_the_limit() {
+        assert_eq!(super::truncate_words("court", 100), "court");
+        let long_word = "a".repeat(150);
+        let cut = super::truncate_words(&long_word, 100);
+        assert_eq!(cut.chars().count(), 101); // 100 car. + '…'
+        assert!(cut.ends_with('…'));
     }
 }
