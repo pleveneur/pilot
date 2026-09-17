@@ -2,9 +2,15 @@
 //
 // Après un redémarrage de Pilot, la session RPC du super-agent repart de zéro
 // (--no-session) : l'assistant n'a plus aucune idée d'où on en était. Cette
-// extension lui fournit un outil :
+// extension lui fournit trois outils :
 //   - update_session_memory(resume) → enregistre un résumé compact et versionné
 //     du sujet en cours / des chantiers en cours, persisté sur disque par Pilot.
+//   - remove_session_memory(target, field?) → retire UN fait précis du résumé
+//     (une entrée de work_in_progress, par rang ou par texte, ou le contenu d'un
+//     champ texte simple) sans réécrire toute la mémoire. Le fait retiré part
+//     dans une corbeille bornée, donc annulable.
+//   - restore_session_memory(id?) → remet en place un retrait (par son id, ou le
+//     plus récent si l'id est absent).
 //
 // Pilot réinjecte automatiquement ce résumé au début du premier message après
 // redémarrage (« Mémoire de session (reprise) »), pour que l'assistant reprenne
@@ -24,6 +30,16 @@ import { Type } from "typebox";
 // le détecte dans le `input` reçu et enregistre la mémoire au lieu d'afficher
 // un champ de saisie.
 const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
+// Sentinel préfixant le titre d'un `input` d'outil remove_session_memory. La
+// charge utile est un JSON { target, field? } ; Pilot l'intercepte, exécute le
+// retrait ciblé (commande Rust `super_agent_remove_session_memory`) et renvoie
+// le résultat en JSON.
+const MEMORY_REMOVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_REMOVE::";
+// Sentinel préfixant le titre d'un `input` d'outil restore_session_memory. La
+// charge utile est un JSON { id? } ; Pilot l'intercepte, restaure le retrait
+// (commande Rust `super_agent_restore_session_memory`) et renvoie le résultat
+// en JSON.
+const MEMORY_RESTORE_SENTINEL = "PILOT_ASSISTANT_MEMORY_RESTORE::";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -46,6 +62,76 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await ctx.ui.input(MEMORY_SAVE_SENTINEL + params.resume, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "remove_session_memory",
+    label: "Remove Session Memory",
+    description:
+      "Retirer un fait précis de ta mémoire de session sans réécrire tout le résumé (contrairement à update_session_memory) : un travail en cours (par son rang dans la liste work_in_progress, ou par le texte de son projet / de son titre) ou le contenu d'un champ texte simple (par exemple notes, current_topic, active_project). À utiliser dès qu'un fait mémorisé est devenu faux, périmé ou obsolète. Ce qui est retiré n'est pas perdu : il part dans une corbeille bornée et peut être remis en place avec restore_session_memory.",
+    promptSnippet: "remove_session_memory: retirer un fait précis devenu faux ou périmé",
+    promptGuidelines: [
+      "Use remove_session_memory to remove ONE stale or incorrect fact from your session memory instead of rewriting the whole resume with update_session_memory.",
+      "To remove a work-in-progress entry, pass `target`: either its 1-based position in the work_in_progress list (as a string, e.g. \"2\") or a text fragment of its `project` / `title` field.",
+      "To empty a simple text field of the resume instead, pass `field` (\"notes\", \"current_topic\", \"active_project\"); `target` is then ignored. At least one of `target` / `field` is required.",
+      "The removed fact goes to a bounded trash and can be restored with restore_session_memory (by id, or the most recent one), so removing is safe.",
+    ],
+    parameters: Type.Object({
+      target: Type.Optional(
+        Type.String({
+          description:
+            "Rang 1-based du travail en cours à retirer (ex: \"2\") ou fragment de texte de son projet / titre. Ignoré si `field` est fourni.",
+        }),
+      ),
+      field: Type.Optional(
+        Type.String({
+          description:
+            "Nom d'un champ texte simple à vider (ex: notes, current_topic). Si fourni, `target` est ignoré.",
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({
+        target: params.target ?? "",
+        field: params.field ?? "",
+      });
+      const result = await ctx.ui.input(MEMORY_REMOVE_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "restore_session_memory",
+    label: "Restore Session Memory",
+    description:
+      "Remettre en place un fait de mémoire de session précédemment retiré avec remove_session_memory. Désigne le retrait par son identifiant (`id`), ou restaure le retrait le plus récent si aucun identifiant n'est donné. À utiliser quand un fait retiré s'avère finalement encore utile ou exact.",
+    promptSnippet: "restore_session_memory: remettre en place un fait de mémoire retiré",
+    promptGuidelines: [
+      "Use restore_session_memory to undo a previous remove_session_memory: a work-in-progress entry or an emptied text field is put back into the session memory.",
+      "Pass `id` to restore a specific removal; if omitted, the most recent removal is restored.",
+      "Prefer remove_session_memory + restore_session_memory over rewriting the whole memory when you only need to undo one change.",
+    ],
+    parameters: Type.Object({
+      id: Type.Optional(
+        Type.String({
+          description:
+            "Identifiant du retrait à restaurer. Omis → le retrait le plus récent est remis en place.",
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({ id: params.id ?? "" });
+      const result = await ctx.ui.input(MEMORY_RESTORE_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Requête annulée." }] };
       }

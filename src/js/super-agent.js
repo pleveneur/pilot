@@ -31,6 +31,7 @@ import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
+import { parseMemoryRemovePayload, parseMemoryRestorePayload } from "./super-agent-memory.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -2781,6 +2782,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const SESSIONS_SENTINEL = "PILOT_ASSISTANT_SESSIONS::";
     const MCP_STATE_SENTINEL = "PILOT_ASSISTANT_MCP_STATE::";
     const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
+    const MEMORY_REMOVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_REMOVE::";
+    const MEMORY_RESTORE_SENTINEL = "PILOT_ASSISTANT_MEMORY_RESTORE::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
@@ -2797,6 +2800,46 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       try {
         await invoke("super_agent_save_session_memory", { resume });
         await respondSuperAgent(id, JSON.stringify({ ok: true }), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(MEMORY_REMOVE_SENTINEL)) {
+      // Mémoire de session (pilot-assistant-session-memory) : retrait ciblé d'un
+      // fait (entrée work_in_progress, ou vidage d'un champ texte) via l'outil
+      // `remove_session_memory`. Le retrait part dans une corbeille bornée côté
+      // Rust (donc annulable) ; on renvoie la nouvelle mémoire en JSON.
+      const parsed = parseMemoryRemovePayload(title.slice(MEMORY_REMOVE_SENTINEL.length));
+      if (parsed.error) {
+        await respondSuperAgent(id, JSON.stringify({ error: parsed.error }), false);
+        return;
+      }
+      try {
+        const result = await invoke("super_agent_remove_session_memory", {
+          target: parsed.target,
+          field: parsed.field || null,
+        });
+        await respondSuperAgent(id, JSON.stringify({ ok: true, memory: result }), false);
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(MEMORY_RESTORE_SENTINEL)) {
+      // Mémoire de session (pilot-assistant-session-memory) : remise en place
+      // d'un retrait via l'outil `restore_session_memory` (par id, ou le plus
+      // récent si l'id est absent). On renvoie la nouvelle mémoire en JSON.
+      const parsed = parseMemoryRestorePayload(title.slice(MEMORY_RESTORE_SENTINEL.length));
+      if (parsed.error) {
+        await respondSuperAgent(id, JSON.stringify({ error: parsed.error }), false);
+        return;
+      }
+      try {
+        const result = await invoke("super_agent_restore_session_memory", {
+          id: parsed.id || null,
+        });
+        await respondSuperAgent(id, JSON.stringify({ ok: true, memory: result }), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }
