@@ -1018,15 +1018,12 @@ fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
-/// Charge la config depuis le disque si elle est encore le défaut (chargement
-/// paresseux). À appeler avant de lire des champs de config sensibles (ex:
-/// `rpc_pi_path`) dans les commandes qui ne passent pas par `get_config` —
-/// sinon, au démarrage, ces champs sont vides tant que `get_config` n'a pas été
-/// appelé (bug « Pi indisponible » : health check E4 lu avant le chargement).
-fn ensure_config_loaded(state: &AppState, app: &AppHandle) {
-    let mut config = state.config.lock().unwrap();
+/// Vrai si la configuration en mémoire est encore « par défaut » (aucun réglage
+/// du disque chargé). Extrait pour être testable et réutilisé par
+/// `ensure_config_loaded` (réserve R-A, lot 3-bis).
+fn config_is_default(config: &AppConfig) -> bool {
     let default = AppConfig::default();
-    if config.theme == default.theme
+    config.theme == default.theme
         && config.subtheme == default.subtheme
         && config.default_command == default.default_command
         && config.recent_projects.is_empty()
@@ -1040,11 +1037,58 @@ fn ensure_config_loaded(state: &AppState, app: &AppHandle) {
         && config.show_thinking == default.show_thinking
         && config.show_tools == default.show_tools
         && config.pdf_md_model == default.pdf_md_model
-    {
-        // Issue #75 : si la config disque est illisible/invalide, on CONSERVE la
-        // config courante en mémoire plutôt que de l'écraser par un défaut complet.
-        if let Ok(disk) = load_config_disk(app) {
-            *config = disk;
+}
+
+/// Charge la config depuis le disque si elle est encore le défaut (chargement
+/// paresseux). À appeler avant de lire des champs de config sensibles (ex:
+/// `rpc_pi_path`) dans les commandes qui ne passent pas par `get_config` —
+/// sinon, au démarrage, ces champs sont vides tant que `get_config` n'a pas été
+/// appelé (bug « Pi indisponible » : health check E4 lu avant le chargement).
+///
+/// Réserve R-A (lot 3-bis) : cette fonction **ne bloque jamais** et **ne panique
+/// jamais** :
+///   - verrou empoisonné → lecture directe via `into_inner()` (données valides) ;
+///   - verrou occupé → on rend la main immédiatement (un autre thread charge ou
+///     écrit déjà : attendre gèlerait l'interface) ;
+///   - l'I/O disque est faite **hors** du verrou.
+fn ensure_config_loaded(
+    config: &Mutex<AppConfig>,
+    load_disk: impl FnOnce() -> Result<AppConfig, String>,
+) {
+    let needs_load = match config.try_lock() {
+        Ok(cfg) => config_is_default(&cfg),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            eprintln!(
+                "[config] verrou empoisonné : le chargement paresseux continue sans panique \
+                 (réserve R-A, lot 3-bis)."
+            );
+            config_is_default(&poisoned.into_inner())
+        }
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    if !needs_load {
+        return;
+    }
+    // Issue #75 : si la config disque est illisible/invalide, on CONSERVE la
+    // config courante en mémoire plutôt que de l'écraser par un défaut complet.
+    let disk = match load_disk() {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    match config.try_lock() {
+        Ok(mut cfg) => {
+            if config_is_default(&cfg) {
+                *cfg = disk;
+            }
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            let mut cfg = poisoned.into_inner();
+            if config_is_default(&cfg) {
+                *cfg = disk;
+            }
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            // Un autre thread a repris le verrou entre-temps : il fera le travail.
         }
     }
 }
@@ -1510,7 +1554,7 @@ struct BackendInfo {
 
 #[tauri::command]
 async fn get_backend_info(state: State<'_, AppState>, app: AppHandle) -> Result<BackendInfo, String> {
-    ensure_config_loaded(&state, &app);
+    ensure_config_loaded(&state.config, || load_config_disk(&app));
     let pi_path = {
         let config = state.config.lock().unwrap();
         config.rpc_pi_path.clone()
@@ -1546,7 +1590,7 @@ struct PiHealth {
 
 #[tauri::command]
 async fn pi_health_check(state: State<'_, AppState>, app: AppHandle) -> Result<PiHealth, String> {
-    ensure_config_loaded(&state, &app);
+    ensure_config_loaded(&state.config, || load_config_disk(&app));
     let pi_path = {
         let config = state.config.lock().unwrap();
         config.rpc_pi_path.clone()
@@ -1766,7 +1810,7 @@ fn get_config_read(config: &Mutex<AppConfig>, app: &AppHandle) -> Result<AppConf
 
 #[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
-    ensure_config_loaded(&state, &app);
+    ensure_config_loaded(&state.config, || load_config_disk(&app));
     get_config_read(&state.config, &app)
 }
 
@@ -1854,7 +1898,7 @@ fn check_and_launch_plface(
     state: State<AppState>,
     app: AppHandle,
 ) -> plface::PlfaceLaunchOutcome {
-    ensure_config_loaded(&state, &app);
+    ensure_config_loaded(&state.config, || load_config_disk(&app));
     let (enabled, path, avatar) = {
         let cfg = state.config.lock().unwrap();
         (
@@ -3320,6 +3364,72 @@ mod tests {
         assert!(
             read.is_err(),
             "la lecture doit signaler l'indisponibilité, jamais renvoyer les défauts"
+        );
+    }
+
+    #[test]
+    fn ensure_config_loaded_recovers_from_a_poisoned_lock() {
+        // Réserve R-A (lot 3-bis) : `ensure_config_loaded` (chargement paresseux
+        // au démarrage) utilisait `state.config.lock().unwrap()` → panique si le
+        // verrou était empoisonné. Elle doit désormais le lire via `into_inner()`.
+        let config = std::sync::Arc::new(std::sync::Mutex::new(AppConfig::default()));
+        let poison = std::sync::Arc::clone(&config);
+        let _ = std::thread::spawn(move || {
+            let _guard = poison.lock().unwrap();
+            panic!("empoisonnement volontaire du verrou de configuration");
+        })
+        .join();
+        assert!(
+            config.lock().is_err(),
+            "le verrou doit être effectivement empoisonné"
+        );
+
+        let real = AppConfig {
+            default_command: "depuis-le-disque".to_string(),
+            ..AppConfig::default()
+        };
+        // Ne doit PAS paniquer.
+        super::ensure_config_loaded(&config, || Ok(real.clone()));
+
+        assert_eq!(
+            super::config_snapshot_locked(&config).default_command,
+            "depuis-le-disque",
+            "la config disque doit être chargée malgré le verrou empoisonné"
+        );
+    }
+
+    #[test]
+    fn ensure_config_loaded_does_not_block_on_a_held_lock() {
+        // Réserve R-A (lot 3-bis) : le chargement paresseux ne doit jamais
+        // attendre le verrou (gel de l'interface au démarrage).
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let config = std::sync::Arc::new(std::sync::Mutex::new(AppConfig::default()));
+        let held = std::sync::Arc::clone(&config);
+        let (tx, rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            tx.send(()).expect("signal de verrouillage");
+            std::thread::sleep(Duration::from_millis(400));
+        });
+        rx.recv().expect("le verrou doit être tenu");
+
+        let start = Instant::now();
+        super::ensure_config_loaded(&config, || {
+            panic!("le disque ne doit pas être lu quand le verrou est tenu")
+        });
+        let elapsed = start.elapsed();
+        holder.join().expect("fin du détenteur du verrou");
+
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "ensure_config_loaded ne doit jamais attendre le verrou (mesuré {:?})",
+            elapsed
+        );
+        assert!(
+            super::config_is_default(&config.lock().unwrap()),
+            "la config reste inchangée quand le verrou est occupé"
         );
     }
 }
