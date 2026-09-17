@@ -487,6 +487,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
+- **Notifications Telegram** (Paramètres ⚙️ → onglet **Agent**) : recevez les
+  avis de Pilot (fin de tâche d'un agent, anomalie, arrêt automatique d'une
+  session) sur **Telegram**, même loin de l'ordinateur. Désactivé par défaut :
+  tant que l'interrupteur est décoché ou qu'un champ est vide, rien n'est
+  envoyé et aucune erreur ne s'affiche. La **réception** des messages Telegram
+  n'est **pas encore prise en charge**. Voir la section « Notifications
+  Telegram » de cette aide.
 - **Outils navigateur** : les sessions d'agents lancées par Pilot disposent des
   outils Chrome (`chrome_*`) du module navigateur lorsqu'il est installé — le
   correctif ne prend effet qu'après un **redémarrage de Pilot** (et un redémarrage

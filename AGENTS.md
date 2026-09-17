@@ -64,6 +64,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Code Graph (graphe de connaissances projet) | `spec_code_graph.md` |
 | Diff Review agent (modifications) | `spec_diff_review.md` |
 | Détection d'anomalies (agents bloqués) | `spec_anomaly.md` |
+| Notifications Telegram (étape 1 : envoi seulement) | `spec_telegram.md` |
 | Mémoire de projet auto-maintenue | `spec_project_memory.md` |
 | Mode consommateur MCP (POC) | `spec_pilot.md` § MCP |
 | MCP piloté par l'Assistant | `spec_pilot.md` § MCP + `spec_super_agent.md` § MCP piloté (flag `mcp_agent_confirm`, outils `mcp_state` / `run_agents(mcp_server)`) |
@@ -128,6 +129,7 @@ pilot/
 ├── spec_super_agent.md       # Spécifications Assistant (suivi multi-projets, lecture seule)
 ├── spec_dashboard.md         # Spécifications Tableau de bord projet (issue #51)
 ├── spec_vault.md             # Spécifications Coffre fort de mots de passe (issue #52)
+├── spec_telegram.md          # Spécifications Notifications Telegram (étape 1 : envoi seulement)
 ├── plan_gds.md               # ROADMAP GDS (gestionnaire de sources) — plan validé
 ├── spec_gds.md               # Spec GDS : sources centralisées + suivi fusionné PostgreSQL (phases A→B→C)
 ├── spec_web_component.md     # Spec composant web (issue #56) : widget marque blanche (phase D)

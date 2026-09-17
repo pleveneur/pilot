@@ -80,6 +80,11 @@ normalement** l'agent au lieu de rester en file derrière un couple
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
+- **Alerte sur Telegram** : si la passerelle Telegram est activée
+  (**Paramètres ⚙️ → Agent → Notifications Telegram**), ces alertes (anomalie
+  détectée, arrêt automatique, verrou de run libéré) vous sont **aussi**
+  envoyées sur Telegram. Voir la section « Notifications Telegram » de cette
+  aide.
 - **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
   activations) sont **relus en continu**, à chaque passage de la surveillance
   (toutes les **30 s**). Un changement dans les Paramètres s'applique donc

@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-17 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly -->
+<!-- PILOT-HELP generated=2026-09-17 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -430,6 +430,13 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
+- **Notifications Telegram** (Paramètres ⚙️ → onglet **Agent**) : recevez les
+  avis de Pilot (fin de tâche d'un agent, anomalie, arrêt automatique d'une
+  session) sur **Telegram**, même loin de l'ordinateur. Désactivé par défaut :
+  tant que l'interrupteur est décoché ou qu'un champ est vide, rien n'est
+  envoyé et aucune erreur ne s'affiche. La **réception** des messages Telegram
+  n'est **pas encore prise en charge**. Voir la section « Notifications
+  Telegram » de cette aide.
 - **Outils navigateur** : les sessions d'agents lancées par Pilot disposent des
   outils Chrome (`chrome_*`) du module navigateur lorsqu'il est installé — le
   correctif ne prend effet qu'après un **redémarrage de Pilot** (et un redémarrage
@@ -1890,6 +1897,11 @@ normalement** l'agent au lieu de rester en file derrière un couple
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
+- **Alerte sur Telegram** : si la passerelle Telegram est activée
+  (**Paramètres ⚙️ → Agent → Notifications Telegram**), ces alertes (anomalie
+  détectée, arrêt automatique, verrou de run libéré) vous sont **aussi**
+  envoyées sur Telegram. Voir la section « Notifications Telegram » de cette
+  aide.
 - **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
   activations) sont **relus en continu**, à chaque passage de la surveillance
   (toutes les **30 s**). Un changement dans les Paramètres s'applique donc
@@ -1898,3 +1910,48 @@ normalement** l'agent au lieu de rester en file derrière un couple
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
   exécution).
+
+---
+
+## Aide utilisateur — Notifications Telegram
+
+Pilot peut vous prévenir **sur Telegram** quand il a quelque chose à vous dire,
+même si vous êtes loin de l'ordinateur :
+
+- **fin de tâche d'un agent** (chat de l'agent π, tâche déléguée, run d'agents) ;
+- **alerte d'anomalie** : un agent semble bloqué (actif sans progression) ;
+- **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
+  libéré).
+
+**Réglage** : dans **Paramètres ⚙️ → onglet Agent**, section
+**« Notifications Telegram »** :
+
+1. cochez **« Envoyer les avis sur Telegram »** ;
+2. collez le **jeton du bot** (fourni par **@BotFather** dans Telegram) ;
+3. indiquez l'**identifiant de discussion** qui recevra les avis (votre
+   identifiant personnel, ou celui d'un groupe).
+
+Pour obtenir ces deux valeurs : créez un bot auprès de **@BotFather**
+(`/newbot`), puis envoyez un message à votre bot et récupérez votre identifiant
+auprès de **@userinfobot** (ou de l'API `getUpdates`).
+
+**Comportement quand c'est désactivé (par défaut)** : tant que l'interrupteur
+est décoché **ou** qu'un des deux champs est vide, **rien n'est envoyé**,
+Pilot ne contacte aucun serveur et **aucun message d'erreur** ne s'affiche.
+Décocher le réglage suffit à tout arrêter.
+
+**Détails utiles** :
+
+- l'envoi se fait **en arrière-plan** : il ne ralentit ni ne bloque jamais
+  Pilot ;
+- si Telegram est injoignable (pas de réseau, jeton erroné), l'avis est
+  simplement perdu — **cela n'interrompt jamais le travail en cours** et
+  n'affiche aucune erreur ;
+- ces avis sont **indépendants** des notifications natives (fenêtre Windows) :
+  vous pouvez avoir l'un sans l'autre ;
+- le jeton est conservé dans votre configuration locale et n'est utilisé que
+  pour l'envoi ; il n'apparaît dans aucun journal.
+
+⚠️ **La réception des messages Telegram n'existe pas encore** : vous recevez les
+avis de Pilot, mais **Pilot ne lit pas** ce que vous écrivez sur Telegram
+(pas de réponse, pas de pilotage à distance par Telegram à ce stade).
