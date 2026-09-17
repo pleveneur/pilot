@@ -487,6 +487,10 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   local (pas seulement à distance).
 - **Quality-gate** (bouton 🛡️) : active un protocole anti-régression embarqué
   (vérifie que les modifications ne cassent aucune fonctionnalité existante).
+- **Outils navigateur** : les sessions d'agents lancées par Pilot disposent des
+  outils Chrome (`chrome_*`) du module navigateur lorsqu'il est installé — le
+  correctif ne prend effet qu'après un **redémarrage de Pilot** (et un redémarrage
+  des agents en cours).
 
 L'agent a accès aux fichiers du projet courant (lecture/écriture).
 <!-- /HELP:agent-pi -->
