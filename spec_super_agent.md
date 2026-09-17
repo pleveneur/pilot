@@ -643,6 +643,12 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - Un **sélecteur de modèle** est disponible dans la barre d'outils de l'onglet
   🧭 (même liste que les agents de coding). Le changement s'applique à la
   session de l'Assistant.
+- **Modèle par défaut dédié (issue #88)** : **Paramètres ⚙️ → onglet « Modèles
+  IA » → Modèle par défaut de l'Assistant**. Laisser « Modèle par défaut »
+  (valeur vide) pour reprendre le **modèle par défaut global des agents**
+  (comportement historique inchangé). Le réglage est prioritaire sur le défaut
+  global pour l'Assistant uniquement et s'applique au démarrage suivant de sa
+  session (le sélecteur de la barre d'outils reste le modèle **actif**).
 
 ### Personnaliser le prompt
 - **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
