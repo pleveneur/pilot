@@ -64,16 +64,26 @@ export function truncateSuperAgentSummary(summary) {
  */
 export function computeRunLaunchVerdict(launchResult) {
   const r = launchResult || {};
+  const launched = r.started === true;
+  const queued = r.queued === true;
+  // `preparing` : le lancement est EN COURS en arrière-plan (estimation
+  // plan-maker d'une run avec codeur). La réponse à l'outil part
+  // immédiatement pour ne pas bloquer le tour de l'assistant ; le résultat
+  // réel (échec / mise en file) est déposé dans la remontée durable.
+  const preparing = r.preparing === true;
+  // Issue #87 : l'accusé ne doit JAMAIS annoncer « ok » alors que rien ne s'est
+  // passé. Une demande réellement lancée, mise en file d'attente ou en cours de
+  // préparation est un succès ; dans TOUT autre cas (refus, abandon silencieux,
+  // résultat de lancement illisible) on force une erreur explicite : l'assistant
+  // (et l'utilisateur) doit savoir POURQUOI la mission n'a pas démarré, au lieu
+  // de lire un `{ok:true}` vide de sens qui masque la perte de la demande.
+  const ok = launched || queued || preparing;
   return {
-    ok: true,
-    launched: !!r.started,
-    queued: !!r.queued,
-    // `preparing` : le lancement est EN COURS en arrière-plan (estimation
-    // plan-maker d'une run avec codeur). La réponse à l'outil part
-    // immédiatement pour ne pas bloquer le tour de l'assistant ; le résultat
-    // réel (échec / mise en file) est déposé dans la remontée durable.
-    preparing: !!r.preparing,
-    error: r.error || null,
+    ok,
+    launched,
+    queued,
+    preparing,
+    error: r.error || (ok ? null : "Lancement non effectué : aucun démarrage ni mise en file (raison non rapportée par le lanceur)."),
   };
 }
 
@@ -3205,7 +3215,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
-            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
+            // Issue #87 : accusé de lancement structuré (même contrat que les
+            // autres branches `launchWithEstimate`). Renvoyer `true` produisait
+            // un accusé mensonger `{ok:true, launched:false, queued:false,
+            // preparing:false, error:null}` : la demande ÉTAIT mise en file mais
+            // l'accusé prétendait qu'il ne s'était rien passé.
+            return { queued: true, started: false, preparing: false, error: null };
           }
           runAgentsInFlightByProject[target] = true;
           // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine

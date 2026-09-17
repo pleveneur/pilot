@@ -285,6 +285,126 @@ impl AgentService {
         Ok(())
     }
 
+    /// Issue #87 : purge des ÉTATS D'EXÉCUTION FANTÔMES d'un projet.
+    ///
+    /// Défaut visé : une ligne `agents` dont `proc_state = 'Running'` (posé au
+    /// démarrage de la session) reste dans cet état alors que le processus pi
+    /// est MORT et que `busy` est retombé à 0 (process tué/crashé sans
+    /// `agent_settled`/`process_exit` traité, événements perdus). Rien ne
+    /// remettait jamais la ligne à un état sain : le verrou d'exécution du
+    /// projet restait posé, les lancements suivants étaient refusés ou mis en
+    /// file sans jamais démarrer, et il fallait redémarrer Pilot (voire changer
+    /// la casse du chemin du projet, qui contournait le verrou).
+    ///
+    /// Détection : lignes `proc_state = 'Running'` de projet réel dont AUCUNE
+    /// session vivante n'existe pour (projet, agent) — `agent_alive`, c'est-à-
+    /// dire `try_wait` sur le processus enfant. Remise à un état sain :
+    /// `loaded=0, busy=0, proc_state='Unloaded'`, marque `busy` de la map
+    /// d'anomalie libérée (c'est elle qui porte l'exclusivité des spécialités
+    /// côté moteur), session morte retirée du registre, et UNE LIGNE DE JOURNAL
+    /// par purge (traçabilité). Les sessions VIVANTES (parkées, en cours de
+    /// démarrage, en attente d'utilisateur) ne sont JAMAIS touchées.
+    ///
+    /// Sans redémarrage : appelée par le moniteur d'anomalies (30 s).
+    ///
+    /// @param conn connexion `pilot.db` ouverte (permet le test unitaire).
+    /// @param anomaly_map map d'état du moniteur (clé `project\u{1f}agent`).
+    /// @returns la liste `(projet, agent)` purgée (pour l'événement frontend).
+    pub fn purge_ghost_running_states(
+        &self,
+        conn: &rusqlite::Connection,
+        anomaly_map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+    ) -> Result<Vec<(String, String)>, String> {
+        // 1. Candidats : état d'exécution « en cours » d'un projet réel. Les
+        //    agents GLOBAUX (project_path NULL, ex. agent standard d'assistant)
+        //    sont hors périmètre : ils ne portent pas de verrou de projet.
+        let mut rows: Vec<(String, String)> = Vec::new();
+        {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, project_path FROM agents
+                     WHERE proc_state = 'Running'
+                       AND project_path IS NOT NULL AND project_path <> ''",
+                )
+                .map_err(|e| format!("Erreur purge_ghost_running_states (prepare): {}", e))?;
+            let mapped = stmt
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })
+                .map_err(|e| format!("Erreur purge_ghost_running_states (query): {}", e))?;
+            for row in mapped {
+                rows.push(row.map_err(|e| format!("Erreur purge_ghost_running_states (row): {}", e))?);
+            }
+        }
+        // 2. Filtrage par VIVACITÉ réelle du processus (hors verrou de base).
+        let mut purged: Vec<(String, String)> = Vec::new();
+        for (agent_id, project) in rows {
+            if self.agent_alive(&project, &agent_id) {
+                // Exécution légitime : rien à faire (session parkée ou en cours).
+                continue;
+            }
+            conn.execute(
+                "UPDATE agents SET loaded = 0, busy = 0, proc_state = 'Unloaded'
+                 WHERE id = ?1 AND project_path = ?2",
+                params![agent_id, project],
+            )
+            .map_err(|e| format!("Erreur purge_ghost_running_states (update): {}", e))?;
+            // Verrou d'exclusivité moteur : libérer la marque `busy` résiduelle
+            // (sinon la file JS attend un agent qui n'existe plus).
+            {
+                let mut m = anomaly_map.lock().unwrap();
+                if let Some(e) = m.get_mut(&format!("{}\u{1f}{}", project, agent_id)) {
+                    e.busy = false;
+                    e.blocked_reported = false;
+                    e.auto_stopped_reported = false;
+                }
+            }
+            // Session morte retirée du registre : sans cela, la sonde
+            // `list_agent_sessions` listait encore l'entrée (présente mais non
+            // vivante) et les gardes d'exclusivité frontend conservaient un
+            // créneau fantôme.
+            self.drop_dead_session(&project, &agent_id);
+            // Journal : une ligne par purge (diagnostic sans redémarrage).
+            eprintln!(
+                "[agent-service] issue #87 : état d'exécution fantôme purgé — agent={} projet={} proc_state=Running sans processus vivant → Unloaded (loaded=0, busy=0, verrou projet libéré)",
+                agent_id, project
+            );
+            purged.push((project, agent_id));
+        }
+        Ok(purged)
+    }
+
+    /// Variante applicative de `purge_ghost_running_states` : ouvre `pilot.db`
+    /// depuis l'`AppHandle`. Utilisée par le moniteur d'anomalies (30 s).
+    pub fn purge_ghost_running_states_app(
+        &self,
+        app: &AppHandle,
+        anomaly_map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+    ) -> Result<Vec<(String, String)>, String> {
+        let conn = db::open_conn(app)?;
+        self.purge_ghost_running_states(&conn, anomaly_map)
+    }
+
+    /// Retire du registre la session de (projet, agent) si son processus est
+    /// MORT (idempotent, sans effet si absente ou vivante). Utilisé par la
+    /// purge des états fantômes (issue #87).
+    fn drop_dead_session(&self, project: &str, agent_id: &str) {
+        let key = Self::session_key(project, agent_id);
+        let mut sessions = self.sessions.lock().unwrap();
+        let dead = match sessions.get_mut(&key) {
+            Some(e) => e
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_some())
+                .unwrap_or(true),
+            None => false,
+        };
+        if dead {
+            sessions.remove(&key);
+        }
+    }
+
     // ── Registre (Phase 1) ──
 
     /// Liste les agents. `project_path` : Some → agents de ce projet ; None →

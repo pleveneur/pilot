@@ -42,6 +42,7 @@ import {
   dequeueExclusivity,
   isAgentActiveOnProject as isAgentActiveOnProjectSessions,
   isAnyAgentWorking,
+  isProjectWorking,
   classifyExclusivitySession,
 } from "./exclusivity-queue.js";
 import { isProjectReservedBy, deleteReservations, clearAllReservations } from "./reservations.js";
@@ -49,6 +50,13 @@ import { isProjectReservedBy, deleteReservations, clearAllReservations } from ".
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_TOTAL_BUDGET = 30;
 const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des outils longs)
+
+// Issue #87 : fenêtre de grâce avant de conclure qu'un groupe parallèle dont le
+// travail est encore EN FILE (pending > 0) n'a plus aucun porteur (aucun agent
+// actif et aucune session ne travaillant sur le projet). Évite de couper une run
+// en cours de démarrage (fenêtre entre `beginRun` et l'entrée du 1er agent dans
+// `activeAgents`) tout en récupérant un verrou orphelin en ~1 min.
+const QUEUED_ORPHAN_GRACE_MS = 60 * 1000;
 
 // Issue #37 : détection de boucle dans la réflexion des sous-agents.
 // Escalade adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies par agent et par
@@ -89,6 +97,13 @@ function newRunCtx(project) {
   return {
     project,
     runState: "idle", // "idle" | "running" | "stopping"
+    // Issue #87 : instant de (re)création du contexte de run. `beginRun`
+    // recopie tous les champs du contexte neuf → l'instant est réarmé à chaque
+    // démarrage de run. Sert de repère d'inactivité même quand AUCUN événement
+    // d'agent n'a jamais été reçu (`lastActivityAt` restait null → la garde de
+    // temps du watchdog ne s'armait pas et le verrou pouvait ne jamais être
+    // libéré).
+    startedAt: Date.now(),
     // Identifiant de run (posé par beginRun). endRun(project, generation) refuse
     // de libérer si la génération ne correspond pas.
     generation: 0,
@@ -293,11 +308,33 @@ export async function releaseStuckRunLock(project) {
     ghosts = !working;
   }
 
-  const stuck = (noActive && noParallel) || residualParallel || ghosts;
+  // 3 bis (issue #87) : DEMANDE EN FILE SANS PORTEUR. Groupe parallèle avec du
+  //    travail encore attendu (pending > 0) mais AUCUN agent actif et AUCUNE
+  //    session ne travaillant sur le projet : le créneau d'exécution n'est plus
+  //    tenu par personne (agent fantôme dont le processus est mort). Sans cette
+  //    détection, le verrou restait « running » indéfiniment — et si aucun
+  //    événement d'agent n'avait jamais été reçu, `lastActivityAt` était null,
+  //    donc la garde de temps (point 4) ne s'armait jamais — puis TOUTES les
+  //    demandes suivantes étaient mises en file en silence (issue #87).
+  //    La fenêtre de grâce (`startedAt`/`lastActivityAt`) évite de couper une
+  //    run en cours de démarrage.
+  let orphanQueue = false;
+  if (noActive && !noParallel && ctx.parallelGroup.pending > 0) {
+    const idleSince = ctx.lastActivityAt || ctx.startedAt || 0;
+    if (idleSince && Date.now() - idleSince > QUEUED_ORPHAN_GRACE_MS) {
+      orphanQueue = !(await projectHasWorkingSession(key));
+    }
+  }
+
+  const stuck = (noActive && noParallel) || residualParallel || ghosts || orphanQueue;
   if (!stuck) {
     // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
     //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
-    if (ctx.lastActivityAt && Date.now() - ctx.lastActivityAt > busState.timeoutMs) {
+    //    `startedAt` sert de repère quand aucun événement d'agent n'a jamais été
+    //    reçu (`lastActivityAt` null) : sans lui, le verrou n'était jamais
+    //    libéré (issue #87).
+    const idleSince = ctx.lastActivityAt || ctx.startedAt;
+    if (idleSince && Date.now() - idleSince > busState.timeoutMs) {
       const drained = await drainExclusivityQueues(ctx, key);
       if (drained) {
         console.warn("[agents-bus] watchdog : run inactive depuis trop longtemps mais demandes en file → relance.");
@@ -318,6 +355,8 @@ export async function releaseStuckRunLock(project) {
   if (drained) {
     if (ghosts) {
       console.warn("[agents-bus] watchdog : agents fantômes/inactifs mais demandes en file → relance des demandes en attente.");
+    } else if (orphanQueue) {
+      console.warn("[agents-bus] watchdog : travail en file sans agent porteur (verrou orphelin) → relance des demandes en attente.");
     } else if (residualParallel) {
       console.warn("[agents-bus] watchdog : groupe parallèle résiduel mais demandes en file → relance des demandes en attente.");
     } else {
@@ -330,6 +369,8 @@ export async function releaseStuckRunLock(project) {
   // Rien en file : libérer réellement le verrou (la vraie run est terminée).
   if (noActive && noParallel) {
     console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
+  } else if (orphanQueue) {
+    console.warn("[agents-bus] watchdog : travail en file sans agent porteur (verrou orphelin), libération forcée.");
   } else if (residualParallel) {
     console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
   } else {
@@ -385,6 +426,23 @@ async function anyActiveAgentWorking(project) {
     return isAnyAgentWorking(sessions, Array.from(ctx.activeAgents), (id) => ctx.agentProject[id] || null, Date.now());
   } catch (e) {
     return false;
+  }
+}
+
+// Issue #87 : une session du PROJET travaille-t-elle réellement ? Contrairement
+// à `anyActiveAgentWorking` (scopé aux agents ACTIFS du contexte de run), cette
+// sonde est scopée PROJET : elle détecte qu'un agent extérieur au contexte (run
+// précédente abandonnée) travaille encore — auquel cas une demande en file
+// d'attente doit continuer d'attendre au lieu d'être relancée par-dessus.
+// Fail-safe (sens anti-double-run) : en cas d'erreur de sonde, on retourne true
+// → le verrou est CONSERVÉ (jamais de libération sur une sonde indisponible).
+async function projectHasWorkingSession(project) {
+  try {
+    const res = await invoke("list_agent_sessions");
+    const sessions = (res && res.sessions) || [];
+    return isProjectWorking(sessions, runKey(project));
+  } catch (_) {
+    return true;
   }
 }
 

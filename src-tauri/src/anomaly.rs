@@ -600,6 +600,39 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     }),
                 );
             }
+            // Issue #87 : purge des ÉTATS D'EXÉCUTION FANTÔMES. Le filtre ci-
+            // dessus (Bug #152) ne voit que les entrées encore `busy` dans la
+            // map d'anomalie ET dont la session enregistrée est morte. Il
+            // manquait le cas décrit par l'issue : la ligne `agents` reste
+            // `proc_state='Running'` (et `busy` est déjà retombé à 0) alors
+            // qu'AUCUN processus n'est vivant → le verrou d'exécution du projet
+            // restait posé et TOUS les lancements suivants étaient refusés ou
+            // mis en file en silence (jusqu'au redémarrage de Pilot, la variante
+            // de casse du chemin contournant le verrou). La purge ci-dessous est
+            // autoritaire : elle inspecte la base (proc_state='Running') et
+            // vérifie la vivacité réelle du processus (`agent_alive`), remet la
+            // ligne à `Unloaded` (loaded=0, busy=0), libère la marque `busy` de
+            // la map d'anomalie, retire la session morte du registre et
+            // journalise UNE LIGNE par purge. Les sessions vivantes (parkées, en
+            // cours) ne sont jamais touchées.
+            if let Ok(purged) = state
+                .agent_service
+                .purge_ghost_running_states_app(&app, &anomaly_map)
+            {
+                for (project, agent) in purged {
+                    // Événement Rust → JS : le bus d'agents libère le créneau
+                    // d'exclusivité du projet et lance les demandes en attente.
+                    let _ = app.emit(
+                        "agent-stale-busy-released",
+                        serde_json::json!({
+                            "project": project,
+                            "agent": agent,
+                            "idleMinutes": 0,
+                            "reason": "État d'exécution fantôme purgé : marqué « en cours » sans processus vivant — verrou du projet libéré.",
+                        }),
+                    );
+                }
+            }
             // 3. Plafond « réfléchit » du super-agent (tâche #141) : couper le
             //    process du super-agent bloqué (busy sans progression) + alerter.
             //    Ne touche jamais aux agents de projets (clé dédiée `\u{1f}superagent`).
