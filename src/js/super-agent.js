@@ -31,7 +31,12 @@ import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
-import { parseMemoryRemovePayload, parseMemoryRestorePayload } from "./super-agent-memory.js";
+import {
+  parseMemoryRemovePayload,
+  parseMemoryRestorePayload,
+  parseMemoryTrashListPayload,
+  formatMemoryTrashList,
+} from "./super-agent-memory.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
