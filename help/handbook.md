@@ -1641,7 +1641,9 @@ l'assistant peut **retirer ce fait précis** sans réécrire tout le résumé. L
 retiré n'est pas perdu : il est gardé dans une **corbeille limitée aux 20 derniers
 retraits**, et l'assistant peut le **remettre en place** (le dernier retrait par
 défaut, ou un retrait choisi) si vous vous êtes trompés ou s'il redevient
-pertinent.
+pertinent. L'assistant peut aussi **consulter la liste** des retraits encore
+remisables (identifiant, date, aperçu du contenu) pour retrouver un retrait
+ancien sans avoir à annuler les plus récents.
 
 ---
 

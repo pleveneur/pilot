@@ -1029,10 +1029,18 @@ naturellement là où on en était.
   via `field`. À utiliser dès qu'un fait mémorisé est devenu faux, périmé ou
   obsolète. Envoi via sentinel `PILOT_ASSISTANT_MEMORY_REMOVE::` + charge utile
   JSON `{ target, field? }` (commande Rust `super_agent_remove_session_memory`).
+  Le résultat renvoie la mémoire mise à jour **et** l'identifiant du retrait
+  rangé en corbeille (`trash_id`), qui permet de le remettre en place précisément.
 - **Outil `restore_session_memory`** (même extension) : remet en place un fait
   précédemment retiré, par son `id`, ou **le retrait le plus récent** quand aucun
   `id` n'est fourni. Envoi via sentinel `PILOT_ASSISTANT_MEMORY_RESTORE::` +
   charge utile JSON `{ id? }` (commande Rust `super_agent_restore_session_memory`).
+- **Outil `list_session_memory_trash`** (même extension) : parcourt la corbeille —
+  les retraits en attente, **du plus récent au plus ancien**, chacun avec son
+  identifiant, son type, sa date et un **aperçu court** du contenu retiré. Évite
+  d'annuler un par un les retraits plus récents quand on veut restaurer un retrait
+  ancien. Envoi via sentinel `PILOT_ASSISTANT_MEMORY_TRASH_LIST::` (commande Rust
+  `super_agent_list_session_memory_trash`, lecture seule).
 - **Corbeille bornée** : chaque retrait est conservé dans une corbeille
   (`app_data_dir()/session-memory-trash.json`), limitée aux **20 derniers
   retraits** (au-delà, les plus anciens sont évincés). Rien n'est perdu
@@ -1069,7 +1077,9 @@ l'assistant peut **retirer ce fait précis** sans réécrire tout le résumé. L
 retiré n'est pas perdu : il est gardé dans une **corbeille limitée aux 20 derniers
 retraits**, et l'assistant peut le **remettre en place** (le dernier retrait par
 défaut, ou un retrait choisi) si vous vous êtes trompés ou s'il redevient
-pertinent.
+pertinent. L'assistant peut aussi **consulter la liste** des retraits encore
+remisables (identifiant, date, aperçu du contenu) pour retrouver un retrait
+ancien sans avoir à annuler les plus récents.
 <!-- /HELP:super-agent-session-memory -->
 
 ## 6. Initialisation d'un projet existant
