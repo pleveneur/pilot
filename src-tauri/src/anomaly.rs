@@ -66,6 +66,15 @@ pub struct AgentAnomalyState {
     /// et la libération du créneau « run fantôme » sont SUSPENDUS : une attente
     /// d'utilisateur n'est pas un blocage, c'est un état légitime (nuit, réunion).
     pub awaiting_user: bool,
+    /// Une opération d'OUTIL est-elle en cours d'exécution ? Posé sur
+    /// `tool_execution_start`, levé sur `tool_execution_end` (et sur tout
+    /// événement de fin de tour / de mort du process, anti-fuite). Distingue une
+    /// OPÉRATION LONGUE EN COURS (build, série de tests, longue analyse) — aucun
+    /// événement n'est émis entre le start et le end — d'un agent RÉELLEMENT
+    /// FIGÉ (aucun travail en cours) : tant qu'un outil tourne, l'arrêt
+    /// automatique T2 est suspendu (un long travail qui avance ne doit plus être
+    /// coupé à tort).
+    pub tool_in_progress: bool,
 }
 
 /// Événements RPC considérés comme une activité de l'agent (rafraîchissent
@@ -179,6 +188,8 @@ pub fn make_observer(
                     entry.last_event = t.to_string();
                     // Mort du process : aucune attente d'utilisateur ne subsiste.
                     entry.awaiting_user = false;
+                    // Mort du process : aucun outil ne tourne plus.
+                    entry.tool_in_progress = false;
                 }
             } else {
                 let entry = m.entry(agent_key.clone()).or_insert(AgentAnomalyState {
@@ -190,12 +201,17 @@ pub fn make_observer(
                     blocked_reported: false,
                     auto_stopped_reported: false,
                     awaiting_user: is_user_request,
+                    // Posé si cet événement fondateur est déjà un start d'outil.
+                    tool_in_progress: t == "tool_execution_start",
                 });
                 if t == "agent_start" {
                     entry.busy = true;
                     // Nouvelle exécution : réarmer la détection de blocage ET l'arrêt auto.
                     entry.blocked_reported = false;
                     entry.auto_stopped_reported = false;
+                    // Nouvelle exécution : aucun outil en cours (anti-fuite si un
+                    // `tool_execution_end` de la run précédente a été perdu).
+                    entry.tool_in_progress = false;
                 } else if t == "agent_settled" || t == "agent_end" {
                     // `agent_end` marque la fin d'un tour (le frontend considère
                     // l'agent « au repos » dès cet événement). On repasse busy=false
@@ -206,6 +222,8 @@ pub fn make_observer(
                     entry.busy = false;
                     entry.blocked_reported = false;
                     entry.auto_stopped_reported = false;
+                    // Fin de tour : plus aucun outil en cours (anti-fuite).
+                    entry.tool_in_progress = false;
                 }
                 // Marqueur « en attente de réponse utilisateur » : posé par une
                 // question interactive, levé par le premier événement d'activité
@@ -221,6 +239,16 @@ pub fn make_observer(
                 }
                 entry.last_activity_wall = Some(SystemTime::now());
                 entry.last_event = t.to_string();
+                // Distinction « opération d'outil en cours » vs « agent figé » :
+                // un `tool_execution_end` clôt l'opération ; SEUL un
+                // `tool_execution_start` l'ouvre (`tool_execution_update` ne fait
+                // que rafraîchir l'activité, il ne marque pas l'ouverture).
+                // Les autres événements d'activité ne changent pas ce marqueur.
+                if t == "tool_execution_end" {
+                    entry.tool_in_progress = false;
+                } else if t == "tool_execution_start" {
+                    entry.tool_in_progress = true;
+                }
             }
         }
     })
@@ -279,6 +307,14 @@ fn should_auto_stop_on_progress(
     now: Instant,
 ) -> bool {
     if !enabled || !entry.busy || entry.auto_stopped_reported || entry.awaiting_user {
+        return false;
+    }
+    // Une opération d'outil EN COURS est un travail qui avance : un long build,
+    // une longue série de tests ou une longue analyse n'émet aucun événement
+    // entre `tool_execution_start` et `tool_execution_end`. Ne jamais couper
+    // tant que l'outil tourne ; l'agent RÉELLEMENT figé (aucun outil en cours)
+    // reste arrêté comme avant.
+    if entry.tool_in_progress {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_progress).as_secs();
@@ -400,10 +436,11 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                         entry.blocked_reported = true;
                         alerts.push((project.clone(), agent.clone(), entry.last_event.clone(), idle_secs / 60));
                     }
-                    // 2. Arrêt auto (T2) : agents délégués uniquement (le super-agent
-                    //    est exclu, cf. `is_super`). Le scope (AgentProcess) est filtré
-                    //    après (agent_process_alive). Bug #152 : le calcul d'inactivité
-                    //    ignore les réessais provider (should_auto_stop_on_progress).
+                    // 2. Arrêt auto (T2) : agents délégués ET agent standard (session
+                    //    principale) ; seul le super-agent est exclu (cf. `is_super`). Le scope
+                    //    (AgentProcess) est filtré après (agent_process_alive). Bug #152 : le
+                    //    calcul d'inactivité ignore les réessais provider
+                    //    (should_auto_stop_on_progress).
                     if !is_super
                         && should_auto_stop_on_progress(
                             entry,
@@ -821,6 +858,64 @@ mod tests {
         assert!(activity.lock().unwrap().is_empty());
     }
 
+    /// Passage 3 du lot 1 : l'observateur distingue une OPÉRATION D'OUTIL EN
+    /// COURS (`tool_execution_start` … `tool_execution_end`) d'un agent au repos.
+    /// Le marqueur est levé par une fin de tour (`agent_end`/`agent_settled`) —
+    /// anti-fuite si `tool_execution_end` est perdu — et par la mort du process.
+    #[test]
+    fn observer_tracks_tool_in_progress() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        // agent_start → aucun outil en cours.
+        obs(&ev("agent_start"));
+        assert!(
+            !anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "agent_start → aucun outil en cours"
+        );
+
+        // tool_execution_start → opération d'outil en cours.
+        obs(&ev("tool_execution_start"));
+        assert!(
+            anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "tool_execution_start → opération en cours"
+        );
+
+        // tool_execution_update (flux de l'outil) ne clôt pas l'opération.
+        obs(&ev("tool_execution_update"));
+        assert!(
+            anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "tool_execution_update → toujours en cours"
+        );
+
+        // tool_execution_end → opération terminée.
+        obs(&ev("tool_execution_end"));
+        assert!(
+            !anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "tool_execution_end → opération terminée"
+        );
+
+        // Un nouvel outil en cours puis agent_settled → marqueur levé (anti-fuite).
+        obs(&ev("tool_execution_start"));
+        obs(&ev("agent_settled"));
+        assert!(
+            !anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "agent_settled → plus d'outil en cours (anti-fuite)"
+        );
+
+        // Nouvel outil puis process_exit → marqueur levé (mort du process).
+        obs(&ev("agent_start"));
+        obs(&ev("tool_execution_start"));
+        obs(&ev("process_exit"));
+        assert!(
+            !anomaly.lock().unwrap().get("/proj\u{1f}codeur").unwrap().tool_in_progress,
+            "process_exit → plus d'outil en cours"
+        );
+    }
+
     /// Le prompt de diagnostic mentionne l'anomalie et interdit l'action auto.
     #[test]
     fn diagnostic_prompt_mentions_anomaly_and_no_auto_action() {
@@ -848,6 +943,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user: false,
+            tool_in_progress: false,
         };
         let (iso, relative) = last_activity_info(&state);
         // ISO présent et au format RFC3339 (ex: 2024-01-15T10:30:00+00:00).
@@ -867,6 +963,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user: false,
+            tool_in_progress: false,
         };
         let (iso2, relative2) = last_activity_info(&no_wall);
         assert!(iso2.is_none(), "ISO absent sans activité wall-clock");
@@ -892,6 +989,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: reported,
             awaiting_user: false,
+            tool_in_progress: false,
         };
 
         // Désactivé → jamais arrêté, même très inactif.
@@ -1010,6 +1108,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user: false,
+            tool_in_progress: false,
         };
 
         // Boucle de réessais fraîche (il y a 30 s) mais AUCUNE progression depuis
@@ -1036,6 +1135,51 @@ mod tests {
         assert!(!should_auto_stop_on_progress(&e, true, 10, now));
     }
 
+    /// Passage 3 du lot 1 : une OPÉRATION LONGUE EN COURS (outil démarré qui
+    /// tourne encore) n'est PAS arrêtée automatiquement, même si la dernière
+    /// progression date de plus que le seuil — alors qu'un agent RÉELLEMENT FIGÉ
+    /// (aucun outil en cours) reste arrêté comme avant. Le seuil et les autres
+    /// gardes (enabled/busy/already-reported/awaiting_user) sont inchangés.
+    #[test]
+    fn should_auto_stop_on_progress_suspends_during_long_tool() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        // 12 min depuis la dernière progression (> seuil 10 min).
+        let state = |tool_in_progress: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(720),
+            last_progress: now - Duration::from_secs(720),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "tool_execution_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress,
+        };
+
+        // Outil en cours → pas d'arrêt (long build / longue série de tests).
+        assert!(
+            !should_auto_stop_on_progress(&state(true), true, 10, now),
+            "opération longue en cours → pas d'arrêt automatique"
+        );
+
+        // Aucun outil en cours → agent figé → arrêt (comportement conservé).
+        assert!(
+            should_auto_stop_on_progress(&state(false), true, 10, now),
+            "agent figé (aucun outil) → arrêt conservé"
+        );
+
+        // Le réglage d'activation reste respecté : désactivé → jamais d'arrêt.
+        assert!(!should_auto_stop_on_progress(&state(false), false, 10, now));
+
+        // Le seuil reste respecté : outil en cours ET progression < seuil.
+        let fresh = AgentAnomalyState {
+            last_activity: now - Duration::from_secs(300),
+            last_progress: now - Duration::from_secs(300),
+            ..state(true)
+        };
+        assert!(!should_auto_stop_on_progress(&fresh, true, 10, now));
+    }
+
     /// Verrou fantôme (busy-stale) : `should_release_stale_busy` libère la marque
     /// busy d'un agent figé (busy sans activité depuis > grace) SANS dépendre de
     /// l'arrêt auto (T2). Gardes : non-busy → jamais, et inactivité < seuil → non.
@@ -1051,6 +1195,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user: false,
+            tool_in_progress: false,
         };
 
         // Non busy → jamais libéré.
@@ -1087,6 +1232,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user,
+            tool_in_progress: false,
         };
 
         // busy frais (< grace) → exclusif : une run réellement en cours.
@@ -1163,6 +1309,7 @@ mod tests {
             blocked_reported: false,
             auto_stopped_reported: false,
             awaiting_user,
+            tool_in_progress: false,
         };
 
         // (a) En attente de réponse utilisateur → aucune décision automatique.

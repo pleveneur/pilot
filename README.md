@@ -489,7 +489,7 @@ pilot/
 
 ## Licence
 
-MIT
+MIT — voir le fichier [`LICENSE`](LICENSE) pour le texte complet (© 2026 pleveneur).
 
 ## Modèles et Multi-comptes Ollama
 

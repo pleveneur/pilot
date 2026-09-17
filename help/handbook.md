@@ -1770,15 +1770,33 @@ avertit (bandeau + notification native). Le bandeau propose un bouton
 **🔍 Diagnostiquer** qui lance un agent d'analyse **sans action automatique** :
 il propose des évolutions que vous validez vous-même.
 
-**Arrêt automatique des agents délégués (T2)** : un agent **délégué** (lancé via
-run_agents, ex. par l'Assistant 🧭) **bloqué** — actif mais **sans progression**
-depuis le seuil dédié (défaut : **10 minutes**) — est **arrêté automatiquement**.
+**Arrêt automatique des agents bloqués (T2)** : un agent **bloqué** — actif mais
+**sans progression** depuis le seuil dédié (défaut : **10 minutes**) — est
+**arrêté automatiquement**. Cela concerne les **agents délégués** (lancés via
+run_agents, ex. par l'Assistant 🧭) **et l'agent standard** du projet (session
+principale), pour qu'un process figé ne bloque plus Pilot. Le reviewer et
+l'Assistant ne sont **jamais** arrêtés automatiquement.
+
+**Opération longue en cours** (un outil démarré qui tourne encore : longue
+construction, longue série de tests, longue analyse) : tant qu'un outil
+s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
+automatique (T2) ne le coupe pas**. Attention : cela ne protège pas une opération
+**totalement silencieuse** (aucun événement pendant plus de **10 minutes**) du
+délai d'inactivité côté interface, qui met fin à la run **sans tuer l'agent** ;
+et au bout de **25 minutes** d'absence d'activité, le filet « occupé périmé »
+(ci-dessous) libère le créneau **sans tuer l'agent**. Seul un agent
+**réellement figé** (aucun outil en cours, plus aucune progression) est arrêté
+par T2.
+
+**Question posée à l'utilisateur** : quand un agent attend votre réponse (choix,
+confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique
+(T2) est **mis en pause** tant que la réponse n'est pas donnée, même très
+longtemps.
 
 **Verrou de run fantôme (busy-stale)** : si un agent reste marqué actif (process
 pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
 (notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
 réinitialiser son processus. Aucun réglage utilisateur.
-Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
@@ -1786,11 +1804,14 @@ Un outil qui démarre sans se terminer au-delà du seuil est considéré bloqué
 - **Diagnostic automatique** : après l'arrêt, un **agent de diagnostic est lancé
   automatiquement** pour **proposer** des évolutions (lecture seule, validation
   utilisateur requise — aucune action automatique).
-- **Scope restreint** : seuls les agents délégués sont arrêtés ; le chat
-  principal, le reviewer et l'Assistant ne sont jamais arrêtés automatiquement.
+- **Scope restreint** : sont arrêtés automatiquement les agents **délégués** ET
+  l'**agent standard** du projet (session principale) ; le reviewer et
+  l'Assistant ne sont **jamais** arrêtés automatiquement. Le filet « occupé
+  périmé » libère le créneau **sans tuer l'agent**.
 - **Réglages** : dans **Paramètres ⚙️ → Agent**, vous pouvez activer/désactiver
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
-  délégués bloqués** (seuil 10 min). Activés par défaut.
+  bloqués (délégués + standard)** (seuil 10 min). Activés par
+  défaut.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
