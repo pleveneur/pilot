@@ -59,6 +59,13 @@ processus n'étant plus vivant, son créneau et son verrou d'exécution sont
 son processus est mort : il est relançable au lieu de rester bloqué en silence.
 Une exécution réellement en cours n'est jamais touchée.
 
+**Marque « occupé » toujours libérée à l'arrêt** : quelle que soit la façon
+dont un agent est arrêté (arrêt manuel, fermeture du projet, arrêt de tous les
+agents, fermeture de Pilot ou mise à jour de pi), sa marque « occupé » est
+**systématiquement purgée**. Une nouvelle demande sur ce projet **redémarre
+normalement** l'agent au lieu de rester en file derrière un couple
+(projet, agent) marqué occupé à tort.
+
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
   agent en file d'attente sur le même rôle peut prendre le relais.
@@ -107,6 +114,17 @@ reviewer, super-agent), il met à jour **deux** maps :
 `agent_start` → `busy=true` (et réarme `blocked_reported` + `auto_stopped_reported`) ;
 `agent_settled` → `busy=false`. Tout événement d'activité (`ACTIVITY_EVENTS`)
 rafraîchit `last_activity`/`last_event`.
+
+**Purge de la marque `busy` sur TOUS les chemins d'arrêt (R2)** : la remise à
+zéro n'est pas réservée à `AgentService::stop`. `stop_project_sessions`,
+`stop_all_agent_processes` et `shutdown_all` (lui-même appelé par la **mise à
+jour de pi**, l'application ne se fermant pas) passent par le helper
+`purge_anomaly_busy_for_key` → **`clear_anomaly_busy`** — même remise à zéro,
+aucune logique dupliquée — après relâchement du verrou des sessions (pas
+d'imbrication de verrous). Sans cette purge, un couple `(projet, agent)` restait
+`busy=true` avec une activité récente : au redémarrage de l'agent (retour sur le
+projet, mise à jour de pi), la demande était considérée « déjà en cours »,
+**mise en file et jamais démarrée**.
 
 ### 2.2 Moniteur (`anomaly::start_monitor`)
 
@@ -310,7 +328,7 @@ callback de notification du bus (message ⏱️).
 |---|---|
 | `src-tauri/src/anomaly.rs` | Observateur combiné, moniteur, arrêt auto, commande diagnostic, tests |
 | `src-tauri/src/lib.rs` | `mod anomaly`, config (`anomaly_detection_enabled`, `anomaly_timeout_minutes`, `agent_auto_stop_enabled`, `agent_auto_stop_minutes`), état `agent_anomaly`, setup, commande |
-| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) + `purge_ghost_running_states` (issue #87) |
+| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) + `purge_ghost_running_states` (issue #87) + purge de la marque `busy` sur **tous** les chemins d'arrêt (`purge_anomaly_busy_for_key`, R2) |
 | `src-tauri/src/rpc.rs` | Suppression de l'ancien `make_project_activity_observer` (remplacé par l'observateur combiné) |
 | `src/js/anomaly.js` | Bandeau d'alerte, notification, arrêt auto (événement `agent-auto-stopped`), modale de diagnostic |
 | `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) + `releaseStuckRunLock` : verrou orphelin « travail en file sans porteur » (issue #87) |
@@ -345,6 +363,11 @@ callback de notification du bus (message ⏱️).
   libération du créneau fantôme ne se déclenchent pas ; dès que le marqueur est
   levé (réponse traitée ou fin de tour), l'arrêt redevient déclenchable au-delà
   du seuil (aucune régression du filet de sécurité).
+- Purge de la marque `busy` sur tous les chemins d'arrêt (R2) couverte par les
+  tests Rust `stop_project_sessions_clears_anomaly_busy`,
+  `stop_all_agent_processes_clears_anomaly_busy` et
+  `shutdown_all_clears_anomaly_busy` (ils échouent sur le code d'avant
+  correctif : seul `AgentService::stop` purgeait la marque).
 - Test manuel : simuler un agent bloqué (seuil auto-stop réduit à 1 min) → après
   le seuil, l'agent est arrêté, l'événement UI + bandeau apparaissent, la file
   d'exclusivité est libérée (un agent en attente prend le relais) et l'agent de

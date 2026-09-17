@@ -1344,6 +1344,17 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **C2 — Agent demandé introuvable : échec franc, jamais de repli silencieux** :
+  si l'agent **explicitement demandé** (id transmis par `run_agents` /
+  `delegate_to_coder`) **n'existe pas** dans le registre, la délégation est
+  **annulée avec une erreur explicite citant l'id demandé** et **AUCUN agent
+  n'est lancé**. Le repli (codeur du projet → agent `default`) ne s'applique
+  **que** lorsqu'**aucun agent n'est demandé**. Avant, la demande partait
+  silencieusement à un autre agent sans que personne ne le sache (détour
+  silencieux). Décision portée par la fonction **pure**
+  `resolveDelegationTargetDecision` (super-agent.js ; `resolveDelegationTarget`
+  ne collecte que l'I/O), couverte par
+  `src/js/super-agent-delegation-target.test.js` (5 cas, dont « introuvable »).
 - **Restitution fiable du résultat (fin de run → Assistant)** : le résultat
   d'une délégation arrive **automatiquement** dans la conversation de
   l'Assistant à la fin de la tâche — même si pi a dû **se relancer** après une
@@ -1857,6 +1868,13 @@ processus n'étant plus vivant, son créneau et son verrou d'exécution sont
 **agent global** (espace assistant, sans projet) resté « en cours » alors que
 son processus est mort : il est relançable au lieu de rester bloqué en silence.
 Une exécution réellement en cours n'est jamais touchée.
+
+**Marque « occupé » toujours libérée à l'arrêt** : quelle que soit la façon
+dont un agent est arrêté (arrêt manuel, fermeture du projet, arrêt de tous les
+agents, fermeture de Pilot ou mise à jour de pi), sa marque « occupé » est
+**systématiquement purgée**. Une nouvelle demande sur ce projet **redémarre
+normalement** l'agent au lieu de rester en file derrière un couple
+(projet, agent) marqué occupé à tort.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un

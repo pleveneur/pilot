@@ -450,6 +450,17 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
+- **C2 — Agent demandé introuvable : échec franc, jamais de repli silencieux** :
+  si l'agent **explicitement demandé** (id transmis par `run_agents` /
+  `delegate_to_coder`) **n'existe pas** dans le registre, la délégation est
+  **annulée avec une erreur explicite citant l'id demandé** et **AUCUN agent
+  n'est lancé**. Le repli (codeur du projet → agent `default`) ne s'applique
+  **que** lorsqu'**aucun agent n'est demandé**. Avant, la demande partait
+  silencieusement à un autre agent sans que personne ne le sache (détour
+  silencieux). Décision portée par la fonction **pure**
+  `resolveDelegationTargetDecision` (super-agent.js ; `resolveDelegationTarget`
+  ne collecte que l'I/O), couverte par
+  `src/js/super-agent-delegation-target.test.js` (5 cas, dont « introuvable »).
 - **Restitution fiable du résultat (fin de run → Assistant)** : le résultat
   d'une délégation arrive **automatiquement** dans la conversation de
   l'Assistant à la fin de la tâche — même si pi a dû **se relancer** après une
@@ -1332,7 +1343,7 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 
 | Fichier | Rôle |
 |---|---|
-| `src/js/super-agent.js` | Onglet 🧭 : chat (session persistante + streaming), questions (boutons pilot-choices), actions (open_project / delegate_to_coder), initialisation, panneau Projets & clients (association projet→client). |
+| `src/js/super-agent.js` | Onglet 🧭 : chat (session persistante + streaming), questions (boutons pilot-choices), actions (open_project / delegate_to_coder), initialisation, panneau Projets & clients (association projet→client). Résolution de la cible de délégation (`resolveDelegationTargetDecision`, pure) : repli codeur→défaut **uniquement** si aucun agent n'est demandé ; id demandé inconnu → erreur explicite, aucune cible. |
 | `src/js/super-agent-config.js` | Paramètres ⚙️ : nom, clients, association projet→client. |
 
 ## 12. Anti-régression
