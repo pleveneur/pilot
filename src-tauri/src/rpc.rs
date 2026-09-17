@@ -1003,12 +1003,49 @@ pub fn list_agent_models(state: State<AppState>) -> Result<Value, String> {
     do_list_agent_models(state.inner())
 }
 
+// R2 (F2 de l'étude oh-my-pi) : noms de commande de découverte, dans l'ordre à
+// essayer. `get_commands` est le nom utilisé par pi (moteur actuel) ;
+// `get_available_commands` est le nom exposé par omp. Aucune régression pour pi :
+// le premier essai est inchangé, le second n'a lieu qu'en cas d'échec.
+pub(crate) const COMMAND_DISCOVERY_ORDER: [&str; 2] = ["get_commands", "get_available_commands"];
+
+/// Vrai si la réponse de découverte des commandes est exploitable (au moins une
+/// commande). Une réponse `success:false` (commande inconnue) est un échec.
+pub(crate) fn command_result_ok(value: &Value) -> bool {
+    if value.get("success").and_then(|s| s.as_bool()) == Some(false) {
+        return false;
+    }
+    let data = value.get("data").unwrap_or(value);
+    data.get("commands")
+        .and_then(|c| c.as_array())
+        .map(|c| !c.is_empty())
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub fn list_agent_commands(state: State<AppState>) -> Result<Value, String> {
     let project = state.active_project.lock().unwrap().clone().ok_or("Aucun projet ouvert")?;
-    let cmd = serde_json::json!({"type": "get_commands"});
     state.agent_service.with_active_session(&project, |session| {
-        rpc_manager::send_command_sync(session, cmd)
+        let mut last: Result<Value, String> = Err("aucune réponse".to_string());
+        for (i, name) in COMMAND_DISCOVERY_ORDER.iter().enumerate() {
+            let cmd = serde_json::json!({"type": name});
+            let is_last = i + 1 == COMMAND_DISCOVERY_ORDER.len();
+            match rpc_manager::send_command_sync(session, cmd) {
+                Ok(v) => {
+                    if command_result_ok(&v) || is_last {
+                        return Ok(v);
+                    }
+                    last = Ok(v);
+                }
+                Err(e) => {
+                    if is_last {
+                        return Err(e);
+                    }
+                    last = Err(e);
+                }
+            }
+        }
+        last
     })?
 }
 
@@ -1088,8 +1125,35 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        count_rpc_messages, extract_model_from_state, kind_from_version_output, should_block_start,
+        command_result_ok, count_rpc_messages, extract_model_from_state, kind_from_version_output,
+        should_block_start, COMMAND_DISCOVERY_ORDER,
     };
+
+    #[test]
+    fn command_discovery_order_starts_with_the_name_pi_uses() {
+        // R2 (F2 de l'étude oh-my-pi) : le premier essai est celui d'aujourd'hui
+        // (pi) ; le second est le nom exposé par omp, essayé seulement en échec.
+        assert_eq!(COMMAND_DISCOVERY_ORDER[0], "get_commands");
+        assert_eq!(COMMAND_DISCOVERY_ORDER[1], "get_available_commands");
+    }
+
+    #[test]
+    fn command_result_ok_detects_a_useful_response() {
+        // Réponse enveloppée (pi) : result.data.commands
+        assert!(command_result_ok(
+            &serde_json::json!({"data":{"commands":[{"name":"compact"}]}})
+        ));
+        // Réponse nue : {commands: [...]}
+        assert!(command_result_ok(
+            &serde_json::json!({"commands":[{"name":"handoff"}]})
+        ));
+        // Commande inconnue / échec / vide → on doit basculer sur le nom suivant.
+        assert!(!command_result_ok(&serde_json::json!({"success":false})));
+        assert!(!command_result_ok(
+            &serde_json::json!({"data":{"commands":[]}})
+        ));
+        assert!(!command_result_ok(&serde_json::json!({})));
+    }
 
     #[test]
     fn count_messages_array_direct() {

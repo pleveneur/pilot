@@ -15,6 +15,10 @@ import { exportConversationMarkdown, copyConversationHtml } from "./conversation
 import { renderEditGateDialog } from "./diff-view.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
+import {
+  isTerminalAgentEnd,
+  commandsFromUpdate,
+} from "./agent-hardening.js";
 import { getTabsManager } from "./tabs.js";
 
 /**
@@ -5964,7 +5968,25 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       break;
 
+    case "available_commands_update": {
+      // R2 (F2 de l'étude oh-my-pi) : omp pousse la liste des commandes
+      // disponibles au lieu de répondre à `get_commands`. On recharge la palette
+      // pour ne pas perdre les commandes fournies par le moteur (no-op sur pi,
+      // qui n'émet pas cet événement).
+      if (commandsFromUpdate(payload)) {
+        loadCommands().catch(() => {});
+      }
+      break;
+    }
+
     case "agent_end":
+      // R2 (F3 de l'étude oh-my-pi) : un agent_end non terminal annonce que la
+      // session va reprendre (maintenance ou tâche asynchrone en attente). Ce
+      // n'est PAS une fin de run : on ne notifie pas et on n'avance pas l'état.
+      // pi n'émet jamais `isTerminal` → comportement inchangé sur le moteur actuel.
+      if (!isTerminalAgentEnd(payload)) {
+        break;
+      }
       // D1 (spec_web_remote.md) : notification desktop native si le prompt venait
       // du web (mode remote) — l'utilisateur a lancé une tâche depuis son
       // téléphone et veut être prévenu sur le desktop quand l'agent a terminé.
