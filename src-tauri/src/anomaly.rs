@@ -841,6 +841,45 @@ mod tests {
         serde_json::json!({ "type": t })
     }
 
+    /// Issue #89 : les réglages consommés par la boucle du moniteur sont extraits
+    /// de la config COURANTE (relue à chaque tour), donc une valeur modifiée dans
+    /// les Paramètres se retrouve immédiatement dans `MonitorConfig` — sans
+    /// redémarrer Pilot.
+    #[test]
+    fn monitor_config_reflects_current_settings() {
+        let mut cfg = crate::AppConfig::default();
+        cfg.anomaly_detection_enabled = false;
+        cfg.anomaly_timeout_minutes = 7;
+        cfg.agent_auto_stop_enabled = false;
+        cfg.agent_auto_stop_minutes = 3;
+        cfg.super_agent_auto_stop_enabled = false;
+        cfg.super_agent_auto_stop_minutes = 4;
+        cfg.stale_busy_grace_minutes = 5;
+
+        let mc = MonitorConfig::from_app_config(&cfg);
+        assert!(!mc.anomaly_enabled);
+        assert_eq!(mc.timeout_minutes, 7);
+        assert!(!mc.auto_stop_enabled);
+        assert_eq!(mc.auto_stop_minutes, 3);
+        assert!(!mc.super_stop_enabled);
+        assert_eq!(mc.super_stop_minutes, 4);
+        assert_eq!(mc.stale_busy_grace, 5);
+    }
+
+    /// Issue #89 : quand la config est momentanément illisible (verrou pris), le
+    /// moniteur garde la DERNIÈRE valeur connue au lieu de bloquer ou de
+    /// s'arrêter ; une lecture réussie prend la valeur fraîche.
+    #[test]
+    fn monitor_config_falls_back_to_last_known() {
+        let last = MonitorConfig::defaults();
+        assert_eq!(monitor_config_or_last(None, last), last);
+        let fresh = MonitorConfig {
+            timeout_minutes: 1,
+            ..MonitorConfig::defaults()
+        };
+        assert_eq!(monitor_config_or_last(Some(fresh), last), fresh);
+    }
+
     /// L'observateur combiné met à jour la map d'activité par projet ET la map
     /// de surveillance d'anomalie par agent (busy + last_activity + last_event).
     #[test]
