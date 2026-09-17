@@ -1676,10 +1676,22 @@ pub(crate) fn gds_globally_enabled(state: &AppState) -> bool {
     state.config.lock().unwrap().gds_enabled
 }
 
+/// Cœur testable de la commande `get_config` (réserve de la relecture 0.4.14).
+///
+/// Même forme de résultat que la commande (`Result<AppConfig, String>`) pour que
+/// ses appelants ne changent pas, mais lecture **non bloquante** : on délègue au
+/// helper partagé `config_snapshot_locked` (issue #89) au lieu de
+/// `config.lock().unwrap()` (verrou bloquant, et panique si le verrou est
+/// empoisonné). Extrait dans une fonction libre pour être couvert par un test
+/// unitaire sans devoir construire tout `AppState`.
+fn get_config_read(config: &Mutex<AppConfig>) -> Result<AppConfig, String> {
+    Ok(config_snapshot_locked(config))
+}
+
 #[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
     ensure_config_loaded(&state, &app);
-    Ok(state.config.lock().unwrap().clone())
+    get_config_read(&state.config)
 }
 
 #[tauri::command]
@@ -3106,5 +3118,46 @@ mod tests {
         .join();
         assert!(config.lock().is_err(), "le verrou doit être empoisonné");
         assert_eq!(super::config_snapshot_locked(&config).theme, "light");
+    }
+
+    #[test]
+    fn get_config_read_never_waits_for_a_held_lock() {
+        // (c) `get_config` (lecture de configuration au démarrage) doit rendre la
+        // main immédiatement même si un autre thread tient le verrou : avant le
+        // correctif, `state.config.lock().unwrap()` attendait le relâchement du
+        // verrou (et paniquait s'il était empoisonné).
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let config = std::sync::Arc::new(std::sync::Mutex::new(AppConfig {
+            theme: "light".to_string(),
+            ..AppConfig::default()
+        }));
+        let held = std::sync::Arc::clone(&config);
+        let (tx, rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            tx.send(()).expect("signal de verrouillage");
+            std::thread::sleep(Duration::from_millis(400));
+        });
+        // rx.recv() garantit que le verrou est effectivement tenu par `holder`.
+        rx.recv().expect("le verrou doit être tenu");
+
+        let start = Instant::now();
+        let read = super::get_config_read(&config);
+        let elapsed = start.elapsed();
+        holder.join().expect("fin du détenteur du verrou");
+
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "get_config ne doit jamais attendre le verrou (attendu < 300 ms, mesuré {:?})",
+            elapsed
+        );
+        let cfg = read.expect("la lecture ne doit jamais échouer");
+        assert_eq!(
+            cfg.theme,
+            AppConfig::default().theme,
+            "repli sur la configuration par défaut quand le verrou est tenu"
+        );
     }
 }
