@@ -405,6 +405,17 @@ const SUPER_AGENT_SESSION_MEMORY_PROMPT: &str =
 /// mesurable et couvert par le garde-fou anti-regonflement du prompt.
 const SUPER_AGENT_SCHEDULE_PROMPT: &str = "\n\nTu disposes d'un outil `schedule_create` pour programmer une relance différée (afterSeconds) ou périodique (everySeconds >= 60) qui reviendra dans ta conversation à l'échéance. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Utilise `schedule_list` / `schedule_delete` pour gérer tes rappels. Max 20 rappels actifs. Désactive automatiquement un rappel devenu inutile (ne détecte plus rien, chantier terminé, condition remplie) via `schedule_set_enabled` au lieu de le supprimer, et réactive-le si le besoin revient.";
 
+/// Rôle de base de l'assistant (toujours injecté en tête du prompt système).
+/// `{}` est remplacé par le nom de l'assistant. Extrait en constante pour être
+/// mesurable et couvert par le garde-fou anti-regonflement du prompt.
+const SUPER_AGENT_ROLE_TEMPLATE: &str = "Tu es « {} », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.";
+
+/// Plafond du garde-fou anti-regonflement : total des textes FIXES du prompt
+/// système de l'assistant (rôle, règles figées et voix permanente), injectés à
+/// chaque message indépendamment des données et des toggles. Fixé au total
+/// mesuré après nettoyage, majoré de 5 % (arrondi au multiple de 50 supérieur).
+const SUPER_AGENT_FIXED_PROMPT_BUDGET: usize = 5550;
+
 
 #[tauri::command]
 pub async fn start_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
@@ -600,10 +611,7 @@ pub(crate) fn do_send_super_agent_prompt(
         (cfg.super_agent_name.clone(), cfg.super_agent_prompt.clone(), cfg.super_agent_concise, cfg.super_agent_coordinator, cfg.super_agent_user_memory.clone(), cfg.super_agent_adaptive_personality, cfg.super_agent_personality.clone(), cfg.super_agent_user_friendly)
     };
     let name = if name.trim().is_empty() { "Assistant".to_string() } else { name.trim().to_string() };
-    let role_text = format!(
-        "Tu es « {} », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.",
-        name
-    );
+    let role_text = SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", &name, 1);
     // Contexte projet : le projet actuellement actif dans Pilot + le projet sur
     // lequel l'assistant travaillait (dernier projet ouvert via `open_project`).
     // Le projet ACTIF est TOUJOURS la cible par défaut (issue #40).
@@ -4970,9 +4978,7 @@ mod tests {
     // ---------------------------------------------------------------------
     #[test]
     fn super_agent_prompt_is_measured_block_by_block() {
-        let role = String::from(
-            "Tu es « Assistant », l'assistant de suivi multi-projets de Pilot. Tu suis plusieurs projets (organisés par client) de la demande à la livraison, tu apprends des sessions d'agents et tu réponds aux questions. Tu es strictement en lecture seule : tu ne modifies jamais les fichiers des projets.",
-        );
+        let role = super::SUPER_AGENT_ROLE_TEMPLATE.replacen("{}", "Assistant", 1);
         let project_context = build_project_context(Some("/proj/actif"), Some("/proj/ancien"));
         let known_projects = format!(
             "\n\nProjets que tu connais :\n- {}",
@@ -5083,5 +5089,26 @@ mod tests {
         let cut = super::truncate_words(&long_word, 100);
         assert_eq!(cut.chars().count(), 101); // 100 car. + '…'
         assert!(cut.ends_with('…'));
+    }
+
+    /// Garde-fou anti-regonflement : le total des textes FIXES injectés à chaque
+    /// message ne doit pas dépasser `SUPER_AGENT_FIXED_PROMPT_BUDGET`. Si ce test
+    /// échoue, c'est qu'une consigne a été rallongée ou ajoutée : compacter (ou
+    /// relever le plafond explicitement, en justifiant la nouvelle règle).
+    #[test]
+    fn super_agent_fixed_prompt_stays_under_budget() {
+        let total = super::SUPER_AGENT_ROLE_TEMPLATE.chars().count()
+            + super::SUPER_AGENT_TOOLS_PROMPT.chars().count()
+            + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
+            + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
+            + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
+            + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
+            + super::voice_guideline().chars().count();
+        let budget = super::SUPER_AGENT_FIXED_PROMPT_BUDGET;
+        eprintln!("prompt assistant — textes fixes : {total} caracteres (plafond {budget})");
+        assert!(
+            total <= budget,
+            "textes fixes du prompt assistant : {total} caracteres > plafond {budget} — compacter ou relever le plafond explicitement"
+        );
     }
 }
