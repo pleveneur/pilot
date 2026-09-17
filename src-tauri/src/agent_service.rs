@@ -309,6 +309,26 @@ impl AgentService {
         }
     }
 
+    /// Défaut B (réserve R2) : purge la marque d'occupation `busy` du couple
+    /// encodé dans une clé de session `project\u{1f}agent`. Factorise l'accès à
+    /// la map d'anomalie partagée (via `self.anomaly_map`) et le découpage de
+    /// clé, pour que TOUS les chemins d'arrêt — arrêt d'une session (`stop`),
+    /// arrêt des sessions d'un projet (`stop_project_sessions`), arrêt des
+    /// processus d'agents (`stop_all_agent_processes`), arrêt complet
+    /// (`shutdown_all`) — passent par la MÊME remise à zéro
+    /// (`clear_anomaly_busy`), sans logique dupliquée. Ne crée aucune entrée.
+    fn purge_anomaly_busy_for_key(&self, key: &str) {
+        let map = match self.anomaly_map.lock().unwrap().clone() {
+            Some(m) => m,
+            None => return,
+        };
+        let (project, agent_id) = match key.split_once('\u{1f}') {
+            Some(pair) => pair,
+            None => return,
+        };
+        Self::clear_anomaly_busy(&map, project, agent_id);
+    }
+
     /// Retourne le statut d'extensions du dernier spawn de la session
     /// super-agent (None si jamais lancée). Lecture seule pour le frontend
     /// (tâche #136 : détection d'absence d'outils de l'assistant).
@@ -926,10 +946,9 @@ impl AgentService {
         // travail en cours : sans cette purge, `busy` reste à true avec un
         // `lastActivity` récent, ce qui bloque les gardes d'exclusivité
         // (« Une run est déjà en cours ») et met les demandes suivantes en file
-        // au lieu de les démarrer.
-        if let Some(map) = self.anomaly_map.lock().unwrap().clone() {
-            Self::clear_anomaly_busy(&map, project, agent_id);
-        }
+        // au lieu de les démarrer. Même remise à zéro que les autres chemins
+        // d'arrêt (réserve R2), via le helper unique.
+        self.purge_anomaly_busy_for_key(&key);
         // Si l'agent arrêté était l'agent actif, réinitialiser le pointeur.
         let mut active = self.active.lock().unwrap();
         if active.as_deref() == Some(agent_id) {
@@ -1209,44 +1228,75 @@ impl AgentService {
     /// (projet, agent)) et doivent être tuées pour éviter toute fuite
     /// de processus pi.
     pub fn stop_project_sessions(&self, project: &str) {
-        let mut sessions = self.sessions.lock().unwrap();
-        let keys: Vec<String> = sessions
-            .iter()
-            .filter(|(_, e)| e.project == project)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in keys {
-            if let Some(mut entry) = sessions.remove(&k) {
-                rpc_manager::stop_session(&mut entry.session);
+        let keys: Vec<String> = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let keys: Vec<String> = sessions
+                .iter()
+                .filter(|(_, e)| e.project == project)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in &keys {
+                if let Some(mut entry) = sessions.remove(k) {
+                    rpc_manager::stop_session(&mut entry.session);
+                }
             }
+            keys
+        };
+        // Réserve R2 : même remise à zéro que `stop` pour chaque couple arrêté.
+        // Une session fermée avec son projet n'est plus un travail en cours :
+        // sans cette purge, `busy` resterait vrai et un redémarrage de l'agent
+        // au retour sur le projet serait mis en file d'attente à tort.
+        for k in &keys {
+            self.purge_anomaly_busy_for_key(k);
         }
     }
 
     /// Arrête toutes les sessions d'agents multi-rôles H2 V2 (tous projets).
     /// Utilisé par `stop_all_agent_processes` et à l'arrêt de l'app.
     pub fn stop_all_agent_processes(&self) {
-        let mut sessions = self.sessions.lock().unwrap();
-        let keys: Vec<String> = sessions
-            .iter()
-            .filter(|(_, e)| e.mode == SpawnMode::AgentProcess)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in keys {
-            if let Some(mut entry) = sessions.remove(&k) {
-                rpc_manager::stop_session(&mut entry.session);
+        let keys: Vec<String> = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let keys: Vec<String> = sessions
+                .iter()
+                .filter(|(_, e)| e.mode == SpawnMode::AgentProcess)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in &keys {
+                if let Some(mut entry) = sessions.remove(k) {
+                    rpc_manager::stop_session(&mut entry.session);
+                }
             }
+            keys
+        };
+        // Réserve R2 : même remise à zéro que `stop` (le projet reste ouvert et
+        // les autres agents continuent de tourner → un faux `busy` maintiendrait
+        // le verrou d'exclusivité de ce couple).
+        for k in &keys {
+            self.purge_anomaly_busy_for_key(k);
         }
     }
 
     /// Arrêt complet de toutes les sessions (issue #14). À la fermeture de Pilot.
+    /// Appelé aussi par `update_pi` (mise à jour du binaire) SANS quitter
+    /// l'application : la purge de la marque `busy` (réserve R2) a donc un
+    /// intérêt réel — après la mise à jour, les sessions redémarrent et doivent
+    /// repartir d'un état non occupé. (Sur le seul chemin de fermeture complète,
+    /// la purge serait sans effet observable puisque le processus s'arrête, mais
+    /// elle est inoffensive et garantit un contrat unique pour tous les arrêts.)
     pub fn shutdown_all(&self) {
-        {
+        let keys: Vec<String> = {
             let mut sessions = self.sessions.lock().unwrap();
+            let keys: Vec<String> = sessions.keys().cloned().collect();
             for (_, mut entry) in sessions.drain() {
                 rpc_manager::stop_session(&mut entry.session);
             }
-        }
+            keys
+        };
         *self.active.lock().unwrap() = None;
+        // Réserve R2 : même remise à zéro que `stop` pour chaque couple arrêté.
+        for k in &keys {
+            self.purge_anomaly_busy_for_key(k);
+        }
     }
 
     /// Vue d'ensemble de TOUTES les sessions d'agents du registre (P2).
@@ -3510,6 +3560,116 @@ mod tests {
             m.get(&format!("{}\u{1f}{}", proj, "reviewer")).unwrap().busy,
             "la purge cible le couple arrêté, pas les autres agents"
         );
+    }
+
+    /// Réserve R2 (lot C2) — helpers de test : pose une session parkée + une
+    /// entrée d'anomalie `busy=true` pour un couple (projet, agent), afin de
+    /// vérifier que CHAQUE chemin d'arrêt remet la marque d'occupation à zéro.
+    fn seed_busy_couple(svc: &AgentService, proj: &str, agent: &str, mode: SpawnMode) {
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, agent),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Parked,
+                    mode,
+                },
+            );
+        }
+        let map = svc
+            .anomaly_map
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("map d'anomalie partagée (set_anomaly_map)");
+        map.lock().unwrap().insert(
+            AgentService::session_key(proj, agent),
+            anomaly::AgentAnomalyState {
+                last_activity: Instant::now(),
+                last_progress: Instant::now(),
+                last_activity_wall: Some(std::time::SystemTime::now()),
+                last_event: "agent_start".to_string(),
+                busy: true,
+                blocked_reported: false,
+                auto_stopped_reported: false,
+                awaiting_user: false,
+                tool_in_progress: true,
+                produced_output: false,
+            },
+        );
+    }
+
+    /// Réserve R2 (lot C2) : lit la marque d'occupation d'un couple.
+    fn is_couple_busy(svc: &AgentService, proj: &str, agent: &str) -> bool {
+        let map = svc
+            .anomaly_map
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("map d'anomalie partagée (set_anomaly_map)");
+        let m = map.lock().unwrap();
+        m.get(&AgentService::session_key(proj, agent))
+            .map(|e| e.busy)
+            .unwrap_or(false)
+    }
+
+    /// Réserve R2 (lot C2) — GARDE ANTI-RÉGRESSION : `stop_project_sessions`
+    /// (fermeture/switch de projet) doit purger la marque d'occupation des
+    /// couples arrêtés, et SEULEMENT de ceux-ci. Avant ce correctif, l'arrêt des
+    /// sessions d'un projet laissait `busy=true` : au retour sur le projet,
+    /// l'agent redémarré était compté « déjà actif » et sa demande mise en file
+    /// sans jamais démarrer.
+    /// Ce test ÉCHOUE sur le code d'avant correctif et PASSE après.
+    #[test]
+    fn stop_project_sessions_clears_anomaly_busy() {
+        let svc = AgentService::new();
+        svc.set_anomaly_map(Arc::new(Mutex::new(HashMap::new())));
+        seed_busy_couple(&svc, "/p/A", "codeur", SpawnMode::AgentProcess);
+        seed_busy_couple(&svc, "/p/A", "default", SpawnMode::MainSession);
+        seed_busy_couple(&svc, "/p/B", "reviewer", SpawnMode::AgentProcess);
+
+        svc.stop_project_sessions("/p/A");
+
+        assert!(!is_couple_busy(&svc, "/p/A", "codeur"), "couple du projet fermé purgé");
+        assert!(!is_couple_busy(&svc, "/p/A", "default"), "toutes les sessions du projet purgées");
+        assert!(is_couple_busy(&svc, "/p/B", "reviewer"), "purge scopée : autre projet intact");
+    }
+
+    /// Réserve R2 (lot C2) — GARDE ANTI-RÉGRESSION : `stop_all_agent_processes`
+    /// (arrêt des processus d'agents, l'app continue) doit purger la marque des
+    /// processus `AgentProcess` arrêtés, sans toucher aux autres modes.
+    /// Ce test ÉCHOUE sur le code d'avant correctif et PASSE après.
+    #[test]
+    fn stop_all_agent_processes_clears_anomaly_busy() {
+        let svc = AgentService::new();
+        svc.set_anomaly_map(Arc::new(Mutex::new(HashMap::new())));
+        seed_busy_couple(&svc, "/p/A", "codeur", SpawnMode::AgentProcess);
+        seed_busy_couple(&svc, "/p/A", "default", SpawnMode::MainSession);
+
+        svc.stop_all_agent_processes();
+
+        assert!(!is_couple_busy(&svc, "/p/A", "codeur"), "processus AgentProcess purgé");
+        assert!(is_couple_busy(&svc, "/p/A", "default"), "autre mode non arrêté → marque conservée");
+    }
+
+    /// Réserve R2 (lot C2) — GARDE ANTI-RÉGRESSION : `shutdown_all` (arrêt
+    /// complet, réutilisé par la mise à jour de pi SANS quitter l'app) doit
+    /// purger la marque de TOUS les couples arrêtés. Après une mise à jour de
+    /// pi, les sessions redémarrent et doivent repartir d'un état non occupé.
+    /// Ce test ÉCHOUE sur le code d'avant correctif et PASSE après.
+    #[test]
+    fn shutdown_all_clears_anomaly_busy() {
+        let svc = AgentService::new();
+        svc.set_anomaly_map(Arc::new(Mutex::new(HashMap::new())));
+        seed_busy_couple(&svc, "/p/A", "codeur", SpawnMode::AgentProcess);
+        seed_busy_couple(&svc, "/p/B", "reviewer", SpawnMode::MainSession);
+
+        svc.shutdown_all();
+
+        assert!(!is_couple_busy(&svc, "/p/A", "codeur"), "arrêt complet : couple A purgé");
+        assert!(!is_couple_busy(&svc, "/p/B", "reviewer"), "arrêt complet : couple B purgé");
     }
 
     /// Anti-boucle de redémarrage du super-agent (bug onglet Assistant) : une
