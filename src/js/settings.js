@@ -147,6 +147,10 @@ export async function initSettings() {
   const inputAnomalyTimeout = document.getElementById("setting-anomaly-timeout");
   const chkAutoStopEnabled = document.getElementById("setting-auto-stop-enabled");
   const inputAutoStopTimeout = document.getElementById("setting-auto-stop-minutes");
+  // ── Notifications Telegram (spec_telegram.md, étape 1 : envoi seulement) ──
+  const chkTelegramEnabled = document.getElementById("setting-telegram-enabled");
+  const inputTelegramToken = document.getElementById("setting-telegram-token");
+  const inputTelegramChatId = document.getElementById("setting-telegram-chat-id");
   const inputPdfMdModel = document.getElementById("setting-pdf-md-model");
   // Issue #88 : modèle par défaut DÉDIÉ à l'Assistant (vide = repli sur le
   // modèle par défaut global des agents).
@@ -693,6 +697,10 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (inputAnomalyTimeout) inputAnomalyTimeout.value = currentConfig.anomaly_timeout_minutes ?? 30;
     if (chkAutoStopEnabled) chkAutoStopEnabled.checked = currentConfig.agent_auto_stop_enabled !== false;
     if (inputAutoStopTimeout) inputAutoStopTimeout.value = currentConfig.agent_auto_stop_minutes ?? 10;
+    // ── Notifications Telegram (étape 1 : envoi seulement) ──
+    if (chkTelegramEnabled) chkTelegramEnabled.checked = currentConfig.telegram_notify_enabled === true;
+    if (inputTelegramToken) inputTelegramToken.value = currentConfig.telegram_bot_token || "";
+    if (inputTelegramChatId) inputTelegramChatId.value = currentConfig.telegram_chat_id || "";
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
     if (inputSuperAgentDefaultModel) inputSuperAgentDefaultModel.value = currentConfig.super_agent_default_model || "";
     chkAutoSave.checked = currentConfig.auto_save || false;
@@ -1234,6 +1242,19 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         // ── Arrêt auto des agents délégués bloqués (T2) ──
         agent_auto_stop_enabled: chkAutoStopEnabled ? chkAutoStopEnabled.checked !== false : true,
         agent_auto_stop_minutes: inputAutoStopTimeout ? (parseInt(inputAutoStopTimeout.value, 10) || 10) : 10,
+        // ── Notifications Telegram (spec_telegram.md, étape 1 : envoi seulement) ──
+        // Défauts sûrs : désactivé et champs vides. Un repli sur `currentConfig`
+        // évite qu'un enregistrement réinitialise un réglage déjà saisi si un
+        // champ venait à manquer dans le DOM.
+        telegram_notify_enabled: chkTelegramEnabled
+          ? chkTelegramEnabled.checked === true
+          : (currentConfig?.telegram_notify_enabled === true),
+        telegram_bot_token: inputTelegramToken
+          ? inputTelegramToken.value.trim()
+          : (currentConfig?.telegram_bot_token || ""),
+        telegram_chat_id: inputTelegramChatId
+          ? inputTelegramChatId.value.trim()
+          : (currentConfig?.telegram_chat_id || ""),
         // ── Plafond « réfléchit » du super-agent (tâche #141) ──
         // Pas d'UI dédiée : on préserve les valeurs de la config courante pour
         // qu'un enregistrement des Paramètres ne les réinitialise pas (défauts

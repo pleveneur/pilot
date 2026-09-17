@@ -430,6 +430,22 @@
               <label for="setting-auto-stop-minutes" title="Durée sans progression (en minutes) au-delà de laquelle un agent délégué ou l'agent standard est arrêté automatiquement. Seuil distinct du seuil de blocage (alerte).">Seuil d'arrêt auto (minutes) :</label>
               <input type="number" id="setting-auto-stop-minutes" min="1" max="600" step="1" value="10" />
             </div>
+            <div class="settings-section-title"><i data-lucide="send" class="icon-sm"></i> Notifications Telegram</div>
+            <div class="setting-row setting-row-checkbox setting-row-indent">
+              <input type="checkbox" id="setting-telegram-enabled" />
+              <label for="setting-telegram-enabled" title="Envoyer sur Telegram les avis destinés à l'utilisateur : fin de tâche d'un agent, anomalie d'agent bloqué, arrêt automatique d'une session.">Envoyer les avis sur Telegram</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-telegram-token" title="Jeton du bot Telegram (fourni par @BotFather). Conservé dans votre configuration locale et utilisé uniquement pour envoyer les avis.">Jeton du bot :</label>
+              <input type="password" id="setting-telegram-token" autocomplete="off" spellcheck="false" placeholder="123456789:AA…" style="width:280px;" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-telegram-chat-id" title="Identifiant de la discussion qui recevra les avis (votre identifiant personnel, ou celui d'un groupe).">Identifiant de discussion :</label>
+              <input type="text" id="setting-telegram-chat-id" autocomplete="off" spellcheck="false" placeholder="ex. 123456789" style="width:160px;" />
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span style="font-size:11px;color:var(--text-muted);">Tant que l'interrupteur est décoché ou qu'un champ est vide, <strong>rien n'est envoyé</strong> (aucun message d'erreur). La <strong>réception</strong> des messages Telegram (vous répondre depuis Telegram) n'est <strong>pas encore prise en charge</strong>.</span>
+            </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-context-engine" />
               <label for="setting-context-engine" title="Injecter automatiquement le contexte projet (AGENTS.md, fichier actif, imports, specs) avant le 1er prompt de chaque session"><i data-lucide="layers" class="icon-sm"></i> Context Engine (auto-contexte agent)</label>
