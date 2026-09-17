@@ -134,7 +134,7 @@ fn build_default_agent_registry(config: &AppConfig) -> Value {
 /// reviewer, testeur, documenteur et plan-maker.
 #[tauri::command]
 pub fn reset_agent_registry(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
-    let config = state.config.lock().unwrap().clone();
+    let config = state.config_snapshot();
     let default = build_default_agent_registry(&config);
     let agents_val = default.get("agents").cloned().unwrap_or(Value::Array(vec![]));
     let agents: Vec<crate::agent::Agent> = serde_json::from_value(agents_val)
@@ -517,7 +517,7 @@ pub fn compact_agent_context(state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn convert_pdf_to_md_ai(state: State<AppState>, text: String) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
+    let config = state.config_snapshot();
     let pdf_md_model = config.pdf_md_model.clone();
     let pi_path = config.rpc_pi_path.clone();
     drop(config);
@@ -550,7 +550,7 @@ pub fn convert_pdf_to_md_ai(state: State<AppState>, text: String) -> Result<Stri
 /// Retourne un tableau de chaînes "provider/modelId" trié alphabétiquement.
 #[tauri::command]
 pub fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, String> {
-    let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+    let pi_path = state.config_snapshot().rpc_pi_path.clone();
     let models_path = resolve_agent_home(&pi_path)?.join("agent").join("models.json");
     let json_str = std::fs::read_to_string(&models_path)
         .map_err(|e| format!("Lecture models.json: {}", e))?;

@@ -620,7 +620,7 @@ fn activity_metrics(state: &AppState, project_paths: &[String]) -> Value {
 
     // Actions d'outils : scanner les fichiers de session pi des projets.
     let mut actions: HashMap<String, u64> = HashMap::new();
-    let config = state.config.lock().unwrap();
+    let config = state.config_snapshot();
     let session_dir = crate::session_history::project_sessions_dir(&config);
     for project_path in project_paths {
         let folder = crate::session_history::project_to_session_folder(project_path);
@@ -892,7 +892,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
     // agent agrégées sur tous les projets ouverts, ou vides si aucun). Le
     // frontend masque la partie projet via `has_project: false`.
     let Some(project_path) = project_path else {
-        let projects = state.config.lock().unwrap().open_projects.clone();
+        let projects = state.config_snapshot().open_projects.clone();
         let activity = activity_metrics(&state, &projects);
         return Ok(serde_json::json!({
             "has_project": false,
@@ -918,7 +918,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
         .unwrap_or(&project_path)
         .to_string();
     let client = {
-        let cfg = state.config.lock().unwrap();
+        let cfg = state.config_snapshot();
         cfg.super_agent_project_client
             .get(&project_path)
             .cloned()
@@ -1060,7 +1060,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
 /// session indexée. Lecture seule — ne modifie aucun fichier.
 #[tauri::command]
 pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
-    let config = state.config.lock().unwrap();
+    let config = state.config_snapshot();
     let mut projects: Vec<String> = if config.open_projects.is_empty() {
         state
             .project_path
