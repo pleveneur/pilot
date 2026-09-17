@@ -3989,11 +3989,57 @@ mod tests {
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         take_trash_entry, trash_entry_preview, validate_export_json, list_memory_trash_entries,
-        memory_removal_result, MEMORY_FORMAT, MEMORY_VERSION,
+        memory_removal_result, parse_model_spec, resolve_super_agent_default, MEMORY_FORMAT,
+        MEMORY_VERSION,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
+
+    // ── Issue #88 : modèle par défaut dédié à l'assistant ──
+    #[test]
+    fn model_spec_parses_provider_and_id() {
+        assert_eq!(
+            parse_model_spec("openai/gpt-5"),
+            Some(("openai".to_string(), "gpt-5".to_string()))
+        );
+        // Espaces ignorés en bord.
+        assert_eq!(
+            parse_model_spec("  plh/claude-4  "),
+            Some(("plh".to_string(), "claude-4".to_string()))
+        );
+        // Tout ce qui suit le 1er slash appartient à l'id.
+        assert_eq!(
+            parse_model_spec("a/b/c"),
+            Some(("a".to_string(), "b/c".to_string()))
+        );
+    }
+
+    #[test]
+    fn model_spec_rejects_empty_or_malformed() {
+        assert_eq!(parse_model_spec(""), None);
+        assert_eq!(parse_model_spec("   "), None);
+        assert_eq!(parse_model_spec("sans-slash"), None);
+        assert_eq!(parse_model_spec("/model"), None);
+        assert_eq!(parse_model_spec("provider/"), None);
+    }
+
+    #[test]
+    fn super_agent_default_prefers_dedicated_setting() {
+        let global = Some(("pi".to_string(), "global".to_string()));
+        // Réglage dédié renseigné → il prend le pas sur le défaut global.
+        assert_eq!(
+            resolve_super_agent_default("plh/dedic", global.clone()),
+            Some(("plh".to_string(), "dedic".to_string()))
+        );
+        // Absent, vide ou mal formé → repli sur le défaut global (aucune
+        // régression pour les configurations existantes).
+        assert_eq!(resolve_super_agent_default("", global.clone()), global);
+        assert_eq!(resolve_super_agent_default("   ", global.clone()), global);
+        assert_eq!(resolve_super_agent_default("invalide", global.clone()), global);
+        // Ni réglage dédié ni défaut global → None (comportement historique).
+        assert_eq!(resolve_super_agent_default("", None), None);
+    }
 
     fn mem_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
