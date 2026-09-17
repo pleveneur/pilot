@@ -1622,4 +1622,100 @@ mod tests {
         let blocked = state(false);
         assert!(should_auto_stop(&blocked, true, 10, now));
     }
+
+    /// Lot 3 (défaut A) : une session MUETTE ET INACTIVE (busy, aucun résultat
+    /// produit, aucune activité réelle depuis le seuil) est SIGNALÉE — et une
+    /// seule fois (le verrou `blocked_reported`, posé par le moniteur, empêche
+    /// toute répétition en boucle). Déterministe : `now` synthétique, aucune
+    /// horloge réelle.
+    #[test]
+    fn should_report_silent_session_flags_mute_inactive_session_once() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let mute = AgentAnomalyState {
+            last_activity: now - Duration::from_secs(3600), // 60 min sans activité
+            last_progress: now - Duration::from_secs(3600),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "agent_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: false,
+            produced_output: false,
+        };
+        assert!(
+            should_report_silent_session(&mute, true, 30, now),
+            "busy + aucun résultat + 60 min sans activité → signalée (cas muet)"
+        );
+        // Une fois signalée (verrou posé par le moniteur) → plus jamais.
+        let reported = AgentAnomalyState {
+            blocked_reported: true,
+            ..mute
+        };
+        assert!(
+            !should_report_silent_session(&reported, true, 30, now),
+            "un seul signalement par exécution : pas de répétition en boucle"
+        );
+        // Détection désactivée → jamais signalée.
+        let mute = AgentAnomalyState {
+            blocked_reported: false,
+            ..reported
+        };
+        assert!(!should_report_silent_session(&mute, false, 30, now));
+    }
+
+    /// Lot 3 (défaut A) : AUCUN faux positif — une session qui a livré un résultat,
+    /// qui travaille encore (activité récente), qui est au repos, qui attend
+    /// l'utilisateur ou qui exécute un outil n'est JAMAIS signalée comme muette.
+    #[test]
+    fn should_report_silent_session_never_flags_productive_or_fresh_session() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state_at = |idle_secs: u64, busy: bool, produced: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "message_start".to_string(),
+            busy,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: false,
+            produced_output: produced,
+        };
+        // (a) a déjà livré un résultat → JAMAIS (faux positif « en échec après
+        // avoir livré » rendu impossible, même si le dernier événement est un
+        // simple `message_start`).
+        assert!(
+            !should_report_silent_session(&state_at(3600, true, true), true, 30, now),
+            "session ayant livré un résultat → jamais signalée"
+        );
+        // (b) activité récente (5 min < seuil) → « longue mais qui travaille ».
+        assert!(
+            !should_report_silent_session(&state_at(300, true, false), true, 30, now),
+            "activité récente → jamais signalée"
+        );
+        // (c) session terminée / au repos.
+        assert!(
+            !should_report_silent_session(&state_at(3600, false, false), true, 30, now),
+            "session au repos → jamais signalée"
+        );
+        // (d) opération d'outil en cours (silence légitime).
+        let working = AgentAnomalyState {
+            tool_in_progress: true,
+            ..state_at(3600, true, false)
+        };
+        assert!(
+            !should_report_silent_session(&working, true, 30, now),
+            "outil en cours → jamais signalée"
+        );
+        // (e) question posée à l'utilisateur, en attente de réponse.
+        let waiting = AgentAnomalyState {
+            awaiting_user: true,
+            ..state_at(3600, true, false)
+        };
+        assert!(
+            !should_report_silent_session(&waiting, true, 30, now),
+            "attente utilisateur → jamais signalée"
+        );
+    }
 }
