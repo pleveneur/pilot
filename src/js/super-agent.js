@@ -3704,8 +3704,13 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // sur la vue affichée (règle de cohérence ecrans.md).
       const target = await resolveDelegationTarget(projectPath, info.agentId || null);
       const agentId = target.id;
-      if (!agentId) {
-        appendSystemMessage(messagesEl, "❌ Impossible de résoudre l'agent cible de la délégation.");
+      if (!target.ok || !agentId) {
+        // Cause C2 : un agent EXPLICITEMENT demandé mais introuvable ne doit
+        // JAMAIS être rabattu en silence sur un autre agent — la demande
+        // partirait au mauvais agent sans que personne ne le sache. Erreur
+        // explicite (id demandé) et AUCUN lancement.
+        const detail = target.error || "agent cible introuvable";
+        appendSystemMessage(messagesEl, `❌ Délégation annulée : ${detail}. Aucun agent n'a été lancé.`);
         await respondSuperAgentAction(id, false);
         return;
       }
@@ -4246,39 +4251,79 @@ function stopInvisibleAgentMonitoring(agentId, projectPath) {
 }
 
 /**
+ * Décision PURE de résolution de la cible d'une délégation (cause C2).
+ * Séparée de l'I/O (`resolveDelegationTarget`) pour être testable sans Tauri.
+ *
+ * Règle : un agent EXPLICITEMENT demandé (`requestedAgentId`) et INTROUVABLE
+ * provoque une ERREUR EXPLICITE (`ok:false` + `error` portant l'id demandé) et
+ * AUCUN lancement — jamais de repli silencieux sur un autre agent (la demande
+ * partirait au mauvais agent). Le repli n'est autorisé que si AUCUN agent n'est
+ * demandé : codeur du projet, puis agent par défaut, puis littéral `default`.
+ * @param {object} input
+ * @param {string|null} input.requestedAgentId
+ * @param {{id:string,name:string}|null} input.requested
+ * @param {{id:string,name:string}|null} input.coder
+ * @param {{id:string,name:string}|null} input.fallback
+ * @returns {{ok:boolean, id:string|null, name:string|null, error:string|null}}
+ */
+export function resolveDelegationTargetDecision({ requestedAgentId, requested, coder, fallback }) {
+  if (requestedAgentId) {
+    if (requested && requested.id) {
+      return { ok: true, id: requested.id, name: requested.name || requested.id, error: null };
+    }
+    return {
+      ok: false,
+      id: null,
+      name: null,
+      error: `agent demandé introuvable : « ${requestedAgentId} »`,
+    };
+  }
+  if (coder && coder.id) {
+    return { ok: true, id: coder.id, name: coder.name || coder.id, error: null };
+  }
+  if (fallback && fallback.id) {
+    return { ok: true, id: fallback.id, name: fallback.name || fallback.id, error: null };
+  }
+  return { ok: true, id: DEFAULT_AGENT_ID, name: DEFAULT_AGENT_ID, error: null };
+}
+
+/**
  * 4.1 (R3) + tâche 209 : résout l'agent CIBLE d'une délégation depuis l'objet
  * persisté (get_agent), jamais depuis un littéral, ET son libellé d'affichage.
  * Ordre de résolution :
- *   1. l'agent explicitement demandé par l'assistant (`agent_id`) ;
+ *   1. l'agent explicitement demandé par l'assistant (`agent_id`) — s'il est
+ *      INTROUVABLE, erreur explicite (cause C2) : aucun repli, aucun lancement ;
  *   2. sinon le codeur du projet (agent du registre classé codeur, priorité à
  *      l'id « codeur ») ;
  *   3. sinon l'agent par défaut du projet (littéral `default`), dernier recours.
  * @param {string|null} projectPath
  * @param {string|null} [requestedAgentId]
- * @returns {Promise<{id: string, name: string}>}
+ * @returns {Promise<{ok: boolean, id: string|null, name: string|null, error: string|null}>}
  */
 async function resolveDelegationTarget(projectPath, requestedAgentId) {
   // 1. Agent explicitement demandé par l'assistant (outil delegate_to_coder).
-  if (requestedAgentId) {
-    const found = await lookupAgent(requestedAgentId, projectPath);
-    if (found) return found;
+  const requested = requestedAgentId ? await lookupAgent(requestedAgentId, projectPath) : null;
+  // 2. Repli (codeur puis défaut) UNIQUEMENT quand AUCUN agent n'est demandé.
+  let coder = null;
+  if (!requestedAgentId) {
+    try {
+      const registry = await loadAgentRegistry();
+      const agents = Array.isArray(registry && registry.agents) ? registry.agents : [];
+      const preferred = agents.find((a) => a && a.id === "codeur");
+      const c = preferred || agents.find((a) => a && classifyAgent(normalizeAgent(a)).isCoder);
+      if (c && c.id) coder = { id: c.id, name: c.name || c.id };
+    } catch (_) {}
   }
-  // 2. Codeur du projet : agent du registre classé codeur (priorité id « codeur »).
-  try {
-    const registry = await loadAgentRegistry();
-    const agents = Array.isArray(registry && registry.agents) ? registry.agents : [];
-    const preferred = agents.find((a) => a && a.id === "codeur");
-    const coder = preferred || agents.find((a) => a && classifyAgent(normalizeAgent(a)).isCoder);
-    if (coder && coder.id) {
-      return { id: coder.id, name: coder.name || coder.id };
-    }
-  } catch (_) {}
   // 3. Agent par défaut du projet (dernier recours). start_agent_session
   // (AgentService::start) le seed automatiquement en base avec des valeurs par
   // défaut, donc retourner "default" est sûr même sans objet existant.
-  const def = await lookupAgent(DEFAULT_AGENT_ID, projectPath);
-  if (def) return def;
-  return { id: DEFAULT_AGENT_ID, name: DEFAULT_AGENT_ID };
+  const fallback = coder ? null : await lookupAgent(DEFAULT_AGENT_ID, projectPath);
+  return resolveDelegationTargetDecision({
+    requestedAgentId: requestedAgentId || null,
+    requested,
+    coder,
+    fallback,
+  });
 }
 
 /**
