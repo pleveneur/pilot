@@ -1043,6 +1043,12 @@ apprend et répond.
   **notification native** (bannière OS) quand l'Assistant signale un événement
   **important** : une **tâche déléguée** à un agent du projet **est terminée**, ou
   une **anomalie** de suivi (ex: connexion au super-agent perdue).
+- **Fin de run : avis garanti, succès OU échec** : à la fin d'une run d'agents
+  délégués, la notification desktop et le **son « fin »** sont émis **en premier
+  et une seule fois** — même si la consignation du compte rendu dans le suivi
+  échoue (celle-ci est *fail-open* : son échec n'enlève jamais l'avis). Une run
+  dont **un seul agent a échoué** est annoncée comme un **échec** (« ❌ Tâche
+  terminée en ÉCHEC… »), jamais comme un succès.
 - **Désactivé par défaut** pour éviter la sur-notification : les réponses
   banales de l'Assistant ne déclenchent **aucune** notification.
 
@@ -1350,7 +1356,9 @@ uniquement un bloc d'instructions dans le prompt système.
   un résultat via `get_delegation_result(project, sessionId?|agent_id?)`
   (`sessionId` exposé par `list_agent_sessions` ; à défaut le jsonl le plus
   récent de l'agent ou sa session vivante `get_messages`), lecture seule et
-  sûre à retenter.
+  sûre à retenter. La recherche du fichier de session couvre aussi les
+  **sous-dossiers d'agents** (`<sessions>/<projet>/<agent_id>/`), pas seulement
+  la racine du projet.
 - **Plan structuré avant délégation (plan-maker)** : pour les demandes
   importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
   `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
@@ -1542,7 +1550,10 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   (valeur vide) pour reprendre le **modèle par défaut global des agents**
   (comportement historique inchangé). Le réglage est prioritaire sur le défaut
   global pour l'Assistant uniquement et s'applique au démarrage suivant de sa
-  session (le sélecteur de la barre d'outils reste le modèle **actif**).
+  session (le sélecteur de la barre d'outils reste le modèle **actif**). Le
+  choix est **persisté immédiatement** (`set_super_agent_default_model`) et
+  **préservé par l'enregistrement des Paramètres**, qui réécrit pourtant toute
+  la configuration (`settings.js:1242`).
 
 ### Personnaliser le prompt
 - **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
