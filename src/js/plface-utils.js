@@ -21,6 +21,9 @@ export const PLFACE_OUTCOMES = [
 /** États possibles renvoyés par la commande `stop_plface`. */
 export const PLFACE_STOP_OUTCOMES = ["closed", "notRunning", "failed"];
 
+/** Extension attendue pour un fichier de modèle d'avatar. */
+export const VRM_EXTENSION = "vrm";
+
 /**
  * Traduit un état de lancement PLface en message utilisateur.
  * @param {string} outcome état sérialisé renvoyé par le moteur (camelCase)
@@ -77,6 +80,34 @@ export function plfaceStopMessage(outcome) {
         kind: "warning",
       };
   }
+}
+
+/**
+ * Vrai si le chemin désigne un fichier de modèle d'avatar `.vrm`.
+ * Insensible à la casse (`.VRM` accepté). Fonction pure : aucune I/O, testable.
+ * @param {string} path chemin sélectionné par l'utilisateur
+ * @returns {boolean}
+ */
+export function isVrmPath(path) {
+  const trimmed = String(path == null ? "" : path).trim().replace(/^"|"$/g, "");
+  const dot = trimmed.lastIndexOf(".");
+  if (dot < 0 || dot === trimmed.length - 1) return false;
+  return trimmed.slice(dot + 1).toLowerCase() === VRM_EXTENSION;
+}
+
+/**
+ * Traduit le refus d'un fichier qui n'est pas un modèle `.vrm` en message
+ * utilisateur clair et discret (aucun nom de code technique).
+ * @param {string} path chemin refusé (seul le nom de fichier est cité)
+ * @returns {{ text: string, kind: "warning" }}
+ */
+export function avatarRejectedMessage(path) {
+  const name = String(path == null ? "" : path).split(/[\\/]/).pop() || "";
+  const quoted = name ? `« ${name} »` : "Le fichier choisi";
+  return {
+    text: `${quoted} n'est pas un modèle d'avatar .vrm. Choisissez un fichier .vrm.`,
+    kind: "warning",
+  };
 }
 
 /**
