@@ -2103,6 +2103,12 @@ impl AgentService {
                     if std::fs::write(&gate_file, include_str!("../extensions/pilot-reserve-gate.ts")).is_ok() {
                         extensions.push(gate_file.to_string_lossy().to_string());
                     }
+                    // Outils navigateur (pi-chrome) : autorise les outils chrome_*
+                    // pour cette session d'agent (cf. extensions/pilot-chrome.ts).
+                    let chrome_file = dir.join("pilot-chrome.ts");
+                    if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
+                        extensions.push(chrome_file.to_string_lossy().to_string());
+                    }
                     // #21 : quand l'assistant active l'héritage de contexte, les
                     // agents spécifiques chargent aussi pilot-context.ts (comme
                     // l'agent standard) pour hériter du contexte projet.
@@ -2237,7 +2243,7 @@ impl AgentService {
             None
         };
 
-        // Extensions pi (porte pré-écriture, contexte, choix).
+        // Extensions pi (porte pré-écriture, contexte, choix, navigateur).
         let ext_supported = probe_extension_support(&state, &pi_path);
         let mut extensions: Vec<String> = Vec::new();
         if ext_supported {
@@ -2257,6 +2263,12 @@ impl AgentService {
                     let choices_file = dir.join("pilot-choices.ts");
                     if std::fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
                         extensions.push(choices_file.to_string_lossy().to_string());
+                    }
+                    // Outils navigateur (pi-chrome) : autorise les outils chrome_*
+                    // dans la session principale de l'agent (cf. extensions/pilot-chrome.ts).
+                    let chrome_file = dir.join("pilot-chrome.ts");
+                    if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
+                        extensions.push(chrome_file.to_string_lossy().to_string());
                     }
                     // POC MCP : extension client MCP (SDK bundlé) si activé.
                     if mcp_enabled {
