@@ -2719,6 +2719,8 @@ pub fn run() {
             super_agent::inject_session_summary,
             super_agent::super_agent_save_session_memory,
             super_agent::super_agent_load_session_memory,
+            super_agent::super_agent_remove_session_memory,
+            super_agent::super_agent_restore_session_memory,
             super_agent::replay_superagent_summaries,
             super_agent::initialize_super_agent,
             super_agent::list_clients,
