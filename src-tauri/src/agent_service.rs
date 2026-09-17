@@ -296,9 +296,13 @@ impl AgentService {
     /// file sans jamais démarrer, et il fallait redémarrer Pilot (voire changer
     /// la casse du chemin du projet, qui contournait le verrou).
     ///
-    /// Détection : lignes `proc_state = 'Running'` de projet réel dont AUCUNE
-    /// session vivante n'existe pour (projet, agent) — `agent_alive`, c'est-à-
-    /// dire `try_wait` sur le processus enfant. Remise à un état sain :
+    /// Détection : lignes `proc_state = 'Running'` (projet réel OU agent GLOBAL
+    /// `project_path` NULL — espace assistant) dont AUCUNE session vivante
+    /// n'existe pour (projet, agent) — `agent_alive`, c'est-à-dire `try_wait`
+    /// sur le processus enfant. Les agents globaux n'ont pas de verrou de
+    /// projet mais leur ligne `Running`/`loaded=1` fantôme bloquait tout autant
+    /// leur redémarrage (état d'exécution incohérent, sans erreur renvoyée).
+    /// Remise à un état sain :
     /// `loaded=0, busy=0, proc_state='Unloaded'`, marque `busy` de la map
     /// d'anomalie libérée (c'est elle qui porte l'exclusivité des spécialités
     /// côté moteur), session morte retirée du registre, et UNE LIGNE DE JOURNAL
@@ -315,16 +319,18 @@ impl AgentService {
         conn: &rusqlite::Connection,
         anomaly_map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
     ) -> Result<Vec<(String, String)>, String> {
-        // 1. Candidats : état d'exécution « en cours » d'un projet réel. Les
-        //    agents GLOBAUX (project_path NULL, ex. agent standard d'assistant)
-        //    sont hors périmètre : ils ne portent pas de verrou de projet.
+        // 1. Candidats : état d'exécution « en cours », projet réel ET global.
+        //    Les agents GLOBAUX (project_path NULL/'' — espace assistant) ne
+        //    portent pas de verrou de projet, mais leur ligne `Running`/`loaded=1`
+        //    fantôme est tout aussi incohérente : elle bloquait silencieusement
+        //    leur redémarrage (aucune erreur renvoyée). Ils vivent sous la clé de
+        //    session réservée `ASSISTANT_SPACE` (et non sous "").
         let mut rows: Vec<(String, String)> = Vec::new();
         {
             let mut stmt = conn
                 .prepare(
-                    "SELECT id, project_path FROM agents
-                     WHERE proc_state = 'Running'
-                       AND project_path IS NOT NULL AND project_path <> ''",
+                    "SELECT id, COALESCE(project_path, '') FROM agents
+                     WHERE proc_state = 'Running'",
                 )
                 .map_err(|e| format!("Erreur purge_ghost_running_states (prepare): {}", e))?;
             let mapped = stmt
@@ -338,17 +344,36 @@ impl AgentService {
         }
         // 2. Filtrage par VIVACITÉ réelle du processus (hors verrou de base).
         let mut purged: Vec<(String, String)> = Vec::new();
-        for (agent_id, project) in rows {
+        for (agent_id, raw_project) in rows {
+            // Agent global (project_path NULL/'' : espace assistant) → clé de
+            // session/map réservée `ASSISTANT_SPACE`.
+            let is_global = raw_project.is_empty();
+            let project = if is_global {
+                ASSISTANT_SPACE.to_string()
+            } else {
+                raw_project
+            };
             if self.agent_alive(&project, &agent_id) {
                 // Exécution légitime : rien à faire (session parkée ou en cours).
                 continue;
             }
-            conn.execute(
-                "UPDATE agents SET loaded = 0, busy = 0, proc_state = 'Unloaded'
-                 WHERE id = ?1 AND project_path = ?2",
-                params![agent_id, project],
-            )
-            .map_err(|e| format!("Erreur purge_ghost_running_states (update): {}", e))?;
+            // La ligne globale a `project_path` NULL : l'égalité de chemin ne
+            // peut pas la cibler (NULL = NULL est faux en SQL) → clause dédiée.
+            if is_global {
+                conn.execute(
+                    "UPDATE agents SET loaded = 0, busy = 0, proc_state = 'Unloaded'
+                     WHERE id = ?1 AND (project_path IS NULL OR project_path = '')",
+                    params![agent_id],
+                )
+                .map_err(|e| format!("Erreur purge_ghost_running_states (update global): {}", e))?;
+            } else {
+                conn.execute(
+                    "UPDATE agents SET loaded = 0, busy = 0, proc_state = 'Unloaded'
+                     WHERE id = ?1 AND project_path = ?2",
+                    params![agent_id, project],
+                )
+                .map_err(|e| format!("Erreur purge_ghost_running_states (update): {}", e))?;
+            }
             // Verrou d'exclusivité moteur : libérer la marque `busy` résiduelle
             // (sinon la file JS attend un agent qui n'existe plus).
             {
@@ -366,8 +391,10 @@ impl AgentService {
             self.drop_dead_session(&project, &agent_id);
             // Journal : une ligne par purge (diagnostic sans redémarrage).
             eprintln!(
-                "[agent-service] issue #87 : état d'exécution fantôme purgé — agent={} projet={} proc_state=Running sans processus vivant → Unloaded (loaded=0, busy=0, verrou projet libéré)",
-                agent_id, project
+                "[agent-service] issue #87 : état d'exécution fantôme purgé — agent={} projet={} ({}) proc_state=Running sans processus vivant → Unloaded (loaded=0, busy=0, verrou libéré)",
+                agent_id,
+                project,
+                if is_global { "agent global" } else { "projet" }
             );
             purged.push((project, agent_id));
         }
@@ -3533,10 +3560,12 @@ mod tests {
         );
     }
 
-    /// Issue #87 : les agents GLOBAUX (`project_path` NULL) et les états non
-    /// « en cours » (Paused/Stopped/Unloaded) sont hors périmètre de la purge.
+    /// Issue #87 : un agent GLOBAL (`project_path` NULL) resté « Running » sans
+    /// processus vivant est un fantôme comme un autre — il est purgé sous la clé
+    /// réservée `ASSISTANT_SPACE` ; les états non « en cours »
+    /// (Paused/Stopped/Unloaded) restent, eux, hors périmètre.
     #[test]
-    fn purge_ghost_running_states_ignores_global_and_non_running_rows() {
+    fn purge_ghost_running_states_handles_global_rows_and_ignores_non_running() {
         let svc = AgentService::new();
         let conn = rusqlite::Connection::open_in_memory().expect("base en mémoire");
         db::init_db(&conn).expect("schéma pilot.db");
@@ -3554,11 +3583,46 @@ mod tests {
         .expect("insert pause");
         let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        assert!(
-            svc.purge_ghost_running_states(&conn, &anomaly_map)
-                .expect("purge")
-                .is_empty(),
-            "agent global et état Paused hors périmètre"
+        {
+            let mut m = anomaly_map.lock().unwrap();
+            m.insert(
+                format!("{}\u{1f}assistant-global", ASSISTANT_SPACE),
+                busy_anomaly_entry(),
+            );
+        }
+        let purged = svc
+            .purge_ghost_running_states(&conn, &anomaly_map)
+            .expect("purge");
+        assert_eq!(
+            purged,
+            vec![(ASSISTANT_SPACE.to_string(), "assistant-global".to_string())],
+            "le fantôme global est purgé sous la clé ASSISTANT_SPACE"
         );
+        let (loaded, busy, state): (i64, i64, String) = conn
+            .query_row(
+                "SELECT loaded, busy, proc_state FROM agents WHERE id = 'assistant-global'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("ligne assistant-global");
+        assert_eq!((loaded, busy, state.as_str()), (0, 0, "Unloaded"));
+        assert!(
+            !anomaly_map
+                .lock()
+                .unwrap()
+                .get(&format!("{}\u{1f}assistant-global", ASSISTANT_SPACE))
+                .expect("entrée anomalie globale")
+                .busy,
+            "verrou d'exclusivité global libéré"
+        );
+        // État non « en cours » : jamais touché.
+        let p_state: String = conn
+            .query_row(
+                "SELECT proc_state FROM agents WHERE id = 'pause'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("ligne pause");
+        assert_eq!(p_state, "Paused", "état Paused hors périmètre");
     }
 }
