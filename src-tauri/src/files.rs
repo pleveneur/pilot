@@ -77,6 +77,24 @@ pub fn write_file_content(path: String, content: String) -> Result<(), String> {
     fs::write(&path, &content).map_err(|e| format!("Erreur écriture: {}", e))
 }
 
+/// Avertissement de fraîcheur ajouté en tête du handoff de contexte.
+/// Le contenu injecté (contexte RAG, mémoire projet, graphe) est un instantané
+/// pris au moment de l'écriture : il est ensuite réinjecté tel quel à CHAQUE tour
+/// et peut donc être périmé. Une seule ligne, pour ne pas gonfler le system prompt.
+pub const CONTEXT_HANDOFF_STALENESS_WARNING: &str =
+    "⚠️ Instantané pris maintenant : des fichiers ont pu changer depuis — vérifie le disque avant d'agir.\n\n";
+
+/// Prépare le contenu final du handoff : avertissement de fraîcheur + contenu.
+/// Fonction pure (testable). Un contenu vide reste vide : l'extension
+/// `pilot-context` n'injecte rien pour un fichier vide, on n'ajoute donc pas
+/// l'avertissement seul (il enverrait du contexte sans contexte).
+pub fn context_handoff_content(content: &str) -> String {
+    if content.trim().is_empty() {
+        return String::new();
+    }
+    format!("{}{}", CONTEXT_HANDOFF_STALENESS_WARNING, content)
+}
+
 /// Écrit le fichier de handoff d'injection de contexte (`.pilot/context-inject.md`)
 /// consommé par l'extension pi `pilot-context` (avant_agent_start → systemPrompt).
 /// Crée le dossier `.pilot` s'il n'existe pas. Le contenu (contexte + mémoire projet)
@@ -89,7 +107,8 @@ pub fn write_context_handoff(project_path: String, content: String) -> Result<()
     let dir = std::path::Path::new(&project_path).join(".pilot");
     fs::create_dir_all(&dir).map_err(|e| format!("Erreur création .pilot: {}", e))?;
     let file = dir.join("context-inject.md");
-    fs::write(&file, &content).map_err(|e| format!("Erreur écriture handoff: {}", e))
+    let body = context_handoff_content(&content);
+    fs::write(&file, &body).map_err(|e| format!("Erreur écriture handoff: {}", e))
 }
 
 /// Écrit un fichier binaire.
@@ -162,4 +181,49 @@ pub fn file_mtime(path: String) -> Result<f64, String> {
 #[tauri::command]
 pub fn open_in_browser(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| format!("Erreur ouverture navigateur: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handoff_content_prefixes_staleness_warning() {
+        let out = context_handoff_content("=== MÉMOIRE DU PROJET ===\nfaits");
+        assert!(out.starts_with(CONTEXT_HANDOFF_STALENESS_WARNING));
+        assert!(out.contains("=== MÉMOIRE DU PROJET ==="));
+        // Le contenu d'origine est préservé intégralement après l'avertissement.
+        assert!(out.ends_with("faits"));
+    }
+
+    #[test]
+    fn handoff_content_empty_stays_empty() {
+        assert_eq!(context_handoff_content(""), "");
+        assert_eq!(context_handoff_content("  \n  "), "");
+    }
+
+    #[test]
+    fn write_context_handoff_writes_warning_to_disk() {
+        let base = std::env::temp_dir().join(format!(
+            "pilot-handoff-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let project = base.to_string_lossy().to_string();
+        write_context_handoff(project.clone(), "BLOC-CONTEXTE".to_string())
+            .expect("écriture handoff");
+        let written = fs::read_to_string(base.join(".pilot").join("context-inject.md"))
+            .expect("lecture handoff");
+        assert!(written.starts_with(CONTEXT_HANDOFF_STALENESS_WARNING));
+        assert!(written.ends_with("BLOC-CONTEXTE"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn write_context_handoff_ignores_empty_project_path() {
+        assert!(write_context_handoff("  ".to_string(), "x".to_string()).is_ok());
+    }
 }

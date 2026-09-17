@@ -27,6 +27,11 @@ RAG local via embeddings pi.
   `/resume` et l'historique (H9) n'affichent que la vraie saisie utilisateur.
 - Le fichier de handoff est supprimé aux frontières de session (voir Reset) puis
   réécrit au prochain prompt. `.pilot/` est git-ignoré.
+- **Avertissement de fraîcheur** : le bloc est un instantané pris au moment de
+  l'écriture, réinjecté tel quel à chaque tour suivant. `write_context_handoff`
+  (Rust, `files.rs`) préfixe donc le contenu d'une ligne d'avertissement courte
+  (« instantané pris maintenant, des fichiers ont pu changer depuis, vérifie le
+  disque avant d'agir ») pour éviter que l'agent fasse confiance à un contexte périmé.
 - Chat standard uniquement ; le mode Orchestration construit déjà son propre
   contexte via `buildPlanPrompt`.
 - Format du bloc injecté (dans le system prompt) :
