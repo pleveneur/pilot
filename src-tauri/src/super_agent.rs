@@ -321,14 +321,15 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
 /// les outils d'agents (`run_agents`, `create_agent`, `delegate_to_coder`,
 /// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le flux « plan-maker »
 /// pour les demandes de code importantes (plan → validation → délégation).
-const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `run_agents(agent_ids, task)` (méthode par défaut : lance une tâche sur un/plusieurs agents en arrière-plan, tu reçois un accusé puis le résultat agrégé), `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent de chaque spécialité peut tourner à la fois sur un projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin (ne la relance pas).\n\nExécute le travail via des agents spécifiques (`run_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), construis une demande structurée et complète, montre-la à l'utilisateur, puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, présente-le et fais valider les tâches par l'utilisateur (`ask_multi_choice`/`ask_confirm`), puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `run_agents(agent_ids, task)` (méthode par défaut : lance une tâche sur un/plusieurs agents en arrière-plan, tu reçois un accusé puis le résultat agrégé), `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent de chaque spécialité peut tourner à la fois sur un projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin (ne la relance pas).\n\nExécute le travail via des agents spécifiques (`run_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), montre-la à l'utilisateur, puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, présente-le et fais valider les tâches par l'utilisateur (`ask_multi_choice`/`ask_confirm`), puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
 
-/// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
-/// de résilience / anti-blocage. L'assistant ne s'arrête pas au premier
-/// obstacle : il relance au moins une fois en changeant d'approche avant de
-/// solliciter l'utilisateur. Distinct de la détection de boucle technique
-/// (issue #55) qui reste un filet de sécurité contre les répétitions exactes.
-const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Règle de résilience — ne jamais s'arrêter au premier obstacle\nSi une tâche déléguée ou une action échoue, ne t'arrête pas immédiatement : relance AU MOINS UNE FOIS en changeant d'approche (autre agent, autre formulation, autre méthode, autre découpage). Au 2e échec consécutif sur la même tâche, préviens l'utilisateur avec un point clair (ce qui a été tenté, pourquoi ça bloque, options proposées).\nRelancer en changeant d'approche n'est PAS une répétition en boucle : la détection de boucle technique reste un filet de sécurité distinct.\n";
+/// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
+/// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
+/// seule formulation par règle). L'assistant construit des demandes structurées,
+/// ne relance pas une tâche à l'identique et ne s'arrête pas au premier
+/// obstacle. Distinct de la détection de boucle technique (issue #55), qui reste
+/// un filet de sécurité contre les répétitions exactes.
+const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Résilience et anti-boucle — `run_agents`\nConstruis toujours une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. L'enveloppe « ## Contexte/## Objectif/## Consignes/## Ce qu'il ne faut PAS faire » est ajoutée MÉCANIQUEMENT par Pilot : n'insère que le contenu de la tâche.\n\nNe relance JAMAIS la même tâche à l'identique. Si une tâche déléguée ou une action échoue, relance AU MOINS UNE FOIS en changeant d'approche (autre agent, autre formulation, autre méthode, autre découpage) ; au 2e échec consécutif sur la même tâche, préviens l'utilisateur avec un point clair (ce qui a été tenté, pourquoi ça bloque, options proposées). Si tu as déjà reçu un résultat, passe à la suite. Relancer en changeant d'approche n'est PAS une répétition en boucle : la détection de boucle technique reste un filet de sécurité distinct.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
 /// par défaut sur le fichier AGENTS.md des projets. Quand l'assistant travaille
@@ -340,33 +341,12 @@ const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Règle de résilience — ne
 const SUPER_AGENT_AGENTSMD_PROMPT: &str = "\n\n## Règle par défaut — fichier AGENTS.md des projets\nSi un projet n'a pas de fichier AGENTS.md (ou un contenu incomplet pour guider un agent), signale-le à l'utilisateur et programme un rappel (`schedule_create`) pour y revenir, sans laisser le point tomber dans l'oubli. Une fois le AGENTS.md créé (ou complété), désactive le rappel correspondant (`schedule_set_enabled`).\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
-/// anti-boucle pour l'outil `run_agents`. L'assistant doit construire des
-/// prompts STRUCTURÉS (comme le mode manuel : contexte, objectif, contraintes,
-/// fichiers, vérifications, ce qu'il ne faut PAS faire) pour que l'agent
-/// réussisse du premier coup, et ne JAMAIS relancer la même tâche à l'identique
-/// (cause racine des boucles de `run_agents`). Distinct de la détection de
-/// boucle technique (issue #55) qui reste un filet de sécurité.
-const SUPER_AGENT_ANTILOOP_PROMPT: &str = "\n\n## Règle anti-boucle — `run_agents`\nConstruis toujours une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. L'enveloppe « ## Contexte/## Objectif/## Consignes/## Ce qu'il ne faut PAS faire » est ajoutée MÉCANIQUEMENT par Pilot : n'insère que le contenu de la tâche.\n\nNe relance JAMAIS la même tâche à l'identique : si une run échoue, change d'approche (agent, formulation, découpage) ou interroge l'utilisateur ; si tu as déjà reçu un résultat, passe à la suite.\n";
-
-/// Bloc d'instructions injecté dans le prompt système de l'assistant : usage de
-/// l'outil `list_agent_sessions` et de la dernière activité (`lastActivity` /
-/// `lastActivityRelative` / `lastEvent`) pour décider si on ARRÊTE un agent
-/// (juger la progression pour ne pas couper un agent encore actif). Ce bloc NE
-/// sert PAS à surveiller un agent en continu (voir la règle anti-attente
-/// SUPER_AGENT_NO_WAIT_PROMPT). Un agent avec une dernière activité récente
-/// travaille encore, même sans sortie visible immédiate.
-const SUPER_AGENT_SESSIONS_PROMPT: &str = "\n\n## Supervision des agents — juger la progression avant d'arrêter\nUtilise `list_agent_sessions` (et ses champs `lastActivity`/`lastActivityRelative`/`lastEvent`) pour juger si un agent progresse réellement avant de l'arrêter : une activité RÉCENTE signifie qu'il travaille encore (ne l'arrête pas sur la seule absence de sortie visible) ; n'envisage l'arrêt que pour un agent réellement inactif (dernière activité ancienne).\n\nCe bloc sert UNIQUEMENT à décider si tu ARRÊTES un agent (ne pas couper un agent encore actif) : il ne t'autorise PAS à le surveiller en continu (voir la règle anti-attente).\n";
-
-/// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
-/// par défaut « anti-attente ». Après un lancement (`run_agents` / délégation),
-/// l'assistant doit rendre immédiatement la main à l'utilisateur (statut court
-/// « travail lancé en arrière-plan ») au lieu de surveiller l'agent en temps réel
-/// (sleep, relectures répétées de `list_agent_sessions`/`get_delegation_result`/
-/// `git_status`), ce qui bloquerait la conversation. Pour l'avancement : UN
-/// rappel différé non bloquant (`schedule_create`), désactivé une fois le travail
-/// terminé. Complète SUPER_AGENT_SESSIONS_PROMPT (décider d'ARRÊTER un agent) et
-/// SUPER_AGENT_RESILIENCE_PROMPT (ne pas rester bloqué).
-const SUPER_AGENT_NO_WAIT_PROMPT: &str = "\n\n## Règle anti-attente — ne pas surveiller un agent en temps réel\nNe surveille JAMAIS un agent en temps réel et ne bloque JAMAIS la conversation en attendant sa fin. Après un lancement (`run_agents` / délégation), rends immédiatement la main à l'utilisateur avec un statut court (« travail lancé en arrière-plan »).\n\nInterdiction des boucles d'attente : pas de `sleep` ni d'attente active, pas de vérifications répétées de `list_agent_sessions`, `get_delegation_result` ou `git_status` juste après un lancement. Pour connaître l'avancement, programme UN SEUL rappel différé non bloquant (`schedule_create`) et désactive-le une fois le travail terminé (`schedule_set_enabled`).\n\nNe consulte un résultat de délégation (`get_delegation_result`) QUE si l'utilisateur le demande, ou quand il est déjà disponible. Si l'utilisateur écrit pendant qu'un travail tourne, réponds-lui immédiatement et signale que le travail continue en arrière-plan.\n";
+/// de supervision des agents (fusionnées : anti-attente + jugement avant arrêt,
+/// une seule formulation par règle). Après un lancement, l'assistant rend
+/// immédiatement la main (pas de surveillance temps réel ni de boucle poll) et
+/// programme au plus UN rappel différé. Avant d'arrêter un agent, il juge sa
+/// progression via la dernière activité (`lastActivity`).
+const SUPER_AGENT_NO_WAIT_PROMPT: &str = "\n\n## Supervision des agents — ni attente temps réel, ni arrêt à tort\nNe surveille JAMAIS un agent en temps réel et ne bloque JAMAIS la conversation en attendant sa fin. Après un lancement (`run_agents` / délégation), rends immédiatement la main à l'utilisateur avec un statut court (« travail lancé en arrière-plan »). Pas de `sleep` ni d'attente active, pas de vérifications répétées de `list_agent_sessions`, `get_delegation_result` ou `git_status` juste après un lancement. Pour connaître l'avancement, programme UN SEUL rappel différé non bloquant (`schedule_create`) et désactive-le une fois le travail terminé (`schedule_set_enabled`).\n\nNe consulte un résultat de délégation (`get_delegation_result`) QUE si l'utilisateur le demande, ou quand il est déjà disponible. Si l'utilisateur écrit pendant qu'un travail tourne, réponds-lui immédiatement et signale que le travail continue en arrière-plan.\n\nPour décider d'ARRÊTER un agent (ne pas couper un agent encore actif), juge sa progression via `list_agent_sessions` (`lastActivity`/`lastActivityRelative`/`lastEvent`) : une activité RÉCENTE signifie qu'il travaille encore (ne l'arrête pas sur la seule absence de sortie visible) ; n'envisage l'arrêt que pour un agent réellement inactif (dernière activité ancienne).\n";
 
 /// Prompt guidant l'assistant sur la mémoire de session réinjectée au premier
 /// message après redémarrage. En-tête du bloc « Mémoire de session (reprise) »
@@ -401,7 +381,7 @@ fn concise_guideline(enabled: bool) -> String {
     if !enabled {
         return String::new();
     }
-    "\n\nRègle de style : réponds de façon concise. Informe l'utilisateur et prends des décisions, mais ne détaille pas tout ce qui se fait, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
+    "\n\nRègle de style : réponds de façon concise (voir ta voix permanente, point 6) : informe et décide sans tout détailler, sauf si l'utilisateur le demande explicitement. Utilise des phrases courtes.".to_string()
 }
 
 /// Construit la consigne « Assistant coordinateur pur » à injecter dans le
@@ -432,7 +412,7 @@ fn user_friendly_guideline(enabled: bool) -> String {
     if !enabled {
         return String::new();
     }
-    "\n\nRègle de style : réponds en langage simple et non technique, sauf si l'utilisateur demande explicitement du technique. Évite le jargon, explique les concepts de façon accessible et privilégie des explications claires pour un non-spécialiste.".to_string()
+    "\n\nRègle de style : renforce le langage simple et non technique de ta voix permanente (points 1 et 4) : évite le jargon, sauf si l'utilisateur demande explicitement du technique.".to_string()
 }
 
 /// Construit la consigne « voix » de l'assistant (style de réponse de
@@ -525,8 +505,6 @@ fn assemble_super_agent_system_prompt(blocks: &SuperAgentPromptBlocks) -> String
     full_system.push_str(SUPER_AGENT_TOOLS_PROMPT);
     full_system.push_str(SUPER_AGENT_RESILIENCE_PROMPT);
     full_system.push_str(SUPER_AGENT_AGENTSMD_PROMPT);
-    full_system.push_str(SUPER_AGENT_ANTILOOP_PROMPT);
-    full_system.push_str(SUPER_AGENT_SESSIONS_PROMPT);
     full_system.push_str(SUPER_AGENT_NO_WAIT_PROMPT);
     if !blocks.custom_prompt.trim().is_empty() {
         full_system.push_str("\n\n");
@@ -4985,18 +4963,20 @@ mod tests {
         let fixed = super::SUPER_AGENT_TOOLS_PROMPT.chars().count()
             + super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()
             + super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()
-            + super::SUPER_AGENT_ANTILOOP_PROMPT.chars().count()
-            + super::SUPER_AGENT_SESSIONS_PROMPT.chars().count()
             + super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()
             + super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()
             + super::voice_guideline().chars().count();
         let fixed_parts: Vec<(&str, usize)> = vec![
             ("TOOLS", super::SUPER_AGENT_TOOLS_PROMPT.chars().count()),
-            ("RESILIENCE", super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count()),
+            (
+                "RESILIENCE+ANTILOOP",
+                super::SUPER_AGENT_RESILIENCE_PROMPT.chars().count(),
+            ),
             ("AGENTSMD", super::SUPER_AGENT_AGENTSMD_PROMPT.chars().count()),
-            ("ANTILOOP", super::SUPER_AGENT_ANTILOOP_PROMPT.chars().count()),
-            ("SESSIONS", super::SUPER_AGENT_SESSIONS_PROMPT.chars().count()),
-            ("NO_WAIT", super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count()),
+            (
+                "SUPERVISION (NO_WAIT+SESSIONS)",
+                super::SUPER_AGENT_NO_WAIT_PROMPT.chars().count(),
+            ),
             ("SCHEDULE", super::SUPER_AGENT_SCHEDULE_PROMPT.chars().count()),
             ("VOICE", super::voice_guideline().chars().count()),
         ];
