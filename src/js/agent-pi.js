@@ -15,6 +15,7 @@ import { exportConversationMarkdown, copyConversationHtml } from "./conversation
 import { renderEditGateDialog } from "./diff-view.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
+import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
 import {
   isTerminalAgentEnd,
   commandsFromUpdate,
@@ -240,6 +241,12 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 
   const wrapper = document.createElement("div");
   wrapper.className = "agent-chat-container";
+  // C4 : identifiants des sélecteurs de modèle propres au couple (projet, agent).
+  // Plusieurs onglets agents vivent dans le même document : des id globaux
+  // (`agent-model-select`) faisaient que `document.getElementById` renvoyait
+  // toujours le PREMIER onglet → choisir un modèle dans l'agent 2 modifiait la
+  // sélection de l'agent 1. Voir agent-model-selector.js.
+  const selectorIds = agentSelectorIds(agentId, projectPath);
 
   // ── Zone des messages ──
   const messagesEl = document.createElement("div");
@@ -261,9 +268,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     <button class="agent-btn" data-action="agents-md" id="agent-amd-btn" title="Générer / mettre à jour AGENTS.md (instructions projet pour l'agent)"><i data-lucide="scroll-text" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-md" title="Exporter la conversation en Markdown"><i data-lucide="download" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="export-html" title="Copier la conversation en HTML dans le presse-papiers"><i data-lucide="copy" class="icon-sm"></i></button>
-    <select class="agent-model-select" id="agent-model-select" title="Changer de modèle"></select>
-    <select class="agent-model-select hidden" id="agent-orch-model-select" disabled title="Orchestrateur (mode Orchestration)"></select>
-    <select class="agent-model-select hidden" id="agent-coder-model-select" disabled title="Codeur (mode Orchestration)"></select>
+    <select class="agent-model-select" id="${selectorIds.standard}" title="Changer de modèle"></select>
+    <select class="agent-model-select hidden" id="${selectorIds.orchestrator}" disabled title="Orchestrateur (mode Orchestration)"></select>
+    <select class="agent-model-select hidden" id="${selectorIds.coder}" disabled title="Codeur (mode Orchestration)"></select>
     <span class="agent-stats" id="agent-stats" title="Tokens / Coût"></span>
     <span class="agent-lock-badge hidden" id="agent-lock-badge" title="Projet sensible : local-first garanti">🔒</span>
     <span class="agent-status" id="agent-status">Prêt</span>
@@ -579,6 +586,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // relais des choix via l'assistant (tâche de suivi #22) afin de router la
   // réponse vers la bonne session agent.
   state.agentId = agentId;
+  // C4 : id des sélecteurs de CET agent, réutilisés par les fonctions hors
+  // closure (loadModels, applyModelAlias, handleRpcEvent).
+  state.selectorIds = selectorIds;
   // Chantier 5/5 : enregistre le state de CET onglet (purge ciblée par
   // l'Assistant via purgeAgentTabView). Retiré à la fermeture de l'onglet.
   agentTabStates.set(agentId, state);
@@ -1913,7 +1923,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
                 appendSystemMessage(messagesEl, `🔄 Modèle restauré : ${state.defaultModel}`);
               }
               // Resync le sélecteur standard sur le modèle restauré
-              const stdSel = document.getElementById("agent-model-select");
+              const stdSel = agentModelSelectEl(state);
               if (stdSel) stdSel.value = state.defaultModel;
               updateStats();
             } catch (err) {
@@ -2117,7 +2127,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   await loadModelAliases();
 
   // ── Changement de modèle dans le select ──
-  const modelSelect = document.getElementById("agent-model-select");
+  const modelSelect = agentModelSelectEl(state);
   modelSelect.addEventListener("change", async () => {
     const value = modelSelect.value;
     if (!value) return;
@@ -2687,9 +2697,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
    * (les modèles sont pilotés automatiquement par switchToOrchestrator/Coder).
    */
   function setModelSelectorsOrchestrationMode(orchActive, st) {
-    const stdSel = document.getElementById("agent-model-select");
-    const orchSelEl = document.getElementById("agent-orch-model-select");
-    const coderSelEl = document.getElementById("agent-coder-model-select");
+    const stdSel = agentModelSelectEl(st);
+    const orchSelEl = agentModelSelectEl(st, "orchestrator");
+    const coderSelEl = agentModelSelectEl(st, "coder");
     if (orchActive) {
       if (stdSel) stdSel.classList.add("hidden");
       if (orchSelEl) {
@@ -4924,6 +4934,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // Multi-onglets agents : éléments du chat de CET onglet, pour que tabs.js
     // puisse les réactiver (globals d'autocomplétion/popups) à la bascule.
     elements: {
+      // C4 : le state de CET onglet, pour que la bascule d'onglet rende les
+      // fonctions hors closure (applyModelAlias via `window.__agentState`)
+      // solidaires de l'agent affiché, et non du dernier créé.
+      state,
       messagesEl,
       inputEl,
       autocompleteEl,
@@ -4941,6 +4955,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
  */
 export function activateAgentTab(elements) {
   if (!elements) return;
+  if (elements.state) window.__agentState = elements.state;
   if (elements.messagesEl) resumeMessagesEl = elements.messagesEl;
   if (elements.inputEl) acInputEl = elements.inputEl;
   if (elements.autocompleteEl) acPopupEl = elements.autocompleteEl;
@@ -5238,7 +5253,7 @@ async function applyModelAlias(cmd) {
     const ok = await setAgentModelSafe(window.__agentState, provider, modelId, "Le modèle n'a pas pu être basculé");
     if (!ok) {
       // perte de connexion : message déjà affiché, on restaure le select
-      const modelSelect = document.getElementById("agent-model-select");
+      const modelSelect = agentModelSelectEl(window.__agentState);
       if (modelSelect) {
         const curOpt = Array.from(modelSelect.options).find(o => o.value === window.__agentState?.currentModel);
         if (curOpt) modelSelect.value = curOpt.value;
@@ -5256,7 +5271,7 @@ async function applyModelAlias(cmd) {
   }
   const st = window.__agentState;
   if (st) st.currentModel = modelValue;
-  const modelSelect = document.getElementById("agent-model-select");
+  const modelSelect = agentModelSelectEl(st);
   if (modelSelect) {
     const opt = Array.from(modelSelect.options).find(o => o.value === modelValue);
     if (opt) modelSelect.value = modelValue;
@@ -5355,8 +5370,20 @@ async function fetchAvailableModels(preferFile = false) {
   return [];
 }
 
+/**
+ * C4 : élément sélecteur de modèle de l'agent `st` (id propre au couple
+ * projet + agent). Renvoie `null` si le state ne porte pas d'id (agent
+ * antérieur au correctif) : on ne retombe JAMAIS sur un id partagé, qui
+ * viserait le premier onglet du document.
+ * @param {object|null|undefined} st
+ * @param {"standard"|"orchestrator"|"coder"} [kind]
+ */
+function agentModelSelectEl(st, kind = "standard") {
+  return findModelSelect((id) => document.getElementById(id), st && st.selectorIds, kind);
+}
+
 async function loadModels(st, forceDefault = false, preferFile = false) {
-  const select = document.getElementById("agent-model-select");
+  const select = agentModelSelectEl(st);
   if (!select) return;
   try {
     const models = await fetchAvailableModels(preferFile);
@@ -5374,8 +5401,8 @@ async function loadModels(st, forceDefault = false, preferFile = false) {
     }
     select.innerHTML = html;
     // Remplir aussi les sélecteurs (inactifs) du mode Orchestration avec la même liste.
-    const orchSel2 = document.getElementById("agent-orch-model-select");
-    const coderSel2 = document.getElementById("agent-coder-model-select");
+    const orchSel2 = agentModelSelectEl(st, "orchestrator");
+    const coderSel2 = agentModelSelectEl(st, "coder");
     if (orchSel2) orchSel2.innerHTML = html;
     if (coderSel2) coderSel2.innerHTML = html;
     // En mode Orchestration, repositionner les sélecteurs orch sur les modèles choisis
@@ -6535,7 +6562,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             const modelMatch = state.pendingText.match(/\[success\]\s*Modèle changé\s*:\s*(\S+)/);
             if (modelMatch) {
               state.currentModel = modelMatch[1];
-              const select = document.getElementById("agent-model-select");
+              const select = agentModelSelectEl(state);
               if (select) {
                 const opt = Array.from(select.options).find((o) => o.value === state.currentModel);
                 if (opt) select.value = state.currentModel;
@@ -7000,7 +7027,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
         const modelMatch = payload.message.match(/Modèle changé\s*:\s*(\S+)/);
         if (modelMatch) {
           state.currentModel = modelMatch[1];
-          const select = document.getElementById("agent-model-select");
+          const select = agentModelSelectEl(state);
           if (select) {
             const opt = Array.from(select.options).find((o) => o.value === state.currentModel);
             if (opt) select.value = state.currentModel;
@@ -7038,7 +7065,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
     case "model_change":
       state.currentModel = `${payload.provider || ""}/${payload.modelId || ""}`;
       // Mettre à jour le sélecteur
-      const mcSelect = document.getElementById("agent-model-select");
+      const mcSelect = agentModelSelectEl(state);
       if (mcSelect) {
         const mcOpt = Array.from(mcSelect.options).find((o) => o.value === state.currentModel);
         if (mcOpt) mcSelect.value = state.currentModel;
