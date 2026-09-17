@@ -25,7 +25,7 @@ import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList } from "./agent-activity.js";
-import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
+import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
@@ -3069,10 +3069,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
-              // T7 : fin de tâche (succès) → compte-rendu + notification
-              // desktop + son + consignation dans le suivi.
-              appendSystemMessage(messagesEl, `✅ Tâche terminée par les agents sélectionnés.`);
-              settleRun(true, result);
+              // T7 : fin de tâche → compte-rendu + notification desktop + son +
+              // consignation. Issue #87 (2ᵉ moitié) : le groupe parallèle signale
+              // sa fin par « done » MÊME quand un agent a échoué (statut « error »
+              // agrégé dans le texte) → l'issue réelle est relue du résultat, pour
+              // ne jamais annoncer un échec comme un succès.
+              const ok = !runAgentsResultFailed(result);
+              appendSystemMessage(messagesEl, ok
+                ? `✅ Tâche terminée par les agents sélectionnés.`
+                : `❌ Tâche terminée en ÉCHEC par les agents sélectionnés.`);
+              settleRun(ok, result);
               reportStart(true, null);
             },
             (err) => {
@@ -3347,8 +3353,14 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           runAgentsForAssistantAsync(
             assignments,
             (result) => {
-              appendSystemMessage(messagesEl, `✅ Tâche d'assistant terminée par les agents sélectionnés.`);
-              settleRun(true, result);
+              // Issue #87 (2ᵉ moitié) : même relecture de l'issue réelle que pour
+              // `run_agents` (un agent d'assistant en échec remonte par « done »
+              // avec un statut « error » agrégé).
+              const ok = !runAgentsResultFailed(result);
+              appendSystemMessage(messagesEl, ok
+                ? `✅ Tâche d'assistant terminée par les agents sélectionnés.`
+                : `❌ Tâche d'assistant terminée en ÉCHEC par les agents sélectionnés.`);
+              settleRun(ok, result);
             },
             (err) => {
               const msg = err && err.message ? err.message : String(err);
@@ -4774,14 +4786,22 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {})
  * @param {boolean} ok - true si la run a abouti.
  */
 async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
-  // (a) compte-rendu + consignation dans le suivi (inject_session_summary).
-  // Fin de tâche : mémorisation FORCÉE (`remember: true`) — un compte rendu de
-  // fin de run (résultat ou échec) ne doit jamais être perdu.
-  await injectRunAgentsResultToSuperAgent(result, projectPath, { remember: true });
-  // (b) notification desktop native (si activée) + (c) son de fin (si activé).
-  const { title, body } = buildRunAgentsNotification({ ok, projectPath });
-  notifySuperAgentDone({ title, body }).catch(() => {});
-  playAssistantSound("fin").catch(() => {});
+  // Issue #87 (2ᵉ moitié) : le groupe parallèle du bus signale sa fin par
+  // « done » MÊME quand un agent a échoué (statut « error » agrégé dans le
+  // texte). Une run dont un agent a échoué est donc un ÉCHEC, jamais un succès.
+  const effectiveOk = ok === true && !runAgentsResultFailed(result);
+  // Avis de fin (notification desktop si `notify_super_agent_done`, son si
+  // `assistant_sound_enabled`) émis EN PREMIER et une seule fois, puis
+  // consignation dans le suivi (fail-open, cf. `emitRunAgentsFinishNotice`).
+  await emitRunAgentsFinishNotice({
+    ok: effectiveOk,
+    projectPath,
+    result,
+    notify: notifySuperAgentDone,
+    playSound: playAssistantSound,
+    consign: (r) => injectRunAgentsResultToSuperAgent(r, projectPath, { remember: true }),
+  });
+  return effectiveOk;
 }
 
 export async function initializeSuperAgent(messagesEl) {
