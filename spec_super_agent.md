@@ -1258,6 +1258,15 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   périmé est libéré et la demande démarre. Quand une demande est réellement
   mise en file, le retour de `run_agents` / `run_assistant_agents` l'indique
   honnêtement (`launched: false, queued: true`).
+- **Prompt allégé et plafonné (anti-regonflement)** : le prompt système est
+  assemblé par la fonction pure `assemble_super_agent_system_prompt` (rôle,
+  contexte projet, listes, règles figées, mémoire, guidelines). Les règles
+  dupliquées sont fusionnées (résilience + anti-boucle ; supervision +
+  anti-attente). La liste des agents conserve **tous les identifiants** mais
+  tronque les descriptions longues à 100 caractères (fin de mot + `…`). Un test
+  garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
+  des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
+  (5 550 caractères, mesuré à 5 278).
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant
