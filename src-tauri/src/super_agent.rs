@@ -2920,6 +2920,8 @@ pub(crate) const SESSION_MEMORY_TRASH_FORMAT: &str = "pilot-assistant-session-me
 pub(crate) const SESSION_MEMORY_TRASH_VERSION: u64 = 1;
 /// Nombre maximal de retraits conservés (le plus ancien sort en premier).
 pub(crate) const SESSION_MEMORY_TRASH_LIMIT: usize = 20;
+/// Longueur maximale de l'aperçu du contenu retiré (parcours de la corbeille).
+pub(crate) const SESSION_MEMORY_TRASH_PREVIEW_MAX: usize = 120;
 
 /// Chemin du fichier de corbeille (à côté de la mémoire de session).
 pub(crate) fn session_memory_trash_path(app: &AppHandle) -> PathBuf {
@@ -2996,6 +2998,76 @@ pub(crate) fn take_trash_entry(trash: &mut Value, id: Option<&str>) -> Option<Va
         return None;
     }
     Some(arr.remove(idx))
+}
+
+/// Aperçu COURT (borné) du contenu d'un retrait, pour le parcours de la
+/// corbeille : le texte retiré d'un champ, ou « projet — titre » d'un travail
+/// en cours. Entrée inexploitable → chaîne vide (jamais de panic).
+pub(crate) fn trash_entry_preview(entry: &Value, max_chars: usize) -> String {
+    let raw = match entry.get("kind").and_then(|x| x.as_str()).unwrap_or("") {
+        "field" => entry
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "work_in_progress" => {
+            let project = entry
+                .get("content")
+                .and_then(|c| c.get("project"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            let title = entry
+                .get("content")
+                .and_then(|c| c.get("title"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            match (project.is_empty(), title.is_empty()) {
+                (false, false) => format!("{} — {}", project, title),
+                (false, true) => project.to_string(),
+                (true, false) => title.to_string(),
+                (true, true) => String::new(),
+            }
+        }
+        _ => entry
+            .get("content")
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
+    };
+    truncate_chars(&raw, max_chars)
+}
+
+/// Parcours de la corbeille : les retraits en attente, du plus récent au plus
+/// ancien (l'ordre du fichier), avec identifiant, type, date et aperçu court du
+/// contenu. Borné aux entrées déjà conservées (la corbeille est bornée en
+/// écriture). Corbeille non conforme → liste vide.
+pub(crate) fn list_memory_trash_entries(trash: &Value) -> Value {
+    let entries = trash
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let items: Vec<Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.get("id").and_then(|x| x.as_str()).unwrap_or(""),
+                "kind": e.get("kind").and_then(|x| x.as_str()).unwrap_or(""),
+                "removed_at": e.get("removed_at").and_then(|x| x.as_str()).unwrap_or(""),
+                "preview": trash_entry_preview(e, SESSION_MEMORY_TRASH_PREVIEW_MAX),
+            })
+        })
+        .collect();
+    serde_json::json!({ "count": items.len(), "entries": items })
+}
+
+/// Résultat d'un retrait tel que renvoyé à l'assistant : la mémoire mise à jour
+/// (`memory`, format inchangé) et l'identifiant du retrait rangé en corbeille
+/// (`trash_id`), qui permet de le remettre en place précisément.
+pub(crate) fn memory_removal_result(new_json: &str, trash_id: &str) -> Value {
+    serde_json::json!({
+        "memory": new_json,
+        "trash_id": trash_id,
+    })
 }
 
 /// Retire UNE entrée de `work_in_progress` (désignation par rang 1-based, ou par
@@ -3221,17 +3293,23 @@ fn write_memory_trash(app: &AppHandle, trash: &Value) -> Result<(), String> {
 ///
 /// `target` : rang 1-based, ou texte du titre / du projet d'un travail en cours.
 /// `field` : nom d'un champ texte simple à vider (« notes », « current_topic »…).
-/// Si `field` est fourni, `target` est ignoré. Retourne la nouvelle mémoire.
+/// Si `field` est fourni, `target` est ignoré. Retourne la nouvelle mémoire et
+/// l'identifiant du retrait (`memory_removal_result`).
 #[tauri::command]
 pub fn super_agent_remove_session_memory(
     app: AppHandle,
     target: String,
     field: Option<String>,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     let path = session_memory_path(&app);
     let raw = std::fs::read_to_string(&path)
         .map_err(|_| "Aucune mémoire de session enregistrée : rien à retirer.".to_string())?;
     let (new_json, entry) = remove_session_memory_item(&raw, &target, field.as_deref())?;
+    let trash_id = entry
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     let mut trash = read_memory_trash(&app);
     push_trash_entry(&mut trash, entry, SESSION_MEMORY_TRASH_LIMIT);
     std::fs::write(&path, &new_json)
@@ -3242,7 +3320,15 @@ pub fn super_agent_remove_session_memory(
         let _ = std::fs::write(&path, &raw);
         return Err(e);
     }
-    Ok(new_json)
+    Ok(memory_removal_result(&new_json, &trash_id))
+}
+
+/// Commande Tauri : parcourt la corbeille des retraits de mémoire (les retraits
+/// en attente, du plus récent au plus ancien) avec pour chacun son identifiant,
+/// son type, sa date et un aperçu court du contenu retiré. Lecture seule.
+#[tauri::command]
+pub fn super_agent_list_session_memory_trash(app: AppHandle) -> Result<Value, String> {
+    Ok(list_memory_trash_entries(&read_memory_trash(&app)))
 }
 
 /// Commande Tauri : remet en place un retrait de la corbeille (désigné par son
@@ -3812,6 +3898,13 @@ pub fn import_super_agent_memory(
 }
 
 #[cfg(test)]
+mod tests_inner_helper {
+    use super::*;
+    #[allow(dead_code)]
+    pub(crate) fn list_entries(t: &Value) -> Value {
+        list_memory_trash_entries(t)
+    }
+}
 mod tests {
     use super::{
         build_project_context, deliver_one_summary, enqueue_session_summary, init_db,
@@ -3820,9 +3913,10 @@ mod tests {
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
-        take_trash_entry, validate_export_json, MEMORY_FORMAT, MEMORY_VERSION,
+        take_trash_entry, trash_entry_preview, validate_export_json, list_memory_trash_entries,
+        memory_removal_result, MEMORY_FORMAT, MEMORY_VERSION,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
-        SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_VERSION,
+        SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
 
@@ -4042,6 +4136,121 @@ mod tests {
         assert_eq!(newest["id"], format!("id{}", total - 1));
         assert!(take_trash_entry(&mut trash, Some("absent")).is_none());
         assert!(take_trash_entry(&mut trash, Some("id10")).is_none());
+    }
+
+    #[test]
+    fn session_memory_removal_result_carries_trash_id() {
+        // Le retrait renvoie la mémoire mise à jour ET l'identifiant du retrait
+        // rangé en corbeille (pour une remise en place ciblée).
+        let (json, entry) = remove_session_memory_item(&sample_memory(), "2", None).unwrap();
+        let result = memory_removal_result(&json, &entry["id"].as_str().unwrap().to_string());
+        assert_eq!(result["memory"], json);
+        assert!(!result["trash_id"].as_str().unwrap_or("").is_empty());
+        assert_eq!(result["trash_id"], entry["id"]);
+        // Le format de la mémoire renvoyée est inchangé.
+        let mem: serde_json::Value = serde_json::from_str(result["memory"].as_str().unwrap()).unwrap();
+        assert_eq!(mem["format"], SESSION_MEMORY_FORMAT);
+        assert_eq!(mem["version"], SESSION_MEMORY_VERSION);
+        // Un second retrait donne un identifiant différent.
+        let (json2, entry2) = remove_session_memory_item(&sample_memory(), "1", None).unwrap();
+        assert_ne!(
+            memory_removal_result(&json2, &entry2["id"].as_str().unwrap().to_string())["trash_id"],
+            result["trash_id"]
+        );
+    }
+
+    #[test]
+    fn session_memory_trash_list_is_ordered_bounded_and_previewed() {
+        // Corbeille vide → liste vide, jamais d'erreur.
+        let empty = list_memory_trash_entries(&parse_memory_trash(""));
+        assert_eq!(empty["count"], 0);
+        assert_eq!(empty["entries"].as_array().unwrap().len(), 0);
+        // Corbeille non conforme → liste vide aussi.
+        assert_eq!(list_memory_trash_entries(&serde_json::json!({"x": 1}))["count"], 0);
+
+        // Deux retraits : le plus récent (notes) doit être listé en premier.
+        let (_, e1) = remove_session_memory_item(&sample_memory(), "2", None).unwrap();
+        let (_, e2) = remove_session_memory_item(&sample_memory(), "", Some("notes")).unwrap();
+        let id1 = e1["id"].as_str().unwrap().to_string();
+        let id2 = e2["id"].as_str().unwrap().to_string();
+        let mut trash = parse_memory_trash("");
+        push_trash_entry(&mut trash, e1, SESSION_MEMORY_TRASH_LIMIT);
+        push_trash_entry(&mut trash, e2, SESSION_MEMORY_TRASH_LIMIT);
+        // La liste suit l'ordre de la corbeille : plus récent d'abord.
+        let listed = list_memory_trash_entries(&trash);
+        assert_eq!(listed["count"], 2);
+        let entries = listed["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["id"], id2);
+        assert_eq!(entries[1]["id"], id1);
+        assert_eq!(entries[0]["kind"], "field");
+        assert_eq!(entries[1]["kind"], "work_in_progress");
+        assert!(!entries[0]["removed_at"].as_str().unwrap_or("").is_empty());
+        // Aperçus courts : le contenu retiré, borné.
+        assert_eq!(entries[0]["preview"], "note à vider");
+        assert_eq!(entries[1]["preview"], "/p/b — Beta");
+        // Borne : la liste ne contient que les entrées déjà conservées.
+        let mut big = parse_memory_trash("");
+        for i in 0..SESSION_MEMORY_TRASH_LIMIT + 5 {
+            push_trash_entry(&mut big, serde_json::json!({"id": format!("id{}", i)}), SESSION_MEMORY_TRASH_LIMIT);
+        }
+        assert_eq!(list_memory_trash_entries(&big)["count"], SESSION_MEMORY_TRASH_LIMIT);
+        // Aperçu borné même sur un contenu très long, entrée inexploitable tolérée.
+        let long = serde_json::json!({"id": "x", "kind": "field", "content": "y".repeat(500)});
+        let preview = trash_entry_preview(&long, SESSION_MEMORY_TRASH_PREVIEW_MAX);
+        assert!(preview.chars().count() <= SESSION_MEMORY_TRASH_PREVIEW_MAX + 20);
+        assert_eq!(trash_entry_preview(&serde_json::json!({"kind": "autre"}), 10), "");
+    }
+
+    #[test]
+    fn session_memory_trash_list_and_restore_by_id() {
+        let mem = sample_memory();
+        // Deux retraits successifs : Alpha (rang 1) puis notes.
+        let (after_alpha, e1) = remove_session_memory_item(&mem, "1", None).unwrap();
+        let (after_both, e2) = remove_session_memory_item(&after_alpha, "", Some("notes")).unwrap();
+        let id1 = e1["id"].as_str().unwrap().to_string();
+        let id2 = e2["id"].as_str().unwrap().to_string();
+        let mut trash = parse_memory_trash("");
+        push_trash_entry(&mut trash, e1, SESSION_MEMORY_TRASH_LIMIT);
+        push_trash_entry(&mut trash, e2, SESSION_MEMORY_TRASH_LIMIT);
+        let listed = list_memory_trash_entries(&trash);
+        let ids: Vec<&str> = listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec![id2.as_str(), id1.as_str()]);
+        // L'identifiant visé est bien présent dans le parcours.
+        assert!(ids.contains(&id1.as_str()));
+
+        // Remise en place par identifiant : seul le retrait visé repart.
+        let entry = take_trash_entry(&mut trash, Some(&id1)).unwrap();
+        let restored = restore_session_memory_item(&after_both, &entry).unwrap();
+        let rv: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        let titles: Vec<&str> = rv["resume"]["work_in_progress"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["Alpha", "Beta", "Gamma"]);
+        // Le champ notes reste vidé (l'autre retrait n'a pas été touché).
+        assert_eq!(rv["resume"]["notes"], "");
+        assert_eq!(trash["entries"].as_array().unwrap().len(), 1);
+
+        // Non-régression : sans identifiant, c'est le retrait le plus récent
+        // qui revient (« notes » ici).
+        let newest = take_trash_entry(&mut trash, None).unwrap();
+        assert_eq!(newest["id"], id2);
+        let restored2 = restore_session_memory_item(&after_both, &newest).unwrap();
+        let rv2: serde_json::Value = serde_json::from_str(&restored2).unwrap();
+        assert_eq!(rv2["resume"]["notes"], "note à vider");
+        assert_eq!(rv2["resume"]["work_in_progress"].as_array().unwrap().len(), 2);
+        // Cible introuvable : aucun retrait pris, la corbeille est intacte.
+        let mut untouched = parse_memory_trash("");
+        push_trash_entry(&mut untouched, serde_json::json!({"id": "garde"}), SESSION_MEMORY_TRASH_LIMIT);
+        assert!(take_trash_entry(&mut untouched, Some("absent")).is_none());
+        assert_eq!(untouched["entries"].as_array().unwrap().len(), 1);
     }
 
     #[test]
