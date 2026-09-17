@@ -7,11 +7,49 @@
 // permission est refusée, ou l'envoi échoue, on log un warning et on ne lève
 // jamais d'erreur (la notification est un confort, pas une fonctionnalité
 // critique). Aucune régression possible sur le flux agent.
+//
+// Depuis la passerelle Telegram (spec_telegram.md, étape 1 : envoi seulement),
+// chaque avis est AUSSI transmis au moteur, en arrière-plan
+// (`forwardToTelegram`) : c'est le moteur qui décide d'envoyer ou non (inerte
+// tant que la passerelle est désactivée ou mal configurée). Aucune logique de
+// notification n'est dupliquée : les trois points d'avis existants
+// (`notifyAgentDone`, `notifySuperAgentDone`, `notifyAnomaly`) couvrent la fin
+// de tâche d'un agent, les événements de l'assistant et les alertes
+// d'anomalie / arrêt automatique.
 
 import { invoke } from "@tauri-apps/api/core";
 
 let _permissionChecked = false;
 let _granted = false;
+
+/**
+ * Transmet un avis à la passerelle Telegram (spec_telegram.md, étape 1 :
+ * ENVOI seulement).
+ *
+ * Le moteur (Rust) décide seul de l'inertie : passerelle désactivée ou mal
+ * configurée → aucun envoi, aucune erreur remontée. Côté interface l'appel est
+ * « fire-and-forget » : on n'attend JAMAIS la réponse et tout échec est avalé
+ * (un avis non transmis ne doit jamais perturber le flux de notification).
+ *
+ * Appelée AVANT les filtres de notification native (réglage local, permission
+ * OS) : Telegram est un canal indépendant, il ne doit pas être conditionné par
+ * le réglage des notifications desktop.
+ * @param {string} title
+ * @param {string} body
+ * @returns {Promise<void>}
+ */
+export function forwardToTelegram(title, body) {
+  const text = [title, body]
+    .filter((s) => typeof s === "string" && s.trim().length > 0)
+    .join(" — ");
+  if (!text) return Promise.resolve();
+  try {
+    return Promise.resolve(invoke("telegram_notify", { text })).catch(() => {});
+  } catch (_) {
+    // `invoke` indisponible (hors Tauri) : inerte, jamais d'erreur.
+    return Promise.resolve();
+  }
+}
 
 /**
  * Vérifie (et demande au besoin) la permission de notification native.
@@ -57,6 +95,11 @@ export async function notifyAgentDoneFromRemote(opts = {}) {
  * @param {object} [opts] — { title?: string, body?: string, local?: boolean }
  */
 export async function notifyAgentDone(opts = {}) {
+  const title = opts.title || "Pilot — Agent terminé";
+  const body = opts.body || "✅ L'agent a terminé.";
+  // Passerelle Telegram (spec_telegram.md) : transmise en premier, en
+  // arrière-plan, indépendamment du réglage local et de la permission OS.
+  forwardToTelegram(title, body);
   if (opts.local) {
     // Chat local : uniquement si le réglage est activé (issue #41).
     try {
@@ -66,8 +109,6 @@ export async function notifyAgentDone(opts = {}) {
       return;
     }
   }
-  const title = opts.title || "Pilot — Agent terminé";
-  const body = opts.body || "✅ L'agent a terminé.";
   try {
     const mod = await import("@tauri-apps/plugin-notification");
     // Vérifier la permission (demande au 1er appel si pas encore fait).
@@ -91,14 +132,16 @@ export async function notifyAgentDone(opts = {}) {
  * @param {object} [opts] — { title?: string, body?: string }
  */
 export async function notifySuperAgentDone(opts = {}) {
+  const title = opts.title || "Pilot — Assistant";
+  const body = opts.body || "ℹ️ L'assistant signale un événement important.";
+  // Passerelle Telegram : canal indépendant du réglage `notify_super_agent_done`.
+  forwardToTelegram(title, body);
   try {
     const cfg = await invoke("get_config");
     if (!cfg || !cfg.notify_super_agent_done) return;
   } catch (_) {
     return;
   }
-  const title = opts.title || "Pilot — Assistant";
-  const body = opts.body || "ℹ️ L'assistant signale un événement important.";
   try {
     const mod = await import("@tauri-apps/plugin-notification");
     let granted = _granted;
@@ -120,14 +163,17 @@ export async function notifySuperAgentDone(opts = {}) {
  * @param {object} [opts] — { title?: string, body?: string }
  */
 export async function notifyAnomaly(opts = {}) {
+  const title = opts.title || "Pilot — Anomalie détectée";
+  const body = opts.body || "⚠️ Un agent semble bloqué (actif sans progression).";
+  // Passerelle Telegram : alerte transmise même si la notification native est
+  // désactivée côté surveillance (`anomaly_detection_enabled`).
+  forwardToTelegram(title, body);
   try {
     const cfg = await invoke("get_config");
     if (!cfg || cfg.anomaly_detection_enabled === false) return;
   } catch (_) {
     return;
   }
-  const title = opts.title || "Pilot — Anomalie détectée";
-  const body = opts.body || "⚠️ Un agent semble bloqué (actif sans progression).";
   try {
     const mod = await import("@tauri-apps/plugin-notification");
     let granted = _granted;
