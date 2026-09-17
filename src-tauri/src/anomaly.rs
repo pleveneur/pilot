@@ -373,6 +373,92 @@ fn auto_stop_target(agent_process_alive: bool, main_session_alive: bool) -> &'st
     }
 }
 
+/// Réglages consommés par la boucle du moniteur (anomalie, arrêt auto T2,
+/// plafond de l'assistant, verrou busy-stale). Extrait de `AppConfig` pour être
+/// relu à CHAQUE tour : un réglage modifié dans les Paramètres s'applique sans
+/// redémarrer Pilot (issue #89). `Copy` : la boucle en garde la dernière valeur
+/// connue, qui sert de repli si la config est momentanément illisible.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MonitorConfig {
+    anomaly_enabled: bool,
+    timeout_minutes: u32,
+    auto_stop_enabled: bool,
+    auto_stop_minutes: u32,
+    super_stop_enabled: bool,
+    super_stop_minutes: u32,
+    stale_busy_grace: u32,
+}
+
+impl MonitorConfig {
+    /// Valeurs par défaut (identiques à celles d'`AppConfig`). Utilisées
+    /// uniquement si la toute première lecture de la config échoue.
+    fn defaults() -> Self {
+        Self {
+            anomaly_enabled: true,
+            timeout_minutes: crate::default_anomaly_timeout_minutes(),
+            auto_stop_enabled: true,
+            auto_stop_minutes: crate::default_agent_auto_stop_minutes(),
+            super_stop_enabled: true,
+            super_stop_minutes: crate::default_agent_auto_stop_minutes(),
+            stale_busy_grace: crate::default_stale_busy_grace_minutes(),
+        }
+    }
+
+    fn from_app_config(cfg: &crate::AppConfig) -> Self {
+        Self {
+            anomaly_enabled: cfg.anomaly_detection_enabled,
+            timeout_minutes: cfg.anomaly_timeout_minutes,
+            auto_stop_enabled: cfg.agent_auto_stop_enabled,
+            auto_stop_minutes: cfg.agent_auto_stop_minutes,
+            super_stop_enabled: cfg.super_agent_auto_stop_enabled,
+            super_stop_minutes: cfg.super_agent_auto_stop_minutes,
+            stale_busy_grace: cfg.stale_busy_grace_minutes,
+        }
+    }
+}
+
+/// Sélection du repli quand la config est illisible : `None` (lecture
+/// impossible ce tour-ci) → dernière valeur connue ; `Some` → valeur fraîche.
+/// Pure et testable.
+fn monitor_config_or_last(current: Option<MonitorConfig>, last: MonitorConfig) -> MonitorConfig {
+    current.unwrap_or(last)
+}
+
+/// Lit les réglages du moniteur SANS jamais bloquer le thread de surveillance ni
+/// le faire mourir (issue #89). Avant ce correctif, la boucle faisait
+/// `state.config.lock().unwrap()` : un verrou empoisonné (panic d'un autre
+/// thread pendant qu'il détenait la config) faisait PANIQUER la boucle, tuait le
+/// thread de surveillance — créé une seule fois au démarrage — et PLUS AUCUN
+/// réglage n'était appliqué avant un redémarrage de Pilot.
+/// Comportement :
+///  - verrou libre → valeur courante (relecture à chaque tour) ;
+///  - verrou momentanément pris (`WouldBlock`) → dernière valeur connue + trace,
+///    aucun blocage, la surveillance continue ;
+///  - verrou empoisonné (`Poisoned`) → les données sont intactes malgré le
+///    poison : on les lit directement au lieu de renoncer, la surveillance
+///    continue avec la valeur courante.
+fn read_monitor_config(state: &AppState, last: MonitorConfig) -> MonitorConfig {
+    match state.config.try_lock() {
+        Ok(cfg) => monitor_config_or_last(Some(MonitorConfig::from_app_config(&cfg)), last),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            eprintln!(
+                "[anomaly] config verrouillée par un panic antérieur (verrou empoisonné) : \
+                 lecture directe, la surveillance continue (issue #89)."
+            );
+            MonitorConfig::from_app_config(&poisoned.into_inner())
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            eprintln!(
+                "[anomaly] config momentanément illisible (verrou pris) : repli sur la \
+                 dernière valeur connue (seuil d'inactivité {} min), la surveillance continue \
+                 (issue #89).",
+                last.timeout_minutes
+            );
+            monitor_config_or_last(None, last)
+        }
+    }
+}
+
 /// Démarre la surveillance arrière-plan des anomalies d'agents (tâche 8) ET
 /// l'arrêt AUTOMATIQUE des agents délégués bloqués (T2).
 /// Thread autonome : toutes les 30 s, vérifie si un agent actif (busy) n'a pas
@@ -391,21 +477,25 @@ fn auto_stop_target(agent_process_alive: bool, main_session_alive: bool) -> &'st
 /// `anomaly_detection_enabled` et `agent_auto_stop_enabled` (défauts activés).
 pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, AgentAnomalyState>>>) {
     std::thread::spawn(move || {
+        // Issue #89 : dernière valeur connue des réglages, utilisée comme repli
+        // si la config est momentanément illisible (jamais de blocage, jamais
+        // d'arrêt de la surveillance sur une lecture de config).
+        let mut last_cfg = MonitorConfig::defaults();
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<AppState>();
-            let (anomaly_enabled, timeout_minutes, auto_stop_enabled, auto_stop_minutes, super_stop_enabled, super_stop_minutes, stale_busy_grace) = {
-                let cfg = state.config.lock().unwrap();
-                (
-                    cfg.anomaly_detection_enabled,
-                    cfg.anomaly_timeout_minutes,
-                    cfg.agent_auto_stop_enabled,
-                    cfg.agent_auto_stop_minutes,
-                    cfg.super_agent_auto_stop_enabled,
-                    cfg.super_agent_auto_stop_minutes,
-                    cfg.stale_busy_grace_minutes,
-                )
-            };
+            // Relecture de la valeur COURANTE à chaque tour (issue #89) : un
+            // changement dans les Paramètres s'applique sans redémarrer Pilot.
+            last_cfg = read_monitor_config(state.inner(), last_cfg);
+            let MonitorConfig {
+                anomaly_enabled,
+                timeout_minutes,
+                auto_stop_enabled,
+                auto_stop_minutes,
+                super_stop_enabled,
+                super_stop_minutes,
+                stale_busy_grace,
+            } = last_cfg;
             let anomaly_timeout_secs = (timeout_minutes.max(1) as u64) * 60;
             let now = Instant::now();
             let mut alerts: Vec<(String, String, String, u64)> = Vec::new();
