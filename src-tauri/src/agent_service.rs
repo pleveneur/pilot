@@ -1748,12 +1748,42 @@ impl AgentService {
         Ok(false)
     }
 
+    /// Issue #87 (défaut résiduel n°1) : remet à zéro l'état persistant d'un
+    /// agent GLOBAL (`project_path` NULL, espace assistant) après son arrêt
+    /// explicite. Sans cela, la ligne `agents` restait `proc_state='Running'` et
+    /// `loaded=1` alors que le processus venait d'être tué (seule la purge
+    /// périodique des fantômes rattrapait l'incohérence, avec un délai).
+    /// Prend la connexion en paramètre pour rester testable de façon
+    /// déterministe. Tolérante : renvoie le nombre de lignes mises à jour
+    /// (0 si l'agent n'a aucune ligne persistée).
+    pub(crate) fn reset_global_agent_state(
+        &self,
+        conn: &rusqlite::Connection,
+        agent_id: &str,
+    ) -> Result<usize, String> {
+        conn.execute(
+            "UPDATE agents SET loaded = 0, busy = 0, proc_state = 'Stopped'
+             WHERE id = ?1 AND project_path IS NULL",
+            params![agent_id],
+        )
+        .map_err(|e| format!("Erreur reset_global_agent_state: {}", e))
+    }
+
     /// Arrête la session d'un agent d'assistant (processus tué, session retirée).
     pub fn stop_assistant_agent(&self, agent_id: &str) -> Result<(), String> {
         let key = Self::session_key(ASSISTANT_SPACE, agent_id);
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(mut entry) = sessions.remove(&key) {
             rpc_manager::stop_session(&mut entry.session);
+        }
+        drop(sessions);
+        // Issue #87 (défaut résiduel n°1) : garantir l'état final
+        // `Stopped`/`loaded=0`/`busy=0` de la ligne persistée (agent global,
+        // `project_path` NULL). Tolérant : l'agent peut n'avoir aucune ligne.
+        if let Some(app) = self.app.lock().unwrap().clone() {
+            if let Ok(conn) = db::open_conn(&app) {
+                self.reset_global_agent_state(&conn, agent_id).ok();
+            }
         }
         Ok(())
     }
@@ -3626,5 +3656,57 @@ mod tests {
             )
             .expect("ligne pause");
         assert_eq!(p_state, "Paused", "état Paused hors périmètre");
+    }
+
+    /// Issue #87 (défaut résiduel n°1) : l'arrêt d'un agent GLOBAL doit aboutir
+    /// à un état final sain (`Stopped`, loaded=0, busy=0). Auparavant la ligne
+    /// restait `Running`/`loaded=1` après l'arrêt (seule la purge périodique
+    /// rattrapait l'incohérence, avec un délai). Une ligne de PROJET portant le
+    /// même id ne doit jamais être touchée par cette remise à zéro globale.
+    #[test]
+    fn reset_global_agent_state_stops_only_null_project_rows() {
+        let svc = AgentService::new();
+        let conn = rusqlite::Connection::open_in_memory().expect("base en mémoire");
+        db::init_db(&conn).expect("schéma pilot.db");
+        conn.execute(
+            "INSERT INTO agents (id, project_path, name, role, proc_state, loaded, busy)
+             VALUES ('global-1', NULL, 'Global', 'assistant', 'Running', 1, 0)",
+            [],
+        )
+        .expect("insert global");
+        conn.execute(
+            "INSERT INTO agents (id, project_path, name, role, proc_state, loaded, busy)
+             VALUES ('global-1', '/p/A', 'Projet', 'coder', 'Running', 1, 0)",
+            [],
+        )
+        .expect("insert projet");
+        let changed = svc
+            .reset_global_agent_state(&conn, "global-1")
+            .expect("reset global");
+        assert_eq!(changed, 1, "seule la ligne globale est remise à zéro");
+        let (loaded, busy, state): (i64, i64, String) = conn
+            .query_row(
+                "SELECT loaded, busy, proc_state FROM agents
+                 WHERE id = 'global-1' AND project_path IS NULL",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("ligne globale");
+        assert_eq!((loaded, busy, state.as_str()), (0, 0, "Stopped"));
+        // La ligne de projet du même id reste intacte (son arrêt passe par `stop`).
+        let p_state: String = conn
+            .query_row(
+                "SELECT proc_state FROM agents WHERE id = 'global-1' AND project_path = '/p/A'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("ligne projet");
+        assert_eq!(p_state, "Running", "la ligne de projet n'est pas touchée");
+        // Tolérance : un agent sans ligne persistée ne fait pas échouer l'arrêt.
+        assert_eq!(
+            svc.reset_global_agent_state(&conn, "inconnu")
+                .expect("reset inconnu"),
+            0
+        );
     }
 }
