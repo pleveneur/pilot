@@ -83,6 +83,7 @@ mod mcp_config;
 mod agent;
 mod agent_service;
 mod anomaly;
+mod telegram;
 mod gds;
 mod gds_client;
 mod gds_db;
@@ -306,6 +307,20 @@ struct AppConfig {
     // y compris pour un chat LOCAL (pas seulement à distance). Défaut off.
     #[serde(default)]
     notify_agent_done: bool,
+    // ── Passerelle Telegram (spec_telegram.md, étape 1 : ENVOI seulement) ──
+    // Avis envoyés au propriétaire sur Telegram (fin de tâche d'un agent,
+    // anomalie d'agent bloqué, arrêt automatique d'une session). Désactivée par
+    // défaut : un config.json ancien (sans ces champs) reste STRICTEMENT inerte.
+    // Tant que l'interrupteur est faux ou que le jeton / l'identifiant de
+    // discussion est vide, rien n'est tenté (aucun réseau, aucune erreur).
+    // Le jeton est un secret d'envoi (jamais journalisé) : il est saisi dans les
+    // Paramètres et transmis uniquement à l'API du bot.
+    #[serde(default)]
+    telegram_notify_enabled: bool,
+    #[serde(default)]
+    telegram_bot_token: String,
+    #[serde(default)]
+    telegram_chat_id: String,
     #[serde(default)]
     pdf_md_model: String,
     #[serde(default = "default_sidebar_width")]
@@ -885,6 +900,9 @@ impl Default for AppConfig {
             show_thinking: true,
             show_tools: false,
             notify_agent_done: false,
+            telegram_notify_enabled: false,
+            telegram_bot_token: String::new(),
+            telegram_chat_id: String::new(),
             pdf_md_model: String::new(),
             sidebar_width: 280,
             auto_save: false,
@@ -1036,6 +1054,12 @@ fn config_is_default(config: &AppConfig) -> bool {
         && config.rpc_agent_enabled == default.rpc_agent_enabled
         && config.show_thinking == default.show_thinking
         && config.show_tools == default.show_tools
+        // Passerelle Telegram (spec_telegram.md) : un réglage Telegram non
+        // défaut rend la config « non par défaut », donc le chargement
+        // paresseux ne peut pas l'écraser par les valeurs du disque.
+        && config.telegram_notify_enabled == default.telegram_notify_enabled
+        && config.telegram_bot_token == default.telegram_bot_token
+        && config.telegram_chat_id == default.telegram_chat_id
         && config.pdf_md_model == default.pdf_md_model
 }
 
@@ -2701,6 +2725,7 @@ pub fn run() {
             save_config,
             set_sidebar_width,
             play_assistant_sound,
+            telegram::telegram_notify,
             set_window_title,
             get_recent_projects,
             close_project,
