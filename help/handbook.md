@@ -1635,6 +1635,14 @@ l'ouverture de l'onglet, un message « 🔁 Reprise de session — … » rappel
 contexte. Vous pouvez aussi lui demander explicitement de « retenir » ou de
 « reprendre » une discussion.
 
+Vous pouvez aussi lui demander de **corriger** sa mémoire : si un fait mémorisé
+est devenu faux ou périmé (un chantier terminé, un projet qui n'est plus le bon),
+l'assistant peut **retirer ce fait précis** sans réécrire tout le résumé. Le fait
+retiré n'est pas perdu : il est gardé dans une **corbeille limitée aux 20 derniers
+retraits**, et l'assistant peut le **remettre en place** (le dernier retrait par
+défaut, ou un retrait choisi) si vous vous êtes trompés ou s'il redevient
+pertinent.
+
 ---
 
 ### MCP piloté par l'Assistant

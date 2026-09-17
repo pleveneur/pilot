@@ -1022,6 +1022,23 @@ naturellement là où on en était.
   chantier, à un changement de sujet, avant de reprendre une discussion
   importante, ou sur demande explicite. Envoi via sentinel
   `PILOT_ASSISTANT_MEMORY_SAVE::` (commande Rust `super_agent_save_session_memory`).
+- **Outil `remove_session_memory`** (même extension) : retire **un fait précis** du
+  résumé sans le réécrire entièrement — une entrée de `work_in_progress` désignée
+  par son rang 1-based ou par un fragment de texte de son `project` / `title`, ou
+  le contenu d'un champ texte simple (`notes`, `current_topic`, `active_project`)
+  via `field`. À utiliser dès qu'un fait mémorisé est devenu faux, périmé ou
+  obsolète. Envoi via sentinel `PILOT_ASSISTANT_MEMORY_REMOVE::` + charge utile
+  JSON `{ target, field? }` (commande Rust `super_agent_remove_session_memory`).
+- **Outil `restore_session_memory`** (même extension) : remet en place un fait
+  précédemment retiré, par son `id`, ou **le retrait le plus récent** quand aucun
+  `id` n'est fourni. Envoi via sentinel `PILOT_ASSISTANT_MEMORY_RESTORE::` +
+  charge utile JSON `{ id? }` (commande Rust `super_agent_restore_session_memory`).
+- **Corbeille bornée** : chaque retrait est conservé dans une corbeille
+  (`app_data_dir()/session-memory-trash.json`), limitée aux **20 derniers
+  retraits** (au-delà, les plus anciens sont évincés). Rien n'est perdu
+  immédiatement : une remise en place (`restore_session_memory`) reste possible
+  tant que le retrait n'a pas été évincé. Une entrée restaurée reprend sa
+  **position d'origine** dans `work_in_progress`.
 - **Format compact versionné** :
   `{ "format": "pilot-assistant-session-memory", "version": 1, "updated_at": ISO-8601,
   "resume": { "current_topic", "active_project", "work_in_progress":[{project,title,status}], "notes" } }`.
@@ -1045,6 +1062,14 @@ retrouvez immédiatement où on en était, sans avoir à tout ré-expliquer. À
 l'ouverture de l'onglet, un message « 🔁 Reprise de session — … » rappelle le
 contexte. Vous pouvez aussi lui demander explicitement de « retenir » ou de
 « reprendre » une discussion.
+
+Vous pouvez aussi lui demander de **corriger** sa mémoire : si un fait mémorisé
+est devenu faux ou périmé (un chantier terminé, un projet qui n'est plus le bon),
+l'assistant peut **retirer ce fait précis** sans réécrire tout le résumé. Le fait
+retiré n'est pas perdu : il est gardé dans une **corbeille limitée aux 20 derniers
+retraits**, et l'assistant peut le **remettre en place** (le dernier retrait par
+défaut, ou un retrait choisi) si vous vous êtes trompés ou s'il redevient
+pertinent.
 <!-- /HELP:super-agent-session-memory -->
 
 ## 6. Initialisation d'un projet existant
