@@ -148,6 +148,9 @@ export async function initSettings() {
   const chkAutoStopEnabled = document.getElementById("setting-auto-stop-enabled");
   const inputAutoStopTimeout = document.getElementById("setting-auto-stop-minutes");
   const inputPdfMdModel = document.getElementById("setting-pdf-md-model");
+  // Issue #88 : modèle par défaut DÉDIÉ à l'Assistant (vide = repli sur le
+  // modèle par défaut global des agents).
+  const inputSuperAgentDefaultModel = document.getElementById("setting-superagent-default-model");
   const chkAutoSave = document.getElementById("setting-auto-save");
   const inputAutoSaveDelay = document.getElementById("setting-auto-save-delay");
   const chkWordWrap = document.getElementById("setting-word-wrap");
@@ -686,6 +689,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (chkAutoStopEnabled) chkAutoStopEnabled.checked = currentConfig.agent_auto_stop_enabled !== false;
     if (inputAutoStopTimeout) inputAutoStopTimeout.value = currentConfig.agent_auto_stop_minutes ?? 10;
     inputPdfMdModel.value = currentConfig.pdf_md_model || "";
+    if (inputSuperAgentDefaultModel) inputSuperAgentDefaultModel.value = currentConfig.super_agent_default_model || "";
     chkAutoSave.checked = currentConfig.auto_save || false;
     inputAutoSaveDelay.value = currentConfig.auto_save_delay || 3000;
     chkWordWrap.checked = currentConfig.word_wrap || false;
@@ -724,6 +728,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     // Peupler les selects de modèles puis positionner les valeurs
     const models = await loadModelsList();
     populateModelSelect(inputPdfMdModel, models, currentConfig.pdf_md_model || "");
+    populateModelSelect(inputSuperAgentDefaultModel, models, currentConfig.super_agent_default_model || "");
     populateModelSelect(inputOrchestratorModel, models, currentConfig.orchestrator_provider
       ? `${currentConfig.orchestrator_provider}/${currentConfig.orchestrator_model_id}`
       : "");
@@ -1107,6 +1112,21 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     });
   }
 
+  // Issue #88 : appliquer/effacer immédiatement le modèle par défaut dédié à
+  // l'Assistant (commande persistée en config par le cœur). Vide = effacer le
+  // réglage → l'Assistant repart sur le modèle par défaut global des agents.
+  if (inputSuperAgentDefaultModel) {
+    inputSuperAgentDefaultModel.addEventListener("change", async () => {
+      const value = inputSuperAgentDefaultModel.value.trim();
+      const [provider, modelId] = value.split("/", 2);
+      try {
+        await invoke("set_super_agent_default_model", { provider: provider || "", modelId: modelId || "" });
+      } catch (e) {
+        showToast("Modèle par défaut de l'Assistant : " + e, "error");
+      }
+    });
+  }
+
   // Fermer (Annuler) — annule aussi les modifs providers non sauvegardées
   btnClose.addEventListener("click", async () => {
     await cancelProvidersIfDirty();
@@ -1216,6 +1236,12 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         // 25 min, cf. lib.rs).
         stale_busy_grace_minutes: currentConfig?.stale_busy_grace_minutes || 25,
         pdf_md_model: inputPdfMdModel.value.trim(),
+        // Issue #88 : modèle par défaut dédié à l'Assistant. Préservé explicitement
+        // ici — l'enregistrement des Paramètres réécrit TOUTE la config, un champ
+        // absent serait réinitialisé à vide.
+        super_agent_default_model: inputSuperAgentDefaultModel
+          ? inputSuperAgentDefaultModel.value.trim()
+          : (currentConfig?.super_agent_default_model || ""),
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,
         favorites: currentConfig?.favorites || [],
@@ -1614,6 +1640,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     try {
       const models = await loadModelsList();
       populateModelSelect(inputPdfMdModel, models, currentConfig.pdf_md_model || "");
+      populateModelSelect(inputSuperAgentDefaultModel, models, currentConfig.super_agent_default_model || "");
       populateModelSelect(inputOrchestratorModel, models, currentConfig.orchestrator_provider
         ? `${currentConfig.orchestrator_provider}/${currentConfig.orchestrator_model_id}` : "");
       populateModelSelect(inputCoderModel, models, currentConfig.coder_provider
