@@ -18,6 +18,7 @@ import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import {
   isTerminalAgentEnd,
   commandsFromUpdate,
+  buildPromptPayload,
 } from "./agent-hardening.js";
 import { getTabsManager } from "./tabs.js";
 
@@ -1344,8 +1345,11 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
             console.warn("Contexte/Mémoire: échec écriture handoff:", wErr);
           }
         }
-        const payload = { message: text };
-        if (images) payload.images = images;
+        // R2 (idée 3 de l'étude oh-my-pi) : le corps du prompt est construit par
+        // une fonction pure et testable. Sans run en cours, le résultat est
+        // strictement identique à aujourd'hui (aucun champ ajouté). Le jour où le
+        // moteur change, passer `isStreaming`/`kind` pour annoncer F8.
+        const payload = buildPromptPayload(text, { images });
         // D1 : prompt envoyé depuis le desktop (chat standard) → origine locale.
         // Les prompts distants (web) ne passent pas ici (envoyés via /api/agent/prompt
         // côté backend) ; leur origine est positionnée via l'événement user_message.
