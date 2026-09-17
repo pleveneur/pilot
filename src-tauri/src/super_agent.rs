@@ -1692,26 +1692,27 @@ fn truncate_summary(summary: &str) -> String {
     cut
 }
 
-/// Enregistre un résumé de session dans la base et l'injecte au super-agent
-/// (s'il est démarré) pour qu'il apprenne en continu.
-#[tauri::command]
-pub fn inject_session_summary(
-    state: State<AppState>,
-    app: AppHandle,
-    project_path: Option<String>,
-    session_id: Option<String>,
-    summary: String,
-) -> Result<Value, String> {
-    // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
-    // contexte de l'assistant. Tronqué ici à la source, le marqueur de
-    // troncature informe l'assistant que le résultat a été agrégé.
-    let summary = truncate_summary(&summary);
-    // Persister TOUJOURS dans la base (delivered=0 par défaut). En cas de
-    // super-agent indisponible ou occupé, le résumé est conservé en attente et
-    // sera rejoué plus tard (`replay_pending_superagent_summaries`) → plus
-    // aucune perte silencieuse.
-    let conn = open_db(&app)?;
-    let project_id: Option<i64> = match &project_path {
+/// Résultat de la mise en boîte d'une remontée de session avant toute tentative
+/// d'injection. `deferred` signale que l'appelant a demandé une remise différée
+/// (assistant occupé) : la ligne est écrite (`delivered=0`) mais l'injection
+/// immédiate ne doit PAS être tentée.
+pub(crate) struct SummaryEnqueue {
+    pub rowid: i64,
+    pub project_id: Option<i64>,
+    pub deferred: bool,
+}
+
+/// Persiste une remontée dans la boîte durable (`delivered=0`) : crée/met à jour
+/// le projet associé puis insère le résumé. Retourne l'id de la ligne et l'id
+/// projet éventuel. Fonction pure sur `Connection` (in-memory en test) → testable
+/// sans `State`/`AppHandle`.
+pub(crate) fn persist_session_summary(
+    conn: &Connection,
+    project_path: Option<&str>,
+    session_id: Option<&str>,
+    summary: &str,
+) -> Result<(i64, Option<i64>), String> {
+    let project_id: Option<i64> = match project_path {
         Some(p) => {
             conn.execute(
                 "INSERT INTO projects (path, name) VALUES (?1, ?2)
@@ -1733,7 +1734,159 @@ pub fn inject_session_summary(
         rusqlite::params![project_id, session_id.unwrap_or_default(), summary],
     )
     .map_err(|e| format!("Erreur enregistrement résumé: {}", e))?;
-    let summary_rowid = conn.last_insert_rowid();
+    Ok((conn.last_insert_rowid(), project_id))
+}
+
+/// Met en boîte une remontée : écrit TOUJOURS la ligne durable (`delivered=0`)
+/// puis, si `defer` est vrai, journalise « queued » et signale la remise
+/// différée. C'est le chemin de report différé (assistant occupé), factorisé
+/// pour être couvert par un test unitaire. Fonction pure sur `Connection`.
+pub(crate) fn enqueue_session_summary(
+    conn: &Connection,
+    project_path: Option<&str>,
+    session_id: Option<&str>,
+    summary: &str,
+    defer: bool,
+) -> Result<SummaryEnqueue, String> {
+    let (rowid, project_id) = persist_session_summary(conn, project_path, session_id, summary)?;
+    if defer {
+        log_injection(
+            conn,
+            project_id,
+            "queued",
+            true,
+            "remise différée demandée (assistant occupé) — sera rejoué",
+        );
+    }
+    Ok(SummaryEnqueue { rowid, project_id, deferred: defer })
+}
+
+/// Marque une remontée comme livrée (`delivered=1`). Idempotent : repasser sur
+/// une ligne déjà livrée ne la remet pas en attente. Fonction pure sur
+/// `Connection`.
+pub(crate) fn mark_session_summary_delivered(conn: &Connection, id: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE session_summaries SET delivered = 1 WHERE id = ?1",
+        rusqlite::params![id],
+    )
+    .map_err(|e| format!("Erreur marquage livré: {}", e))?;
+    Ok(())
+}
+
+/// Liste les remontées encore en attente (`delivered=0`) dans l'ordre de
+/// création. Fonction pure sur `Connection` → testable (livraison au plus une
+/// fois : une entrée livrée n'est plus jamais retournée).
+pub(crate) fn pending_session_summaries(
+    conn: &Connection,
+) -> Result<Vec<(i64, Option<i64>, String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_id, session_id, summary FROM session_summaries \
+             WHERE delivered = 0 ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))
+}
+
+/// Tente la livraison d'UNE remontée en attente : construit le message, appelle
+/// le transport `send`, et en cas de succès marque la ligne `delivered=1` +
+/// journalise « rejoué ». En cas d'échec du transport, journalise l'erreur et
+/// LAISSE la ligne en attente (`delivered=0`) → aucune perte. Retourne `true`
+/// si la remontée a été livrée. Fonction pure sur `Connection` (transport
+/// injecté) → testable en mémoire.
+pub(crate) fn deliver_one_summary<F>(
+    conn: &Connection,
+    id: i64,
+    project_id: Option<i64>,
+    summary: &str,
+    mut send: F,
+) -> Result<bool, String>
+where
+    F: FnMut(&str) -> Result<(), String>,
+{
+    let project_path = project_id.and_then(|pid| {
+        conn.query_row(
+            "SELECT path FROM projects WHERE id = ?1",
+            rusqlite::params![pid],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    });
+    let msg = build_injection_message(project_path.as_deref(), summary);
+    match send(&msg) {
+        Ok(()) => {
+            mark_session_summary_delivered(conn, id)?;
+            log_injection(conn, project_id, "delivered", true, "rejoué");
+            Ok(true)
+        }
+        Err(e) => {
+            log_injection(conn, project_id, "error", false, &e);
+            Ok(false)
+        }
+    }
+}
+
+/// Enregistre un résumé de session dans la base et l'injecte au super-agent
+/// (s'il est démarré) pour qu'il apprenne en continu. La ligne est TOUJOURS
+/// écrite (`delivered=0` par défaut → aucune perte). `defer = Some(true)`
+/// demande une remise différée : la ligne est écrite mais l'injection immédiate
+/// n'est pas tentée (l'assistant est occupé côté interface) ; le rejeu la
+/// délivrera plus tard.
+#[tauri::command]
+pub fn inject_session_summary(
+    state: State<AppState>,
+    app: AppHandle,
+    project_path: Option<String>,
+    session_id: Option<String>,
+    summary: String,
+    defer: Option<bool>,
+) -> Result<Value, String> {
+    // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
+    // contexte de l'assistant. Tronqué ici à la source, le marqueur de
+    // troncature informe l'assistant que le résultat a été agrégé.
+    let summary = truncate_summary(&summary);
+    // Persister TOUJOURS dans la base (delivered=0 par défaut). En cas de
+    // super-agent indisponible ou occupé, le résumé est conservé en attente et
+    // sera rejoué plus tard (`replay_pending_superagent_summaries`) → plus
+    // aucune perte silencieuse.
+    let conn = open_db(&app)?;
+    // Mise en boîte durable + décision de remise différée, factorisées dans
+    // `enqueue_session_summary` (fonction pure testable : le chemin `defer`
+    // n'était couvert par aucun test). Comportement inchangé.
+    let enq = enqueue_session_summary(
+        &conn,
+        project_path.as_deref(),
+        session_id.as_deref(),
+        &summary,
+        defer.unwrap_or(false),
+    )?;
+    let project_id = enq.project_id;
+    let summary_rowid = enq.rowid;
+
+    // Remise DIFFÉRÉE demandée par l'appelant (assistant occupé côté interface) :
+    // la ligne est déjà écrite avec delivered=0, on ne tente PAS l'injection
+    // immédiate. Sans cela, un compte rendu confié pendant la fenêtre où le
+    // backend se croit encore libre serait marqué « livré » alors que pi, en
+    // pleine génération, l'ignorerait. Le rejeu
+    // (`replay_pending_superagent_summaries`) le délivrera dès la libération.
+    if enq.deferred {
+        drop(conn);
+        return Ok(serde_json::json!({
+            "status": "queued",
+            "detail": "remise différée demandée (assistant occupé) — sera rejoué"
+        }));
+    }
 
     // Injecter au super-agent s'il est vivant ET non occupé. Sinon le laisser
     // en attente (delivered=0) : le rejeu le délivrera à la prochaine
@@ -1743,11 +1896,7 @@ pub fn inject_session_summary(
         let cmd = serde_json::json!({"type": "prompt", "message": msg});
         match state.agent_service.send_superagent(cmd) {
             Ok(()) => {
-                conn.execute(
-                    "UPDATE session_summaries SET delivered = 1 WHERE id = ?1",
-                    rusqlite::params![summary_rowid],
-                )
-                .map_err(|e| format!("Erreur marquage livré: {}", e))?;
+                mark_session_summary_delivered(&conn, summary_rowid)?;
                 log_injection(&conn, project_id, "delivered", true, "ok");
                 drop(conn);
                 Ok(serde_json::json!({"status": "delivered", "detail": "ok"}))
@@ -1821,25 +1970,7 @@ fn replay_pending_superagent_summaries_inner(
         return Ok(());
     }
     let conn = open_db(app)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, project_id, session_id, summary FROM session_summaries \
-             WHERE delivered = 0 ORDER BY id",
-        )
-        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
-    let pending: Vec<(i64, Option<i64>, String, String)> = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, Option<i64>>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-            ))
-        })
-        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?
-        .collect::<Result<_, _>>()
-        .map_err(|e| format!("Erreur lecture résumés en attente: {}", e))?;
-    drop(stmt);
+    let pending = pending_session_summaries(&conn)?;
     // Rafale à l'ouverture (issue #141) : chaque résumé rejoué lance un VRAI
     // tour de génération. On borne le nombre injecté par appel (cycle) et on
     // espace les injections pour ne pas saturer une machine lente. Les résumés
@@ -1855,30 +1986,16 @@ fn replay_pending_superagent_summaries_inner(
         if !superagent_available(state) {
             break;
         }
-        let project_path = project_id.and_then(|pid| {
-            conn.query_row(
-                "SELECT path FROM projects WHERE id = ?1",
-                rusqlite::params![pid],
-                |r| r.get::<_, String>(0),
-            )
-            .ok()
-        });
         let _ = session_id;
-        let msg = build_injection_message(project_path.as_deref(), &summary);
-        let cmd = serde_json::json!({"type": "prompt", "message": msg});
-        match state.agent_service.send_superagent(cmd) {
-            Ok(()) => {
-                conn.execute(
-                    "UPDATE session_summaries SET delivered = 1 WHERE id = ?1",
-                    rusqlite::params![id],
-                )
-                .map_err(|e| format!("Erreur marquage livré: {}", e))?;
-                log_injection(&conn, project_id, "delivered", true, "rejoué");
-                delivered_count += 1;
-            }
-            Err(e) => {
-                log_injection(&conn, project_id, "error", false, &e);
-            }
+        // Livraison déléguée à la fonction pure testable : marque delivered=1 et
+        // journalise en cas de succès, laisse en attente en cas d'échec.
+        let sent = deliver_one_summary(&conn, id, project_id, &summary, |msg| {
+            state
+                .agent_service
+                .send_superagent(serde_json::json!({"type": "prompt", "message": msg}))
+        })?;
+        if sent {
+            delivered_count += 1;
         }
         // Espace les injections (chaque rejeu = un tour de génération).
         std::thread::sleep(Duration::from_millis(SUPER_AGENT_REPLAY_INTERVAL_MS));
@@ -3329,11 +3446,12 @@ pub fn import_super_agent_memory(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_project_context, init_db, parse_session_memory, replace_tracking, schedule_delete,
-        schedule_due, schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
-        schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
-        validate_export_json, MEMORY_FORMAT, MEMORY_VERSION, SESSION_MEMORY_FORMAT,
-        SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
+        build_project_context, deliver_one_summary, enqueue_session_summary, init_db,
+        mark_session_summary_delivered, parse_session_memory, pending_session_summaries,
+        replace_tracking, schedule_delete, schedule_due, schedule_insert, schedule_list,
+        schedule_mark_done, schedule_next_fire, schedule_next_fire_at, schedule_set_enabled,
+        serialize_session_memory, serialize_tracking, validate_export_json, MEMORY_FORMAT,
+        MEMORY_VERSION, SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_VERSION,
     };
     use rusqlite::Connection;
 
@@ -3802,5 +3920,132 @@ mod tests {
     #[test]
     fn empty_when_no_project() {
         assert_eq!(build_project_context(None, None), "");
+    }
+
+    // ── Remise durable des comptes rendus : chemin de REPORT DIFFÉRÉ ──
+
+    #[test]
+    fn deferred_report_is_queued_then_delivered_once_without_loss() {
+        let conn = mem_conn();
+
+        // 1. Remise différée (assistant occupé) : l'entrée est mise de côté.
+        let enq = enqueue_session_summary(
+            &conn,
+            Some("/proj/defer"),
+            Some("sess-1"),
+            "compte rendu différé",
+            true,
+        )
+        .unwrap();
+        assert!(enq.deferred, "defer=true doit signaler une remise différée");
+        // La ligne est écrite en base, NON livrée (delivered=0) → aucune perte.
+        let delivered: i64 = conn
+            .query_row(
+                "SELECT delivered FROM session_summaries WHERE id = ?1",
+                [enq.rowid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered, 0, "une remise différée ne doit pas être marquée livrée");
+        // Elle est bien en attente.
+        let pending = pending_session_summaries(&conn).unwrap();
+        assert_eq!(pending.len(), 1, "l'entrée différée doit être en attente");
+        assert_eq!(pending[0].0, enq.rowid);
+        assert_eq!(pending[0].3, "compte rendu différé");
+        // Journalisée « queued » (pas de faux « livré »).
+        let queued: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM injection_logs WHERE status = 'queued'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, 1);
+        let delivered_logs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM injection_logs WHERE status = 'delivered'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered_logs, 0, "une remise différée ne doit pas être journalisée livrée");
+
+        // 2. Le rejeu tente la livraison mais le transport échoue : l'entrée
+        //    RESTE en attente (jamais perdue, jamais marquée livrée).
+        let pending = pending_session_summaries(&conn).unwrap();
+        let sent_ok =
+            deliver_one_summary(&conn, pending[0].0, pending[0].1, &pending[0].3, |_| {
+                Err("transport indisponible".to_string())
+            })
+            .unwrap();
+        assert!(!sent_ok);
+        assert_eq!(
+            pending_session_summaries(&conn).unwrap().len(),
+            1,
+            "un échec de livraison ne doit pas perdre l'entrée"
+        );
+        let err_logs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM injection_logs WHERE status = 'error'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(err_logs, 1);
+
+        // 3. Livraison effective : marquée delivered=1, journalisée « rejoué ».
+        let pending = pending_session_summaries(&conn).unwrap();
+        let mut captured = String::new();
+        let sent_ok =
+            deliver_one_summary(&conn, pending[0].0, pending[0].1, &pending[0].3, |msg| {
+                captured = msg.to_string();
+                Ok(())
+            })
+            .unwrap();
+        assert!(sent_ok);
+        assert!(captured.contains("compte rendu différé"));
+        assert!(captured.contains("/proj/defer"), "le message doit porter le projet");
+        // Plus rien en attente → jamais livrée deux fois.
+        assert!(pending_session_summaries(&conn).unwrap().is_empty());
+        let delivered_logs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM injection_logs WHERE status = 'delivered'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered_logs, 1, "la livraison doit être journalisée une seule fois");
+        // Un second cycle de rejeu ne relivre rien (idempotence).
+        assert!(pending_session_summaries(&conn).unwrap().is_empty());
+        // Le marquage est idempotent.
+        mark_session_summary_delivered(&conn, enq.rowid).unwrap();
+        assert!(pending_session_summaries(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn non_deferred_report_is_written_but_not_queued() {
+        let conn = mem_conn();
+        let enq = enqueue_session_summary(&conn, Some("/proj/live"), None, "cr immédiat", false)
+            .unwrap();
+        assert!(!enq.deferred, "defer=false ne doit pas signaler une remise différée");
+        // La ligne est écrite en boîte durable, non livrée : l'injection est
+        // tentée par l'appelant (commande), pas par cette fonction.
+        let delivered: i64 = conn
+            .query_row(
+                "SELECT delivered FROM session_summaries WHERE id = ?1",
+                [enq.rowid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(delivered, 0);
+        // Aucune journalisation « queued » pour une remise non différée.
+        let queued: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM injection_logs WHERE status = 'queued'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(queued, 0);
     }
 }

@@ -1,13 +1,15 @@
-// Tests — porte d'accusé de lecture des comptes rendus de l'Assistant.
-// Corrige « compte rendu marqué transmis avant lecture » : tant que l'assistant
-// est occupé (backendBusy), le compte rendu est mis en file (non transmis, donc
-// non marqué livré) et rejoué dès qu'il se libère.
+// Tests — porte de remise durable des comptes rendus de l'Assistant.
+// Garantie : le compte rendu est TOUJOURS confié à la remise durable
+// (`inject_session_summary`), même quand l'assistant est occupé (dans ce cas
+// `defer: true` → écrit en base `delivered=0`, rejoué dès la libération). Plus
+// de perte au redémarrage / à la fermeture de l'onglet (ancienne file en
+// mémoire seule).
 
 import { describe, it, expect, vi } from "vitest";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
 
-describe("createReportDeliveryGate — ne transmet que si l'assistant est libre", () => {
-  it("assistant libre → transmet immédiatement (delivered)", async () => {
+describe("createReportDeliveryGate — remise durable systématique", () => {
+  it("assistant libre → remise immédiate (defer:false, delivered)", async () => {
     const isBusy = vi.fn(() => false);
     const send = vi.fn(async () => "delivered");
     const gate = createReportDeliveryGate({ isBusy, send });
@@ -17,38 +19,43 @@ describe("createReportDeliveryGate — ne transmet que si l'assistant est libre"
     expect(status).toBe("delivered");
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].summary).toBe("cr");
+    expect(send.mock.calls[0][1]).toEqual({ defer: false });
     expect(gate.pendingCount()).toBe(0);
   });
 
-  it("assistant occupé → met en file SANS transmettre (queued, pas marqué livré)", async () => {
+  it("assistant occupé → remise durable DIFFÉRÉE (defer:true, queued) — jamais perdue", async () => {
     const isBusy = vi.fn(() => true);
-    const send = vi.fn(async () => "delivered");
+    const send = vi.fn(async () => "queued");
     const gate = createReportDeliveryGate({ isBusy, send });
 
     const status = await gate.deliver({ summary: "cr", projectPath: "/p", category: "runagents" });
 
     expect(status).toBe("queued");
-    expect(send).not.toHaveBeenCalled();
+    // La remise durable EST appelée (écriture en base) : c'est la correction.
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][1]).toEqual({ defer: true });
     expect(gate.pendingCount()).toBe(1);
   });
 
-  it("flush alors que l'assistant est occupé → no-op (l'entrée reste en file)", async () => {
+  it("flush alors que l'assistant est occupé → no-op, aucun rejeu", async () => {
     const isBusy = vi.fn(() => true);
-    const send = vi.fn(async () => "delivered");
-    const gate = createReportDeliveryGate({ isBusy, send });
+    const send = vi.fn(async () => "queued");
+    const replay = vi.fn(async () => {});
+    const gate = createReportDeliveryGate({ isBusy, send, replay });
 
     await gate.deliver({ summary: "cr", projectPath: "/p", category: "session" });
     const r = await gate.flush();
 
     expect(r).toBe("busy");
-    expect(send).not.toHaveBeenCalled();
+    expect(replay).not.toHaveBeenCalled();
     expect(gate.pendingCount()).toBe(1);
   });
 
-  it("flush après libération → rejoue l'entrée mise en attente (une seule)", async () => {
+  it("flush après libération → rejoue les remises différées (une fois) et remet le compteur à zéro", async () => {
     let busy = true;
-    const send = vi.fn(async () => "delivered");
-    const gate = createReportDeliveryGate({ isBusy: () => busy, send });
+    const send = vi.fn(async () => "queued");
+    const replay = vi.fn(async () => {});
+    const gate = createReportDeliveryGate({ isBusy: () => busy, send, replay });
 
     await gate.deliver({ summary: "cr1", projectPath: "/p", category: "runagents" });
     await gate.deliver({ summary: "cr2", projectPath: "/p", category: "runagents" });
@@ -57,45 +64,39 @@ describe("createReportDeliveryGate — ne transmet que si l'assistant est libre"
     busy = false;
     const r = await gate.flush();
     expect(r).toBe("flushed");
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0][0].summary).toBe("cr1");
-    expect(gate.pendingCount()).toBe(1);
-
-    // Le drain suivant transmet la seconde entrée (FIFO).
-    await gate.flush();
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[1][0].summary).toBe("cr2");
+    expect(replay).toHaveBeenCalledTimes(1);
     expect(gate.pendingCount()).toBe(0);
+
+    // Plus rien de différé → pas de second rejeu.
+    expect(await gate.flush()).toBe("empty");
+    expect(replay).toHaveBeenCalledTimes(1);
   });
 
-  it("flush sur file vide → empty (aucun envoi)", async () => {
-    const send = vi.fn(async () => "delivered");
-    const gate = createReportDeliveryGate({ isBusy: () => false, send });
+  it("flush sans remise différée → empty (aucun rejeu)", async () => {
+    const replay = vi.fn(async () => {});
+    const gate = createReportDeliveryGate({ isBusy: () => false, send: async () => "delivered", replay });
 
     expect(await gate.flush()).toBe("empty");
-    expect(send).not.toHaveBeenCalled();
+    expect(replay).not.toHaveBeenCalled();
   });
 
-  it("aucun doublon pendant un flush en cours (in-flight)", async () => {
+  it("aucun rejeu concurrent pendant un flush en cours (in-flight)", async () => {
     let busy = true;
-    let resolveSend;
-    const send = vi.fn(
+    let resolveReplay;
+    const replay = vi.fn(
       () => new Promise((res) => {
-        resolveSend = res;
+        resolveReplay = res;
       })
     );
-    const gate = createReportDeliveryGate({ isBusy: () => busy, send });
+    const gate = createReportDeliveryGate({ isBusy: () => busy, send: async () => "queued", replay });
 
     await gate.deliver({ summary: "cr", projectPath: "/p", category: "session" });
-    expect(gate.pendingCount()).toBe(1);
     busy = false;
-    // Un flush précédent est déjà en cours : on en déclenche un second avant la
-    // résolution (ne doit pas envoyer une 2ᵉ fois / ni désordonner).
     const first = gate.flush();
     const second = gate.flush();
     expect(await second).toBe("in-flight");
-    resolveSend("delivered");
-    await first;
-    expect(send).toHaveBeenCalledTimes(1);
+    resolveReplay();
+    expect(await first).toBe("flushed");
+    expect(replay).toHaveBeenCalledTimes(1);
   });
 });

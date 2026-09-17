@@ -62,6 +62,11 @@ export function computeRunLaunchVerdict(launchResult) {
     ok: true,
     launched: !!r.started,
     queued: !!r.queued,
+    // `preparing` : le lancement est EN COURS en arrière-plan (estimation
+    // plan-maker d'une run avec codeur). La réponse à l'outil part
+    // immédiatement pour ne pas bloquer le tour de l'assistant ; le résultat
+    // réel (échec / mise en file) est déposé dans la remontée durable.
+    preparing: !!r.preparing,
     error: r.error || null,
   };
 }
@@ -280,17 +285,20 @@ let delegationBusy = false;
 let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
 
 // Anti-« compte rendu marqué transmis avant lecture » : les comptes rendus de
-// run / délégation passent par une PORTE D'ACCUSÉ DE LECTURE (module pur
-// `super-agent-reports.js`). Quand l'assistant est occupé, transmettre le compte
-// rendu le ferait marquer « livré » côté Rust (inject_session_summary) alors que
-// pi, en pleine génération, ignore le nouveau prompt : le compte rendu serait
-// perdu ET réputé reçu. On ne transmet donc QUE si l'assistant est libre (flag
-// front `backendBusy`, fiable car posé dès l'envoi utilisateur) ; sinon l'entrée
-// reste en file (NON transmise, marqueur de délégation NON consommé) et est
-// rejouée dès la libération. `sendSuperAgentReport` fait la livraison réelle.
+// run / délégation passent par une PORTE (module pur `super-agent-reports.js`).
+// `inject_session_summary` (Rust) écrit TOUJOURS le compte rendu dans la table
+// durable `session_summaries` (`delivered=0`) avant toute tentative d'injection :
+// la porte confie donc TOUJOURS l'entrée à cette remise, même quand l'assistant
+// est occupé. Dans ce cas elle transmet `defer: true` (flag front `backendBusy`,
+// fiable car posé dès l'envoi utilisateur) : la ligne est écrite mais NON marquée
+// livrée, car pi, en pleine génération, ignorerait le nouveau prompt → le rejeu
+// Rust la délivre dès la libération. Plus aucune perte au redémarrage / à la
+// fermeture de l'onglet (l'ancienne file en mémoire n'était pas durable).
+// `sendSuperAgentReport` fait la remise réelle ; `replay` déclenche le rejeu.
 const superAgentReportGate = createReportDeliveryGate({
   isBusy: () => backendBusy,
-  send: (entry) => sendSuperAgentReport(entry),
+  send: (entry, opts) => sendSuperAgentReport(entry, opts),
+  replay: () => invoke("replay_superagent_summaries"),
 });
 
 // P0-1 : état RÉEL du backend super-agent (busy / libre), maintenu par
@@ -3040,15 +3048,36 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // DÉMARRAGE RÉEL, pas l'intention de lancer.
           return { queued: false, started: !!launched.started, error: launched.error || null };
         };
+        // Dépose dans la remontée durable le résultat d'un lancement DIFFÉRÉ
+        // (après estimation) que l'assistant n'a pas pu attendre : échec du
+        // lancement ou mise en file d'attente. Un succès est déjà rapporté par la
+        // fin de run (`settleRun`) → pas de doublon.
+        const reportDeferredLaunch = (verdict) => {
+          const v = verdict || {};
+          if (v.queued) {
+            injectRunAgentsResultToSuperAgent(
+              `[Info run_agents] La tâche a été mise en file d'attente sur le projet ${target} (une run était déjà en cours) : elle démarrera automatiquement à la fin de la tâche en cours.`,
+              projectPath,
+            );
+          } else if (!v.started) {
+            injectRunAgentsResultToSuperAgent(
+              `[Échec du lancement run_agents] ${v.error || "le lancement n'a pas démarré après l'estimation des fichiers."}`,
+              projectPath,
+            );
+          }
+        };
         const launchWithEstimate = () => {
           if (coderIds.length > 0 && targetProject) {
-            // Estimation fire-and-forget (ne bloque pas le tour de l'assistant) :
-            // on lance d'abord plan-maker, on écrit les réservations, puis on ne
-            // lance le codeur QU'APRÈS (les réservations doivent être en place
-            // avant que les spécialistes travaillent). Fail-open : si l'estimation
+            // NON BLOQUANT : l'estimation plan-maker (T6) peut durer jusqu'à 60 s.
+            // L'assistant ne doit PAS rester occupé (saisie utilisateur bloquée)
+            // pendant ce temps. On lance donc l'estimation EN ARRIÈRE-PLAN et on
+            // rend la main immédiatement (accusé de lancement `preparing`). Le
+            // résultat réel du lancement (échec / mise en file) est déposé dans
+            // la remontée durable dès qu'il est connu ; un succès est déjà
+            // rapporté par la fin de run (settleRun). Fail-open : si l'estimation
             // échoue, on lance quand même le codeur sans réservations.
             appendSystemMessage(messagesEl, `🧠 J'estime d'abord les fichiers que le codeur va toucher (plan-maker)…`);
-            return estimateAndReserve(targetProject, task, coderIds, {
+            estimateAndReserve(targetProject, task, coderIds, {
               runAgentsForAssistant,
               loadAgentRegistry,
               releaseStuckRunLock,
@@ -3064,7 +3093,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               .catch(() => {
                 // Fail-open : ne jamais bloquer le codeur à cause d'une estimation.
                 return launchOrQueue();
-              });
+              })
+              .then(reportDeferredLaunch)
+              .catch((e) => reportDeferredLaunch({ started: false, queued: false, error: e && e.message ? e.message : String(e) }));
+            return { queued: false, started: false, preparing: true, error: null };
           }
           return launchOrQueue();
         };
@@ -3138,8 +3170,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
-          return await launchWithEstimate(); // { queued, started, error } : résultat de lancement réel
+          return await launchWithEstimate(); // { queued, started, preparing, error } : résultat de lancement (ou accusé si estimation en cours)
         };
+        // Réponse à l'outil : quand une estimation plan-maker est nécessaire
+        // (run avec codeur), `startRun` rend la main IMMÉDIATEMENT avec
+        // `preparing: true` — l'assistant finit son tour et reste disponible, le
+        // lancement réel se poursuit en arrière-plan.
         const launchResult = await startRun();
         await respondSuperAgent(id, JSON.stringify(computeRunLaunchVerdict(launchResult)), false);
       } catch (e) {
@@ -4523,21 +4559,24 @@ export async function flushPendingSuperAgentReports() {
 }
 
 /**
- * Livraison RÉELLE d'un compte rendu à l'assistant (invoke `inject_session_summary`).
- * Appelée par la porte `superAgentReportGate` uniquement quand l'assistant est
- * libre. Consomme le marqueur de délégation éventuel AU MOMENT de la livraison
- * (jamais avant : un compte rendu mis en file sans être transmis ne doit ni
- * marquer le marqueur consommé, ni déclencher notification/notification).
+ * Remise RÉELLE d'un compte rendu à l'assistant (invoke `inject_session_summary`).
+ * Appelée par la porte `superAgentReportGate` à CHAQUE compte rendu (durable).
+ * `opts.defer` (assistant occupé) : la ligne est écrite en base mais l'injection
+ * immédiate n'est pas tentée → `delivered=0`, rejouée plus tard. Le marqueur de
+ * délégation éventuel est consommé ICI : son texte est figé dans le compte rendu
+ * (donc persisté en base) et n'est jamais perdu, même en remise différée.
  * @param {{summary: string, projectPath: string|null, category: string, delegation?: object|null}} entry
+ * @param {{defer?: boolean}} [opts]
  * @returns {Promise<unknown>} résultat de `inject_session_summary`.
  */
-async function sendSuperAgentReport(entry) {
+async function sendSuperAgentReport(entry, opts = {}) {
   let summary = entry.summary;
   if (entry.delegation) {
     const del = entry.delegation;
-    // Consommer le marqueur SEULEMENT à la livraison effective (et seulement si
-    // c'est toujours le même marqueur : une délégation plus récente ne doit pas
-    // être écrasée par une livraison tardive).
+    // Consommer le marqueur AU MOMENT de la remise (et seulement si c'est
+    // toujours le même marqueur : une délégation plus récente ne doit pas être
+    // écrasée par une remise tardive). Le texte du marqueur est inclus dans le
+    // compte rendu, donc persisté en base même si la remise est différée.
     if (pendingDelegation === del) pendingDelegation = null;
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
@@ -4554,6 +4593,7 @@ async function sendSuperAgentReport(entry) {
     projectPath: entry.projectPath || null,
     sessionId: null,
     summary,
+    defer: !!opts.defer,
   });
   warnInjectionFailure(res && res.status, res && res.detail, entry.category || "session");
   return res;
