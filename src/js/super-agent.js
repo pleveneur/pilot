@@ -26,6 +26,7 @@ import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, buildRunAgentsNotification } from "./run-agents-notify.js";
+import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
@@ -4165,10 +4166,13 @@ function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   appendSystemMessage(messagesEl, message);
   // Injecter le feedback de délégation (consomme pendingDelegation → notification
   // + consignation dans le suivi de l'assistant), avec le RÉSULTAT de l'agent.
-  injectSessionSummaryToSuperAgent(
-    buildInvisibleAgentFinalSummary(finalText),
-    projectPath
-  ).catch(() => {});
+  // Garde de curation : un compte rendu sans résultat (agent sans texte final)
+  // n'est pas mémorisé — SAUF s'il porte le feedback d'une délégation en attente
+  // (la fin de tâche déléguée n'est jamais perdue, cf. `injectSessionSummaryToSuperAgent`).
+  const reportSummary = buildInvisibleAgentFinalSummary(finalText);
+  injectSessionSummaryToSuperAgent(reportSummary, projectPath, {
+    remember: shouldRememberAgentReport(reportSummary),
+  }).catch(() => {});
 }
 
 /** Détection de boucle de réflexion sur l'agent invisible (throttlée). */
@@ -4693,7 +4697,7 @@ async function sendSuperAgentReport(entry, opts = {}) {
  * l'assistant est libre (appelée à la fin de tour et par le poll d'état).
  * @returns {Promise<unknown>}
  */
-export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
+export async function injectSessionSummaryToSuperAgent(summary, projectPath, opts = {}) {
   // Issue #47 : si une délégation est en attente (delegate_to_coder), le résumé
   // sera marqué comme feedback de tâche déléguée pour que l'assistant mette à
   // jour son suivi. Le marqueur n'est PAS consommé ici : il l'est à la livraison
@@ -4706,11 +4710,21 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
     category: "session",
     delegation: pendingDelegation,
   };
-  await superAgentReportGate.deliver(entry);
+  // Garde de curation (fil de mémoire) : l'appelant signale une entrée sans
+  // valeur via `opts.remember = false` (filtre) ; elle n'est alors pas remise,
+  // donc pas mémorisée. EXCEPTION ABSOLUE : si un feedback de délégation attend
+  // d'être remis, la remise est faite même sans valeur — le compte rendu de fin
+  // de tâche déléguée (marqueur « [Tâche déléguée terminée] ») n'est jamais
+  // perdu. Sans `opts.remember` (chat standard, déjà filtré en amont), le
+  // comportement reste inchangé.
+  if (shouldDeliverAgentReport(opts.remember, { delegationPending: !!entry.delegation })) {
+    await superAgentReportGate.deliver(entry);
+  }
   // Issue #66 : l'agent a terminé sa tâche — vider la file des délégations
   // en attente (transmettre la demande suivante mise en file, s'il y en a).
   // Appelé aussi bien pour l'agent_end visible (agent-pi.js) que pour l'agent
-  // invisible (finalizeInvisibleAgent appelle cette même fonction).
+  // invisible (finalizeInvisibleAgent appelle cette même fonction). Toujours
+  // exécuté, indépendamment du filtre de mémorisation ci-dessus.
   flushDelegationQueue();
 }
 
@@ -4729,7 +4743,14 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath) {
  * @param {string} result - texte agrégé de la run (ou message d'échec/info).
  * @param {string|null} projectPath - chemin du projet actif.
  */
-async function injectRunAgentsResultToSuperAgent(result, projectPath) {
+async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {}) {
+  // Garde de curation (fil de mémoire) : un point d'avancement protocolaire
+  // (« [Info run_agents] … » : mise en file, démarrage ▶️, arrêt auto ⏱️)
+  // n'apporte aucun fait réutilisable → non mémorisé. Une FIN de run force la
+  // remise (`{ remember: true }`, voir `finishRunAgentsToSuperAgent`) : un
+  // résultat de run (ou un échec de run) n'est jamais filtré.
+  const memorable = opts.remember === true || shouldRememberAgentReport(result);
+  if (!shouldDeliverAgentReport(memorable)) return;
   // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le contexte
   // de l'assistant). Porte d'accusé de lecture via superAgentReportGate.
   await superAgentReportGate.deliver({
@@ -4754,7 +4775,9 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath) {
  */
 async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
   // (a) compte-rendu + consignation dans le suivi (inject_session_summary).
-  await injectRunAgentsResultToSuperAgent(result, projectPath);
+  // Fin de tâche : mémorisation FORCÉE (`remember: true`) — un compte rendu de
+  // fin de run (résultat ou échec) ne doit jamais être perdu.
+  await injectRunAgentsResultToSuperAgent(result, projectPath, { remember: true });
   // (b) notification desktop native (si activée) + (c) son de fin (si activé).
   const { title, body } = buildRunAgentsNotification({ ok, projectPath });
   notifySuperAgentDone({ title, body }).catch(() => {});
