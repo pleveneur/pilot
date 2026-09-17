@@ -797,7 +797,7 @@ pub(crate) fn do_start_diagnostic_agent(
     anomaly: &Value,
 ) -> Result<(), String> {
     let (pi_path, no_session) = {
-        let cfg = state.config.lock().unwrap();
+        let cfg = state.config_snapshot();
         (cfg.rpc_pi_path.clone(), cfg.rpc_no_session)
     };
     let prompt = build_diagnostic_prompt(project, agent, anomaly);

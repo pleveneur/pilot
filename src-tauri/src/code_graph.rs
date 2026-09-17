@@ -821,7 +821,7 @@ fn build_graph_blocking_inner(app: &AppHandle, project_path: &str) -> Result<Gra
     // c'est un champ Mutex de AppState (même pattern que les autres commandes).
     let (extraction, include_calls) = {
         let state = app.state::<crate::AppState>();
-        let config = state.config.lock().unwrap();
+        let config = state.config_snapshot();
         (config.graph_extraction.clone(), config.graph_include_calls)
     };
     let root = Path::new(project_path);

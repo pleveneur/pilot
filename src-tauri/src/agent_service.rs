@@ -655,7 +655,7 @@ impl AgentService {
         if self.get_agent(app, agent_id, Some(project))?.is_none() {
             let state = app.state::<AppState>();
             let coder_model = {
-                let config = state.config.lock().unwrap();
+                let config = state.config_snapshot();
                 if !config.coder_provider.is_empty() && !config.coder_model_id.is_empty() {
                     format!("{}/{}", config.coder_provider, config.coder_model_id)
                 } else {
@@ -913,7 +913,7 @@ impl AgentService {
             .name("pilot-agent-session-index".into())
             .spawn(move || {
                 let state = app.state::<AppState>();
-                let config = state.config.lock().unwrap().clone();
+                let config = state.config_snapshot();
                 if let Err(e) = session_history::index_project_sessions(&project, &config) {
                     eprintln!(
                         "[sessions] Indexation auto après fin d'agent délégué échouée pour {} : {}",
@@ -1873,7 +1873,7 @@ impl AgentService {
         mcp_server: Option<String>,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
-        let mcp_enabled = state.config.lock().unwrap().mcp_enabled;
+        let mcp_enabled = state.config_snapshot().mcp_enabled;
         // Agent d'assistant piloté MCP (brique B) : si MCP est activé ET qu'un
         // serveur cible est désigné, on écrit l'extension client MCP en plus des
         // extensions assistant standards. Jamais au démarrage (à la demande).
@@ -1950,7 +1950,7 @@ impl AgentService {
         pi_path: &str,
     ) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
-        let mcp_enabled = state.config.lock().unwrap().mcp_enabled;
+        let mcp_enabled = state.config_snapshot().mcp_enabled;
         let mut extensions: Vec<String> = Vec::new();
         let mut probe = probe_backend(&state, pi_path);
         // Correctif démarrage lent : si la sonde échoue (timeout transitoire
@@ -2114,7 +2114,7 @@ impl AgentService {
         // pilot-context.ts (comme l'agent standard) pour hériter du contexte
         // projet (RAG/Context Engine + mémoire + Code Graph) en plus de leur rôle.
         let (inherit_context, mcp_enabled) = {
-            let config = state.config.lock().unwrap();
+            let config = state.config_snapshot();
             (config.super_agent_inherit_context, config.mcp_enabled)
         };
         let mut extensions: Vec<String> = Vec::new();
@@ -2223,7 +2223,7 @@ impl AgentService {
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits, mcp_enabled) = {
-            let config = state.config.lock().unwrap();
+            let config = state.config_snapshot();
             (
                 config.rpc_pi_path.clone(),
                 config.rpc_no_session,
