@@ -820,22 +820,67 @@ fn resolve_delegation_messages(
     (messages, if has_agent { "session_file" } else { "none" })
 }
 
-/// Lit le(s) fichier(s) jsonl d'une session identifiée par session_id dans le
-/// dossier des sessions du projet (même parsing que l'ancien flux inline).
+/// Lit le jsonl d'une session identifiée par session_id dans le dossier des
+/// sessions du projet (même parsing que l'ancien flux inline). Le dossier de
+/// sessions est résolu depuis la config, puis la recherche est déléguée à
+/// `load_session_jsonl_messages_in`.
 fn load_session_jsonl_messages(state: &AppState, project: &str, session_id: &str) -> Vec<Value> {
     let config = state.config.lock().unwrap();
     let session_dir = project_sessions_dir(&config);
     drop(config);
-    let folder_name = project_to_session_folder(project);
-    let project_dir = session_dir.join(&folder_name);
-    let mut messages: Vec<Value> = Vec::new();
-    if !project_dir.exists() {
+    load_session_jsonl_messages_in(&session_dir, project, session_id)
+}
+
+/// Cherche le fichier `<horodatage>_<session_id>.jsonl` d'un projet dans
+/// `<session_dir>/<dossier_projet>/` puis, si absent, dans chacun de ses
+/// sous-dossiers d'agents (`<dossier_projet>/<agent_id>/`).
+///
+/// Pourquoi les sous-dossiers : `agent_service.rs` (spawn_session) range la
+/// session d'un agent dont l'id n'est pas `default` dans son propre
+/// sous-dossier. Sans cette recherche, `session_id` seul ne retrouvait jamais
+/// le fichier d'un agent délégué (résultat de délégation vide, source `none`).
+/// Lecture seule et idempotent.
+fn load_session_jsonl_messages_in(
+    session_dir: &std::path::Path,
+    project: &str,
+    session_id: &str,
+) -> Vec<Value> {
+    let project_dir = session_dir.join(project_to_session_folder(project));
+    // 1. Dossier projet (agent `default` : jsonl à la racine du dossier projet).
+    if let Some(messages) = read_session_jsonl_in_dir(&project_dir, session_id) {
         return messages;
     }
-    let entries = match fs::read_dir(&project_dir) {
-        Ok(e) => e,
-        Err(_) => return messages,
-    };
+    if !project_dir.is_dir() {
+        return Vec::new();
+    }
+    // 2. Sous-dossiers d'agents (agents non-`default` — dont ceux que
+    //    l'Assistant délègue par défaut). Ordre stable pour un comportement
+    //    déterministe.
+    let mut subdirs: Vec<std::path::PathBuf> = fs::read_dir(&project_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    subdirs.sort();
+    for dir in subdirs {
+        if let Some(messages) = read_session_jsonl_in_dir(&dir, session_id) {
+            return messages;
+        }
+    }
+    Vec::new()
+}
+
+/// Cherche dans `dir` (non récursif) un fichier `*_<session_id>.jsonl` et
+/// retourne ses messages parsés. `None` si le fichier est absent ou vide :
+/// l'appelant peut alors poursuivre la recherche ailleurs.
+fn read_session_jsonl_in_dir(dir: &std::path::Path, session_id: &str) -> Option<Vec<Value>> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let suffix = format!("_{}", session_id);
+    let entries = fs::read_dir(dir).ok()?;
     for entry_it in entries {
         let entry_it = match entry_it {
             Ok(e) => e,
@@ -846,13 +891,15 @@ fn load_session_jsonl_messages(state: &AppState, project: &str, session_id: &str
             continue;
         }
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if !stem.ends_with(&format!("_{}", session_id)) {
+        if !stem.ends_with(&suffix) {
             continue;
         }
-        messages = parse_jsonl_message_lines(&fs::read_to_string(&path).unwrap_or_default());
-        break;
+        let messages = parse_jsonl_message_lines(&fs::read_to_string(&path).unwrap_or_default());
+        if !messages.is_empty() {
+            return Some(messages);
+        }
     }
-    messages
+    None
 }
 
 /// Lit le jsonl le plus récent du dossier de sessions de l'agent
