@@ -3898,7 +3898,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
  * (openFile en arrière-plan + affichage de la demande déléguée).
  * @returns {Promise<boolean>} true si la demande a été transmise.
  */
-async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen }) {
+export async function transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen }) {
   let agentTab = null;
   try {
     if (invisible || forceInvisible || !agentTabOpen) {
@@ -3910,7 +3910,10 @@ async function transmitDelegationToAgent({ request, projectPath, agentId, messag
     } else {
       // Issue #49 : ouvrir/démarrer l'agent du projet SANS basculer sur son
       // onglet — on reste sur l'onglet Assistant pour attendre le retour.
-      agentTab = await tabs.openFile("", "agent", false, false);
+      // Cause C3 : ouvrir l'onglet de l'agent RÉSOLU (pas le littéral
+      // `default`) — sinon le message délégué s'affiche dans le mauvais onglet
+      // et la session transmise n'est pas celle de l'agent visé.
+      agentTab = await tabs.openFile("", "agent", false, false, agentId, projectPath);
     }
     // Chantier 5/5 (v0.3.8) : purge automatique avant délégation. Si l'option
     // est activée (défaut) et que l'agent a DÉJÀ une conversation (a déjà

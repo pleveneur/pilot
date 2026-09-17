@@ -102,7 +102,7 @@ class Tab {
   }
 }
 
-class TabsManager {
+export class TabsManager {
   constructor() {
     this.tabs = [];
     this.activeTabId = null;
@@ -255,11 +255,21 @@ class TabsManager {
    * @param {string} path
    * @param {'edit'|'preview'|'terminal'} mode
    * @param {boolean} [runDefault] - lancer la commande par défaut (terminal uniquement)
+   * @param {boolean} [switchTo] - rendre l'onglet actif
+   * @param {string|null} [agentId] - mode "agent" uniquement : id de l'agent à
+   *   ouvrir (cause C3). Sans lui, l'agent standard (littéral `default`).
+   * @param {string|null} [projectPath] - mode "agent" uniquement : projet de
+   *   l'agent (scoping multi-projets).
    */
-  async openFile(path, mode = "edit", runDefault = false, switchTo = true) {
+  async openFile(path, mode = "edit", runDefault = false, switchTo = true, agentId = null, projectPath = null) {
     // Onglet Agent Pi (RPC)
     if (mode === "agent") {
-      return await this._openAgent(path || agentDisplayLabel(), "default", runDefault, switchTo);
+      // Cause C3 : l'agentId explicite prime sur le littéral `default`.
+      // Ouvrir l'onglet d'un agent RÉSOLU (délégation de l'assistant) doit
+      // démarrer la session de CET agent, pas celle de l'agent standard —
+      // sinon le message délégué s'affiche dans le mauvais onglet et la
+      // transmission échoue ensuite.
+      return await this._openAgent(path || agentDisplayLabel(), agentId || "default", runDefault, switchTo, projectPath);
     }
 
     // Onglet Super-agent (🧭) — spec_super_agent.md : assistant de suivi
