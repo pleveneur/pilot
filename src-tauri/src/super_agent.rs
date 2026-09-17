@@ -174,14 +174,21 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
 /// l'assistant), et `pilot-choices` fournit les outils de question (ask_choice,
 /// ask_input, ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
 pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
-    let pi_path = state.config.lock().unwrap().rpc_pi_path.clone();
+    let (pi_path, dedicated_default) = {
+        let cfg = state.config.lock().unwrap();
+        (
+            cfg.rpc_pi_path.clone(),
+            cfg.super_agent_default_model.clone(),
+        )
+    };
     let cwd = state
         .project_path
         .lock()
         .unwrap()
         .clone()
         .unwrap_or_default();
-    let default_model = default_model_from_config(&pi_path);
+    let default_model =
+        resolve_super_agent_default(&dedicated_default, default_model_from_config(&pi_path));
     state
         .agent_service
         .start_superagent(app, &cwd, &pi_path, default_model)
@@ -214,6 +221,36 @@ pub(crate) fn default_model_from_config(pi_path: &str) -> Option<(String, String
     let def = parsed.get("defaultModel")?.as_str()?;
     let idx = def.find('/')?;
     Some((def[..idx].to_string(), def[idx + 1..].to_string()))
+}
+
+/// Parse une spécification de modèle `"provider/modelId"` (issue #88).
+/// Tolérant : espaces ignorés en bord, `provider` et `modelId` non vides exigés.
+/// Retourne `None` si la chaîne est vide ou mal formée.
+pub(crate) fn parse_model_spec(spec: &str) -> Option<(String, String)> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let idx = spec.find('/')?;
+    let provider = spec[..idx].trim();
+    let model_id = spec[idx + 1..].trim();
+    if provider.is_empty() || model_id.is_empty() {
+        return None;
+    }
+    Some((provider.to_string(), model_id.to_string()))
+}
+
+/// Modèle par défaut EFFECTIF de l'assistant (issue #88).
+/// 1. réglage dédié `super_agent_default_model` s'il est renseigné et valide ;
+/// 2. sinon le défaut global des agents (`global`, déjà résolu par
+///    `default_model_from_config`).
+/// `global` est passé en paramètre (et non relu ici) pour que la fonction reste
+/// pure et testable sans accès disque.
+pub(crate) fn resolve_super_agent_default(
+    dedicated: &str,
+    global: Option<(String, String)>,
+) -> Option<(String, String)> {
+    parse_model_spec(dedicated).or(global)
 }
 
 /// Liste concise des projets connus de la base (path + nom), pour que
@@ -599,10 +636,19 @@ pub async fn ask_super_agent(
         )
     };
 
-    // Si aucun modèle n'a été choisi, retomber sur le modèle par défaut du
-    // backend (pi --no-session n'a pas de modèle par défaut).
+    // Si aucun modèle n'a été choisi, retomber sur le modèle par défaut de
+    // l'assistant (réglage dédié, issue #88) puis, à défaut, sur le modèle par
+    // défaut du backend (pi --no-session n'a pas de modèle par défaut).
     if model.trim().is_empty() {
-        if let Some((p, id)) = default_model_from_config(&pi_path) {
+        let dedicated = state
+            .config
+            .lock()
+            .unwrap()
+            .super_agent_default_model
+            .clone();
+        if let Some((p, id)) =
+            resolve_super_agent_default(&dedicated, default_model_from_config(&pi_path))
+        {
             model = format!("{}/{}", p, id);
         }
     }
@@ -1087,6 +1133,29 @@ pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: S
     Ok(())
 }
 
+/// Définit le modèle par défaut DÉDIÉ à l'assistant (issue #88), persisté en
+/// config (format `"provider/modelId"`). Une valeur vide efface le réglage →
+/// retour au modèle par défaut global des agents. Ne change PAS le modèle actif
+/// de la session (c'est `set_super_agent_model` qui pilote le modèle courant).
+#[tauri::command]
+pub fn set_super_agent_default_model(
+    state: State<AppState>,
+    app: AppHandle,
+    provider: String,
+    model_id: String,
+) -> Result<(), String> {
+    let (provider, model_id) = (provider.trim(), model_id.trim());
+    let spec = if provider.is_empty() || model_id.is_empty() {
+        String::new()
+    } else {
+        format!("{}/{}", provider, model_id)
+    };
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_default_model = spec;
+    crate::save_config_disk(&app, &cfg)?;
+    Ok(())
+}
+
 /// Envoie une commande arbitraire au processus pi du super-agent (ex:
 /// `extension_ui_response` pour répondre aux boutons de question posés par
 /// l'assistant via pilot-choices).
@@ -1319,12 +1388,18 @@ pub async fn analyze_super_agent_personality(
     state: State<'_, AppState>,
     history: Vec<SuperAgentTurn>,
 ) -> Result<String, String> {
-    let (pi_path, mut model) = {
+    let (pi_path, mut model, dedicated_default) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.rpc_pi_path.clone(), cfg.super_agent_model.clone())
+        (
+            cfg.rpc_pi_path.clone(),
+            cfg.super_agent_model.clone(),
+            cfg.super_agent_default_model.clone(),
+        )
     };
     if model.trim().is_empty() {
-        if let Some((p, id)) = default_model_from_config(&pi_path) {
+        if let Some((p, id)) =
+            resolve_super_agent_default(&dedicated_default, default_model_from_config(&pi_path))
+        {
             model = format!("{}/{}", p, id);
         }
     }

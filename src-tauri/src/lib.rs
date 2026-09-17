@@ -484,6 +484,13 @@ struct AppConfig {
     // l'appel bloquant `ask_super_agent` (process frais par tour).
     #[serde(default)]
     super_agent_model: String,
+    // Modèle par défaut DÉDIÉ à l'assistant (issue #88, format "provider/modelId").
+    // Distinct du modèle par défaut global des agents (`defaultModel` de
+    // model-switch.json) : quand il est renseigné, il prend le pas sur le défaut
+    // global pour l'assistant uniquement. Vide/absent → repli sur le défaut
+    // global, donc comportement historique inchangé (aucune migration).
+    #[serde(default)]
+    super_agent_default_model: String,
     // Prompt système personnalisé du super-agent (éditable dans Paramètres).
     // Préfixé à chaque tour de `ask_super_agent` pour cadrer le comportement.
     #[serde(default)]
@@ -913,6 +920,7 @@ impl Default for AppConfig {
             super_agent_clients: Vec::new(),
             super_agent_project_client: HashMap::new(),
             super_agent_model: String::new(),
+            super_agent_default_model: String::new(),
             super_agent_prompt: String::new(),
             super_agent_open: false,
             super_agent_start_on_launch: true,
@@ -2680,6 +2688,7 @@ pub fn run() {
             super_agent::ask_super_agent,
             super_agent::new_super_agent_session,
             super_agent::set_super_agent_model,
+            super_agent::set_super_agent_default_model,
             super_agent::set_super_agent_working_project,
             super_agent::super_agent_db_query,
             super_agent::super_agent_db_execute,
