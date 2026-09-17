@@ -1567,4 +1567,72 @@ mod tests {
         assert_eq!(msgs[0]["text"], "bonjour");
         assert_eq!(msgs[1]["text"], "faire le boulot\n✔"); // blocs joints par \n
     }
+
+    // ── Recherche du fichier de session (sous-dossier d'agent, issue #87) ──
+
+    /// Fabrique un fichier de session `<horodatage>_<session_id>.jsonl` dans
+    /// `dir`, avec un unique message assistant.
+    fn write_session_jsonl(dir: &std::path::Path, session_id: &str, text: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let line = format!(
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}}}\n",
+            text
+        );
+        fs::write(
+            dir.join(format!("2026-01-01T00-00-00-000Z_{}.jsonl", session_id)),
+            line,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn load_session_jsonl_messages_in_finds_agent_subfolder_session() {
+        // spawn_session range la session d'un agent non-`default` dans
+        // `<dossier_projet>/<agent_id>/` : la recherche doit l'y trouver.
+        let root = std::env::temp_dir().join("pilot-delegation-test-subfolder");
+        let _ = fs::remove_dir_all(&root);
+        let project = "G:\\IA_PL\\pilot";
+        let proj_dir = root.join(project_to_session_folder(project));
+        // Un autre agent à la racine : ne doit pas être confondu.
+        write_session_jsonl(&proj_dir, "autre-session", "mauvais");
+        write_session_jsonl(&proj_dir.join("codeur"), "sess42", "travail termine");
+
+        let msgs = load_session_jsonl_messages_in(&root, project, "sess42");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "assistant");
+        assert_eq!(msgs[0]["text"], "travail termine");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_session_jsonl_messages_in_finds_project_root_session() {
+        // Non-régression : l'agent `default` écrit à la racine du dossier projet
+        // et doit rester prioritaire.
+        let root = std::env::temp_dir().join("pilot-delegation-test-root");
+        let _ = fs::remove_dir_all(&root);
+        let project = "G:\\IA_PL\\pilot";
+        let proj_dir = root.join(project_to_session_folder(project));
+        write_session_jsonl(&proj_dir, "sess7", "resultat racine");
+        write_session_jsonl(&proj_dir.join("codeur"), "sess7", "resultat sous-dossier");
+
+        let msgs = load_session_jsonl_messages_in(&root, project, "sess7");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["text"], "resultat racine");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_session_jsonl_messages_in_unknown_session_is_empty() {
+        let root = std::env::temp_dir().join("pilot-delegation-test-unknown");
+        let _ = fs::remove_dir_all(&root);
+        let project = "G:\\IA_PL\\pilot";
+        let proj_dir = root.join(project_to_session_folder(project));
+        write_session_jsonl(&proj_dir.join("codeur"), "sess1", "x");
+
+        assert!(load_session_jsonl_messages_in(&root, project, "inconnu").is_empty());
+        // Dossier projet inexistant : aucune erreur, résultat vide.
+        let absent = root.join("projet-absent");
+        assert!(load_session_jsonl_messages_in(&absent, project, "sess1").is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
