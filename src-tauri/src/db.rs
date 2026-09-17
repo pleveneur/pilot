@@ -32,7 +32,9 @@ pub(crate) fn open_conn(app: &AppHandle) -> Result<Connection, String> {
 }
 
 /// Applique les migrations versionnées (idempotentes via IF NOT EXISTS).
-fn init_db(conn: &Connection) -> Result<(), String> {
+/// `pub(crate)` : réutilisée par les tests unitaires qui valident les purges
+/// d'état sur une base en mémoire (même schéma que la base réelle).
+pub(crate) fn init_db(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
 

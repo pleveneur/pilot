@@ -49,6 +49,14 @@ pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
 (notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
 réinitialiser son processus. Aucun réglage utilisateur.
 
+**État d'exécution fantôme (issue #87)** : si un agent a été enregistré
+« en cours » alors que son processus n'existe plus (mort silencieuse), Pilot
+**remet son état à zéro** au passage suivant du moniteur (≤ 30 s) : son
+processus n'étant plus vivant, son créneau et son verrou d'exécution sont
+**libérés automatiquement** et les lancements suivants sur ce projet
+**repartent normalement** — sans redémarrer Pilot. Une exécution réellement en
+cours n'est jamais touchée.
+
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
   agent en file d'attente sur le même rôle peut prendre le relais.
@@ -200,6 +208,52 @@ files d'exclusivité/de délégation au lieu de laisser les demandes derrière u
 fantôme. Le champ `stale_busy_grace_minutes` est préservé dans settings.js
 (aucune UI dédiée).
 
+### 2.4 bis Purge des états d'exécution fantômes (issue #87)
+
+Le filet §2.4 ne couvre que les sessions **encore vivantes** et les entrées de la
+map d'anomalie restées `busy`. Il manquait le cas de l'issue #87 : la ligne
+`agents` de `pilot.db` reste `proc_state='Running'` (avec `busy` **déjà retombé à
+0** et `loaded=1`) alors qu'**aucun processus n'est vivant** — l'agent a été
+parqué puis son process pi est mort sans événement de fin (aucun `set_state`
+n'est appelé en fin de run normale). Cette ligne fantôme porte le verrou
+d'exécution du projet : toutes les demandes suivantes étaient mises en file en
+silence jusqu'au redémarrage de Pilot (une variante de casse du chemin
+contournait le verrou, clé = chemin).
+
+À chaque passage du moniteur (30 s), `AgentService::purge_ghost_running_states`
+(agent_service.rs) :
+
+1. sélectionne les lignes `agents` en `proc_state='Running'` avec un
+   `project_path` non vide (les agents **globaux**, `project_path` NULL, sont hors
+   périmètre : ils ne portent pas de verrou de projet) ;
+2. **vérifie la vivacité réelle** du processus (`agent_alive` → `try_wait`) : une
+   session vivante (parkée ou en cours) est **laissée intacte** ;
+3. pour chaque fantôme : remise à `proc_state='Unloaded'`, `loaded=0`, `busy=0`,
+   libération de la marque `busy` (et des drapeaux `blocked_reported` /
+   `auto_stopped_reported`) dans la map d'anomalie, retrait de la **session
+   morte** du registre, puis **journalisation d'une ligne**
+   (`eprintln!("[agent-service] issue #87 : état d'exécution fantôme purgé …")`)
+   — une par purge, pour diagnostiquer sans redémarrer Pilot ;
+4. émet l'événement **`agent-stale-busy-released`** par paire purgée (raison
+   dédiée « État d'exécution fantôme purgé … »). Le bus d'agents l'utilise pour
+   terminer le tour d'un agent **encore suivi** dans `activeAgents` ; pour un
+   fantôme sorti du suivi en mémoire, la libération du verrou de run est assurée
+   côté frontend par `releaseStuckRunLock` (détection « travail en file sans
+   porteur », agents-bus.js), appelée **avant chaque nouveau lancement**.
+
+Complément frontend (agents-bus.js) : `releaseStuckRunLock` détecte désormais le
+cas « groupe parallèle avec du travail encore attendu (`pending > 0`) mais
+**aucun agent actif** et aucune session travaillant sur le projet »
+(`orphanQueue`). Sans cette détection, le verrou restait `running`
+indéfiniment ; et comme `lastActivityAt` n'est posé qu'à la réception d'un
+événement d'agent, la garde de temps ne s'armait jamais quand la run n'avait
+**jamais** émis d'événement. Deux garde-fous : **fenêtre de grâce** de 60 s
+(`startedAt`, pour ne pas couper une run en cours de démarrage) et **sonde
+`isProjectWorking`** (une session travaille réellement sur le projet → le verrou
+est conservé, la demande en file continue d'attendre). Si des demandes sont en
+file, elles sont **relancées** (le verrou est conservé) au lieu d'attendre un
+fantôme ; sinon le verrou est libéré.
+
 ### 2.5 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 
 Commande Tauri : lance un processus agent dédié (`diagnostic`, canal
@@ -233,10 +287,10 @@ callback de notification du bus (message ⏱️).
 |---|---|
 | `src-tauri/src/anomaly.rs` | Observateur combiné, moniteur, arrêt auto, commande diagnostic, tests |
 | `src-tauri/src/lib.rs` | `mod anomaly`, config (`anomaly_detection_enabled`, `anomaly_timeout_minutes`, `agent_auto_stop_enabled`, `agent_auto_stop_minutes`), état `agent_anomaly`, setup, commande |
-| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) |
+| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) + `purge_ghost_running_states` (issue #87) |
 | `src-tauri/src/rpc.rs` | Suppression de l'ancien `make_project_activity_observer` (remplacé par l'observateur combiné) |
 | `src/js/anomaly.js` | Bandeau d'alerte, notification, arrêt auto (événement `agent-auto-stopped`), modale de diagnostic |
-| `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) |
+| `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) + `releaseStuckRunLock` : verrou orphelin « travail en file sans porteur » (issue #87) |
 | `src/js/super-agent.js` | Notification assistant (message ⏱️ d'arrêt auto) |
 | `src/js/desktop-notify.js` | `notifyAnomaly` |
 | `src/js/main.js` | `initAnomalyDetection` |
@@ -250,6 +304,16 @@ callback de notification du bus (message ⏱️).
   — et `awaiting_user_suspends_auto_stop_and_stale_release`).
 - `npm run build` (vite) passe.
 - `npm test` (vitest) passe (agents-bus : aucune régression).
+- Issue #87 couverte par des tests dédiés : côté Rust
+  `purge_ghost_running_states_resets_orphan_rows_and_keeps_live_ones` (ligne
+  fantôme → `Unloaded`/`loaded=0`/`busy=0`, marque `busy` libérée, session morte
+  retirée, ligne vivante intacte, idempotence) et
+  `purge_ghost_running_states_ignores_global_and_non_running_rows` (agents
+  globaux et états non `Running` hors périmètre) ; côté JS les cas « verrou
+  orphelin libéré », « demande relancée », « session travaillant réellement →
+  verrou maintenu », « fenêtre de grâce » et « sonde indisponible » dans
+  `agents-bus.test.js`, plus l'accusé de lancement honnête dans
+  `super-agent-launch-verdict.test.js`.
 - Correctif « opération longue » couvert par les tests : tant qu'un outil est EN
   COURS (`tool_in_progress`), `should_auto_stop_on_progress` renvoie `false` ;
   un agent figé (aucun outil, plus de progression) est arrêté comme avant.

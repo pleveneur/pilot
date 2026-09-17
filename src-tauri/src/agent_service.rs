@@ -3376,4 +3376,177 @@ mod tests {
         assert_eq!(policy.crash_count, 0, "mort sans démarrage connu → compteur remis à zéro");
         assert!(policy.blocked_remaining(now).is_none());
     }
+
+    /// Construit une entrée d'anomalie « agent en cours de tâche » (busy=true)
+    /// pour la clé composite `project\u{1f}agent`.
+    fn busy_anomaly_entry() -> anomaly::AgentAnomalyState {
+        anomaly::AgentAnomalyState {
+            last_activity: Instant::now(),
+            last_progress: Instant::now(),
+            last_activity_wall: Some(std::time::SystemTime::now()),
+            last_event: "agent_start".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: false,
+        }
+    }
+
+    /// Issue #87 : état d'exécution FANTÔME purgé. Une ligne `agents` restée
+    /// `proc_state='Running'` (busy déjà retombé à 0) alors qu'AUCUN processus
+    /// n'est vivant porte le verrou d'exécution du projet : elle doit être
+    /// remise à un état sain (`Unloaded`, loaded=0, busy=0), sa session morte
+    /// retirée du registre et sa marque `busy` (map d'anomalie, verrou moteur)
+    /// libérée — sans redémarrer Pilot. Une exécution RÉELLEMENT vivante (même
+    /// projet, même état persisté) ne doit JAMAIS être touchée.
+    #[test]
+    fn purge_ghost_running_states_resets_orphan_rows_and_keeps_live_ones() {
+        let svc = AgentService::new();
+        let proj = "/p/ghost";
+        let conn = rusqlite::Connection::open_in_memory().expect("base en mémoire");
+        db::init_db(&conn).expect("schéma pilot.db");
+        // Deux agents du même projet, tous deux persistés « Running » :
+        //  - `fantome` : aucun processus vivant (le cas de l'issue #87) ;
+        //  - `vivant`  : session parkée dont le processus est VIVANT.
+        for (id, busy) in [("fantome", 0), ("vivant", 1)] {
+            conn.execute(
+                "INSERT INTO agents (id, project_path, name, role, proc_state, loaded, busy)
+                 VALUES (?1, ?2, ?1, 'coder', 'Running', 1, ?3)",
+                params![id, proj, busy],
+            )
+            .expect("insert agent");
+        }
+        // Session morte laissée dans le registre (le process pi est mort sans
+        // événement de fin) + session vivante.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            let dead = fake_session();
+            // kill() : le processus enfant meurt → try_wait() renvoie Some.
+            sessions.insert(
+                AgentService::session_key(proj, "fantome"),
+                SessionEntry {
+                    session: dead,
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+            sessions.insert(
+                AgentService::session_key(proj, "vivant"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Parked,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+            let _ = sessions
+                .get_mut(&AgentService::session_key(proj, "fantome"))
+                .unwrap()
+                .session
+                .child
+                .kill();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        // Marque busy résiduelle sur le fantôme (verrou moteur) et sur le vivant.
+        let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        {
+            let mut m = anomaly_map.lock().unwrap();
+            m.insert(format!("{}\u{1f}{}", proj, "fantome"), busy_anomaly_entry());
+            m.insert(format!("{}\u{1f}{}", proj, "vivant"), busy_anomaly_entry());
+        }
+        // Purge : seul le fantôme est détecté (proc_state Running sans process).
+        let purged = svc
+            .purge_ghost_running_states(&conn, &anomaly_map)
+            .expect("purge");
+        assert_eq!(
+            purged,
+            vec![(proj.to_string(), "fantome".to_string())],
+            "un seul fantôme purgé"
+        );
+        // État remis à sain : verrou du projet libéré.
+        let (loaded, busy, state): (i64, i64, String) = conn
+            .query_row(
+                "SELECT loaded, busy, proc_state FROM agents WHERE id = 'fantome'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("ligne fantome");
+        assert_eq!((loaded, busy, state.as_str()), (0, 0, "Unloaded"));
+        // Marque busy de la map d'anomalie (verrou d'exclusivité moteur) libérée.
+        assert!(
+            !anomaly_map
+                .lock()
+                .unwrap()
+                .get(&format!("{}\u{1f}{}", proj, "fantome"))
+                .expect("entrée fantome")
+                .busy,
+            "verrou d'exclusivité libéré pour le fantôme"
+        );
+        // Session morte retirée du registre (plus de créneau fantôme listé).
+        assert!(
+            !svc.sessions
+                .lock()
+                .unwrap()
+                .contains_key(&AgentService::session_key(proj, "fantome")),
+            "session morte retirée du registre"
+        );
+        // Le vivant est INTACT : exécution légitime, jamais touchée.
+        let (l_loaded, l_busy, l_state): (i64, i64, String) = conn
+            .query_row(
+                "SELECT loaded, busy, proc_state FROM agents WHERE id = 'vivant'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("ligne vivant");
+        assert_eq!((l_loaded, l_busy, l_state.as_str()), (1, 1, "Running"));
+        assert!(svc.agent_alive(proj, "vivant"), "session vivante conservée");
+        assert!(
+            anomaly_map
+                .lock()
+                .unwrap()
+                .get(&format!("{}\u{1f}{}", proj, "vivant"))
+                .expect("entrée vivant")
+                .busy,
+            "verrou conservé pour l'agent qui travaille"
+        );
+        // Idempotence : une seconde purge ne fait plus rien.
+        assert!(
+            svc.purge_ghost_running_states(&conn, &anomaly_map)
+                .expect("purge 2")
+                .is_empty(),
+            "plus rien à purger"
+        );
+    }
+
+    /// Issue #87 : les agents GLOBAUX (`project_path` NULL) et les états non
+    /// « en cours » (Paused/Stopped/Unloaded) sont hors périmètre de la purge.
+    #[test]
+    fn purge_ghost_running_states_ignores_global_and_non_running_rows() {
+        let svc = AgentService::new();
+        let conn = rusqlite::Connection::open_in_memory().expect("base en mémoire");
+        db::init_db(&conn).expect("schéma pilot.db");
+        conn.execute(
+            "INSERT INTO agents (id, project_path, name, role, proc_state, loaded, busy)
+             VALUES ('assistant-global', NULL, 'Assistant', 'assistant', 'Running', 1, 0)",
+            [],
+        )
+        .expect("insert global");
+        conn.execute(
+            "INSERT INTO agents (id, project_path, name, role, proc_state, loaded, busy)
+             VALUES ('pause', '/p/A', 'Pause', 'coder', 'Paused', 1, 0)",
+            [],
+        )
+        .expect("insert pause");
+        let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        assert!(
+            svc.purge_ghost_running_states(&conn, &anomaly_map)
+                .expect("purge")
+                .is_empty(),
+            "agent global et état Paused hors périmètre"
+        );
+    }
 }

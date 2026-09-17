@@ -21,6 +21,7 @@ import {
   isProjectReserved,
   reservationsPath,
 } from "./reservations.js";
+import { enqueueExclusivity } from "./exclusivity-queue.js";
 
 describe("isRunInProgress — source de vérité « run occupée ou non » (par projet)", () => {
   it("est exportée comme fonction (contrat de la source unique)", () => {
@@ -316,6 +317,104 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
 
   it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
     beginRun("projetA");
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+});
+
+// ── Issue #87 : verrou orphelin « travail en file sans porteur » ───────────
+// Incident : après la mort silencieuse d'un agent (proc_state='Running' sans
+// processus vivant, busy retombé à 0), le verrou de run du projet restait
+// « running » indéfiniment : `releaseStuckRunLock` ne détectait pas le cas
+// « groupe parallèle avec du travail encore EN FILE (pending > 0) mais AUCUN
+// agent actif », et sa garde de temps dépendait de `lastActivityAt` (jamais posé
+// si aucun événement d'agent n'avait été reçu). Résultat : toutes les demandes
+// suivantes étaient mises en file en silence, sans jamais démarrer, jusqu'au
+// redémarrage de Pilot (la variante de casse du chemin contournait le verrou).
+describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur (issue #87)", () => {
+  beforeEach(() => {
+    endRun("projetA");
+    vi.mocked(invoke).mockClear();
+  });
+  afterEach(() => {
+    endRun("projetA");
+    vi.mocked(invoke).mockReset();
+  });
+
+  /** Run avec du travail en file (pending > 0) mais aucun agent actif. */
+  const beginOrphanRun = ({ idleMs, assignment } = {}) => {
+    const ctx = beginRun("projetA");
+    ctx.parallelGroup = {
+      assignments: assignment ? [assignment] : [],
+      pending: 1,
+      results: {},
+      onComplete: async () => {},
+    };
+    // Aucune activité jamais reçue : `lastActivityAt` reste null.
+    ctx.startedAt = Date.now() - (idleMs === undefined ? 120_000 : idleMs);
+    return ctx;
+  };
+  const mockSessions = (sessions) => {
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "list_agent_sessions" ? { sessions } : undefined
+    );
+  };
+
+  it("travail en file, aucun agent porteur, file vide → verrou LIBÉRÉ (jamais de blocage permanent)", async () => {
+    beginOrphanRun();
+    mockSessions([]); // aucun processus vivant sur le projet
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("demande en file derrière un agent fantôme → la demande est RELANCÉE (le verrou est conservé)", async () => {
+    const demande = { agentId: "magnus", brief: "travail en attente", project: "projetA" };
+    const ctx = beginOrphanRun({ assignment: demande });
+    enqueueExclusivity(ctx.exclusivityQueue, "magnus", "projetA", demande);
+    mockSessions([]);
+    await releaseStuckRunLock("projetA");
+    // La demande en attente est bien sortie de la file (relancée) au lieu de
+    // rester coincée : le groupe parallèle n'attend plus personne.
+    expect(ctx.parallelGroup.pending).toBe(0);
+    expect(ctx.exclusivityQueue[`projetA\u{1f}magnus`]).toBeUndefined();
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("un agent travaille encore sur le projet (hors agents actifs du contexte) → verrou MAINTENU", async () => {
+    beginOrphanRun({ idleMs: 120_000 });
+    mockSessions([{ agent: "autre", project: "projetA", mode: "agent_process", alive: true, busy: true }]);
+    await releaseStuckRunLock("projetA");
+    // La demande en file doit continuer d'attendre un travail réellement en
+    // cours : jamais de double run par-dessus.
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("run qui vient de démarrer (pending > 0, aucun agent encore actif) → verrou MAINTENU (fenêtre de grâce)", async () => {
+    beginOrphanRun({ idleMs: 0 });
+    mockSessions([]);
+    await releaseStuckRunLock("projetA");
+    // Aucune coupe d'une run en cours de démarrage (entre beginRun et l'entrée
+    // du premier agent dans activeAgents).
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("sonde de sessions indisponible → verrou MAINTENU pour un travail en file (jamais de libération sur incertitude)", async () => {
+    beginOrphanRun();
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agent_sessions") throw new Error("sonde indisponible");
+      return undefined;
+    });
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("garde de temps : run sans AUCUN événement (lastActivityAt null) et sans file → libérée via startedAt", async () => {
+    const ctx = beginRun("projetA");
+    ctx.agentProject["magnus"] = "projetA";
+    ctx.activeAgents.add("magnus");
+    ctx.startedAt = Date.now() - (11 * 60 * 1000); // > timeoutMs (10 min)
+    ctx.lastActivityAt = null; // aucun événement d'agent jamais reçu
+    mockSessions([{ agent: "magnus", project: "projetA", mode: "agent_process", alive: true }]);
     await releaseStuckRunLock("projetA");
     expect(getRunState("projetA")).toBe("idle");
   });

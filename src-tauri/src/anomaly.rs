@@ -620,8 +620,13 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                 .purge_ghost_running_states_app(&app, &anomaly_map)
             {
                 for (project, agent) in purged {
-                    // Événement Rust → JS : le bus d'agents libère le créneau
-                    // d'exclusivité du projet et lance les demandes en attente.
+                    // Événement Rust → JS : le bus d'agents l'écoute pour
+                    // terminer le tour d'un agent encore suivi dans
+                    // `activeAgents` (cas busy-stale). Pour un fantôme sorti du
+                    // suivi en mémoire, la libération du verrou de run est
+                    // assurée côté JS par `releaseStuckRunLock` (détection
+                    // « travail en file sans porteur »), appelée avant chaque
+                    // nouveau lancement : plus besoin de redémarrer Pilot.
                     let _ = app.emit(
                         "agent-stale-busy-released",
                         serde_json::json!({

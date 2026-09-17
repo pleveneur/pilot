@@ -1270,6 +1270,19 @@ uniquement un bloc d'instructions dans le prompt système.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **Issue #87 — Accusé de lancement honnête (plus de faux « ok »)** : quand
+  l'Assistant lance une mission (`run_agents`), l'accusé retourné à l'Assistant
+  distingue désormais trois situations au lieu d'un « ok » fourre-tout :
+  mission **réellement démarrée** (`launched: true`), mission **mise en file
+  d'attente** parce qu'une run est déjà en cours (`queued: true` — l'accusé le
+  dit explicitement au lieu d'un `launched/queued/preparing` tous faux), ou
+  **refus avec raison explicite** (`ok: false` + `error`) au lieu d'un accusé
+  `{ok:true}` sans aucune action. Le cas « abandon silencieux » (rien démarré,
+  rien mis en file, aucune raison) devient impossible : la raison est forcée
+  côté code. Techniquement : `computeRunLaunchVerdict` (super-agent.js) renvoie
+  `ok = launched || queued || preparing`, et la branche de mise en file de
+  `startRun` renvoie un objet `{queued:true,...}` au lieu du booléen `true`
+  (qui était lu comme un objet → tous champs falsy).
 - **Bug #81 — Délégation débloquée après arrêt auto de l'agent standard** :
   quand le moniteur d'anomalies **arrête automatiquement** l'agent standard
   (process pi standard figé vivant, `agent-auto-stopped` avec reason dédié
@@ -1813,6 +1826,14 @@ longtemps.
 pi figé) sans activité depuis **25 minutes**, Pilot libère son créneau
 (notification 🧹 avec la raison) pour que les demandes en file reprennent — sans
 réinitialiser son processus. Aucun réglage utilisateur.
+
+**État d'exécution fantôme (issue #87)** : si un agent a été enregistré
+« en cours » alors que son processus n'existe plus (mort silencieuse), Pilot
+**remet son état à zéro** au passage suivant du moniteur (≤ 30 s) : son
+processus n'étant plus vivant, son créneau et son verrou d'exécution sont
+**libérés automatiquement** et les lancements suivants sur ce projet
+**repartent normalement** — sans redémarrer Pilot. Une exécution réellement en
+cours n'est jamais touchée.
 
 - **Notification** : un bandeau + une notification native indiquent que l'agent
   a été arrêté (agent + raison). Le créneau de ce spécialiste est libéré : un
