@@ -1242,6 +1242,14 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         super_agent_default_model: inputSuperAgentDefaultModel
           ? inputSuperAgentDefaultModel.value.trim()
           : (currentConfig?.super_agent_default_model || ""),
+        // Modèle ACTIF de l'Assistant (celui qui fait tourner la session en
+        // cours, écrit par le sélecteur de l'onglet 🧭 via
+        // `set_super_agent_model`) : réglage SANS UI dans les Paramètres.
+        // `save_config` réécrit TOUTE la config → on préserve explicitement la
+        // valeur courante, sinon la clé serait réinitialisée à vide et
+        // l'Assistant repartirait sur son modèle par défaut (issue #88).
+        // À ne pas confondre avec `super_agent_default_model` ci-dessus.
+        super_agent_model: currentConfig?.super_agent_model || "",
         auto_save: chkAutoSave.checked,
         auto_save_delay: parseInt(inputAutoSaveDelay.value, 10) || 3000,
         favorites: currentConfig?.favorites || [],

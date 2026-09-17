@@ -45,8 +45,9 @@ describe("issue #88 (lot 2) — le modèle ACTIF survit à l'enregistrement des 
     expect(m[1]).not.toMatch(/inputSuperAgentDefaultModel/);
     // Les deux clés coexistent : le réglage durable reste exposé séparément.
     expect(js).toMatch(new RegExp(`^\\s*${DEFAULT}\\s*:`, "m"));
-    expect(js).toContain('invoke("set_super_agent_model"');
     expect(js).toContain('invoke("set_super_agent_default_model"');
+    // Le sélecteur de l'onglet 🧭 écrit le modèle ACTIF par une autre commande.
+    expect(read("src/js/super-agent.js")).toContain('invoke("set_super_agent_model"');
   });
 
   it("côté Rust la clé du modèle actif existe avec un défaut (configs anciennes)", () => {
