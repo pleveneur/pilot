@@ -75,7 +75,12 @@ async function skipForever() {
     cfg.pi_skip_update_check = true;
     await invoke("save_config", { config: cfg });
     toastInfo("Vérification des mises à jour de Pi désactivée.");
-  } catch (_) { /* silencieux */ }
+  } catch (e) {
+    // Réserve R-B : la lecture a échoué → on ANNULE l'écriture (jamais de
+    // valeurs par défaut persistées à la place de la vraie configuration).
+    toastError("Configuration indisponible : préférence non enregistrée.");
+    console.error("skipForever:", e);
+  }
   closeModal();
 }
 

@@ -651,8 +651,13 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     const clickX = e.clientX, clickY = e.clientY;
     try {
       currentConfig = await invoke("get_config");
-    } catch (_) {
-      currentConfig = { theme: "dark", default_command: "", recent_projects: [], auto_load_last_project: false, auto_run_command: false, integrated_terminal: false, rpc_agent_enabled: false, rpc_pi_path: "", rpc_no_session: false, rpc_session_dir: "", multi_agent_tabs: false, quality_gate_enabled: false, show_thinking: true, show_tools: false, pdf_md_model: "", auto_save: false, auto_save_delay: 3000, context_engine_enabled: true, context_budget_tokens: 8000, context_include_imports: true, context_include_specs: true, context_include_recents: true, context_rag_enabled: false, context_rag_endpoint: "http://127.0.0.1:11434", context_rag_model: "nomic-embed-text", modal_animations: true };
+    } catch (e) {
+      // Réserve R-B : sans configuration lisible, ouvrir la modale sur un objet
+      // par défaut ferait persister ces défauts à l'enregistrement (perte de TOUS
+      // les réglages). On ANNULE l'ouverture avec un message clair.
+      console.error("get_config (Paramètres):", e);
+      alert("Configuration indisponible pour le moment. Réessayez dans un instant : aucun réglage n'a été modifié.");
+      return;
     }
     // Agents du projet (issue #35) : charger la config du projet actif.
     await loadProjectAgents();
@@ -931,7 +936,12 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       if (inputPlfaceAvatar) cfg.plface_avatar_path = inputPlfaceAvatar.value.trim();
       await invoke("save_config", { config: cfg });
       currentConfig = cfg;
-    } catch (_) {}
+    } catch (e) {
+      // Réserve R-B : lecture échouée → écriture annulée (jamais de défauts
+      // persistés à la place de la vraie configuration).
+      console.error("persistPlfaceSettings:", e);
+      showToast("Configuration indisponible : réglages PLface non enregistrés.", "error");
+    }
   }
   // Indicateur d'état lisible : « Votre avatar est lancé / est arrêté ». Sondé
   // à l'ouverture de la modale et après chaque action. Fail-open : un échec de

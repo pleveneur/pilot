@@ -201,13 +201,22 @@ async function executeCommand(id, tabs) {
       tabs._openScratchpad();
       break;
     case "toggle-word-wrap": {
-      const currentConfig = await invoke("get_config");
-      const newWrap = !currentConfig.word_wrap;
-      const updatedConfig = { ...currentConfig, word_wrap: newWrap };
-      await invoke("save_config", { config: updatedConfig });
-      window.dispatchEvent(new CustomEvent("pilot-config-changed", { detail: updatedConfig }));
-      const { toastInfo } = await import("./toast.js");
-      toastInfo(newWrap ? "Renvoi à la ligne activé" : "Renvoi à la ligne désactivé");
+      // Réserve R-B : si la lecture de configuration échoue (indisponible), on
+      // ANNULE l'écriture — sans quoi une réécriture complète de l'objet
+      // persisterait des valeurs par défaut et écraserait les réglages.
+      try {
+        const currentConfig = await invoke("get_config");
+        const newWrap = !currentConfig.word_wrap;
+        const updatedConfig = { ...currentConfig, word_wrap: newWrap };
+        await invoke("save_config", { config: updatedConfig });
+        window.dispatchEvent(new CustomEvent("pilot-config-changed", { detail: updatedConfig }));
+        const { toastInfo } = await import("./toast.js");
+        toastInfo(newWrap ? "Renvoi à la ligne activé" : "Renvoi à la ligne désactivé");
+      } catch (e) {
+        const { toastError } = await import("./toast.js");
+        toastError("Configuration indisponible : renvoi à la ligne inchangé.");
+        console.error("toggle-word-wrap:", e);
+      }
       break;
     }
     case "check-update":
@@ -751,7 +760,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         window.dispatchEvent(new CustomEvent("pilot-config-changed", { detail: updatedConfig }));
         const { toastInfo } = await import("./toast.js");
         toastInfo(newWrap ? "Renvoi à la ligne activé" : "Renvoi à la ligne désactivé");
-      } catch (_) {}
+      } catch (e) {
+        const { toastError } = await import("./toast.js");
+        toastError("Configuration indisponible : renvoi à la ligne inchangé.");
+        console.error("Alt+Z word-wrap:", e);
+      }
       return;
     }
 

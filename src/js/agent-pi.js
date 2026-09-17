@@ -1671,7 +1671,11 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       case "quality-gate": {
         // Toggle + persistance + relance de l'agent (skills chargés au démarrage de pi).
         let config;
-        try { config = await invoke("get_config"); } catch (e) { console.error(e); break; }
+        try { config = await invoke("get_config"); } catch (e) {
+          console.error(e);
+          appendSystemMessage(messagesEl, "⚠️ Configuration indisponible : quality-gate inchangé (aucune écriture).");
+          break;
+        }
         const newState = !config.quality_gate_enabled;
         config.quality_gate_enabled = newState;
         try { await invoke("save_config", { config }); } catch (e) { console.error("save_config:", e); break; }

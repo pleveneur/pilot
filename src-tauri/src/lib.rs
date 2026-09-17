@@ -1676,22 +1676,98 @@ pub(crate) fn gds_globally_enabled(state: &AppState) -> bool {
     state.config.lock().unwrap().gds_enabled
 }
 
-/// Cœur testable de la commande `get_config` (réserve de la relecture 0.4.14).
+/// Reprises rapides et pas d'attente avant de considérer le verrou de
+/// configuration comme occupé (réserve R-B, lot 3-bis). On laisse finir une
+/// section critique courte sans jamais geler l'interface (10 × 2 ms = 20 ms au
+/// pire).
+const CONFIG_LOCK_RETRIES: u32 = 10;
+const CONFIG_LOCK_RETRY_STEP: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Lecture **stricte** de la configuration disque pour le repli de lecture
+/// (réserve R-B, lot 3-bis) : ne renvoie **jamais** `AppConfig::default()` à la
+/// place d'une configuration réelle.
+///   - `Ok(Some(cfg))` → fichier présent et valide ;
+///   - `Ok(None)`      → fichier absent (il n'y a alors rien à écraser) ;
+///   - `Err(_)`        → fichier présent mais illisible/invalide.
+fn load_config_disk_if_present(app: &AppHandle) -> Result<Option<AppConfig>, String> {
+    let path = config_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("Config illisible: {}", e))?;
+    match serde_json::from_str::<AppConfig>(&content) {
+        Ok(mut cfg) => {
+            cfg.migrate();
+            Ok(Some(cfg))
+        }
+        Err(e) => Err(format!("Config invalide: {}", e)),
+    }
+}
+
+/// Cœur testable de la commande `get_config` (réserve R-B du lot 3-bis).
 ///
-/// Même forme de résultat que la commande (`Result<AppConfig, String>`) pour que
-/// ses appelants ne changent pas, mais lecture **non bloquante** : on délègue au
-/// helper partagé `config_snapshot_locked` (issue #89) au lieu de
-/// `config.lock().unwrap()` (verrou bloquant, et panique si le verrou est
-/// empoisonné). Extrait dans une fonction libre pour être couvert par un test
-/// unitaire sans devoir construire tout `AppState`.
-fn get_config_read(config: &Mutex<AppConfig>) -> Result<AppConfig, String> {
-    Ok(config_snapshot_locked(config))
+/// Lecture **non bloquante** ET qui **ne renvoie jamais de valeurs par défaut à
+/// la place de la vraie configuration**. C'est cette garantie qui empêche un
+/// appelant « lire, modifier un champ, réécrire TOUT l'objet » (Alt+Z,
+/// quality-gate, Paramètres, « ne plus demander »…) d'écraser les réglages de
+/// l'utilisateur : si la lecture rendait des défauts, la réécriture persisterait
+/// ces défauts.
+///
+/// 1. `try_lock` + reprises bornées (aucun gel de l'interface, issue #89) ;
+/// 2. verrou empoisonné → lecture directe via `into_inner()` (données valides) ;
+/// 3. verrou toujours occupé → repli sur la configuration **disque** (autoritaire :
+///    les écritures écrivent le disque AVANT l'état mémoire) ;
+/// 4. disque absent/illisible → `Err` explicite « configuration indisponible »,
+///    pour que l'appelant ANNULE son écriture au lieu de persister des défauts.
+fn get_config_read_with(
+    config: &Mutex<AppConfig>,
+    load_disk: impl FnOnce() -> Result<Option<AppConfig>, String>,
+) -> Result<AppConfig, String> {
+    for attempt in 0..CONFIG_LOCK_RETRIES {
+        match config.try_lock() {
+            Ok(cfg) => return Ok(cfg.clone()),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                eprintln!(
+                    "[config] verrou empoisonné par un panic antérieur : lecture directe, \
+                     la valeur reste utilisable (issue #89)."
+                );
+                return Ok(poisoned.into_inner().clone());
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if attempt + 1 < CONFIG_LOCK_RETRIES {
+                    std::thread::sleep(CONFIG_LOCK_RETRY_STEP);
+                }
+            }
+        }
+    }
+    eprintln!(
+        "[config] verrou de configuration occupé après reprises : repli sur la configuration \
+         disque — JAMAIS de valeurs par défaut (réserve R-B, lot 3-bis)."
+    );
+    match load_disk() {
+        Ok(Some(cfg)) => Ok(cfg),
+        Ok(None) => Err(
+            "Configuration momentanément indisponible (fichier de configuration absent) ; \
+             aucune écriture n'a été effectuée."
+                .to_string(),
+        ),
+        Err(e) => Err(format!(
+            "Configuration momentanément indisponible ({}) ; aucune écriture n'a été effectuée.",
+            e
+        )),
+    }
+}
+
+/// Wrapper de production de `get_config_read_with` : le repli disque résout le
+/// chemin via l'`AppHandle`.
+fn get_config_read(config: &Mutex<AppConfig>, app: &AppHandle) -> Result<AppConfig, String> {
+    get_config_read_with(config, || load_config_disk_if_present(app))
 }
 
 #[tauri::command]
 fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, String> {
     ensure_config_loaded(&state, &app);
-    get_config_read(&state.config)
+    get_config_read(&state.config, &app)
 }
 
 #[tauri::command]
@@ -3144,7 +3220,12 @@ mod tests {
         rx.recv().expect("le verrou doit être tenu");
 
         let start = Instant::now();
-        let read = super::get_config_read(&config);
+        let read = super::get_config_read_with(&config, || {
+            Ok(Some(AppConfig {
+                theme: "light".to_string(),
+                ..AppConfig::default()
+            }))
+        });
         let elapsed = start.elapsed();
         holder.join().expect("fin du détenteur du verrou");
 
@@ -3154,10 +3235,91 @@ mod tests {
             elapsed
         );
         let cfg = read.expect("la lecture ne doit jamais échouer");
+        assert_eq!(cfg.theme, "light", "la vraie configuration reste lisible (repli disque)");
+    }
+
+    #[test]
+    fn config_read_for_update_never_writes_defaults_over_real_config() {
+        // Réserve R-B (lot 3-bis) : simule un cycle « lire → modifier un champ →
+        // réécrire TOUT l'objet », exactement comme les appelants JS (Alt+Z,
+        // quality-gate, enregistrement des Paramètres…), pendant qu'un autre
+        // thread tient le verrou de configuration. La valeur réécrite doit être
+        // la VRAIE configuration (repli disque), jamais les valeurs par défaut.
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let real = AppConfig {
+            theme: "dark".to_string(),
+            default_command: "commande-utilisateur".to_string(),
+            ..AppConfig::default()
+        };
+        // La configuration disque est l'autorité : elle contient la vraie config
+        // (les écritures écrivent le disque AVANT l'état mémoire).
+        let disk = real.clone();
+        let config = std::sync::Arc::new(std::sync::Mutex::new(real.clone()));
+
+        let held = std::sync::Arc::clone(&config);
+        let (tx, rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            tx.send(()).expect("signal de verrouillage");
+            std::thread::sleep(Duration::from_millis(400));
+        });
+        rx.recv().expect("le verrou doit être tenu");
+
+        let start = Instant::now();
+        let read = super::get_config_read_with(&config, || Ok(Some(disk.clone())));
+        let elapsed = start.elapsed();
+        holder.join().expect("fin du détenteur du verrou");
+
+        // L'interface ne gèle jamais sur le verrou.
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "la lecture ne doit pas attendre le verrou (mesuré {:?})",
+            elapsed
+        );
+
+        // Lecture-modification-écriture : on modifie un champ puis on réécrit
+        // TOUT l'objet (comportement des appelants JS).
+        let mut updated = read.expect("la configuration doit rester disponible");
+        updated.word_wrap = !updated.word_wrap;
+        *config.lock().unwrap() = updated;
+
+        let final_cfg = config.lock().unwrap().clone();
         assert_eq!(
-            cfg.theme,
-            AppConfig::default().theme,
-            "repli sur la configuration par défaut quand le verrou est tenu"
+            final_cfg.default_command, "commande-utilisateur",
+            "la configuration finale doit conserver les VRAIES valeurs, jamais les défauts"
+        );
+        assert_ne!(
+            final_cfg.default_command,
+            AppConfig::default().default_command,
+            "une valeur par défaut ne doit jamais être écrite à la place de la vraie config"
+        );
+    }
+
+    #[test]
+    fn config_read_reports_unavailable_instead_of_defaults() {
+        // Réserve R-B (lot 3-bis) : verrou occupé ET disque absent/illisible →
+        // la lecture doit signaler « indisponible » (Err) pour que l'appelant
+        // annule son écriture, jamais renvoyer les défauts.
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let config = std::sync::Arc::new(std::sync::Mutex::new(AppConfig::default()));
+        let held = std::sync::Arc::clone(&config);
+        let (tx, rx) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            tx.send(()).expect("signal de verrouillage");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        rx.recv().expect("le verrou doit être tenu");
+
+        let read = super::get_config_read_with(&config, || Ok(None));
+        holder.join().expect("fin du détenteur du verrou");
+        assert!(
+            read.is_err(),
+            "la lecture doit signaler l'indisponibilité, jamais renvoyer les défauts"
         );
     }
 }
