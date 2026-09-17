@@ -71,6 +71,10 @@ cours n'est jamais touchée.
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
+- **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
+  activations) sont **relus en continu**, à chaque passage de la surveillance
+  (toutes les **30 s**). Un changement dans les Paramètres s'applique donc
+  **sans redémarrer Pilot** — au plus tard au passage suivant du moniteur.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
@@ -112,6 +116,19 @@ pas déjà signalé. Il émet alors l'événement `agent-anomaly`
 
 Respecte le réglage `anomaly_detection_enabled` (défaut activé) et
 `anomaly_timeout_minutes` (défaut 30).
+
+**Réglages relus à chaque tour (issue #89)** : toutes les valeurs consommées par
+la boucle (`anomaly_detection_enabled`, `anomaly_timeout_minutes`,
+`agent_auto_stop_enabled`, `agent_auto_stop_minutes`,
+`super_agent_auto_stop_enabled`, `super_agent_auto_stop_minutes`,
+`stale_busy_grace_minutes`) sont regroupées dans `MonitorConfig` et relues **à
+chaque passage** via `read_monitor_config` (`anomaly.rs:440`) : un réglage
+modifié dans les Paramètres s'applique sans redémarrer Pilot. La lecture ne
+bloque jamais le thread de surveillance (`try_lock`) : verrou **empoisonné** →
+lecture directe des données intactes ; verrou momentanément **pris** → repli sur
+la **dernière valeur connue** (`monitor_config_or_last`, `anomaly.rs:423`). Si la
+toute première lecture échoue, les valeurs par défaut d'`AppConfig`
+s'appliquent.
 
 ### 2.3 Arrêt automatique des agents bloqués (T2)
 

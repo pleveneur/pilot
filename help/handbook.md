@@ -1859,6 +1859,10 @@ cours n'est jamais touchée.
   la **Détection d'anomalies** (seuil 30 min) et l'**Arrêt auto des agents
   bloqués (délégués + standard)** (seuil 10 min). Activés par
   défaut.
+- **Prise en compte immédiate (issue #89)** : ces réglages (seuils et
+  activations) sont **relus en continu**, à chaque passage de la surveillance
+  (toutes les **30 s**). Un changement dans les Paramètres s'applique donc
+  **sans redémarrer Pilot** — au plus tard au passage suivant du moniteur.
 - **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
