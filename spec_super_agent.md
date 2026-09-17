@@ -995,6 +995,17 @@ Tables (V1) :
   court (seuils `MIN_TOTAL_CHARS` / `MIN_RESPONSE_CHARS`), purement protocolaire
   ou sans contenu réel. Seuls les échanges porteurs d'information alimentent la
   mémoire de suivi.
+- **Filtre des comptes rendus d'agents** (mêmes règles, deuxième garde du même
+  module : `shouldRememberAgentReport`) : les deux autres chemins qui écrivaient
+  sans filtre sont désormais couverts — fin d'un **agent lancé en arrière-plan**
+  (`super-agent.js`, `finalizeInvisibleAgent`, un compte rendu générique sans
+  résultat n'est plus mémorisé) et **points d'avancement d'une run d'agents**
+  (`[Info run_agents]` : mise en file, démarrage ▶️, arrêt auto ⏱️). Aucune
+  perte possible d'un compte rendu de fin de tâche : une **fin de run** force la
+  mémorisation (`{ remember: true }`) et un **feedback de délégation en attente**
+  est toujours remis (`shouldDeliverAgentReport`, exception absolue au filtre,
+  le marqueur « [Tâche déléguée terminée] » n'est jamais perdu). En cas de doute,
+  le filtre conserve (fail-open).
 - L'Assistant met à jour sa base : tâches, décisions, état d'avancement.
 - **Ne pas bloquer** : l'injection est asynchrone et ne ralentit pas la session
   d'origine.
