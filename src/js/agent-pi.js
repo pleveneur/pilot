@@ -36,6 +36,7 @@ import { refreshIcons, setIcon } from "./icons.js";
 import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
+import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
 import {
   buildPlanPrompt, buildTaskPrompt, buildRetryTaskPrompt, buildEscalationPrompt, buildRevisionPrompt,
   buildSubdividePrompt, buildFinalReviewPrompt, buildCoderFinalReviewPrompt, buildCoderFinalReviewContinuePrompt,
@@ -6032,7 +6033,7 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
             state.lastUserPrompt ? `Demande: ${state.lastUserPrompt}` : "",
             state.lastAssistantRawText ? `Réponse: ${state.lastAssistantRawText}` : "",
           ].filter(Boolean).join("\n");
-          if (saSummary) {
+          if (saSummary && shouldRememberExchange(state.lastUserPrompt, state.lastAssistantRawText)) {
             injectSessionSummaryToSuperAgent(saSummary, window._pilotProjectPath).catch(() => {});
           }
         }

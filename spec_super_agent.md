@@ -526,6 +526,8 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 - À chaque **fin de session d'un agent** (chat ou orchestration), un **résumé**
   est envoyé automatiquement à l'Assistant : il apprend ainsi ce qui a été fait,
   décidé et livré, sans que vous ayez à le lui demander.
+- Les **échanges insignifiants** (salutation, accusé de réception, réponse trop
+  courte ou vide) sont **ignorés** : seule la mémoire utile est alimentée.
 - Pour un **projet déjà existant**, utilisez le bouton **« Initialiser »** :
   l'Assistant analyse le projet (structure, documentation, historique des
   sessions) puis pose les questions nécessaires à son fonctionnement.
@@ -974,6 +976,12 @@ Tables (V1) :
   tâche d'orchestration), Pilot génère un **résumé** (réutilise la logique de
   capture H9 / synthèse d'orchestration) et l'**injecte** à l'Assistant via un
   prompt système ou un message dédié.
+- **Filtre d'insignifiance** (chat standard) : avant l'injection, la fonction
+  pure `shouldRememberExchange` (`src/js/super-agent-exchange-filter.js`,
+  branchée dans `agent-pi.js` à l'`agent_end`) refuse un échange vide, trop
+  court (seuils `MIN_TOTAL_CHARS` / `MIN_RESPONSE_CHARS`), purement protocolaire
+  ou sans contenu réel. Seuls les échanges porteurs d'information alimentent la
+  mémoire de suivi.
 - L'Assistant met à jour sa base : tâches, décisions, état d'avancement.
 - **Ne pas bloquer** : l'injection est asynchrone et ne ralentit pas la session
   d'origine.
