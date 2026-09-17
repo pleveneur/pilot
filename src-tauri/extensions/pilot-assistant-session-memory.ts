@@ -11,6 +11,9 @@
 //     dans une corbeille bornée, donc annulable.
 //   - restore_session_memory(id?) → remet en place un retrait (par son id, ou le
 //     plus récent si l'id est absent).
+//   - list_session_memory_trash() → liste les retraits en attente dans la
+//     corbeille bornée (identifiant, type, date, aperçu court du contenu), du
+//     plus récent au plus ancien.
 //
 // Pilot réinjecte automatiquement ce résumé au début du premier message après
 // redémarrage (« Mémoire de session (reprise) »), pour que l'assistant reprenne
@@ -40,6 +43,11 @@ const MEMORY_REMOVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_REMOVE::";
 // (commande Rust `super_agent_restore_session_memory`) et renvoie le résultat
 // en JSON.
 const MEMORY_RESTORE_SENTINEL = "PILOT_ASSISTANT_MEMORY_RESTORE::";
+// Sentinel préfixant le titre d'un `input` d'outil list_session_memory_trash.
+// La charge utile est un JSON vide {} ; Pilot l'intercepte, parcourt la
+// corbeille (commande Rust `super_agent_list_session_memory_trash`) et renvoie
+// la liste des retraits en attente en JSON.
+const MEMORY_TRASH_LIST_SENTINEL = "PILOT_ASSISTANT_MEMORY_TRASH_LIST::";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -79,7 +87,7 @@ export default function (pi: ExtensionAPI) {
       "Use remove_session_memory to remove ONE stale or incorrect fact from your session memory instead of rewriting the whole resume with update_session_memory.",
       "To remove a work-in-progress entry, pass `target`: either its 1-based position in the work_in_progress list (as a string, e.g. \"2\") or a text fragment of its `project` / `title` field.",
       "To empty a simple text field of the resume instead, pass `field` (\"notes\", \"current_topic\", \"active_project\"); `target` is then ignored. At least one of `target` / `field` is required.",
-      "The removed fact goes to a bounded trash and can be restored with restore_session_memory (by id, or the most recent one), so removing is safe.",
+      "The removed fact goes to a bounded trash and can be restored with restore_session_memory, so removing is safe. The result carries `trash_id`, the identifier of the removal you just made (use it with restore_session_memory if you want to undo that specific removal).",
     ],
     parameters: Type.Object({
       target: Type.Optional(
@@ -132,6 +140,29 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ id: params.id ?? "" });
       const result = await ctx.ui.input(MEMORY_RESTORE_SENTINEL + payload, "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "list_session_memory_trash",
+    label: "List Session Memory Trash",
+    description:
+      "Lister les faits de mémoire de session que tu as retirés avec remove_session_memory et qui sont encore en attente de remise en place. Renvoie chaque retrait avec son identifiant, son type, sa date et un aperçu court de son contenu, du plus récent au plus ancien. À utiliser avant restore_session_memory quand le retrait à remettre en place n'est pas le plus récent : cela évite d'annuler un par un les retraits plus récents.",
+    promptSnippet: "list_session_memory_trash: voir les retraits de mémoire encore remisables",
+    promptGuidelines: [
+      "Use list_session_memory_trash to see which removals are still restorable (bounded trash, most recent first), with each entry's `id`, type, date and a short preview of the removed content.",
+      "Call it before restore_session_memory when the removal you want to undo is probably not the most recent one: pick the `id` of the right entry, then restore it with restore_session_memory.",
+      "The trash only keeps the most recent removals (bounded), so an older removal may no longer be listed.",
+    ],
+    parameters: Type.Object({}),
+    executionMode: "sequential",
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const payload = JSON.stringify({});
+      const result = await ctx.ui.input(MEMORY_TRASH_LIST_SENTINEL + payload, "");
       if (result == null) {
         return { content: [{ type: "text", text: "Requête annulée." }] };
       }

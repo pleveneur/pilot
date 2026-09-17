@@ -2784,6 +2784,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
     const MEMORY_SAVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_SAVE::";
     const MEMORY_REMOVE_SENTINEL = "PILOT_ASSISTANT_MEMORY_REMOVE::";
     const MEMORY_RESTORE_SENTINEL = "PILOT_ASSISTANT_MEMORY_RESTORE::";
+    const MEMORY_TRASH_LIST_SENTINEL = "PILOT_ASSISTANT_MEMORY_TRASH_LIST::";
     const DELEGATION_SENTINEL = "PILOT_ASSISTANT_DELEGATION::";
     const PROJECT_SNAPSHOT_SENTINEL = "PILOT_ASSISTANT_PROJECT_SNAPSHOT::";
     const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
@@ -2809,7 +2810,8 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       // Mémoire de session (pilot-assistant-session-memory) : retrait ciblé d'un
       // fait (entrée work_in_progress, ou vidage d'un champ texte) via l'outil
       // `remove_session_memory`. Le retrait part dans une corbeille bornée côté
-      // Rust (donc annulable) ; on renvoie la nouvelle mémoire en JSON.
+      // Rust (donc annulable) ; on renvoie la nouvelle mémoire + l'identifiant du
+      // retrait (`trash_id`), qui permet de le remettre en place précisément.
       const parsed = parseMemoryRemovePayload(title.slice(MEMORY_REMOVE_SENTINEL.length));
       if (parsed.error) {
         await respondSuperAgent(id, JSON.stringify({ error: parsed.error }), false);
@@ -2820,7 +2822,31 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           target: parsed.target,
           field: parsed.field || null,
         });
-        await respondSuperAgent(id, JSON.stringify({ ok: true, memory: result }), false);
+        await respondSuperAgent(
+          id,
+          JSON.stringify({ ok: true, memory: result.memory, trash_id: result.trash_id }),
+          false,
+        );
+      } catch (e) {
+        await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
+      }
+      return;
+    }
+    if (title.startsWith(MEMORY_TRASH_LIST_SENTINEL)) {
+      // Mémoire de session (pilot-assistant-session-memory) : parcours de la
+      // corbeille via l'outil `list_session_memory_trash`. On liste les retraits
+      // en attente (du plus récent au plus ancien) avec leur identifiant, pour
+      // pouvoir cibler la remise en place sans annuler les retraits plus récents.
+      const parsed = parseMemoryTrashListPayload(
+        title.slice(MEMORY_TRASH_LIST_SENTINEL.length),
+      );
+      if (parsed.error) {
+        await respondSuperAgent(id, JSON.stringify({ error: parsed.error }), false);
+        return;
+      }
+      try {
+        const result = await invoke("super_agent_list_session_memory_trash");
+        await respondSuperAgent(id, JSON.stringify({ ok: true, ...formatMemoryTrashList(result) }), false);
       } catch (e) {
         await respondSuperAgent(id, JSON.stringify({ error: String(e) }), false);
       }

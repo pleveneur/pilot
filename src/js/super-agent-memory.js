@@ -46,3 +46,46 @@ export function parseMemoryRestorePayload(raw) {
   const id = typeof base.value.id === "string" ? base.value.id.trim() : "";
   return { id };
 }
+
+// Charge utile de l'outil list_session_memory_trash : aucune donnée à
+// transporter (le parcours lit la corbeille côté Rust). Une charge utile vide
+// ou un objet vide sont acceptés ; tout le reste est refusé sans exception.
+export function parseMemoryTrashListPayload(raw) {
+  const base = parsePayloadObject(raw);
+  if (base.error) return base;
+  return {};
+}
+
+// Réponse de la commande super_agent_list_session_memory_trash
+// (`{ count, entries: [{ id, kind, removed_at, preview }] }`, du plus récent au
+// plus ancien) : conserve l'ordre et le contenu, et produit en plus un texte
+// court prêt à lire. Entrée inexploitable → champs vides, jamais d'exception.
+export function formatMemoryTrashList(raw) {
+  let data = raw;
+  if (typeof raw === "string") {
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = null;
+    }
+  }
+  const source = data && Array.isArray(data.entries) ? data.entries : [];
+  const entries = source.map((e) => ({
+    id: e && typeof e.id === "string" ? e.id : "",
+    kind: e && typeof e.kind === "string" ? e.kind : "",
+    removed_at: e && typeof e.removed_at === "string" ? e.removed_at : "",
+    preview: e && typeof e.preview === "string" ? e.preview : "",
+  }));
+  const text =
+    entries.length === 0
+      ? "Corbeille de mémoire vide : aucun retrait à remettre en place."
+      : entries
+          .map((e, i) => {
+            const date = e.removed_at || "date inconnue";
+            const preview = e.preview || "(contenu indisponible)";
+            const kind = e.kind || "fait";
+            return `${i + 1}. id=${e.id} — ${kind} — retiré le ${date} : ${preview}`;
+          })
+          .join("\n");
+  return { count: entries.length, entries, text };
+}
