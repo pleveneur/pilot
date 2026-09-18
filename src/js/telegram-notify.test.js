@@ -33,6 +33,11 @@ import {
   notifySuperAgentDone,
   notifyAnomaly,
 } from "./desktop-notify.js";
+import {
+  resetTelegramDialogState,
+  setTelegramDialogConfigured,
+  setTelegramDialogEnabled,
+} from "./telegram-dialog.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
@@ -48,6 +53,9 @@ function telegramMessages() {
 beforeEach(() => {
   invoke.mockClear(); // les appels get_config n'ont pas d'implémentation réelle
   invoke.mockImplementation(async () => ({}));
+  // État Telegram du dialogue remis à zéro : ces tests portent sur l'étape 1
+  // (communication du dialogue coupée), sauf le test d'alerte explicite.
+  resetTelegramDialogState();
 });
 
 describe("forwardToTelegram — branchement de l'interface", () => {
@@ -110,6 +118,18 @@ describe("branchement sur les avis existants", () => {
     expect(telegramMessages()).toEqual([
       "Pilot — Anomalie détectée — ⚠️ Un agent semble bloqué (actif sans progression).",
     ]);
+  });
+
+  it("communication du dialogue ACTIVE → une alerte d'anomalie part QUAND MÊME (jamais coupée)", async () => {
+    // Le pire cas du défaut : quand la communication Telegram du dialogue est
+    // active, l'anti-doublon ne doit JAMAIS faire taire une alerte.
+    setTelegramDialogConfigured(true);
+    setTelegramDialogEnabled(true);
+    await notifyAnomaly({ title: "Pilot — Agent silencieux", body: "un agent ne produit plus rien" });
+    expect(telegramMessages()).toEqual([
+      "Pilot — Agent silencieux — un agent ne produit plus rien",
+    ]);
+    resetTelegramDialogState();
   });
 });
 

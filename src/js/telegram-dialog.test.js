@@ -9,12 +9,14 @@
 //   4. la VISIBILITÉ du bouton selon la configuration ;
 //   5. la CONSERVATION du réglage d'une session à l'autre et la compatibilité
 //      d'une configuration ancienne (champ absent = valeur par défaut) ;
-//   6. l'ABSENCE de doublon d'avis (avis bruts coupés quand le dialogue parle).
+//   6. l'ABSENCE de doublon d'avis SANS PERTE : en communication active, un avis
+//      brut non critique est retardé puis abandonné si l'Assistant parle, envoyé
+//      sinon ; les ALERTES ne sont jamais retardées ni coupées.
 //
 // Le comportement du moteur (inertie, nettoyage, envoi via un faux envoyeur) est
 // couvert par les tests Rust de `src-tauri/src/telegram.rs` et de `lib.rs`.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -29,6 +31,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 import { invoke } from "@tauri-apps/api/core";
 import {
   TELEGRAM_DIALOG_MAX_CHARS,
+  TELEGRAM_RAW_AVIS_GRACE_MS,
   condenseAssistantMessage,
   classifyAssistantMessage,
   isUsefulAssistantMessage,
@@ -39,12 +42,40 @@ import {
   isTelegramDialogActive,
   resetTelegramDialogState,
   loadTelegramDialogConfig,
+  setRawAvisTimers,
+  setRawAvisTurnProbe,
+  flushRawTelegramAvis,
 } from "./telegram-dialog.js";
 import { forwardToTelegram } from "./desktop-notify.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const read = (p) => readFileSync(resolve(root, p), "utf8");
+
+/** Minuteurs factices du tampon d'avis : on contrôle l'envoi différé sans attendre. */
+function manualTimers() {
+  let now = 0;
+  let nextId = 1;
+  const scheduled = new Map();
+  return {
+    setTimeout: (fn, ms) => {
+      const id = nextId++;
+      scheduled.set(id, { fn, at: now + ms });
+      return id;
+    },
+    clearTimeout: (id) => scheduled.delete(id),
+    advance: (ms) => {
+      now += ms;
+      for (const [id, entry] of [...scheduled]) {
+        if (entry.at <= now) {
+          scheduled.delete(id);
+          entry.fn();
+        }
+      }
+    },
+    count: () => scheduled.size,
+  };
+}
 
 /** Messages envoyés au moteur (commande telegram_notify). */
 function telegramMessages() {
@@ -56,6 +87,12 @@ function telegramMessages() {
 beforeEach(() => {
   invoke.mockClear();
   invoke.mockImplementation(async () => ({}));
+  resetTelegramDialogState();
+});
+
+afterEach(() => {
+  setRawAvisTimers(null);
+  setRawAvisTurnProbe(null);
   resetTelegramDialogState();
 });
 
@@ -183,19 +220,43 @@ describe("inertie totale", () => {
 });
 
 describe("visibilité du bouton selon la configuration", () => {
-  it("jeton ET identifiant présents → visible", () => {
+  it("interrupteur principal coché + jeton ET identifiant présents → visible", () => {
     expect(
-      computeTelegramDialogVisibility({ telegram_bot_token: "123:", telegram_chat_id: "42" })
+      computeTelegramDialogVisibility({
+        telegram_notify_enabled: true,
+        telegram_bot_token: "123:",
+        telegram_chat_id: "42",
+      })
     ).toBe(true);
+  });
+
+  it("interrupteur principal NON coché → invisible, même bien configuré", () => {
+    // Sans l'interrupteur « Notifications Telegram », rien ne partirait jamais :
+    // proposer un bouton d'activation serait trompeur.
+    expect(
+      computeTelegramDialogVisibility({
+        telegram_notify_enabled: false,
+        telegram_bot_token: "123:",
+        telegram_chat_id: "42",
+      })
+    ).toBe(false);
   });
 
   it("config absente ou partielle → invisible", () => {
     expect(computeTelegramDialogVisibility(null)).toBe(false);
     expect(computeTelegramDialogVisibility({})).toBe(false);
-    expect(computeTelegramDialogVisibility({ telegram_bot_token: "123:" })).toBe(false);
-    expect(computeTelegramDialogVisibility({ telegram_chat_id: "42" })).toBe(false);
     expect(
-      computeTelegramDialogVisibility({ telegram_bot_token: "   ", telegram_chat_id: "42" })
+      computeTelegramDialogVisibility({ telegram_notify_enabled: true, telegram_bot_token: "123:" })
+    ).toBe(false);
+    expect(
+      computeTelegramDialogVisibility({ telegram_notify_enabled: true, telegram_chat_id: "42" })
+    ).toBe(false);
+    expect(
+      computeTelegramDialogVisibility({
+        telegram_notify_enabled: true,
+        telegram_bot_token: "   ",
+        telegram_chat_id: "42",
+      })
     ).toBe(false);
   });
 });
@@ -203,6 +264,7 @@ describe("visibilité du bouton selon la configuration", () => {
 describe("conservation du réglage et compatibilité d'une ancienne config", () => {
   it("le réglage est relu tel quel d'une session à l'autre", async () => {
     const cfg = {
+      telegram_notify_enabled: true,
       telegram_bot_token: "123:abc",
       telegram_chat_id: "42",
       telegram_dialog_enabled: true,
@@ -220,7 +282,9 @@ describe("conservation du réglage et compatibilité d'une ancienne config", () 
   it("une configuration ANCIENNE (champ absent) reste lisible, désactivée par défaut", async () => {
     const oldCfg = { telegram_bot_token: "123:abc", telegram_chat_id: "42" };
     const state = await loadTelegramDialogConfig(async () => oldCfg);
-    expect(state).toEqual({ enabled: false, visible: true });
+    // Sans l'interrupteur principal (champ absent d'une ancienne config), la
+    // passerelle n'est pas opérationnelle → bouton invisible, communication off.
+    expect(state).toEqual({ enabled: false, visible: false });
     expect(isTelegramDialogActive()).toBe(false);
   });
 
@@ -248,17 +312,62 @@ describe("conservation du réglage et compatibilité d'une ancienne config", () 
   });
 });
 
-describe("absence de doublon d'avis", () => {
+describe("absence de doublon d'avis (et zéro perte)", () => {
   it("communication INACTIVE → avis brut transmis comme avant (étape 1)", async () => {
     await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
     expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
   });
 
-  it("communication ACTIVE → avis brut coupé (c'est l'Assistant qui parle)", async () => {
+  it("communication ACTIVE → une ALERTE n'est jamais retardée ni coupée", async () => {
     setTelegramDialogConfigured(true);
     setTelegramDialogEnabled(true);
-    await forwardToTelegram("Pilot — Anomalie détectée", "⚠️ agent bloqué");
+    await forwardToTelegram("Pilot — Anomalie détectée", "⚠️ agent bloqué", { critical: true });
+    expect(telegramMessages()).toEqual(["Pilot — Anomalie détectée — ⚠️ agent bloqué"]);
+  });
+
+  it("communication ACTIVE → avis non critique RETARDÉ, puis envoyé si l'Assistant ne parle pas", async () => {
+    setTelegramDialogConfigured(true);
+    setTelegramDialogEnabled(true);
+    const timers = manualTimers();
+    setRawAvisTimers(timers);
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    // Retardé (pas encore envoyé) mais PAS perdu : il part à l'échéance.
     expect(telegramMessages()).toEqual([]);
+    expect(timers.count()).toBe(1);
+    timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
+    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
+  });
+
+  it("communication ACTIVE → avis retardé ABANDONNÉ si l'Assistant parle pendant la fenêtre", async () => {
+    setTelegramDialogConfigured(true);
+    setTelegramDialogEnabled(true);
+    const timers = manualTimers();
+    setRawAvisTimers(timers);
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    const sent = relayAssistantMessageToTelegram(
+      "✅ La tâche déléguée est terminée.",
+      { send: (text) => invoke("telegram_notify", { text }) }
+    );
+    expect(sent).toBe(true);
+    timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS * 3);
+    // Pas de doublon : seule la phrase de l'Assistant est partie.
+    expect(telegramMessages()).toEqual(["✅ La tâche déléguée est terminée."]);
+  });
+
+  it("communication ACTIVE → un tour en cours repousse l'échéance, la fin de tour sans parole déclenche l'avis", async () => {
+    setTelegramDialogConfigured(true);
+    setTelegramDialogEnabled(true);
+    const timers = manualTimers();
+    setRawAvisTimers(timers);
+    let busy = true;
+    setRawAvisTurnProbe(() => busy);
+    await forwardToTelegram("Pilot — Agent terminé", "✅ terminé");
+    timers.advance(TELEGRAM_RAW_AVIS_GRACE_MS);
+    // Le tour de l'Assistant est en cours : on attend sa fin réelle.
+    expect(telegramMessages()).toEqual([]);
+    busy = false;
+    flushRawTelegramAvis();
+    expect(telegramMessages()).toEqual(["Pilot — Agent terminé — ✅ terminé"]);
   });
 
   it("communication ACTIVE → l'Assistant parle à la place, en une phrase", () => {

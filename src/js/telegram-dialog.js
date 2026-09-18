@@ -8,11 +8,15 @@
 // compte rendu, alerte, demande d'accord) ; les messages intermédiaires (étapes
 // de travail, appels d'outils, bavardage technique) sont écartés.
 //
-// Déduplication : quand la communication Telegram du dialogue est ACTIVE, c'est
-// l'Assistant qui parle — les avis BRUTS existants (fin de mission d'agent,
-// anomalie) ne sont plus envoyés en plus (cf. `forwardToTelegram` dans
-// desktop-notify.js, qui consulte `isTelegramDialogActive`). Quand elle est
-// INACTIVE, les avis de l'étape 1 continuent exactement comme avant.
+// Déduplication SANS PERTE : quand la communication Telegram du dialogue est
+// ACTIVE, c'est l'Assistant qui parle — les avis BRUTS existants (fin de mission
+// d'agent, compte rendu) sont alors RETARDÉS d'une courte fenêtre (cf.
+// `deliverRawTelegramAvis`, appelé par `forwardToTelegram` dans desktop-notify.js)
+// plutôt que coupés : l'avis n'est abandonné que si l'Assistant parle réellement
+// pendant cette fenêtre, sinon il part comme avant. Les ALERTES CRITIQUES
+// (anomalie, arrêt automatique, agent silencieux) ne sont jamais retardées ni
+// coupées. Quand la communication est INACTIVE, les avis de l'étape 1 continuent
+// exactement comme avant.
 //
 // Inertie totale : communication coupée OU Telegram non configuré (jeton ou
 // identifiant de discussion vide) ⇒ RIEN n'est tenté (aucun accès réseau, aucune
@@ -213,20 +217,154 @@ export function isTelegramDialogActive() {
 export function resetTelegramDialogState() {
   dialogEnabled = false;
   dialogConfigured = false;
+  dropRawAvis();
+}
+
+// ── Anti-doublon SANS PERTE : avis bruts retardés ────────────────────────────
+// L'avis brut d'un événement (fin de tâche, compte rendu) ne doit être coupé QUE
+// si l'Assistant va réellement parler : sa phrase reformulée couvre alors le même
+// événement. Mais l'Assistant ne parle pas toujours (onglet fermé, réponse courte
+// écartée par le filtre, échec de l'envoi) — sans tampon, l'événement ne
+// produirait plus RIEN sur Telegram.
+//
+// D'où ce tampon : en communication ACTIVE, l'avis brut est RETARDÉ d'une courte
+// fenêtre (`TELEGRAM_RAW_AVIS_GRACE_MS`). Si l'Assistant parle pendant cette
+// fenêtre, l'avis en attente est abandonné (`claimRawAvisForAssistant`, appelé au
+// SUCCÈS de `relayAssistantMessageToTelegram`) ; sinon il part tel quel. Deux
+// garde-fous, pour ne jamais perdre un événement :
+//   - un tour de l'Assistant EN COURS (sonde `rawAvisTurnProbe`) repousse
+//     l'échéance : on attend la fin réelle du tour, où l'Assistant aura parlé ou
+//     non (borne dure `TELEGRAM_RAW_AVIS_MAX_WAIT_MS`) ;
+//   - `flushRawTelegramAvis()` (fermeture d'onglet, fin de tour sans parole,
+//     arrêt) envoie immédiatement ce qui attend.
+// Limite connue et assumée : la corrélation avis ↔ tour est approximative — un
+// tour de l'Assistant SANS RAPPORT (chat de l'utilisateur) survenant pendant la
+// fenêtre peut reprendre un avis à son compte. La priorité est de ne jamais
+// perdre un événement (un doublon reste préférable à un silence).
+
+/** Courte fenêtre de reprise d'un avis brut par la parole de l'Assistant. */
+export const TELEGRAM_RAW_AVIS_GRACE_MS = 8000;
+/** Attente maximale d'un avis brut (garde-fou : jamais de perte sur tour bloqué). */
+export const TELEGRAM_RAW_AVIS_MAX_WAIT_MS = 60000;
+
+let rawAvisPending = [];
+let rawAvisTimers = { setTimeout, clearTimeout };
+let rawAvisTurnProbe = null; // () => boolean : un tour de l'Assistant est en cours
+
+/**
+ * Remplace les minuteurs du tampon d'avis bruts (TESTS : aucun minuteur réel).
+ * Passer `null` restaure les minuteurs globaux.
+ */
+export function setRawAvisTimers(timers) {
+  rawAvisTimers = timers || { setTimeout, clearTimeout };
 }
 
 /**
- * Vrai si Telegram est configuré : jeton de bot ET identifiant de discussion
- * non vides. C'est la condition de VISIBILITÉ du bouton 🧭 (rien d'autre : le
- * bouton reste totalement invisible tant que Telegram n'est pas configuré).
- * Fonction PURE.
+ * Déclare la sonde « un tour de l'Assistant est en cours » (injectée par l'onglet
+ * 🧭 : `() => backendBusy`). Passer `null` la retire ; une sonde absente (ou qui
+ * lève) est traitée comme « aucun tour en cours » (jamais de blocage).
+ */
+export function setRawAvisTurnProbe(probe) {
+  rawAvisTurnProbe = typeof probe === "function" ? probe : null;
+}
+
+function rawAvisTurnInProgress() {
+  try {
+    return rawAvisTurnProbe ? rawAvisTurnProbe() === true : false;
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Envoie un avis brut sans jamais laisser remonter d'erreur. */
+function sendRawAvis(entry) {
+  try {
+    const result = (entry.send || defaultSend)(entry.text);
+    if (result && typeof result.catch === "function") result.catch(() => {});
+  } catch (_) {
+    // Inerte : un échec d'avis ne perturbe jamais l'application.
+  }
+}
+
+/** Abandonne les avis bruts en attente (l'Assistant a parlé, ou remise à zéro). */
+function dropRawAvis() {
+  for (const entry of rawAvisPending) rawAvisTimers.clearTimeout(entry.timer);
+  rawAvisPending = [];
+}
+
+/** L'Assistant a RÉELLEMENT parlé : les avis bruts en attente sont abandonnés. */
+function claimRawAvisForAssistant() {
+  dropRawAvis();
+}
+
+/** Envoie MAINTENANT tous les avis bruts en attente (aucun n'est perdu). */
+export function flushRawTelegramAvis() {
+  const entries = rawAvisPending;
+  rawAvisPending = [];
+  for (const entry of entries) {
+    rawAvisTimers.clearTimeout(entry.timer);
+    sendRawAvis(entry);
+  }
+}
+
+/** Programme l'envoi différé d'un avis brut (repoussé tant qu'un tour est en cours). */
+function scheduleRawAvis(entry, delay) {
+  if (!entry.deadline) entry.deadline = Date.now() + TELEGRAM_RAW_AVIS_MAX_WAIT_MS;
+  entry.timer = rawAvisTimers.setTimeout(() => {
+    rawAvisPending = rawAvisPending.filter((e) => e !== entry);
+    const remaining = entry.deadline - Date.now();
+    if (rawAvisTurnInProgress() && remaining > 0) {
+      // Tour en cours : attendre sa fin réelle (l'Assistant parlera ou non).
+      scheduleRawAvis(entry, Math.min(TELEGRAM_RAW_AVIS_GRACE_MS, remaining));
+      rawAvisPending.push(entry);
+      return;
+    }
+    sendRawAvis(entry);
+  }, delay);
+}
+
+/**
+ * Livre un avis BRUT de l'étape 1 (fin de tâche d'agent, compte rendu de
+ * l'Assistant) en évitant le doublon SANS jamais perdre l'événement :
+ *   - alerte CRITIQUE (`opts.critical`, ex. anomalie / arrêt automatique) →
+ *     envoyée TOUT DE SUITE, jamais retardée ni coupée ;
+ *   - communication du dialogue INACTIVE → envoyée tout de suite (étape 1) ;
+ *   - communication ACTIVE → retardée d'une courte fenêtre : abandonnée si
+ *     l'Assistant parle réellement (il couvre l'événement), envoyée sinon.
+ *
+ * @param {string} text - texte déjà assemblé (titre + corps).
+ * @param {{critical?: boolean}} [opts]
+ * @param {object} [deps] - { isActive, send } injectables (tests).
+ * @returns {void}
+ */
+export function deliverRawTelegramAvis(text, opts = {}, deps = {}) {
+  const message = String(text ?? "").trim();
+  if (!message) return;
+  const isActive = deps.isActive || isTelegramDialogActive;
+  const entry = { text: message, send: deps.send || defaultSend, timer: null, deadline: 0 };
+  if (opts.critical === true || !isActive()) {
+    sendRawAvis(entry);
+    return;
+  }
+  rawAvisPending.push(entry);
+  scheduleRawAvis(entry, TELEGRAM_RAW_AVIS_GRACE_MS);
+}
+
+/**
+ * Vrai si la passerelle Telegram est réellement en ÉTAT DE FONCTIONNER :
+ * interrupteur principal « Notifications Telegram » coché ET jeton de bot ET
+ * identifiant de discussion non vides. C'est la condition de VISIBILITÉ du
+ * bouton 🧭 : impossible de l'activer alors que rien ne partirait jamais.
+ * Le bouton reste totalement invisible tant que ces trois conditions ne sont
+ * pas réunies. Fonction PURE.
  * @param {object|null} cfg
  * @returns {boolean}
  */
 export function computeTelegramDialogVisibility(cfg) {
   const token = String((cfg && cfg.telegram_bot_token) || "").trim();
   const chatId = String((cfg && cfg.telegram_chat_id) || "").trim();
-  return token.length > 0 && chatId.length > 0;
+  const gatewayOn = !!(cfg && cfg.telegram_notify_enabled === true);
+  return gatewayOn && token.length > 0 && chatId.length > 0;
 }
 
 /** Envoi réel : passerelle d'envoi EXISTANTE (inerte si non configurée). */
@@ -260,6 +398,9 @@ export function relayAssistantMessageToTelegram(text, deps = {}) {
   } catch (_) {
     // Jamais visible : un échec de la parole de l'Assistant ne perturbe rien.
   }
+  // L'Assistant a réellement parlé : il couvre l'événement → les avis bruts
+  // encore en attente dans la fenêtre anti-doublon sont abandonnés.
+  claimRawAvisForAssistant();
   return true;
 }
 

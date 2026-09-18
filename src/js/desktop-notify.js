@@ -16,9 +16,16 @@
 // (`notifyAgentDone`, `notifySuperAgentDone`, `notifyAnomaly`) couvrent la fin
 // de tâche d'un agent, les événements de l'assistant et les alertes
 // d'anomalie / arrêt automatique.
+//
+// Étape 2, lot 3 : quand l'Assistant « parle » sur Telegram (communication du
+// dialogue active), les avis bruts non critiques sont RETARDÉS d'une courte
+// fenêtre pour éviter un doublon avec la phrase de l'Assistant, sans jamais
+// risquer de les perdre (`deliverRawTelegramAvis` dans telegram-dialog.js). Les
+// avis d'ALERTE (anomalie, arrêt automatique) passent en `critical` : ils
+// partent TOUT DE SUITE, quoi qu'il arrive.
 
 import { invoke } from "@tauri-apps/api/core";
-import { isTelegramDialogActive } from "./telegram-dialog.js";
+import { deliverRawTelegramAvis } from "./telegram-dialog.js";
 
 let _permissionChecked = false;
 let _granted = false;
@@ -35,27 +42,23 @@ let _granted = false;
  * Appelée AVANT les filtres de notification native (réglage local, permission
  * OS) : Telegram est un canal indépendant, il ne doit pas être conditionné par
  * le réglage des notifications desktop.
+ *
+ * Étape 2, lot 3 (anti-doublon SANS PERTE) : quand la communication du dialogue
+ * est ACTIVE, l'avis part immédiatement s'il est `critical` (alerte), sinon il
+ * est retardé d'une courte fenêtre et n'est abandonné que si l'Assistant parle
+ * réellement pendant celle-ci (voir `deliverRawTelegramAvis`).
  * @param {string} title
  * @param {string} body
+ * @param {{critical?: boolean}} [opts] - `critical: true` = jamais retardé.
  * @returns {Promise<void>}
  */
-export function forwardToTelegram(title, body) {
-  // Étape 2, lot 3 (spec_telegram.md) : quand la communication Telegram du
-  // DIALOGUE est ACTIVE, c'est l'Assistant qui parle — ses réponses sont
-  // reformulées en une phrase simple. Les avis BRUTS (fin de mission d'agent,
-  // anomalie, arrêt automatique) sont alors écartés pour éviter tout doublon.
-  // Communication coupée ⇒ comportement de l'étape 1 STRICTEMENT inchangé.
-  if (isTelegramDialogActive()) return Promise.resolve();
+export function forwardToTelegram(title, body, opts = {}) {
   const text = [title, body]
     .filter((s) => typeof s === "string" && s.trim().length > 0)
     .join(" — ");
   if (!text) return Promise.resolve();
-  try {
-    return Promise.resolve(invoke("telegram_notify", { text })).catch(() => {});
-  } catch (_) {
-    // `invoke` indisponible (hors Tauri) : inerte, jamais d'erreur.
-    return Promise.resolve();
-  }
+  deliverRawTelegramAvis(text, opts);
+  return Promise.resolve();
 }
 
 /**
@@ -172,9 +175,12 @@ export async function notifySuperAgentDone(opts = {}) {
 export async function notifyAnomaly(opts = {}) {
   const title = opts.title || "Pilot — Anomalie détectée";
   const body = opts.body || "⚠️ Un agent semble bloqué (actif sans progression).";
-  // Passerelle Telegram : alerte transmise même si la notification native est
-  // désactivée côté surveillance (`anomaly_detection_enabled`).
-  forwardToTelegram(title, body);
+  // Passerelle Telegram : ALERTE CRITIQUE — elle ne doit JAMAIS être retardée ni
+  // coupée, même si la communication du dialogue est active (une anomalie ou un
+  // arrêt automatique est trop important pour dépendre de la parole de
+  // l'Assistant). Transmise même si la notification native est désactivée côté
+  // surveillance (`anomaly_detection_enabled`).
+  forwardToTelegram(title, body, { critical: true });
   try {
     const cfg = await invoke("get_config");
     if (!cfg || cfg.anomaly_detection_enabled === false) return;

@@ -54,8 +54,10 @@ import {
 // (visible uniquement si Telegram est configuré, état persisté).
 import {
   classifyAssistantMessage,
+  flushRawTelegramAvis,
   loadTelegramDialogConfig,
   relayAssistantMessageToTelegram,
+  setRawAvisTurnProbe,
 } from "./telegram-dialog.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
@@ -1291,12 +1293,15 @@ export async function createSuperAgent(container) {
   wrapper.appendChild(toolbar);
 
   // ── Telegram (étape 2, lot 3, spec_telegram.md) : communication du dialogue ──
-  // Bouton d'activation dans l'onglet 🧭. Il est TOTALEMENT invisible tant que
-  // Telegram n'est pas configuré (jeton + identifiant présents dans les
-  // Paramètres → onglet Assistant) : aucun réglage dupliqué ici. Désactivé par
-  // défaut et persisté (`AppConfig.telegram_dialog_enabled`), il est relu au
+  // Bouton d'activation dans l'onglet 🧭. Il est TOTALEMENT invisible tant que la
+  // passerelle n'est pas réellement en état de fonctionner : interrupteur
+  // principal « Notifications Telegram » coché ET jeton + identifiant présents
+  // dans les Paramètres (→ onglet Assistant). Un réglage dupliqué ici serait
+  // trompeur : on ne propose pas un bouton qui ne pourrait rien envoyer. Désactivé
+  // par défaut et persisté (`AppConfig.telegram_dialog_enabled`), il est relu au
   // chargement → l'état survit aux redémarrages. Activé, l'Assistant vous parle
-  // sur Telegram (une phrase simple) et les avis bruts sont coupés (anti-doublon).
+  // sur Telegram (une phrase simple) et les avis bruts non critiques sont
+  // retardés (anti-doublon sans perte, cf. `deliverRawTelegramAvis`).
   const telegramBtn = toolbar.querySelector("#superagent-telegram-btn");
   const applyTelegramDialogButton = (state) => {
     if (!telegramBtn) return;
@@ -2113,6 +2118,10 @@ export async function createSuperAgent(container) {
   };
   window.addEventListener("pilot-agent-relay-request", onAgentRelayRequest);
   window._pilotSuperAgentOpen = true;
+  // Anti-doublon Telegram (lot 3) : l'onglet est VIVANT — un tour de l'Assistant
+  // en cours repousse l'envoi des avis bruts retardés jusqu'à sa fin (fin de tour
+  // où l'Assistant aura parlé, ou non).
+  setRawAvisTurnProbe(() => backendBusy);
   // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est ouvert (pour
   // désactiver sa saisie si l'option est activée).
   window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
@@ -2297,6 +2306,11 @@ export async function createSuperAgent(container) {
       superEventsOpen = false;
       superEventsUnread = 0;
       // Issue #59 : notifier l'agent que l'onglet 🧭 Assistant est fermé.
+      // Anti-doublon Telegram (lot 3) : l'Assistant ne peut plus parler → les
+      // avis bruts retardés partent MAINTENANT (aucun événement perdu), et la
+      // sonde de tour est retirée.
+      setRawAvisTurnProbe(null);
+      flushRawTelegramAvis();
       window.dispatchEvent(new CustomEvent("pilot-superagent-open-changed"));
     },
   };
@@ -2708,8 +2722,12 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // Telegram (étape 2, lot 3) : l'Assistant « parle » — sa réponse finale est
     // reformulée en UNE phrase simple et transmise (les messages intermédiaires
     // sont écartés). Aucun envoi, aucune erreur si la communication est coupée.
-    relayAssistantMessageToTelegram(respText);
+    // Anti-doublon SANS PERTE : si l'Assistant n'a rien transmis (réponse vide ou
+    // écartée par le filtre), les avis bruts retardés pendant ce tour partent
+    // maintenant — un événement ne peut plus rester sans aucune information.
+    const spokenToTelegram = relayAssistantMessageToTelegram(respText);
     onEnd();
+    if (!spokenToTelegram) flushRawTelegramAvis();
     // Fin de flux : une fois la dernière frame de rendu peinte, le rendu est au
     // repos → le son de fin armé (délégation / run d'agents) peut être joué.
     flushSuperRenderThenSoundIdle();
