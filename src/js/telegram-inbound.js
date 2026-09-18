@@ -24,6 +24,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { injectExternalMessageToSuperAgent } from "./super-agent.js";
+import { consumeTelegramQuestionAnswer } from "./telegram-questions.js";
 
 /** Intervalle d'interrogation (court : l'utilisateur attend une réaction). */
 export const TELEGRAM_INBOUND_INTERVAL_MS = 4000;
@@ -46,6 +47,10 @@ export function formatTelegramInboundText(text) {
  *   appel des commandes Rust de réception / validation du curseur.
  * @param {(text: string) => Promise<unknown>} [deps.deliver]
  *   remise à la conversation de l'Assistant (porte durable).
+ * @param {(text: string) => boolean} [deps.consumeAnswer]
+ *   tente d'appliquer le message comme RÉPONSE à une question en cours de
+ *   l'Assistant (étape 2, lot 1). Renvoie vrai si le message a été consommé
+ *   (il n'est alors PAS déposé dans la conversation).
  * @param {number} [deps.intervalMs]
  * @param {{setInterval: Function, clearInterval: Function}} [deps.timers]
  * @param {(...args: unknown[]) => void} [deps.warn] - journalisation silencieuse.
@@ -54,6 +59,7 @@ export function formatTelegramInboundText(text) {
 export function createTelegramInbound(deps = {}) {
   const invokeFn = deps.invokeFn || ((cmd, args) => invoke(cmd, args));
   const deliver = deps.deliver || ((text) => injectExternalMessageToSuperAgent(text));
+  const consumeAnswer = deps.consumeAnswer || consumeTelegramQuestionAnswer;
   const intervalMs = deps.intervalMs || TELEGRAM_INBOUND_INTERVAL_MS;
   const timers = deps.timers || { setInterval, clearInterval };
   const warn = deps.warn || ((...args) => console.warn(...args));
@@ -97,6 +103,20 @@ export function createTelegramInbound(deps = {}) {
         if (!text.trim()) {
           // Rien à remettre : on valide tout de même le curseur pour ne pas
           // relire indéfiniment ce message.
+          await commit(updateId === null ? null : updateId + 1, updateId);
+          continue;
+        }
+        // Étape 2, lot 1 : si une question de l'Assistant attend une réponse, le
+        // message est interprété comme CETTE réponse (même chemin que dans
+        // l'application) et n'est PAS déposé dans la conversation.
+        let consumed = false;
+        try {
+          consumed = consumeAnswer(text) === true;
+        } catch (e) {
+          warn("[telegram-inbound] réponse ignorée :", e);
+        }
+        if (consumed) {
+          delivered += 1;
           await commit(updateId === null ? null : updateId + 1, updateId);
           continue;
         }

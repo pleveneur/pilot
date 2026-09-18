@@ -38,6 +38,11 @@ import {
   parseMemoryTrashListPayload,
   formatMemoryTrashList,
 } from "./super-agent-memory.js";
+import {
+  askTelegramQuestion,
+  settleTelegramQuestion,
+  clearTelegramQuestion,
+} from "./telegram-questions.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -494,6 +499,9 @@ let pendingBarEl = null;        // conteneur #pendingBar (défini par createSupe
 let pendingInputEl = null;      // textarea #superagent-input (défini par createSuperAgent)
 let superMessagesEl = null;     // zone des messages du chat (définie par createSuperAgent)
 const pendingQuestions = [];    // file FIFO de questions en attente
+// Telegram (étape 2, lot 1) : question actuellement publiée sur Telegram, pour
+// ne pas la republier à chaque re-rendu. Réinitialisé à la fermeture de l'onglet.
+let telegramAskedQuestion = null;
 const SUPERAGENT_PLACEHOLDER_DEFAULT = "Poser une question sur tous les projets… (Entrée pour envoyer)";
 const PENDING_NOTE_PLACEHOLDER = "Votre précision (optionnel)… puis validez";
 
@@ -547,15 +555,70 @@ function renderActivePendingQuestion() {
 function enqueuePendingQuestion(q) {
   pendingQuestions.push(q);
   renderActivePendingQuestion();
+  syncTelegramQuestion();
 }
 
 /** Finalise la question active (après envoi) et passe à la suivante (FIFO). */
 function finalizePendingQuestion() {
-  pendingQuestions.shift();
+  const done = pendingQuestions.shift();
   renderActivePendingQuestion();
   if (pendingInputEl && !hasPendingQuestion()) {
     pendingInputEl.placeholder = SUPERAGENT_PLACEHOLDER_DEFAULT;
   }
+  // Telegram (étape 2, lot 1) : la question résolue dans l'application est
+  // marquée comme telle (première réponse gagne) ; la question suivante, s'il
+  // y en a une, prend sa place sur Telegram.
+  syncTelegramQuestion(done);
+}
+
+// ── Telegram (étape 2, lot 1) : questions / réponses depuis Telegram ──
+// La question active (tête de file de `pendingQuestions`) est AUSSI envoyée sur
+// Telegram via la passerelle d'envoi existante. Le propriétaire répond par un
+// numéro (option) ou un texte libre ; la réponse est appliquée par `q.submit`,
+// exactement comme une réponse donnée dans l'application.
+
+/** Décrit une question en attente pour Telegram (titre, message, options). */
+function telegramDescriptorOf(q) {
+  const options = Array.isArray(q.options) ? q.options : [];
+  if (q.confirmed !== undefined) {
+    return { kind: "confirm", title: q.title, message: q.message || "", options: ["Oui", "Non"] };
+  }
+  if (q.multi) return { kind: "multi", title: q.title, options };
+  if (options.length) return { kind: "choice", title: q.title, options };
+  return { kind: "input", title: q.title };
+}
+
+/**
+ * Applique une réponse reçue par Telegram à la question en cours, par le MÊME
+ * chemin que si le propriétaire avait répondu dans l'application (`q.submit`) :
+ *   - option (numéro) → choix unique / multi / confirmation ;
+ *   - texte libre → valeur de saisie, ou précision d'un choix / d'une
+ *     confirmation (mêmes règles que la validation de la barre de saisie).
+ * @param {object} q - question active.
+ * @param {{kind: string, index?: number, value?: string}} parsed
+ */
+async function applyTelegramAnswer(q, parsed) {
+  if (parsed.kind === "option") {
+    if (q.multi) q.selected.add(parsed.value);
+    else if (q.confirmed !== undefined) q.confirmed = parsed.value === "Oui";
+    else q.selected = parsed.value;
+    await q.submit("", false);
+    return;
+  }
+  await q.submit(parsed.value, false);
+}
+
+/**
+ * Synchronise la passerelle Telegram avec la question active :
+ *   - marque la question `settled` comme résolue (première réponse gagne) ;
+ *   - publie sur Telegram la nouvelle tête de file, si elle change.
+ */
+function syncTelegramQuestion(settled) {
+  if (settled) settleTelegramQuestion(settled);
+  const q = pendingQuestions[0];
+  if (!q || q === telegramAskedQuestion) return;
+  telegramAskedQuestion = q;
+  askTelegramQuestion(q, telegramDescriptorOf(q), (parsed) => applyTelegramAnswer(q, parsed));
 }
 
 /** Envoie la réponse d'une question : marque la barre résolue, envoie, puis
@@ -2125,6 +2188,10 @@ export async function createSuperAgent(container) {
         } catch (_) { /* une réponse qui échoue ne bloque pas la fermeture */ }
       }
       pendingQuestions.length = 0;
+      // Telegram (étape 2, lot 1) : oublier la question publiée (onglet fermé,
+      // plus aucune question en cours) et annuler son rappel éventuel.
+      telegramAskedQuestion = null;
+      clearTelegramQuestion();
       if (pendingBar) pendingBar.innerHTML = "";
       pendingBarEl = null;
       pendingInputEl = null;
@@ -4636,7 +4703,7 @@ function renderSuperAgentConfirm(messagesEl, state, id, title, message, responde
   const target = targetOverride || getSuperAgentAttachTarget(messagesEl, state);
   target.appendChild(makeChoiceBanner(title, message));
   const q = {
-    id, title, responder, confirmed: true,
+    id, title, responder, confirmed: true, message,
     placeholder: PENDING_NOTE_PLACEHOLDER,
   };
   q.render = (bar) => renderConfirmPendingBar(q, bar);

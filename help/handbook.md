@@ -1952,9 +1952,17 @@ Décocher le réglage suffit à tout arrêter.
 - le jeton est conservé dans votre configuration locale et n'est utilisé que
   pour l'envoi ; il n'apparaît dans aucun journal.
 
-⚠️ **La réception est partielle (lot 0)** : Pilot **lit désormais** ce que vous
-écrivez à votre bot et le transmet à la conversation de l'Assistant (onglet 🧭),
-qui peut donc tenir compte de votre message. En revanche, **Pilot ne répond pas
-encore sur Telegram** : les réponses de l'Assistant restent dans Pilot. Un
-message écrit par une **autre personne** que vous est **ignoré** (jamais de
-réponse).
+⚠️ **Répondre aux questions depuis Telegram (lot 1)** : quand l'Assistant vous
+**pose une question** (choix, confirmation, saisie libre), Pilot vous l'envoie
+**aussi sur Telegram**, avec la liste numérotée des options. Répondez **en
+texte** :
+
+- **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
+- **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
+  précision d'un choix / d'une confirmation).
+
+La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
+Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,
+la question reste posée et Pilot vous envoie **un seul rappel discret** après
+quelques minutes. Un message écrit par une **autre personne** que vous est
+**ignoré** (jamais de réponse).

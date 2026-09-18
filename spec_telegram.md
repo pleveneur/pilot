@@ -1,19 +1,25 @@
-# Spécification — Passerelle Telegram (étape 1 : ENVOI + étape 2, lot 0 : SOCLE D'ÉCOUTE)
+# Spécification — Passerelle Telegram (étape 1 : ENVOI · étape 2 : ÉCOUTE et RÉPONSES)
 
-> **Statut : ✅ Implémenté.** Étape 1 (envoi) en v0.4.14 ; **étape 2, lot 0
-> (socle d'écoute)** implémentée ensuite (branche `feat/telegram-etape2-lot0-ecoute`).
+> **Statut : ✅ Implémenté (lot 1 inclus).** Étape 1 (envoi) en v0.4.14 ;
+> **étape 2, lot 0 (socle d'écoute)** puis **lot 1 (répondre depuis Telegram aux
+> questions de l'assistant)** implémentés ensuite (branche
+> `feat/telegram-etape2-lot0-ecoute`).
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi **et** de réception) +
-> `src/js/desktop-notify.js` (branchement des avis sortants) + `src/js/telegram-inbound.js`
-> (écoute au démarrage de l'application) + Paramètres ⚙️ → onglet **Assistant**.
+> `src/js/desktop-notify.js` (avis sortants) + `src/js/telegram-inbound.js`
+> (écoute au démarrage) + `src/js/telegram-questions.js` (questions/réponses) +
+> `src/js/super-agent.js` (branchement des questions) + Paramètres ⚙️ → onglet
+> **Assistant**.
 >
 > **Étape 1 = ENVOI.** Pilot prévient le propriétaire sur Telegram quand il a
 > quelque chose à lui dire : fin de tâche d'un agent, anomalie d'agent bloqué,
 > arrêt automatique d'une session.
-> **Étape 2 = RÉCEPTION.** **Lot 0 (ce document)** : pilot livre le **socle** —
-> Pilot lit les messages que le propriétaire écrit à son bot et les remet à la
-> conversation de l'Assistant (porte durable existante). Le **branchement des
-> questions de l'assistant** (répondre depuis Telegram, boutons de choix, dépôt
-> d'une réponse sur Telegram) reste à faire dans un **lot suivant**.
+> **Étape 2 = RÉCEPTION.** **Lot 0** : Pilot **lit** les messages que le
+> propriétaire écrit à son bot et les remet à la conversation de l'Assistant.
+> **Lot 1** : quand l'Assistant **pose une question**, elle est **aussi envoyée
+> sur Telegram** ; le propriétaire répond en texte (un numéro choisit l'option,
+> tout autre texte est une réponse libre) et la réponse revient dans Pilot par
+> le **même chemin** qu'une réponse donnée dans l'application. La **première
+> réponse gagne** (application ou Telegram).
 
 <!-- HELP:telegram -->
 ## Aide utilisateur — Notifications Telegram
@@ -55,12 +61,20 @@ Décocher le réglage suffit à tout arrêter.
 - le jeton est conservé dans votre configuration locale et n'est utilisé que
   pour l'envoi ; il n'apparaît dans aucun journal.
 
-⚠️ **La réception est partielle (lot 0)** : Pilot **lit désormais** ce que vous
-écrivez à votre bot et le transmet à la conversation de l'Assistant (onglet 🧭),
-qui peut donc tenir compte de votre message. En revanche, **Pilot ne répond pas
-encore sur Telegram** : les réponses de l'Assistant restent dans Pilot. Un
-message écrit par une **autre personne** que vous est **ignoré** (jamais de
-réponse).
+⚠️ **Répondre aux questions depuis Telegram (lot 1)** : quand l'Assistant vous
+**pose une question** (choix, confirmation, saisie libre), Pilot vous l'envoie
+**aussi sur Telegram**, avec la liste numérotée des options. Répondez **en
+texte** :
+
+- **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
+- **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
+  précision d'un choix / d'une confirmation).
+
+La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
+Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,
+la question reste posée et Pilot vous envoie **un seul rappel discret** après
+quelques minutes. Un message écrit par une **autre personne** que vous est
+**ignoré** (jamais de réponse).
 <!-- /HELP:telegram -->
 
 ---
@@ -92,10 +106,24 @@ officiel, une API HTTP, aucun serveur à héberger).
 - **inertie totale** quand la passerelle n'est pas configurée (aucun accès
   réseau, aucune erreur visible).
 
+**Dans le périmètre (étape 2, lot 1, implémentée)** :
+- quand l'Assistant (ou un agent relayé dans son onglet) **pose une question**,
+  l'envoyer **aussi sur Telegram** via la passerelle d'envoi existante, sous
+  forme courte et lisible (liste numérotée des options) ;
+- **interpréter la réponse** du propriétaire : un numéro choisit l'option, tout
+  autre texte est une réponse libre ;
+- ramener cette réponse dans Pilot **par le même chemin** qu'une réponse donnée
+  dans l'application (aucune duplication de logique) ;
+- **première réponse gagne** (application ou Telegram) : l'autre voie est
+  ignorée proprement (aucune double réponse, aucune erreur, aucune alerte) ;
+- **un seul rappel discret** sur Telegram après quelques minutes si aucune
+  réponse n'arrive (aucune expiration automatique : la question reste posée).
+
 **Hors périmètre (étape 2, lot suivant)** :
-- brancher les **questions de l'assistant** (répondre depuis Telegram, boutons
-  de choix/confirmation, renvoi de la réponse sur Telegram) ;
-- commandes entrantes, boutons Telegram, gestion multi-utilisateurs.
+- **boutons** Telegram (réponse par numéro en texte uniquement pour ce lot) ;
+- nouveau réglage d'activation des questions (le lot 1 réutilise strictement
+  l'interrupteur existant) ;
+- commandes entrantes, gestion multi-utilisateurs.
 
 **Hors périmètre (à jamais)** : aucune dépendance nouvelle (le projet réutilise
 `reqwest::blocking`, déjà présent), aucune modification des seuils d'inactivité,
@@ -221,12 +249,13 @@ est rangé dans **Paramètres ⚙️ → onglet Assistant**.
 
 ## 8. Limites assumées
 
-- **Réception partielle** : le socle d'écoute est livré (lot 0), mais
-  l'assistant ne **répond pas encore** sur Telegram.
 - Pas de bouton « Tester l'envoi » : un avis n'est émis que sur un événement
   réel. Le réglage est validé par la réception du prochain avis.
 - Un avis perdu (hors ligne) n'est jamais rejoué : c'est un confort, pas un
   canal garanti.
+- **Réponse par numéro uniquement** : les questions se répondent en **texte**
+  (un numéro pour choisir, sinon texte libre). Les **boutons** Telegram sont
+  réservés à un lot ultérieur.
 
 ## 9. Étape 2, lot 0 — socle d'écoute
 
@@ -309,3 +338,95 @@ L'interface des Paramètres n'est **pas modifiée**.
   validé si la remise échoue, échec de réception avalé, pas de passe
   concurrente, `start`/`stop` idempotents, `initTelegramInbound` démarre une
   seule instance.
+
+## 10. Étape 2, lot 1 — répondre depuis Telegram aux questions
+
+### 10.1 Module pur + passerelle (`src/js/telegram-questions.js`)
+
+Aucune dépendance nouvelle : le module réutilise la passerelle d'envoi
+**existante** (`invoke("telegram_notify", …)`, inerte côté Rust si non
+configurée) et ne manipule **jamais** le jeton.
+
+```
+formatQuestionForTelegram(descriptor) -> string   // PURE : ❓ titre + message + options numérotées
+formatQuestionReminder(descriptor)    -> string   // PURE : rappel discret
+parseTelegramAnswer(text, descriptor) -> {kind:"empty"|"option"|"text"}  // PURE
+createTelegramQuestionBridge({send, reminderMs, timers, warn})
+  .ask(question, descriptor, resolve)  // publie la question + planifie l'unique rappel
+  .settle(question?)                   // résolue dans l'application (première réponse gagne)
+  .feed(text) -> boolean               // applique un message entrant comme réponse
+  .clear()                             // oublie la question active (fermeture d'onglet)
+```
+
+- `parseTelegramAnswer` : texte vide → `empty` ; `/^(\d+)[.)]?$/` **dans la
+  plage** des options → `option(index, value)` ; tout le reste (y compris un
+  numéro hors plage, et un numéro **sans option** comme une saisie libre) →
+  `text(value)`. Fonction pure, donc testable sans interface.
+- Passerelle partagée (`telegramQuestionBridge`) exportée avec
+  `askTelegramQuestion` / `settleTelegramQuestion` / `clearTelegramQuestion` /
+  `consumeTelegramQuestionAnswer`. Un échec d'envoi est **avalé** (journal au
+  plus) : jamais visible.
+- **Une seule question active**, **première réponse gagne** : après résolution,
+  l'entrée est conservée `resolved: true` (et non supprimée) afin qu'une réponse
+  tardive soit **ignorée** au lieu d'être ré-interprétée contre une question
+  suivante.
+- **Rappel** : un unique `setTimeout` (`TELEGRAM_QUESTION_REMINDER_MS = 3 min`),
+  annulé à la résolution ; aucune expiration automatique (la question reste
+  posée indéfiniment).
+
+### 10.2 Branchement dans l'onglet Assistant (`src/js/super-agent.js`)
+
+- Les questions de l'Assistant vivent déjà dans une file FIFO (`pendingQuestions`).
+  `enqueuePendingQuestion` et `finalizePendingQuestion` appellent désormais
+  `syncTelegramQuestion(settled)` : la **tête de file** est publiée sur Telegram
+  (une seule fois par question, `telegramAskedQuestion`), et la question résolue
+  est marquée `settle`.
+- `telegramDescriptorOf(q)` déduit le descripteur du type de question :
+  confirmation (`confirmed !== undefined`) → options `["Oui", "Non"]` ; choix
+  multiple (`multi`) / choix simple (`options`) → options de la question ;
+  sinon → saisie libre.
+- `applyTelegramAnswer(q, parsed)` applique la réponse par `q.submit(note,
+  cancelled)` — **exactement** le chemin de la réponse dans l'application :
+  - option → `q.selected` (choix), `q.selected.add` (multi) ou `q.confirmed =
+    (value === "Oui")` (confirmation), puis `submit("")` ;
+  - texte libre → `submit(texte)` (valeur pour une saisie, précision / note pour
+    un choix ou une confirmation, comme la validation de la barre).
+- La fermeture de l'onglet (`unlisten`) appelle `clearTelegramQuestion()` et
+  réinitialise `telegramAskedQuestion` : plus aucune question publiée.
+
+### 10.3 Aiguillage de l'écoute (`src/js/telegram-inbound.js`)
+
+- Avant de remettre un message à la conversation, l'écoute tente de le
+  **consommer comme réponse** (`consumeAnswer`, injectable ; par défaut
+  `consumeTelegramQuestionAnswer`).
+- Si le message est consommé, il **n'est pas déposé** dans la conversation ; le
+  curseur est validé normalement (le message ne sera pas relu).
+- Sinon, comportement du lot 0 inchangé (remise durable).
+- **Personne d'autre que le propriétaire** n'est remonté par Rust (filtrage
+  existant) : un inconnu ne peut donc jamais répondre à une question.
+
+### 10.4 Configuration et inertie
+
+**Aucun nouveau réglage** : le lot 1 réutilise strictement les trois champs de
+l'étape 1. Interrupteur décoché ou champ vide → `telegram_notify` **et**
+`telegram_poll_inbound` sont **inertes** (aucune tentative réseau, aucune erreur
+visible, jeton jamais journalisé).
+
+### 10.5 Tests
+
+- **Interface — module** (`src/js/telegram-questions.test.js`, minuteurs et
+  envoi **injectés**, aucun réseau) : numéro → option (« 1 », « 2. », « 3) »),
+  numéro **hors plage** → texte libre, texte libre, texte vide (aucune réponse),
+  sans options un numéro reste une saisie ; formatage (titre/message/options,
+  Oui/Non, saisie libre, descripteur incomplet) ; **première réponse gagne**
+  (résolue dans l'application → Telegram ignoré ; après une réponse Telegram,
+  une seconde est ignorée) ; rappel **unique** et annulé si la question est
+  résolue avant ; aucune expiration ; **inertie complète** (envoi no-op, aucune
+  erreur) ; `clear` oublie la question.
+- **Interface — écoute** (`src/js/telegram-inbound.test.js`) : un message
+  consommé comme réponse n'est **pas** déposé et le curseur avance ; un message
+  non consommé est déposé normalement ; passerelle **inerte** → aucune réponse
+  consommée ni message déposé.
+- **Rust** (`telegram.rs`) : le message d'un **inconnu** (« 1 » compris) n'est
+  jamais remonté (il ne peut pas répondre) ; sans configuration, `poll_inbound`
+  ne touche pas le réseau (aucune réponse possible).

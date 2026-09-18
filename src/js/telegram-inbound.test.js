@@ -190,6 +190,49 @@ describe("createTelegramInbound — une passe de réception", () => {
   });
 });
 
+describe("createTelegramInbound — réponses aux questions (étape 2, lot 1)", () => {
+  it("consomme un message comme réponse à une question sans le déposer dans la conversation", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 5, text: "2" }],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeAnswer = vi.fn(() => true);
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeAnswer, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    // Le message brut est confié à l'interpréteur (pas le texte préfixé).
+    expect(consumeAnswer).toHaveBeenCalledWith("2");
+    expect(deliver).not.toHaveBeenCalled();
+    // Le curseur avance tout de même : le message ne sera pas relu.
+    expect(calls).toContainEqual(["telegram_inbound_commit", { offset: 6 }]);
+  });
+
+  it("dépose dans la conversation un message qui n'est pas une réponse", async () => {
+    const { invokeFn } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 7, text: "bonjour" }],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeAnswer = vi.fn(() => false);
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeAnswer, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(deliver).toHaveBeenCalledWith("[Message Telegram de l'utilisateur] bonjour");
+  });
+
+  it("reste inert sans configuration : aucune réponse consommée, rien déposé", async () => {
+    const { invokeFn } = recordingInvoke({ status: "inert", messages: [] });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeAnswer = vi.fn(() => true);
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeAnswer, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(0);
+    expect(consumeAnswer).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+});
+
 describe("createTelegramInbound — interrogation périodique", () => {
   afterEach(() => {
     vi.useRealTimers();

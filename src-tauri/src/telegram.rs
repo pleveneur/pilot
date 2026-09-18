@@ -853,4 +853,36 @@ mod tests {
         assert_eq!(poll.messages.len(), 1);
         assert_eq!(poll.messages[0].text, "ok");
     }
+
+    // ── Étape 2 (lot 1) : une réponse ne peut venir QUE du propriétaire ──
+
+    #[test]
+    fn inbound_stranger_cannot_answer_pending_question() {
+        // Un inconnu qui répondrait « 1 » (numéro d'option valide) ne doit
+        // JAMAIS être remonté : il ne peut donc pas répondre à une question de
+        // l'assistant. Silencieux, sans alerte.
+        let cfg = ready(); // propriétaire = 4242
+        let response = updates_json(serde_json::json!([
+            { "update_id": 20, "message": { "chat": { "id": 9999 }, "text": "1" } },
+            { "update_id": 21, "message": { "chat": { "id": 9999 }, "text": "oui, vas-y" } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert!(poll.messages.is_empty(), "aucun message d'inconnu remonté");
+        assert_eq!(poll.next_offset, 22, "le curseur avance sans rien remettre");
+        assert_eq!(poll.inert, None);
+    }
+
+    #[test]
+    fn inbound_without_config_cannot_answer_pending_question() {
+        // Interrupteur décoché ou champ vide : aucune tentative réseau, donc
+        // aucune réponse possible — inertie totale et silencieuse.
+        let disabled = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        let p = poll_inbound(&disabled, 9, |_| panic!("aucun accès réseau attendu")).unwrap();
+        assert!(p.messages.is_empty());
+        assert_eq!(p.next_offset, 9);
+        assert_eq!(p.inert, Some("passerelle désactivée"));
+    }
 }
