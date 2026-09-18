@@ -278,9 +278,66 @@ describe("answerFromApp — course « première réponse gagne »", () => {
     expect(resolve).not.toHaveBeenCalled();
 
     release("envoyé");
-    await expect(applied).resolves.toBe("envoyé");
+    await expect(applied).resolves.toEqual({ applied: true, value: "envoyé" });
     // Une seule réponse a été appliquée : celle de l'application.
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("deux soumissions enchaînées sans attente : une SEULE réponse produit un effet", async () => {
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, () => {});
+
+    // La première soumission est encore en cours quand la seconde arrive
+    // (aucun await entre les deux appels).
+    let release;
+    const pending = new Promise((r) => {
+      release = r;
+    });
+    const first = bridge.answerFromApp(question, () => pending);
+    const second = bridge.answerFromApp(question, () => "seconde");
+
+    release("première");
+    const [r1, r2] = await Promise.all([first, second]);
+
+    expect(r1).toEqual({ applied: true, value: "première" });
+    // La seconde est INOPÉRANTE : aucune seconde application.
+    expect(r2).toEqual({ applied: false });
+  });
+
+  it("une réponse Telegram EN COURS d'application rend une soumission applicative inopérante", async () => {
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    let release;
+    const pending = new Promise((r) => {
+      release = r;
+    });
+    const appliedFromTelegram = vi.fn(() => pending);
+    // Chemin réel : `feed` délègue l'application à `answerFromApp` (comme le fait
+    // `q.submit` → `finishPendingQuestion` → `answerTelegramQuestionFromApp`).
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, () =>
+      bridge.answerFromApp(question, () => appliedFromTelegram())
+    );
+
+    expect(bridge.feed("1")).toBe(true); // Telegram gagne, application en cours
+    // Une soumission applicative très rapprochée ne doit RIEN appliquer.
+    const fromApp = await bridge.answerFromApp(question, () => "app");
+    expect(fromApp).toEqual({ applied: false });
+
+    release("ok");
+    await Promise.resolve();
+    expect(appliedFromTelegram).toHaveBeenCalledTimes(1);
+  });
+
+  it("une question déjà répondue (settle) rend une soumission applicative tardive inopérante", async () => {
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, () => {});
+    bridge.settle(question);
+    const apply = vi.fn(() => "tard");
+
+    await expect(bridge.answerFromApp(question, apply)).resolves.toEqual({ applied: false });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it("applique normalement la réponse donnée dans l'application", async () => {
@@ -289,7 +346,7 @@ describe("answerFromApp — course « première réponse gagne »", () => {
     bridge.ask(question, { title: "Approche ?", options: ["A"] }, () => {});
     const apply = vi.fn(() => "ok");
 
-    await expect(bridge.answerFromApp(question, apply)).resolves.toBe("ok");
+    await expect(bridge.answerFromApp(question, apply)).resolves.toEqual({ applied: true, value: "ok" });
     expect(apply).toHaveBeenCalledTimes(1);
     expect(bridge.feed("1")).toBe(false); // déjà répondue dans l'application
   });

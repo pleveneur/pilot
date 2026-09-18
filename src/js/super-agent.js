@@ -700,11 +700,15 @@ async function finishPendingQuestion(q, value, cancelled) {
   // hérite des badges de la demande qui a ouvert le tour. Reset seulement à
   // la vraie fin de tour (onEnd) ou au prochain envoi utilisateur.
   try {
-    // Telegram (étape 2, lot 1) : marquer la question RÉSOLUE avant l'envoi —
-    // sans quoi une réponse Telegram arrivant pendant cet envoi serait acceptée
-    // et produirait une SECONDE réponse (course). Si l'envoi échoue, la question
+    // Telegram (étape 2, lot 1) : la question est RÉSERVÉE (résolue + application
+    // en cours) AVANT l'envoi — une seconde soumission très rapprochée (autre
+    // clic, réponse Telegram) est donc inopérante. Si l'envoi échoue, la question
     // est rouverte (la barre reste affichée, Telegram reste utilisable).
-    await answerTelegramQuestionFromApp(q, () => q.responder(q.id, value, cancelled));
+    const outcome = await answerTelegramQuestionFromApp(q, () => q.responder(q.id, value, cancelled));
+    // Course « première réponse gagne » : si cette soumission a été refusée
+    // (question déjà répondue / application concurrente en cours), ne JAMAIS
+    // finaliser — sinon la file avancerait à tort (question suivante perdue).
+    if (outcome && outcome.applied === false) return;
     clearPendingInput();
     finalizePendingQuestion();
   } catch (err) {

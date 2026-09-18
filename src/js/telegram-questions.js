@@ -166,7 +166,7 @@ export function parseTelegramAnswer(text, descriptor = {}) {
  *   ask: (question: object, descriptor: object, resolve: (parsed: object) => unknown) => void,
  *   settle: (question?: object) => void,
  *   reopen: (question?: object) => void,
- *   answerFromApp: (question: object, apply: () => unknown) => Promise<unknown>,
+ *   answerFromApp: (question: object, apply: () => unknown) => Promise<{applied: boolean, value?: unknown}>,
  *   feed: (text: string) => boolean,
  *   clear: () => void,
  *   current: () => object|null,
@@ -228,6 +228,14 @@ export function createTelegramQuestionBridge(deps = {}) {
       descriptor: descriptor || {},
       resolve,
       resolved: false,
+      // Course « première réponse gagne » (voir `answerFromApp`) :
+      //   - `applying` : une application de réponse est EN COURS (réservation
+      //     synchrone posée avant tout await) ;
+      //   - `answered` : l'application du gagnant est TERMINÉE (question close).
+      // Ces deux états rendent une SECONDE soumission (autre clic, réponse
+      // Telegram) inopérante, sans jamais bloquer le flux gagnant.
+      applying: false,
+      answered: false,
       reminderSent: false,
     };
     fire(formatQuestionForTelegram(active.descriptor));
@@ -243,6 +251,9 @@ export function createTelegramQuestionBridge(deps = {}) {
   function settle(question) {
     if (active && (question === undefined || active.question === question)) {
       active.resolved = true;
+      // La question est close : une réponse (applicative ou Telegram) arrivant
+      // ensuite ne doit plus rien appliquer (première réponse gagne).
+      active.answered = true;
       clearReminder();
     }
   }
@@ -261,19 +272,37 @@ export function createTelegramQuestionBridge(deps = {}) {
 
   /**
    * Répond à la question ACTIVE depuis l'application en garantissant la
-   * « première réponse gagne » face à une réponse Telegram CONCURRENTE : la
-   * question est marquée résolue AVANT d'appliquer la réponse (envoi
-   * asynchrone). Sans cela, un message Telegram arrivant pendant l'envoi serait
-   * accepté et produirait une SECONDE réponse (course). En cas d'échec de
-   * l'envoi, la question est rouverte.
+   * « première réponse gagne » face à TOUTE réponse concurrente (autre clic très
+   * rapproché, réponse Telegram) : la question est RÉSERVÉE (marquée résolue et
+   * « application en cours ») AVANT d'appeler `apply` — sans aucun await avant
+   * la réservation. Deux soumissions enchaînées sans attente ne peuvent donc pas
+   * produire deux réponses : la seconde est inopérante (`{ applied: false }`).
+   * Le marquage laisse passer le flux gagnant (notamment la réponse Telegram,
+   * dont l'application aval revient ici). En cas d'échec de l'envoi, la question
+   * est rouverte (Telegram reste utilisable) et la réservation est libérée.
+   * @returns {Promise<{applied: boolean, value?: unknown}>}
    */
   async function answerFromApp(question, apply) {
-    settle(question);
+    if (!active || (question !== undefined && active.question !== question)) {
+      return { applied: false };
+    }
+    // Déjà répondue et appliquée, ou une application est déjà en cours (ce flux
+    // ou un flux concurrent) → la seconde soumission est inopérante.
+    if (active.answered || active.applying) return { applied: false };
+    // Réservation SYNCHRONE (aucun await avant) : c'est elle qui rend la
+    // seconde réponse inopérante, y compris si elle arrive « en même temps ».
+    active.resolved = true;
+    active.applying = true;
+    clearReminder();
     try {
-      return await apply();
+      const value = await apply();
+      if (active && active.question === question) active.answered = true;
+      return { applied: true, value };
     } catch (e) {
       reopen(question);
       throw e;
+    } finally {
+      if (active && active.question === question) active.applying = false;
     }
   }
 
@@ -347,7 +376,7 @@ export function settleTelegramQuestion(question) {
  * @param {object} question - identité de la question (tête de file).
  * @param {() => unknown} apply - application de la réponse (envoi asynchrone).
  * @param {object} [bridge] - passerelle (défaut : la passerelle partagée).
- * @returns {Promise<unknown>}
+ * @returns {Promise<{applied: boolean, value?: unknown}>}
  */
 export function answerTelegramQuestionFromApp(question, apply, bridge) {
   return (bridge || telegramQuestionBridge).answerFromApp(question, apply);
