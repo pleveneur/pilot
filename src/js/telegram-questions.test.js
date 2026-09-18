@@ -435,7 +435,7 @@ describe("parseTelegramAnswer — confirmation : oui / non / ambigu (jamais de �
   });
 
   it("un accord clair est une confirmation", () => {
-    for (const text of ["oui", "OUI", "ok", "d'accord", "d’accord", "vas-y", "confirme", "yes", "bien sûr"]) {
+    for (const text of ["oui", "OUI", "ok", "d'accord", "d’accord", "vas-y", "confirme", "yes", "bien sûr", "je valide", "Je valide !", "je confirme", "je suis d'accord"]) {
       expect(parseTelegramAnswer(text, confirm)).toEqual({
         kind: "decision",
         confirmed: true,

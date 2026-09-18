@@ -81,7 +81,8 @@ export function formatQuestionReminder(descriptor = {}) {
 const CONFIRM_YES_TEXTS = new Set([
   "oui", "ouais", "ouaip", "yep", "y", "yes", "ok", "okay", "okey",
   "d'accord", "daccord", "dac", "accord", "entendu", "parfait", "confirme",
-  "confirmer", "vas-y", "vasy", "vas y", "go", "valide", "valider", "ja",
+  "confirmer", "je confirme", "vas-y", "vasy", "vas y", "go", "valide",
+  "valider", "je valide", "je suis d'accord", "c'est d'accord", "ja",
   "si", "sí", "bien sûr", "bien sur",
 ]);
 const CONFIRM_NO_TEXTS = new Set([
