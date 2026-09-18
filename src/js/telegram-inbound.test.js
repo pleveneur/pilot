@@ -283,3 +283,86 @@ describe("initTelegramInbound", () => {
     first.stop();
   });
 });
+
+describe("createTelegramInbound — curseur : avance jusqu'aux updates ÉCARTÉS (sans perte)", () => {
+  it("avance le curseur quand la passe ne contient QUE des updates écartés (inconnu, photo, texte vide)", async () => {
+    // Rust ne remonte aucun message (autre expéditeur / sans texte) mais calcule
+    // nextOffset sur TOUS les updates : le curseur doit avancer pour ne pas les
+    // relire indéfiniment.
+    const { invokeFn, calls } = recordingInvoke({ status: "ok", nextOffset: 42, messages: [] });
+    const deliver = vi.fn(async () => "delivered");
+    const inbound = createTelegramInbound({ invokeFn, deliver, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(0);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      ["telegram_poll_inbound", undefined],
+      ["telegram_inbound_commit", { offset: 42 }],
+    ]);
+    expect(inbound.lastCommitted()).toEqual({ updateId: 41, offset: 42 });
+  });
+
+  it("après le dernier message du propriétaire, avance aussi sur les updates écartés qui suivent", async () => {
+    // update_id 9 = propriétaire ; 10 = inconnu écarté → nextOffset 11.
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      nextOffset: 11,
+      messages: [{ updateId: 9, text: "bonjour" }],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const inbound = createTelegramInbound({ invokeFn, deliver, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(calls.filter(([cmd]) => cmd === "telegram_inbound_commit")).toEqual([
+      ["telegram_inbound_commit", { offset: 10 }], // après remise du message
+      ["telegram_inbound_commit", { offset: 11 }], // avance sur l'update écarté
+    ]);
+  });
+
+  it("N'AVANCE PAS jusqu'à nextOffset si la remise échoue (aucun message perdu)", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      nextOffset: 20,
+      messages: [
+        { updateId: 18, text: "premier" },
+        { updateId: 19, text: "second" },
+      ],
+    });
+    const deliver = vi.fn(async () => {
+      throw new Error("base indisponible");
+    });
+    const inbound = createTelegramInbound({ invokeFn, deliver, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(0);
+    // Le curseur est resté totalement en arrière : les deux messages seront relus.
+    expect(calls.some(([cmd]) => cmd === "telegram_inbound_commit")).toBe(false);
+  });
+
+  it("sans nextOffset (réponse ancienne) : aucun commit supplémentaire", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 3, text: "a" }],
+    });
+    const inbound = createTelegramInbound({ invokeFn, deliver: vi.fn(async () => "delivered"), ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(calls.filter(([cmd]) => cmd === "telegram_inbound_commit")).toEqual([
+      ["telegram_inbound_commit", { offset: 4 }],
+    ]);
+  });
+
+  it("ne recule jamais : un nextOffset déjà atteint ne produit pas de commit en double", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      nextOffset: 12,
+      messages: [{ updateId: 11, text: "a" }],
+    });
+    const inbound = createTelegramInbound({ invokeFn, deliver: vi.fn(async () => "delivered"), ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    // Commit in-loop (12) puis nextOffset (12) NON supérieur → un seul commit.
+    expect(calls.filter(([cmd]) => cmd === "telegram_inbound_commit")).toEqual([
+      ["telegram_inbound_commit", { offset: 12 }],
+    ]);
+  });
+});

@@ -16,13 +16,17 @@
 //     libre. Rien n'est perdu si l'assistant est occupé ou fermé ;
 //   - le curseur n'est validé (`telegram_inbound_commit`) QU'APRÈS la remise
 //     durable réussie de chaque message : un message non remis est relu à la
-//     passe suivante (aucune perte). La mémorisation est en revanche
-//     BEST-EFFORT : si elle échoue (curseur non écrit), le message est relu à
-//     la passe suivante et donc remis DEUX fois — un doublon reste préférable à
-//     une perte. Par ailleurs, seul le curseur des messages du PROPRIÉTAIRE est
-//     mémorisé (`updateId + 1`) : les updates filtrés côté Rust (autres
-//     expéditeurs, messages sans texte) sont revus à chaque passe puis
-//     ré-ignorés — inoffensif, mais pas « jamais relus ».
+//     passe suivante (aucune perte). À la fin d'une passe où TOUS les messages
+//     ont été traités, le curseur avance jusqu'au dernier update VU
+//     (`nextOffset`, updates ÉCARTÉS côté Rust compris : autre expéditeur,
+//     message sans texte) pour ne pas les relire indéfiniment. Il ne dépasse
+//     donc jamais le dernier message réellement vu ; en cas d'échec de remise,
+//     il reste en arrière.
+//   - la mémorisation est BEST-EFFORT (sémantique « au moins une fois ») : si
+//     l'écriture du curseur échoue, le message est relu à la passe suivante et
+//     donc remis DEUX fois — un doublon reste préférable à une perte.
+//   - un message sans texte (photo, sticker, texte vide) est simplement ÉCARTÉ
+//     par le Rust : il n'est jamais remonté ni remis, seul le curseur avance.
 //
 // Tout est défensif : un échec (réseau, backend, commande) n'affiche AUCUNE
 // erreur à l'utilisateur et ne perturbe jamais le reste de l'application.
@@ -102,6 +106,7 @@ export function createTelegramInbound(deps = {}) {
       const res = await invokeFn("telegram_poll_inbound");
       const messages = (res && res.messages) || [];
       let delivered = 0;
+      let failed = false;
       for (const message of messages) {
         const text = (message && message.text) || "";
         const updateId = message && typeof message.updateId === "number" ? message.updateId : null;
@@ -131,10 +136,25 @@ export function createTelegramInbound(deps = {}) {
           // Remise impossible : on N'avance PAS le curseur → ce message (et les
           // suivants) sera relu à la passe suivante. Aucune perte.
           warn("[telegram-inbound] remise impossible (message relu ensuite) :", e);
+          failed = true;
           break;
         }
         delivered += 1;
         await commit(updateId === null ? null : updateId + 1, updateId);
+      }
+      // Avance le curseur jusqu'au dernier update VU, y compris ceux ÉCARTÉS
+      // côté Rust (autre expéditeur, message sans texte) : sans cela ils sont
+      // relus à chaque passe. Uniquement si TOUS les messages du lot ont été
+      // traités : en cas d'échec de remise, le curseur reste en arrière (le
+      // message en échec et les suivants seront relus — aucune perte).
+      if (
+        !failed &&
+        res &&
+        typeof res.nextOffset === "number" &&
+        Number.isFinite(res.nextOffset) &&
+        (!committed || res.nextOffset > committed.offset)
+      ) {
+        await commit(res.nextOffset, res.nextOffset - 1);
       }
       return delivered;
     } catch (e) {
