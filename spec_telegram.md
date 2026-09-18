@@ -2,7 +2,7 @@
 
 > **Statut : ✅ Implémenté (étape 1, v0.4.14).**
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi) + `src/js/desktop-notify.js`
-> (branchement sur les avis existants) + Paramètres ⚙️ → onglet **Agent**.
+> (branchement sur les avis existants) + Paramètres ⚙️ → onglet **Assistant**.
 >
 > **Étape 1 = ENVOI uniquement.** Pilot prévient le propriétaire sur Telegram
 > quand il a quelque chose à lui dire : fin de tâche d'un agent, anomalie d'agent
@@ -22,7 +22,7 @@ même si vous êtes loin de l'ordinateur :
 - **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
   libéré).
 
-**Réglage** : dans **Paramètres ⚙️ → onglet Agent**, section
+**Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Envoyer les avis sur Telegram »** ;
@@ -101,6 +101,10 @@ pour qu'un `config.json` ancien reste **inerte** (aucune migration requise) :
   Paramètres envoie un `AppConfig` complet : une clé omise serait réinitialisée
   par `serde`), avec repli sur `currentConfig` si un champ manquait.
 - Le jeton est saisi dans un champ **masqué** (`type=password`).
+- Les trois réglages sont rangés dans **Paramètres ⚙️ → onglet « Assistant »**,
+  section « Notifications Telegram » (l'onglet « Assistant » est le propriétaire
+  du canal d'avis ; les identifiants DOM et les clés de configuration sont
+  inchangés).
 - Les réserves du lot 3-bis sont préservées : lecture non bloquante, jamais de
   réécriture de valeurs par défaut, annulation de l'ouverture de la modale si
   `get_config` échoue (réserve R-B). Une configuration non lisible ⇒ **aucun
@@ -195,7 +199,8 @@ appelé **en tête** des trois fonctions d'avis existantes :
 
 Bloc `<!-- HELP:telegram -->` ci-dessus, agrégé par `scripts/build-handbook.js`
 (source ajoutée à la liste `SOURCES`) puis embarqué via `include_str!` :
-l'onglet ❓ Aide répond donc sur les notifications Telegram.
+l'onglet ❓ Aide répond donc sur les notifications Telegram. Le réglage associé
+est rangé dans **Paramètres ⚙️ → onglet Assistant**.
 
 ## 8. Limites assumées
 

@@ -1169,6 +1169,11 @@ ancien sans avoir à annuler les plus récents.
 - **Prompt système** personnalisé (préfixé à chaque tour).
 - **Liste des clients** (ajout / suppression / renommage).
 - Association **projet → client**.
+- **Notifications Telegram** (interrupteur « Envoyer les avis sur Telegram » +
+  jeton du bot + identifiant de discussion) : le canal d'avis du propriétaire
+  appartient à l'Assistant, son réglage est donc rangé dans cet onglet
+  (déplacé depuis l'onglet « Agent Pi »). Identifiants DOM et clés de
+  configuration **inchangés** — voir `spec_telegram.md`.
 
 ### Transfert de mémoire (issue #69)
 

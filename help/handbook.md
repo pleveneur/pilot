@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-17 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
+<!-- PILOT-HELP generated=2026-09-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1923,7 +1923,7 @@ même si vous êtes loin de l'ordinateur :
 - **arrêt automatique d'une session** (agent bloqué arrêté, verrou de run
   libéré).
 
-**Réglage** : dans **Paramètres ⚙️ → onglet Agent**, section
+**Réglage** : dans **Paramètres ⚙️ → onglet Assistant**, section
 **« Notifications Telegram »** :
 
 1. cochez **« Envoyer les avis sur Telegram »** ;
