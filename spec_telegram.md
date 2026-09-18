@@ -85,8 +85,9 @@ Décocher le réglage suffit à tout arrêter.
 texte** :
 
 - **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
+- sur une **confirmation** (Oui/Non), un accord clair (« oui », « ok », « vas-y »…) confirme et un refus clair (« non », « annule », « stop »…) refuse ; un texte ambigu **ne décide rien** : la question reste posée et vous est reposée ;
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
-  précision d'un choix / d'une confirmation).
+  précision d'un choix).
 
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
 Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,
@@ -308,9 +309,11 @@ est rangé dans **Paramètres ⚙️ → onglet Assistant**.
   réel. Le réglage est validé par la réception du prochain avis.
 - Un avis perdu (hors ligne) n'est jamais rejoué : c'est un confort, pas un
   canal garanti.
-- **Réponse par numéro uniquement** : les questions se répondent en **texte**
-  (un numéro pour choisir, sinon texte libre). Les **boutons** Telegram sont
-  réservés à un lot ultérieur.
+- **Réponse par numéro ou par oui / non** : les questions se répondent en
+  **texte** (un numéro pour choisir, un accord / refus clair pour une
+  confirmation, sinon texte libre). Un texte ambigu sur une confirmation ne
+  tranche rien : la question reste posée et est reposée. Les **boutons**
+  Telegram sont réservés à un lot ultérieur.
 
 ## 9. Étape 2, lot 0 — socle d'écoute
 
@@ -341,12 +344,12 @@ Règles de comportement :
    autre expéditeur est ignoré **silencieusement** : aucune erreur, **jamais de
    réponse**.
 3. **Curseur** : `collect_inbound` calcule `next_offset = dernier update_id + 1`
-   sur **tous** les updates reçus (inconnus compris). C'est un curseur
-   **proposé** : l'interface ne mémorise que `updateId + 1` des messages du
-   propriétaire qu'elle a traités (elle n'utilise pas `nextOffset`). Les updates
-   filtrés (autres expéditeurs, messages sans texte) sont donc renvoyés puis
-   ré-ignorés à chaque passe — inoffensif, aucun doublon de message du
-   propriétaire. Le curseur est rangé dans
+   sur **tous** les updates reçus (inconnus compris). L'interface valide
+   `updateId + 1` après la remise durable de chaque message du propriétaire,
+   puis avance en fin de passe jusqu'à `nextOffset` (updates **écartés**
+   compris : autres expéditeurs, messages sans texte) pour ne pas les relire
+   indéfiniment. Elle ne saute donc jamais par-dessus un message non remis. Le
+   curseur est rangé dans
    `<app_data_dir>/telegram_inbound_state.json` — **pas dans `AppConfig`** :
    aucun réglage ajouté, aucune modification des Paramètres.
 4. **Inertie identique à l'envoi** : `poll_inbound` consulte `inert_reason()`
@@ -357,14 +360,17 @@ Règles de comportement :
    `{ status: "error" }` (une ligne de journal au plus) ; le jeton est retiré de
    tout message d'erreur (`redact_token`) et le client HTTP est appelé avec
    `without_url`.
-6. **Aucune perte ; doublon en dernier recours** : `telegram_poll_inbound`
-   **n'avance pas** le curseur ; l'interface appelle
+6. **Aucune perte ; doublon en dernier recours (au moins une fois)** :
+   `telegram_poll_inbound` **n'avance pas** le curseur ; l'interface appelle
    `telegram_inbound_commit(offset)` **après** la remise durable réussie de
-   chaque message. Un message non remis est donc relu à la passe suivante
-   (aucune perte). La mémorisation est **best-effort** : si le curseur ne peut
-   pas être écrit, le message est relu et donc remis une **seconde** fois — un
-   doublon est assumé plutôt qu'une perte. Le curseur est monotone (un appel
-   tardif portant une valeur plus petite est ignoré).
+   chaque message, puis avance jusqu'au dernier update **vu** (`nextOffset`) en
+   fin de passe — updates écartés compris (autre expéditeur, message sans
+   texte : ces messages sont **abandonnés**, jamais remis). Un message non remis
+   est donc relu à la passe suivante (aucune perte) et le curseur reste en
+   arrière. La mémorisation est **best-effort** : si le curseur ne peut pas être
+   écrit, le message est relu et donc remis une **seconde** fois — un doublon
+   est assumé plutôt qu'une perte. Le curseur est monotone (un appel tardif
+   portant une valeur plus petite est ignoré).
 
 ### 9.2 Écoute côté interface (`src/js/telegram-inbound.js`)
 
@@ -382,6 +388,10 @@ Règles de comportement :
 - Message remis sous la forme `[Message Telegram de l'utilisateur] <texte>`.
 - Tout échec est silencieux (journal au plus) : la réception ne perturbe jamais
   le reste de l'application.
+- **Sémantique « au moins une fois »** : le curseur avance en fin de passe
+  jusqu'au dernier update vu (updates écartés compris) ; en cas d'échec de
+  remise, il reste en arrière. Un message du propriétaire peut donc être remis
+  **deux fois** (jamais zéro fois).
 
 ### 9.3 Configuration
 
@@ -398,7 +408,8 @@ L'interface des Paramètres n'est **pas modifiée**.
   panique s'il est appelé) ; un message d'erreur ne contient jamais le jeton.
 - **Interface** (`src/js/telegram-inbound.test.js`, `invoke` et la remise
   mockés) : remise et validation du curseur, ordre des messages, curseur **non**
-  validé si la remise échoue, échec de réception avalé, pas de passe
+  validé si la remise échoue, curseur avancé jusqu'aux updates **écartés**
+  (aucun message remis) en fin de passe, échec de réception avalé, pas de passe
   concurrente, `start`/`stop` idempotents, `initTelegramInbound` démarre une
   seule instance.
 
@@ -413,7 +424,8 @@ configurée) et ne manipule **jamais** le jeton.
 ```
 formatQuestionForTelegram(descriptor) -> string   // PURE : ❓ titre + message + options numérotées
 formatQuestionReminder(descriptor)    -> string   // PURE : rappel discret
-parseTelegramAnswer(text, descriptor) -> {kind:"empty"|"option"|"text"}  // PURE
+parseTelegramAnswer(text, descriptor) -> {kind:"empty"|"option"|"decision"|"undecided"|"text"}  // PURE
+interpretConfirmationText(text)      -> {kind:"empty"|"decision"|"undecided"}  // PURE
 createTelegramQuestionBridge({send, reminderMs, timers, warn})
   .ask(question, descriptor, resolve)  // publie la question + planifie l'unique rappel
   .settle(question?)                   // résolue dans l'application (première réponse gagne)
@@ -424,14 +436,22 @@ createTelegramQuestionBridge({send, reminderMs, timers, warn})
 ```
 
 - `parseTelegramAnswer` : texte vide → `empty` ; `/^(\d+)[.)]?$/` **dans la
-  plage** des options → `option(index, value)` ; tout le reste (y compris un
-  numéro hors plage, et un numéro **sans option** comme une saisie libre) →
+  plage** des options → `option(index, value)` ; sur une **confirmation**
+  (descripteur `kind:"confirm"` ou options `["Oui","Non"]`), un texte libre est
+  classé par `interpretConfirmationText` : accord clair →
+  `decision(confirmed:true)`, refus clair → `decision(confirmed:false)`,
+  ambigu → `undecided` (aucune décision) ; tout le reste (y compris un numéro
+  hors plage, et un numéro **sans option** comme une saisie libre) →
   `text(value)`. Fonction pure, donc testable sans interface.
 - Passerelle partagée (`telegramQuestionBridge`) exportée avec
   `askTelegramQuestion` / `settleTelegramQuestion` /
   `answerTelegramQuestionFromApp` / `clearTelegramQuestion` /
   `consumeTelegramQuestionAnswer`. Un échec d'envoi est **avalé** (journal au
   plus) : jamais visible.
+- **Confirmation : jamais de « oui » par défaut** : un texte ambigu ne décide
+  **rien** — la question reste posée (`resolved` inchangé) et est **reposée**
+  avec ses choix ; le message est tout de même consommé (il n'est pas déposé
+  comme message libre pendant que la question est en attente).
 - **Une seule question active**, **première réponse gagne** : après résolution,
   l'entrée est conservée `resolved: true` (et non supprimée) afin qu'une réponse
   tardive ne soit pas ré-interprétée contre une question suivante. Une telle
@@ -464,8 +484,11 @@ createTelegramQuestionBridge({send, reminderMs, timers, warn})
   cancelled)` — **exactement** le chemin de la réponse dans l'application :
   - option → `q.selected` (choix), `q.selected.add` (multi) ou `q.confirmed =
     (value === "Oui")` (confirmation), puis `submit("")` ;
+  - confirmation par texte (`decision`) → `q.confirmed = parsed.confirmed`,
+    puis `submit("")` ; un texte **ambigu** (`undecided`) ne décide rien
+    (garde-fou : la question a déjà été reposée par la passerelle) ;
   - texte libre → `submit(texte)` (valeur pour une saisie, précision / note pour
-    un choix ou une confirmation, comme la validation de la barre).
+    un choix, comme la validation de la barre).
 - **Réponse dans l'application** : `finishPendingQuestion` appelle
   `answerTelegramQuestionFromApp(q, () => q.responder(...))` : la question est
   marquée résolue AVANT l'envoi (course « première réponse gagne », cf. 10.1),
@@ -497,7 +520,9 @@ visible, jeton jamais journalisé).
 - **Interface — module** (`src/js/telegram-questions.test.js`, minuteurs et
   envoi **injectés**, aucun réseau) : numéro → option (« 1 », « 2. », « 3) »),
   numéro **hors plage** → texte libre, texte libre, texte vide (aucune réponse),
-  sans options un numéro reste une saisie ; formatage (titre/message/options,
+  sans options un numéro reste une saisie ; **confirmation** : accord clair →
+  confirmation, refus clair (non, annule, stop…) → refus, texte ambigu → aucune
+  décision (question reposée, `resolve` non appelé, `resolved` inchangé) ; formatage (titre/message/options,
   Oui/Non, saisie libre, descripteur incomplet) ; **première réponse gagne**
   (résolue dans l'application → Telegram ignoré ; après une réponse Telegram,
   une seconde est ignorée) ; **course** (marquage résolu AVANT l'envoi : un

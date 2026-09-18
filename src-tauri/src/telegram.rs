@@ -319,11 +319,12 @@ fn chat_id_string(value: &serde_json::Value) -> Option<String> {
 /// réponse, jamais d'erreur), et calcule `next_offset` au-delà de TOUS les
 /// updates reçus, y compris ceux des inconnus.
 ///
-/// Nuance : c'est un curseur PROPOSÉ. L'interface n'utilise pas `next_offset` et
-/// ne mémorise que `updateId + 1` des messages du propriétaire qu'elle a
-/// traités : les updates filtrés (autres expéditeurs, messages sans texte) sont
-/// donc renvoyés puis ré-ignorés à chaque passe (inoffensif : un message du
-/// propriétaire n'est jamais remis deux fois, sauf échec d'écriture du curseur).
+/// Nuance : c'est un curseur PROPOSÉ. L'interface commite `updateId + 1` après la
+/// remise durable de chaque message du propriétaire, puis avance en fin de passe
+/// jusqu'à `next_offset` (updates ÉCARTÉS compris) pour ne pas les relire
+/// indéfiniment. En cas d'échec de remise, le curseur reste en arrière : un
+/// message du propriétaire n'est donc jamais perdu (au plus remis deux fois si
+/// l'écriture du curseur échoue, cf. sémantique « au moins une fois »).
 /// Aucune I/O.
 pub fn collect_inbound(
     cfg: &TelegramConfig,
@@ -459,11 +460,13 @@ fn write_inbound_offset(app: &AppHandle, offset: i64) {
 ///   d'erreur visible, jamais de jeton dans le message.
 ///
 /// Le curseur n'est PAS avancé ici : l'interface appelle `telegram_inbound_commit`
-/// APRÈS la remise durable de chaque message à l'assistant, puis seulement pour
-/// le curseur du dernier message remis. Garantie : rien n'est perdu (un message
-/// non remis est relu à la passe suivante). La mémorisation est en revanche
-/// BEST-EFFORT (`write_inbound_offset` ignore un échec d'écriture) : si elle
-/// échoue, le message est relu et remis une seconde fois.
+/// APRÈS la remise durable de chaque message à l'assistant, puis avance jusqu'au
+/// dernier update VU (`nextOffset`, updates filtrés compris) en fin de passe.
+/// Garantie : rien n'est perdu (un message non remis est relu à la passe
+/// suivante, et le curseur ne saute jamais par-dessus). La mémorisation est en
+/// revanche BEST-EFFORT (`write_inbound_offset` ignore un échec d'écriture) : si
+/// elle échoue, le message est relu et remis une seconde fois (sémantique
+/// « au moins une fois »).
 #[tauri::command]
 pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String> {
     let cfg = match read_gateway_config(&app) {

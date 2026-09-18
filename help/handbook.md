@@ -1964,8 +1964,9 @@ Décocher le réglage suffit à tout arrêter.
 texte** :
 
 - **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
+- sur une **confirmation** (Oui/Non), un accord clair (« oui », « ok », « vas-y »…) confirme et un refus clair (« non », « annule », « stop »…) refuse ; un texte ambigu **ne décide rien** : la question reste posée et vous est reposée ;
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
-  précision d'un choix / d'une confirmation).
+  précision d'un choix).
 
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
 Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,

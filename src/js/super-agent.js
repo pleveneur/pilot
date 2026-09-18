@@ -23,7 +23,7 @@ import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 // partir pendant que la réponse / le raisonnement s'écrit encore). L'émetteur
 // réel (`playAssistantSound`, qui relit `assistant_sound_enabled`) est branché
 // ici : l'inertie du réglage est donc strictement inchangée.
-import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, setDeferredSoundPlayer } from "./sound-deferred.js";
+import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound, setDeferredSoundPlayer } from "./sound-deferred.js";
 setDeferredSoundPlayer(playAssistantSound);
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE } from "./agents-bus.js";
@@ -620,16 +620,25 @@ function telegramDescriptorOf(q) {
  * Applique une réponse reçue par Telegram à la question en cours, par le MÊME
  * chemin que si le propriétaire avait répondu dans l'application (`q.submit`) :
  *   - option (numéro) → choix unique / multi / confirmation ;
- *   - texte libre → valeur de saisie, ou précision d'un choix / d'une
- *     confirmation (mêmes règles que la validation de la barre de saisie).
+ *   - confirmation par texte (accord / refus CLAIR) → `q.confirmed` ;
+ *   - texte libre → valeur de saisie, ou précision d'un choix (mêmes règles que
+ *     la validation de la barre de saisie) ;
+ *   - texte ambigu sur une confirmation (`undecided`) → garde-fou : aucune
+ *     décision (la question a déjà été reposée par la passerelle).
  * @param {object} q - question active.
- * @param {{kind: string, index?: number, value?: string}} parsed
+ * @param {{kind: string, index?: number, value?: string, confirmed?: boolean}} parsed
  */
 async function applyTelegramAnswer(q, parsed) {
+  if (parsed.kind === "undecided") return; // jamais de confirmation par défaut
   if (parsed.kind === "option") {
     if (q.multi) q.selected.add(parsed.value);
     else if (q.confirmed !== undefined) q.confirmed = parsed.value === "Oui";
     else q.selected = parsed.value;
+    await q.submit("", false);
+    return;
+  }
+  if (parsed.kind === "decision" && q.confirmed !== undefined) {
+    q.confirmed = parsed.confirmed === true;
     await q.submit("", false);
     return;
   }
@@ -1983,6 +1992,11 @@ export async function createSuperAgent(container) {
     if (action === "immersive") {
       enterImmersive();
     } else if (action === "abort") {
+      // Arrêt manuel de l'assistant : le flux peut s'interrompre sans jamais
+      // signaler son repos. On remet le lecteur de son différé à zéro pour que
+      // la surface « superagent » restée active ne retarde plus de 12 s le son
+      // de la prochaine mission.
+      resetDeferredSound();
       await invoke("abort_super_agent").catch(() => {});
     } else if (action === "new-session") {
       await invoke("new_super_agent_session").catch(() => {});
@@ -2416,6 +2430,9 @@ function maybeDetectSuperAgentLoop(messagesEl) {
     invoke("abort_super_agent").catch((e) =>
       console.error("Erreur abort_super_agent (loop):", e)
     );
+    // Arrêt automatique (boucle) : la surface de rendu ne signalera pas son
+    // repos → remise à zéro pour ne pas retarder le son suivant.
+    resetDeferredSound();
     return;
   }
   if (superLoopBuffer.length < SUPER_LOOP_BUFFER_MIN) return;
@@ -2433,6 +2450,7 @@ function maybeDetectSuperAgentLoop(messagesEl) {
     invoke("abort_super_agent").catch((e) =>
       console.error("Erreur abort_super_agent (loop):", e)
     );
+    resetDeferredSound();
   }
 }
 
@@ -2764,6 +2782,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       superAgentStderrBuffer = (superAgentStderrBuffer + payload.text).slice(-SUPER_AGENT_STDERR_MAX);
     }
     onEnd();
+    // Échec du processus : aucun signal de fin de rendu ne viendra. On remet le
+    // lecteur de son différé à zéro (surface active périmée → son suivant
+    // immédiat, jamais retardé par le délai de sécurité).
+    resetDeferredSound();
     scheduleTransientDisconnect(messagesEl, statusEl, () => {
       const msg = buildSuperAgentDisconnectedMessage();
       appendSystemMessage(messagesEl, msg);

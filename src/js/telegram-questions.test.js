@@ -358,3 +358,117 @@ describe("consumeTelegramQuestionAnswer (passerelle partagée)", () => {
     expect(consumeTelegramQuestionAnswer("bonjour Pilot")).toBe(false);
   });
 });
+
+describe("parseTelegramAnswer — confirmation : oui / non / ambigu (jamais de « oui » par défaut)", () => {
+  const confirm = { kind: "confirm", title: "Confirmer ?", options: ["Oui", "Non"] };
+  // Sans `kind` explicite, la paire Oui/Non suffit à reconnaître une confirmation.
+  const legacy = { title: "Confirmer ?", options: ["Oui", "Non"] };
+
+  it("un refus clair est un REFUS (jamais une confirmation)", () => {
+    for (const text of [
+      "non", "Non", "NON", "nan", "no", "nope", "annule", "Annuler !", "stop",
+      "laisse tomber", "pas maintenant", "surtout pas", "jamais", "refuse",
+    ]) {
+      expect(parseTelegramAnswer(text, confirm)).toEqual({
+        kind: "decision",
+        confirmed: false,
+        value: String(text).trim(),
+      });
+    }
+  });
+
+  it("un accord clair est une confirmation", () => {
+    for (const text of ["oui", "OUI", "ok", "d'accord", "d’accord", "vas-y", "confirme", "yes", "bien sûr"]) {
+      expect(parseTelegramAnswer(text, confirm)).toEqual({
+        kind: "decision",
+        confirmed: true,
+        value: String(text).trim(),
+      });
+    }
+  });
+
+  it("un texte ambigu ne décide RIEN (aucune confirmation par défaut)", () => {
+    for (const text of ["peut-être", "je ne sais pas", "tu en penses quoi ?", "9", "0", "2 h"]) {
+      expect(parseTelegramAnswer(text, confirm)).toEqual({ kind: "undecided", value: String(text).trim() });
+    }
+  });
+
+  it("la paire Oui/Non suffit (descripteur sans `kind`)", () => {
+    expect(parseTelegramAnswer("non", legacy)).toEqual({ kind: "decision", confirmed: false, value: "non" });
+    expect(parseTelegramAnswer("oui", legacy)).toEqual({ kind: "decision", confirmed: true, value: "oui" });
+    expect(parseTelegramAnswer("bof", legacy)).toEqual({ kind: "undecided", value: "bof" });
+  });
+
+  it("les numéros continuent de désigner Oui (1) et Non (2)", () => {
+    expect(parseTelegramAnswer("1", confirm)).toEqual({ kind: "option", index: 0, value: "Oui" });
+    expect(parseTelegramAnswer("2", confirm)).toEqual({ kind: "option", index: 1, value: "Non" });
+  });
+
+  it("les autres questions ne changent pas : le texte reste une réponse libre", () => {
+    expect(parseTelegramAnswer("non", { title: "Approche ?", options: ["A", "B"] })).toEqual({
+      kind: "text",
+      value: "non",
+    });
+    expect(parseTelegramAnswer("MonProjet", { title: "Nom ?", options: [] })).toEqual({
+      kind: "text",
+      value: "MonProjet",
+    });
+  });
+});
+
+describe("createTelegramQuestionBridge — confirmation par texte libre", () => {
+  const confirm = { kind: "confirm", title: "Confirmer ?", options: ["Oui", "Non"] };
+
+  it("« non » produit un refus (resolve reçoit confirmed:false)", () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, confirm, resolve);
+
+    expect(bridge.feed("non")).toBe(true);
+    expect(resolve).toHaveBeenCalledWith({ kind: "decision", confirmed: false, value: "non" });
+    expect(bridge.current().resolved).toBe(true);
+    expect(bridge.feed("oui")).toBe(false); // plus de double réponse
+  });
+
+  it("« oui » produit une confirmation", () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, confirm, resolve);
+
+    expect(bridge.feed("d'accord")).toBe(true);
+    expect(resolve).toHaveBeenCalledWith({ kind: "decision", confirmed: true, value: "d'accord" });
+  });
+
+  it("un texte ambigu ne tranche pas et la question est REPOSÉE", () => {
+    const send = vi.fn();
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, confirm, resolve);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // Texte hors sujet : consommé (pas de message libre) mais AUCUNE décision.
+    expect(bridge.feed("peut-être")).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(bridge.current().resolved).toBe(false);
+
+    // La question est reposée, avec ses choix possibles.
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1][0]).toContain("Confirmer ?");
+    expect(send.mock.calls[1][0]).toContain("1. Oui");
+    expect(send.mock.calls[1][0]).toContain("2. Non");
+
+    // Puis une réponse claire tranche normalement.
+    expect(bridge.feed("non")).toBe(true);
+    expect(resolve).toHaveBeenCalledWith({ kind: "decision", confirmed: false, value: "non" });
+    expect(bridge.current().resolved).toBe(true);
+  });
+
+  it("une saisie libre et un choix simple ne sont pas affectés", () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, resolve);
+
+    expect(bridge.feed("non")).toBe(true); // pas une confirmation ici
+    expect(resolve).toHaveBeenCalledWith({ kind: "text", value: "non" });
+  });
+});

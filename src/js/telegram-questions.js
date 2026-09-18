@@ -6,8 +6,11 @@
 // AUSSI envoyée sur Telegram via la passerelle d'envoi EXISTANTE
 // (`telegram_notify`). Le propriétaire répond en texte :
 //   - un numéro (« 1 », « 2 »…) sélectionne l'option correspondante ;
+//   - pour une CONFIRMATION, un accord clair (« oui », « ok », « vas-y »…) vaut
+//     confirmation et un refus clair (« non », « annule », « stop »…) vaut
+//     refus ; un texte ambigu ne tranche RIEN (la question est reposée) ;
 //   - tout autre texte est pris comme réponse libre (valeur pour une saisie,
-//     précision pour un choix / une confirmation).
+//     précision pour un choix).
 // La réponse revient dans Pilot par le MÊME chemin qu'une réponse donnée dans
 // l'application (le `resolve` fourni par l'appelant appelle `q.submit`).
 //
@@ -45,7 +48,11 @@ export function formatQuestionForTelegram(descriptor = {}) {
   const options = Array.isArray(descriptor.options) ? descriptor.options : [];
   if (options.length) {
     options.forEach((opt, i) => lines.push(`${i + 1}. ${String(opt)}`));
-    lines.push("Répondez par le numéro correspondant.");
+    lines.push(
+      descriptor.kind === "confirm"
+        ? "Répondez par le numéro correspondant (ou par « oui » / « non »)."
+        : "Répondez par le numéro correspondant.",
+    );
   } else {
     lines.push("Répondez par un message texte.");
   }
@@ -62,15 +69,73 @@ export function formatQuestionReminder(descriptor = {}) {
   return `⏳ Toujours en attente de votre réponse :\n${formatQuestionForTelegram(descriptor)}`;
 }
 
+// ── Interprétation d'un texte libre répondant à une CONFIRMATION ───────────
+// Une confirmation est une PORTE : « non » ne doit JAMAIS valoir « oui ». Le
+// texte reçu est donc classé AVANT toute décision :
+//   - accord clair → confirmation ;
+//   - refus clair → refus ;
+//   - texte ambigu / hors sujet → AUCUNE décision : la question reste posée et
+//     est reposée (le propriétaire peut répondre « 1 » / « 2 » ou reformuler).
+// Les listes sont volontairement COURTES et explicites : mieux vaut redemander
+// que de deviner à la place du propriétaire.
+const CONFIRM_YES_TEXTS = new Set([
+  "oui", "ouais", "ouaip", "yep", "y", "yes", "ok", "okay", "okey",
+  "d'accord", "daccord", "dac", "accord", "entendu", "parfait", "confirme",
+  "confirmer", "vas-y", "vasy", "vas y", "go", "valide", "valider", "ja",
+  "si", "sí", "bien sûr", "bien sur",
+]);
+const CONFIRM_NO_TEXTS = new Set([
+  "non", "nan", "nope", "no", "n", "annule", "annuler", "annulé",
+  "abandonne", "abandonner", "stop", "stoppe", "halte", "laisse tomber",
+  "laisse-tomber", "laisse", "pas maintenant", "pas pour l'instant", "plus tard",
+  "surtout pas", "surtout-pas", "jamais", "refuse", "refuser", "refusé",
+  "no way", "negatif", "négatif",
+]);
+
+/** Normalise un texte pour la comparaison (minuscules, apostrophes, ponctuation). */
+function normalizeConfirmText(text) {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019`]/g, "'")
+    .replace(/[.,;:!?\u2026]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Classe un texte libre adressé à une question de CONFIRMATION.
+ * Fonction PURE.
+ * @param {string} text
+ * @returns {{kind: "empty"} | {kind: "decision", confirmed: boolean, value: string} | {kind: "undecided", value: string}}
+ */
+export function interpretConfirmationText(text) {
+  const raw = String(text ?? "").trim();
+  const norm = normalizeConfirmText(raw);
+  if (!norm) return { kind: "empty" };
+  if (CONFIRM_YES_TEXTS.has(norm)) return { kind: "decision", confirmed: true, value: raw };
+  if (CONFIRM_NO_TEXTS.has(norm)) return { kind: "decision", confirmed: false, value: raw };
+  return { kind: "undecided", value: raw };
+}
+
+/** Vrai si le descripteur décrit une question de confirmation (Oui / Non). */
+function isConfirmDescriptor(descriptor) {
+  if (descriptor && descriptor.kind === "confirm") return true;
+  const options = Array.isArray(descriptor && descriptor.options) ? descriptor.options : [];
+  return options.length === 2 && options[0] === "Oui" && options[1] === "Non";
+}
+
 /**
  * Interprète un message reçu du propriétaire comme réponse à la question :
  *   - vide → `{ kind: "empty" }` (aucune réponse à appliquer) ;
  *   - numéro valide → `{ kind: "option", index, value }` ;
+ *   - confirmation (Oui / Non) + texte → `{ kind: "decision", confirmed }`
+ *     pour un accord / refus clair, `{ kind: "undecided" }` sinon (la question
+ *     reste posée, elle est reposée) ; jamais de confirmation par défaut ;
  *   - autre texte (y compris un numéro hors plage) → `{ kind: "text", value }`.
  * Fonction PURE.
  * @param {string} text
- * @param {{options?: string[]}} [descriptor]
- * @returns {{kind: "empty"} | {kind: "option", index: number, value: string} | {kind: "text", value: string}}
+ * @param {{kind?: string, options?: string[]}} [descriptor]
+ * @returns {{kind: "empty"} | {kind: "option", index: number, value: string} | {kind: "decision", confirmed: boolean, value: string} | {kind: "undecided", value: string} | {kind: "text", value: string}}
  */
 export function parseTelegramAnswer(text, descriptor = {}) {
   const raw = String(text ?? "").trim();
@@ -83,6 +148,9 @@ export function parseTelegramAnswer(text, descriptor = {}) {
       return { kind: "option", index, value: String(options[index]) };
     }
   }
+  // Confirmation : le texte est interprété (accord / refus / ambigu), jamais
+  // utilisé comme « note » valant accord par défaut.
+  if (isConfirmDescriptor(descriptor)) return interpretConfirmationText(raw);
   return { kind: "text", value: raw };
 }
 
@@ -211,12 +279,23 @@ export function createTelegramQuestionBridge(deps = {}) {
 
   /**
    * Tente d'appliquer un message entrant comme réponse à la question active.
-   * @returns {boolean} vrai si le message a été consommé comme réponse.
+   * Sur une CONFIRMATION, un texte ambigu ne tranche RIEN : la question reste
+   * posée et est reposée (avec ses choix) ; le message est tout de même
+   * « consommé » (il n'est pas déposé comme message libre dans la conversation,
+   * pour ne pas faire répondre l'assistant en parallèle de sa propre question).
+   * @returns {boolean} vrai si le message a été consommé comme réponse (ou
+   *   comme tentative de réponse non tranchée).
    */
   function feed(text) {
     if (!active || active.resolved) return false;
     const parsed = parseTelegramAnswer(text, active.descriptor);
     if (parsed.kind === "empty") return false;
+    if (parsed.kind === "undecided") {
+      // Aucune décision (porte de confirmation) : on repose la question pour
+      // que le propriétaire puisse répondre « 1 » / « 2 » ou reformuler.
+      fire(formatQuestionForTelegram(active.descriptor));
+      return true;
+    }
     // Première réponse gagne : on marque AVANT d'appliquer (anti-réentrance).
     active.resolved = true;
     clearReminder();
