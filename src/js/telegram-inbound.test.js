@@ -366,3 +366,116 @@ describe("createTelegramInbound — curseur : avance jusqu'aux updates ÉCARTÉS
     ]);
   });
 });
+
+// ── Chemin RÉEL de l'application : minuteurs globaux NON injectés ───────────
+// Les tests précédents injectent TOUJOURS de faux minuteurs : le chemin par
+// défaut (celui réellement emprunté par Pilot) n'était donc jamais exercé, ce
+// qui a laissé passer « Illegal invocation » sur des minuteurs natifs détachés.
+// Les minuteurs globaux installés ici sont STRICTS : ils reproduisent la
+// plateforme en levant « Illegal invocation » dès qu'une fonction native est
+// appelée en méthode d'un autre objet (this ≠ undefined/globalThis).
+describe("chemin RÉEL : minuteurs globaux non injectés", () => {
+  /**
+   * Installe des minuteurs globaux stricts (plateforme simulée).
+   * @returns {{setIntervalSpy: object, clearIntervalSpy: object, handles: Map, badContexts: () => number}}
+   */
+  function installStrictNativeTimers() {
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const handles = new Map();
+    let nextId = 1;
+    let bad = 0;
+    const setIntervalSpy = vi.fn(function (fn, ms) {
+      if (this !== undefined && this !== globalThis) {
+        bad += 1;
+        throw new TypeError("Illegal invocation");
+      }
+      const id = nextId++;
+      handles.set(id, realSetInterval(fn, ms));
+      return id;
+    });
+    const clearIntervalSpy = vi.fn(function (id) {
+      if (this !== undefined && this !== globalThis) {
+        bad += 1;
+        throw new TypeError("Illegal invocation");
+      }
+      const real = handles.get(id);
+      handles.delete(id);
+      if (real !== undefined) realClearInterval(real);
+    });
+    vi.stubGlobal("setInterval", setIntervalSpy);
+    vi.stubGlobal("clearInterval", clearIntervalSpy);
+    return { setIntervalSpy, clearIntervalSpy, handles, badContexts: () => bad };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("démarre, interroge puis s'arrête avec les minuteurs natifs (aucune injection)", async () => {
+    const strict = installStrictNativeTimers();
+    const deliver = vi.fn(async () => "delivered");
+    const inbound = createTelegramInbound({ deliver }); // AUCUN minuteur injecté
+
+    expect(() => inbound.start()).not.toThrow();
+    expect(inbound.isRunning()).toBe(true);
+    expect(strict.handles.size).toBe(1);
+    expect(strict.badContexts()).toBe(0); // jamais appelé en méthode détachée
+
+    await vi.advanceTimersByTimeAsync(TELEGRAM_INBOUND_INTERVAL_MS);
+    expect(invoke).toHaveBeenCalledWith("telegram_poll_inbound", undefined);
+
+    inbound.stop();
+    expect(inbound.isRunning()).toBe(false);
+    expect(strict.handles.size).toBe(0);
+    expect(strict.badContexts()).toBe(0);
+  });
+
+  it("une erreur pendant un cycle ne remonte pas et l'écoute continue", async () => {
+    const strict = installStrictNativeTimers();
+    const invokeFn = vi.fn(async () => {
+      throw new Error("passerelle indisponible");
+    });
+    const inbound = createTelegramInbound({ invokeFn, deliver: vi.fn() });
+
+    inbound.start();
+    await vi.advanceTimersByTimeAsync(TELEGRAM_INBOUND_INTERVAL_MS);
+    expect(await inbound.pollOnce()).toBe(0); // aucune exception remontée
+
+    await vi.advanceTimersByTimeAsync(TELEGRAM_INBOUND_INTERVAL_MS);
+    expect(invokeFn.mock.calls.length).toBeGreaterThanOrEqual(2); // l'écoute a continué
+    expect(strict.badContexts()).toBe(0);
+    inbound.stop();
+  });
+
+  it("une erreur au démarrage est absorbée : le reste de l'initialisation continue", async () => {
+    vi.stubGlobal("setInterval", function () {
+      throw new TypeError("Illegal invocation");
+    });
+    vi.doMock("@tauri-apps/api/core", () => ({
+      invoke: vi.fn(async () => ({ status: "inert", messages: [] })),
+    }));
+    vi.doMock("./super-agent.js", () => ({
+      injectExternalMessageToSuperAgent: vi.fn(async () => "delivered"),
+    }));
+    vi.resetModules();
+    const fresh = await import("./telegram-inbound.js");
+
+    let continued = false;
+    expect(() => {
+      fresh.initTelegramInbound();
+      continued = true; // la ligne suivante de main.js s'exécuterait
+    }).not.toThrow();
+    expect(continued).toBe(true);
+
+    // Idempotent : le second appel ne relance rien et ne lève pas non plus.
+    const instance = fresh.initTelegramInbound();
+    expect(instance).toBeTruthy();
+    expect(instance.isRunning()).toBe(false);
+  });
+});
