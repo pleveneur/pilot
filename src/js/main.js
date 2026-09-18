@@ -14,6 +14,7 @@ import { initAnomalyDetection } from "./anomaly.js";
 // Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
 // l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
 import { initTelegramInbound } from "./telegram-inbound.js";
+import { loadTelegramDialogConfig } from "./telegram-dialog.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
@@ -320,6 +321,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // l'Assistant via la porte durable existante. Démarre avec l'application et
   // reste totalement inerte tant que la passerelle n'est pas configurée.
   initTelegramInbound();
+
+  // 3d-bis. Telegram (étape 2, lot 3) : charger l'état de la communication du
+  // DIALOGUE de l'Assistant (activé / configuré). Cet état conditionne la parole
+  // de l'Assistant ET la coupure des avis bruts (anti-doublon) ; il est donc lu
+  // dès le démarrage, avant même l'ouverture de l'onglet 🧭. Inerte si la
+  // passerelle n'est pas configurée.
+  loadTelegramDialogConfig();
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
   initUpdater();

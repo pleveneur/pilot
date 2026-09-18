@@ -321,6 +321,13 @@ struct AppConfig {
     telegram_bot_token: String,
     #[serde(default)]
     telegram_chat_id: String,
+    // Étape 2, lot 3 : communication Telegram du DIALOGUE de l'Assistant. Quand
+    // elle est activée (bouton dans l'onglet 🧭, visible seulement si Telegram
+    // est configuré), l'Assistant « parle » sur Telegram et les avis bruts sont
+    // coupés (anti-doublon). Désactivée par défaut ; un champ ABSENT d'une
+    // ancienne config reprend ce défaut.
+    #[serde(default)]
+    telegram_dialog_enabled: bool,
     #[serde(default)]
     pdf_md_model: String,
     #[serde(default = "default_sidebar_width")]
@@ -903,6 +910,7 @@ impl Default for AppConfig {
             telegram_notify_enabled: false,
             telegram_bot_token: String::new(),
             telegram_chat_id: String::new(),
+            telegram_dialog_enabled: false,
             pdf_md_model: String::new(),
             sidebar_width: 280,
             auto_save: false,
@@ -1060,6 +1068,7 @@ fn config_is_default(config: &AppConfig) -> bool {
         && config.telegram_notify_enabled == default.telegram_notify_enabled
         && config.telegram_bot_token == default.telegram_bot_token
         && config.telegram_chat_id == default.telegram_chat_id
+        && config.telegram_dialog_enabled == default.telegram_dialog_enabled
         && config.pdf_md_model == default.pdf_md_model
 }
 
@@ -3458,5 +3467,31 @@ mod tests {
             super::config_is_default(&config.lock().unwrap()),
             "la config reste inchangée quand le verrou est occupé"
         );
+    }
+
+    #[test]
+    fn telegram_dialog_defaults_off_and_tolerates_absent_field() {
+        // Étape 2, lot 3 : une configuration ANCIENNE (sans le champ) reste
+        // lisible et le champ reprend son défaut (désactivé).
+        let cfg: super::AppConfig = serde_json::from_str(
+            r#"{"telegram_notify_enabled":true,"telegram_bot_token":"t","telegram_chat_id":"1"}"#,
+        )
+        .expect("une configuration ancienne doit rester lisible");
+        assert!(!cfg.telegram_dialog_enabled);
+
+        // Persistance : l'état activé survit à un aller-retour de sérialisation.
+        let mut saved = cfg.clone();
+        saved.telegram_dialog_enabled = true;
+        let json = serde_json::to_string(&saved).expect("sérialisation");
+        assert!(json.contains("\"telegram_dialog_enabled\":true"));
+        let back: super::AppConfig = serde_json::from_str(&json).expect("relecture");
+        assert!(back.telegram_dialog_enabled);
+
+        // La sentinelle de config « par défaut » distingue activé/désactivé :
+        // un réglage non défaut ne peut pas être écrasé par le chargement paresseux.
+        let mut only_dialog = super::AppConfig::default();
+        assert!(super::config_is_default(&only_dialog));
+        only_dialog.telegram_dialog_enabled = true;
+        assert!(!super::config_is_default(&only_dialog));
     }
 }

@@ -18,6 +18,7 @@
 // d'anomalie / arrêt automatique.
 
 import { invoke } from "@tauri-apps/api/core";
+import { isTelegramDialogActive } from "./telegram-dialog.js";
 
 let _permissionChecked = false;
 let _granted = false;
@@ -39,6 +40,12 @@ let _granted = false;
  * @returns {Promise<void>}
  */
 export function forwardToTelegram(title, body) {
+  // Étape 2, lot 3 (spec_telegram.md) : quand la communication Telegram du
+  // DIALOGUE est ACTIVE, c'est l'Assistant qui parle — ses réponses sont
+  // reformulées en une phrase simple. Les avis BRUTS (fin de mission d'agent,
+  // anomalie, arrêt automatique) sont alors écartés pour éviter tout doublon.
+  // Communication coupée ⇒ comportement de l'étape 1 STRICTEMENT inchangé.
+  if (isTelegramDialogActive()) return Promise.resolve();
   const text = [title, body]
     .filter((s) => typeof s === "string" && s.trim().length > 0)
     .join(" — ");

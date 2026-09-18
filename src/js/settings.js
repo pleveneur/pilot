@@ -1255,6 +1255,12 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         telegram_chat_id: inputTelegramChatId
           ? inputTelegramChatId.value.trim()
           : (currentConfig?.telegram_chat_id || ""),
+        // ── Communication Telegram du DIALOGUE de l'Assistant (étape 2, lot 3) ──
+        // Pas d'UI ici (le bouton vit dans l'onglet 🧭 Assistant). On PRÉSERVE la
+        // valeur courante pour qu'un enregistrement des Paramètres ne coupe pas
+        // la communication sans que l'utilisateur l'ait demandé. Champ absent
+        // d'une ancienne config ⇒ défaut sûr (désactivé).
+        telegram_dialog_enabled: currentConfig?.telegram_dialog_enabled === true,
         // ── Plafond « réfléchit » du super-agent (tâche #141) ──
         // Pas d'UI dédiée : on préserve les valeurs de la config courante pour
         // qu'un enregistrement des Paramètres ne les réinitialise pas (défauts

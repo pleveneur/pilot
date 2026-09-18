@@ -1,9 +1,9 @@
 # Spécification — Passerelle Telegram (étape 1 : ENVOI · étape 2 : ÉCOUTE et RÉPONSES)
 
-> **Statut : ✅ Implémenté (lot 1 inclus).** Étape 1 (envoi) en v0.4.14 ;
-> **étape 2, lot 0 (socle d'écoute)** puis **lot 1 (répondre depuis Telegram aux
-> questions de l'assistant)** implémentés ensuite (branche
-> `feat/telegram-etape2-lot0-ecoute`).
+> **Statut : ✅ Implémenté (lots 0, 1 et 3 inclus).** Étape 1 (envoi) en v0.4.14 ;
+> **étape 2, lot 0 (socle d'écoute)**, **lot 1 (répondre depuis Telegram aux
+> questions de l'assistant)** puis **lot 3 (l'Assistant parle sur Telegram)**
+> implémentés ensuite (branche `feat/telegram-etape2-lot0-ecoute`).
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi **et** de réception) +
 > `src/js/desktop-notify.js` (avis sortants) + `src/js/telegram-inbound.js`
 > (écoute au démarrage) + `src/js/telegram-questions.js` (questions/réponses) +
@@ -20,6 +20,12 @@
 > tout autre texte est une réponse libre) et la réponse revient dans Pilot par
 > le **même chemin** qu'une réponse donnée dans l'application. La **première
 > réponse gagne** (application ou Telegram).
+> **Lot 3** : quand le **dialogue Telegram** de l'Assistant est activé (bouton
+> dans l'onglet 🧭, visible seulement si Telegram est configuré), ce que
+> l'Assistant écrit part **aussi sur Telegram**, **reformulé en une phrase
+> simple** (seuls les messages utiles : réponse, fin de mission, alerte, demande
+> d'accord). Les avis bruts sont alors **coupés** (anti-doublon) ; communication
+> inactive ⇒ rien ne change par rapport à l'étape 1.
 
 <!-- HELP:telegram -->
 ## Aide utilisateur — Notifications Telegram
@@ -75,6 +81,19 @@ Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas
 la question reste posée et Pilot vous envoie **un seul rappel discret** après
 quelques minutes. Un message écrit par une **autre personne** que vous est
 **ignoré** (jamais de réponse).
+
+📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
+petit bouton de discussion permet d'**activer** cette communication. Il
+n'apparaît que si Telegram est configuré (les réglages — jeton et identifiant —
+restent dans **Paramètres ⚙️ → onglet Assistant**). Une fois activé, ce que
+l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
+simple**, et **seulement quand cela vous est utile** : réponse à votre question,
+fin de mission / compte rendu, alerte, demande d'accord. Les étapes de travail et
+les détails techniques ne vous sont pas envoyés. Quand cette communication est
+**active**, Pilot ne double plus les avis décrits ci-dessus (pas deux fois la même
+information) ; quand elle est **coupée** (par défaut), les avis continuent
+exactement comme avant. Le bouton indique son état et votre choix est conservé
+après un redémarrage de Pilot.
 <!-- /HELP:telegram -->
 
 ---
@@ -119,10 +138,23 @@ officiel, une API HTTP, aucun serveur à héberger).
 - **un seul rappel discret** sur Telegram après quelques minutes si aucune
   réponse n'arrive (aucune expiration automatique : la question reste posée).
 
-**Hors périmètre (étape 2, lot suivant)** :
+**Dans le périmètre (étape 2, lot 3, implémentée)** :
+- **l'Assistant « parle »** : ses messages utiles partent **aussi** sur Telegram,
+  **reformulés en une phrase simple** (réponse, fin de mission / compte rendu,
+  alerte, demande d'accord) ; les messages intermédiaires (étapes de travail,
+  bavardage technique, code, chemins de fichiers) sont **écartés** ;
+- **bouton d'activation** dans l'onglet 🧭 Assistant, **visible uniquement si
+  Telegram est configuré** (jeton **et** identifiant présents), sinon
+  **totalement invisible** ; il affiche son état (activé / coupé) ;
+- **anti-doublon** : communication active ⇒ les avis bruts (fin de mission
+  d'agent, anomalie, arrêt automatique) ne sont **plus** envoyés en plus ;
+  communication coupée ⇒ comportement de l'étape 1 **strictement inchangé** ;
+- **désactivé par défaut** et **persisté** (`telegram_dialog_enabled`).
+
+**Hors périmètre (étape 2, lots suivants)** :
 - **boutons** Telegram (réponse par numéro en texte uniquement pour ce lot) ;
-- nouveau réglage d'activation des questions (le lot 1 réutilise strictement
-  l'interrupteur existant) ;
+- l'interrupteur des **questions** (lot 1) reste inchangé : le lot 3 n'ajoute
+  qu'un réglage pour le **dialogue** de l'Assistant ;
 - commandes entrantes, gestion multi-utilisateurs.
 
 **Hors périmètre (à jamais)** : aucune dépendance nouvelle (le projet réutilise
@@ -131,7 +163,7 @@ aucun jeton écrit dans un journal ou un fichier de log.
 
 ## 3. Configuration
 
-Trois champs dans `AppConfig` (`src-tauri/src/lib.rs`), tous `#[serde(default)]`
+Quatre champs dans `AppConfig` (`src-tauri/src/lib.rs`), tous `#[serde(default)]`
 pour qu'un `config.json` ancien reste **inerte** (aucune migration requise) :
 
 | Champ | Type | Défaut | Rôle |
@@ -139,6 +171,14 @@ pour qu'un `config.json` ancien reste **inerte** (aucune migration requise) :
 | `telegram_notify_enabled` | `bool` | `false` | Interrupteur principal. |
 | `telegram_bot_token` | `String` | `""` | Jeton du bot (secret d'envoi). |
 | `telegram_chat_id` | `String` | `""` | Discussion cible (personne ou groupe). |
+| `telegram_dialog_enabled` | `bool` | `false` | Communication du **dialogue** de l'Assistant (bouton 🧭, lot 3). |
+
+Le quatrième champ n'a **aucune interface dans les Paramètres** : il est
+positionné par le **bouton de l'onglet 🧭** (cf. § 11), ce qui évite tout doublon
+de réglage. `settings.js` le **réécrit tel quel** (sinon un enregistrement des
+Paramètres le réinitialiserait) et un champ **absent** d'une ancienne config
+reprend son défaut (`false`). `config_is_default()` le compare aussi, pour que le
+chargement paresseux ne puisse jamais écraser un réglage non défaut.
 
 - Les champs sont exposés par les commandes **existantes** `get_config` /
   `save_config` (aucune commande dédiée).
@@ -430,3 +470,92 @@ visible, jeton jamais journalisé).
 - **Rust** (`telegram.rs`) : le message d'un **inconnu** (« 1 » compris) n'est
   jamais remonté (il ne peut pas répondre) ; sans configuration, `poll_inbound`
   ne touche pas le réseau (aucune réponse possible).
+
+## 11. Étape 2, lot 3 — l'Assistant parle sur Telegram
+
+### 11.1 Module pur + passerelle (`src/js/telegram-dialog.js`)
+
+Aucune dépendance nouvelle : le module réutilise la passerelle d'envoi
+**existante** (`invoke("telegram_notify", …)`, inerte côté Rust si non
+configurée) et ne manipule **jamais** le jeton.
+
+```
+stripTechnical(raw)                 -> string   // PURE : retire code, liens, URL, chemins, fichiers, commandes, Markdown
+firstSentence(text)                 -> string   // PURE : première phrase (sans couper « 1.5 »)
+condenseAssistantMessage(raw)       -> string   // PURE : phrase simple, ponctuée, bornée (200 car.)
+classifyAssistantMessage(raw)       -> "empty"|"alert"|"approval"|"question"|"report"|"intermediate"  // PURE
+isUsefulAssistantMessage(raw)       -> boolean  // PURE : utile ≠ intermédiaire / vide
+computeTelegramDialogVisibility(cfg)-> boolean  // PURE : jeton ET identifiant présents
+relayAssistantMessageToTelegram(text, {isActive, send}) -> boolean
+loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la config
+```
+
+- **Condensation** : `stripTechnical` retire blocs/inline de code, images et
+  libellés de liens, URL, chemins Windows/POSIX, noms de fichiers à extension de
+  code, lignes de commande, puis les marqueurs Markdown ; `firstSentence` prend la
+  première phrase ; `condenseAssistantMessage` ponctue et borne à
+  `TELEGRAM_DIALOG_MAX_CHARS = 200` caractères (coupe au mot, suffixe `…`).
+- **Filtrage** : utile = `report` (fin de mission / compte rendu / réponse),
+  `alert` (erreur, anomalie, blocage…), `approval` / `question` (demande
+  d'accord, question au propriétaire). Écarté = `intermediate` (narration
+  d'étape, bavardage court) et `empty` (message purement technique).
+- **État** : deux drapeaux de module (`enabled`, `configured`).
+  `isTelegramDialogActive() = enabled && configured` : c'est la condition qui
+  autorise la parole de l'Assistant **et** coupe les avis bruts (anti-doublon).
+- **Inertie** : `relayAssistantMessageToTelegram` n'appelle rien si la
+  communication n'est pas active ou si le message n'est pas utile ; un échec
+  d'envoi est **avalé** (jamais visible). `loadTelegramDialogConfig` en cas
+  d'échec de lecture retombe sur `{enabled:false, visible:false}` (fail-closed).
+
+### 11.2 Branchement dans l'onglet Assistant (`src/js/super-agent.js`)
+
+- **Réponse finale** : à `agent_end`, juste avant `onEnd()` (qui remet
+  `lastAssistantRawText` à zéro), `relayAssistantMessageToTelegram(respText)` :
+  un seul envoi, une phrase simple, uniquement si le message est utile.
+- **Alertes** : `appendSystemMessage` transmet en plus sur Telegram tout message
+  système classé `alert` (erreur, anomalie, blocage). Les autres messages
+  système (accueil, nouvelle session, suivi) ne sont **jamais** transmis.
+- **Bouton** `data-action="telegram-dialog"` (`#superagent-telegram-btn`, icône
+  Lucide `message-circle`) dans la barre d'outils de l'onglet 🧭. Il est
+  `hidden` par défaut et n'est **affiché que si Telegram est configuré** ; la
+  classe `.active` (vert, même convention que le quality-gate) indique l'état.
+  Un clic bascule le réglage : `get_config` → `save_config({config})` → relecture
+  (l'état interne et le bouton sont remis à jour, un message de confirmation est
+  affiché dans le dialogue). Échec de lecture/écriture ⇒ message d'alerte, aucun
+  changement de réglage.
+- **Rafraîchissement** : `pilot-config-changed` rejoue la lecture (visibilité et
+  état suivent les Paramètres). Le listener est retiré dans `unlisten` (pas de
+  fuite à la recréation de l'onglet).
+
+### 11.3 Démarrage (`src/js/main.js`)
+
+`loadTelegramDialogConfig()` est appelé au démarrage de l'application (comme
+`initTelegramInbound`) : l'état est connu **avant** l'ouverture de l'onglet 🧭,
+donc la coupure des avis bruts (anti-doublon) est effective même sans onglet
+ouvert. Échec de lecture ⇒ inerte.
+
+### 11.4 Anti-doublon (`src/js/desktop-notify.js`)
+
+`forwardToTelegram(title, body)` (utilisé par les trois avis existants :
+`notifyAgentDone`, `notifySuperAgentDone`, `notifyAnomaly`) retourne
+**immédiatement** quand `isTelegramDialogActive()` est vrai : c'est l'Assistant
+qui parle, l'avis brut n'est pas doublé. Communication coupée ⇒ chemin de
+l'étape 1 **inchangé** (les tests de `telegram-notify.test.js` restent verts).
+
+### 11.5 Tests
+
+- **Interface — module** (`src/js/telegram-dialog.test.js`, passerelle et
+  `invoke` injectés, aucun réseau) : condensation (texte long → première phrase
+  bornée et ponctuée ; texte technique → aucun code / nom de fichier / commande ;
+  texte court conservé ; message purement technique → rien) ; filtrage (compte
+  rendu, alerte, demande d'accord → utiles ; étape de travail, bavardage court,
+  vide → écartés) ; **inertie** (bouton coupé, Telegram absent, config illisible,
+  message intermédiaire, échec d'envoi avalé) ; **visibilité** du bouton
+  (jeton + identifiant requis) ; **conservation** du réglage d'une session à
+  l'autre et **compatibilité d'une ancienne config** (champ absent = défaut) ;
+  **absence de doublon** (avis brut transmis quand la communication est coupée,
+  coupé quand elle est active, et l'Assistant parle à la place).
+- **Rust** (`lib.rs`) : le champ est déclaré `#[serde(default)]`, défaut `false`,
+  comparé par `config_is_default` ; une configuration **ancienne** (champ absent)
+  reste lisible et reprend son défaut ; un aller-retour de sérialisation conserve
+  l'état activé.

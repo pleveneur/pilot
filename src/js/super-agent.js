@@ -43,6 +43,14 @@ import {
   settleTelegramQuestion,
   clearTelegramQuestion,
 } from "./telegram-questions.js";
+// Telegram (étape 2, lot 3) : l'Assistant « parle » sur Telegram. Relaie sa
+// réponse finale (reformulée en une phrase simple) et gère le bouton d'activation
+// (visible uniquement si Telegram est configuré, état persisté).
+import {
+  classifyAssistantMessage,
+  loadTelegramDialogConfig,
+  relayAssistantMessageToTelegram,
+} from "./telegram-dialog.js";
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
@@ -1030,6 +1038,13 @@ function appendSystemMessage(messagesEl, text) {
   // projet (sans contexte). Un message d'info doit toujours porter un libellé
   // utile (ex: « Projet ouvert : X ») ; sinon on ne l'affiche pas.
   if (!trimmed || isBareProjectPath(trimmed)) return;
+  // Telegram (étape 2, lot 3) : les ALERTES affichées à l'utilisateur (erreur,
+  // anomalie, blocage) partent aussi sur Telegram, en une phrase simple, quand
+  // la communication du dialogue est active. Les autres messages système
+  // (accueil, session, suivi) ne sont jamais transmis.
+  if (classifyAssistantMessage(trimmed) === "alert") {
+    relayAssistantMessageToTelegram(trimmed);
+  }
   const seq = infoSeq++;
   pendingInfo[seq] = { messagesEl, text: trimmed };
   flushPendingInfo();
@@ -1252,10 +1267,67 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="telegram-dialog" id="superagent-telegram-btn" title="Communication Telegram" aria-label="Communication Telegram" hidden><i data-lucide="message-circle" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
   `;
   wrapper.appendChild(toolbar);
+
+  // ── Telegram (étape 2, lot 3, spec_telegram.md) : communication du dialogue ──
+  // Bouton d'activation dans l'onglet 🧭. Il est TOTALEMENT invisible tant que
+  // Telegram n'est pas configuré (jeton + identifiant présents dans les
+  // Paramètres → onglet Assistant) : aucun réglage dupliqué ici. Désactivé par
+  // défaut et persisté (`AppConfig.telegram_dialog_enabled`), il est relu au
+  // chargement → l'état survit aux redémarrages. Activé, l'Assistant vous parle
+  // sur Telegram (une phrase simple) et les avis bruts sont coupés (anti-doublon).
+  const telegramBtn = toolbar.querySelector("#superagent-telegram-btn");
+  const applyTelegramDialogButton = (state) => {
+    if (!telegramBtn) return;
+    telegramBtn.hidden = !(state && state.visible);
+    const on = !!(state && state.enabled);
+    telegramBtn.classList.toggle("active", on);
+    telegramBtn.title = on
+      ? "Communication Telegram activée : l'Assistant vous parle sur Telegram — cliquez pour couper"
+      : "Activer la communication Telegram (l'Assistant vous parle en une phrase)";
+  };
+  const refreshTelegramDialogButton = async () => {
+    try {
+      applyTelegramDialogButton(await loadTelegramDialogConfig());
+    } catch (_) {
+      // Inerte : un état illisible laisse le bouton invisible (jamais d'erreur).
+    }
+  };
+  const onTelegramPrefsChanged = () => { refreshTelegramDialogButton(); };
+  refreshTelegramDialogButton();
+  window.addEventListener("pilot-config-changed", onTelegramPrefsChanged);
+
+  // Bascule l'état (clic sur le bouton) puis le persiste via la configuration.
+  async function toggleTelegramDialog() {
+    let cfg;
+    try {
+      cfg = await invoke("get_config");
+    } catch (e) {
+      console.error("get_config:", e);
+      appendSystemMessage(messagesEl, "⚠️ Configuration indisponible : la communication Telegram reste inchangée.");
+      return;
+    }
+    const next = !(cfg && cfg.telegram_dialog_enabled === true);
+    try {
+      await invoke("save_config", { config: { ...cfg, telegram_dialog_enabled: next } });
+    } catch (e) {
+      console.error("save_config:", e);
+      appendSystemMessage(messagesEl, "⚠️ Impossible d'enregistrer le réglage Telegram.");
+      return;
+    }
+    // Relire la config : met à jour l'état interne (parole + anti-doublon) ET le bouton.
+    await refreshTelegramDialogButton();
+    appendSystemMessage(
+      messagesEl,
+      next
+        ? "📨 Communication Telegram activée : je vous parle directement sur Telegram."
+        : "📨 Communication Telegram coupée."
+    );
+  }
 
   // Tâche #136 : bannière d'anomalie — si l'assistant n'a AUCUN outil à sa
   // disposition (extensions assistant non chargées au spawn, ex: porte
@@ -1918,6 +1990,8 @@ export async function createSuperAgent(container) {
       }
     } else if (action === "voice") {
       toggleVoiceInput();
+    } else if (action === "telegram-dialog") {
+      await toggleTelegramDialog();
     }
   });
 
@@ -2173,6 +2247,7 @@ export async function createSuperAgent(container) {
       try { unlistenAutoStop(); } catch (_) {}
       window.removeEventListener("pilot-agent-relay-request", onAgentRelayRequest);
       window.removeEventListener("pilot-config-changed", onConfigChanged);
+      window.removeEventListener("pilot-config-changed", onTelegramPrefsChanged);
       document.removeEventListener("keydown", onImmersiveKeydown);
       window._pilotSuperAgentOpen = false;
       // Chantier #132 + tâche #141 : nettoyer la barre des questions en attente.
@@ -2609,6 +2684,10 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     const respBubble = currentBody;
     const respBase = currentTurnProjectBadges;
     const respText = lastAssistantRawText;
+    // Telegram (étape 2, lot 3) : l'Assistant « parle » — sa réponse finale est
+    // reformulée en UNE phrase simple et transmise (les messages intermédiaires
+    // sont écartés). Aucun envoi, aucune erreur si la communication est coupée.
+    relayAssistantMessageToTelegram(respText);
     onEnd();
     if (respBubble && respBase && respText && String(respText).trim()) {
       extendResponseBubbleBadges(respBubble, respBase, respText).catch((e) => console.error("extendResponseBubbleBadges erreur:", e));

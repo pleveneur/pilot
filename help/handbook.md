@@ -1966,3 +1966,16 @@ Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas
 la question reste posée et Pilot vous envoie **un seul rappel discret** après
 quelques minutes. Un message écrit par une **autre personne** que vous est
 **ignoré** (jamais de réponse).
+
+📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
+petit bouton de discussion permet d'**activer** cette communication. Il
+n'apparaît que si Telegram est configuré (les réglages — jeton et identifiant —
+restent dans **Paramètres ⚙️ → onglet Assistant**). Une fois activé, ce que
+l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
+simple**, et **seulement quand cela vous est utile** : réponse à votre question,
+fin de mission / compte rendu, alerte, demande d'accord. Les étapes de travail et
+les détails techniques ne vous sont pas envoyés. Quand cette communication est
+**active**, Pilot ne double plus les avis décrits ci-dessus (pas deux fois la même
+information) ; quand elle est **coupée** (par défaut), les avis continuent
+exactement comme avant. Le bouton indique son état et votre choix est conservé
+après un redémarrage de Pilot.
