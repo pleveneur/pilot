@@ -178,7 +178,13 @@ export function createTelegramQuestionBridge(deps = {}) {
   const reminderMs = Number.isFinite(deps.reminderMs)
     ? deps.reminderMs
     : TELEGRAM_QUESTION_REMINDER_MS;
-  const timers = deps.timers || { setTimeout, clearTimeout };
+  // Minuteurs par défaut : appeler les fonctions natives via l'objet global
+  // (jamais par raccourci d'objet, qui les détacherait et lèverait « Illegal
+  // invocation » quand elles sont appelées en méthodes). Restent injectables.
+  const timers = deps.timers || {
+    setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (h) => globalThis.clearTimeout(h),
+  };
   const warn = deps.warn || (() => {});
 
   // Question active : { question, descriptor, resolve, resolved, reminderSent }.

@@ -248,7 +248,20 @@ export const TELEGRAM_RAW_AVIS_GRACE_MS = 8000;
 export const TELEGRAM_RAW_AVIS_MAX_WAIT_MS = 60000;
 
 let rawAvisPending = [];
-let rawAvisTimers = { setTimeout, clearTimeout };
+/**
+ * Minuteurs par défaut : de petites flèches rappellent les fonctions natives via
+ * l'objet global. Un raccourci d'objet (`{ setTimeout, clearTimeout }`) détacherait
+ * les fonctions de leur objet d'origine, et l'appel en méthode lèverait
+ * « Illegal invocation ». Restent injectables via `setRawAvisTimers`.
+ */
+function defaultRawAvisTimers() {
+  return {
+    setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (h) => globalThis.clearTimeout(h),
+  };
+}
+
+let rawAvisTimers = defaultRawAvisTimers();
 let rawAvisTurnProbe = null; // () => boolean : un tour de l'Assistant est en cours
 
 /**
@@ -256,7 +269,7 @@ let rawAvisTurnProbe = null; // () => boolean : un tour de l'Assistant est en co
  * Passer `null` restaure les minuteurs globaux.
  */
 export function setRawAvisTimers(timers) {
-  rawAvisTimers = timers || { setTimeout, clearTimeout };
+  rawAvisTimers = timers || defaultRawAvisTimers();
 }
 
 /**

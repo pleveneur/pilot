@@ -70,7 +70,16 @@ export function createTelegramInbound(deps = {}) {
   const deliver = deps.deliver || ((text) => injectExternalMessageToSuperAgent(text));
   const consumeAnswer = deps.consumeAnswer || consumeTelegramQuestionAnswer;
   const intervalMs = deps.intervalMs || TELEGRAM_INBOUND_INTERVAL_MS;
-  const timers = deps.timers || { setInterval, clearInterval };
+  // Minuteurs par défaut : de petites flèches rappellent les fonctions natives
+  // via l'objet global. Un raccourci d'objet (`{ setInterval, clearInterval }`)
+  // détacherait les fonctions de leur objet d'origine et l'appel en méthode
+  // (`timers.setInterval(...)`) lèverait « Illegal invocation » : le chemin par
+  // défaut — celui réellement utilisé par l'application — doit fonctionner sans
+  // aucune injection. Les minuteurs restent injectables pour les tests.
+  const timers = deps.timers || {
+    setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
+    clearInterval: (h) => globalThis.clearInterval(h),
+  };
   const warn = deps.warn || ((...args) => console.warn(...args));
 
   let handle = null;
