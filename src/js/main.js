@@ -320,7 +320,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // (`telegram_poll_inbound`) et remet les messages du propriétaire à
   // l'Assistant via la porte durable existante. Démarre avec l'application et
   // reste totalement inerte tant que la passerelle n'est pas configurée.
-  initTelegramInbound();
+  // Module ANNEXE : un échec ici (journalisé) ne doit JAMAIS interrompre
+  // l'initialisation de Pilot — le reste du démarrage doit continuer.
+  try {
+    initTelegramInbound();
+  } catch (e) {
+    console.warn("Écoute Telegram indisponible:", e);
+  }
 
   // 3d-bis. Telegram (étape 2, lot 3) : charger l'état de la communication du
   // DIALOGUE de l'Assistant (activé / configuré). Cet état conditionne la parole

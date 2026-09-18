@@ -210,7 +210,18 @@ let singleton = null;
  */
 export function initTelegramInbound() {
   if (singleton) return singleton;
-  singleton = createTelegramInbound();
-  singleton.start();
+  try {
+    singleton = createTelegramInbound();
+    singleton.start();
+  } catch (e) {
+    // L'écoute Telegram est un module ANNEXE : un échec de démarrage ne doit
+    // JAMAIS se propager à l'initialisation de Pilot (journalisation silencieuse
+    // uniquement). Le reste de l'application continue normalement.
+    try {
+      console.warn("[telegram-inbound] démarrage ignoré :", e);
+    } catch (_) {
+      /* même la journalisation ne doit pas remonter */
+    }
+  }
   return singleton;
 }
