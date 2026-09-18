@@ -19,6 +19,12 @@
 //     pendant l'attente, ou juste après l'émission, est ignoré) ;
 //   - aucun silence complet (délai de sécurité borné : si la fin d'affichage
 //     n'est jamais signalée, le son est joué après `safetyMs` sans activité).
+//   - son jamais retardé par une interruption : un arrêt MANUEL de l'agent /
+//     assistant, un ÉCHEC de processus ou une ANNULATION de run peuvent
+//     interrompre le flux sans que la surface signale son repos. Ces sites
+//     appellent `resetDeferredSound()` (super-agent.js, agent-pi.js,
+//     agents-bus.js) pour remettre l'état à zéro : pas de surface active
+//     périmée, donc pas de délai de sécurité résiduel de 12 s.
 //
 // Module PUR (aucun import navigateur, aucun effet de bord à l'import) :
 // `play`, `schedule` et `cancel` sont injectables pour les tests. Le singleton

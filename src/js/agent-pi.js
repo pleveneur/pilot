@@ -43,7 +43,7 @@ import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js"
 // Son de fin DIFFÉRÉ : le chat de l'agent signale son activité d'écriture et son
 // repos, pour qu'un son armé (fin de mission signalée par l'assistant) ne parte
 // jamais pendant que le texte / le raisonnement s'affiche encore.
-import { noteSoundRenderActivity, markSoundRenderIdle } from "./sound-deferred.js";
+import { noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound } from "./sound-deferred.js";
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
@@ -1559,6 +1559,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       case "abort":
         try {
           await invoke("abort_agent");
+          // Arrêt manuel de l'agent : le flux peut s'interrompre sans signaler
+          // son repos → remise à zéro du son différé (son suivant immédiat).
+          resetDeferredSound();
           statusEl.textContent = "Arrêté";
           statusEl.className = "agent-status agent-status-idle";
           state.isStreaming = false;
@@ -7120,6 +7123,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       state.isStreaming = false;
       state.piDead = true;
       console.error("[agent-pi] process_exit:", payload);
+      // Échec de l'agent : aucun signal de fin de rendu → remise à zéro du son
+      // différé pour ne pas retarder le son de la prochaine mission.
+      resetDeferredSound();
       // Pendant un restart/reconnect, le handler de restart affiche déjà un
       // message clair (et waitForPiReady baille sur piDead). Ne pas dupliquer.
       if (state.restarting) break;

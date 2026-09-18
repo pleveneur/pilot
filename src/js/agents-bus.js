@@ -10,6 +10,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { backendKind } from "./backend-info.js";
 import { notifyAgentDone } from "./desktop-notify.js";
+// Annulation d'une run : les surfaces de rendu des agents peuvent s'interrompre
+// sans signaler leur repos → remise à zéro du son différé (son suivant
+// immédiat, jamais retardé par le délai de sécurité).
+import { resetDeferredSound } from "./sound-deferred.js";
 import { buildProjectContext } from "./context-engine.js";
 import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
@@ -1611,6 +1615,10 @@ export async function stopAgentsRun(options = {}) {
     return s === "running" || s === "stopping";
   });
   if (runningKeys.length === 0) return;
+  // Annulation réelle d'une run (bouton, timeout, boucle, trop de tours) :
+  // remise à zéro du lecteur de son différé pour que les surfaces restées
+  // « actives » ne retardent pas le son de la prochaine mission.
+  resetDeferredSound();
   for (const key of runningKeys) {
     const ctx = busState.runs[key];
     ctx.runState = "stopping";

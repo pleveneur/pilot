@@ -2,6 +2,9 @@
 // l'affichage RÉELLEMENT terminé (aucun son tant que du texte arrive encore,
 // un seul son par fin de mission, délai de sécurité borné).
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import {
   createDeferredSoundPlayer,
   setDeferredSoundPlayer,
@@ -204,5 +207,51 @@ describe("createDeferredSoundPlayer — attendre la fin de l'affichage", () => {
     });
     throwing.arm("fin");
     expect(() => throwing.idle("superagent")).not.toThrow();
+  });
+});
+
+describe("reset() aux interruptions — le son n'est ni perdu ni retardé", () => {
+  it("une surface restée active (arrêt manuel) ne retarde plus le son suivant", () => {
+    const { play, clock, player } = setup();
+    player.arm("fin");
+    player.activity("superagent"); // le flux s'interrompt sans signaler son repos
+    player.reset(); // appelé par le site d'interruption (abort / échec / annulation)
+    expect(player.isArmed()).toBe(false);
+    expect(player.pendingCount()).toBe(0);
+
+    // Nouvelle mission : le son part dès le repos, sans attendre le délai de sécurité.
+    player.arm("fin");
+    player.idle("superagent");
+    expect(play).toHaveBeenCalledTimes(1);
+
+    // Aucun son tardif ni doublon après l'échéance de l'ancien délai.
+    clock.advance(20000);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("branchement de resetDeferredSound aux interruptions (garde anti-régression)", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const read = (name) => readFileSync(resolve(here, name), "utf8");
+  const imported = (src) =>
+    /import\s*\{[^}]*\bresetDeferredSound\b[^}]*\}\s*from\s*"\.\/sound-deferred\.js"/.test(src);
+  const calls = (src) => src.split("resetDeferredSound()").length - 1;
+
+  it("super-agent.js : importé et appelé sur arrêt manuel / échec / boucle", () => {
+    const src = read("super-agent.js");
+    expect(imported(src)).toBe(true);
+    expect(calls(src)).toBeGreaterThanOrEqual(4);
+  });
+
+  it("agent-pi.js : importé et appelé sur arrêt manuel / échec de processus", () => {
+    const src = read("agent-pi.js");
+    expect(imported(src)).toBe(true);
+    expect(calls(src)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("agents-bus.js : importé et appelé sur annulation de run", () => {
+    const src = read("agents-bus.js");
+    expect(imported(src)).toBe(true);
+    expect(calls(src)).toBeGreaterThanOrEqual(1);
   });
 });
