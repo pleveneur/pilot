@@ -47,6 +47,7 @@ import {
 import {
   askTelegramQuestion,
   settleTelegramQuestion,
+  answerTelegramQuestionFromApp,
   clearTelegramQuestion,
 } from "./telegram-questions.js";
 // Telegram (étape 2, lot 3) : l'Assistant « parle » sur Telegram. Relaie sa
@@ -690,7 +691,11 @@ async function finishPendingQuestion(q, value, cancelled) {
   // hérite des badges de la demande qui a ouvert le tour. Reset seulement à
   // la vraie fin de tour (onEnd) ou au prochain envoi utilisateur.
   try {
-    await q.responder(q.id, value, cancelled);
+    // Telegram (étape 2, lot 1) : marquer la question RÉSOLUE avant l'envoi —
+    // sans quoi une réponse Telegram arrivant pendant cet envoi serait acceptée
+    // et produirait une SECONDE réponse (course). Si l'envoi échoue, la question
+    // est rouverte (la barre reste affichée, Telegram reste utilisable).
+    await answerTelegramQuestionFromApp(q, () => q.responder(q.id, value, cancelled));
     clearPendingInput();
     finalizePendingQuestion();
   } catch (err) {

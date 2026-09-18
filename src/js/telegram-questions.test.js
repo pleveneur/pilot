@@ -17,6 +17,9 @@ import {
   parseTelegramAnswer,
   createTelegramQuestionBridge,
   consumeTelegramQuestionAnswer,
+  askTelegramQuestion,
+  answerTelegramQuestionFromApp,
+  clearTelegramQuestion,
   TELEGRAM_QUESTION_REMINDER_MS,
 } from "./telegram-questions.js";
 
@@ -252,6 +255,101 @@ describe("createTelegramQuestionBridge — envoi et réponse", () => {
     expect(bridge.current()).toBeNull();
     expect(bridge.feed("1")).toBe(false);
     expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
+describe("answerFromApp — course « première réponse gagne »", () => {
+  it("marque la question RÉSOLUE avant l'envoi : une réponse Telegram PENDANT l'envoi est refusée", async () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, resolve);
+
+    let release;
+    const pending = new Promise((r) => {
+      release = r;
+    });
+    // L'application répond : le marquage « résolue » précède l'envoi (asynchrone).
+    const applied = bridge.answerFromApp(question, () => pending);
+
+    // Le message Telegram arrive PENDANT l'envoi : il n'est PAS une réponse.
+    // (Il sera déposé comme message libre dans la conversation.)
+    expect(bridge.feed("1")).toBe(false);
+    expect(resolve).not.toHaveBeenCalled();
+
+    release("envoyé");
+    await expect(applied).resolves.toBe("envoyé");
+    // Une seule réponse a été appliquée : celle de l'application.
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("applique normalement la réponse donnée dans l'application", async () => {
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, () => {});
+    const apply = vi.fn(() => "ok");
+
+    await expect(bridge.answerFromApp(question, apply)).resolves.toBe("ok");
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(bridge.feed("1")).toBe(false); // déjà répondue dans l'application
+  });
+
+  it("si l'envoi applicatif ÉCHOUE, la question est ROUVERTE (Telegram reste utilisable)", async () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, resolve);
+
+    await expect(
+      bridge.answerFromApp(question, async () => {
+        throw new Error("rpc indisponible");
+      })
+    ).rejects.toThrow("rpc indisponible");
+
+    expect(bridge.current().resolved).toBe(false);
+    expect(bridge.feed("2")).toBe(true);
+    expect(resolve).toHaveBeenCalledWith({ kind: "option", index: 1, value: "B" });
+  });
+
+  it("réouvre la question mais n'émet PAS un second rappel si le rappel est déjà parti", async () => {
+    const send = vi.fn();
+    const timers = fakeTimers();
+    const bridge = createTelegramQuestionBridge({ send, timers, ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Confirmer ?", options: ["Oui", "Non"] }, () => {});
+    timers.fireAll(); // le rappel unique est parti (question + rappel)
+    expect(send).toHaveBeenCalledTimes(2);
+
+    await expect(
+      bridge.answerFromApp(question, async () => {
+        throw new Error("échec");
+      })
+    ).rejects.toThrow("échec");
+
+    timers.fireAll();
+    expect(send).toHaveBeenCalledTimes(2); // toujours un seul rappel
+  });
+});
+
+describe("answerTelegramQuestionFromApp (passerelle partagée)", () => {
+  it("marque résolue AVANT l'envoi : une réponse Telegram concurrente n'est pas consommée", async () => {
+    const resolve = vi.fn();
+    const question = { id: "shared-race" };
+    try {
+      askTelegramQuestion(question, { title: "Approche ?", options: ["A"] }, resolve);
+      let release;
+      const pending = new Promise((r) => {
+        release = r;
+      });
+      const applied = answerTelegramQuestionFromApp(question, () => pending);
+
+      expect(consumeTelegramQuestionAnswer("1")).toBe(false);
+      release("ok");
+      await applied;
+      expect(resolve).not.toHaveBeenCalled();
+    } finally {
+      clearTelegramQuestion();
+    }
   });
 });
 

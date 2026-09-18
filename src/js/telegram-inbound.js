@@ -15,9 +15,14 @@
 //     d'abord écrit en attente en base, puis délivré dès que l'assistant est
 //     libre. Rien n'est perdu si l'assistant est occupé ou fermé ;
 //   - le curseur n'est validé (`telegram_inbound_commit`) QU'APRÈS la remise
-//     durable réussie de chaque message : rien n'est perdu (un message non remis
-//     est relu à la passe suivante), rien n'est relu deux fois (le curseur des
-//     messages déjà remis est mémorisé).
+//     durable réussie de chaque message : un message non remis est relu à la
+//     passe suivante (aucune perte). La mémorisation est en revanche
+//     BEST-EFFORT : si elle échoue (curseur non écrit), le message est relu à
+//     la passe suivante et donc remis DEUX fois — un doublon reste préférable à
+//     une perte. Par ailleurs, seul le curseur des messages du PROPRIÉTAIRE est
+//     mémorisé (`updateId + 1`) : les updates filtrés côté Rust (autres
+//     expéditeurs, messages sans texte) sont revus à chaque passe puis
+//     ré-ignorés — inoffensif, mais pas « jamais relus ».
 //
 // Tout est défensif : un échec (réseau, backend, commande) n'affiche AUCUNE
 // erreur à l'utilisateur et ne perturbe jamais le reste de l'application.

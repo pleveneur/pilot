@@ -4,6 +4,18 @@
 > **étape 2, lot 0 (socle d'écoute)**, **lot 1 (répondre depuis Telegram aux
 > questions de l'assistant)** puis **lot 3 (l'Assistant parle sur Telegram)**
 > implémentés ensuite (branche `feat/telegram-etape2-lot0-ecoute`).
+> **Passage de correctifs** (suite à la relecture indépendante) : les avis bruts
+> ne sont plus jamais **coupés** — les alertes partent toujours, les autres avis
+> sont **différés** puis envoyés si l'Assistant ne parle pas (11.4) ; le bouton
+> d'activation n'est proposé que si la passerelle est **réellement
+> opérationnelle** (11.1) ; la réponse donnée dans l'application marque la
+> question résolue **avant** son envoi (course, 10.1).
+> **Passage de correctifs** (suite à la relecture indépendante) : les avis bruts
+> ne sont plus jamais **coupés** — les alertes partent toujours, les autres avis
+> sont **différés** puis envoyés si l'Assistant ne parle pas (11.4) ; le bouton
+> d'activation n'est proposé que si la passerelle est **réellement
+> opérationnelle** (11.1) ; la réponse donnée dans l'application marque la
+> question résolue **avant** son envoi (course, 10.1).
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi **et** de réception) +
 > `src/js/desktop-notify.js` (avis sortants) + `src/js/telegram-inbound.js`
 > (écoute au démarrage) + `src/js/telegram-questions.js` (questions/réponses) +
@@ -84,16 +96,19 @@ quelques minutes. Un message écrit par une **autre personne** que vous est
 
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
-n'apparaît que si Telegram est configuré (les réglages — jeton et identifiant —
-restent dans **Paramètres ⚙️ → onglet Assistant**). Une fois activé, ce que
+n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
+(interrupteur **« Envoyer les avis sur Telegram »** coché, jeton et identifiant
+renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,
 fin de mission / compte rendu, alerte, demande d'accord. Les étapes de travail et
 les détails techniques ne vous sont pas envoyés. Quand cette communication est
-**active**, Pilot ne double plus les avis décrits ci-dessus (pas deux fois la même
-information) ; quand elle est **coupée** (par défaut), les avis continuent
-exactement comme avant. Le bouton indique son état et votre choix est conservé
-après un redémarrage de Pilot.
+**active**, Pilot évite de vous envoyer deux fois la même information — mais
+**les alertes (anomalie, arrêt automatique) vous parviennent toujours**, et les
+autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
+**coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
+indique son état et votre choix est conservé après un redémarrage de Pilot.
 <!-- /HELP:telegram -->
 
 ---
@@ -325,10 +340,15 @@ Règles de comportement :
    (`telegram_chat_id`, nombres et identifiants textuels `@canal` acceptés). Tout
    autre expéditeur est ignoré **silencieusement** : aucune erreur, **jamais de
    réponse**.
-3. **Curseur** : le curseur avance jusqu'à `dernier update_id + 1`, y compris
-   pour les updates des inconnus (sinon ils seraient relus à chaque passe). Il
-   est rangé dans `<app_data_dir>/telegram_inbound_state.json` — **pas dans
-   `AppConfig`** : aucun réglage ajouté, aucune modification des Paramètres.
+3. **Curseur** : `collect_inbound` calcule `next_offset = dernier update_id + 1`
+   sur **tous** les updates reçus (inconnus compris). C'est un curseur
+   **proposé** : l'interface ne mémorise que `updateId + 1` des messages du
+   propriétaire qu'elle a traités (elle n'utilise pas `nextOffset`). Les updates
+   filtrés (autres expéditeurs, messages sans texte) sont donc renvoyés puis
+   ré-ignorés à chaque passe — inoffensif, aucun doublon de message du
+   propriétaire. Le curseur est rangé dans
+   `<app_data_dir>/telegram_inbound_state.json` — **pas dans `AppConfig`** :
+   aucun réglage ajouté, aucune modification des Paramètres.
 4. **Inertie identique à l'envoi** : `poll_inbound` consulte `inert_reason()`
    (même champs, mêmes règles que l'envoi) et retourne `inert` **sans appeler le
    transport** si la passerelle est décochée, si le jeton est vide ou si
@@ -337,11 +357,14 @@ Règles de comportement :
    `{ status: "error" }` (une ligne de journal au plus) ; le jeton est retiré de
    tout message d'erreur (`redact_token`) et le client HTTP est appelé avec
    `without_url`.
-6. **Aucun doublon, aucune perte** : `telegram_poll_inbound` **n'avance pas** le
-   curseur ; l'interface appelle `telegram_inbound_commit(offset)` **après** la
-   remise durable réussie de chaque message. Un message non remis est donc relu
-   à la passe suivante (pas de perte) tandis que les messages déjà remis ne sont
-   plus relus (pas de doublon). Le curseur est monotone.
+6. **Aucune perte ; doublon en dernier recours** : `telegram_poll_inbound`
+   **n'avance pas** le curseur ; l'interface appelle
+   `telegram_inbound_commit(offset)` **après** la remise durable réussie de
+   chaque message. Un message non remis est donc relu à la passe suivante
+   (aucune perte). La mémorisation est **best-effort** : si le curseur ne peut
+   pas être écrit, le message est relu et donc remis une **seconde** fois — un
+   doublon est assumé plutôt qu'une perte. Le curseur est monotone (un appel
+   tardif portant une valeur plus petite est ignoré).
 
 ### 9.2 Écoute côté interface (`src/js/telegram-inbound.js`)
 
@@ -394,6 +417,8 @@ parseTelegramAnswer(text, descriptor) -> {kind:"empty"|"option"|"text"}  // PURE
 createTelegramQuestionBridge({send, reminderMs, timers, warn})
   .ask(question, descriptor, resolve)  // publie la question + planifie l'unique rappel
   .settle(question?)                   // résolue dans l'application (première réponse gagne)
+  .reopen(question?)                   // l'envoi applicatif a échoué : la question reste ouverte
+  .answerFromApp(question, apply)      // marque résolue AVANT apply() (course) ; rouvre si apply() échoue
   .feed(text) -> boolean               // applique un message entrant comme réponse
   .clear()                             // oublie la question active (fermeture d'onglet)
 ```
@@ -403,13 +428,23 @@ createTelegramQuestionBridge({send, reminderMs, timers, warn})
   numéro hors plage, et un numéro **sans option** comme une saisie libre) →
   `text(value)`. Fonction pure, donc testable sans interface.
 - Passerelle partagée (`telegramQuestionBridge`) exportée avec
-  `askTelegramQuestion` / `settleTelegramQuestion` / `clearTelegramQuestion` /
+  `askTelegramQuestion` / `settleTelegramQuestion` /
+  `answerTelegramQuestionFromApp` / `clearTelegramQuestion` /
   `consumeTelegramQuestionAnswer`. Un échec d'envoi est **avalé** (journal au
   plus) : jamais visible.
 - **Une seule question active**, **première réponse gagne** : après résolution,
   l'entrée est conservée `resolved: true` (et non supprimée) afin qu'une réponse
-  tardive soit **ignorée** au lieu d'être ré-interprétée contre une question
-  suivante.
+  tardive ne soit pas ré-interprétée contre une question suivante. Une telle
+  réponse tardive n'est pas « ignorée en silence » : `feed` renvoie `false` et
+  le message est **déposé comme message libre** dans la conversation (comportement
+  du lot 0).
+- **Course entre les deux voies** : une réponse donnée dans l'application passe
+  par `answerFromApp(question, apply)` (exporté sous
+  `answerTelegramQuestionFromApp`) : la question est marquée résolue **avant**
+  l'appel à `apply()` (envoi asynchrone). Un message Telegram arrivant PENDANT
+  cet envoi est donc refusé (pas de seconde réponse). Si `apply()` échoue, la
+  question est **rouverte** (`reopen`) : la barre reste affichée, Telegram reste
+  utilisable, et l'unique rappel n'est réarmé que s'il n'a pas déjà été émis.
 - **Rappel** : un unique `setTimeout` (`TELEGRAM_QUESTION_REMINDER_MS = 3 min`),
   annulé à la résolution ; aucune expiration automatique (la question reste
   posée indéfiniment).
@@ -431,6 +466,11 @@ createTelegramQuestionBridge({send, reminderMs, timers, warn})
     (value === "Oui")` (confirmation), puis `submit("")` ;
   - texte libre → `submit(texte)` (valeur pour une saisie, précision / note pour
     un choix ou une confirmation, comme la validation de la barre).
+- **Réponse dans l'application** : `finishPendingQuestion` appelle
+  `answerTelegramQuestionFromApp(q, () => q.responder(...))` : la question est
+  marquée résolue AVANT l'envoi (course « première réponse gagne », cf. 10.1),
+  puis `finalizePendingQuestion` enchaîne sur la question suivante. En cas
+  d'échec de l'envoi, la question est rouverte et la barre reste affichée.
 - La fermeture de l'onglet (`unlisten`) appelle `clearTelegramQuestion()` et
   réinitialise `telegramAskedQuestion` : plus aucune question publiée.
 
@@ -460,9 +500,12 @@ visible, jeton jamais journalisé).
   sans options un numéro reste une saisie ; formatage (titre/message/options,
   Oui/Non, saisie libre, descripteur incomplet) ; **première réponse gagne**
   (résolue dans l'application → Telegram ignoré ; après une réponse Telegram,
-  une seconde est ignorée) ; rappel **unique** et annulé si la question est
-  résolue avant ; aucune expiration ; **inertie complète** (envoi no-op, aucune
-  erreur) ; `clear` oublie la question.
+  une seconde est ignorée) ; **course** (marquage résolu AVANT l'envoi : un
+  message Telegram arrivant pendant l'envoi applicatif n'est pas consommé ;
+  échec de l'envoi applicatif → question **rouverte** et Telegram de nouveau
+  accepté ; pas de second rappel après réouverture) ; rappel **unique** et
+  annulé si la question est résolue avant ; aucune expiration ; **inertie
+  complète** (envoi no-op, aucune erreur) ; `clear` oublie la question.
 - **Interface — écoute** (`src/js/telegram-inbound.test.js`) : un message
   consommé comme réponse n'est **pas** déposé et le curseur avance ; un message
   non consommé est déposé normalement ; passerelle **inerte** → aucune réponse
@@ -485,9 +528,12 @@ firstSentence(text)                 -> string   // PURE : première phrase (sans
 condenseAssistantMessage(raw)       -> string   // PURE : phrase simple, ponctuée, bornée (200 car.)
 classifyAssistantMessage(raw)       -> "empty"|"alert"|"approval"|"question"|"report"|"intermediate"  // PURE
 isUsefulAssistantMessage(raw)       -> boolean  // PURE : utile ≠ intermédiaire / vide
-computeTelegramDialogVisibility(cfg)-> boolean  // PURE : jeton ET identifiant présents
+computeTelegramDialogVisibility(cfg)-> boolean  // PURE : interrupteur principal + jeton ET identifiant
 relayAssistantMessageToTelegram(text, {isActive, send}) -> boolean
 loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la config
+deliverRawTelegramAvis(text, {critical, isActive, send}) -> void  // avis BRUT : immédiat si alerte ou comm. coupée, sinon différé
+flushRawTelegramAvis()              -> void   // envoie tout de suite les avis différés (fin de tour sans parole, fermeture d'onglet)
+setRawAvisTimers(timers) / setRawAvisTurnProbe(probe)  // injection (tests / état de tour)
 ```
 
 - **Condensation** : `stripTechnical` retire blocs/inline de code, images et
@@ -501,7 +547,13 @@ loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la
   d'étape, bavardage court) et `empty` (message purement technique).
 - **État** : deux drapeaux de module (`enabled`, `configured`).
   `isTelegramDialogActive() = enabled && configured` : c'est la condition qui
-  autorise la parole de l'Assistant **et** coupe les avis bruts (anti-doublon).
+  autorise la parole de l'Assistant **et** qui déclenche la retenue des avis
+  bruts (anti-doublon, cf. 11.4) — retenue jamais définitive : un avis retenu
+  repart si l'Assistant ne parle pas.
+- **Visibilité du bouton** : `computeTelegramDialogVisibility(cfg)` exige
+  l'**interrupteur principal** (« Notifications Telegram ») **coché** ET un jeton
+  ET un identifiant non vides. Sans cela le bouton n'est pas proposé : il ne peut
+  donc pas paraître « actif » alors que la passerelle n'enverrait jamais rien.
 - **Inertie** : `relayAssistantMessageToTelegram` n'appelle rien si la
   communication n'est pas active ou si le message n'est pas utile ; un échec
   d'envoi est **avalé** (jamais visible). `loadTelegramDialogConfig` en cas
@@ -517,12 +569,18 @@ loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la
   système (accueil, nouvelle session, suivi) ne sont **jamais** transmis.
 - **Bouton** `data-action="telegram-dialog"` (`#superagent-telegram-btn`, icône
   Lucide `message-circle`) dans la barre d'outils de l'onglet 🧭. Il est
-  `hidden` par défaut et n'est **affiché que si Telegram est configuré** ; la
-  classe `.active` (vert, même convention que le quality-gate) indique l'état.
-  Un clic bascule le réglage : `get_config` → `save_config({config})` → relecture
-  (l'état interne et le bouton sont remis à jour, un message de confirmation est
-  affiché dans le dialogue). Échec de lecture/écriture ⇒ message d'alerte, aucun
-  changement de réglage.
+  `hidden` par défaut et n'est **affiché que si la passerelle est réellement
+  opérationnelle** (interrupteur principal « Notifications Telegram » coché +
+  jeton + identifiant non vides) ; la classe `.active` (vert, même convention
+  que le quality-gate) indique l'état. Un clic bascule le réglage : `get_config`
+  → `save_config({config})` → relecture (l'état interne et le bouton sont remis
+  à jour, un message de confirmation est affiché dans le dialogue). Échec de
+  lecture/écriture ⇒ message d'alerte, aucun changement de réglage.
+- **Anti-doublon (avis bruts)** : à `agent_end`, l'Assistant tente de parler
+  (`relayAssistantMessageToTelegram`) ; s'il n'a **pas** parlé, les avis bruts
+  retenus pendant la fenêtre sont envoyés (`flushRawTelegramAvis`). La fermeture
+  de l'onglet libère elle aussi les avis retenus ; l'état de tour
+  (`setRawAvisTurnProbe`) empêche l'envoi d'un avis tant que l'Assistant rédige.
 - **Rafraîchissement** : `pilot-config-changed` rejoue la lecture (visibilité et
   état suivent les Paramètres). Le listener est retiré dans `unlisten` (pas de
   fuite à la recréation de l'onglet).
@@ -530,17 +588,33 @@ loadTelegramDialogConfig(invokeFn?) -> Promise<{enabled, visible}>   // relit la
 ### 11.3 Démarrage (`src/js/main.js`)
 
 `loadTelegramDialogConfig()` est appelé au démarrage de l'application (comme
-`initTelegramInbound`) : l'état est connu **avant** l'ouverture de l'onglet 🧭,
-donc la coupure des avis bruts (anti-doublon) est effective même sans onglet
-ouvert. Échec de lecture ⇒ inerte.
+`initTelegramInbound`) : l'état (visibilité, activation, parole de l'Assistant)
+est donc connu **avant** l'ouverture de l'onglet 🧭. Échec de lecture ⇒ inerte.
 
-### 11.4 Anti-doublon (`src/js/desktop-notify.js`)
+### 11.4 Anti-doublon des avis bruts (`src/js/desktop-notify.js`)
 
-`forwardToTelegram(title, body)` (utilisé par les trois avis existants :
-`notifyAgentDone`, `notifySuperAgentDone`, `notifyAnomaly`) retourne
-**immédiatement** quand `isTelegramDialogActive()` est vrai : c'est l'Assistant
-qui parle, l'avis brut n'est pas doublé. Communication coupée ⇒ chemin de
-l'étape 1 **inchangé** (les tests de `telegram-notify.test.js` restent verts).
+`forwardToTelegram(title, body, { critical })` est appelé par les trois avis
+existants (`notifyAgentDone`, `notifySuperAgentDone`, `notifyAnomaly`) et
+délègue à `deliverRawTelegramAvis` (`src/js/telegram-dialog.js`), qui applique une
+règle « zéro perte d'abord, zéro doublon ensuite » :
+
+1. **Communication coupée** (`isTelegramDialogActive()` faux) → envoi
+   **immédiat**, chemin de l'étape 1 strictement inchangé.
+2. **Alerte** (`critical: true`, posé par `notifyAnomaly` — anomalie, arrêt
+   automatique, agent silencieux) → envoi **immédiat**, même en communication
+   active : une alerte n'est **jamais** retenue ni coupée.
+3. **Autre avis, communication active** → l'avis est **retenu** puis envoyé après
+   une courte fenêtre (`TELEGRAM_RAW_AVIS_GRACE_MS = 8 s`). Il est **abandonné**
+   (doublon évité) seulement si l'Assistant transmet réellement une phrase
+   pendant cette fenêtre. Si un **tour** de l'Assistant est en cours lors de
+   l'échéance, l'envoi est repoussé jusqu'à la fin réelle du tour, avec un plafond
+   dur (`TELEGRAM_RAW_AVIS_MAX_WAIT_MS = 60 s`). `flushRawTelegramAvis()`
+   (fin de tour sans parole, fermeture de l'onglet, erreur) envoie immédiatement
+   les avis retenus.
+
+Limite assumée et documentée : la corrélation tour ↔ avis est approximative — un
+tour de l'Assistant sans rapport, survenant dans la fenêtre, peut consommer
+l'avis retenu (doublon évité, mais l'avis brut n'est alors pas envoyé).
 
 ### 11.5 Tests
 
@@ -551,10 +625,14 @@ l'étape 1 **inchangé** (les tests de `telegram-notify.test.js` restent verts).
   rendu, alerte, demande d'accord → utiles ; étape de travail, bavardage court,
   vide → écartés) ; **inertie** (bouton coupé, Telegram absent, config illisible,
   message intermédiaire, échec d'envoi avalé) ; **visibilité** du bouton
-  (jeton + identifiant requis) ; **conservation** du réglage d'une session à
-  l'autre et **compatibilité d'une ancienne config** (champ absent = défaut) ;
-  **absence de doublon** (avis brut transmis quand la communication est coupée,
-  coupé quand elle est active, et l'Assistant parle à la place).
+  (interrupteur principal **et** jeton **et** identifiant requis ; interrupteur
+  décoché → invisible) ; **conservation** du réglage d'une session à l'autre et
+  **compatibilité d'une ancienne config** (champ absent = défaut, donc bouton
+  invisible) ; **absence de doublon SANS PERTE** (communication coupée → envoi
+  immédiat ; alerte → envoi immédiat même en communication active ; avis
+  non critique → retardé puis envoyé si l'Assistant ne parle pas ; abandonné si
+  l'Assistant parle dans la fenêtre ; report tant qu'un tour est en cours puis
+  envoi à la fin du tour).
 - **Rust** (`lib.rs`) : le champ est déclaré `#[serde(default)]`, défaut `false`,
   comparé par `config_is_default` ; une configuration **ancienne** (champ absent)
   reste lisible et reprend son défaut ; un aller-retour de sérialisation conserve

@@ -279,8 +279,9 @@ pub fn telegram_notify(app: AppHandle, text: String) {
 //   - une réception `getUpdates` filtrée sur l'identifiant de discussion du
 //     propriétaire ; tout autre expéditeur est ignoré SILENCIEUSEMENT (jamais
 //     de réponse, jamais d'erreur) ;
-//   - un curseur persistant (`dernier update_id + 1`) pour ne jamais retraiter
-//     deux fois le même message ;
+//   - un curseur persistant (`dernier update_id + 1`) pour ne pas retraiter les
+//     messages du propriétaire déjà remis (mémorisation best-effort : un échec
+//     d'écriture fait relire le message à la passe suivante) ;
 //   - une inertie STRICTEMENT identique à l'envoi (mêmes champs, mêmes règles) :
 //     passerelle décochée ou champ vide → aucun accès réseau, aucune erreur.
 
@@ -315,9 +316,15 @@ fn chat_id_string(value: &serde_json::Value) -> Option<String> {
 
 /// Cœur PUR de la réception : extrait d'une réponse `getUpdates` les messages
 /// du PROPRIÉTAIRE, ignore silencieusement tout autre expéditeur (jamais de
-/// réponse, jamais d'erreur), et avance le curseur au-delà de TOUS les updates
-/// reçus (y compris ceux des inconnus : sans cela ils seraient relus à chaque
-/// passe). Aucune I/O.
+/// réponse, jamais d'erreur), et calcule `next_offset` au-delà de TOUS les
+/// updates reçus, y compris ceux des inconnus.
+///
+/// Nuance : c'est un curseur PROPOSÉ. L'interface n'utilise pas `next_offset` et
+/// ne mémorise que `updateId + 1` des messages du propriétaire qu'elle a
+/// traités : les updates filtrés (autres expéditeurs, messages sans texte) sont
+/// donc renvoyés puis ré-ignorés à chaque passe (inoffensif : un message du
+/// propriétaire n'est jamais remis deux fois, sauf échec d'écriture du curseur).
+/// Aucune I/O.
 pub fn collect_inbound(
     cfg: &TelegramConfig,
     offset: i64,
@@ -454,8 +461,9 @@ fn write_inbound_offset(app: &AppHandle, offset: i64) {
 /// Le curseur n'est PAS avancé ici : l'interface appelle `telegram_inbound_commit`
 /// APRÈS la remise durable de chaque message à l'assistant, puis seulement pour
 /// le curseur du dernier message remis. Garantie : rien n'est perdu (un message
-/// non remis est relu à la passe suivante) ET rien n'est remis deux fois (le
-/// curseur des messages déjà remis est mémorisé).
+/// non remis est relu à la passe suivante). La mémorisation est en revanche
+/// BEST-EFFORT (`write_inbound_offset` ignore un échec d'écriture) : si elle
+/// échoue, le message est relu et remis une seconde fois.
 #[tauri::command]
 pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String> {
     let cfg = match read_gateway_config(&app) {

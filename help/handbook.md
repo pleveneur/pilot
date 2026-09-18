@@ -1975,13 +1975,16 @@ quelques minutes. Un message écrit par une **autre personne** que vous est
 
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
-n'apparaît que si Telegram est configuré (les réglages — jeton et identifiant —
-restent dans **Paramètres ⚙️ → onglet Assistant**). Une fois activé, ce que
+n'apparaît que si l'envoi Telegram est réellement **en état de fonctionner**
+(interrupteur **« Envoyer les avis sur Telegram »** coché, jeton et identifiant
+renseignés — ces réglages restent dans **Paramètres ⚙️ → onglet Assistant**) :
+s'il s'affiche, c'est que vos messages partiront vraiment. Une fois activé, ce que
 l'Assistant écrit vous arrive **aussi sur Telegram**, **résumé en une phrase
 simple**, et **seulement quand cela vous est utile** : réponse à votre question,
 fin de mission / compte rendu, alerte, demande d'accord. Les étapes de travail et
 les détails techniques ne vous sont pas envoyés. Quand cette communication est
-**active**, Pilot ne double plus les avis décrits ci-dessus (pas deux fois la même
-information) ; quand elle est **coupée** (par défaut), les avis continuent
-exactement comme avant. Le bouton indique son état et votre choix est conservé
-après un redémarrage de Pilot.
+**active**, Pilot évite de vous envoyer deux fois la même information — mais
+**les alertes (anomalie, arrêt automatique) vous parviennent toujours**, et les
+autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
+**coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
+indique son état et votre choix est conservé après un redémarrage de Pilot.

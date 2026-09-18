@@ -14,6 +14,8 @@
 // Garanties :
 //   - la PREMIÈRE réponse gagne (application OU Telegram) : l'autre voie est
 //     ignorée proprement, sans double réponse, sans erreur, sans alerte ;
+//     la question est marquée répondue AVANT l'envoi applicatif, pour qu'une
+//     réponse Telegram arrivant PENDANT cet envoi soit refusée (course) ;
 //   - si aucune réponse n'arrive, la question reste posée (aucune expiration
 //     automatique) et UN SEUL rappel discret est envoyé après quelques minutes ;
 //   - inertie : rien n'est tenté quand la passerelle n'est pas configurée
@@ -95,6 +97,8 @@ export function parseTelegramAnswer(text, descriptor = {}) {
  * @returns {{
  *   ask: (question: object, descriptor: object, resolve: (parsed: object) => unknown) => void,
  *   settle: (question?: object) => void,
+ *   reopen: (question?: object) => void,
+ *   answerFromApp: (question: object, apply: () => unknown) => Promise<unknown>,
  *   feed: (text: string) => boolean,
  *   clear: () => void,
  *   current: () => object|null,
@@ -108,10 +112,11 @@ export function createTelegramQuestionBridge(deps = {}) {
   const timers = deps.timers || { setTimeout, clearTimeout };
   const warn = deps.warn || (() => {});
 
-  // Question active : { question, descriptor, resolve, resolved }.
+  // Question active : { question, descriptor, resolve, resolved, reminderSent }.
   // Après résolution on CONSERVE l'entrée (`resolved: true`) pour qu'une réponse
-  // tardive soit ignorée au lieu d'être ré-interprétée contre une question
-  // suivante ou déposée dans la conversation.
+  // tardive ne soit pas ré-interprétée contre une question suivante : elle est
+  // alors REFUSÉE par `feed` et devient un message libre de la conversation (le
+  // comportement observé de l'étape 2, lot 1).
   let active = null;
   let reminder = null;
 
@@ -120,6 +125,19 @@ export function createTelegramQuestionBridge(deps = {}) {
       timers.clearTimeout(reminder);
       reminder = null;
     }
+  }
+
+  /** Arme l'unique rappel si la question est encore ouverte et sans rappel émis. */
+  function armReminder() {
+    if (!active || active.reminderSent) return;
+    clearReminder();
+    reminder = timers.setTimeout(() => {
+      reminder = null;
+      if (active && !active.resolved) {
+        fire(formatQuestionReminder(active.descriptor));
+        active.reminderSent = true;
+      }
+    }, reminderMs);
   }
 
   /** Envoi silencieux : un échec n'est jamais visible et n'interrompt rien. */
@@ -137,23 +155,57 @@ export function createTelegramQuestionBridge(deps = {}) {
   /** Publie une nouvelle question : envoi immédiat + unique rappel planifié. */
   function ask(question, descriptor, resolve) {
     clearReminder();
-    active = { question, descriptor: descriptor || {}, resolve, resolved: false };
+    active = {
+      question,
+      descriptor: descriptor || {},
+      resolve,
+      resolved: false,
+      reminderSent: false,
+    };
     fire(formatQuestionForTelegram(active.descriptor));
-    reminder = timers.setTimeout(() => {
-      reminder = null;
-      if (active && !active.resolved) fire(formatQuestionReminder(active.descriptor));
-    }, reminderMs);
+    armReminder();
   }
 
   /**
    * Marque la question comme résolue dans l'application (première réponse
-   * gagne) : un message Telegram ultérieur sera ignoré. Sans argument, résout
-   * la question active.
+   * gagne). Sans argument, résout la question active. Une réponse Telegram
+   * arrivant ensuite n'est plus acceptée comme réponse (`feed` renvoie faux) :
+   * elle est déposée comme message libre dans la conversation de l'Assistant.
    */
   function settle(question) {
     if (active && (question === undefined || active.question === question)) {
       active.resolved = true;
       clearReminder();
+    }
+  }
+
+  /**
+   * Rouvre la question active (l'envoi applicatif a ÉCHOUÉ) : la barre reste
+   * affichée et une réponse Telegram doit rester acceptée. Réarme l'unique
+   * rappel s'il n'a pas encore été émis.
+   */
+  function reopen(question) {
+    if (!active || (question !== undefined && active.question !== question)) return;
+    if (!active.resolved) return;
+    active.resolved = false;
+    armReminder();
+  }
+
+  /**
+   * Répond à la question ACTIVE depuis l'application en garantissant la
+   * « première réponse gagne » face à une réponse Telegram CONCURRENTE : la
+   * question est marquée résolue AVANT d'appliquer la réponse (envoi
+   * asynchrone). Sans cela, un message Telegram arrivant pendant l'envoi serait
+   * accepté et produirait une SECONDE réponse (course). En cas d'échec de
+   * l'envoi, la question est rouverte.
+   */
+  async function answerFromApp(question, apply) {
+    settle(question);
+    try {
+      return await apply();
+    } catch (e) {
+      reopen(question);
+      throw e;
     }
   }
 
@@ -186,7 +238,7 @@ export function createTelegramQuestionBridge(deps = {}) {
     active = null;
   }
 
-  return { ask, settle, feed, clear, current: () => active };
+  return { ask, settle, reopen, answerFromApp, feed, clear, current: () => active };
 }
 
 /** Envoi réel : passerelle d'envoi EXISTANTE (inerte si non configurée). */
@@ -207,6 +259,19 @@ export function askTelegramQuestion(question, descriptor, resolve) {
 /** Marque la question comme résolue dans l'application (première réponse). */
 export function settleTelegramQuestion(question) {
   telegramQuestionBridge.settle(question);
+}
+
+/**
+ * Répond à la question depuis l'application en marquant d'abord la question
+ * résolue (course « première réponse gagne »), puis en appliquant la réponse.
+ * En cas d'échec de l'application, la question est rouverte.
+ * @param {object} question - identité de la question (tête de file).
+ * @param {() => unknown} apply - application de la réponse (envoi asynchrone).
+ * @param {object} [bridge] - passerelle (défaut : la passerelle partagée).
+ * @returns {Promise<unknown>}
+ */
+export function answerTelegramQuestionFromApp(question, apply, bridge) {
+  return (bridge || telegramQuestionBridge).answerFromApp(question, apply);
 }
 
 /** Oublie la question active (fermeture de l'onglet / nouvelle session). */
