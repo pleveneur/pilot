@@ -1,9 +1,11 @@
-// telegram.rs — Passerelle Telegram (bot officiel), ÉTAPE 1 : ENVOI uniquement.
+// telegram.rs — Passerelle Telegram (bot officiel), ÉTAPE 1 : ENVOI + ÉTAPE 2
+// (lot 0) : SOCLE D'ÉCOUTE.
 //
 // Objectif : prévenir le propriétaire sur Telegram quand Pilot a quelque chose
 // à lui dire (fin de tâche d'un agent, anomalie d'agent bloqué, arrêt
-// automatique d'une session). La RÉCEPTION des messages (répondre à Pilot
-// depuis Telegram) n'est PAS prise en charge à cette étape.
+// automatique d'une session), et LIRE ce que le propriétaire écrit à son bot
+// (les questions/réponses de l'assistant seront branchées dans un lot suivant :
+// ici on livre uniquement le socle, la réception filtrée et son curseur).
 //
 // Contrat (spec_telegram.md) :
 //   - STRICTEMENT INERTE si la passerelle est désactivée ou mal configurée
@@ -93,6 +95,19 @@ impl TelegramConfig {
             "{}/bot{}/sendMessage",
             TELEGRAM_API_BASE,
             self.token.trim()
+        )
+    }
+
+    /// URL `getUpdates` du bot, à partir du curseur donné. ATTENTION : elle
+    /// contient le jeton ; ne jamais la journaliser, l'afficher ni la
+    /// persister. `timeout=0` → l'appel est NON bloquant (l'interface interroge
+    /// à intervalle court, elle ne doit jamais rester suspendue).
+    pub fn api_updates_url(&self, offset: i64) -> String {
+        format!(
+            "{}/bot{}/getUpdates?offset={}&timeout=0",
+            TELEGRAM_API_BASE,
+            self.token.trim(),
+            offset
         )
     }
 }
@@ -254,6 +269,242 @@ pub fn notify_background(app: &AppHandle, text: String) {
 #[tauri::command]
 pub fn telegram_notify(app: AppHandle, text: String) {
     notify_background(&app, text);
+}
+
+// ── ÉTAPE 2 (lot 0) : SOCLE D'ÉCOUTE ────────────────────────────────────────
+//
+// Pilot peut LIRE les messages que le propriétaire écrit à son bot. Périmètre
+// volontairement minimal (le branchement des questions de l'assistant viendra
+// dans un lot suivant) :
+//   - une réception `getUpdates` filtrée sur l'identifiant de discussion du
+//     propriétaire ; tout autre expéditeur est ignoré SILENCIEUSEMENT (jamais
+//     de réponse, jamais d'erreur) ;
+//   - un curseur persistant (`dernier update_id + 1`) pour ne jamais retraiter
+//     deux fois le même message ;
+//   - une inertie STRICTEMENT identique à l'envoi (mêmes champs, mêmes règles) :
+//     passerelle décochée ou champ vide → aucun accès réseau, aucune erreur.
+
+/// Un message entrant RETENU (venant du propriétaire uniquement).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundMessage {
+    pub update_id: i64,
+    pub text: String,
+}
+
+/// Résultat d'une passe de réception.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundPoll {
+    /// Messages du propriétaire, dans l'ordre reçu.
+    pub messages: Vec<InboundMessage>,
+    /// Curseur à mémoriser pour la prochaine passe (`dernier update_id + 1`).
+    pub next_offset: i64,
+    /// Motif d'inertie si la passerelle n'est pas utilisable.
+    pub inert: Option<&'static str>,
+}
+
+/// Identifiant de discussion d'un objet `chat` Telegram, sous forme de chaîne
+/// (l'API renvoie un nombre pour les personnes/groupes, une chaîne pour
+/// certains canaux).
+fn chat_id_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::String(s) => Some(s.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// Cœur PUR de la réception : extrait d'une réponse `getUpdates` les messages
+/// du PROPRIÉTAIRE, ignore silencieusement tout autre expéditeur (jamais de
+/// réponse, jamais d'erreur), et avance le curseur au-delà de TOUS les updates
+/// reçus (y compris ceux des inconnus : sans cela ils seraient relus à chaque
+/// passe). Aucune I/O.
+pub fn collect_inbound(
+    cfg: &TelegramConfig,
+    offset: i64,
+    response: &serde_json::Value,
+) -> InboundPoll {
+    let owner = cfg.chat_id.trim();
+    let mut messages = Vec::new();
+    let mut next_offset = offset;
+    if let Some(updates) = response.get("result").and_then(|v| v.as_array()) {
+        for update in updates {
+            let Some(update_id) = update.get("update_id").and_then(|v| v.as_i64()) else {
+                continue;
+            };
+            if update_id + 1 > next_offset {
+                next_offset = update_id + 1;
+            }
+            let Some(message) = update.get("message").or_else(|| update.get("edited_message"))
+            else {
+                continue;
+            };
+            let chat_id = message
+                .get("chat")
+                .and_then(|c| c.get("id"))
+                .and_then(chat_id_string);
+            if chat_id.as_deref() != Some(owner) {
+                // Expéditeur inconnu : ignoré silencieusement.
+                continue;
+            }
+            let text = message
+                .get("text")
+                .and_then(|v| v.as_str())
+                .or_else(|| message.get("caption").and_then(|v| v.as_str()))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            if text.is_empty() {
+                continue;
+            }
+            messages.push(InboundMessage { update_id, text });
+        }
+    }
+    InboundPoll {
+        messages,
+        next_offset,
+        inert: None,
+    }
+}
+
+/// Cœur PUR d'une passe de réception, transport INJECTÉ (`fetch(url)`) — comme
+/// `dispatch` pour l'envoi : les tests n'atteignent JAMAIS le réseau.
+pub fn poll_inbound<S>(cfg: &TelegramConfig, offset: i64, fetch: S) -> Result<InboundPoll, String>
+where
+    S: FnOnce(&str) -> Result<serde_json::Value, String>,
+{
+    if let Some(reason) = cfg.inert_reason() {
+        return Ok(InboundPoll {
+            messages: Vec::new(),
+            next_offset: offset,
+            inert: Some(reason),
+        });
+    }
+    match fetch(&cfg.api_updates_url(offset)) {
+        Ok(response) => Ok(collect_inbound(cfg, offset, &response)),
+        // Défense en profondeur : un message d'erreur ne porte jamais le jeton.
+        Err(e) => Err(redact_token(&e, &cfg.token)),
+    }
+}
+
+/// Réception réelle : GET `getUpdates`, délais courts, `without_url` pour ne
+/// jamais exposer le jeton dans un message d'erreur.
+fn http_get_updates(url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .build()
+        .map_err(|e| format!("client http: {}", e.without_url()))?;
+    let resp = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("réseau: {}", e.without_url()))?;
+    if !resp.status().is_success() {
+        return Err(format!("API Telegram: HTTP {}", resp.status().as_u16()));
+    }
+    resp.json::<serde_json::Value>()
+        .map_err(|e| format!("réponse illisible: {}", e))
+}
+
+/// Fichier du curseur de réception, rangé dans les données de l'application
+/// (PAS dans les Paramètres : aucun réglage ajouté, rien à réécrire côté
+/// interface).
+const INBOUND_STATE_FILE: &str = "telegram_inbound_state.json";
+
+fn inbound_state_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join(INBOUND_STATE_FILE))
+}
+
+/// Lit le curseur mémorisé (0 si absent/illisible → on repart du début).
+fn read_inbound_offset(app: &AppHandle) -> i64 {
+    let Some(path) = inbound_state_path(app) else {
+        return 0;
+    };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|v| v.get("offset").and_then(|o| o.as_i64()))
+        .unwrap_or(0)
+}
+
+/// Mémorise le curseur (silencieux : un échec d'écriture n'interrompt rien).
+fn write_inbound_offset(app: &AppHandle, offset: i64) {
+    let Some(path) = inbound_state_path(app) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let payload = serde_json::json!({ "offset": offset }).to_string();
+    let _ = std::fs::write(&path, payload);
+}
+
+/// Commande Tauri : une passe de réception. Appelée à intervalle court par
+/// l'interface (module `telegram-inbound.js`), INDÉPENDAMMENT de l'onglet 🧭.
+///
+/// - passerelle non configurée / décochée → `inert`, SANS accès réseau ;
+/// - sinon → `getUpdates` filtré sur le propriétaire, messages renvoyés à
+///   l'interface avec le curseur atteint ;
+/// - un échec (réseau, API) est silencieux (`status: "error"`) : jamais
+///   d'erreur visible, jamais de jeton dans le message.
+///
+/// Le curseur n'est PAS avancé ici : l'interface appelle `telegram_inbound_commit`
+/// APRÈS la remise durable de chaque message à l'assistant, puis seulement pour
+/// le curseur du dernier message remis. Garantie : rien n'est perdu (un message
+/// non remis est relu à la passe suivante) ET rien n'est remis deux fois (le
+/// curseur des messages déjà remis est mémorisé).
+#[tauri::command]
+pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String> {
+    let cfg = match read_gateway_config(&app) {
+        Some(cfg) => cfg,
+        None => {
+            return Ok(serde_json::json!({
+                "status": "inert",
+                "reason": "configuration indisponible",
+                "messages": [],
+            }))
+        }
+    };
+    let offset = read_inbound_offset(&app);
+    match poll_inbound(&cfg, offset, http_get_updates) {
+        Ok(poll) => {
+            if let Some(reason) = poll.inert {
+                return Ok(serde_json::json!({
+                    "status": "inert",
+                    "reason": reason,
+                    "messages": [],
+                }));
+            }
+            Ok(serde_json::json!({
+                "status": "ok",
+                "nextOffset": poll.next_offset,
+                "messages": poll
+                    .messages
+                    .iter()
+                    .map(|m| serde_json::json!({ "updateId": m.update_id, "text": m.text }))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        Err(e) => {
+            eprintln!("[telegram] réception impossible (ignorée) : {}", e);
+            Ok(serde_json::json!({ "status": "error", "messages": [] }))
+        }
+    }
+}
+
+/// Commande Tauri : mémorise le curseur de réception après remise réussie d'un
+/// message à l'assistant (accusé de lecture du côté de l'interface). Monotone :
+/// le curseur ne recule jamais, même si un appel tardif portait une valeur plus
+/// petite. Silencieux (aucune erreur visible).
+#[tauri::command]
+pub fn telegram_inbound_commit(app: AppHandle, offset: i64) -> Result<(), String> {
+    if offset > read_inbound_offset(&app) {
+        write_inbound_offset(&app, offset);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -458,5 +709,148 @@ mod tests {
             cfg.api_url(),
             "https://api.telegram.org/bot123456:ABC-DEF/sendMessage"
         );
+    }
+
+    // ── Étape 2 (lot 0) : socle d'écoute ──
+
+    fn updates_json(updates: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "ok": true, "result": updates })
+    }
+
+    #[test]
+    fn updates_url_uses_get_updates_with_cursor() {
+        let cfg = ready();
+        assert_eq!(
+            cfg.api_updates_url(41),
+            "https://api.telegram.org/bot123456:ABC-DEF/getUpdates?offset=41&timeout=0"
+        );
+    }
+
+    #[test]
+    fn inbound_keeps_owner_message_and_ignores_stranger() {
+        let cfg = ready(); // propriétaire = 4242
+        let response = updates_json(serde_json::json!([
+            { "update_id": 10, "message": { "chat": { "id": 9999 }, "text": "inconnu" } },
+            { "update_id": 11, "message": { "chat": { "id": 4242 }, "text": "  bonjour Pilot  " } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert_eq!(poll.messages.len(), 1, "un seul expéditeur retenu");
+        assert_eq!(poll.messages[0].update_id, 11);
+        assert_eq!(poll.messages[0].text, "bonjour Pilot");
+        // Le curseur avance AUSSI sur l'update de l'inconnu (sinon il serait relu).
+        assert_eq!(poll.next_offset, 12);
+        assert_eq!(poll.inert, None);
+    }
+
+    #[test]
+    fn inbound_cursor_prevents_reprocessing() {
+        let cfg = ready();
+        let batch = updates_json(serde_json::json!([
+            { "update_id": 7, "message": { "chat": { "id": 4242 }, "text": "premier" } },
+        ]));
+        let first = poll_inbound(&cfg, 0, move |url: &str| {
+            assert!(url.contains("offset=0"), "première passe depuis 0 : {url}");
+            Ok(batch.clone())
+        })
+        .unwrap();
+        assert_eq!(first.messages.len(), 1);
+        assert_eq!(first.next_offset, 8);
+
+        // Seconde passe : on repart du curseur mémorisé → le faux Telegram ne
+        // renvoie plus l'update déjà consommé.
+        let second = poll_inbound(&cfg, first.next_offset, |url: &str| {
+            assert!(url.contains("offset=8"), "seconde passe depuis le curseur : {url}");
+            Ok(updates_json(serde_json::json!([])))
+        })
+        .unwrap();
+        assert!(second.messages.is_empty(), "aucun doublon");
+        assert_eq!(second.next_offset, 8, "curseur stable sans nouvel update");
+    }
+
+    #[test]
+    fn inbound_inert_when_disabled_never_touches_network() {
+        let cfg = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        let poll = poll_inbound(&cfg, 5, |_| panic!("aucun accès réseau attendu")).unwrap();
+        assert_eq!(poll.inert, Some("passerelle désactivée"));
+        assert!(poll.messages.is_empty());
+        assert_eq!(poll.next_offset, 5, "curseur inchangé");
+    }
+
+    #[test]
+    fn inbound_inert_when_token_or_chat_missing_never_touches_network() {
+        let no_token = TelegramConfig {
+            token: "  ".to_string(),
+            ..ready()
+        };
+        let p1 = poll_inbound(&no_token, 3, |_| panic!("aucun accès réseau attendu")).unwrap();
+        assert_eq!(p1.inert, Some("jeton du bot absent"));
+        assert_eq!(p1.next_offset, 3);
+
+        let no_chat = TelegramConfig {
+            chat_id: String::new(),
+            ..ready()
+        };
+        let p2 = poll_inbound(&no_chat, 3, |_| panic!("aucun accès réseau attendu")).unwrap();
+        assert_eq!(p2.inert, Some("identifiant de discussion absent"));
+        assert_eq!(p2.next_offset, 3);
+    }
+
+    #[test]
+    fn inbound_active_gateway_calls_fetch_with_cursor() {
+        let cfg = ready();
+        let response = updates_json(serde_json::json!([
+            { "update_id": 3, "message": { "chat": { "id": 4242 }, "text": "salut" } },
+        ]));
+        let poll = poll_inbound(&cfg, 2, move |url: &str| {
+            assert!(url.ends_with("/bot123456:ABC-DEF/getUpdates?offset=2&timeout=0"));
+            Ok(response.clone())
+        })
+        .unwrap();
+        assert_eq!(poll.messages.len(), 1);
+        assert_eq!(poll.messages[0].text, "salut");
+        assert_eq!(poll.next_offset, 4);
+        assert_eq!(poll.inert, None);
+    }
+
+    #[test]
+    fn inbound_error_never_leaks_token() {
+        let cfg = ready();
+        // Un faux transport qui recrache l'URL (donc le jeton), comme le ferait
+        // le message d'une bibliothèque HTTP.
+        let err = poll_inbound(&cfg, 0, |url: &str| Err(format!("réseau: {url}"))).unwrap_err();
+        assert!(!err.contains("123456:ABC-DEF"), "jeton divulgué : {err}");
+        assert!(err.contains("***"));
+    }
+
+    #[test]
+    fn inbound_skips_messages_without_text() {
+        let cfg = ready();
+        let response = updates_json(serde_json::json!([
+            { "update_id": 1, "message": { "chat": { "id": 4242 } } },
+            { "update_id": 2, "message": { "chat": { "id": 4242 }, "caption": "légende" } },
+            { "update_id": 3, "my_chat_member": {} },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert_eq!(poll.messages.len(), 1, "seul le message porteur de texte est retenu");
+        assert_eq!(poll.messages[0].text, "légende");
+        assert_eq!(poll.next_offset, 4);
+    }
+
+    #[test]
+    fn inbound_matches_string_chat_id() {
+        let cfg = TelegramConfig {
+            chat_id: "  @moncanal  ".to_string(),
+            ..ready()
+        };
+        let response = updates_json(serde_json::json!([
+            { "update_id": 1, "message": { "chat": { "id": "@moncanal" }, "text": "ok" } },
+            { "update_id": 2, "message": { "chat": { "id": "@autre" }, "text": "non" } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert_eq!(poll.messages.len(), 1);
+        assert_eq!(poll.messages[0].text, "ok");
     }
 }

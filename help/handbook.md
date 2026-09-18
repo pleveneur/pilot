@@ -1952,6 +1952,9 @@ Décocher le réglage suffit à tout arrêter.
 - le jeton est conservé dans votre configuration locale et n'est utilisé que
   pour l'envoi ; il n'apparaît dans aucun journal.
 
-⚠️ **La réception des messages Telegram n'existe pas encore** : vous recevez les
-avis de Pilot, mais **Pilot ne lit pas** ce que vous écrivez sur Telegram
-(pas de réponse, pas de pilotage à distance par Telegram à ce stade).
+⚠️ **La réception est partielle (lot 0)** : Pilot **lit désormais** ce que vous
+écrivez à votre bot et le transmet à la conversation de l'Assistant (onglet 🧭),
+qui peut donc tenir compte de votre message. En revanche, **Pilot ne répond pas
+encore sur Telegram** : les réponses de l'Assistant restent dans Pilot. Un
+message écrit par une **autre personne** que vous est **ignoré** (jamais de
+réponse).

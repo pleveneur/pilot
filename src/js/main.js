@@ -11,6 +11,9 @@ import { initOutline, closeOutline } from "./outline.js";
 import { initToasts, toastSuccess, toastError, toastWarning, toastInfo } from "./toast.js";
 import { initUpdater, checkForUpdate } from "./updater.js";
 import { initAnomalyDetection } from "./anomaly.js";
+// Étape 2 Telegram (lot 0) : écoute des messages entrants. Démarrée avec
+// l'application, INDÉPENDAMMENT de l'ouverture de l'onglet 🧭 Assistant.
+import { initTelegramInbound } from "./telegram-inbound.js";
 import { refreshBackendInfo, agentDisplayLabel, checkPiHealth } from "./backend-info.js";
 import { checkPiUpdate } from "./pi-update.js";
 import { initInterproject } from "./interproject.js";
@@ -311,6 +314,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 3d-bis. Détection d'anomalies des agents (tâche 8) : écoute les événements
   // `agent-anomaly` (moniteur Rust) et la sortie de l'agent de diagnostic.
   initAnomalyDetection();
+
+  // 3d-bis. Écoute Telegram (étape 2, lot 0) : interroge la réception côté Rust
+  // (`telegram_poll_inbound`) et remet les messages du propriétaire à
+  // l'Assistant via la porte durable existante. Démarre avec l'application et
+  // reste totalement inerte tant que la passerelle n'est pas configurée.
+  initTelegramInbound();
 
   // 3d-bis. Vérification automatique des mises à jour (Tauri updater)
   initUpdater();

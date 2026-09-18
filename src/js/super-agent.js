@@ -4753,6 +4753,28 @@ async function sendSuperAgentReport(entry, opts = {}) {
 }
 
 /**
+ * Remet à la conversation de l'Assistant un message VENU DE L'EXTÉRIEUR (étape 2
+ * Telegram : message écrit par le propriétaire à son bot). Passe par la MÊME
+ * porte durable que les comptes rendus d'agents : `inject_session_summary`
+ * écrit TOUJOURS la ligne en base (`delivered=0`) avant toute tentative
+ * d'injection, puis le rejeu Rust la délivre dès que l'assistant est libre —
+ * aucun message n'est perdu si l'assistant est occupé ou absent.
+ *
+ * Volontairement SANS effet de bord sur les délégations (à la différence de
+ * `injectSessionSummaryToSuperAgent`) : un message entrant n'est pas un retour
+ * de tâche.
+ * @param {string} text - texte du message reçu.
+ * @returns {Promise<unknown>}
+ */
+export async function injectExternalMessageToSuperAgent(text) {
+  await superAgentReportGate.deliver({
+    summary: truncateSuperAgentSummary(text),
+    projectPath: null,
+    category: "telegram",
+  });
+}
+
+/**
  * File d'attente de la porte : rejoue un compte rendu en attente dès que
  * l'assistant est libre (appelée à la fin de tour et par le poll d'état).
  * @returns {Promise<unknown>}
