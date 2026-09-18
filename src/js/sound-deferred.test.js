@@ -1,8 +1,15 @@
 // Tests unitaires — sound-deferred.js : le son de fin n'est joué qu'une fois
 // l'affichage RÉELLEMENT terminé (aucun son tant que du texte arrive encore,
 // un seul son par fin de mission, délai de sécurité borné).
-import { vi, describe, it, expect } from "vitest";
-import { createDeferredSoundPlayer } from "./sound-deferred.js";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  createDeferredSoundPlayer,
+  setDeferredSoundPlayer,
+  armDoneSound,
+  noteSoundRenderActivity,
+  markSoundRenderIdle,
+  resetDeferredSound,
+} from "./sound-deferred.js";
 
 /**
  * Faux horloge déterministe : planificateur + annulateur injectables, avance
@@ -51,6 +58,60 @@ function setup(opts = {}) {
   });
   return { play, clock, player };
 }
+
+describe("API applicative (singleton branché sur playAssistantSound)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetDeferredSound();
+  });
+  afterEach(() => {
+    resetDeferredSound();
+    setDeferredSoundPlayer(null);
+    vi.useRealTimers();
+  });
+
+  it("le signal de fin arme le son, il n'est joué qu'au repos du rendu", () => {
+    const play = vi.fn();
+    setDeferredSoundPlayer(play);
+    armDoneSound("fin");
+    expect(play).toHaveBeenCalledTimes(0);
+    noteSoundRenderActivity("superagent");
+    expect(play).toHaveBeenCalledTimes(0);
+    expect(markSoundRenderIdle("superagent")).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalledWith("fin");
+  });
+
+  it("un autre onglet qui écrit encore retient le son (Assistant + agent)", () => {
+    const play = vi.fn();
+    setDeferredSoundPlayer(play);
+    armDoneSound("fin");
+    noteSoundRenderActivity("superagent");
+    noteSoundRenderActivity("agent");
+    expect(markSoundRenderIdle("agent")).toBe(false);
+    expect(play).toHaveBeenCalledTimes(0);
+    expect(markSoundRenderIdle("superagent")).toBe(true);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("un seul son par fin de mission (arm + idle répétés)", () => {
+    const play = vi.fn();
+    setDeferredSoundPlayer(play);
+    armDoneSound("fin");
+    markSoundRenderIdle("superagent");
+    armDoneSound("fin");
+    markSoundRenderIdle("superagent");
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("délai de sécurité : sans fin d'affichage signalée, le son finit par partir", () => {
+    const play = vi.fn();
+    setDeferredSoundPlayer(play);
+    armDoneSound("fin");
+    vi.advanceTimersByTime(12000);
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("createDeferredSoundPlayer — attendre la fin de l'affichage", () => {
   it("aucun son tant que du texte arrive encore (surface encore active)", () => {

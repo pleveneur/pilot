@@ -1065,6 +1065,12 @@ apprend et répond.
   aux moments où il notifie l'utilisateur : **fin de tâche d'agent** (son
   « fin »), **point important / anomalie** (son « point »), **question posée**
   (son « attention »).
+- **Son « fin » joué à la fin réelle de l'affichage** : il n'est plus émis au
+  moment où la tâche se termine, mais une fois que le texte a **entièrement fini
+  de s'afficher** à l'écran (flux terminé, y compris le raisonnement lorsqu'il
+  est affiché) — plus de son pendant que la réponse s'écrit encore. Un seul son
+  par fin de mission ; si la fin d'affichage n'est jamais signalée, un délai de
+  sécurité borné finit par le jouer (jamais de silence complet).
 - **Installation automatique** : le script est **créé tout seul** au premier
   usage (dossier `~/.pilot/assistant/` créé si besoin). Aucune intervention
   manuelle n'est requise : le bouton « Tester » fonctionne dès l'installation.

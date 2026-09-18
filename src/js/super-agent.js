@@ -19,6 +19,12 @@ import {
   buildToolLoopFingerprint,
 } from "./loop-detection.js";
 import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
+// Son de fin DIFFÉRÉ jusqu'à la fin réelle de l'affichage (le son ne doit plus
+// partir pendant que la réponse / le raisonnement s'écrit encore). L'émetteur
+// réel (`playAssistantSound`, qui relit `assistant_sound_enabled`) est branché
+// ici : l'inertie du réglage est donc strictement inchangée.
+import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, setDeferredSoundPlayer } from "./sound-deferred.js";
+setDeferredSoundPlayer(playAssistantSound);
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
@@ -492,6 +498,17 @@ let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
 // (le modèle ne les a pas dans son scope, mais le handler module si).
 let superSetBusyHint = () => {};
 let superSetReflecting = () => {};
+
+/**
+ * Fin de flux (agent_end) : le dernier delta est rendu via requestAnimationFrame.
+ * On attend que la frame soit peinte, puis on déclare le rendu au repos — c'est
+ * à cet instant (et pas à la réception du signal de fin) que le son de fin armé
+ * est joué. Repli setTimeout hors navigateur (tests).
+ */
+function flushSuperRenderThenSoundIdle() {
+  const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 0);
+  raf(() => raf(() => markSoundRenderIdle("superagent")));
+}
 
 // ── Questions en attente (chantier #132) ──
 // Boutons de choix réunis avec la barre de saisie principale : quand
@@ -2515,6 +2532,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       }
       pendingText += delta.delta;
       lastAssistantRawText += delta.delta;
+      // Du texte arrive encore à l'écran : aucun son tant que ce n'est pas fini.
+      noteSoundRenderActivity("superagent");
       // Issue #55 : accumuler le flux pour la détection de boucle.
       superLoopBuffer += delta.delta;
       maybeDetectSuperAgentLoop(messagesEl);
@@ -2550,6 +2569,8 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
       // Issue #55 : accumuler la réflexion streamée pour la détection de boucle.
       superLoopBuffer += delta.delta;
       maybeDetectSuperAgentLoop(messagesEl);
+      // La réflexion affichée compte aussi comme du texte en cours d'écriture.
+      noteSoundRenderActivity("superagent");
       if (currentThinkingBlock) {
         if (superShowThinking) {
           const content = currentThinkingBlock.querySelector(".agent-thinking-content");
@@ -2689,6 +2710,9 @@ function handleSuperAgentEvent(payload, messagesEl, statusEl, state, onEnd) {
     // sont écartés). Aucun envoi, aucune erreur si la communication est coupée.
     relayAssistantMessageToTelegram(respText);
     onEnd();
+    // Fin de flux : une fois la dernière frame de rendu peinte, le rendu est au
+    // repos → le son de fin armé (délégation / run d'agents) peut être joué.
+    flushSuperRenderThenSoundIdle();
     if (respBubble && respBase && respText && String(respText).trim()) {
       extendResponseBubbleBadges(respBubble, respBase, respText).catch((e) => console.error("extendResponseBubbleBadges erreur:", e));
     }
@@ -4885,8 +4909,10 @@ async function sendSuperAgentReport(entry, opts = {}) {
       title: "Pilot — Assistant",
       body: `✅ Tâche déléguée terminée (projet « ${del.projectPath || "inconnu"} »). L'agent a répondu à la demande transmise.`,
     }).catch(() => {});
-    // Son « fin » : tâche d'agent terminée (si le son est activé).
-    playAssistantSound("fin").catch(() => {});
+    // Son « fin » : tâche d'agent terminée (si le son est activé). ARMÉ et non
+    // joué ici : le compte rendu va lancer un tour de l'Assistant dont le texte
+    // s'affiche en streaming — le son doit attendre la fin réelle de ce rendu.
+    armDoneSound("fin");
   }
   const res = await invoke("inject_session_summary", {
     projectPath: entry.projectPath || null,
@@ -5014,7 +5040,9 @@ async function finishRunAgentsToSuperAgent(result, projectPath, ok) {
     projectPath,
     result,
     notify: notifySuperAgentDone,
-    playSound: playAssistantSound,
+    // Fin de run : son ARMÉ (pas joué) — il partira à la fin de l'affichage du
+    // compte rendu injecté à l'assistant (cf. `armDoneSound`).
+    playSound: armDoneSound,
     consign: (r) => injectRunAgentsResultToSuperAgent(r, projectPath, { remember: true }),
   });
   return effectiveOk;

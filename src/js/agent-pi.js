@@ -40,6 +40,10 @@ async function getAgentEventChannel(agentId = "default", projectPath = null) {
 }
 import { refreshIcons, setIcon } from "./icons.js";
 import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js";
+// Son de fin DIFFÉRÉ : le chat de l'agent signale son activité d'écriture et son
+// repos, pour qu'un son armé (fin de mission signalée par l'assistant) ne parte
+// jamais pendant que le texte / le raisonnement s'affiche encore.
+import { noteSoundRenderActivity, markSoundRenderIdle } from "./sound-deferred.js";
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
@@ -5872,6 +5876,17 @@ function renderLoopAbandonChoices(messagesEl, state, kind) {
   });
 }
 
+/**
+ * Fin de flux (agent_end) : le dernier delta de texte est rendu via
+ * requestAnimationFrame. On attend que la frame soit peinte, puis on déclare le
+ * rendu de l'onglet au repos — c'est à cet instant que le son de fin armé est
+ * joué (jamais pendant que le texte s'écrit encore). Repli setTimeout (tests).
+ */
+function flushAgentRenderThenSoundIdle() {
+  const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb) => setTimeout(cb, 0);
+  raf(() => raf(() => markSoundRenderIdle("agent")));
+}
+
 async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn, orchFns) {
   const type = payload.type;
 
@@ -6040,6 +6055,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       state.isStreaming = false;
       state.pendingRender = false;
+      // Fin de flux de l'agent : une fois la dernière frame de rendu peinte, le
+      // rendu de l'onglet est au repos (le son de fin armé peut être joué).
+      flushAgentRenderThenSoundIdle();
       // Le dernier prompt a été répondu (agent_end reçu). Une compaction de fond
       // survenant ensuite ne doit PAS re-émettre le prompt (issue #31).
       state.lastPromptAnswered = true;
@@ -6520,6 +6538,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           break;
 
         case "text_delta":
+          // Du texte arrive encore à l'écran : aucun son de fin tant que ce
+          // n'est pas terminé (cf. sound-deferred.js).
+          noteSoundRenderActivity("agent");
           state.pendingText += delta.delta || "";
           state.lastAssistantRawText += delta.delta || "";
           // Issue #37 : accumuler le flux pour la détection de boucle.
@@ -6589,6 +6610,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
           break;
 
         case "thinking_delta":
+          // Le raisonnement affiché compte aussi comme du texte en cours.
+          noteSoundRenderActivity("agent");
           // Issue #37 : accumuler la réflexion streamée pour la détection de boucle.
           state.loopBuffer += delta.delta || "";
           maybeDetectReflectionLoop(state, messagesEl);
