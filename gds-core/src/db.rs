@@ -461,6 +461,105 @@ pub async fn set_user_status(pool: &PgPool, email: &str, status: &str) -> Result
     Ok(())
 }
 
+// ── Gestion des comptes (L3.2) ──
+
+/// Vocabulaire des rôles (L3.1) — source unique côté socle.
+pub const USER_ROLES: [&str; 3] = ["admin", "dev", "standard"];
+
+/// Vocabulaire des statuts (L3.1) — source unique côté socle.
+pub const USER_STATUSES: [&str; 3] = ["pending", "active", "disabled"];
+
+/// `true` si `role` appartient au vocabulaire contraint en base (L3.1).
+pub fn is_known_role(role: &str) -> bool {
+    USER_ROLES.contains(&role)
+}
+
+/// `true` si `status` appartient au vocabulaire contraint en base (L3.1).
+pub fn is_known_status(status: &str) -> bool {
+    USER_STATUSES.contains(&status)
+}
+
+/// Liste les comptes utilisateurs (L3.2), triés par email.
+///
+/// Ne renvoie **jamais** `password_hash` : l'empreinte ne quitte pas la couche
+/// base (elle n'est lue que par `get_user_by_email`, pour la connexion).
+pub async fn list_users(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
+    let rows = sqlx::query("SELECT id, email, name, role, status FROM users ORDER BY email")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Liste users: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.get::<i64, _>("id"),
+                "email": r.get::<String, _>("email"),
+                "name": r.get::<String, _>("name"),
+                "role": r.get::<String, _>("role"),
+                "status": r.get::<String, _>("status"),
+            })
+        })
+        .collect())
+}
+
+/// Change le rôle d'un utilisateur (L3.2).
+///
+/// Refuse un rôle hors vocabulaire (le `CHECK` de `0006_roles.sql` le refuserait
+/// de toute façon en base, mais l'erreur est ici en français et sans détour par
+/// PostgreSQL). Échoue si l'email est inconnu (`rows_affected == 0`).
+pub async fn set_user_role(pool: &PgPool, email: &str, role: &str) -> Result<(), String> {
+    let role = role.trim();
+    if !is_known_role(role) {
+        return Err(format!("Rôle inconnu: {}", role));
+    }
+    let res = sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE email = $2")
+        .bind(role)
+        .bind(email)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Mise à jour rôle: {}", e))?;
+    if res.rows_affected() == 0 {
+        return Err("Utilisateur introuvable".to_string());
+    }
+    Ok(())
+}
+
+/// Remplace l'empreinte du mot de passe d'un utilisateur (L3.2).
+///
+/// L'appelant fournit l'**empreinte** (Argon2id, `WebAuth::hash_password`) :
+/// aucun mot de passe en clair n'entre dans cette couche. Échoue si l'email est
+/// inconnu (`rows_affected == 0`).
+pub async fn reset_user_password(
+    pool: &PgPool,
+    email: &str,
+    password_hash: &str,
+) -> Result<(), String> {
+    let res =
+        sqlx::query("UPDATE users SET password_hash = $1, updated_at = now() WHERE email = $2")
+            .bind(password_hash)
+            .bind(email)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Réinitialisation du mot de passe: {}", e))?;
+    if res.rows_affected() == 0 {
+        return Err("Utilisateur introuvable".to_string());
+    }
+    Ok(())
+}
+
+/// Nombre d'administrateurs **actifs** (L3.2).
+///
+/// Sert de garde-fou « dernier administrateur » : désactiver le dernier
+/// administrateur actif laisserait l'installation sans personne pour gérer les
+/// comptes. Distinct de `count_admins` (L2.4), qui compte les administrateurs
+/// **quel que soit leur statut** et sert de verrou d'initialisation.
+pub async fn count_active_admins(pool: &PgPool) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Comptage des administrateurs actifs: {}", e))
+}
+
 /// Retourne l'id d'un projet par nom (None si absent).
 pub async fn get_project_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM projects WHERE name = $1")
@@ -1751,6 +1850,68 @@ mod tests {
         }
     }
 
+    /// Base **vierge jetable** migrée (lot L3) : `None` si
+    /// `PILOT_GDS_TEST_URL` est absente/invalide ou ne vise pas
+    /// `pilot_gds_test_*` (le test sort alors proprement — CI verte).
+    ///
+    /// Le pool est déclaré **avant** le garde dans le tuple : il est donc fermé
+    /// avant le `DROP DATABASE` du garde (ordre de destruction des tuples).
+    async fn fresh_migrated_test_db() -> Option<(PgPool, GdsTestDbGuard)> {
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!("PILOT_GDS_TEST_URL absente — test ignoré");
+                return None;
+            }
+        };
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return None;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        if !env_db.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_TEST_URL doit viser une base de test `pilot_gds_test_*` \
+                 (base visée: {:?}) — test ignoré",
+                env_db
+            );
+            return None;
+        }
+        assert_ne!(
+            env_db, GDS_DB_NAME,
+            "la base réelle ne doit jamais être ciblée"
+        );
+
+        let test_db = unique_test_db_name();
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création base de test");
+        let guard = GdsTestDbGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(base_opts.clone().database(&test_db))
+            .await
+            .expect("connexion base de test");
+        migrate(&pool).await.expect("migration sur base vierge");
+        admin_pool.close().await;
+        Some((pool, guard))
+    }
+
     #[tokio::test]
     async fn migrate_repairs_eol_checksum_mismatch() {
         // Test d'intégration facultatif : sans serveur Postgres de test fourni
@@ -2444,6 +2605,66 @@ mod tests {
             .await
             .expect("comptage des utilisateurs");
         assert_eq!(count, 1, "seul le compte admis doit exister");
+
+        pool.close().await;
+    }
+
+    // ── L3.2 — comptage des administrateurs ACTIFS (garde-fou « dernier admin ») ──
+    //
+    // Base vierge jetable : seuls les comptes `role = 'admin'` ET
+    // `status = 'active'` comptent. `count_admins` (L2.4), lui, compte tous les
+    // administrateurs quel que soit leur statut (verrou d'initialisation).
+    #[tokio::test]
+    async fn count_active_admins_ignores_disabled_and_non_admin_accounts() {
+        let (pool, _guard) = match fresh_migrated_test_db().await {
+            Some(v) => v,
+            None => return,
+        };
+
+        // 1) Un admin actif, un admin désactivé, un dev actif.
+        create_user(&pool, "a1@gds.test", "", "", "admin", "active")
+            .await
+            .expect("admin actif");
+        create_user(&pool, "a2@gds.test", "", "", "admin", "disabled")
+            .await
+            .expect("admin désactivé");
+        create_user(&pool, "d1@gds.test", "", "", "dev", "active")
+            .await
+            .expect("dev actif");
+        assert_eq!(count_active_admins(&pool).await.unwrap(), 1);
+        assert_eq!(
+            count_admins(&pool).await.unwrap(),
+            2,
+            "count_admins compte les admins quel que soit leur statut"
+        );
+
+        // 2) Un admin `pending` ne compte pas non plus.
+        create_user(&pool, "a3@gds.test", "", "", "admin", "pending")
+            .await
+            .expect("admin en attente");
+        assert_eq!(count_active_admins(&pool).await.unwrap(), 1);
+
+        // 3) Désactiver le seul admin actif (réutilise `set_user_status`) → 0.
+        set_user_status(&pool, "a1@gds.test", "disabled")
+            .await
+            .expect("désactivation");
+        assert_eq!(count_active_admins(&pool).await.unwrap(), 0);
+
+        // 4) Réactivation → 1.
+        set_user_status(&pool, "a1@gds.test", "active")
+            .await
+            .expect("réactivation");
+        assert_eq!(count_active_admins(&pool).await.unwrap(), 1);
+
+        // 5) Le vocabulaire exposé est bien celui contraint en base (L3.1).
+        for r in USER_ROLES {
+            assert!(is_known_role(r), "rôle admis rejeté: {}", r);
+        }
+        for s in USER_STATUSES {
+            assert!(is_known_status(s), "statut admis rejeté: {}", s);
+        }
+        assert!(!is_known_role("root"));
+        assert!(!is_known_status("zzz"));
 
         pool.close().await;
     }

@@ -236,6 +236,20 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/admin/ssh-keys/refresh",
             post(gds_admin_ssh_keys_refresh::<S>),
         )
+        // ── L3.2 : gestion des comptes (création, liste, rôle, statut, mot de passe) ──
+        .route(
+            "/api/gds/admin/users",
+            get(gds_admin_users::<S>).post(gds_admin_user_create::<S>),
+        )
+        .route("/api/gds/admin/users/role", post(gds_admin_user_role::<S>))
+        .route(
+            "/api/gds/admin/users/status",
+            post(gds_admin_user_status::<S>),
+        )
+        .route(
+            "/api/gds/admin/users/password",
+            post(gds_admin_user_password::<S>),
+        )
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -289,6 +303,292 @@ async fn gds_admin_ssh_keys_refresh<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Res
                 "ssh_dir": crate::ssh::authorized_keys_dir_in(&home),
             }))
             .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Gestion des comptes (L3.2) — routes d'administration ──
+//
+// Montées dans `admin_routes`, donc derrière `auth_middleware` **puis**
+// `require_admin` (rôle `admin` exigé). Règle constante : aucune réponse ne
+// contient jamais un mot de passe ni une empreinte.
+
+/// `GET /api/gds/admin/users` — **réservée au rôle `admin`**.
+/// Liste les comptes (id, email, name, role, status), triés par email.
+async fn gds_admin_users<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_users(&pool).await {
+        Ok(list) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "users_list", "admin", true);
+            Json(json!({ "users": list })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUserCreateBody {
+    email: String,
+    #[serde(default)]
+    name: String,
+    password: String,
+    #[serde(default = "default_user_role")]
+    role: String,
+}
+
+/// Rôle par défaut d'un compte créé par un administrateur (`dev`, comme la
+/// valeur par défaut de la base).
+fn default_user_role() -> String {
+    "dev".to_string()
+}
+
+/// `POST /api/gds/admin/users` — **réservée au rôle `admin`**.
+///
+/// Crée un compte directement **actif** (l'attente de validation ne concerne que
+/// l'auto-inscription publique `users/register`). Réponses :
+/// - `200 { ok, id, email, role, status }` ;
+/// - `400` : email/mot de passe vide ou rôle hors vocabulaire ;
+/// - `409` : email déjà inscrit ;
+/// - `500` : base injoignable ou erreur d'écriture.
+///
+/// Le mot de passe est haché (Argon2id) et n'est jamais renvoyé.
+async fn gds_admin_user_create<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<AdminUserCreateBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    if email.is_empty() || body.password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Email et mot de passe requis" })),
+        )
+            .into_response();
+    }
+    let role = body.role.trim();
+    if !gds_db::is_known_role(role) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Rôle inconnu: {}", role) })),
+        )
+            .into_response();
+    }
+    match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "Email déjà inscrit" })),
+            )
+                .into_response()
+        }
+        Ok(None) => {}
+        Err(e) => return err_response(e),
+    }
+    let hash = match WebAuth::hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::create_user(&pool, &email, &body.name, &hash, role, "active").await {
+        Ok(id) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "user_create", &email, true);
+            Json(json!({
+                "ok": true,
+                "id": id,
+                "email": email,
+                "role": role,
+                "status": "active",
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUserRoleBody {
+    email: String,
+    role: String,
+}
+
+/// `POST /api/gds/admin/users/role` — **réservée au rôle `admin`**.
+/// Change le rôle d'un compte. Réponses : `200`, `400` (rôle hors vocabulaire),
+/// `404` (email inconnu), `500`.
+async fn gds_admin_user_role<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<AdminUserRoleBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    let role = body.role.trim();
+    if !gds_db::is_known_role(role) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Rôle inconnu: {}", role) })),
+        )
+            .into_response();
+    }
+    match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Utilisateur introuvable" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    }
+    match gds_db::set_user_role(&pool, &email, role).await {
+        Ok(()) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "user_role", &email, true);
+            Json(json!({ "ok": true, "email": email, "role": role })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUserStatusBody {
+    email: String,
+    status: String,
+}
+
+/// `POST /api/gds/admin/users/status` — **réservée au rôle `admin`**.
+///
+/// Change le statut d'un compte en **réutilisant** `gds_db::set_user_status`.
+/// Garde-fou « dernier administrateur » : la désactivation du **dernier**
+/// administrateur **actif** est refusée (`409`) — l'installation ne doit jamais
+/// se retrouver sans personne pour gérer les comptes. Réponses : `200`, `400`
+/// (statut hors vocabulaire), `404` (email inconnu), `409` (dernier admin),
+/// `500`.
+async fn gds_admin_user_status<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<AdminUserStatusBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    let status = body.status.trim();
+    if !gds_db::is_known_status(status) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Statut inconnu: {}", status) })),
+        )
+            .into_response();
+    }
+    // Le compte est lu d'abord : 404 si l'email est inconnu, et le garde-fou
+    // n'a besoin de compter que pour la désactivation d'un admin ACTIF.
+    let user = match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Utilisateur introuvable" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    };
+    if status == "disabled" && user.role == "admin" && user.status == "active" {
+        match gds_db::count_active_admins(&pool).await {
+            Ok(n) if n <= 1 => {
+                ctx.audit().record(
+                    &authed.ip,
+                    &authed.key,
+                    "user_disable_denied",
+                    &email,
+                    false,
+                );
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "Impossible de désactiver le dernier administrateur actif"
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(_) => {}
+            Err(e) => return err_response(e),
+        }
+    }
+    match gds_db::set_user_status(&pool, &email, status).await {
+        Ok(()) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "user_status", &email, true);
+            Json(json!({ "ok": true, "email": email, "status": status })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AdminUserPasswordBody {
+    email: String,
+    password: String,
+}
+
+/// `POST /api/gds/admin/users/password` — **réservée au rôle `admin`**.
+/// Réinitialise le mot de passe d'un compte. Le mot de passe n'est ni
+/// journalisé, ni renvoyé : seule son empreinte (Argon2id) est écrite.
+/// Réponses : `200`, `400` (mot de passe vide), `404` (email inconnu), `500`.
+async fn gds_admin_user_password<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<AdminUserPasswordBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    if body.password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Mot de passe requis" })),
+        )
+            .into_response();
+    }
+    match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Utilisateur introuvable" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    }
+    let hash = match WebAuth::hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::reset_user_password(&pool, &email, &hash).await {
+        Ok(()) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "user_password", &email, true);
+            Json(json!({ "ok": true, "email": email })).into_response()
         }
         Err(e) => err_response(e),
     }

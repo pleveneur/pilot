@@ -773,6 +773,356 @@ mod tests {
         pool.close().await;
     }
 
+    /// Requête JSON authentifiée (jeton) vers `uri`, IP source de test.
+    fn admin_json_request(
+        method: &str,
+        uri: &str,
+        token: &str,
+        body: serde_json::Value,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", token))
+            .extension(ConnectInfo(test_addr()))
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    /// Compteur de bases jetables du module de tests (évite toute collision de
+    /// nom entre tests exécutés en parallèle).
+    static HTTP_TEST_DB_SEQ: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Base jetable du test HTTP : `DROP DATABASE` garanti au `Drop` (thread
+    /// dédié, un `Drop` ne pouvant pas `.await`), sur le modèle de
+    /// `GdsTestDbGuard` du socle. Indispensable pour que deux tests HTTP
+    /// n'écrivent pas en parallèle dans la même table `users`.
+    struct HttpTestDbGuard {
+        admin_url: String,
+        db_name: String,
+    }
+
+    impl Drop for HttpTestDbGuard {
+        fn drop(&mut self) {
+            let url = self.admin_url.clone();
+            let name = self.db_name.clone();
+            let _ = std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    let _ = rt.block_on(async move {
+                        if let Ok(pool) = gds_core::db::connect(&url).await {
+                            let _ = sqlx::query(
+                                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                                 WHERE datname = $1 AND pid <> pg_backend_pid()",
+                            )
+                            .bind(&name)
+                            .execute(&pool)
+                            .await;
+                            let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", name))
+                                .execute(&pool)
+                                .await;
+                            pool.close().await;
+                        }
+                    });
+                }
+            })
+            .join();
+        }
+    }
+
+    /// L3.2 — **scénario HTTP complet sur une base réelle jetable** (facultatif) :
+    /// l'admin crée un compte, le liste (sans empreinte de mot de passe), change
+    /// son rôle, réinitialise son mot de passe, le désactive — puis la connexion
+    /// du compte est **REFUSÉE** (403). Vérifie aussi le garde-fou « dernier
+    /// administrateur actif » (désactivation refusée en 409) et le refus d'un
+    /// jeton non administrateur (403) sur la gestion des comptes.
+    ///
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test ne s'exécute pas (CI verte).
+    /// L'URL doit désigner une base **jetable** `pilot_gds_test_*`.
+    #[tokio::test]
+    async fn accounts_create_list_disable_then_login_refused() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "accounts_create_list_disable_then_login_refused: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        // Base **dédiée** à ce test : créée ici, supprimée au Drop. Sans cela,
+        // les deux tests HTTP écriraient en parallèle dans la même table
+        // `users` de la base d'URL et se marcheraient dessus.
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_http_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: std::env::temp_dir(),
+        });
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let dev = ctx
+            .auth
+            .create_session_as("dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let email = "compte-l32@gds.test";
+        let password = "mot-de-passe-l32";
+        let new_password = "mot-de-passe-l32-nouveau";
+
+        // 1) Création par l'admin (compte directement ACTIF).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users",
+                &admin,
+                serde_json::json!({
+                    "email": email, "name": "Compte L32",
+                    "password": password, "role": "dev"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["role"], serde_json::json!("dev"));
+        assert_eq!(value["status"], serde_json::json!("active"));
+        assert!(
+            !value.to_string().contains(password),
+            "la réponse ne doit jamais contenir le mot de passe"
+        );
+
+        // 1 bis) Un rôle hors vocabulaire est refusé (400), aucun second compte.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users",
+                &admin,
+                serde_json::json!({
+                    "email": "autre-l32@gds.test",
+                    "password": "pw", "role": "root"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 2) Liste : le compte apparaît, sans empreinte de mot de passe.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/admin/users",
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        let users = value["users"].as_array().expect("tableau users");
+        assert_eq!(users.len(), 1, "un seul compte : {:?}", users);
+        assert_eq!(users[0]["email"], serde_json::json!(email));
+        assert_eq!(users[0]["role"], serde_json::json!("dev"));
+        assert_eq!(users[0]["status"], serde_json::json!("active"));
+        assert!(
+            !value.to_string().contains("password_hash"),
+            "l'empreinte de mot de passe ne doit pas sortir de la base"
+        );
+
+        // 3) La connexion du compte fonctionne (statut actif).
+        let res = app
+            .clone()
+            .oneshot(login_request(email, password))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["role"], serde_json::json!("dev"));
+
+        // 3 bis) Changement de rôle → `standard`, visible dans la liste.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/role",
+                &admin,
+                serde_json::json!({ "email": email, "role": "standard" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["role"], serde_json::json!("standard"));
+
+        // 3 ter) Réinitialisation du mot de passe : l'ancien ne vaut plus rien,
+        // le nouveau ouvre le compte.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/password",
+                &admin,
+                serde_json::json!({ "email": email, "password": new_password }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(
+            !json_body(res).await.to_string().contains(new_password),
+            "la réponse ne doit jamais contenir le mot de passe"
+        );
+        let res = app
+            .clone()
+            .oneshot(login_request(email, password))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let res = app
+            .clone()
+            .oneshot(login_request(email, new_password))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // 4) Garde-fou « dernier administrateur actif » : un admin actif créé
+        //    par l'admin ne peut pas être désactivé (409).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users",
+                &admin,
+                serde_json::json!({
+                    "email": "dernier-admin-l32@gds.test",
+                    "password": "pw-dernier-admin", "role": "admin"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(gds_core::db::count_active_admins(&pool).await.unwrap(), 1);
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/status",
+                &admin,
+                serde_json::json!({
+                    "email": "dernier-admin-l32@gds.test", "status": "disabled"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        let value = json_body(res).await;
+        assert!(
+            value["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("dernier administrateur"),
+            "message d'erreur inattendu : {}",
+            value
+        );
+        assert_eq!(
+            gds_core::db::count_active_admins(&pool).await.unwrap(),
+            1,
+            "l'administrateur actif doit être intact"
+        );
+
+        // 5) Désactivation du compte (autorisée) → sa connexion est REFUSÉE.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/users/status",
+                &admin,
+                serde_json::json!({ "email": email, "status": "disabled" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["status"], serde_json::json!("disabled"));
+        let res = app
+            .clone()
+            .oneshot(login_request(email, new_password))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::FORBIDDEN,
+            "un compte désactivé ne doit plus pouvoir se connecter"
+        );
+
+        // 6) Un jeton non administrateur est refusé (403) sur la gestion des
+        //    comptes (le garde `require_admin` s'applique).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/admin/users",
+                &dev,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // Nettoyage : la base jetable est supprimée par son garde au Drop
+        // (aucun `DELETE FROM users` nécessaire — elle est dédiée à ce test).
+        pool.close().await;
+        admin_pool.close().await;
+    }
+
     // ── L2.5 — dépôts git dans le conteneur ──
 
     /// `POST /api/gds/admin/ssh-keys/refresh` avec un jeton éventuel.

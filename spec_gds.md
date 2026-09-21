@@ -289,9 +289,17 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - V1 : tous les inscrits (ayant les codes d'accès serveur) ont accès à **tous**
   les projets (`project_members` est rempli « tout le monde » par défaut ; la
   table est prête pour une restriction V2).
-- **Rôles** : `users.role` supporte au minimum `admin` (peut désigner la
-  personne autorisée au mode urgent, §5.4) et `dev`. V1 : le premier user
-  provisionné est `admin`.
+- **Rôles** : `users.role` ∈ {`admin`, `dev`, `standard`} et `users.status` ∈
+  {`pending`, `active`, `disabled`}, **contraints en base** (migration
+  `0006_roles.sql`). V1 : le premier user provisionné est `admin` ; `admin` peut
+  désigner la personne autorisée au mode urgent (§5.4). **Gestion des comptes
+  côté serveur** (routes d'administration, rôle `admin` exigé) :
+  `GET /api/gds/admin/users` (liste : id, email, nom, rôle, statut — **jamais**
+  d'empreinte de mot de passe), `POST /api/gds/admin/users` (création d'un
+  compte directement `active`), `POST .../users/role`, `POST .../users/status`
+  (réutilise `set_user_status` ; la désactivation du **dernier administrateur
+  actif** est refusée en `409`) et `POST .../users/password`
+  (réinitialisation, empreinte Argon2id écrite, mot de passe jamais renvoyé).
 
 ### 2.3 Migrations
 
