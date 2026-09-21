@@ -14,6 +14,13 @@
 //! (`L2.3`), compte admin (`L2.4`), clés SSH (`L2.5`/`L2.6`), supervision
 //! (`L2.7`), conteneur (`L2.8`). L2.2 (routes de santé publique et d'état
 //! administrateur) est monté par `gds_core::http::server_router`.
+//!
+//! Initialisation de la base (micro-tâche L2.3) : `gds-server --init-db` prépare
+//! la base à partir d'un cluster **vide** (création du rôle et de la base
+//! applicative si absents, via `gds_core::db::provision_with`, puis application
+//! des migrations embarquées) et rend la main. L'entrypoint du conteneur appelle
+//! ce mode AVANT de lancer le service ; l'opération est idempotente, donc un
+//! second démarrage conserve les données du volume.
 
 mod config;
 
@@ -25,12 +32,79 @@ use gds_core::rate::WebGuard;
 use gds_core::server_status;
 use std::sync::Arc;
 
+/// Option de démarrage reconnue : prépare la base puis rend la main (appelée par
+/// l'entrypoint du conteneur, cf. « Initialisation de la base » ci-dessus).
+const INIT_DB_FLAG: &str = "--init-db";
+
 #[tokio::main]
 async fn main() {
+    if std::env::args().skip(1).any(|a| a == INIT_DB_FLAG) {
+        if let Err(e) = init_db().await {
+            eprintln!("gds-server : initialisation de la base impossible : {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(e) = run().await {
         eprintln!("gds-server : démarrage impossible : {}", e);
         std::process::exit(1);
     }
+}
+
+/// Prépare la base du service à partir d'un cluster vierge (L2.3) :
+///
+/// 1. pool d'**administration** sur la base de maintenance (compte
+///    superutilisateur) puis `provision_with` — crée le rôle et la base
+///    applicative s'ils sont absents, sans jamais recréer ni vider une base
+///    existante (les données du volume sont conservées) ;
+/// 2. pool **applicatif** (rôle dédié, non-superuser) puis `migrate` —
+///    application des migrations embarquées, idempotente.
+///
+/// Les journaux montrent ce qui a réellement été créé puis la version de
+/// migration atteinte (aucun secret n'y figure). Aucune autre étape de L2 n'est
+/// faite ici : le compte administrateur relève de L2.4, les clés SSH de L2.5.
+async fn init_db() -> Result<(), String> {
+    let cfg = ServerConfig::from_env()?;
+
+    // 1. Préparation du rôle + de la base (base de maintenance obligatoirement
+    //    présente, contrairement à la base applicative au premier démarrage).
+    let admin = config::open_pool_with_retry(
+        config::admin_options(&cfg),
+        "connexion d'administration",
+    )
+    .await?;
+    let outcome =
+        gds_core::db::provision_with(&admin, &cfg.db_name, &cfg.db_user, &cfg.db_password)
+            .await?;
+    if outcome.database_created {
+        println!("gds-server : base « {} » créée", cfg.db_name);
+    } else {
+        println!(
+            "gds-server : base « {} » déjà présente (données conservées)",
+            cfg.db_name
+        );
+    }
+    if outcome.role_created {
+        println!("gds-server : rôle « {} » créé", cfg.db_user);
+    } else {
+        println!("gds-server : rôle « {} » déjà présent", cfg.db_user);
+    }
+    admin.close().await;
+
+    // 2. Migrations embarquées, appliquées par le rôle applicatif.
+    let pool = config::open_pool_with_retry(config::pg_options(&cfg), "base applicative").await?;
+    let versions = gds_core::db::embedded_migration_versions();
+    println!(
+        "gds-server : migrations embarquées : {}",
+        gds_core::db::format_migration_versions(&versions)
+    );
+    gds_core::db::migrate(&pool).await?;
+    println!(
+        "gds-server : migrations appliquées jusqu'à la version {:04}",
+        server_status::applied_migration(&pool).await?
+    );
+    pool.close().await;
+    Ok(())
 }
 
 /// Séquence de démarrage complète, isolée de `main` pour être lisible et

@@ -96,6 +96,92 @@ where
     Err(last_err)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Initialisation de la base (refonte GDS, L2.3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Base de MAINTENANCE visée par le pool d'administration : elle existe toujours
+/// dans un cluster PostgreSQL, contrairement à la base applicative qui peut
+/// manquer au premier démarrage.
+pub const ADMIN_DB_NAME: &str = "postgres";
+/// Superutilisateur PostgreSQL par défaut du bootstrap.
+pub const DEFAULT_DB_ADMIN_USER: &str = "postgres";
+
+/// Paramètres du compte d'ADMINISTRATION PostgreSQL — utilisés **uniquement**
+/// pour préparer la base (création du rôle et de la base applicative, L2.3),
+/// jamais par le service en fonctionnement (qui tourne avec le rôle applicatif
+/// non-superuser). Aucune URL n'est construite : le mot de passe ne transite pas
+/// par une chaîne et n'est jamais journalisé.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbAdminSettings {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+}
+
+/// Lit les paramètres d'administration via un `lookup` injecté (testable sans
+/// environnement) :
+///   - `GDS_DB_ADMIN_HOST` (défaut : hôte PostgreSQL du service) ;
+///   - `GDS_DB_ADMIN_USER` (défaut `postgres`) ;
+///   - `GDS_DB_ADMIN_PASSWORD` (défaut : `POSTGRES_PASSWORD`).
+/// Le `.env` documenté par la spec (§6.4) ne contient donc qu'un seul secret.
+pub fn db_admin_settings<F>(cfg: &ServerConfig, lookup: F) -> DbAdminSettings
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let get = |name: &str| {
+        lookup(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    DbAdminSettings {
+        host: get("GDS_DB_ADMIN_HOST").unwrap_or_else(|| cfg.db_host.clone()),
+        port: pg_port(cfg),
+        user: get("GDS_DB_ADMIN_USER").unwrap_or_else(|| DEFAULT_DB_ADMIN_USER.to_string()),
+        password: get("GDS_DB_ADMIN_PASSWORD").unwrap_or_else(|| cfg.db_password.clone()),
+    }
+}
+
+/// Options de connexion du pool d'administration (base de maintenance).
+pub fn admin_options_from(settings: &DbAdminSettings) -> PgConnectOptions {
+    PgConnectOptions::new()
+        .host(settings.host.as_str())
+        .port(settings.port)
+        .username(settings.user.as_str())
+        .password(settings.password.as_str())
+        .database(ADMIN_DB_NAME)
+}
+
+/// Options d'administration depuis l'environnement réel du service.
+pub fn admin_options(cfg: &ServerConfig) -> PgConnectOptions {
+    admin_options_from(&db_admin_settings(cfg, |name| std::env::var(name).ok()))
+}
+
+/// Ouvre un pool avec la politique de reprise du service : première tentative
+/// immédiate, puis attente progressive (`startup_delays`). `label` désigne le
+/// pool dans les traces de progression (aucun secret n'y figure).
+pub async fn open_pool_with_retry(opts: PgConnectOptions, label: &str) -> Result<PgPool, String> {
+    retry_with_delays(&startup_delays(), |attempt| {
+        let opts = opts.clone();
+        async move {
+            match open_pool(opts).await {
+                Ok(pool) => Ok(pool),
+                Err(e) => {
+                    eprintln!(
+                        "gds-server : {} non prête (tentative {}) : {}",
+                        label,
+                        attempt + 1,
+                        e
+                    );
+                    Err(e)
+                }
+            }
+        }
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +281,44 @@ mod tests {
         let result: Result<u32, String> = retry_with_delays(&[], |_attempt| async { Ok(1) })
             .await;
         assert!(result.is_err());
+    }
+
+    // ── L2.3 — préparation de la base : paramètres d'administration ──
+    #[test]
+    fn db_admin_settings_default_to_the_service_host_and_postgres_user() {
+        let c = cfg(&[("GDS_DB_HOST", "db.internal"), ("GDS_DB_PORT", "6543")]);
+        let s = db_admin_settings(&c, |_| None);
+        assert_eq!(s.host, "db.internal", "hôte par défaut = hôte PostgreSQL du service");
+        assert_eq!(s.port, 6543, "port par défaut = port PostgreSQL du service");
+        assert_eq!(s.user, DEFAULT_DB_ADMIN_USER);
+        assert_eq!(s.password, "pw", "mot de passe par défaut = POSTGRES_PASSWORD");
+    }
+
+    #[test]
+    fn db_admin_settings_read_overrides_and_ignore_empty_values() {
+        let c = cfg(&[]);
+        let s = db_admin_settings(&c, |name| match name {
+            "GDS_DB_ADMIN_HOST" => Some("/var/run/postgresql".to_string()),
+            "GDS_DB_ADMIN_USER" => Some("   ".to_string()),
+            "GDS_DB_ADMIN_PASSWORD" => Some("admin-secret".to_string()),
+            _ => None,
+        });
+        assert_eq!(s.host, "/var/run/postgresql");
+        assert_eq!(s.user, DEFAULT_DB_ADMIN_USER, "valeur vide → défaut");
+        assert_eq!(s.password, "admin-secret");
+    }
+
+    #[test]
+    fn admin_options_target_the_maintenance_database() {
+        let opts = admin_options_from(&DbAdminSettings {
+            host: "h".to_string(),
+            port: 6543,
+            user: DEFAULT_DB_ADMIN_USER.to_string(),
+            password: "s".to_string(),
+        });
+        assert_eq!(opts.get_host(), "h");
+        assert_eq!(opts.get_port(), 6543);
+        assert_eq!(opts.get_username(), DEFAULT_DB_ADMIN_USER);
+        assert_eq!(opts.get_database(), Some(ADMIN_DB_NAME));
     }
 }

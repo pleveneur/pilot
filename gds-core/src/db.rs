@@ -35,34 +35,59 @@ pub async fn connect(addr: &str) -> Result<PgPool, String> {
         .map_err(|e| format!("Connexion PostgreSQL: {}", e))
 }
 
-/// Provisionne la base GDS : crée `db_name` + l'utilisateur dédié (idempotent).
-/// `admin_url` = URL d'un compte superuser (ex: postgres://postgres:pass@host:5432/postgres).
-/// Le mot de passe de l'utilisateur dédié est passé en paramètre (jamais codé).
-pub async fn provision(
-    admin_url: &str,
+/// Issue d'une préparation de base (refonte GDS, L2.3) : ce que CET appel a
+/// réellement créé. Sert aux journaux d'initialisation du service
+/// (« base créée » / « base déjà présente ») sans jamais exposer de secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProvisionOutcome {
+    /// La base applicative a été créée par cet appel.
+    pub database_created: bool,
+    /// Le rôle applicatif a été créé par cet appel.
+    pub role_created: bool,
+}
+
+/// Prépare la base GDS sur un pool d'ADMINISTRATION **déjà ouvert** : crée
+/// `db_name` + l'utilisateur dédié (idempotent) et attribue la PROPRIÉTÉ de la
+/// base au rôle applicatif. Le mot de passe du rôle dédié est passé en
+/// paramètre (jamais codé, jamais journalisé).
+///
+/// Corps extrait à l'identique de `provision` (refonte GDS, L2.3) : le service
+/// autonome ouvre son pool d'administration depuis l'environnement et n'a donc
+/// aucune URL à construire (aucun mot de passe ne transite par une chaîne).
+///
+/// Idempotent : une base ou un rôle déjà présent n'est jamais recréé ni vidé
+/// (les données restent en place) ; `ProvisionOutcome` indique seulement ce qui
+/// a été créé par CET appel.
+///
+/// **Propriété de la base** : PostgreSQL 15+ a retiré le droit `CREATE` sur le
+/// schéma `public` à `PUBLIC` ; sans cette propriété, le rôle applicatif ne
+/// pourrait pas appliquer les migrations (`permission denied for schema
+/// public`, constaté sur PostgreSQL 16.15). Le rôle reste **non-superuser** :
+/// il n'agit que dans SA base.
+pub async fn provision_with(
+    admin: &PgPool,
     db_name: &str,
     user: &str,
     password: &str,
-) -> Result<(), String> {
-    let admin = connect(admin_url).await?;
+) -> Result<ProvisionOutcome, String> {
     // Base : CREATE DATABASE ne peut pas être paramétré ni transactionnel.
     let db_exists: bool = sqlx::query("SELECT 1 FROM pg_database WHERE datname = $1")
         .bind(db_name)
-        .fetch_optional(&admin)
+        .fetch_optional(admin)
         .await
         .map_err(|e| format!("Vérif base: {}", e))?
         .is_some();
     if !db_exists {
         let sql = format!("CREATE DATABASE \"{}\"", db_name);
         sqlx::query(&sql)
-            .execute(&admin)
+            .execute(admin)
             .await
             .map_err(|e| format!("Création base: {}", e))?;
     }
     // Utilisateur dédié (droits limités au schéma applicatif).
     let user_exists: bool = sqlx::query("SELECT 1 FROM pg_roles WHERE rolname = $1")
         .bind(user)
-        .fetch_optional(&admin)
+        .fetch_optional(admin)
         .await
         .map_err(|e| format!("Vérif user: {}", e))?
         .is_some();
@@ -70,16 +95,41 @@ pub async fn provision(
         let pwd = password.replace('\'', "''");
         let sql = format!("CREATE USER \"{}\" WITH PASSWORD '{}'", user, pwd);
         sqlx::query(&sql)
-            .execute(&admin)
+            .execute(admin)
             .await
             .map_err(|e| format!("Création user: {}", e))?;
     }
     // Droits sur la base.
     let sql = format!("GRANT ALL PRIVILEGES ON DATABASE \"{}\" TO \"{}\"", db_name, user);
     sqlx::query(&sql)
-        .execute(&admin)
+        .execute(admin)
         .await
         .map_err(|e| format!("Grant: {}", e))?;
+    // Propriété de la base au rôle applicatif (voir la doc ci-dessus) : requise
+    // pour que `migrate` puisse créer ses tables dans le schéma `public`.
+    let sql = format!("ALTER DATABASE \"{}\" OWNER TO \"{}\"", db_name, user);
+    sqlx::query(&sql)
+        .execute(admin)
+        .await
+        .map_err(|e| format!("Propriété de la base: {}", e))?;
+    Ok(ProvisionOutcome {
+        database_created: !db_exists,
+        role_created: !user_exists,
+    })
+}
+
+/// Provisionne la base GDS depuis une URL d'administration : ouvre le pool
+/// (compte superuser, ex: `postgres://postgres:pass@host:5432/postgres`) puis
+/// délègue à `provision_with`. Signature et comportement conservés pour les
+/// appelants existants (desk, routes web).
+pub async fn provision(
+    admin_url: &str,
+    db_name: &str,
+    user: &str,
+    password: &str,
+) -> Result<(), String> {
+    let admin = connect(admin_url).await?;
+    provision_with(&admin, db_name, user, password).await?;
     Ok(())
 }
 
@@ -104,6 +154,28 @@ pub enum ChecksumDivergence {
 /// SHA-384 d'un contenu (algorithme d'empreinte des migrations sqlx).
 pub fn sha384_bytes(data: &[u8]) -> Vec<u8> {
     Sha384::digest(data).to_vec()
+}
+
+/// Versions des migrations embarquées (`0001`, `0002`, …), ordre croissant —
+/// tel que le migrateur sqlx les applique. Pure (aucune base requise) : sert aux
+/// journaux d'initialisation du service (L2.3), qui doivent montrer QUELLES
+/// migrations sont appliquées, et aux tests d'invariant du registre.
+pub fn embedded_migration_versions() -> Vec<i64> {
+    sqlx::migrate!().iter().map(|m| m.version).collect()
+}
+
+/// Rend une liste de versions de migration sous la forme lisible
+/// « 0001, 0002, 0003 » (journaux d'initialisation du service). Une liste vide
+/// rend `(aucune)`. Pure — testable sans base.
+pub fn format_migration_versions(versions: &[i64]) -> String {
+    if versions.is_empty() {
+        return "(aucune)".to_string();
+    }
+    versions
+        .iter()
+        .map(|v| format!("{:04}", v))
+        .collect::<Vec<String>>()
+        .join(", ")
 }
 
 /// Classe une divergence d'empreinte (pure, testable sans base).
@@ -1495,6 +1567,28 @@ mod tests {
         );
     }
 
+    // ── L2.3 — versions embarquées et leur rendu (journaux d'init) ──
+    #[test]
+    fn embedded_migration_versions_are_sorted_from_one() {
+        let versions = embedded_migration_versions();
+        assert!(!versions.is_empty(), "aucune migration embarquée trouvée");
+        assert_eq!(versions[0], 1, "la première migration embarquée doit être 0001");
+        let mut sorted = versions.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            versions, sorted,
+            "versions embarquées non triées ou dupliquées"
+        );
+    }
+
+    #[test]
+    fn format_migration_versions_pads_and_handles_empty() {
+        assert_eq!(format_migration_versions(&[1, 2, 7]), "0001, 0002, 0007");
+        assert_eq!(format_migration_versions(&[12]), "0012");
+        assert_eq!(format_migration_versions(&[]), "(aucune)");
+    }
+
     // ── T3(c) — classification pure des divergences d'empreinte ──
     #[test]
     fn classify_checksum_identical() {
@@ -1831,5 +1925,221 @@ mod tests {
         assert_eq!(before, after, "le registre ne doit pas être modifié");
 
         pool.close().await;
+    }
+
+    // ── L2.3 — préparation d'une base VIDE, puis conservation des données ──
+    //
+    // Test d'intégration facultatif, même isolation que les tests T5 : sans
+    // `PILOT_GDS_TEST_URL`, il ne s'exécute pas (la CI reste verte). L'URL sert
+    // de base d'ADMINISTRATION (base de maintenance, ex. `postgres`) ; la base
+    // et le rôle créés par le test portent le préfixe jetable `pilot_gds_test_`
+    // et sont supprimés à la fin (garde `Drop`), y compris en cas de panique.
+    // La base réelle `pilot_gds` ne peut JAMAIS être ciblée.
+
+    /// Mot de passe du rôle jetable du test L2.3 (aucune valeur de production).
+    const L23_TEST_ROLE_PASSWORD: &str = "l23-test-password";
+
+    /// Base + rôle jetables du test L2.3 : `DROP DATABASE` puis `DROP ROLE`
+    /// garantis au `Drop` (thread dédié : un `Drop` ne peut pas `.await`).
+    struct L23TestGuard {
+        admin_options: PgConnectOptions,
+        db_name: String,
+        role: String,
+    }
+
+    impl Drop for L23TestGuard {
+        fn drop(&mut self) {
+            let opts = self.admin_options.clone();
+            let name = self.db_name.clone();
+            let role = self.role.clone();
+            let _ = std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    let _ = rt.block_on(async move {
+                        if let Ok(pool) = PgPoolOptions::new().connect_with(opts).await {
+                            let _ = sqlx::query(
+                                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                                 WHERE datname = $1 AND pid <> pg_backend_pid()",
+                            )
+                            .bind(&name)
+                            .execute(&pool)
+                            .await;
+                            let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", name))
+                                .execute(&pool)
+                                .await;
+                            let _ = sqlx::query(&format!("DROP OWNED BY \"{}\"", role))
+                                .execute(&pool)
+                                .await;
+                            let _ = sqlx::query(&format!("DROP ROLE IF EXISTS \"{}\"", role))
+                                .execute(&pool)
+                                .await;
+                            pool.close().await;
+                        }
+                    });
+                }
+            })
+            .join();
+        }
+    }
+
+    #[tokio::test]
+    async fn provision_with_creates_then_preserves_the_database() {
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "provision_with_creates_then_preserves_the_database: \
+                     PILOT_GDS_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        assert!(
+            !env_db.is_empty(),
+            "PILOT_GDS_TEST_URL doit désigner une base d'administration"
+        );
+        assert_ne!(
+            env_db, GDS_DB_NAME,
+            "la base réelle ne doit jamais être ciblée"
+        );
+
+        // Base + rôle jetables (préfixe réservé aux tests).
+        let base_name = unique_test_db_name();
+        let test_db = base_name.clone();
+        let test_role = format!("{}_role", base_name);
+
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        // Reliquats éventuels d'un run interrompu.
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        let _ = sqlx::query(&format!("DROP ROLE IF EXISTS \"{}\"", test_role))
+            .execute(&admin_pool)
+            .await;
+        let _guard = L23TestGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+            role: test_role.clone(),
+        };
+
+        // 1) Base VIDE : la préparation crée le rôle puis la base.
+        let first = provision_with(
+            &admin_pool,
+            test_db.as_str(),
+            test_role.as_str(),
+            L23_TEST_ROLE_PASSWORD,
+        )
+        .await
+        .expect("préparation initiale d'une base vide");
+        assert!(first.database_created, "la base devait être créée");
+        assert!(first.role_created, "le rôle devait être créé");
+
+        // La base appartient au rôle applicatif : sans cela, PostgreSQL 15+
+        // refuserait les migrations dans le schéma `public`.
+        let owner: String = sqlx::query_scalar(
+            "SELECT r.rolname FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba \
+             WHERE d.datname = $1",
+        )
+        .bind(test_db.as_str())
+        .fetch_one(&admin_pool)
+        .await
+        .expect("propriétaire de la base de test");
+        assert_eq!(owner, test_role, "la base doit appartenir au rôle applicatif");
+
+        // 2) Le rôle APPLICATIF (non-superuser) applique les migrations.
+        let app_opts = base_opts
+            .clone()
+            .username(test_role.as_str())
+            .password(L23_TEST_ROLE_PASSWORD)
+            .database(test_db.as_str());
+        let app_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_opts.clone())
+            .await
+            .expect("connexion à la base de test avec le rôle applicatif");
+        migrate(&app_pool).await.expect("migrations sur base vierge");
+        let expected_version = embedded_migration_versions()
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        assert_eq!(
+            crate::server_status::applied_migration(&app_pool)
+                .await
+                .expect("version de migration appliquée"),
+            expected_version,
+            "toutes les migrations embarquées doivent être appliquées"
+        );
+        let users_table: bool = sqlx::query_scalar("SELECT to_regclass('users') IS NOT NULL")
+            .fetch_one(&app_pool)
+            .await
+            .expect("to_regclass users");
+        assert!(users_table, "la table `users` doit exister après migration");
+
+        // Marqueur de données : il DOIT survivre à la seconde préparation.
+        create_user(
+            &app_pool,
+            "l23-marker@gds.test",
+            "l23",
+            "hash-de-test",
+            "dev",
+            "active",
+        )
+        .await
+        .expect("création du marqueur de données");
+        app_pool.close().await;
+
+        // 3) « Redémarrage » sur la MÊME base : rien n'est recréé…
+        let second = provision_with(
+            &admin_pool,
+            test_db.as_str(),
+            test_role.as_str(),
+            L23_TEST_ROLE_PASSWORD,
+        )
+        .await
+        .expect("préparation idempotente");
+        assert!(
+            !second.database_created,
+            "une base existante ne doit JAMAIS être recréée"
+        );
+        assert!(!second.role_created, "un rôle existant ne doit pas être recréé");
+
+        // …et les migrations sont rejouées sans effet (aucune réinitialisation).
+        let app_pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_opts)
+            .await
+            .expect("reconnexion au second démarrage");
+        migrate(&app_pool).await.expect("migrations rejouées");
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&app_pool)
+            .await
+            .expect("comptage des utilisateurs");
+        assert_eq!(
+            users, 1,
+            "les données existantes doivent être CONSERVÉES (aucune remise à zéro)"
+        );
+        let migrations: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", MIGRATIONS_TABLE))
+                .fetch_one(&app_pool)
+                .await
+                .expect("comptage des migrations");
+        assert_eq!(
+            migrations as usize,
+            embedded_migration_versions().len(),
+            "aucune migration supplémentaire ne doit être appliquée"
+        );
+        app_pool.close().await;
     }
 }
