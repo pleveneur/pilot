@@ -24,7 +24,7 @@ use crate::db as gds_db;
 use crate::rate::{token_key, WebGuard};
 use axum::extract::{ConnectInfo, Extension, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::middleware::Next;
+use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -130,6 +130,20 @@ pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/tickets/{id}/status",
             post(gds_ticket_status_web::<S>),
         )
+}
+
+/// Assemble le routeur HTTP du **service autonome** `gds-server` : les routes
+/// partagées du socle (`gds_routes`), protégées par l'authentification par
+/// token (`auth_middleware`), prêtes à être servies (`axum::serve`).
+///
+/// Le poste (`src-tauri`) monte les **mêmes** `gds_routes` derrière son propre
+/// middleware dans `web_server.rs` ; ce point de montage est propre au service
+/// (contexte figé, une seule base) et n'y est donc pas partagé.
+pub fn server_router<S: GdsCtx>(ctx: Arc<S>) -> Router {
+    Router::new()
+        .merge(gds_routes::<S>())
+        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<S>))
+        .with_state(ctx)
 }
 
 fn err_response(e: String) -> Response {

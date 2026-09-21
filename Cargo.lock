@@ -1641,6 +1641,13 @@ dependencies = [
 [[package]]
 name = "gds-server"
 version = "0.4.16"
+dependencies = [
+ "axum",
+ "gds-core",
+ "sqlx",
+ "tokio",
+ "tower",
+]
 
 [[package]]
 name = "generic-array"

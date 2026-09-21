@@ -8,4 +8,18 @@ publish = false
 # Contrainte structurelle (plan de refonte GDS, §2.10) : ce binaire ne doit
 # dépendre NI de Tauri, NI de ses plugins, NI de `wry` — sinon il embarquerait
 # WebKit/WebView2 et ne serait plus conteneurisable.
+#
+# L2.1 : démarrage autonome — lecture de l'environnement via le socle partagé
+# (`gds-core`), ouverture du pool PostgreSQL avec reprise, migrations, montage
+# du routeur partagé et écoute HTTP.
 [dependencies]
+gds-core = { path = "../gds-core" }
+axum = "0.7"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+
+# `tower` permet de tester le montage du routeur (`ServiceExt::oneshot`) sans
+# base de données. `tokio` (macros) pour les tests asynchrones.
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tower = { version = "0.5", features = ["util"] }
