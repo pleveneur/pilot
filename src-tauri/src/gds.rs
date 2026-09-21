@@ -594,6 +594,168 @@ pub fn gds_apply_server(
     }))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L5.2 — Section « Serveurs GDS » de l'écran de paramétrage utilisateur.
+//
+// RÉUTILISE les commandes existantes : `gds_list_saved_servers` (lister),
+// `gds_apply_server` (appliquer à un projet) et `save_server_credentials`
+// (enregistrer les identifiants). L'ÉDITION, la SUPPRESSION et le TEST de
+// connexion d'un serveur mémorisé n'existaient pas : ils sont ajoutés ici.
+//
+// Règle de cohérence : un serveur n'est marqué « validé » (donc proposé et
+// applicable) qu'après un TEST DE CONNEXION PostgreSQL réellement réussi. Le
+// test et l'ajout partagent `test_saved_server_connection` pour garantir que
+// l'affichage ne prétend ni plus ni moins que ce qui est réellement joignable.
+// Aucun mot de passe n'est JAMAIS renvoyé à l'interface.
+
+/// Repli sur le mot de passe mémorisé d'un serveur (clé `user@host`) quand
+/// l'appelant ne fournit pas de mot de passe (test d'un serveur déjà enregistré).
+pub(crate) fn stored_server_password(host: &str, port: &str, user: &str) -> Option<String> {
+    get_saved_server(host, port, user)
+        .ok()
+        .flatten()
+        .and_then(|s| s.db_password)
+        .filter(|p| !p.is_empty())
+}
+
+/// Teste une connexion PostgreSQL pour un serveur GDS (hôte/port/utilisateur +
+/// mot de passe fourni OU mémorisé). Ne persiste RIEN et ne renvoie aucun
+/// secret : `Ok(())` seulement si la connexion aboutit réellement.
+pub(crate) async fn test_saved_server_connection(
+    host: &str,
+    port: &str,
+    user: &str,
+    db_password: &str,
+) -> Result<(), String> {
+    let host = host.trim();
+    let user = user.trim();
+    if host.is_empty() || user.is_empty() {
+        return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
+    }
+    let port = if port.trim().is_empty() { "5432" } else { port.trim() };
+    let mut pw = db_password.trim().to_string();
+    if pw.is_empty() {
+        pw = stored_server_password(host, port, user).unwrap_or_default();
+    }
+    if pw.is_empty() {
+        return Err("Mot de passe PostgreSQL requis pour tester la connexion".to_string());
+    }
+    // URL d'administration reconstruite à la volée (jamais persistée ni loggée).
+    let addr = format!(
+        "postgres://{}:{}@{}:{}/postgres",
+        user,
+        url_encode(&pw),
+        host,
+        port
+    );
+    gds_db::connect(&addr).await.map(|_| ())
+}
+
+/// Supprime un serveur mémorisé (map `servers`, clé `user@host`). Renvoie true
+/// si une entrée a été retirée. Opération LOCALE : aucun appel au serveur, les
+/// projets déjà reliés ne sont pas touchés (seuls les mots de passe sont oubliés).
+pub(crate) fn delete_saved_server(host: &str, user: &str) -> Result<bool, String> {
+    let mut secrets = read_gds_secrets()?;
+    let removed = secrets.servers.remove(&server_key(host, user)).is_some();
+    if removed {
+        write_gds_secrets(&secrets)?;
+    }
+    Ok(removed)
+}
+
+/// Commande Tauri : teste la connexion PostgreSQL d'un serveur SANS rien
+/// enregistrer. Utilisée par le bouton « Tester » de la section « Serveurs GDS ».
+#[tauri::command]
+pub async fn gds_test_saved_server(
+    host: String,
+    port: String,
+    user: String,
+    db_password: String,
+) -> Result<Value, String> {
+    test_saved_server_connection(&host, &port, &user, &db_password).await?;
+    Ok(json!({ "ok": true }))
+}
+
+/// Commande Tauri : AJOUTE (ou complète) un serveur mémorisé APRÈS un test de
+/// connexion réussi. Réutilise `save_server_credentials` (qui marque `validated`),
+/// donc un serveur n'est proposé / applicable que s'il a réellement répondu.
+#[tauri::command]
+pub async fn gds_add_saved_server(
+    host: String,
+    port: String,
+    user: String,
+    db_password: String,
+    admin_password: String,
+) -> Result<Value, String> {
+    test_saved_server_connection(&host, &port, &user, &db_password).await?;
+    save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
+    Ok(json!({
+        "ok": true,
+        "host": host.trim(),
+        "port": if port.trim().is_empty() { "5432" } else { port.trim() },
+        "user": user.trim(),
+    }))
+}
+
+/// Commande Tauri : MODIFIE un serveur mémorisé (hôte/port/utilisateur et/ou
+/// mots de passe). Un changement d'hôte ou d'utilisateur renomme la clé ; les
+/// mots de passe laissés vides CONSERVENT la valeur mémorisée. Un test de
+/// connexion est refait avec les identifiants effectifs avant enregistrement.
+#[tauri::command]
+pub async fn gds_update_saved_server(
+    old_host: String,
+    old_user: String,
+    host: String,
+    port: String,
+    user: String,
+    db_password: String,
+    admin_password: String,
+) -> Result<Value, String> {
+    if host.trim().is_empty() || user.trim().is_empty() {
+        return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
+    }
+    let port_eff = if port.trim().is_empty() { "5432" } else { port.trim() };
+    // Identifiants effectifs : fournis, sinon repris sous l'ANCIENNE clé.
+    let mut db_eff = db_password.trim().to_string();
+    let mut admin_eff = admin_password.trim().to_string();
+    if db_eff.is_empty() {
+        db_eff = stored_server_password(&old_host, port_eff, &old_user).unwrap_or_default();
+    }
+    if admin_eff.is_empty() {
+        admin_eff = get_saved_server(&old_host, port_eff, &old_user)
+            .ok()
+            .flatten()
+            .and_then(|s| s.admin_password)
+            .unwrap_or_default();
+    }
+    test_saved_server_connection(&host, port_eff, &user, &db_eff).await?;
+    // Renommage : retirer l'ancienne clé si l'hôte/utilisateur a changé.
+    let old_key = server_key(&old_host, &old_user);
+    let new_key = server_key(&host, &user);
+    if old_key != new_key {
+        let mut secrets = read_gds_secrets()?;
+        secrets.servers.remove(&old_key);
+        write_gds_secrets(&secrets)?;
+    }
+    save_server_credentials(&host, port_eff, &user, &db_eff, &admin_eff)?;
+    Ok(json!({
+        "ok": true,
+        "host": host.trim(),
+        "port": port_eff,
+        "user": user.trim(),
+    }))
+}
+
+/// Commande Tauri : SUPPRIME un serveur mémorisé (clé `user@host`).
+#[tauri::command]
+pub fn gds_delete_saved_server(host: String, user: String) -> Result<Value, String> {
+    if host.trim().is_empty() || user.trim().is_empty() {
+        return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
+    }
+    let deleted = delete_saved_server(&host, &user)?;
+    Ok(json!({ "ok": true, "deleted": deleted }))
+}
+
 /// Pourcentage-encodage minimal (RFC 3986) d'un segment d'URL (ex: mot de
 /// passe) pour construire une URL `postgres://user:pass@host/db` exploitable.
 pub(crate) fn url_encode(s: &str) -> String {
@@ -2202,6 +2364,45 @@ mod tests {
         assert_eq!(connection_status_from_flags(true, true, false, true, true, true), "error");
         assert_eq!(connection_status_from_flags(true, true, true, false, true, true), "error");
         assert_eq!(connection_status_from_flags(true, true, true, true, true, false), "error");
+    }
+
+    #[test]
+    fn delete_saved_server_removes_entry_and_keeps_others() {
+        // L5.2 : la suppression d'un serveur mémorisé retire SON entrée et
+        // laisse les autres intactes ; la liste ne le propose plus (cohérence
+        // de l'affichage avec ce qui est réellement enregistré).
+        let _guard = TestGdsSecretsGuard::new();
+        save_server_credentials("10.0.0.1", "5432", "alpha", "pwA", "adm")
+            .unwrap();
+        save_server_credentials("10.0.0.2", "5432", "beta", "pwB", "adm")
+            .unwrap();
+        assert!(list_saved_servers().iter().any(|v| v["host"] == "10.0.0.1"));
+        // Suppression réelle.
+        assert!(delete_saved_server("10.0.0.1", "alpha").unwrap());
+        // Le serveur supprimé disparaît ; l'autre reste.
+        let list = list_saved_servers();
+        assert!(!list.iter().any(|v| v["host"] == "10.0.0.1"));
+        assert!(list.iter().any(|v| v["host"] == "10.0.0.2"));
+        // Supprimer un serveur inexistant ne fait rien et ne panique pas.
+        assert!(!delete_saved_server("10.0.0.1", "alpha").unwrap());
+        // Les identifiants supprimés ne sont plus retrouvés.
+        assert!(get_saved_server("10.0.0.1", "5432", "alpha")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn stored_server_password_reads_memorized_ignoring_port() {
+        // L5.2 : le test d'un serveur déjà mémorisé reprend le mot de passe
+        // enregistré (le port n'est pas une clé).
+        let _guard = TestGdsSecretsGuard::new();
+        save_server_credentials("10.0.0.9", "5433", "gamma", "pwG", "adm").unwrap();
+        assert_eq!(
+            stored_server_password("10.0.0.9", "5432", "gamma").as_deref(),
+            Some("pwG")
+        );
+        // Serveur inconnu → aucun mot de passe (le test exigera une saisie).
+        assert!(stored_server_password("10.0.0.9", "5432", "inconnu").is_none());
     }
 
     #[test]

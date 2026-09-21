@@ -3028,6 +3028,11 @@ pub fn run() {
             // ── GDS Évolution 1 : mémoriser les connexions par serveur ──
             gds::gds_list_saved_servers,
             gds::gds_apply_server,
+            // ── GDS L5.2 : paramétrage utilisateur — serveurs mémorisés ──
+            gds::gds_test_saved_server,
+            gds::gds_add_saved_server,
+            gds::gds_update_saved_server,
+            gds::gds_delete_saved_server,
             // ── GDS Phase B : synchronisation (verrou retiré en L6) ──
             gds_client::gds_sync_project,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──

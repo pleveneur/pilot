@@ -8493,6 +8493,43 @@ body.pilot-loading *::after {
   border-left: 3px solid var(--accent);
   padding-left: 8px;
 }
+/* ── LOT 5.2 — section « Serveurs GDS » (liste + actions) ──
+   Tokens exclusivement (cohérence dark/light). Aucun secret affiché. */
+.gds-params-srv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+.gds-params-srv-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 6px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+  flex-wrap: wrap;
+}
+.gds-params-srv-main {
+  min-width: 0;
+}
+.gds-params-srv-title {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  color: var(--text-primary, #e6e8ee);
+  word-break: break-all;
+}
+.gds-params-srv-sub {
+  font-size: 11px;
+  color: var(--text-secondary, #9aa3b2);
+}
+.gds-params-srv-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .gds-admin-scroll {
   flex: 1;
   overflow-y: auto;

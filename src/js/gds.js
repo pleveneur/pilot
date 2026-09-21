@@ -746,8 +746,6 @@ export function createGds(container) {
           <div><label class="gds-label">Dossier local</label><input class="gds-input" value="${esc((cfg && cfg.gds_local_dir) || "—")}" readonly></div>
         </div>
         ` : ""}
-        <div class="gds-panel-desc" style="margin-top:12px; margin-bottom:6px"><strong>Serveurs GDS mémorisés</strong> (hôte/utilisateur uniquement — jamais les mots de passe) :</div>
-        <div id="gds-adv-servers" class="gds-list"></div>
         ${provisioned ? `
         <div class="gds-panel-desc" style="margin-top:12px; margin-bottom:6px"><strong>Projets & dépôts du serveur</strong> :</div>
         <div id="gds-adv-projects" class="gds-list"></div>
@@ -769,23 +767,11 @@ export function createGds(container) {
       refreshIcons(container);
     });
 
-    // Serveurs mémorisés.
-    const serversEl = panel.querySelector("#gds-adv-servers");
-    (async () => {
-      let servers = [];
-      try { servers = await invoke("gds_list_saved_servers"); } catch (_) { servers = []; }
-      if (!servers.length) {
-        serversEl.innerHTML = `<div class="gds-empty">Aucun serveur mémorisé.</div>`;
-      } else {
-        for (const s of servers) {
-          const row = document.createElement("div");
-          row.className = "gds-row";
-          row.innerHTML = `<div class="gds-row-info"><div class="gds-row-title">${esc(s.user)}@${esc(s.host)}:${esc(s.port || "5432")}</div><div class="gds-row-sub">validé</div></div>`;
-          serversEl.appendChild(row);
-        }
-      }
-      refreshIcons(container);
-    })();
+    // NB : le bloc « Serveurs GDS mémorisés » (liste en lecture seule) a été
+    // RETIRÉ de cet onglet PAR PROJET (refonte GDS, L5.2) : la gestion complète
+    // (ajouter/modifier/supprimer/tester/appliquer) vit désormais dans l'onglet
+    // transverse « ⚙️ GDS — paramétrage ». Le sélecteur « Réutiliser un serveur
+    // déjà mémorisé » ci-dessus reste (action propre au projet).
 
     if (provisioned) {
       wireSsh(panel);
