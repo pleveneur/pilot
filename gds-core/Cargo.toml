@@ -10,6 +10,8 @@ publish = false
 # Les modules (db, git, git_cmd, ssh, auth, rate, audit, http, config, roles,
 # server_status) sont extraits depuis `src-tauri` au fil du lot L1.
 [dependencies]
+# Authentification du serveur web / GDS (module `auth`, ex `web_auth.rs`).
+argon2 = "0.5"
 # Accès PostgreSQL du GDS (`db`) — mêmes versions/features que le desk pour
 # n'avoir qu'une seule version résolue dans le workspace.
 chrono = { version = "0.4", features = ["serde"] }

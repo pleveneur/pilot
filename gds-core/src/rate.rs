@@ -1,4 +1,8 @@
-// web_rate.rs — Rate limiting & garde-fous du serveur web distant (mode remote)
+// rate.rs — Rate limiting & garde-fous du serveur web distant (mode remote) — socle partagé
+//
+// Extrait de `src-tauri/src/web_rate.rs` (refonte GDS, L1.7) : le serveur GDS
+// autonome (`gds-server`) a besoin des mêmes compteurs que le mode remote du
+// desk. Aucune dépendance Tauri.
 //
 // Défense en profondeur (décision 6.3/6.4) : Tailscale est la première barrière,
 // l'authentification la seconde, et ces compteurs la troisième — pour limiter les

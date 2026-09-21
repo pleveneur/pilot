@@ -52,10 +52,14 @@ mod review;
 mod agents_md;
 mod rpc_manager;
 mod tailscale;
-mod web_auth;
-mod web_audit;
-mod web_rate;
 mod web_server;
+// L1.7 : `web_auth` / `web_rate` / `web_audit` vivent maintenant dans
+// `gds-core` (partagés avec le serveur GDS autonome). Alias pour laisser
+// inchangés les appelants du desk (`crate::web_auth::…`, `web_server.rs`,
+// `web_commands.rs`, `gds.rs`, `gds_web.rs`) ; L1.10 recâblera directement.
+use gds_core::audit as web_audit;
+use gds_core::auth as web_auth;
+use gds_core::rate as web_rate;
 mod context_engine;
 mod code_graph;
 mod git;

@@ -1,4 +1,9 @@
-// web_audit.rs — Journal d'audit du serveur web distant (mode remote)
+// audit.rs — Journal d'audit du serveur web distant (mode remote) — socle partagé
+//
+// Extrait de `src-tauri/src/web_audit.rs` (refonte GDS, L1.7) : le serveur GDS
+// autonome (`gds-server`) journalise les mêmes actions sensibles que le mode
+// remote du desk. Aucune dépendance Tauri : le chemin du fichier est fourni de
+// l'extérieur (`set_file`).
 //
 // Complément du rate limiting : trace les actions sensibles effectuées depuis
 // un client distant (login, prompt, abort, new, compact, set_model,

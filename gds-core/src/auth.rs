@@ -1,4 +1,8 @@
-// web_auth.rs — Authentification du serveur web distant (mode remote)
+// auth.rs — Authentification du serveur web distant (mode remote) — socle partagé
+//
+// Extrait de `src-tauri/src/web_auth.rs` (refonte GDS, L1.7) : le serveur GDS
+// autonome (`gds-server`) a besoin de la même authentification que le mode
+// remote du desk. Aucune dépendance Tauri.
 //
 // Modèle (décision 6.3) :
 //   - Mot de passe applicatif stocké **hashé argon2** dans AppConfig (jamais en clair).

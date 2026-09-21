@@ -8,8 +8,11 @@
 //! `config`, `roles`, `server_status`) sont déplacés depuis `src-tauri` au fil
 //! du lot L1, à comportement identique.
 
+pub mod audit;
+pub mod auth;
 pub mod db;
 pub mod git;
 pub mod git_cmd;
 pub mod proc;
+pub mod rate;
 pub mod ssh;
