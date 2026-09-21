@@ -1,8 +1,8 @@
 #!/bin/sh
 # gds-server/entrypoint.sh — démarrage du conteneur tout-en-un GDS.
 #
-# Périmètre de la micro-tâche L2.3 (« initialisation de la base à partir d'un
-# volume vide ») :
+# Périmètre des micro-tâches L2.3 (« base à partir d'un volume vide ») et L2.5
+# (« dépôts git : utilisateur git, racine, clefs autorisées ») :
 #   1. création de l'INSTANCE PostgreSQL sur le volume (`initdb`) si le datadir
 #      est VIDE — un datadir déjà initialisé est CONSERVÉ tel quel (aucune
 #      réinitialisation, les données du volume ne sont jamais effacées) ;
@@ -10,19 +10,29 @@
 #   3. préparation de la base de service par le socle, via le binaire :
 #      `gds-server --init-db` (création du rôle et de la base `pilot_gds` s'ils
 #      sont absents, puis migrations embarquées — idempotent) ;
-#   4. lancement du service HTTP (`gds-server`, micro-tâche L2.1).
+#   4. préparation des dépôts git par le socle, via le binaire :
+#      `gds-server --init-ssh` (compte système `git` sans mot de passe
+#      utilisable, `~git/.ssh` en 700, `~git/.ssh/authorized_keys` en 600,
+#      racine des dépôts confiée à `git`, puis RÉGÉNÉRATION du fichier des clefs
+#      autorisées depuis la base — source de vérité : les clefs enregistrées
+#      deviennent utilisables et les clefs révoquées disparaissent). Idempotent :
+#      un fichier déjà conforme n'est pas réécrit ;
+#   5. lancement du service HTTP (`gds-server`, micro-tâche L2.1), qui continue de
+#      rafraîchir ce fichier périodiquement (le poste enregistre ses clefs
+#      directement en base, donc sans notification possible).
 #
-# Hors périmètre de L2.3 (micro-tâches suivantes, à ne pas traiter ici) :
-# utilisateur système `git` et `authorized_keys` (L2.5), sshd + dépôt bare
-# automatique (L2.6), supervision complète des processus et assemblage de
-# l'image (L2.7), orchestration compose (L2.8). Le démarrage de l'instance
-# PostgreSQL fait ici (étape 2) sera repris par le superviseur en L2.7.
+# Hors périmètre de L2.3/L2.5 (micro-tâches suivantes, à ne pas traiter ici) :
+# service SSH (sshd, sshd_config, git-shell) et création du dépôt bare à l'ajout
+# d'un projet (L2.6), supervision complète des processus et assemblage de l'image
+# (L2.7), orchestration compose (L2.8). Le démarrage de l'instance PostgreSQL fait
+# ici (étape 2) sera repris par le superviseur en L2.7.
 #
 # Variables reconnues : `PGDATA` (défaut /var/lib/postgresql/data),
 # `POSTGRES_PASSWORD` (secret du compte d'administration, cf. spec §6.4),
 # `GDS_DB_ADMIN_USER` (défaut « postgres »), `GDS_DB_ADMIN_PASSWORD` (défaut
 # POSTGRES_PASSWORD), `GDS_DB_ADMIN_HOST` (défaut GDS_DB_HOST puis localhost),
-# `GDS_DB_PORT` (défaut 5432). Aucun secret n'est journalisé.
+# `GDS_DB_PORT` (défaut 5432), `GDS_REPOS_ROOT` (défaut /srv/git/repos : racine des
+# dépôts bare, sur volume). Aucun secret n'est journalisé.
 
 set -eu
 
@@ -31,7 +41,11 @@ GDS_DB_ADMIN_USER="${GDS_DB_ADMIN_USER:-postgres}"
 GDS_DB_ADMIN_PASSWORD="${GDS_DB_ADMIN_PASSWORD:-${POSTGRES_PASSWORD:-}}"
 GDS_DB_ADMIN_HOST="${GDS_DB_ADMIN_HOST:-${GDS_DB_HOST:-localhost}}"
 GDS_DB_PORT="${GDS_DB_PORT:-5432}"
-export PGDATA GDS_DB_ADMIN_USER GDS_DB_ADMIN_PASSWORD GDS_DB_ADMIN_HOST GDS_DB_PORT
+# Racine des dépôts bare (volume monté). Explicité ici : la valeur alimente la
+# préparation du compte `git` (L2.5) et sera réutilisée par la création des
+# dépôts (L2.6).
+GDS_REPOS_ROOT="${GDS_REPOS_ROOT:-/srv/git/repos}"
+export PGDATA GDS_DB_ADMIN_USER GDS_DB_ADMIN_PASSWORD GDS_DB_ADMIN_HOST GDS_DB_PORT GDS_REPOS_ROOT
 
 log() { echo "entrypoint: $*"; }
 
@@ -114,11 +128,14 @@ start_database_instance() {
 ensure_database_instance
 start_database_instance
 
-# 3-4. Préparation de la base puis service HTTP. Sans binaire (image non encore
-# assemblée, micro-tâche L2.7), on s'arrête sans laisser croire à un démarrage.
+# 3-5. Préparation de la base, préparation des dépôts git puis service HTTP.
+# Sans binaire (image non encore assemblée, micro-tâche L2.7), on s'arrête sans
+# laisser croire à un démarrage.
 if command -v gds-server >/dev/null 2>&1; then
     log "préparation de la base de service (gds-server --init-db)"
     gds-server --init-db
+    log "préparation du compte git, de la racine des dépôts et des clefs autorisées (gds-server --init-ssh)"
+    gds-server --init-ssh
     log "lancement du service gds-server"
     exec gds-server
 fi

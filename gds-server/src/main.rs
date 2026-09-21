@@ -21,6 +21,19 @@
 //! des migrations embarquées) et rend la main. L'entrypoint du conteneur appelle
 //! ce mode AVANT de lancer le service ; l'opération est idempotente, donc un
 //! second démarrage conserve les données du volume.
+//!
+//! Dépôts git dans le conteneur (micro-tâche L2.5) : `gds-server --init-ssh`
+//! prépare le compte système `git` (sans mot de passe utilisable), son dossier
+//! de clefs `~git/.ssh` (700) et son fichier `authorized_keys` (600), crée la
+//! **racine des dépôts** (`GDS_REPOS_ROOT`, volume) au nom de `git`, puis
+//! **régénère** le fichier des clefs autorisées **depuis la base** (source de
+//! vérité : les clefs enregistrées deviennent utilisables, les clefs révoquées
+//! disparaissent). Comme le poste enregistre ses clefs **directement en base**
+//! (décision 11, aucune notification possible), le service régénère aussi ce
+//! fichier **périodiquement** en tâche de fond (`SSH_KEYS_REFRESH_INTERVAL`).
+//! Le service SSH lui-même (sshd, `sshd_config`, `git-shell`), la création du
+//! dépôt bare à l'ajout d'un projet, le superviseur de processus et l'image
+//! restent hors de cette micro-tâche (L2.6, L2.7, L2.8).
 
 mod config;
 
@@ -31,19 +44,73 @@ use gds_core::http::{server_router, ServerCtx};
 use gds_core::rate::WebGuard;
 use gds_core::server_status;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Option de démarrage reconnue : prépare la base puis rend la main (appelée par
 /// l'entrypoint du conteneur, cf. « Initialisation de la base » ci-dessus).
 const INIT_DB_FLAG: &str = "--init-db";
 
+/// Option de démarrage reconnue : prépare le compte `git`, la racine des dépôts
+/// et les clefs autorisées puis rend la main (L2.5, appelée par l'entrypoint
+/// APRÈS `--init-db` et AVANT le lancement du service).
+const INIT_SSH_FLAG: &str = "--init-ssh";
+
+/// Intervalle du job serveur de rafraîchissement des clefs autorisées (L2.5).
+/// Le poste enregistre ses clefs **directement en base** : le service ne peut pas
+/// être notifié, il rafraîchit donc le fichier périodiquement. La régénération
+/// est idempotente (aucune écriture tant que la base ne change pas), donc ce
+/// cycle ne produit ni duplication ni corruption. La route d'administration
+/// `POST /api/gds/admin/ssh-keys/refresh` permet un rafraîchissement immédiat.
+const SSH_KEYS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Modes de démarrage du binaire (dispatch pur — testable).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupMode {
+    /// Service HTTP (mode par défaut).
+    Serve,
+    /// `--init-db` : prépare la base puis rend la main (L2.3).
+    InitDb,
+    /// `--init-ssh` : prépare les dépôts git puis rend la main (L2.5).
+    InitSsh,
+}
+
+/// Détermine le mode de démarrage à partir des arguments (pure — testable).
+/// `--init-db` est prioritaire (l'entrypoint appelle de toute façon les deux
+/// modes séparément). Un argument inconnu est ignoré (comportement inchangé).
+fn startup_mode<I, A>(args: I) -> StartupMode
+where
+    I: IntoIterator<Item = A>,
+    A: AsRef<str>,
+{
+    let mut mode = StartupMode::Serve;
+    for arg in args {
+        match arg.as_ref() {
+            INIT_DB_FLAG => return StartupMode::InitDb,
+            INIT_SSH_FLAG => mode = StartupMode::InitSsh,
+            _ => {}
+        }
+    }
+    mode
+}
+
 #[tokio::main]
 async fn main() {
-    if std::env::args().skip(1).any(|a| a == INIT_DB_FLAG) {
-        if let Err(e) = init_db().await {
-            eprintln!("gds-server : initialisation de la base impossible : {}", e);
-            std::process::exit(1);
+    match startup_mode(std::env::args().skip(1)) {
+        StartupMode::InitDb => {
+            if let Err(e) = init_db().await {
+                eprintln!("gds-server : initialisation de la base impossible : {}", e);
+                std::process::exit(1);
+            }
+            return;
         }
-        return;
+        StartupMode::InitSsh => {
+            if let Err(e) = init_ssh().await {
+                eprintln!("gds-server : préparation des dépôts git impossible : {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+        StartupMode::Serve => {}
     }
     if let Err(e) = run().await {
         eprintln!("gds-server : démarrage impossible : {}", e);
@@ -107,6 +174,70 @@ async fn init_db() -> Result<(), String> {
     Ok(())
 }
 
+/// Prépare les dépôts git du service à partir du conteneur (micro-tâche L2.5) :
+///
+/// 1. compte système `git` (sans mot de passe utilisable : l'accès se fait par
+///    clef), dossier de clefs `~git/.ssh` en **700** et fichier
+///    `~git/.ssh/authorized_keys` en **600** (droits exigés par sshd) ;
+/// 2. **racine des dépôts** (`GDS_REPOS_ROOT`, volume) créée puis confiée à
+///    `git` — sans elle, aucun dépôt bare ne pourrait être créé (L2.6) ;
+/// 3. **régénération** du fichier des clefs autorisées **depuis la base** : les
+///    clefs enregistrées deviennent utilisables, les clefs révoquées
+///    disparaissent. L'opération est idempotente (un fichier déjà conforme n'est
+///    pas réécrit).
+///
+/// Appelé par `entrypoint.sh` à chaque démarrage, avant le lancement du service.
+/// Ne touche **pas** au service SSH (L2.6) et ne crée aucun dépôt bare (L2.6).
+async fn init_ssh() -> Result<(), String> {
+    let cfg = ServerConfig::from_env()?;
+
+    // 1-2. Compte système, dossier/fichier de clefs, racine des dépôts.
+    let report = gds_core::ssh::provision_git_account(&cfg.repos_root)?;
+    for line in report.summary_lines() {
+        println!("gds-server : {}", line);
+    }
+
+    // 3. Fichier des clefs autorisées régénéré depuis la base (source de vérité).
+    let pool = config::open_pool_with_retry(config::pg_options(&cfg), "base applicative").await?;
+    let sync = gds_core::ssh::regenerate_authorized_keys(&pool).await?;
+    println!(
+        "gds-server : clefs autorisées : {} clef(s) dans {} ({})",
+        sync.keys,
+        gds_core::ssh::authorized_keys_path(),
+        if sync.rewritten {
+            "fichier régénéré"
+        } else {
+            "fichier déjà conforme"
+        }
+    );
+    pool.close().await;
+    Ok(())
+}
+
+/// Job serveur (L2.5) : régénère `~git/.ssh/authorized_keys` **depuis la base**
+/// tant que le service tourne (premier passage immédiat au démarrage, puis
+/// `SSH_KEYS_REFRESH_INTERVAL`). Le poste enregistrant ses clefs directement en
+/// base, ce cycle est le seul moyen d'appliquer une nouvelle clef (ou un
+/// retrait) sans attendre un redémarrage du conteneur.
+///
+/// Toute erreur est journalisée puis ignorée : le fichier des clefs n'est pas
+/// critique pour l'API et ne doit **jamais** arrêter le service.
+async fn ssh_keys_refresh_job(pool: sqlx::PgPool) {
+    loop {
+        match gds_core::ssh::regenerate_authorized_keys(&pool).await {
+            Ok(sync) if sync.rewritten => println!(
+                "gds-server : clefs autorisées régénérées ({} clef(s))",
+                sync.keys
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("gds-server : régénération des clefs autorisées ignorée : {}", e)
+            }
+        }
+        tokio::time::sleep(SSH_KEYS_REFRESH_INTERVAL).await;
+    }
+}
+
 /// Séquence de démarrage complète, isolée de `main` pour être lisible et
 /// laisser `main` ne gérer que l'issue du processus.
 async fn run() -> Result<(), String> {
@@ -145,6 +276,7 @@ async fn run() -> Result<(), String> {
     gds_core::db::migrate(&pool).await?;
 
     // 4. Contexte autonome du service, puis montage du routeur partagé du socle.
+    let keys_pool = pool.clone();
     let ctx = Arc::new(ServerCtx {
         pool,
         auth: Arc::new(WebAuth::new()),
@@ -153,6 +285,10 @@ async fn run() -> Result<(), String> {
         // Racine des dépôts bare : volume supervisé par la route d'état (L2.2).
         repos_root: cfg.repos_root.clone().into(),
     });
+    // 4b. Job serveur (L2.5) : rafraîchissement du fichier des clefs autorisées
+    //     depuis la base (le poste enregistre ses clefs sans pouvoir notifier le
+    //     service). Une erreur du job n'arrête jamais le service.
+    tokio::spawn(ssh_keys_refresh_job(keys_pool));
     let app = server_router(ctx);
 
     // 5. Écoute HTTP sur l'adresse donnée par l'environnement.
@@ -567,5 +703,64 @@ mod tests {
             .await
             .expect("nettoyage de la table users");
         pool.close().await;
+    }
+
+    // ── L2.5 — dépôts git dans le conteneur ──
+
+    /// `POST /api/gds/admin/ssh-keys/refresh` avec un jeton éventuel.
+    fn refresh_request(token: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/api/gds/admin/ssh-keys/refresh");
+        if let Some(t) = token {
+            builder = builder.header("authorization", format!("Bearer {}", t));
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    /// Le binaire reconnaît les modes de démarrage attendus par l'entrypoint
+    /// (`--init-db` en L2.3, `--init-ssh` en L2.5) et sert par défaut.
+    #[test]
+    fn startup_mode_selects_the_expected_mode() {
+        assert_eq!(startup_mode(Vec::<String>::new()), StartupMode::Serve);
+        assert_eq!(startup_mode(["--init-db"]), StartupMode::InitDb);
+        assert_eq!(startup_mode(["--init-ssh"]), StartupMode::InitSsh);
+        // `--init-db` reste prioritaire si les deux modes sont fournis.
+        assert_eq!(
+            startup_mode(["--init-ssh", "--init-db"]),
+            StartupMode::InitDb
+        );
+        // Argument inconnu ignoré : le service démarre (comportement inchangé).
+        assert_eq!(startup_mode(["--wat"]), StartupMode::Serve);
+        // Les arguments réels de `std::env::args()` (String) sont acceptés.
+        let args: Vec<String> = vec!["--init-ssh".to_string()];
+        assert_eq!(startup_mode(args), StartupMode::InitSsh);
+    }
+
+    /// La route de rafraîchissement des clefs est montée derrière
+    /// `require_admin` : sans jeton → 401, avec un jeton non administrateur →
+    /// 403 (refus avant tout accès à la base), avec un jeton administrateur →
+    /// 500 si la base est absente (la route existe : jamais 404).
+    #[tokio::test]
+    async fn ssh_keys_refresh_route_is_admin_only() {
+        let app = server_router(null_ctx());
+        let res = app.oneshot(refresh_request(None)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        let ctx = null_ctx();
+        let dev = ctx
+            .auth
+            .create_session_as("dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app.oneshot(refresh_request(Some(&dev))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let ctx = null_ctx();
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app.oneshot(refresh_request(Some(&admin))).await.unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

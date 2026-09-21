@@ -226,10 +226,16 @@ pub fn public_routes<S: GdsCtx>() -> Router<Arc<S>> {
 
 /// Routes **d'administration** du service (montées derrière `require_admin`).
 ///
-/// À ce jour : l'état serveur (volumes + dernière entrée d'audit). Les routes
+/// À ce jour : l'état serveur (volumes + dernière entrée d'audit) et, depuis
+/// L2.5, la régénération immédiate du fichier des clefs autorisées. Les routes
 /// d'administration à venir (comptes, dépôts, audit, contrôle) viendront ici.
 pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
-    Router::new().route("/api/gds/admin/server", get(gds_admin_server::<S>))
+    Router::new()
+        .route("/api/gds/admin/server", get(gds_admin_server::<S>))
+        .route(
+            "/api/gds/admin/ssh-keys/refresh",
+            post(gds_admin_ssh_keys_refresh::<S>),
+        )
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -250,6 +256,42 @@ async fn gds_admin_server<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
     let last_audit = ctx.audit().recent(1).into_iter().next();
     let report = server_status::collect_admin(pool.as_ref(), repos_root.as_deref(), last_audit).await;
     Json(report).into_response()
+}
+
+/// `POST /api/gds/admin/ssh-keys/refresh` — **réservée au rôle `admin`**
+/// (voir `require_admin`).
+///
+/// Régénère **immédiatement** le fichier `authorized_keys` du compte système
+/// `git` depuis la table `ssh_keys` (L2.5 : la base est la source de vérité) et
+/// rend la main avec le décompte des clefs autorisées. Le service régénère déjà
+/// ce fichier périodiquement (job de `gds-server`) ; cette route permet un
+/// rafraîchissement **déterministe** juste après l'enregistrement (ou le
+/// retrait) d'une clef, sans attendre le cycle suivant.
+///
+/// Réponses :
+/// - `200 { ok: true, keys, rewritten, path, ssh_dir }` (`rewritten` = le
+///   fichier a changé à cet appel) ;
+/// - `500 { error }` : base injoignable ou fichier non écriturable (service hors
+///   conteneur, compte système `git` absent…).
+async fn gds_admin_ssh_keys_refresh<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match crate::ssh::regenerate_authorized_keys(&pool).await {
+        Ok(sync) => {
+            let home = crate::ssh::git_user_home();
+            Json(json!({
+                "ok": true,
+                "keys": sync.keys,
+                "rewritten": sync.rewritten,
+                "path": crate::ssh::authorized_keys_path_in(&home),
+                "ssh_dir": crate::ssh::authorized_keys_dir_in(&home),
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
 }
 
 // ── Initialisation du compte administrateur (L2.4) ──
