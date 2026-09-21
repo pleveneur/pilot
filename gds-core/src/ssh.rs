@@ -191,11 +191,30 @@ pub fn commands_to_create_git_user(os: &SshOs) -> Vec<String> {
     }
 }
 
+/// Home de l'utilisateur `git` forcé par l'environnement (pure).
+///
+/// `PILOT_GIT_USER_HOME` existe pour les tests d'intégration : ils font pointer
+/// le fichier des clefs autorisées vers un dossier jetable au lieu du `~git`
+/// réel de la machine (jamais de modification du vrai fichier `authorized_keys`
+/// pendant un test). Absent ou vide → `None` (comportement de production).
+pub fn forced_git_user_home(raw: Option<&str>) -> Option<String> {
+    let home = raw.map(str::trim).unwrap_or("");
+    if home.is_empty() {
+        None
+    } else {
+        Some(home.to_string())
+    }
+}
+
 /// Dossier personnel de l'utilisateur `git`.
+/// - `PILOT_GIT_USER_HOME` (tests) : forcé, prioritaire sur la détection.
 /// - Linux/macOS : via `getent passwd git` (champ 6 = home).
 /// - Windows : via `windows_git_user_home()` (registre ProfileImagePath, le
 ///   home réel consulté par sshd — pas `C:\Users\git`).
 pub fn git_user_home() -> String {
+    if let Some(home) = forced_git_user_home(std::env::var("PILOT_GIT_USER_HOME").ok().as_deref()) {
+        return home;
+    }
     match detect_os() {
         SshOs::Windows => windows_git_user_home(),
         _ => {
@@ -1200,6 +1219,19 @@ mod tests {
         assert_eq!(lines.len(), 3, "aucune ligne sans racine : {:?}", lines);
         assert!(lines[1].ends_with("droits -"), "{:?}", lines);
         assert!(lines[0].contains("déjà présent"), "{:?}", lines);
+    }
+
+    // ── L4.5 — home `git` forcé pour les tests d'intégration ──
+
+    #[test]
+    fn forced_git_user_home_only_accepts_a_non_empty_path() {
+        assert_eq!(forced_git_user_home(None), None);
+        assert_eq!(forced_git_user_home(Some("")), None);
+        assert_eq!(forced_git_user_home(Some("   ")), None);
+        assert_eq!(
+            forced_git_user_home(Some("  /tmp/pilot-keys  ")),
+            Some("/tmp/pilot-keys".to_string())
+        );
     }
 
     // ── L2.5 — régénération depuis la base (test d'intégration facultatif) ──

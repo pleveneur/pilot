@@ -1379,6 +1379,508 @@ mod tests {
         admin_pool.close().await;
     }
 
+    // ── L4.4 / L4.5 — écran d'administration (projets, purge, journal, clefs) ──
+
+    /// Requête GET authentifiée (jeton) vers `uri`, IP source de test.
+    fn authed_get(uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {}", token))
+            .extension(ConnectInfo(test_addr()))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Identifiants des projets renvoyés par `GET /api/gds/projects`.
+    fn project_ids(value: &serde_json::Value) -> Vec<i64> {
+        value["projects"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|p| p["id"].as_i64()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Actions du journal, dans l'ordre renvoyé (les plus récentes d'abord).
+    fn audit_actions(value: &serde_json::Value) -> Vec<String> {
+        value["entries"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|e| e["action"].as_str().unwrap_or("").to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// L4.4 + L4.5 — **scénario HTTP complet sur une base réelle jetable**
+    /// (facultatif) : attribution/retrait d'un projet (visibilité côté
+    /// développeur), retrait avec purge **optionnelle** (le dépôt bare survit
+    /// sans `purge`), journal d'audit (connexions + actions d'administration,
+    /// paginé et filtrable) et révocation d'une clef SSH (supprimée en base et
+    /// `authorized_keys` **régénéré immédiatement**).
+    ///
+    /// Tout passe par les **routes HTTP** du serveur, jamais par une connexion
+    /// directe à la base du projet : c'est le contrat de l'écran d'administration.
+    ///
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test ne s'exécute pas (CI verte).
+    #[tokio::test]
+    async fn admin_screen_projects_purge_audit_and_ssh_revoke_end_to_end() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "admin_screen_projects_purge_audit_and_ssh_revoke_end_to_end: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_l45_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        // Racine de dépôts ET home `git` DÉDIÉS et jetables : la purge ne touche
+        // que ce dossier, et `authorized_keys` n'est jamais écrit dans le vrai
+        // `~git` de la machine de test (cf. `forced_git_user_home`).
+        let sandbox = std::env::temp_dir().join(format!("pilot-l45-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&sandbox);
+        std::fs::create_dir_all(&sandbox).expect("bac à sable");
+        let repos_root = sandbox.join("repos");
+        std::fs::create_dir_all(&repos_root).expect("racine de dépôts");
+        let repos_root_str = repos_root.to_string_lossy().to_string();
+        let git_home = sandbox.join("git-home");
+        std::fs::create_dir_all(&git_home).expect("home git jetable");
+        let git_home_str = git_home.to_string_lossy().to_string();
+        // Sûr ici : le test est facultatif (jamais exécuté en CI) et le binaire de
+        // test est le seul à lire cette variable.
+        std::env::set_var("PILOT_GIT_USER_HOME", &git_home_str);
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: repos_root.clone(),
+        });
+
+        // Comptes RÉELS (mot de passe haché) : la connexion emprunte la vraie
+        // route, ce qui alimente le journal (`login`) et donne un `user_id` au
+        // jeton — indispensable pour que la liste des projets soit filtrée.
+        let admin_email = "admin-l45@gds.test";
+        let admin_pw = "mot-de-passe-admin-l45";
+        let dev_email = "dev-l45@gds.test";
+        let dev_pw = "mot-de-passe-dev-l45";
+        gds_core::db::create_user(
+            &pool,
+            admin_email,
+            "Admin L45",
+            &WebAuth::hash_password(admin_pw).unwrap(),
+            "admin",
+            "active",
+        )
+        .await
+        .expect("admin de test");
+        let dev_id = gds_core::db::create_user(
+            &pool,
+            dev_email,
+            "Dev L45",
+            &WebAuth::hash_password(dev_pw).unwrap(),
+            "dev",
+            "active",
+        )
+        .await
+        .expect("dev de test");
+
+        // Projet + dépôt bare réellement présents sur le disque.
+        let project_id = gds_core::db::create_project(
+            &pool,
+            "projet-l45",
+            "projet-l45.git",
+            "",
+            "",
+            "active",
+            "",
+        )
+        .await
+        .expect("projet de test");
+        let bare = gds_core::git::repo_bare_path(&repos_root_str, "projet-l45");
+        std::fs::create_dir_all(&bare).unwrap();
+        std::fs::write(bare.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(bare.exists());
+
+        let app = server_router(ctx.clone());
+
+        // Connexions réelles des deux comptes.
+        let res = app
+            .clone()
+            .oneshot(login_request(admin_email, admin_pw))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "connexion admin");
+        let admin_token = json_body(res).await["token"]
+            .as_str()
+            .expect("jeton admin")
+            .to_string();
+        let res = app
+            .clone()
+            .oneshot(login_request(dev_email, dev_pw))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "connexion dev");
+        let dev_token = json_body(res).await["token"]
+            .as_str()
+            .expect("jeton dev")
+            .to_string();
+
+        // 1) Sans attribution, le développeur ne voit PAS le projet.
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/projects", &dev_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let before = project_ids(&json_body(res).await);
+        assert!(
+            !before.contains(&project_id),
+            "projet visible AVANT attribution : {:?}",
+            before
+        );
+
+        // 2) Attribution par l'administrateur → le projet apparaît chez le dev.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/assign",
+                &admin_token,
+                serde_json::json!({ "project_id": project_id, "email": dev_email, "role": "dev" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/projects", &dev_token))
+            .await
+            .unwrap();
+        let after = project_ids(&json_body(res).await);
+        assert!(
+            after.contains(&project_id),
+            "projet invisible APRÈS attribution : {:?}",
+            after
+        );
+
+        // 3) Retrait → il ne le voit plus.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/unassign",
+                &admin_token,
+                serde_json::json!({ "project_id": project_id, "email": dev_email }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/projects", &dev_token))
+            .await
+            .unwrap();
+        let removed = project_ids(&json_body(res).await);
+        assert!(
+            !removed.contains(&project_id),
+            "projet encore visible APRÈS retrait : {:?}",
+            removed
+        );
+
+        // 4) Un jeton non administrateur ne peut PAS retirer un projet (403).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/remove",
+                &dev_token,
+                serde_json::json!({ "project_id": project_id }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 5) Retrait SANS purge : rien n'est détruit sur le disque.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/remove",
+                &admin_token,
+                serde_json::json!({ "project_id": project_id }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["purged"], serde_json::json!(false));
+        assert_eq!(value["name"], serde_json::json!("projet-l45"));
+        assert!(
+            bare.exists(),
+            "le dépôt bare ne doit JAMAIS partir sans purge explicite"
+        );
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/projects", &admin_token))
+            .await
+            .unwrap();
+        assert!(!project_ids(&json_body(res).await).contains(&project_id));
+
+        // 6) Retrait AVEC purge : le dépôt bare disparaît du disque.
+        let project2 = gds_core::db::create_project(
+            &pool,
+            "projet-l45-b",
+            "projet-l45-b.git",
+            "",
+            "",
+            "active",
+            "",
+        )
+        .await
+        .expect("second projet de test");
+        let bare2 = gds_core::git::repo_bare_path(&repos_root_str, "projet-l45-b");
+        std::fs::create_dir_all(&bare2).unwrap();
+        std::fs::write(bare2.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/remove",
+                &admin_token,
+                serde_json::json!({ "project_id": project2, "purge": true }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["purged"], serde_json::json!(true));
+        assert!(
+            !bare2.exists(),
+            "la purge explicite doit détruire le dépôt bare"
+        );
+        // Le premier dépôt, lui, est toujours là (aucune purge en cascade).
+        assert!(bare.exists());
+
+        // 7) Journal : les connexions et les actions d'administration y figurent,
+        //    les plus récentes d'abord, avec pagination et recherche.
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/admin/audit?limit=200", &admin_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let journal = json_body(res).await;
+        let actions = audit_actions(&journal);
+        for expected in [
+            "login",
+            "project_assign",
+            "project_unassign",
+            "project_remove",
+            "project_remove_purge",
+        ] {
+            assert!(
+                actions.iter().any(|a| a == expected),
+                "action {:?} absente du journal : {:?}",
+                expected,
+                actions
+            );
+        }
+        let pos = |a: &str| actions.iter().position(|x| x == a);
+        assert!(
+            pos("project_remove_purge").unwrap() < pos("login").unwrap(),
+            "le journal doit être du plus récent au plus ancien : {:?}",
+            actions
+        );
+        assert!(journal["total"].as_u64().unwrap() >= actions.len() as u64);
+        // Chaque entrée porte l'IP source de la requête.
+        assert!(!journal["entries"][0]["ip"].as_str().unwrap_or("").is_empty());
+
+        // Pagination : une page d'une seule entrée.
+        let res = app
+            .clone()
+            .oneshot(authed_get(
+                "/api/gds/admin/audit?limit=1&offset=0",
+                &admin_token,
+            ))
+            .await
+            .unwrap();
+        let page = json_body(res).await;
+        assert_eq!(page["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(page["limit"], serde_json::json!(1));
+        assert!(page["total"].as_u64().unwrap() >= 2);
+
+        // Recherche libre : ne garde que les entrées correspondantes.
+        let res = app
+            .clone()
+            .oneshot(authed_get(
+                "/api/gds/admin/audit?q=project_remove_purge",
+                &admin_token,
+            ))
+            .await
+            .unwrap();
+        let found = audit_actions(&json_body(res).await);
+        assert!(
+            !found.is_empty() && found.iter().all(|a| a == "project_remove_purge"),
+            "recherche libre inefficace : {:?}",
+            found
+        );
+
+        // Portée « tout le journal » acceptée (et au moins aussi large).
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/admin/audit?scope=all", &admin_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(json_body(res).await["scope"], serde_json::json!("all"));
+
+        // 8) Clefs SSH : insertion, liste, révocation effective et fichier du
+        //    serveur (`authorized_keys`) régénéré immédiatement.
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL45KeyRevoked==";
+        let key_id = gds_core::db::create_ssh_key(&pool, dev_id, key)
+            .await
+            .expect("clef de test");
+        let auth_path = gds_core::ssh::authorized_keys_path_in(&git_home_str);
+        gds_core::ssh::regenerate_authorized_keys(&pool)
+            .await
+            .expect("régénération initiale");
+        assert!(
+            std::fs::read_to_string(&auth_path)
+                .unwrap()
+                .contains("L45KeyRevoked"),
+            "la clef enregistrée doit apparaître dans authorized_keys"
+        );
+
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/admin/ssh-keys", &admin_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let listed = json_body(res).await;
+        let keys = listed["keys"].as_array().unwrap();
+        assert!(keys.iter().any(|k| k["id"] == serde_json::json!(key_id)
+            && k["email"] == serde_json::json!(dev_email)));
+        // L'empreinte de mot de passe ne doit jamais sortir du serveur.
+        assert!(!listed.to_string().contains("password_hash"));
+
+        // Révocation d'une clef INEXISTANTE : 404, jamais une régénération muette.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/ssh-keys/revoke",
+                &admin_token,
+                serde_json::json!({ "id": key_id + 9999 }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // Révocation réelle : la clef quitte la base ET le fichier du serveur.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/ssh-keys/revoke",
+                &admin_token,
+                serde_json::json!({ "id": key_id }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let revoked = json_body(res).await;
+        assert_eq!(revoked["ok"], serde_json::json!(true));
+        // `revoked` est le nombre de lignes supprimées (contrat de la route).
+        assert_eq!(revoked["revoked"], serde_json::json!(1));
+        assert_eq!(revoked["keys"], serde_json::json!(0));
+        let left = gds_core::db::get_ssh_keys_by_user(&pool, dev_id)
+            .await
+            .unwrap();
+        assert!(left.is_empty(), "clef encore en base : {:?}", left);
+        let content = std::fs::read_to_string(&auth_path).unwrap_or_default();
+        assert!(
+            !content.contains("L45KeyRevoked"),
+            "clef révoquée encore autorisée dans {} : {:?}",
+            auth_path,
+            content
+        );
+        assert!(content.trim().is_empty(), "authorized_keys doit être vide");
+
+        // La révocation est elle aussi journalisée (portée par défaut).
+        let res = app
+            .clone()
+            .oneshot(authed_get(
+                "/api/gds/admin/audit?q=ssh_key_revoke",
+                &admin_token,
+            ))
+            .await
+            .unwrap();
+        let found = audit_actions(&json_body(res).await);
+        assert!(
+            found.iter().any(|a| a == "ssh_key_revoke"),
+            "révocation non journalisée : {:?}",
+            found
+        );
+
+        // 9) L'espace occupé (dépôts + base) reste mesurable via la route d'état.
+        let res = app.clone().oneshot(bearer(&admin_token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let status = json_body(res).await;
+        assert!(status["repos_bytes"].as_u64().is_some());
+        assert!(status["db_bytes"].as_u64().is_some());
+
+        // Nettoyage : bac à sable jetable + base supprimée par le garde.
+        let _ = std::fs::remove_dir_all(&sandbox);
+        pool.close().await;
+    }
+
     // ── L2.5 — dépôts git dans le conteneur ──
 
     /// `POST /api/gds/admin/ssh-keys/refresh` avec un jeton éventuel.

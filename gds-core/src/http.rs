@@ -893,6 +893,11 @@ async fn gds_login<S: GdsCtx>(
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Identifiants invalides" }))).into_response();
     }
     let token = ctx.auth().create_session_for(user.id, &user.role, GDS_SESSION_TTL);
+    // L4.5 : la connexion est journalisée. L'écran d'administration filtre par
+    // défaut sur les connexions et les actions d'administration : sans cette
+    // entrée, l'onglet « journal » ne montrerait jamais qui s'est connecté.
+    ctx.audit()
+        .record(&ip, &token_key(&token), "login", &user.email, true);
     Json(json!({ "ok": true, "email": user.email, "role": user.role, "token": token }))
         .into_response()
 }
