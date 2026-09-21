@@ -444,11 +444,11 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - **L6 — Suppression du verrou projet** ✅ : interface, logique, modèle de données
   (migration `0007_drop_project_locks.sql`) et routes HTTP du verrou retirés ;
   contrôle exhaustif des appelants restants.
-- **L7 — Documentation & tests de bout en bout** 🟡 : L7.1 (`spec_gds.md` :
-  verrou retiré, conteneur + rôles documentés) et L7.2 (ce document) faits ;
-  L7.3 (`docs/gds-server-setup.md`) écrit ; reste L7.4 → L7.8 (socle
-  documentaire Pilot, tests d'intégration conteneur, non-régression desktop,
-  CI de l'image serveur).
+- **L7 — Documentation & tests de bout en bout** 🟡 : L7.1 (`spec_gds.md`),
+  L7.2 (ce document), L7.3 (`docs/gds-server-setup.md`), L7.4 (sync assistants
+  sans verrou), L7.5 (socle documentaire Pilot) et **L7.6 (banc de bout en bout
+  en conteneur : `gds-server/tests/e2e.sh` + `docker-compose.test.yml`)** faits ;
+  reste L7.7 (non-régression desktop étendue) et L7.8 (CI de l'image serveur).
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 

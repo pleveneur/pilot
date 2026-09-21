@@ -128,6 +128,40 @@ pub async fn add_project(
     Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
 }
 
+/// Reprend un dépôt tout juste créé au nom du **propriétaire de son dossier
+/// parent** (la racine des dépôts).
+///
+/// Le service tourne en **root** dans le conteneur, alors que les dépôts sont
+/// servis par SSH à l'utilisateur `git`. Sans cette reprise, un dépôt créé par
+/// `git init --bare` appartiendrait à root : git refuserait alors de le servir
+/// (« detected dubious ownership ») et **tout `git push` échouerait**. Sur le
+/// poste dev, la racine des dépôts appartient à l'utilisateur courant qui
+/// exécute `git init` : l'appel est donc sans effet (idempotent).
+///
+/// Toujours silencieux et jamais bloquant (Windows, droits insuffisants, dossier
+/// parent inaccessible) : l'échec d'un `chown` ne doit jamais faire échouer la
+/// création d'un dépôt.
+fn adopt_parent_owner(bare: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Some(parent) = bare.parent() else { return };
+        let Ok(meta) = std::fs::metadata(parent) else { return };
+        let owner = format!("{}:{}", meta.uid(), meta.gid());
+        let _ = std::process::Command::new("chown")
+            .arg("-R")
+            .arg(owner)
+            .arg(bare)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = bare;
+    }
+}
+
 /// Crée le dépôt bare s'il est absent (idempotent). `git_init_bare` est
 /// bloquant (sous-processus git) → `spawn_blocking`. Le dossier parent est créé
 /// au besoin. Retourne `true` si le dépôt a été créé par cet appel.
@@ -141,6 +175,8 @@ async fn ensure_bare(bare: PathBuf) -> Result<bool, String> {
                 .map_err(|e| format!("Création dossier des dépôts {}: {}", parent.display(), e))?;
         }
         git_init_bare(&bare.to_string_lossy())?;
+        // Le dépôt doit appartenir à qui sert les dépôts (cf. `adopt_parent_owner`).
+        adopt_parent_owner(&bare);
         Ok(true)
     })
     .await
@@ -395,6 +431,31 @@ mod tests {
                 outside
             );
         }
+    }
+
+    /// Le dépôt créé doit appartenir au **propriétaire de la racine** des
+    /// dépôts : c'est la condition pour que le compte qui les sert par SSH
+    /// (`git` sur le serveur) puisse les lire et y écrire. Sinon git refuse le
+    /// dépôt (« detected dubious ownership ») et **toute poussée échoue** —
+    /// défaut constaté en L7.6 dans le conteneur, où le service tourne en root
+    /// alors que les dépôts sont servis par `git`. Ce test verrouille
+    /// l'invariant (il ne prouve pas le changement de propriétaire lui-même,
+    /// qui exige les droits root).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn created_bare_adopts_owner_of_repos_root() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("pilot-gds-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let entries = vec![("monprojet".to_string(), format!("{}/monprojet.git", root))];
+        ensure_bares_for(&root, &entries).await.unwrap();
+        let root_meta = std::fs::metadata(&dir).unwrap();
+        let repo_meta = std::fs::metadata(dir.join("monprojet.git")).unwrap();
+        assert_eq!(repo_meta.uid(), root_meta.uid(), "propriétaire du dépôt ≠ celui de la racine");
+        assert_eq!(repo_meta.gid(), root_meta.gid(), "groupe du dépôt ≠ celui de la racine");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// L2.6 — la matérialisation crée les dépôts MANQUANTS (même code que

@@ -1,0 +1,85 @@
+# gds-server/docker-compose.test.yml — banc d'essai JETABLE du serveur GDS
+# (refonte GDS, micro-tâche L7.6 : « tests de bout en bout du serveur »).
+#
+# ⚠️ CE FICHIER N'EST PAS UN FICHIER D'EXPLOITATION.
+#   Il décrit un serveur de TEST, isolé de l'installation réelle par TOUT ce qui
+#   distingue les deux : nom de projet Compose, nom d'image (étiquette distincte),
+#   nom de conteneur, volumes nommés et ports publiés. Rien ici ne peut
+#   recouvrir, arrêter ni modifier l'installation de production :
+#     - projet Compose ....... `pilot-gds-e2e`   (production : `pilot-gds`)
+#     - image ................ `pilot-gds:e2e-local` (production : `pilot-gds:local`)
+#     - conteneur ............ `pilot-gds-e2e`   (production : `pilot-gds`)
+#     - volumes .............. `pilot-gds-e2e_pgdata`, `pilot-gds-e2e_repos`,
+#                              `pilot-gds-e2e_ssh-host-keys`,
+#                              `pilot-gds-e2e_supervisor`
+#     - ports ................ 18080 (API), 12222 (SSH git), 55432 (PostgreSQL)
+#                              (production : 8080 / 2222 / 5432) — ports HAUTS
+#                              choisis pour éviter la collision fréquente de
+#                              5432 avec un PostgreSQL natif et pour ne jamais
+#                              occuper les ports de production.
+#   Un `docker compose -f docker-compose.test.yml down -v` supprime donc
+#   UNIQUEMENT le banc d'essai. Le fichier de production (`docker-compose.yml`)
+#   reste intact et `gds-server/.env` (secrets réels) n'est JAMAIS lu : les
+#   variables sont écrites en clair ci-dessous, uniquement des valeurs de test.
+#
+# OBJET : être démarré À PARTIR D'UN VOLUME VIERGE par `gds-server/tests/e2e.sh`,
+#   qui y déroule le parcours complet (initialisation de l'administrateur,
+#   connexion, création d'un développeur, attribution d'un projet, enregistrement
+#   d'une clef SSH, `git push` en SSH, lecture du journal, redémarrage du service,
+#   santé) puis supprime tout. Le détail est en tête de `tests/e2e.sh`.
+#
+# UTILISATION MANUELLE (rare — le script fait tout) :
+#   docker compose -f gds-server/docker-compose.test.yml up -d --build
+#   docker compose -f gds-server/docker-compose.test.yml down -v
+#   docker rmi pilot-gds:e2e-local     # l'image de test n'est pas conservée
+#
+# Ne JAMAIS publier les ports de ce fichier ni pousser l'image de test où que ce
+# soit : c'est un bac à sable local, sans TLS, avec un mot de passe de test connu.
+
+name: pilot-gds-e2e
+
+services:
+  gds:
+    # Étiquette DISTINCTE de l'image d'exploitation : la construction du banc
+    # d'essai ne remplace jamais `pilot-gds:local`, et la suppression finale
+    # (`docker rmi pilot-gds:e2e-local`) ne peut pas toucher la production.
+    image: pilot-gds:e2e-local
+    build:
+      # Même contexte et même Dockerfile que `docker-compose.yml` : on teste
+      # exactement l'image visée en production, seul le nom change.
+      context: ..
+      dockerfile: gds-server/Dockerfile
+    container_name: pilot-gds-e2e
+    restart: "no"
+    stop_grace_period: 70s
+    # Variables de TEST, en clair et SANS interpolation : aucune lecture de
+    # `gds-server/.env`. `POSTGRES_PASSWORD` est obligatoire au premier démarrage
+    # (le script d'entrée refuse un mot de passe vide : sans lui, la base
+    # d'administration n'accepte pas de connexion TCP) ; sa valeur n'a aucune
+    # importance puisque le banc d'essai est supprimé à la fin.
+    environment:
+      POSTGRES_PASSWORD: "pilot-gds-e2e-secret"
+      GDS_PG_ALLOWED_NETWORKS: "0.0.0.0/0"
+    # Publication sur la BOUCLE LOCALE uniquement, sur des ports HAUTS distincts
+    # de la production et de tout PostgreSQL natif (cf. l'en-tête).
+    ports:
+      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:12222:22"
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - repos:/srv/git/repos
+      - ssh-host-keys:/etc/ssh/host_keys
+      - supervisor:/var/log/supervisor
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-d", "pilot_gds", "-U", "pilot"]
+      interval: 5s
+      timeout: 5s
+      start_period: 120s
+      retries: 60
+
+volumes:
+  pgdata:
+  repos:
+  ssh-host-keys:
+  supervisor:

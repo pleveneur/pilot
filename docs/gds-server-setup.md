@@ -339,6 +339,12 @@ docker exec pilot-gds ls /srv/git/repos
 Attendu : la ligne `gds-server : dépôts bare créés : <projet>.git` dans les
 journaux, puis le dossier `<projet>.git` dans le conteneur.
 
+Le dépôt créé **appartient au compte `git`**, celui qui reçoit les poussées par
+SSH : c'est indispensable, sinon git refuse de servir le dépôt (« detected
+dubious ownership ») et **tout `push` échoue**. Le service s'en charge à chaque
+création, et **reprend au démarrage** les dépôts d'une installation antérieure
+dont le propriétaire ne serait pas `git`.
+
 ---
 
 ## 4. Ce qui n'est PAS exposé au grand public, et pourquoi
@@ -456,6 +462,7 @@ restreindre davantage, ex. `GDS_PG_ALLOWED_NETWORKS=100.64.0.0/10`
 | L'URL `https://<machine>.ts.net/…` affiche le mauvais service | le port 443 sert déjà l'accès web de Pilot | utiliser `--https=8443` (§3.4) |
 | Depuis l'autre appareil : « connection timed out » sur `5432`/`2222` | appareil hors tailnet, ou ports restés sur `GDS_BIND_ADDR=0.0.0.0` | vérifier `tailscale status` sur les deux appareils ; appliquer §3.3 |
 | `Permission denied (publickey)` en SSH | clef du poste non enregistrée dans le GDS | enregistrer la clef publique via l'écran GDS de Pilot |
+| `push` refusé : « detected dubious ownership in repository » | le dépôt bare appartient à un compte autre que `git` (installation antérieure) | `docker compose restart gds` : le démarrage reprend le dépôt au profit de `git` (vérifier ensuite `docker exec pilot-gds ls -l /srv/git/repos`) |
 | Le `push` initial échoue juste après l'ajout du projet | dépôt bare pas encore matérialisé (fenêtre < 30 s) | patienter, puis relancer « Ajouter ce projet au GDS » (§3.6) |
 | `Racine des dépôts serveur non renseignée` | champ vide dans l'écran GDS de Pilot | renseigner `/srv/git/repos` (§3.3) |
 | Port SSH ignoré / erreur git étrange sur un poste Windows | variante SSH de git indéfinie | définir `GIT_SSH_VARIANT=ssh` dans l'environnement du poste, puis relancer Pilot |
@@ -495,6 +502,16 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
   inutile avec le conteneur tout-en-un.
 - **Arrêter / redémarrer le service depuis Pilot** (sans toucher au conteneur) :
   micro-tâche **L2.10**, **implémentée** — voir `gds-server/README.md` §4bis.
-- **Tests de bout en bout en conteneur** : micro-tâche ultérieure. Le protocole
-  de test de l'ancien document n'est **pas** repris ici : il portait sur un
+- **Tests de bout en bout en conteneur (L7.6, fait)** : `gds-server/tests/e2e.sh`,
+  lancé avec l'appui du banc **jetable** `gds-server/docker-compose.test.yml`
+  (projet Compose `pilot-gds-e2e`, image `pilot-gds:e2e-local`, ports
+  `18080`/`12222`/`55432`, aucun socket Docker monté, `.env` de production jamais
+  lu). Sur un volume vierge, le script rejoue le parcours complet — compte
+  administrateur, connexion, création d'un développeur, attribution d'un projet,
+  enregistrement d'une clef SSH, `push` réel en SSH, journal d'audit,
+  redémarrage du service, état de santé — puis **supprime tout** (conteneur,
+  volumes, image) et vérifie qu'aucun élément préexistant n'a bougé.
+  Lancement : `bash gds-server/tests/e2e.sh` (ajouter `E2E_REBUILD=1` pour
+  reconstruire l'image de test).
+- **Protocole de test de l'ancien document** : **non repris** — il portait sur un
   serveur préparé à la main et sur des routes de verrou qui n'existent plus.

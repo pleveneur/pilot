@@ -304,6 +304,37 @@ pub fn authorized_keys_path() -> String {
 
 /// Droits POSIX (bits `rwx`) d'un chemin, `None` sur Windows ou si le chemin
 /// n'existe pas. Sert de **constat** vérifiable (jamais de décision).
+/// Reprend les dépôts d'une racine dont le propriétaire diffère de celui de la
+/// racine (réparation d'une génération antérieure, cf. appelant).
+///
+/// Idempotent et jamais bloquant : un dépôt déjà au bon propriétaire n'est pas
+/// parcouru et un `chown` refusé est ignoré (seul l'avertissement manque).
+fn repair_repos_ownership(root: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(root_meta) = std::fs::metadata(root) else { return };
+        let Ok(entries) = std::fs::read_dir(root) else { return };
+        let owner = format!("{}:{}", root_meta.uid(), root_meta.gid());
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::metadata(&path) else { continue };
+            if !meta.is_dir() || (meta.uid() == root_meta.uid() && meta.gid() == root_meta.gid()) {
+                continue;
+            }
+            run_captured(
+                "chown",
+                &["-R", &owner, &path.to_string_lossy()],
+                Duration::from_secs(120),
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+    }
+}
+
 fn mode_of(path: &str) -> Option<u32> {
     #[cfg(unix)]
     {
@@ -524,9 +555,10 @@ fn provision_git_account_core(
         std::fs::write(&auth, "").map_err(|e| format!("Création authorized_keys: {}", e))?;
     }
     restrict_key_file_permissions(&ssh_dir, &auth);
-    // 3. Racine des dépôts (volume) : créée puis confiée à `git`. Le `chown`
-    //    n'est PAS récursif : on ne touche jamais au contenu d'un volume déjà
-    //    rempli (aucun parcours coûteux, aucun risque sur les dépôts existants).
+    // 3. Racine des dépôts (volume) : créée puis confiée à `git`. Ce `chown`
+    //    porte sur la racine elle-même ; la propriété du CONTENU est traitée
+    //    juste après (3bis) et à la création de chaque dépôt (`git::ensure_bare`
+    //    → `adopt_parent_owner`), sinon git refuse de servir le dépôt.
     let mut repos_root_created = false;
     let mut repos_root_path = String::new();
     let mut repos_root_mode = None;
@@ -539,6 +571,14 @@ fn provision_git_account_core(
             let owner = format!("{}:{}", GIT_USER, GIT_USER);
             run_captured("chown", &[&owner, root], Duration::from_secs(10));
             run_captured("chmod", &["755", root], Duration::from_secs(5));
+            // 3bis. Dépôts créés par une version antérieure : ils appartiennent
+            //       au processus (root dans le conteneur) et non au compte qui
+            //       les sert (`git`). git refuse alors de les servir
+            //       (« detected dubious ownership ») et TOUTE poussée échoue.
+            //       Seuls les dépôts dont le propriétaire DIFFÈRE de celui de
+            //       la racine sont repris (parcours récursif) : au régime
+            //       normal, le coût se limite à un `readdir` de la racine.
+            repair_repos_ownership(root);
         }
         repos_root_path = root.to_string();
         repos_root_mode = mode_of(root);
