@@ -1783,6 +1783,49 @@ pub async fn ensure_project_member(
     Ok(project_id)
 }
 
+/// Garde d'**ajout d'un projet** GDS côté poste (refonte GDS, **L3.5**).
+///
+/// L'ajout d'un projet au serveur et sa publication initiale sont réservés à un
+/// administrateur ou à un développeur (matrice §5.2). Pour un projet **déjà
+/// enregistré**, un développeur doit en outre y être **attribué** : on retombe
+/// alors sur la règle de publication ([`crate::roles::can_publish_project`]).
+///
+/// Compatibilité : si l'email d'identité du poste n'est pas un compte GDS
+/// (installation historique, `identity_email` non rattaché à un utilisateur),
+/// la garde laisse passer — aucun comportement existant n'est cassé, exactement
+/// comme la lecture restreinte des projets en L3.4. Un compte `standard` connu,
+/// lui, est refusé.
+pub async fn ensure_can_add_project(
+    pool: &PgPool,
+    project_name: &str,
+    email: &str,
+) -> Result<(), String> {
+    use crate::roles;
+    let Some(user) = get_user_by_email(pool, email).await? else {
+        return Ok(());
+    };
+    let existing = get_project_by_name(pool, project_name).await?;
+    let (allowed, message) = match existing {
+        Some(project_id) => {
+            let is_member = is_project_member(pool, project_id, user.id).await?;
+            (
+                roles::can_publish_project(&user.role, is_member),
+                "Publication d'un projet existant réservée à l'administrateur ou à un \
+                 développeur attribué au projet",
+            )
+        }
+        None => (
+            roles::can_add_project(&user.role),
+            "Ajout d'un projet réservé à l'administrateur ou à un développeur",
+        ),
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(message.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

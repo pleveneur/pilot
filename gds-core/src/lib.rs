@@ -17,5 +17,8 @@ pub mod git_cmd;
 pub mod http;
 pub mod proc;
 pub mod rate;
+// Matrice des droits ADMIN / DÉVELOPPEUR / STANDARD (refonte GDS, L3.5) :
+// module pur, sans dépendance base/réseau, partagé par le socle et le poste.
+pub mod roles;
 pub mod server_status;
 pub mod ssh;

@@ -22,6 +22,7 @@ use crate::audit::WebAudit;
 use crate::auth::WebAuth;
 use crate::db as gds_db;
 use crate::rate::{token_key, WebGuard};
+use crate::roles;
 use crate::server_status;
 use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -767,7 +768,8 @@ async fn require_admin<S: GdsCtx>(
                 .into_response()
         }
     };
-    if role == "admin" {
+    // Matrice des droits (L3.5) : rôle `admin` exigé.
+    if roles::is_admin(&role) {
         return next.run(req).await;
     }
     ctx.audit().record(&ip, &key, "admin_denied", &path, false);
@@ -1119,6 +1121,41 @@ fn tracking_allowed<S: GdsCtx>(ctx: &S, authed: &AuthedClient) -> Option<Respons
     None
 }
 
+/// Garde **matrice de droits** des écritures du suivi et des tickets
+/// (refonte GDS, L3.5) : le rôle `standard` est **limité à la lecture**
+/// (spec cible §5.2).
+///
+/// Retourne `Some(403)` et journalise `write_denied` pour un compte `standard`
+/// (ou hors vocabulaire) ; `None` pour `admin`, `dev` et la session historique
+/// du poste (rôle vide), afin de ne changer aucun comportement existant.
+fn write_allowed<S: GdsCtx>(ctx: &S, authed: &AuthedClient, subject: &str) -> Option<Response> {
+    if roles::can_write(&authed.role) {
+        return None;
+    }
+    ctx.audit()
+        .record(&authed.ip, &authed.key, "write_denied", subject, false);
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": roles::write_denied_message(&authed.role) })),
+        )
+            .into_response(),
+    )
+}
+
+/// Garde des routes d'**écriture** du suivi : rate limiting puis matrice des
+/// droits (L3.5). Les routes de **lecture** n'appellent que `tracking_allowed`.
+fn tracking_write_allowed<S: GdsCtx>(
+    ctx: &S,
+    authed: &AuthedClient,
+    subject: &str,
+) -> Option<Response> {
+    if let Some(resp) = tracking_allowed(ctx, authed) {
+        return Some(resp);
+    }
+    write_allowed(ctx, authed, subject)
+}
+
 // ── Clients ──
 
 async fn gds_tracking_clients<S: GdsCtx>(
@@ -1153,7 +1190,7 @@ async fn gds_tracking_client_upsert<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<ClientUpsertBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:clients:upsert") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1186,7 +1223,7 @@ async fn gds_tracking_client_delete<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<ClientDeleteBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:clients:delete") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1238,7 +1275,7 @@ async fn gds_tracking_project_upsert<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<ProjectUpsertBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:projects:upsert") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1271,7 +1308,7 @@ async fn gds_tracking_project_delete<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<ProjectDeleteBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:projects:delete") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1330,7 +1367,7 @@ async fn gds_tracking_task_upsert<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<TaskUpsertBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:tasks:upsert") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1372,7 +1409,7 @@ async fn gds_tracking_task_delete<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<TaskDeleteBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:tasks:delete") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1425,7 +1462,7 @@ async fn gds_tracking_decision_upsert<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<DecisionUpsertBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:decisions:upsert") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1464,7 +1501,7 @@ async fn gds_tracking_decision_delete<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<DecisionDeleteBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tracking:decisions:delete") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1525,7 +1562,7 @@ async fn gds_ticket_create_web<S: GdsCtx>(
     Extension(authed): Extension<AuthedClient>,
     Json(body): Json<TicketCreateBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tickets:create") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1572,7 +1609,7 @@ async fn gds_ticket_comment_web<S: GdsCtx>(
     Path(id): Path<i64>,
     Json(body): Json<TicketCommentBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tickets:comment") {
         return resp;
     }
     let pool = match ctx.pool() {
@@ -1604,7 +1641,7 @@ async fn gds_ticket_status_web<S: GdsCtx>(
     Path(id): Path<i64>,
     Json(body): Json<TicketStatusBody>,
 ) -> Response {
-    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "tickets:status") {
         return resp;
     }
     let pool = match ctx.pool() {

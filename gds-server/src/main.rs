@@ -740,6 +740,130 @@ mod tests {
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
+    // ── L3.5 — matrice des droits des écritures du suivi ──
+
+    /// L3.5 — sur les routes d'**écriture** du suivi et des tickets, le rôle
+    /// `standard` est **limité à la lecture** : refusé en 403 (jamais 500/404),
+    /// tandis que `admin`, `dev` et la session historique (rôle vide) franchissent
+    /// la garde et atteignent le handler (pool absent → 500). Les routes de
+    /// **lecture** (`GET`) restent, elles, ouvertes au rôle `standard`.
+    ///
+    /// Note : `/api/gds/tickets/{id}/comments` et `.../status` sont déclarées
+    /// avec la syntaxe `{id}` (axum 0.8) alors que le socle dépend d'axum 0.7
+    /// (`:id`). Ces deux routes sont donc **inatteignables** (le segment est
+    /// littéral) : défaut préexistant, hors périmètre de ce lot, à traiter
+    /// séparément. La garde L3.5 y est néanmoins posée (défense en profondeur).
+    #[tokio::test]
+    async fn tracking_write_routes_deny_standard_role() {
+        let ttl = std::time::Duration::from_secs(60);
+        let write_routes: [(&str, &str, serde_json::Value); 9] = [
+            (
+                "POST",
+                "/api/gds/tracking/clients",
+                serde_json::json!({ "name": "client-l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/clients/delete",
+                serde_json::json!({ "name": "client-l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/projects",
+                serde_json::json!({ "path": "/tmp/l35", "name": "l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/projects/delete",
+                serde_json::json!({ "path": "/tmp/l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/tasks",
+                serde_json::json!({ "id": 1, "project_id": 1, "title": "t-l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/tasks/delete",
+                serde_json::json!({ "id": 1 }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/decisions",
+                serde_json::json!({ "id": 1, "summary": "d-l35" }),
+            ),
+            (
+                "POST",
+                "/api/gds/tracking/decisions/delete",
+                serde_json::json!({ "id": 1 }),
+            ),
+            (
+                "POST",
+                "/api/gds/tickets",
+                serde_json::json!({ "title": "ticket-l35" }),
+            ),
+        ];
+
+        for (method, uri, body) in write_routes {
+            // 1) Rôle standard : refus 403, avant tout accès au pool.
+            let ctx = null_ctx();
+            let standard = ctx.auth.create_session_as("standard", ttl);
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request(method, uri, &standard, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::FORBIDDEN,
+                "standard {} {}",
+                method,
+                uri
+            );
+
+            // 2) Rôles autorisés : le handler est atteint (500), pas 403/404.
+            for role in ["admin", "dev", ""] {
+                let ctx = null_ctx();
+                let token = ctx.auth.create_session_as(role, ttl);
+                let app = server_router(ctx);
+                let res = app
+                    .oneshot(admin_json_request(method, uri, &token, body.clone()))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    res.status(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "rôle {:?} {} {}",
+                    role,
+                    method,
+                    uri
+                );
+            }
+        }
+
+        // 3) Lecture : le rôle standard conserve l'accès (500 = handler atteint).
+        for uri in ["/api/gds/tracking/clients", "/api/gds/tickets"] {
+            let ctx = null_ctx();
+            let standard = ctx.auth.create_session_as("standard", ttl);
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request(
+                    "GET",
+                    uri,
+                    &standard,
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "lecture standard {}",
+                uri
+            );
+        }
+    }
+
     // ── L2.4 — initialisation du compte administrateur ──
 
     /// L2.4 — l'initialisation est **publique** : sans jeton, la requête atteint

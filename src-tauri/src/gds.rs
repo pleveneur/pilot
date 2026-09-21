@@ -564,6 +564,11 @@ pub(crate) async fn add_project_to_gds(
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
+    // Matrice des droits (L3.5) : l'ajout d'un projet au serveur et sa
+    // publication initiale sont réservés à l'administrateur ou à un développeur
+    // (attribué s'il s'agit d'un projet déjà enregistré). Refus AVANT toute
+    // action (clef SSH, dépôt, push) pour ne rien modifier en cas de refus.
+    gds_db::ensure_can_add_project(pool, &project_name(project), email).await?;
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
     // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable. Serveur
     // LOCAL : clef enregistrée en base ET synchronisée dans authorized_keys.
