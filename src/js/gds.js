@@ -9,8 +9,8 @@
 //    nouveau serveur) avec bouton « Activer GDS » — R1/R4.
 //  - Bloc « ▶ Avancé » replié par défaut (SSH, listes serveurs/projets, purge,
 //    Phase B/C), SANS aucun champ email — tout pré-rempli.
-//  - État connecté compact (statut, synchroniser, verrou/relâcher, retirer du
-//    GDS avec confirmation).
+//  - État connecté compact (statut, synchroniser, retirer du GDS avec
+//    confirmation).
 //  - Masquages conditionnels : rien de provisionné → SSH/PhaseB/PhaseC/listes
 //    masqués ; déjà sur le serveur → bouton d'ajout masqué ; connecté →
 //    provision + ajout masqués — R3.
@@ -522,7 +522,7 @@ export function createGds(container) {
     refreshIcons(container);
   }
 
-  // ── État connecté compact (statut, synchro, verrou/relâcher, retirer) ──
+  // ── État connecté compact (statut, synchro, retirer) ──
   // R5 : multi-colonnes (plusieurs blocs côte à côte pour le confort).
   function renderConnected(cfg, identity) {
     const host = (cfg && cfg.db_host) || "";
@@ -533,20 +533,13 @@ export function createGds(container) {
         <div class="gds-panel-title"><i data-lucide="check-circle-2" class="icon-sm"></i> GDS connecté</div>
         <div class="gds-panel-desc">
           <span class="gds-badge gds-badge-ok">Connecté</span>
-          Serveur : <code>${esc(host || "—")}</code>. Synchronisation et verrous opérationnels.
+          Serveur : <code>${esc(host || "—")}</code>. Synchronisation opérationnelle.
         </div>
         <div id="gds-sync-err" class="gds-error"></div>
         <div id="gds-sync-ok" class="gds-ok"></div>
         <div id="gds-sync-status" class="gds-lock-state"></div>
-        <div id="gds-lock-state" class="gds-lock-state"></div>
         <div class="gds-actions">
           <button id="gds-sync-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Synchroniser</button>
-          <button id="gds-release-btn" class="web-btn"><i data-lucide="unlock" class="icon-sm"></i> Relâcher le verrou</button>
-        </div>
-        <label class="gds-label">Raison du verrou urgent</label>
-        <input id="gds-urgent-reason" class="gds-input" placeholder="Motif du passage en urgent" autocomplete="off">
-        <div class="gds-actions">
-          <button id="gds-urgent-btn" class="web-btn"><i data-lucide="alert-triangle" class="icon-sm"></i> Verrou urgent</button>
         </div>
       </div>
       <div class="gds-panel">${renderRemoveHtml("gds-connected-remove")}</div>
@@ -558,7 +551,6 @@ export function createGds(container) {
     const err = panel.querySelector("#gds-sync-err");
     const ok = panel.querySelector("#gds-sync-ok");
     const syncStatus = panel.querySelector("#gds-sync-status");
-    const lockState = panel.querySelector("#gds-lock-state");
 
     async function refreshSyncStatus() {
       try {
@@ -594,29 +586,6 @@ export function createGds(container) {
       }
     }
 
-    async function refreshLock() {
-      const project = currentProjectPath();
-      if (!project) return;
-      try {
-        const lock = await invoke("gds_get_lock", { project });
-        if (!lock) {
-          lockState.innerHTML = `<div class="gds-empty">Aucun verrou actif sur ce projet.</div>`;
-        } else {
-          const held = lock.urgent ? " (urgent)" : "";
-          lockState.innerHTML = `
-            <div class="gds-row">
-              <div class="gds-row-info">
-                <div class="gds-row-title">Verrou détenu par ${esc(lock.email)}${held}</div>
-                <div class="gds-row-sub">Expire : ${new Date(lock.expires_at).toLocaleString()} — ${esc(lock.reason || "—")}</div>
-              </div>
-            </div>
-          `;
-        }
-      } catch (_) {
-        lockState.innerHTML = `<div class="gds-empty">GDS non provisionné — verrou indisponible.</div>`;
-      }
-    }
-
     panel.querySelector("#gds-sync-btn").addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
@@ -627,11 +596,7 @@ export function createGds(container) {
       refreshIcons(container);
       try {
         const res = await invoke("gds_sync_project", { project });
-        const lock = res.lock || {};
-        ok.textContent = lock.acquired
-          ? `✅ Synchronisé (${res.action}) et verrou acquis.`
-          : `⚠️ Synchronisé (${res.action}) mais verrou détenu par ${lock.held_by || "un autre"} — conflit potentiel.`;
-        await refreshLock();
+        ok.textContent = `✅ Synchronisé (${res.action}).`;
         await refreshSyncStatus();
       } catch (e) {
         err.textContent = String(e);
@@ -642,35 +607,7 @@ export function createGds(container) {
       }
     });
 
-    panel.querySelector("#gds-release-btn").addEventListener("click", async () => {
-      const project = currentProjectPath();
-      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
-      err.textContent = ""; ok.textContent = "";
-      try {
-        await invoke("gds_release_lock", { project });
-        ok.textContent = "✅ Verrou relâché.";
-        await refreshLock();
-      } catch (e) {
-        err.textContent = String(e);
-      }
-    });
-
-    panel.querySelector("#gds-urgent-btn").addEventListener("click", async () => {
-      const project = currentProjectPath();
-      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
-      const reason = panel.querySelector("#gds-urgent-reason").value.trim();
-      err.textContent = ""; ok.textContent = "";
-      try {
-        const res = await invoke("gds_urgent_lock", { project, reason });
-        ok.textContent = res.replaced ? `✅ Verrou urgent acquis (remplace ${res.replaced}).` : "✅ Verrou urgent acquis.";
-        await refreshLock();
-      } catch (e) {
-        err.textContent = String(e);
-      }
-    });
-
     wireRemove(panel, "gds-connected-remove");
-    refreshLock();
     refreshSyncStatus();
   }
 
