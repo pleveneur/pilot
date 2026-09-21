@@ -1,8 +1,7 @@
 # ROADMAP — GDS (Gestionnaire de Sources) + Composant web de discussion (issue #56)
 
-> **Statut : 🟢 Phases A + B + C implémentées et refonte serveur GDS (lots
-> L1 → L6) réalisée ; LOT 7 (documentation & tests de bout en bout) en cours ;
-> seule la phase D (composant web, issue #56) reste à faire.**
+> **Statut : ✅ Phases A + B + C implémentées et refonte serveur GDS (lots
+> L1 → L7) réalisée ; seule la phase D (composant web, issue #56) reste à faire.**
 >
 > Document de planification. Les **phases A (fondations serveur), B
 > (synchronisation, désormais **sans verrou**) et C (suivi fusionné + assistant
@@ -412,8 +411,9 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 
 ### PHASE B — Refonte serveur GDS : 7 lots (remplace « synchronisation & verrous »)
 
-> 🟢 **Lots L1 → L6 réalisés ; LOT 7 (documentation & tests de bout en bout) en
-> cours.** L'ancienne phase B « synchronisation & verrous » est **caduque** : le
+> ✅ **Lots L1 → L7 réalisés** (serveur conteneurisé, rôles, écrans, suppression
+> du verrou, documentation et tests de bout en bout compris). L'ancienne phase B
+> « synchronisation & verrous » est **caduque** : le
 > **verrou global projet et le mode urgent ont été retirés** (lot L6, décision 3).
 > La synchronisation poste (dossier paramétrable `gds_local_dir`, clone/fetch/pull
 > — `gds_client.rs`, `git.rs::git_fetch`) reste valide, **sans verrou** (§3.5).
@@ -444,13 +444,20 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - **L6 — Suppression du verrou projet** ✅ : interface, logique, modèle de données
   (migration `0007_drop_project_locks.sql`) et routes HTTP du verrou retirés ;
   contrôle exhaustif des appelants restants.
-- **L7 — Documentation & tests de bout en bout** 🟡 : L7.1 (`spec_gds.md`),
+- **L7 — Documentation & tests de bout en bout** ✅ : L7.1 (`spec_gds.md`),
   L7.2 (ce document), L7.3 (`docs/gds-server-setup.md`), L7.4 (sync assistants
   sans verrou), L7.5 (socle documentaire Pilot), **L7.6 (banc de bout en bout
-  en conteneur : `gds-server/tests/e2e.sh` + `docker-compose.test.yml`)** et
+  en conteneur : `gds-server/tests/e2e.sh` + `docker-compose.test.yml`)**,
   **L7.7 (non-régression : couverture des modules purs vérifiée — 883 → 890
   tests, `src/js/gds-e2e-isolation.test.js` verrouille l'isolation du banc
-  d'essai)** faits ; reste L7.8 (CI de l'image serveur).
+  d'essai)** et **L7.8 (enchaînement dédié à l'image du serveur :
+  `.github/workflows/gds-server-image.yml` — tests unitaires du socle et du
+  serveur, banc d'essai en conteneur, puis construction et poussée de l'image
+  vers le registre GHCR)** faits. L'enchaînement L7.8 est **découplé** de la
+  publication de l'application (`release.yml`) et son déclenchement est
+  **manuel uniquement** : il n'a **jamais** été lancé (décision réservée au
+  propriétaire, cf. « Reste à faire par le propriétaire » du rapport
+  `rapport-gds-l7-8.md`).
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 

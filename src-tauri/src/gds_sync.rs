@@ -899,11 +899,13 @@ pub(crate) fn start_gds_sync_monitor(handle: tauri::AppHandle) {
     });
 }
 
-// ── Forçage serveur par titulaire du verrou (Phase C1.3, spec_gds.md §6) ──
+// ── Forçage serveur du suivi (Phase C1.3, spec_gds.md §6.3) ──
 //
-// Le titulaire du verrou de projet peut forcer la poussée du suivi local vers
-// Postgres, en ÉCRASANT les données distantes (au lieu du « dernier écrit
-// gagne » du pont C1.2). Réservé au membre qui détient le verrou GDS du projet.
+// La publication forcée pousse le suivi local vers Postgres, en ÉCRASANT les
+// données distantes (au lieu du « dernier écrit gagne » du pont C1.2). Le verrou
+// de projet n'existe plus (refonte GDS, lot L6) : l'habilitation est portée par
+// le RÔLE — administrateur, ou développeur attribué au projet (`project_members`)
+// (`gds_core::roles::can_force_publish`, règle resserrée en L3.6).
 
 /// Lit TOUT le suivi SQLite en mémoire (since 0) + mapping noms clients.
 /// La connexion est fermée avant tout await (rusqlite::Connection n'est pas

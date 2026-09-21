@@ -1,0 +1,156 @@
+name: gds-server-image
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enchaînement DÉDIÉ À L'IMAGE DU SERVEUR GDS (refonte GDS, lot L7, micro-tâche
+# L7.8).
+#
+# DÉCOUPLAGE (exigence de la micro-tâche) : ce fichier est INDÉPENDANT de
+# `.github/workflows/release.yml`. Les deux enchaînements ne partagent ni
+# déclencheur, ni job, ni artefact :
+#   - une livraison de l'application desktop ne déclenche JAMAIS cet
+#     enchaînement, et réciproquement ;
+#   - l'échec de l'un n'empêche pas la publication de l'autre.
+#
+# ⚠️ DÉCLENCHEMENT MANUEL UNIQUEMENT (`workflow_dispatch`). Aucun déclencheur
+# automatique (ni étiquette `v*`, ni poussée de branche) n'est branché ici :
+# publier une image de serveur est une action critique, elle reste à la décision
+# du propriétaire. Celui-ci la lance depuis l'onglet « Actions » de GitHub
+# (« Run workflow »). Tant que personne ne le déclenche, cet enchaînement ne
+# s'exécute jamais.
+#
+# Enchaînement des jobs :
+#   1. `tests`              — tests unitaires du socle et du serveur (Rust, sans
+#                             base de données, sans Tauri) ;
+#   2. `e2e`                — banc d'essai de bout en bout en conteneur jetable
+#                             (`gds-server/tests/e2e.sh`), qui construit l'image
+#                             depuis la MÊME recette (`gds-server/Dockerfile`)
+#                             puis supprime tout ;
+#   3. `build-and-publish`  — construction de l'image de production et poussée
+#                             vers le registre GHCR (`ghcr.io/<propriétaire>/pilot-gds`).
+# La poussée est placée APRÈS le banc d'essai : on ne publie pas une image dont
+# le parcours complet n'a pas passé.
+#
+# Ce fichier ne contient AUCUN secret : l'authentification au registre utilise le
+# jeton éphémère fourni par GitHub Actions (`secrets.GITHUB_TOKEN`), qui expire à
+# la fin du job. Aucun identifiant, aucun mot de passe, aucun fichier `.env`
+# n'entre dans l'image (cf. `/.dockerignore` et `gds-server/.env.example`).
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  # Déclenchement MANUEL uniquement — voir l'avertissement ci-dessus.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Étiquette de l'image à publier (vide = sha courte du commit)"
+        required: false
+        default: ""
+
+# `contents: read` : lecture du dépôt. `packages: write` : seule permission
+# supplémentaire, strictement nécessaire pour pousser l'image vers GHCR.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # tests — tests unitaires du socle partagé et du serveur autonome.
+  # Ils ne dépendent NI de Tauri, NI d'une base PostgreSQL, NI du frontend :
+  # aucun `npm ci` ni bundle MCP n'est requis ici (le binaire serveur ne dépend
+  # pas de `src-tauri`, cf. `gds-server/Cargo.toml`).
+  # ─────────────────────────────────────────────────────────────────────
+  tests:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run gds-core unit tests
+        run: cargo test -p gds-core --lib
+
+      - name: Run gds-server unit tests
+        run: cargo test -p gds-server
+
+  # ─────────────────────────────────────────────────────────────────────
+  # e2e — banc d'essai de bout en bout, sur un volume VIERGE, dans un conteneur
+  # jetable (projet Compose `pilot-gds-e2e`, image `pilot-gds:e2e-local`, ports
+  # 18080/12222/55432). Le script ne lit jamais `gds-server/.env`, ne monte
+  # jamais le socket Docker et supprime tout en fin de parcours (conteneur,
+  # volumes, image de test) ; un contrôle final vérifie qu'aucun élément
+  # préexistant n'a bougé.
+  # ─────────────────────────────────────────────────────────────────────
+  e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run end-to-end container suite
+        run: bash gds-server/tests/e2e.sh
+
+  # ─────────────────────────────────────────────────────────────────────
+  # build-and-publish — construction de l'image de production puis poussée vers
+  # GHCR. Le contexte de construction est la RACINE du dépôt (le workspace Cargo
+  # déclare `src-tauri` comme membre et le binaire dépend de `gds-core/`) ;
+  # `/.dockerignore` filtre ce contexte.
+  # ─────────────────────────────────────────────────────────────────────
+  build-and-publish:
+    needs: [tests, e2e]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute image reference
+        id: image
+        env:
+          # L'étiquette saisie est passée par variable d'environnement, jamais
+          # interpolée directement dans le script : elle ne peut pas être lue
+          # comme du code shell.
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          # Les références d'image doivent être en minuscules ; le propriétaire du
+          # dépôt est normalisé ici (aucune valeur codée en dur).
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          tag="${INPUT_IMAGE_TAG}"
+          if [ -z "${tag}" ]; then
+            tag="sha-$(git rev-parse --short=12 HEAD)"
+          fi
+          image="ghcr.io/${owner}/pilot-gds"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Image visée : ${image}:${tag}"
+
+      - name: Set up Buildx builder
+        # Le Dockerfile utilise `RUN --mount=type=cache` (cache du registre cargo
+        # et du répertoire de compilation), non supporté par le pilote « docker »
+        # par défaut : un builder `docker-container` est nécessaire. La seconde
+        # commande couvre le cas où le builder existe déjà (nouvelle tentative
+        # dans le même runner).
+        run: |
+          docker buildx create --name pilot-gds --use || docker buildx use pilot-gds
+          docker buildx inspect --bootstrap
+
+      - name: Log in to GHCR
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          echo "${REGISTRY_TOKEN}" | docker login ghcr.io --username "${REGISTRY_USER}" --password-stdin
+
+      - name: Build and push image
+        # Une seule plateforme est produite (celle du runner : `linux/amd64`).
+        # Pour un poste de développement ARM, il faudrait ajouter
+        # `--platform linux/amd64,linux/arm64` : décision laissée au
+        # propriétaire, aucun comportement n'est présumé ici.
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+          TAG: ${{ steps.image.outputs.tag }}
+        run: |
+          docker buildx build \
+            --file gds-server/Dockerfile \
+            --tag "${IMAGE}:${TAG}" \
+            --push \
+            .
