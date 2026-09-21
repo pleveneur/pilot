@@ -3051,6 +3051,15 @@ pub fn run() {
             gds_admin::gds_admin_saved_servers,
             gds_admin::gds_admin_test_connection,
             gds_admin::gds_admin_connect,
+            // ── GDS (refonte, L4.3) : gestion des comptes du serveur ──
+            // Liste, création, rôle, statut, mot de passe — mêmes routes
+            // d'administration HTTP ; le garde-fou « dernier administrateur »
+            // et l'audit restent appliqués par le serveur.
+            gds_admin::gds_admin_accounts,
+            gds_admin::gds_admin_account_create,
+            gds_admin::gds_admin_account_set_role,
+            gds_admin::gds_admin_account_set_status,
+            gds_admin::gds_admin_account_set_password,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──

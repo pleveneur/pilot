@@ -483,20 +483,24 @@ pub fn is_known_status(status: &str) -> bool {
 ///
 /// Ne renvoie **jamais** `password_hash` : l'empreinte ne quitte pas la couche
 /// base (elle n'est lue que par `get_user_by_email`, pour la connexion).
+/// `created_at` est fourni en ISO 8601 (refonte GDS **L4.3** : l'écran
+/// d'administration affiche la date de création de chaque compte).
 pub async fn list_users(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query("SELECT id, email, name, role, status FROM users ORDER BY email")
+    let rows = sqlx::query("SELECT id, email, name, role, status, created_at FROM users ORDER BY email")
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Liste users: {}", e))?;
     Ok(rows
         .iter()
         .map(|r| {
+            let created_at: DateTime<Utc> = r.get("created_at");
             serde_json::json!({
                 "id": r.get::<i64, _>("id"),
                 "email": r.get::<String, _>("email"),
                 "name": r.get::<String, _>("name"),
                 "role": r.get::<String, _>("role"),
                 "status": r.get::<String, _>("status"),
+                "created_at": created_at.to_rfc3339(),
             })
         })
         .collect())
