@@ -3070,6 +3070,14 @@ pub fn run() {
             gds_admin::gds_admin_project_assign,
             gds_admin::gds_admin_project_unassign,
             gds_admin::gds_admin_project_remove,
+            // ── GDS (refonte, L4.5) : espace utilisé, journal, clefs SSH ──
+            // L'état serveur donne l'espace occupé (dépôts + base) ; le journal
+            // d'audit est paginé et filtré ; les clefs SSH peuvent être listées
+            // et révoquées (le serveur régénère alors `authorized_keys`).
+            gds_admin::gds_admin_server,
+            gds_admin::gds_admin_audit,
+            gds_admin::gds_admin_ssh_keys,
+            gds_admin::gds_admin_ssh_key_revoke,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──

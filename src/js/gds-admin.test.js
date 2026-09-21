@@ -6,6 +6,7 @@ import {
   ACCOUNT_STATUSES,
   ACCOUNTS_DESC,
   ADMIN_SECTIONS,
+  AUDIT_PAGE_SIZE,
   DEFAULT_HTTP_PORT,
   buildAccountCreateArgs,
   buildAccountListArgs,
@@ -13,19 +14,25 @@ import {
   buildAccountRoleArgs,
   buildAccountStatusArgs,
   buildAccountsConnArgs,
+  buildAuditArgs,
   buildGitReposArgs,
   buildProjectAssignArgs,
   buildProjectListArgs,
   buildProjectMembersArgs,
   buildProjectRemoveArgs,
   buildProjectUnassignArgs,
+  buildServerStatusArgs,
+  buildSshKeyRevokeArgs,
+  buildSshKeysArgs,
   findRepoForProject,
   formatAccountDate,
+  formatAuditTime,
   formatBytes,
   formatProjectRemoveConfirmation,
   initialAccountsState,
   initialConnectionState,
   initialProjectsState,
+  initialStorageState,
   nextStatusToggle,
   pickPrefill,
   renderAccountsSectionHtml,
@@ -33,6 +40,7 @@ import {
   renderAccountsTableHtml,
   renderAdminSectionHtml,
   renderAdminShellHtml,
+  renderAuditTableHtml,
   renderConnectionSectionHtml,
   renderConnectionStatusHtml,
   renderProjectMembersHtml,
@@ -40,6 +48,12 @@ import {
   renderProjectsSectionHtml,
   renderProjectsStatusHtml,
   renderProjectsTableHtml,
+  renderSpaceHtml,
+  renderSshKeyRevokeConfirmHtml,
+  renderSshKeysTableHtml,
+  renderStorageSectionHtml,
+  renderStorageStatusHtml,
+  shortPublicKey,
 } from "./gds-admin.js";
 
 describe("ADMIN_SECTIONS (squelette L4.1)", () => {
@@ -681,5 +695,193 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
     });
     expect(shell).not.toContain("À venir — L4.4");
     expect(shell).toContain("À venir — L4.5");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.5 — « Espace utilisé + journal »
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("L4.5 — espace + journal + clefs SSH (rendus purs + charges utiles)", () => {
+  const conn = { host: "h", httpPort: "8080", email: "admin@b" };
+
+  it("initialise l'état sans donnée chargée ni secret", () => {
+    const s = initialStorageState();
+    expect(s.server).toBeNull();
+    expect(s.audit).toBeNull();
+    expect(s.keys).toBeNull();
+    expect(s.auditOffset).toBe(0);
+    expect(s.auditScope).toBe("admin");
+    expect(s.revoking).toBeNull();
+  });
+
+  it("construit les charges utiles (mot de passe vide, bornes respectées)", () => {
+    expect(buildServerStatusArgs(conn)).toEqual(buildAccountsConnArgs(conn));
+    expect(buildSshKeysArgs(conn)).toEqual(buildAccountsConnArgs(conn));
+    expect(buildAuditArgs(conn)).toMatchObject({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      offset: 0,
+      limit: AUDIT_PAGE_SIZE,
+      scope: "admin",
+      search: "",
+    });
+    // Portée inconnue ramenée à « admin » ; `limit` borné à 200.
+    expect(buildAuditArgs(conn, { scope: "n'importe", limit: 9999 }).scope).toBe("admin");
+    expect(buildAuditArgs(conn, { scope: "all" }).scope).toBe("all");
+    expect(buildAuditArgs(conn, { limit: 9999 }).limit).toBe(200);
+    // `limit` absent/absurde (0) → taille de page par défaut.
+    expect(buildAuditArgs(conn, { limit: 0 }).limit).toBe(AUDIT_PAGE_SIZE);
+    expect(buildAuditArgs(conn, { limit: NaN }).limit).toBe(AUDIT_PAGE_SIZE);
+    expect(buildAuditArgs(conn, { offset: -5 }).offset).toBe(0);
+    expect(buildSshKeyRevokeArgs(conn, "7")).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      keyId: 7,
+    });
+  });
+
+  it("formate les dates d'audit et raccourcit les clefs", () => {
+    expect(formatAuditTime(null)).toBe("—");
+    expect(formatAuditTime(0)).toBe("—");
+    expect(typeof formatAuditTime(1700000000000)).toBe("string");
+    expect(formatAuditTime(1700000000000)).not.toBe("—");
+    expect(shortPublicKey("ssh-ed25519 AAAA", 40)).toBe("ssh-ed25519 AAAA");
+    const long = "ssh-ed25519 " + "A".repeat(80);
+    expect(shortPublicKey(long).endsWith("…")).toBe(true);
+    expect(shortPublicKey(long).length).toBeLessThan(long.length);
+  });
+
+  it("rend l'espace utilisé, avec un total honnête (— si inconnu)", () => {
+    const html = renderSpaceHtml({
+      ...initialStorageState(),
+      server: { repos_bytes: 2048, db_bytes: 1024 },
+    });
+    expect(html).toContain("Espace dépôts");
+    expect(html).toContain("Espace base");
+    expect(html).toContain("3.0 Ko");
+    // Donnée manquante : « — », jamais un faux 0.
+    const partial = renderSpaceHtml({ ...initialStorageState(), server: { repos_bytes: null } });
+    expect(partial).toContain("—");
+    expect(partial).not.toContain("0 o");
+  });
+
+  it("rend le journal : pagination, portée, échecs distingués", () => {
+    const html = renderAuditTableHtml({
+      ...initialStorageState(),
+      audit: [
+        { ts: 1700000000000, action: "login", detail: "ok", ip: "10.0.0.1", ok: true },
+        { ts: 1700000001000, action: "login", detail: "refus", ip: "10.0.0.2", ok: false },
+      ],
+      auditTotal: 120,
+      auditOffset: 0,
+      auditScope: "admin",
+    });
+    expect(html).toContain("data-audit-scope=\"admin\"");
+    expect(html).toContain("data-audit-scope=\"all\"");
+    expect(html).toContain("1–50 sur 120");
+    expect(html).toContain("login");
+    expect(html).toContain("✓");
+    expect(html).toContain("✗");
+    // Première page : « Précédent » désactivé ; « Suivant » actif.
+    expect(html).toMatch(/data-audit-page="prev" disabled/);
+    expect(html).not.toMatch(/data-audit-page="next" disabled/);
+    // Dernière page : « Suivant » désactivé.
+    const last = renderAuditTableHtml({
+      ...initialStorageState(),
+      audit: [],
+      auditTotal: 120,
+      auditOffset: 100,
+    });
+    expect(last).toMatch(/data-audit-page="next" disabled/);
+    expect(last).toContain("Aucune entrée pour ce filtre.");
+  });
+
+  it("liste les clefs SSH et n'expose que la clef publique", () => {
+    const html = renderSshKeysTableHtml({
+      ...initialStorageState(),
+      keys: [
+        { id: 3, email: "dev@x", public_key: "ssh-ed25519 AAAA test", created_at: "2026-01-01T00:00:00+00:00" },
+      ],
+    });
+    expect(html).toContain("dev@x");
+    expect(html).toContain("ssh-ed25519 AAAA test");
+    expect(html).toContain("data-ssh-action=\"revoke\"");
+    expect(renderSshKeysTableHtml(initialStorageState())).toContain("Clefs non chargées.");
+    expect(
+      renderSshKeysTableHtml({ ...initialStorageState(), keys: [] })
+    ).toContain("Aucune clef SSH enregistrée.");
+  });
+
+  it("exige une confirmation explicite avant toute révocation", () => {
+    // Aucune confirmation à l'état initial : rien à révoquer.
+    expect(renderSshKeyRevokeConfirmHtml(initialStorageState())).toBe("");
+    const html = renderSshKeyRevokeConfirmHtml({
+      ...initialStorageState(),
+      revoking: { id: 3, email: "dev@x" },
+    });
+    expect(html).toContain("authorized_keys");
+    expect(html).toContain("irréversible");
+    expect(html).toContain("data-ssh-action=\"revoke-confirm\"");
+    expect(html).toContain("data-ssh-action=\"revoke-cancel\"");
+  });
+
+  it("compose la section complète avec ses quatre blocs", () => {
+    const html = renderStorageSectionHtml({
+      ...initialStorageState(),
+      server: { repos_bytes: 10, db_bytes: 20 },
+      audit: [],
+      keys: [],
+    });
+    expect(html).toContain('data-section-id="storage"');
+    expect(html).toContain('id="gds-admin-sto-refresh"');
+    expect(html).toContain("Espace occupé par les dépôts et la base");
+    expect(html).toContain("Journal des connexions & actions");
+    expect(html).toContain("Clefs SSH autorisées");
+    // Sans connexion : message d'invite, aucun tableau.
+    const empty = renderStorageSectionHtml(initialStorageState());
+    expect(empty).toContain("Connectez-vous");
+  });
+
+  it("rend l'état du bloc : chargement, erreur, notice, invite", () => {
+    expect(renderStorageStatusHtml({ ...initialStorageState(), loading: true })).toContain(
+      "Chargement"
+    );
+    expect(renderStorageStatusHtml({ ...initialStorageState(), error: "boom" })).toContain("boom");
+    expect(renderStorageStatusHtml({ ...initialStorageState(), notice: "ok fait" })).toContain(
+      "ok fait"
+    );
+    expect(renderStorageStatusHtml(initialStorageState())).toContain("Connectez-vous");
+    expect(
+      renderStorageStatusHtml({ ...initialStorageState(), server: { repos_bytes: 1 } })
+    ).toContain("chargé");
+  });
+
+  it("n'expose jamais un secret présent dans l'état", () => {
+    const html = renderStorageSectionHtml({
+      ...initialStorageState(),
+      server: { repos_bytes: 1, db_bytes: 2 },
+      audit: [{ ts: 1, action: "login", detail: "d", ip: "i", ok: true }],
+      keys: [{ id: 1, email: "dev@x", public_key: "k" }],
+      password: "S3CR3T-PW",
+      token: "TOKEN-PW",
+    });
+    expect(html).not.toContain("S3CR3T-PW");
+    expect(html).not.toContain("TOKEN-PW");
+  });
+
+  it("remplace la section L4.5 dans le shell et garde L4.6 en squelette", () => {
+    const shell = renderAdminShellHtml({
+      title: "t",
+      subtitle: "s",
+      sections: ADMIN_SECTIONS,
+      sectionHtml: { storage: renderStorageSectionHtml(initialStorageState()) },
+    });
+    expect(shell).not.toContain("À venir — L4.5");
+    expect(shell).toContain("À venir — L4.6");
   });
 });

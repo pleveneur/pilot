@@ -930,6 +930,32 @@ pub async fn get_ssh_keys_by_user(pool: &PgPool, user_id: i64) -> Result<Vec<Str
     Ok(rows.iter().map(|r| r.get::<String, _>("public_key")).collect())
 }
 
+/// Liste TOUTES les clefs SSH du serveur avec leur propriétaire (L4.5).
+/// Renvoie `id`, `user_id`, `email`, `public_key`, `created_at`. L'email vient
+/// d'une jointure sur `users` (toujours présent : la table porte une FK).
+pub async fn list_ssh_keys(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
+    let rows = sqlx::query(
+        "SELECT k.id, k.user_id, u.email, k.public_key, k.created_at \
+         FROM ssh_keys k JOIN users u ON u.id = k.user_id ORDER BY k.id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste clefs SSH: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let created_at: DateTime<Utc> = r.get("created_at");
+            serde_json::json!({
+                "id": r.get::<i64, _>("id"),
+                "user_id": r.get::<i64, _>("user_id"),
+                "email": r.get::<String, _>("email"),
+                "public_key": r.get::<String, _>("public_key"),
+                "created_at": created_at.to_rfc3339(),
+            })
+        })
+        .collect())
+}
+
 /// Retourne l'id d'une clef publique exacte (None si absente).
 pub async fn get_ssh_key_by_key(pool: &PgPool, public_key: &str) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM ssh_keys WHERE public_key = $1")
@@ -958,15 +984,17 @@ pub async fn get_ssh_key_by_fingerprint(pool: &PgPool, fingerprint: &str) -> Res
     Ok(None)
 }
 
-/// Supprime une clef publique par id.
+/// Modifie `delete_ssh_key` (L4.5) : renvoie le nombre de lignes supprimées
+/// (0 = clef déjà absente), pour distinguer une vraie révocation d'un no-op lors
+/// de la régénération de `authorized_keys`.
 #[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
-pub async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<(), String> {
-    sqlx::query("DELETE FROM ssh_keys WHERE id = $1")
+pub async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<u64, String> {
+    let res = sqlx::query("DELETE FROM ssh_keys WHERE id = $1")
         .bind(id)
         .execute(pool)
         .await
         .map_err(|e| format!("Suppression clef SSH: {}", e))?;
-    Ok(())
+    Ok(res.rows_affected())
 }
 
 /// Journalise une action GDS dans `audit_gds` (Phase B : verrous, sync).

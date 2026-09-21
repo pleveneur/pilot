@@ -766,6 +766,263 @@ export function renderProjectsSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.5 — « Espace utilisé + journal » : rendus purs et charges utiles
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Description du bloc « Espace utilisé + journal » (L4.5). */
+export const STORAGE_DESC =
+  "Espace occupé par les dépôts et la base, journal des connexions et des actions " +
+  "d'administration (paginé et filtrable), et clefs SSH autorisées (révocables).";
+
+/**
+ * Portées du journal. « admin » = connexions + actions d'administration (défaut) ;
+ * « all » = tout le journal d'audit (utile pour enquêter). Pure — testable.
+ */
+export const AUDIT_SCOPES = [
+  { id: "admin", label: "Connexions & administration" },
+  { id: "all", label: "Tout le journal" },
+];
+
+/** Taille de page du journal (le serveur borne à 200). */
+export const AUDIT_PAGE_SIZE = 50;
+
+/** État initial du bloc « Espace + journal » (L4.5). Aucun secret n'y figure. */
+export function initialStorageState() {
+  return {
+    server: null,
+    audit: null,
+    auditTotal: 0,
+    auditOffset: 0,
+    auditScope: "admin",
+    auditSearch: "",
+    keys: null,
+    loading: false,
+    error: "",
+    notice: "",
+    busy: "",
+    revoking: null,
+  };
+}
+
+/** Charge utile de lecture de l'état serveur (espace occupé) — sans mot de passe. */
+export function buildServerStatusArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/**
+ * Charge utile du journal d'audit (pure, testable). `offset` et `limit` sont des
+ * nombres, `scope` vaut « admin » par défaut, `search` est la recherche libre.
+ */
+export function buildAuditArgs(
+  conn,
+  { offset = 0, limit = AUDIT_PAGE_SIZE, scope = "admin", search = "" } = {}
+) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    offset: Math.max(0, Number(offset) || 0),
+    limit: Math.min(200, Math.max(1, Number(limit) || AUDIT_PAGE_SIZE)),
+    scope: scope === "all" ? "all" : "admin",
+    search: String(search == null ? "" : search),
+  };
+}
+
+/** Charge utile de lecture des clefs SSH — sans mot de passe. */
+export function buildSshKeysArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/** Charge utile de révocation d'une clef SSH (identifiant strictement positif). */
+export function buildSshKeyRevokeArgs(conn, keyId) {
+  return { ...buildAccountsConnArgs(conn), keyId: Number(keyId) };
+}
+
+/**
+ * Formate un horodatage d'audit (millisecondes epoch) en chaîne locale lisible.
+ * `null`/absurde → « — ». Pure — testable.
+ */
+export function formatAuditTime(ts) {
+  if (ts == null || typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return "—";
+  try {
+    return new Date(ts).toLocaleString();
+  } catch {
+    return "—";
+  }
+}
+
+/**
+ * Raccourcit une clef publique pour l'affichage (la valeur complète reste dans
+ * l'attribut `title`). Pure — testable.
+ */
+export function shortPublicKey(key, max = 46) {
+  const s = String(key == null ? "" : key);
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}…`;
+}
+
+/** Une ligne du journal d'audit (pure). */
+function auditRowHtml(e) {
+  const ok = !e || e.ok !== false;
+  const detail = (e && e.detail) || "";
+  return `
+        <tr>
+          <td class="gds-admin-cell-date">${esc(formatAuditTime(e && e.ts))}</td>
+          <td><span class="gds-admin-badge ${ok ? "ok" : "warn"}">${esc((e && e.action) || "—")}</span></td>
+          <td class="gds-admin-cell-path" title="${esc(detail)}">${esc(detail)}</td>
+          <td class="gds-admin-cell-date">${esc((e && e.ip) || "")}</td>
+          <td>${ok ? "✓" : "✗"}</td>
+        </tr>`;
+}
+
+/**
+ * Rend l'état du bloc « Espace + journal » (pure, testable). Ne reçoit que
+ * l'état local : aucun secret.
+ */
+export function renderStorageStatusHtml(state = {}) {
+  const s = { ...initialStorageState(), ...state };
+  if (s.loading) return `<div class="gds-admin-status loading">Chargement de l'état du serveur…</div>`;
+  if (s.error) return `<div class="gds-admin-status error">⚠️ ${esc(s.error)}</div>`;
+  if (s.notice) return `<div class="gds-admin-status ok">${esc(s.notice)}</div>`;
+  if (s.server == null) {
+    return `<div class="gds-admin-status idle">Connectez-vous au serveur pour afficher l'espace utilisé et le journal.</div>`;
+  }
+  return `<div class="gds-admin-status idle">État du serveur chargé.</div>`;
+}
+
+/** Rend l'espace occupé (dépôts + base + total) (pure). */
+export function renderSpaceHtml(state = {}) {
+  const s = { ...initialStorageState(), ...state };
+  const sv = s.server;
+  if (!sv) return "";
+  const repos = typeof sv.repos_bytes === "number" ? sv.repos_bytes : null;
+  const db = typeof sv.db_bytes === "number" ? sv.db_bytes : null;
+  const total = repos != null && db != null ? repos + db : null;
+  return `
+      <div class="gds-admin-metrics gds-admin-space">
+        <span><b>Espace dépôts</b> ${esc(formatBytes(repos))}</span>
+        <span><b>Espace base</b> ${esc(formatBytes(db))}</span>
+        <span><b>Total</b> ${esc(formatBytes(total))}</span>
+      </div>`;
+}
+
+/** Rend le tableau du journal d'audit + sa pagination (pure). */
+export function renderAuditTableHtml(state = {}) {
+  const s = { ...initialStorageState(), ...state };
+  const scopes = AUDIT_SCOPES.map(
+    (sc) =>
+      `<button class="gds-admin-btn small${s.auditScope === sc.id ? " primary" : ""}" data-audit-scope="${esc(sc.id)}">${esc(sc.label)}</button>`
+  ).join("");
+  const entries = Array.isArray(s.audit) ? s.audit : null;
+  let rows;
+  if (entries == null) {
+    rows = `<tr><td colspan="5" class="gds-admin-muted">Journal non chargé.</td></tr>`;
+  } else if (entries.length === 0) {
+    rows = `<tr><td colspan="5" class="gds-admin-muted">Aucune entrée pour ce filtre.</td></tr>`;
+  } else {
+    rows = entries.map(auditRowHtml).join("");
+  }
+  const total = Number(s.auditTotal) || 0;
+  const start = total === 0 ? 0 : s.auditOffset + 1;
+  const end = Math.min(s.auditOffset + AUDIT_PAGE_SIZE, total);
+  const prev = s.auditOffset <= 0 ? " disabled" : "";
+  const next = s.auditOffset + AUDIT_PAGE_SIZE >= total ? " disabled" : "";
+  return `
+      <div class="gds-admin-block">
+        <div class="gds-admin-reset-title"><i data-lucide="scroll-text" class="icon-sm"></i> Journal des connexions & actions</div>
+        <div class="gds-admin-actions gds-admin-audit-bar">
+          ${scopes}
+          <input id="gds-admin-audit-search" class="gds-admin-acc-role" type="text" placeholder="Rechercher (action, IP, détail)…" value="${esc(s.auditSearch)}">
+          <button class="gds-admin-btn small" data-audit-action="search"><i data-lucide="search" class="icon-sm"></i> Filtrer</button>
+        </div>
+        <table class="gds-admin-table">
+          <thead><tr><th>Date</th><th>Action</th><th>Détail</th><th>IP</th><th>Résultat</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="gds-admin-pager">
+          <button class="gds-admin-btn small" data-audit-page="prev"${prev}><i data-lucide="chevron-left" class="icon-sm"></i> Précédent</button>
+          <span class="gds-admin-muted">${esc(String(start))}–${esc(String(end))} sur ${esc(String(total))}</span>
+          <button class="gds-admin-btn small" data-audit-page="next"${next}>Suivant <i data-lucide="chevron-right" class="icon-sm"></i></button>
+        </div>
+      </div>`;
+}
+
+/** Une ligne de clef SSH (pure). */
+function sshKeyRowHtml(k) {
+  const id = Number(k && k.id);
+  const key = (k && k.public_key) || "";
+  return `
+        <tr data-key-id="${esc(id)}">
+          <td class="gds-admin-cell-date">${esc(String(id))}</td>
+          <td class="gds-admin-cell-email">${esc((k && k.email) || "—")}</td>
+          <td class="gds-admin-cell-path" title="${esc(key)}">${esc(shortPublicKey(key))}</td>
+          <td class="gds-admin-cell-date">${esc((k && k.created_at) || "—")}</td>
+          <td class="gds-admin-cell-actions"><button class="gds-admin-btn small danger" data-ssh-action="revoke" data-id="${esc(id)}" data-email="${esc((k && k.email) || "")}"><i data-lucide="key-round" class="icon-sm"></i> Révoquer</button></td>
+        </tr>`;
+}
+
+/** Rend la liste des clefs SSH autorisées (pure). */
+export function renderSshKeysTableHtml(state = {}) {
+  const s = { ...initialStorageState(), ...state };
+  const keys = Array.isArray(s.keys) ? s.keys : null;
+  let rows;
+  if (keys == null) {
+    rows = `<tr><td colspan="5" class="gds-admin-muted">Clefs non chargées.</td></tr>`;
+  } else if (keys.length === 0) {
+    rows = `<tr><td colspan="5" class="gds-admin-muted">Aucune clef SSH enregistrée.</td></tr>`;
+  } else {
+    rows = keys.map(sshKeyRowHtml).join("");
+  }
+  const count = keys == null ? "—" : String(keys.length);
+  return `
+      <div class="gds-admin-block">
+        <div class="gds-admin-reset-title"><i data-lucide="key-round" class="icon-sm"></i> Clefs SSH autorisées <span class="gds-admin-muted">(${esc(count)})</span></div>
+        <table class="gds-admin-table">
+          <thead><tr><th>#</th><th>Propriétaire</th><th>Clef publique</th><th>Ajoutée</th><th>Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+}
+
+/**
+ * Rend le panneau de confirmation de la révocation d'une clef SSH (pure). Le
+ * texte décrit exactement l'effet (suppression + `authorized_keys` régénéré) et
+ * rappelle que l'action est irréversible.
+ */
+export function renderSshKeyRevokeConfirmHtml(state = {}) {
+  const s = { ...initialStorageState(), ...state };
+  if (!s.revoking) return "";
+  const k = s.revoking;
+  return `
+      <div class="gds-admin-confirm danger">
+        <div class="gds-admin-reset-title">Confirmation — révocation de la clef de <b>${esc(k.email || "—")}</b></div>
+        <div class="gds-admin-section-desc">La clef publique sera supprimée de la base du serveur et le fichier <b>authorized_keys</b> régénéré immédiatement : l'accès SSH par cette clef est refusé dès maintenant. Cette action est irréversible ; le propriétaire devra enregistrer une nouvelle clef.</div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn danger" data-ssh-action="revoke-confirm" data-id="${esc(String(k.id))}"><i data-lucide="key-round" class="icon-sm"></i> Révoquer définitivement</button>
+          <button class="gds-admin-btn" data-ssh-action="revoke-cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
+        </div>
+      </div>`;
+}
+
+/** Rend la section « Espace utilisé + journal » complète (pure, testable). */
+export function renderStorageSectionHtml(state = {}) {
+  const base = initialStorageState();
+  const s = { ...base, ...state };
+  return `
+      <section class="gds-admin-section" data-section-id="storage">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="hard-drive" class="icon-sm"></i> Espace utilisé + journal</div>
+          <button class="gds-admin-btn small" id="gds-admin-sto-refresh"><i data-lucide="refresh-cw" class="icon-sm"></i> Rafraîchir</button>
+        </div>
+        <div class="gds-admin-section-desc">${esc(STORAGE_DESC)}</div>
+        <div id="gds-admin-storage-status">${renderStorageStatusHtml(s)}</div>
+        ${renderSpaceHtml(s)}
+        ${renderAuditTableHtml(s)}
+        ${renderSshKeysTableHtml(s)}
+        ${renderSshKeyRevokeConfirmHtml(s)}
+        <div class="gds-admin-hint">Le journal provient de l'audit du serveur (connexions, révocations, actions d'administration) ; les entrées les plus récentes sont en tête. Révoquer une clef régénère le fichier des clefs autorisées du serveur : l'accès SSH est coupé immédiatement, sans attendre.</div>
+      </section>`;
+}
+
 /**
  * Crée l'onglet « GDS Serveur » (transverse) dans `container`.
  * Ne dépend d'AUCUN projet ouvert : aucune lecture de `window._pilotProjectPath`.
@@ -781,6 +1038,8 @@ export function createGdsAdmin(container) {
   let accounts = initialAccountsState();
   /** État de la section « Dépôts / projets » (L4.4) — jamais de secret. */
   let projects = initialProjectsState();
+  /** État de la section « Espace utilisé + journal » (L4.5) — jamais de secret. */
+  let storage = initialStorageState();
   /** Identité admin de la dernière connexion réussie (hôte + email bruts) : la
    *  clé des identifiants mémorisés côté poste (repli du mot de passe). */
   let adminConn = null;
@@ -815,6 +1074,12 @@ export function createGdsAdmin(container) {
     }
   }
 
+  /** Récupère la saisie du bloc « Espace + journal » AVANT tout redessin. */
+  function readStorageFields() {
+    const search = q("#gds-admin-audit-search");
+    if (search) storage.auditSearch = search.value;
+  }
+
   /** Récupère la saisie de création AVANT tout redessin (sans mot de passe). */
   function captureAccountForm() {
     const email = q("#gds-admin-acc-new-email");
@@ -833,6 +1098,7 @@ export function createGdsAdmin(container) {
     readFields();
     captureAccountForm();
     readProjectFields();
+    readStorageFields();
     container.innerHTML = renderAdminShellHtml({
       title: "🖥️ GDS Serveur — administration",
       subtitle:
@@ -842,6 +1108,7 @@ export function createGdsAdmin(container) {
         connection: renderConnectionSectionHtml(state),
         accounts: renderAccountsSectionHtml(accounts),
         repos: renderProjectsSectionHtml(projects),
+        storage: renderStorageSectionHtml(storage),
       },
     });
     refreshIcons(container);
@@ -870,6 +1137,27 @@ export function createGdsAdmin(container) {
     }
     const purge = q("#gds-admin-prj-purge");
     if (purge) purge.addEventListener("change", () => draw());
+    // ── L4.5 : espace + journal + clefs SSH ──
+    const stoRefresh = q("#gds-admin-sto-refresh");
+    if (stoRefresh) stoRefresh.addEventListener("click", () => loadStorage());
+    for (const btn of container.querySelectorAll("[data-audit-scope]")) {
+      btn.addEventListener("click", () => onAuditScope(btn));
+    }
+    const auditSearch = q("#gds-admin-audit-search");
+    if (auditSearch) {
+      auditSearch.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") runAuditSearch();
+      });
+    }
+    for (const btn of container.querySelectorAll("[data-audit-action]")) {
+      btn.addEventListener("click", () => runAuditSearch());
+    }
+    for (const btn of container.querySelectorAll("[data-audit-page]")) {
+      btn.addEventListener("click", () => onAuditPage(btn));
+    }
+    for (const btn of container.querySelectorAll("[data-ssh-action]")) {
+      btn.addEventListener("click", () => onSshKeyAction(btn));
+    }
   }
 
   // ── L4.4 : projets & dépôts (toutes via l'API HTTP du serveur) ──
@@ -1029,6 +1317,154 @@ export function createGdsAdmin(container) {
         args: buildProjectUnassignArgs(adminConn, id, email),
         success: `« ${email} » retiré du projet.`,
       });
+    }
+  }
+
+  // ── L4.5 : espace utilisé, journal d'audit, clefs SSH (via l'API HTTP) ──
+
+  /** Charge l'état serveur (espace), le journal et les clefs SSH. */
+  async function loadStorage({ silent = false } = {}) {
+    if (!adminConn) {
+      storage.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    if (!silent) {
+      storage.loading = true;
+      storage.error = "";
+      storage.notice = "";
+    }
+    draw();
+    const [sr, ar, kr] = await Promise.all([
+      invokeAccounts("gds_admin_server", buildServerStatusArgs(adminConn)),
+      invokeAccounts(
+        "gds_admin_audit",
+        buildAuditArgs(adminConn, {
+          offset: storage.auditOffset,
+          limit: AUDIT_PAGE_SIZE,
+          scope: storage.auditScope,
+          search: storage.auditSearch,
+        })
+      ),
+      invokeAccounts("gds_admin_ssh_keys", buildSshKeysArgs(adminConn)),
+    ]);
+    if (disposed) return;
+    storage.loading = false;
+    if (sr && sr.ok) {
+      storage.server = sr;
+    } else {
+      storage.error = (sr && sr.error) || "État du serveur indisponible.";
+    }
+    if (ar && ar.ok) {
+      storage.audit = Array.isArray(ar.entries) ? ar.entries : [];
+      storage.auditTotal = Number(ar.total) || 0;
+    } else {
+      storage.error = storage.error || (ar && ar.error) || "Journal indisponible.";
+    }
+    if (kr && kr.ok && Array.isArray(kr.keys)) {
+      storage.keys = kr.keys;
+    } else if (kr && !kr.ok) {
+      storage.error = storage.error || kr.error || "Liste des clefs indisponible.";
+    }
+    draw();
+  }
+
+  /** Recharge seulement le journal (après filtre ou changement de page). */
+  async function loadAudit({ silent = false } = {}) {
+    if (!adminConn) return;
+    if (!silent) {
+      storage.loading = true;
+      storage.error = "";
+      storage.notice = "";
+    }
+    draw();
+    const ar = await invokeAccounts(
+      "gds_admin_audit",
+      buildAuditArgs(adminConn, {
+        offset: storage.auditOffset,
+        limit: AUDIT_PAGE_SIZE,
+        scope: storage.auditScope,
+        search: storage.auditSearch,
+      })
+    );
+    if (disposed) return;
+    storage.loading = false;
+    if (ar && ar.ok) {
+      storage.audit = Array.isArray(ar.entries) ? ar.entries : [];
+      storage.auditTotal = Number(ar.total) || 0;
+    } else {
+      storage.error = (ar && ar.error) || "Journal indisponible.";
+    }
+    draw();
+  }
+
+  /** Applique le filtre de recherche saisi (retour à la première page). */
+  function runAuditSearch() {
+    const el = q("#gds-admin-audit-search");
+    storage.auditSearch = el ? el.value : storage.auditSearch;
+    storage.auditOffset = 0;
+    return loadAudit();
+  }
+
+  /** Bascule la portée du journal (« admin » / « all »). */
+  function onAuditScope(btn) {
+    const scope = btn.getAttribute("data-audit-scope");
+    if (scope === storage.auditScope) return;
+    storage.auditScope = scope === "all" ? "all" : "admin";
+    storage.auditOffset = 0;
+    return loadAudit();
+  }
+
+  /** Pagination du journal (bornée : jamais avant 0 ni après le total). */
+  function onAuditPage(btn) {
+    const dir = btn.getAttribute("data-audit-page");
+    const step = dir === "prev" ? -AUDIT_PAGE_SIZE : AUDIT_PAGE_SIZE;
+    const next = storage.auditOffset + step;
+    const maxStart = Math.max(0, storage.auditTotal - 1);
+    storage.auditOffset = Math.min(maxStart, Math.max(0, next));
+    return loadAudit();
+  }
+
+  /** Traite un clic du bloc des clefs SSH (révocation avec confirmation). */
+  async function onSshKeyAction(btn) {
+    const action = btn.getAttribute("data-ssh-action");
+    if (action === "revoke") {
+      storage.revoking = {
+        id: Number(btn.getAttribute("data-id")),
+        email: btn.getAttribute("data-email") || "",
+      };
+      storage.error = "";
+      storage.notice = "";
+      return draw();
+    }
+    if (action === "revoke-cancel") {
+      storage.revoking = null;
+      return draw();
+    }
+    if (action === "revoke-confirm") {
+      const target = storage.revoking || { id: Number(btn.getAttribute("data-id")), email: "" };
+      if (!adminConn) {
+        storage.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+        return draw();
+      }
+      storage.busy = String(target.id);
+      storage.error = "";
+      storage.notice = "";
+      draw();
+      const res = await invokeAccounts(
+        "gds_admin_ssh_key_revoke",
+        buildSshKeyRevokeArgs(adminConn, target.id)
+      );
+      if (disposed) return;
+      storage.busy = "";
+      if (res && res.ok) {
+        storage.revoking = null;
+        storage.notice =
+          `Clef de « ${target.email} » révoquée : authorized_keys régénéré ` +
+          `(${numOrDash(res.keys)} clef(s) restante(s)).`;
+        return loadStorage({ silent: true });
+      }
+      storage.error = (res && res.error) || "Révocation refusée par le serveur.";
+      return draw();
     }
   }
 
@@ -1234,6 +1670,7 @@ export function createGdsAdmin(container) {
         draw();
         loadAccounts({ silent: true });
         loadProjects({ silent: true });
+        loadStorage({ silent: true });
         return;
       }
       state.ok = false;

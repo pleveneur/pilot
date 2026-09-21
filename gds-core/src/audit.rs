@@ -65,6 +65,58 @@ pub struct AuditEntry {
     pub ok: bool,
 }
 
+/// Vrai si l'entrée passe le filtre du journal (L4.5). Pure — testable.
+///
+/// * `actions` : liste d'actions exactes à retenir (vide = aucune restriction) ;
+/// * `q` : recherche libre insensible à la casse sur l'action, le détail, l'IP
+///   et le sujet (vide = aucune restriction).
+pub fn entry_matches(entry: &AuditEntry, actions: &[String], q: &str) -> bool {
+    if !actions.is_empty() && !actions.iter().any(|a| a == &entry.action) {
+        return false;
+    }
+    let needle = q.trim().to_lowercase();
+    if needle.is_empty() {
+        return true;
+    }
+    let haystack = format!(
+        "{} {} {} {}",
+        entry.action, entry.detail, entry.ip, entry.subject
+    )
+    .to_lowercase();
+    haystack.contains(&needle)
+}
+
+/// Actions de « connexion / administration » retenues par défaut par le journal
+/// de l'écran d'administration (L4.5). Le poste peut demander « tout » en
+/// passant une liste vide. Pure — testable.
+pub fn admin_actions() -> Vec<String> {
+    [
+        "login",
+        "set_password",
+        "kick",
+        "admin_denied",
+        "write_denied",
+        "rate_limited",
+        "user_create",
+        "user_role",
+        "user_status",
+        "user_password",
+        "user_validate",
+        "users_list",
+        "project_assign",
+        "project_unassign",
+        "project_remove",
+        "project_remove_purge",
+        "ssh_key_revoke",
+        "project_create",
+        "project_open",
+        "project_select",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 pub struct WebAudit {
     entries: Mutex<VecDeque<AuditEntry>>,
     /// Chemin du fichier JSONL (None tant que `set_file` n'a pas été appelé).
@@ -140,6 +192,25 @@ impl WebAudit {
         let e = self.entries.lock().unwrap();
         let start = e.len().saturating_sub(n);
         e.iter().skip(start).cloned().collect()
+    }
+
+    /// Page du journal, **plus récentes d'abord**, filtrée (L4.5). `actions` =
+    /// liste d'actions exactes à retenir (vide = toutes) ; `q` = recherche libre
+    /// insensible à la casse sur l'action, le détail, l'IP et le sujet. Renvoie
+    /// `(total_après_filtre, page)` : la pagination est calculée sur le total
+    /// filtré, pas sur le tampon entier.
+    pub fn page(&self, actions: &[String], q: &str, offset: usize, limit: usize) -> (usize, Vec<AuditEntry>) {
+        let e = self.entries.lock().unwrap();
+        let matched: Vec<&AuditEntry> = e.iter().filter(|x| entry_matches(x, actions, q)).collect();
+        let total = matched.len();
+        let page: Vec<AuditEntry> = matched
+            .into_iter()
+            .rev()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect();
+        (total, page)
     }
 
     /// Vide le journal (bouton « Effacer le journal ») : ring buffer **et**
@@ -219,4 +290,77 @@ fn rotate_if_needed(path: &Path) {
         out.push('\n');
     }
     let _ = fs::write(path, out);
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(action: &str, detail: &str) -> AuditEntry {
+        AuditEntry {
+            ts: 1,
+            ip: "10.0.0.1".to_string(),
+            subject: "sub".to_string(),
+            action: action.to_string(),
+            detail: detail.to_string(),
+            ok: true,
+        }
+    }
+
+    #[test]
+    fn entry_matches_restricts_on_exact_actions() {
+        let actions = vec!["login".to_string()];
+        assert!(entry_matches(&entry("login", "ok"), &actions, ""));
+        assert!(!entry_matches(&entry("project_remove", "x"), &actions, ""));
+        // Liste vide = aucune restriction d'action.
+        assert!(entry_matches(&entry("project_remove", "x"), &[], ""));
+    }
+
+    #[test]
+    fn entry_matches_free_search_is_case_insensitive() {
+        let e = entry("project_remove_purge", "42:Alpha");
+        assert!(entry_matches(&e, &[], "alpha"));
+        assert!(entry_matches(&e, &[], "10.0.0.1"));
+        assert!(entry_matches(&e, &[], "PURGE"));
+        assert!(!entry_matches(&e, &[], "beta"));
+        // Espaces ignorés.
+        assert!(entry_matches(&e, &[], "  alpha  "));
+    }
+
+    #[test]
+    fn admin_actions_cover_logins_and_admin_events() {
+        let a = admin_actions();
+        for expected in [
+            "login",
+            "user_create",
+            "project_remove_purge",
+            "ssh_key_revoke",
+            "admin_denied",
+        ] {
+            assert!(a.iter().any(|x| x == expected), "{} manquant", expected);
+        }
+        // Aucune action purement métier (prompt) dans le filtre d'administration.
+        assert!(!a.iter().any(|x| x == "prompt"));
+    }
+
+    #[test]
+    fn page_filters_paginates_and_is_newest_first() {
+        let a = WebAudit::new();
+        a.record("ip", "s", "login", "d1", true);
+        a.record("ip", "s", "prompt", "d2", true);
+        a.record("ip", "s", "login", "d3", true);
+        let (total, page) = a.page(&["login".to_string()], "", 0, 10);
+        assert_eq!(total, 2);
+        // Plus récent d'abord : d3 avant d1.
+        assert_eq!(page[0].detail, "d3");
+        assert_eq!(page[1].detail, "d1");
+        // Pagination calculée sur le total filtré.
+        let (total, page) = a.page(&["login".to_string()], "", 1, 1);
+        assert_eq!(total, 2);
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].detail, "d1");
+        // Aucune restriction : les 3 entrées, plus récentes d'abord.
+        let (total, page) = a.page(&[], "", 0, 10);
+        assert_eq!(total, 3);
+        assert_eq!(page[0].action, "login");
+    }
 }

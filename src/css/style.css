@@ -8813,6 +8813,38 @@ body.pilot-loading *::after {
   color: var(--text-secondary, #a0a6b4);
 }
 
+/* ── L4.5 — bloc « Espace utilisé + journal » ── */
+.gds-admin-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.gds-admin-space {
+  margin-top: 4px;
+}
+.gds-admin-space span {
+  background: var(--surface-2, #1e2127);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.gds-admin-audit-bar {
+  align-items: center;
+}
+.gds-admin-audit-bar input {
+  flex: 1;
+  min-width: 180px;
+  max-width: 320px;
+}
+.gds-admin-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)
    Overlay plein écran : tout est masqué sauf le chat. Barre du haut

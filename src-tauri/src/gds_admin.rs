@@ -956,6 +956,158 @@ pub async fn gds_admin_project_remove(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// L4.5 — Espace utilisé + journal + clés SSH (charges utiles pures)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Encode un texte pour l'insérer dans une query string (pure, testable).
+/// Percent-encodage minimal conforme : les caractères non réservés passent tels
+/// quels, tous les autres deviennent `%XX`.
+pub(crate) fn pct_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// Query string de consultation du journal d'audit (pure, testable).
+/// `scope` est ramené à « admin » (défaut) ou « all » ; `limit` est borné à 200
+/// comme côté serveur ; `q` n'est ajouté que s'il est non vide.
+pub(crate) fn build_audit_query(offset: usize, limit: usize, scope: &str, q: &str) -> String {
+    let scope = match scope.trim().to_lowercase().as_str() {
+        "all" | "tout" => "all",
+        _ => "admin",
+    };
+    let mut s = format!(
+        "?offset={}&limit={}&scope={}",
+        offset,
+        limit.clamp(1, 200),
+        scope
+    );
+    let text = q.trim();
+    if !text.is_empty() {
+        s.push_str(&format!("&q={}", pct_encode(text)));
+    }
+    s
+}
+
+/// Charge utile de révocation d'une clef SSH. L'identifiant doit être
+/// strictement positif (pure, testable).
+pub(crate) fn ssh_key_revoke_payload(id: i64) -> Result<Value, String> {
+    if id <= 0 {
+        return Err("Clef invalide".to_string());
+    }
+    Ok(json!({ "id": id }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.5 — Espace utilisé + journal + clés SSH : commandes Tauri
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Lecture seule de l'état serveur (volumes + dernière entrée d'audit), du
+// journal d'audit paginé et de la liste des clefs SSH ; écriture limitée à la
+// RÉVOCATION d'une clef (le serveur régénère alors `authorized_keys`). Tout
+// passe par les routes HTTP du serveur : aucune connexion PostgreSQL directe.
+
+/// Commande Tauri (L4.5) : état serveur administrateur, dont l'espace occupé
+/// par les dépôts et la base (`GET /api/gds/admin/server`).
+#[tauri::command]
+pub async fn gds_admin_server(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_get(client, &format!("{}/api/gds/admin/server", base), Some(token))
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.5) : journal d'audit paginé et filtré
+/// (`GET /api/gds/admin/audit`). `scope` = « admin » (défaut) ou « all ».
+#[tauri::command]
+pub async fn gds_admin_audit(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+    offset: Option<u32>,
+    limit: Option<u32>,
+    scope: Option<String>,
+    search: Option<String>,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        let qs = build_audit_query(
+            offset.unwrap_or(0) as usize,
+            limit.unwrap_or(50) as usize,
+            &scope.unwrap_or_default(),
+            &search.unwrap_or_default(),
+        );
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_get(
+                client,
+                &format!("{}/api/gds/admin/audit{}", base, qs),
+                Some(token),
+            )
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.5) : liste des clefs SSH autorisées, avec leur
+/// propriétaire (`GET /api/gds/admin/ssh-keys`).
+#[tauri::command]
+pub async fn gds_admin_ssh_keys(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_get(client, &format!("{}/api/gds/admin/ssh-keys", base), Some(token))
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.5) : révoque une clef SSH
+/// (`POST /api/gds/admin/ssh-keys/revoke`). Le serveur régénère immédiatement
+/// `authorized_keys` : la révocation est effective côté `sshd` sans attendre.
+#[tauri::command]
+pub async fn gds_admin_ssh_key_revoke(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+    key_id: i64,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        let payload = match ssh_key_revoke_payload(key_id) {
+            Ok(p) => p,
+            Err(e) => return json!({ "ok": false, "error": e }),
+        };
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_post_json(
+                client,
+                &format!("{}/api/gds/admin/ssh-keys/revoke", base),
+                Some(token),
+                &payload,
+            )
+        })
+    })
+    .await
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests — aides pures, parcours HTTP réel sur un faux serveur local
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1564,6 +1716,103 @@ mod tests {
             log
         );
     }
+    // ── L4.5 : espace utilisé, journal d'audit, clefs SSH ──
+
+    #[test]
+    fn audit_query_defaults_to_admin_scope_and_encodes_the_search() {
+        // Défaut : filtre « administration », page 50.
+        assert_eq!(build_audit_query(0, 50, "", ""), "?offset=0&limit=50&scope=admin");
+        // Portée explicite « tout » (tolérance de casse/accents).
+        assert_eq!(build_audit_query(10, 20, "ALL", ""), "?offset=10&limit=20&scope=all");
+        assert_eq!(build_audit_query(0, 20, "tout", ""), "?offset=0&limit=20&scope=all");
+        // La recherche libre est percent-encodée et trimée.
+        assert_eq!(
+            build_audit_query(0, 50, "admin", "  dev@x  "),
+            "?offset=0&limit=50&scope=admin&q=dev%40x"
+        );
+        // Un `limit` hors bornes est ramené dans [1, 200].
+        assert_eq!(build_audit_query(0, 9999, "admin", ""), "?offset=0&limit=200&scope=admin");
+        assert_eq!(build_audit_query(0, 0, "admin", ""), "?offset=0&limit=1&scope=admin");
+    }
+
+    #[test]
+    fn ssh_key_revoke_payload_rejects_non_positive_ids() {
+        assert!(ssh_key_revoke_payload(0).is_err());
+        assert!(ssh_key_revoke_payload(-3).is_err());
+        assert_eq!(ssh_key_revoke_payload(7).unwrap(), json!({"id": 7}));
+    }
+
+    #[test]
+    fn audit_action_hits_the_paginated_admin_route() {
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_scripted_server(
+            vec![
+                (200, login_body("tok-J")),
+                (200, probe_body()),
+                (
+                    200,
+                    json!({
+                        "entries": [{"ts": 5, "action": "login", "ok": true}],
+                        "total": 1, "offset": 0, "limit": 50, "scope": "admin",
+                    })
+                    .to_string(),
+                ),
+            ],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        let qs = build_audit_query(0, 50, "admin", "dev@x");
+        let v = admin_action(&host, &port, "admin@x", "pw", |client, b, token| {
+            send_get(
+                client,
+                &format!("{}/api/gds/admin/audit{}", b, qs),
+                Some(token),
+            )
+        });
+        assert_eq!(v["ok"], json!(true), "{}", v);
+        assert_eq!(v["entries"][0]["action"], json!("login"));
+        assert_eq!(v["total"], json!(1));
+        let log = reqs.lock().unwrap().join("\n");
+        assert!(
+            log.contains("GET /api/gds/admin/audit?offset=0&limit=50&scope=admin&q=dev%40x"),
+            "{}",
+            log
+        );
+    }
+
+    #[test]
+    fn ssh_key_revoke_action_posts_the_id_and_reports_keys() {
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_scripted_server(
+            vec![
+                (200, login_body("tok-K")),
+                (200, probe_body()),
+                (200, json!({"ok": true, "id": 7, "revoked": 1, "keys": 2, "rewritten": true}).to_string()),
+            ],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        let payload = ssh_key_revoke_payload(7).unwrap();
+        let v = admin_action(&host, &port, "admin@x", "pw", |client, b, token| {
+            send_post_json(
+                client,
+                &format!("{}/api/gds/admin/ssh-keys/revoke", b),
+                Some(token),
+                &payload,
+            )
+        });
+        assert_eq!(v["ok"], json!(true), "{}", v);
+        assert_eq!(v["revoked"], json!(1));
+        assert_eq!(v["keys"], json!(2));
+        let log = reqs.lock().unwrap().join("\n");
+        assert!(
+            log.contains("POST /api/gds/admin/ssh-keys/revoke"),
+            "{}",
+            log
+        );
+        assert!(log.contains("{\"id\":7}"), "{}", log);
+    }
+
     // ── L4.3 : opérations d'administration (session réutilisée) ──
 
     #[test]

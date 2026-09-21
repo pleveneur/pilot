@@ -275,6 +275,13 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/admin/projects/remove",
             post(gds_admin_project_remove::<S>),
         )
+        // ── L4.5 : journal d'audit paginé + clés SSH (liste, révocation) ──
+        .route("/api/gds/admin/audit", get(gds_admin_audit::<S>))
+        .route("/api/gds/admin/ssh-keys", get(gds_admin_ssh_keys::<S>))
+        .route(
+            "/api/gds/admin/ssh-keys/revoke",
+            post(gds_admin_ssh_key_revoke::<S>),
+        )
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -1146,6 +1153,148 @@ async fn gds_admin_project_remove<S: GdsCtx>(
     }
 }
 
+// ── Journal d'audit & clés SSH (L4.5) — routes d'administration ──
+
+/// Paramètres de la consultation du journal d'audit (L4.5).
+#[derive(Deserialize)]
+struct AuditQuery {
+    /// Décalage (nombre d'entrées filtrées à sauter). Défaut 0.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Taille de page (bornée à 200). Défaut 50.
+    #[serde(default)]
+    limit: Option<usize>,
+    /// Liste d'actions exactes séparées par des virgules. Prioritaire sur `scope`.
+    #[serde(default)]
+    actions: Option<String>,
+    /// `all`/`tout` = aucune restriction d'action ; sinon filtre par défaut
+    /// « connexion + administration ».
+    #[serde(default)]
+    scope: Option<String>,
+    /// Recherche libre insensible à la casse (action, détail, IP, sujet).
+    #[serde(default)]
+    q: Option<String>,
+}
+
+/// Découpe une liste d'actions « a,b,c » en vecteur nettoyé. Pure, testable.
+fn parse_actions(raw: Option<&str>) -> Vec<String> {
+    match raw.map(|s| s.trim()) {
+        Some(s) if !s.is_empty() => s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `GET /api/gds/admin/audit` — **réservée au rôle `admin`**.
+///
+/// Journal d'audit distant (L4.5) : entrées paginées et filtrées. Par défaut on
+/// ne montre que les actions de **connexion et d'administration** (les actions
+/// métier — prompt, fichiers — ne concernent pas cet écran) ; `scope=all` ou une
+/// liste `actions=a,b` élargit le périmètre. Les entrées sont renvoyées **les
+/// plus récentes d'abord** ; `total` est le nombre d'entrées après filtre, donc
+/// la pagination reste juste.
+async fn gds_admin_audit<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Query(q): Query<AuditQuery>,
+) -> Response {
+    let explicit = parse_actions(q.actions.as_deref());
+    let actions = if !explicit.is_empty() {
+        explicit
+    } else {
+        let scope = q.scope.as_deref().unwrap_or("").trim().to_lowercase();
+        if scope == "all" || scope == "tout" {
+            Vec::new()
+        } else {
+            crate::audit::admin_actions()
+        }
+    };
+    let offset = q.offset.unwrap_or(0);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let filter_text = q.q.unwrap_or_default();
+    let (total, entries) = ctx.audit().page(&actions, &filter_text, offset, limit);
+    Json(json!({
+        "entries": entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "scope": if actions.is_empty() { "all" } else { "admin" },
+    }))
+    .into_response()
+}
+
+/// `GET /api/gds/admin/ssh-keys` — **réservée au rôle `admin`**.
+///
+/// Toutes les clés publiques enregistrées, avec leur propriétaire (L4.5). La
+/// clé publique n'est pas un secret : elle ne permet ni de se connecter ni de
+/// déduire une clé privée.
+async fn gds_admin_ssh_keys<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    match gds_db::list_ssh_keys(&pool).await {
+        Ok(keys) => Json(json!({ "keys": keys })).into_response(),
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SshKeyRevokeBody {
+    id: i64,
+}
+
+/// `POST /api/gds/admin/ssh-keys/revoke` — **réservée au rôle `admin`**.
+///
+/// Révoque une clé (L4.5) : la clé est supprimée de la base (source de vérité,
+/// L2.5), puis `authorized_keys` est **régénéré immédiatement** — la révocation
+/// prend effet côté `sshd` sans attendre le cycle périodique. `id` doit désigner
+/// une clé existante (404 sinon) : on ne régénère pas pour un no-op silencieux.
+async fn gds_admin_ssh_key_revoke<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<SshKeyRevokeBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let removed = match gds_db::delete_ssh_key(&pool, body.id).await {
+        Ok(n) => n,
+        Err(e) => return err_response(e),
+    };
+    if removed == 0 {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Clé introuvable" })),
+        )
+            .into_response();
+    }
+    // Régénération immédiate du fichier des clés autorisées (L2.5).
+    match crate::ssh::regenerate_authorized_keys(&pool).await {
+        Ok(sync) => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                "ssh_key_revoke",
+                &format!("{}", body.id),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "id": body.id,
+                "revoked": removed,
+                "keys": sync.keys,
+                "rewritten": sync.rewritten,
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
 // ── Projets & dépôts git ──
 
 /// `GET /api/gds/projects` — liste les projets visibles par l'appelant.
@@ -1761,5 +1910,41 @@ mod tests {
             .route("/api/gds/projects", post(|| async { "ok" }))
             .route("/api/gds/sync", post(|| async { "ok" }));
         let _merged = shared.merge(desktop_side);
+    }
+
+    // ── L4.5 : journal d'audit — parsing des paramètres ──
+
+    #[test]
+    fn parse_actions_splits_trims_and_ignores_empties() {
+        assert_eq!(parse_actions(None), Vec::<String>::new());
+        assert_eq!(parse_actions(Some("   ")), Vec::<String>::new());
+        assert_eq!(
+            parse_actions(Some(" login , user_create ,, ")),
+            vec!["login".to_string(), "user_create".to_string()]
+        );
+        // Une seule action reste une liste d'un élément.
+        assert_eq!(parse_actions(Some("ssh_key_revoke")), vec!["ssh_key_revoke".to_string()]);
+    }
+
+    #[test]
+    fn admin_scope_covers_the_actions_recorded_by_the_admin_routes() {
+        // Les actions écrites par les routes d'administration (L3.2/L4.4/L4.5)
+        // doivent être visibles dans le journal par défaut, sinon l'écran
+        // d'administration ne montrerait pas ses propres actions.
+        let actions = crate::audit::admin_actions();
+        for a in [
+            "login",
+            "user_create",
+            "user_role",
+            "user_status",
+            "user_password",
+            "project_assign",
+            "project_unassign",
+            "project_remove",
+            "project_remove_purge",
+            "ssh_key_revoke",
+        ] {
+            assert!(actions.iter().any(|x| x == a), "action absente du journal: {}", a);
+        }
     }
 }
