@@ -12,6 +12,11 @@ publish = false
 [dependencies]
 # Authentification du serveur web / GDS (module `auth`, ex `web_auth.rs`).
 argon2 = "0.5"
+# Routeur HTTP GDS partagé (module `http`, ex `gds_web.rs`) : mêmes types axum
+# que le desk (0.7) pour que le serveur autonome et le desk montent le même
+# routeur. Le desk active en plus la feature `ws` (WebSocket) de son côté ;
+# cargo unifie les features sur la version unique du workspace.
+axum = "0.7"
 # Accès PostgreSQL du GDS (`db`) — mêmes versions/features que le desk pour
 # n'avoir qu'une seule version résolue dans le workspace.
 chrono = { version = "0.4", features = ["serde"] }

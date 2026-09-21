@@ -13,6 +13,7 @@ pub mod auth;
 pub mod db;
 pub mod git;
 pub mod git_cmd;
+pub mod http;
 pub mod proc;
 pub mod rate;
 pub mod ssh;

@@ -16,6 +16,10 @@
 use crate::web_auth::WebAuth;
 use crate::web_audit::WebAudit;
 use crate::web_rate::{token_key, WebGuard};
+// L1.8a : l'authentification et son intermédiaire de contrôle vivent désormais
+// dans le socle partagé `gds-core` (mêmes types pour le desk et le serveur GDS
+// autonome). Ré-export local : aucun appelant du desk ne change.
+pub(crate) use gds_core::http::{auth_middleware, AuthedClient};
 use crate::{
     agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,
@@ -25,9 +29,9 @@ use crate::{
 };
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Extension, Query, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::middleware::{from_fn_with_state, Next};
+use axum::extract::{ConnectInfo, Extension, Query, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -191,10 +195,15 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         // Issue #61 : mode d'interface du web remote (assistant/agents), persisté
         // côté serveur (config) au lieu du localStorage.
         .route("/api/settings", get(web_settings_get).post(web_settings_set))
-        // GDS (spec_gds.md) : routes API Phase A (provision, identité, projets,
-        // dépôts git) + routes B/C réservées. Derrière auth_middleware.
-        .merge(crate::gds_web::gds_routes())
-        .layer(from_fn_with_state(ctx.clone(), auth_middleware));
+        // GDS (spec_gds.md) : routeur partagé `gds_core::http` (authentification
+        // + routes purement base : suivi, tickets, utilisateurs, projets et
+        // dépôts git en lecture — L1.8a) puis routes métier propres au poste
+        // (provision, ajout de projet, poussée forcée, sync locale — L1.8b/c).
+        // Les deux routeurs déclarent des méthodes disjointes sur
+        // `/api/gds/projects` (GET partagé / POST poste) : `merge` les combine.
+        .merge(gds_core::http::gds_routes::<WebCtx>())
+        .merge(crate::gds_web::gds_desktop_routes())
+        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<WebCtx>));
 
     Router::new()
         .route("/api/auth/login", post(login))
@@ -260,52 +269,6 @@ async fn login(
     ctx.audit.record(&ip, &token_key(&token), "login", "session créée", true);
     eprintln!("[web] Nouvelle session distante créée (ip={})", ip);
     Json(json!({"token": token})).into_response()
-}
-
-/// Client authentifié injecté par `auth_middleware` dans les extensions de la
-/// requête, pour que les handlers puissent appliquer un rate limiting par token
-/// et émettre un audit log (origine + sujet) sans re-extraire le bearer.
-/// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source.
-#[derive(Clone)]
-pub(crate) struct AuthedClient {
-    pub(crate) key: String,
-    pub(crate) ip: String,
-}
-
-/// Middleware d'authentification : valide le header `Authorization: Bearer <token>`.
-pub(crate) async fn auth_middleware(
-    State(ctx): State<Arc<WebCtx>>,
-    headers: HeaderMap,
-    mut req: Request,
-    next: Next,
-) -> Response {
-    if let Some(token) = extract_bearer(&headers) {
-        if ctx.auth.validate(&token) {
-            // IP source depuis ConnectInfo (posé par into_make_service_with_connect_info).
-            let ip = req
-                .extensions()
-                .get::<ConnectInfo<std::net::SocketAddr>>()
-                .map(|ci| ci.0.ip().to_string())
-                .unwrap_or_default();
-            req.extensions_mut().insert(AuthedClient {
-                key: token_key(&token),
-                ip,
-            });
-            return next.run(req).await;
-        }
-    }
-    (StatusCode::UNAUTHORIZED, Json(json!({"error": "Non authentifié"}))).into_response()
-}
-
-fn extract_bearer(headers: &HeaderMap) -> Option<String> {
-    let v = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let t = v.strip_prefix("Bearer ")?;
-    let t = t.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t.to_string())
-    }
 }
 
 // ── Helpers de réponse ──
