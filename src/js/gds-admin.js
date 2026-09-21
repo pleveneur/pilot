@@ -1023,6 +1023,212 @@ export function renderStorageSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.6 — « Contrôle du service » : rendus purs, garde de rôle et charges utiles
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Les actions de service (redémarrer / arrêter) appellent les routes L2.10 du
+// serveur, réservées au rôle `admin`. Elles ne partent JAMAIS d'un seul clic :
+// le premier clic ouvre un panneau de **double confirmation** qui décrit
+// exactement ce qui va se passer ; l'action n'est envoyée qu'après une case
+// d'acquittement cochée puis un second clic (« Confirmer »).
+//
+// Après l'action, l'écran suit la santé **publique** (`/api/gds/health`, sans
+// jeton) : un redémarrage invalide les sessions en mémoire du serveur, donc une
+// sonde authentifiée conclurait à tort que le serveur ne répond pas.
+
+/** Description de la section « Contrôle du service » (L4.6). */
+export const SERVICE_DESC =
+  "Redémarrer ou arrêter le service GDS (gds-server et sshd) — la base PostgreSQL " +
+  "n'est jamais arrêtée. Chaque action exige une double confirmation explicite, puis " +
+  "l'écran re-teste automatiquement la santé du service.";
+
+/** Intervalle entre deux sondes de santé (ms) — re-test après une action. */
+export const SERVICE_HEALTH_INTERVAL_MS = 1500;
+/** Nombre maximal de sondes avant d'abandonner le suivi de santé (L4.6). */
+export const SERVICE_HEALTH_MAX_ATTEMPTS = 20;
+/** Sondes injoignables consécutives confirmant un arrêt effectif (L4.6). */
+export const SERVICE_STOP_CONFIRM_ATTEMPTS = 2;
+
+/**
+ * État initial du bloc « Contrôle du service » (L4.6). Aucun secret n'y figure :
+ * ni mot de passe, ni jeton — les commandes n'en renvoient jamais.
+ */
+export function initialServiceState() {
+  return {
+    role: "",
+    status: null,
+    loading: false,
+    error: "",
+    notice: "",
+    confirm: null,
+    busy: "",
+    waiting: null,
+    health: null,
+    attempts: 0,
+    stopped: false,
+  };
+}
+
+/**
+ * L'écran peut-il piloter le service ? Réservé au rôle `admin` (connu depuis la
+ * connexion L4.2). Hors administrateur, les boutons sont masqués. Pure.
+ */
+export function canControlService(role) {
+  return String(role == null ? "" : role).trim().toLowerCase() === "admin";
+}
+
+/** Charge utile de lecture de l'état du service — connexion admin, sans mot de passe. */
+export function buildServiceStatusArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/**
+ * Texte de double confirmation d'une action de service (pure). Il dit clairement
+ * ce qui va se passer, notamment que l'arrêt interrompt l'accès des autres
+ * utilisateurs et les synchronisations, et que les comptes, projets et dépôts
+ * sont CONSERVÉS (la base PostgreSQL n'est jamais arrêtée).
+ */
+export function serviceConfirmText(action) {
+  if (action === "stop") {
+    return (
+      "Arrêter le service : gds-server et sshd sont arrêtés jusqu'à un redémarrage manuel. " +
+      "L'accès des autres utilisateurs et les synchronisations des projets sont interrompus. " +
+      "Les comptes, les projets et les dépôts sont CONSERVÉS — la base PostgreSQL n'est jamais arrêtée."
+    );
+  }
+  return (
+    "Redémarrer le service : gds-server et sshd sont redémarrés. " +
+    "L'accès des autres utilisateurs et les synchronisations des projets sont brièvement interrompus. " +
+    "Les comptes, les projets et les dépôts sont CONSERVÉS — la base PostgreSQL n'est jamais arrêtée."
+  );
+}
+
+/** Classe de badge d'un état de programme `supervisorctl` (pure). */
+function programStateClass(state) {
+  const v = String(state == null ? "" : state).toUpperCase();
+  if (v === "RUNNING") return "ok";
+  if (v === "STOPPED" || v === "FATAL" || v === "EXITED") return "warn";
+  return "";
+}
+
+/**
+ * Rend l'état du bloc « Contrôle du service » (pure, testable). Distingue le
+ * suivi d'un redémarrage (`waiting = "up"`), d'un arrêt (`waiting = "down"`),
+ * l'arrêt confirmé (`stopped`), l'erreur et la notice.
+ */
+export function renderServiceStatusHtml(state = {}) {
+  const s = { ...initialServiceState(), ...state };
+  if (s.loading) return `<div class="gds-admin-status loading">Interrogation du service…</div>`;
+  if (s.waiting === "up") {
+    return `<div class="gds-admin-status loading">Redémarrage en cours — re-test de la santé… (tentative ${esc(String(s.attempts))}/${esc(String(SERVICE_HEALTH_MAX_ATTEMPTS))})</div>`;
+  }
+  if (s.waiting === "down") {
+    return `<div class="gds-admin-status loading">Arrêt demandé — vérification que le service ne répond plus… (${esc(String(s.attempts))})</div>`;
+  }
+  if (s.error) return `<div class="gds-admin-status error">⚠️ ${esc(s.error)}</div>`;
+  if (s.stopped) {
+    return `<div class="gds-admin-status error">⛔ Serveur arrêté — la sonde de santé ne répond plus. La base PostgreSQL, elle, n'est pas arrêtée.</div>`;
+  }
+  if (s.notice) return `<div class="gds-admin-status ok">${esc(s.notice)}</div>`;
+  if (s.status) {
+    return `<div class="gds-admin-status ok">Service joignable — processus ${esc(numOrDash(s.status.pid))}.</div>`;
+  }
+  return `<div class="gds-admin-status idle">Connectez-vous au serveur pour afficher l'état du service.</div>`;
+}
+
+/**
+ * Rend la liste des programmes pilotés et leur état (pure). Aucun programme
+ * PostgreSQL : le service ne le pilote jamais.
+ */
+export function renderServiceProgramsHtml(state = {}) {
+  const s = { ...initialServiceState(), ...state };
+  const st = s.status;
+  if (!st) return "";
+  if (st.error) {
+    return `<div class="gds-admin-status error">⚠️ ${esc(st.error)}</div>`;
+  }
+  const states = Array.isArray(st.states) ? st.states : [];
+  if (states.length === 0) return "";
+  const rows = states
+    .map(
+      (p) => `
+        <tr>
+          <td>${esc((p && p.name) || "—")}</td>
+          <td><span class="gds-admin-badge ${programStateClass(p && p.state)}">${esc((p && p.state) || "—")}</span></td>
+          <td class="gds-admin-cell-date">${esc(p && p.pid != null ? String(p.pid) : "—")}</td>
+        </tr>`
+    )
+    .join("");
+  return `
+      <div class="gds-admin-block">
+        <div class="gds-admin-reset-title"><i data-lucide="activity" class="icon-sm"></i> Programmes pilotés <span class="gds-admin-muted">(processus ${esc(numOrDash(st.pid))})</span></div>
+        <table class="gds-admin-table">
+          <thead><tr><th>Programme</th><th>État</th><th>PID</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+}
+
+/**
+ * Rend le panneau de double confirmation (pure). Aucune action n'est proposée
+ * sans passer par lui ; le bouton « Confirmer » reste désactivé tant que la case
+ * d'acquittement n'est pas cochée (second geste explicite).
+ */
+export function renderServiceConfirmHtml(state = {}) {
+  const s = { ...initialServiceState(), ...state };
+  if (!s.confirm) return "";
+  const action = s.confirm.action === "stop" ? "stop" : "restart";
+  const label = action === "stop" ? "Arrêter le service" : "Redémarrer le service";
+  const noun = action === "stop" ? "l'arrêt" : "le redémarrage";
+  const disabled = s.confirm.ack ? "" : " disabled";
+  return `
+      <div class="gds-admin-confirm danger">
+        <div class="gds-admin-reset-title">Double confirmation — ${esc(label)}</div>
+        <div class="gds-admin-section-desc">${esc(serviceConfirmText(action))}</div>
+        <label class="gds-admin-check"><input type="checkbox" id="gds-admin-svc-ack"${s.confirm.ack ? " checked" : ""}> Je comprends que ${esc(noun)} du service interrompt l'accès des autres utilisateurs et les synchronisations.</label>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn danger" data-svc-action="${esc(action)}-confirm"${disabled}><i data-lucide="power" class="icon-sm"></i> Confirmer — ${esc(label)}</button>
+          <button class="gds-admin-btn" data-svc-action="cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
+        </div>
+      </div>`;
+}
+
+/**
+ * Rend la section « Contrôle du service » complète (pure, testable). `role` est
+ * le rôle du compte connecté : hors `admin`, les boutons et le panneau de
+ * confirmation sont MASQUÉS et un message explique pourquoi.
+ */
+export function renderServiceSectionHtml(state = {}, role = "") {
+  const roleValue = String(role || (state && state.role) || "");
+  const s = { ...initialServiceState(), ...state, role: roleValue };
+  const allowed = canControlService(roleValue);
+  const reserved = allowed
+    ? ""
+    : `<div class="gds-admin-status idle">Actions masquées : elles sont réservées au rôle administrateur.${s.role ? ` Rôle connecté : ${esc(s.role)}.` : " Connectez-vous avec un compte administrateur."}</div>`;
+  const actions = allowed
+    ? `
+        ${renderServiceProgramsHtml(s)}
+        ${renderServiceConfirmHtml(s)}
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn" data-svc-action="restart"><i data-lucide="rotate-cw" class="icon-sm"></i> Redémarrer le service</button>
+          <button class="gds-admin-btn danger" data-svc-action="stop"><i data-lucide="power" class="icon-sm"></i> Arrêter le service</button>
+        </div>
+        <div class="gds-admin-hint">Rien ne part au premier clic : la double confirmation décrit exactement ce qui va se passer. L'arrêt interrompt l'accès des autres utilisateurs et les synchronisations ; les comptes, les projets et les dépôts sont conservés et la base PostgreSQL n'est jamais arrêtée.</div>`
+    : "";
+  return `
+      <section class="gds-admin-section" data-section-id="service">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="power" class="icon-sm"></i> Contrôle du service</div>
+          ${allowed ? `<button class="gds-admin-btn small" id="gds-admin-svc-refresh"><i data-lucide="refresh-cw" class="icon-sm"></i> Rafraîchir</button>` : ""}
+        </div>
+        <div class="gds-admin-section-desc">${esc(SERVICE_DESC)}</div>
+        <div id="gds-admin-service-status">${renderServiceStatusHtml(s)}</div>
+        ${reserved}
+        ${actions}
+      </section>`;
+}
+
 /**
  * Crée l'onglet « GDS Serveur » (transverse) dans `container`.
  * Ne dépend d'AUCUN projet ouvert : aucune lecture de `window._pilotProjectPath`.
@@ -1040,6 +1246,8 @@ export function createGdsAdmin(container) {
   let projects = initialProjectsState();
   /** État de la section « Espace utilisé + journal » (L4.5) — jamais de secret. */
   let storage = initialStorageState();
+  /** État de la section « Contrôle du service » (L4.6) — jamais de secret. */
+  let service = initialServiceState();
   /** Identité admin de la dernière connexion réussie (hôte + email bruts) : la
    *  clé des identifiants mémorisés côté poste (repli du mot de passe). */
   let adminConn = null;
@@ -1080,6 +1288,14 @@ export function createGdsAdmin(container) {
     if (search) storage.auditSearch = search.value;
   }
 
+  /** Récupère la case d'acquittement de la double confirmation (L4.6) AVANT redessin. */
+  function readServiceFields() {
+    const ack = q("#gds-admin-svc-ack");
+    if (ack && service.confirm) {
+      service.confirm = { ...service.confirm, ack: !!ack.checked };
+    }
+  }
+
   /** Récupère la saisie de création AVANT tout redessin (sans mot de passe). */
   function captureAccountForm() {
     const email = q("#gds-admin-acc-new-email");
@@ -1099,6 +1315,9 @@ export function createGdsAdmin(container) {
     captureAccountForm();
     readProjectFields();
     readStorageFields();
+    readServiceFields();
+    // Rôle connu du compte connecté (L4.6 : pilote le masquage des actions).
+    service.role = String((state.server && state.server.role) || adminConn?.role || "");
     container.innerHTML = renderAdminShellHtml({
       title: "🖥️ GDS Serveur — administration",
       subtitle:
@@ -1109,6 +1328,7 @@ export function createGdsAdmin(container) {
         accounts: renderAccountsSectionHtml(accounts),
         repos: renderProjectsSectionHtml(projects),
         storage: renderStorageSectionHtml(storage),
+        service: renderServiceSectionHtml(service),
       },
     });
     refreshIcons(container);
@@ -1158,6 +1378,14 @@ export function createGdsAdmin(container) {
     for (const btn of container.querySelectorAll("[data-ssh-action]")) {
       btn.addEventListener("click", () => onSshKeyAction(btn));
     }
+    // ── L4.6 : contrôle du service (double confirmation) ──
+    const svcRefresh = q("#gds-admin-svc-refresh");
+    if (svcRefresh) svcRefresh.addEventListener("click", () => loadServiceStatus());
+    for (const btn of container.querySelectorAll("[data-svc-action]")) {
+      btn.addEventListener("click", () => onServiceAction(btn));
+    }
+    const svcAck = q("#gds-admin-svc-ack");
+    if (svcAck) svcAck.addEventListener("change", () => draw());
   }
 
   // ── L4.4 : projets & dépôts (toutes via l'API HTTP du serveur) ──
@@ -1468,6 +1696,187 @@ export function createGdsAdmin(container) {
     }
   }
 
+  // ── L4.6 : contrôle du service (double confirmation, santé publique) ──
+
+  /** Charge l'état du service (PID + programmes pilotés). Réservé à l'admin. */
+  async function loadServiceStatus({ silent = false } = {}) {
+    if (!adminConn) {
+      service.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    if (!silent) {
+      service.loading = true;
+      service.error = "";
+      service.notice = "";
+      service.stopped = false;
+      service.waiting = null;
+    }
+    draw();
+    const res = await invokeAccounts("gds_admin_service_status", buildServiceStatusArgs(adminConn));
+    if (disposed) return;
+    service.loading = false;
+    if (res && res.ok) {
+      service.status = res;
+      service.error = "";
+    } else {
+      service.error = (res && res.error) || "État du service indisponible.";
+    }
+    draw();
+  }
+
+  /** Ouvre la double confirmation d'une action de service (AUCUN appel réseau). */
+  function askServiceAction(action) {
+    service.confirm = { action: action === "stop" ? "stop" : "restart", ack: false };
+    service.error = "";
+    service.notice = "";
+    service.stopped = false;
+    return draw();
+  }
+
+  /** Traite un clic de la section « Contrôle du service ». */
+  function onServiceAction(btn) {
+    const action = btn.getAttribute("data-svc-action");
+    if (action === "restart" || action === "stop") return askServiceAction(action);
+    if (action === "cancel") {
+      service.confirm = null;
+      return draw();
+    }
+    if (action === "restart-confirm" || action === "stop-confirm") {
+      return runServiceAction(action === "stop-confirm" ? "stop" : "restart");
+    }
+  }
+
+  /** Exécute l'action confirmée puis suit la santé jusqu'à l'état attendu. */
+  async function runServiceAction(action) {
+    if (!adminConn) {
+      service.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    const command =
+      action === "stop" ? "gds_admin_service_stop" : "gds_admin_service_restart";
+    service.busy = action;
+    service.confirm = null;
+    service.error = "";
+    service.notice = "";
+    service.stopped = false;
+    service.waiting = action === "stop" ? "down" : "up";
+    service.attempts = 0;
+    draw();
+    const res = await invokeAccounts(command, buildServiceStatusArgs(adminConn));
+    if (disposed) return;
+    service.busy = "";
+    if (!(res && res.ok)) {
+      service.waiting = null;
+      service.error = (res && res.error) || "Action refusée par le serveur.";
+      return draw();
+    }
+    // L'ordre est différé côté serveur : on suit la santé publique jusqu'à l'état attendu.
+    service.notice = action === "stop" ? "Arrêt demandé…" : "Redémarrage demandé…";
+    draw();
+    return followHealth(action === "stop" ? "down" : "up");
+  }
+
+  /**
+   * Interroge la santé PUBLIQUE (`/api/gds/health`, sans jeton) jusqu'à l'état
+   * attendu : « up » = le service répond de nouveau (redémarrage effectif) ;
+   * « down » = le service ne répond plus (arrêt effectif).
+   */
+  async function followHealth(expected) {
+    service.waiting = expected;
+    service.attempts = 0;
+    let downStreak = 0;
+    const step = async () => {
+      if (disposed) return;
+      service.attempts += 1;
+      const res = await invokeAccounts("gds_admin_health", {
+        host: adminConn.host,
+        httpPort: adminConn.httpPort,
+      });
+      if (disposed) return;
+      service.health = res;
+      const up = !!(res && res.ok);
+      if (expected === "up" && up) {
+        service.waiting = null;
+        service.stopped = false;
+        const version = String((res && res.version) || "").trim() || "?";
+        service.notice = `Service redémarré — santé rétablie (version ${version}).`;
+        draw();
+        return recoverAfterRestart();
+      }
+      if (expected === "down") {
+        downStreak = up ? 0 : downStreak + 1;
+        if (downStreak >= SERVICE_STOP_CONFIRM_ATTEMPTS) {
+          service.waiting = null;
+          service.stopped = true;
+          service.notice = "";
+          service.status = null;
+          draw();
+          return;
+        }
+      }
+      if (service.attempts >= SERVICE_HEALTH_MAX_ATTEMPTS) {
+        service.waiting = null;
+        service.error =
+          expected === "up"
+            ? "Le service n'a pas répondu après le redémarrage. Vérifiez le serveur, puis cliquez sur Rafraîchir."
+            : "Le service répond encore alors que l'arrêt a été demandé. Vérifiez le serveur.";
+        draw();
+        return;
+      }
+      draw();
+      setTimeout(step, SERVICE_HEALTH_INTERVAL_MS);
+    };
+    return step();
+  }
+
+  /**
+   * Après un redémarrage, la session d'administration en mémoire du serveur est
+   * invalidée. La commande d'état tente alors une reconnexion automatique avec le
+   * mot de passe mémorisé ; si elle échoue (mot de passe non mémorisé), l'écran
+   * invite à se reconnecter. L'état de la connexion est rafraîchi dans tous les cas.
+   */
+  async function recoverAfterRestart() {
+    const st = await invokeAccounts("gds_admin_service_status", buildServiceStatusArgs(adminConn));
+    if (disposed) return;
+    if (st && st.ok) {
+      service.status = st;
+      service.error = "";
+    } else {
+      service.error =
+        `${(st && st.error) || "État du service indisponible."} ` +
+        "La session a peut-être expiré avec le redémarrage — reconnectez-vous (bloc « Connexion serveur ») si nécessaire.";
+    }
+    await refreshConnectionState();
+    await loadStorage({ silent: true });
+    draw();
+  }
+
+  /** Rafraîchit l'état de la connexion (version, migrations, espace) — silencieux. */
+  async function refreshConnectionState() {
+    if (!adminConn) return;
+    const res = await invokeAccounts("gds_admin_test_connection", {
+      host: adminConn.host,
+      httpPort: adminConn.httpPort,
+      email: adminConn.email,
+      password: "",
+    });
+    if (disposed) return;
+    if (res && res.ok) {
+      state.ok = true;
+      state.server = res;
+      state.error = "";
+      service.role = String((res && res.role) || service.role || "");
+    } else {
+      // Session expirée et reconnexion impossible (mot de passe non mémorisé) :
+      // on redemande explicitement la connexion.
+      state.ok = false;
+      state.server = null;
+      state.error =
+        (res && res.error) || "Session expirée après le redémarrage — reconnectez-vous.";
+      adminConn = null;
+    }
+  }
+
   // ── L4.3 : actions sur les comptes (toutes via l'API HTTP du serveur) ──
 
   /** Émet une commande « comptes » et normalise l'erreur en objet JSON. */
@@ -1667,10 +2076,14 @@ export function createGdsAdmin(container) {
         };
         accounts.error = "";
         accounts.notice = "";
+        // Nouvelle connexion : l'état du service repart de zéro.
+        service = initialServiceState();
+        service.role = String((res && res.role) || "");
         draw();
         loadAccounts({ silent: true });
         loadProjects({ silent: true });
         loadStorage({ silent: true });
+        loadServiceStatus({ silent: true });
         return;
       }
       state.ok = false;

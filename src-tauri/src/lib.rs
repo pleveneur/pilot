@@ -3078,6 +3078,14 @@ pub fn run() {
             gds_admin::gds_admin_audit,
             gds_admin::gds_admin_ssh_keys,
             gds_admin::gds_admin_ssh_key_revoke,
+            // ── GDS (refonte, L4.6) : actions de service + santé publique ──
+            // Redémarrer / arrêter le service via les routes L2.10 (réservées à
+            // l'admin) ; la santé publique est re-testée SANS jeton, car un
+            // redémarrage invalide les sessions en mémoire du serveur.
+            gds_admin::gds_admin_service_status,
+            gds_admin::gds_admin_service_restart,
+            gds_admin::gds_admin_service_stop,
+            gds_admin::gds_admin_health,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──

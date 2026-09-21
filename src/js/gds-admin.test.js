@@ -22,8 +22,10 @@ import {
   buildProjectRemoveArgs,
   buildProjectUnassignArgs,
   buildServerStatusArgs,
+  buildServiceStatusArgs,
   buildSshKeyRevokeArgs,
   buildSshKeysArgs,
+  canControlService,
   findRepoForProject,
   formatAccountDate,
   formatAuditTime,
@@ -32,6 +34,7 @@ import {
   initialAccountsState,
   initialConnectionState,
   initialProjectsState,
+  initialServiceState,
   initialStorageState,
   nextStatusToggle,
   pickPrefill,
@@ -48,11 +51,18 @@ import {
   renderProjectsSectionHtml,
   renderProjectsStatusHtml,
   renderProjectsTableHtml,
+  renderServiceConfirmHtml,
+  renderServiceProgramsHtml,
+  renderServiceSectionHtml,
+  renderServiceStatusHtml,
   renderSpaceHtml,
   renderSshKeyRevokeConfirmHtml,
   renderSshKeysTableHtml,
   renderStorageSectionHtml,
   renderStorageStatusHtml,
+  SERVICE_DESC,
+  SERVICE_HEALTH_MAX_ATTEMPTS,
+  serviceConfirmText,
   shortPublicKey,
 } from "./gds-admin.js";
 
@@ -883,5 +893,168 @@ describe("L4.5 — espace + journal + clefs SSH (rendus purs + charges utiles)",
     });
     expect(shell).not.toContain("À venir — L4.5");
     expect(shell).toContain("À venir — L4.6");
+  });
+});
+
+describe("L4.6 — Contrôle du service (rendus purs, garde de rôle, double confirmation)", () => {
+  it("définit un état initial sans secret", () => {
+    const s = initialServiceState();
+    expect(s.status).toBeNull();
+    expect(s.loading).toBe(false);
+    expect(s.error).toBe("");
+    expect(s.confirm).toBeNull();
+    expect(s.waiting).toBeNull();
+    expect(s.stopped).toBe(false);
+    expect(JSON.stringify(s)).not.toContain("password");
+    expect(JSON.stringify(s)).not.toContain("token");
+  });
+
+  it("réserve le pilotage du service au rôle administrateur", () => {
+    expect(canControlService("admin")).toBe(true);
+    expect(canControlService(" Admin ")).toBe(true);
+    expect(canControlService("dev")).toBe(false);
+    expect(canControlService("")).toBe(false);
+    expect(canControlService(null)).toBe(false);
+    expect(canControlService(undefined)).toBe(false);
+  });
+
+  it("décrit clairement les effets, notamment ce qui est CONSERVÉ", () => {
+    const stop = serviceConfirmText("stop");
+    expect(stop).toContain("arrêtés");
+    expect(stop).toContain("interrompus");
+    expect(stop).toContain("CONSERVÉS");
+    expect(stop).toContain("PostgreSQL");
+    const restart = serviceConfirmText("restart");
+    expect(restart).toContain("redémarrés");
+    expect(restart).toContain("CONSERVÉS");
+    expect(restart).toContain("PostgreSQL");
+    expect(stop).not.toBe(restart);
+  });
+
+  it("construit la connexion admin des actions de service (sans mot de passe)", () => {
+    const args = buildServiceStatusArgs({ host: "h", httpPort: "8787", email: "a@x" });
+    expect(args).toEqual({ host: "h", httpPort: "8787", email: "a@x", password: "" });
+    expect(buildServiceStatusArgs(undefined).password).toBe("");
+  });
+
+  it("exige la double confirmation : le bouton Confirmer reste désactivé sans acquittement", () => {
+    expect(renderServiceConfirmHtml(initialServiceState())).toBe("");
+    const pending = renderServiceConfirmHtml({
+      ...initialServiceState(),
+      confirm: { action: "restart", ack: false },
+    });
+    expect(pending).toContain("Double confirmation");
+    expect(pending).toContain("CONSERVÉS");
+    expect(pending).toContain('data-svc-action="restart-confirm"');
+    expect(pending).toContain("disabled");
+    expect(pending).toContain('id="gds-admin-svc-ack"');
+    const ack = renderServiceConfirmHtml({
+      ...initialServiceState(),
+      confirm: { action: "restart", ack: true },
+    });
+    expect(ack).toContain("checked");
+    expect(ack).not.toContain("disabled");
+    const stop = renderServiceConfirmHtml({
+      ...initialServiceState(),
+      confirm: { action: "stop", ack: true },
+    });
+    expect(stop).toContain('data-svc-action="stop-confirm"');
+    expect(stop).toContain("Arrêter le service");
+    expect(stop).toContain("Arrêter le service :");
+  });
+
+  it("masque les boutons hors rôle administrateur et les montre pour l'admin", () => {
+    const forbidden = renderServiceSectionHtml(initialServiceState(), "dev");
+    expect(forbidden).toContain('data-section-id="service"');
+    expect(forbidden).toContain("réservées au rôle administrateur");
+    expect(forbidden).not.toContain('data-svc-action="restart"');
+    expect(forbidden).not.toContain('data-svc-action="stop"');
+    expect(forbidden).not.toContain('id="gds-admin-svc-refresh"');
+    const allowed = renderServiceSectionHtml(initialServiceState(), "admin");
+    expect(allowed).toContain('data-svc-action="restart"');
+    expect(allowed).toContain('data-svc-action="stop"');
+    expect(allowed).toContain('id="gds-admin-svc-refresh"');
+    expect(allowed).toContain('id="gds-admin-service-status"');
+    expect(allowed).not.toContain("réservées au rôle administrateur");
+  });
+
+  it("rend l'état du service (chargement, suivi, erreur, arrêt, notice, invite)", () => {
+    expect(renderServiceStatusHtml({ ...initialServiceState(), loading: true })).toContain(
+      "Interrogation du service"
+    );
+    const up = renderServiceStatusHtml({
+      ...initialServiceState(),
+      waiting: "up",
+      attempts: 3,
+    });
+    expect(up).toContain("Redémarrage en cours");
+    expect(up).toContain(`tentative 3/${SERVICE_HEALTH_MAX_ATTEMPTS}`);
+    expect(
+      renderServiceStatusHtml({ ...initialServiceState(), waiting: "down", attempts: 1 })
+    ).toContain("Arrêt demandé");
+    expect(renderServiceStatusHtml({ ...initialServiceState(), error: "boom" })).toContain("boom");
+    expect(renderServiceStatusHtml({ ...initialServiceState(), stopped: true })).toContain(
+      "arrêté"
+    );
+    expect(renderServiceStatusHtml({ ...initialServiceState(), notice: "fait" })).toContain(
+      "fait"
+    );
+    expect(
+      renderServiceStatusHtml({ ...initialServiceState(), status: { pid: 4242 } })
+    ).toContain("4242");
+    expect(renderServiceStatusHtml(initialServiceState())).toContain("Connectez-vous");
+  });
+
+  it("rend les programmes pilotés (jamais PostgreSQL)", () => {
+    expect(renderServiceProgramsHtml(initialServiceState())).toBe("");
+    const html = renderServiceProgramsHtml({
+      ...initialServiceState(),
+      status: {
+        pid: 99,
+        states: [
+          { name: "gds-server", state: "RUNNING", pid: 55 },
+          { name: "sshd", state: "STOPPED", pid: 56 },
+        ],
+      },
+    });
+    expect(html).toContain("gds-server");
+    expect(html).toContain("sshd");
+    expect(html).toContain("RUNNING");
+    expect(html).toContain("STOPPED");
+    expect(html).not.toContain("postgres");
+    expect(renderServiceProgramsHtml({
+      ...initialServiceState(),
+      status: { error: "superviseur injoignable" },
+    })).toContain("superviseur injoignable");
+  });
+
+  it("n'expose jamais un secret présent dans l'état", () => {
+    const html = renderServiceSectionHtml(
+      {
+        ...initialServiceState(),
+        status: { pid: 1, states: [{ name: "gds-server", state: "RUNNING", pid: 2 }] },
+        password: "S3CR3T-PW",
+        token: "TOKEN-PW",
+      },
+      "admin"
+    );
+    expect(html).not.toContain("S3CR3T-PW");
+    expect(html).not.toContain("TOKEN-PW");
+  });
+
+  it("remplace la section L4.6 dans le shell (plus de squelette)", () => {
+    const shell = renderAdminShellHtml({
+      title: "t",
+      subtitle: "s",
+      sections: ADMIN_SECTIONS,
+      sectionHtml: { service: renderServiceSectionHtml(initialServiceState(), "admin") },
+    });
+    expect(shell).not.toContain("À venir — L4.6");
+    expect(shell).toContain('data-section-id="service"');
+  });
+
+  it("expose une description de section non vide", () => {
+    expect(SERVICE_DESC.length).toBeGreaterThan(20);
+    expect(SERVICE_DESC).toContain("PostgreSQL");
   });
 });

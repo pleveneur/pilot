@@ -1108,6 +1108,112 @@ pub async fn gds_admin_ssh_key_revoke(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// L4.6 — Actions de service (redémarrer / arrêter) : commandes Tauri
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Les routes serveur (`GET /api/gds/admin/service`, `POST …/restart`,
+// `POST …/stop`) sont celles de L2.10 ; elles sont réservées au rôle `admin` et
+// tracées dans l'audit du socle. Aucune connexion PostgreSQL directe ici.
+//
+// La sonde de santé est **publique** (`GET /api/gds/health`) : un redémarrage du
+// service invalide les sessions en mémoire côté serveur, donc re-tester la santé
+// avec un jeton ferait conclure à tort que le serveur ne répond plus. La sonde
+// n'envoie donc AUCUN en-tête `Authorization` et ne demande aucun identifiant.
+
+/// Sonde de santé **publique** : `GET /api/gds/health`, sans jeton. Pure vis-à-vis
+/// de l'état du poste (aucun cache de session consulté ni écrit).
+///
+/// Renvoie toujours un objet JSON : `{ ok: true, version, … }` si le service
+/// répond, sinon `{ ok: false, error }` — c'est ce que l'écran interroge en boucle
+/// après un redémarrage (retour de la santé) ou un arrêt (santé injoignable).
+pub(crate) fn probe_public_health(host: &str, http_port: &str) -> Value {
+    let base = match admin_base_url(host, http_port) {
+        Ok(b) => b,
+        Err(e) => return json!({ "ok": false, "error": e }),
+    };
+    let client = match http_client() {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "error": e }),
+    };
+    match send_get(&client, &format!("{}/api/gds/health", base), None) {
+        Ok(r) if r.ok() => ok_value(r),
+        Ok(r) => json!({ "ok": false, "error": r.error() }),
+        Err(e) => json!({ "ok": false, "error": format!("Serveur GDS injoignable ({})", e) }),
+    }
+}
+
+/// Commande Tauri (L4.6) : état du service (PID du processus qui répond et état
+/// des programmes pilotés), `GET /api/gds/admin/service` — réservée au rôle
+/// `admin` par le serveur.
+#[tauri::command]
+pub async fn gds_admin_service_status(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_get(client, &format!("{}/api/gds/admin/service", base), Some(token))
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.6) : `POST /api/gds/admin/service/restart` — redémarre
+/// `gds-server` et `sshd` (la base PostgreSQL n'est jamais touchée). L'ordre est
+/// différé côté serveur ; l'écran suit ensuite la santé publique.
+#[tauri::command]
+pub async fn gds_admin_service_restart(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_post_json(
+                client,
+                &format!("{}/api/gds/admin/service/restart", base),
+                Some(token),
+                &json!({}),
+            )
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.6) : `POST /api/gds/admin/service/stop` — arrête
+/// `gds-server` et `sshd` (la base PostgreSQL continue de répondre).
+#[tauri::command]
+pub async fn gds_admin_service_stop(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        admin_action(&host, &http_port, &email, &password, |client, base, token| {
+            send_post_json(
+                client,
+                &format!("{}/api/gds/admin/service/stop", base),
+                Some(token),
+                &json!({}),
+            )
+        })
+    })
+    .await
+}
+
+/// Commande Tauri (L4.6) : santé **publique** (`GET /api/gds/health`), sans
+/// identifiant. Sert au re-test automatique après un redémarrage (retour de la
+/// santé) et à la constatation d'un arrêt (santé injoignable).
+#[tauri::command]
+pub async fn gds_admin_health(host: String, http_port: String) -> Result<Value, String> {
+    blocking_admin(move || probe_public_health(&host, &http_port)).await
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests — aides pures, parcours HTTP réel sur un faux serveur local
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1992,5 +2098,122 @@ mod tests {
             "aucun appel réseau attendu: {:?}",
             reqs.lock().unwrap()
         );
+    }
+
+    // ── L4.6 : actions de service + santé publique ──
+
+    #[test]
+    fn service_status_action_hits_the_admin_route_and_reports_the_pid() {
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_scripted_server(
+            vec![
+                (200, login_body("tok-S")),
+                (200, probe_body()),
+                (
+                    200,
+                    json!({
+                        "pid": 4242,
+                        "action_delay_ms": 750,
+                        "programs": ["gds-server", "sshd"],
+                        "states": [
+                            {"name": "gds-server", "state": "RUNNING", "pid": 55},
+                            {"name": "sshd", "state": "RUNNING", "pid": 56}
+                        ],
+                        "error": null
+                    })
+                    .to_string(),
+                ),
+            ],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        let v = admin_action(&host, &port, "admin@x", "pw-secret", |client, b, token| {
+            send_get(client, &format!("{}/api/gds/admin/service", b), Some(token))
+        });
+        assert_eq!(v["ok"], json!(true), "{}", v);
+        assert_eq!(v["pid"], json!(4242));
+        assert_eq!(v["states"][0]["name"], json!("gds-server"));
+        // Aucun secret dans ce que voit l'interface.
+        let text = v.to_string();
+        assert!(!text.contains("pw-secret"), "{}", text);
+        assert!(!text.contains("tok-S"), "{}", text);
+        let log = reqs.lock().unwrap().join("\n");
+        assert!(log.contains("GET /api/gds/admin/service "), "{}", log);
+    }
+
+    #[test]
+    fn service_restart_and_stop_post_to_their_admin_routes() {
+        for (token, path) in [
+            ("tok-R", "/api/gds/admin/service/restart"),
+            ("tok-X", "/api/gds/admin/service/stop"),
+        ] {
+            let reqs = Arc::new(Mutex::new(Vec::new()));
+            let base = spawn_scripted_server(
+                vec![
+                    (200, login_body(token)),
+                    (200, probe_body()),
+                    (
+                        200,
+                        json!({"ok": true, "programs": ["gds-server", "sshd"]}).to_string(),
+                    ),
+                ],
+                reqs.clone(),
+            );
+            let (host, port) = host_port(&base);
+            let v = admin_action(&host, &port, "admin@x", "pw", |client, b, t| {
+                send_post_json(client, &format!("{}{}", b, path), Some(t), &json!({}))
+            });
+            assert_eq!(v["ok"], json!(true), "{}", v);
+            let log = reqs.lock().unwrap().join("\n");
+            assert!(log.contains(&format!("POST {}", path)), "{}", log);
+        }
+    }
+
+    #[test]
+    fn public_health_probe_sends_no_token_and_reports_the_version() {
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_fake_server(
+            vec![(
+                "/api/gds/health",
+                200,
+                json!({"version": "9.9.9", "migration_version": 7, "uptime_seconds": 3,
+                       "users": 1, "projects": 2, "git_repos": 3})
+                .to_string(),
+            )],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        let v = probe_public_health(&host, &port);
+        assert_eq!(v["ok"], json!(true), "{}", v);
+        assert_eq!(v["version"], json!("9.9.9"));
+        assert_eq!(v["git_repos"], json!(3));
+        // PREUVE : aucun en-tête Authorization sur la sonde publique (un
+        // redémarrage invalide les sessions ; la sonde ne doit dépendre d'aucune).
+        let log = reqs.lock().unwrap().join("\n");
+        assert!(log.contains("GET /api/gds/health"), "{}", log);
+        assert!(log.contains("auth= "), "aucun jeton attendu: {}", log);
+        assert!(!log.to_lowercase().contains("bearer"), "{}", log);
+    }
+
+    #[test]
+    fn public_health_probe_reports_an_unreachable_service() {
+        // Port fermé : on ouvre puis libère un port, rien n'écoute plus.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port().to_string();
+        drop(listener);
+        let v = probe_public_health("127.0.0.1", &port);
+        assert_eq!(v["ok"], json!(false));
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("injoignable"),
+            "message attendu clair: {}",
+            v
+        );
+    }
+
+    #[test]
+    fn public_health_probe_rejects_an_invalid_address() {
+        let v = probe_public_health("  ", "8080");
+        assert_eq!(v["ok"], json!(false));
+        assert!(v["error"].as_str().unwrap_or("").contains("Adresse"));
     }
 }
