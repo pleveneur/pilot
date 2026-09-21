@@ -16,6 +16,8 @@ import {
   renderServerFormHtml,
   renderServerActionsHtml,
   renderServersSectionHtml,
+  initialIdentityState,
+  renderIdentitySectionHtml,
 } from "./gds-params.js";
 import { renderAdminShellHtml } from "./gds-admin.js";
 
@@ -168,5 +170,46 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(renderParamsStatusHtml({ kind: "ok", text: "bien" })).toContain("gds-admin-status ok");
     expect(renderParamsStatusHtml({ kind: "loading", text: "…" })).toContain("loading");
     expect(renderParamsStatusHtml({ kind: "error", text: "nope" })).toContain("error");
+  });
+});
+
+describe("gds-params — section Mon identité (L5.3)", () => {
+  it("initialIdentityState démarre en chargement, sans identité ni secret", () => {
+    const s = initialIdentityState();
+    expect(s.loading).toBe(true);
+    expect(s.email).toBe("");
+    expect(s.gitName).toBe("");
+    expect(s.status).toBeNull();
+  });
+
+  it("renderIdentitySectionHtml affiche l'état de chargement sans champ éditable", () => {
+    const html = renderIdentitySectionHtml(initialIdentityState());
+    expect(html).toContain('data-section-id="identity"');
+    expect(html).toContain("Chargement de l'identité");
+    expect(html).not.toContain('id="gds-params-id-email"');
+  });
+
+  it("renderIdentitySectionHtml pré-remplit email + nom git et propose l'enregistrement", () => {
+    const html = renderIdentitySectionHtml({ loading: false, email: "dev@exemple.com", gitName: "Prénom Nom" });
+    expect(html).toContain('id="gds-params-id-email"');
+    expect(html).toContain('value="dev@exemple.com"');
+    expect(html).toContain('id="gds-params-id-name"');
+    expect(html).toContain('value="Prénom Nom"');
+    expect(html).toContain('id="gds-params-id-save"');
+    // Déplacement SANS ajout de logique : mêmes textes de stockage hors projet.
+    expect(html).toContain("gds_secrets.json");
+  });
+
+  it("renderIdentitySectionHtml échappe les valeurs saisies", () => {
+    const html = renderIdentitySectionHtml({ loading: false, email: 'x"><script>', gitName: "a&b" });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("a&amp;b");
+  });
+
+  it("renderIdentitySectionHtml remplace le squelette L5.3 sans toucher aux autres sections", () => {
+    const section = renderIdentitySectionHtml({ loading: false, email: "e@x", gitName: "N" });
+    const shell = renderParamsShellHtml({ sectionHtml: { identity: section } });
+    expect(shell).not.toContain("À venir — L5.3");
+    expect(shell).toContain("À venir — L5.4");
   });
 });

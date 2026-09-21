@@ -41,10 +41,10 @@ function friendlyGdsError(e) {
   const lower = msg.toLowerCase();
   if (lower.includes("identité git") || lower.includes("identity unknown") ||
       lower.includes("user.name") || lower.includes("user.email")) {
-    return "⚠️ Identité git incomplète : définissez votre nom git dans le bloc « Identité » en haut (demandé une seule fois).";
+    return "⚠️ Identité git incomplète : définissez votre nom git dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité (demandé une seule fois).";
   }
   if (lower.includes("nom git requis")) {
-    return "⚠️ Ajout annulé : le nom git est requis. Définissez-le dans le bloc « Identité » en haut (pré-rempli ensuite).";
+    return "⚠️ Ajout annulé : le nom git est requis. Définissez-le dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité (pré-rempli ensuite).";
   }
   if (lower.includes("remote add a échoué") && lower.includes("not a git repository")) {
     return "⚠️ Le dossier ne contenait pas encore de dépôt Git valide pendant l'attache. Réessayez après l'initialisation automatique.";
@@ -93,52 +93,11 @@ export function createGds(container) {
       : "État de la connexion GDS de ce projet.";
   }
 
-  // ── Bloc Identité GLOBAL (email + nom git, saisi une seule fois) ──
-  function renderIdentity(identity) {
-    const panel = document.createElement("div");
-    panel.className = "gds-panel gds-panel-identity";
-    panel.innerHTML = `
-      <div class="gds-panel-title"><i data-lucide="user" class="icon-sm"></i> Identité (une seule saisie globale)</div>
-      <div class="gds-panel-desc">
-        Saisie <strong>une seule fois</strong>, pré-remplie partout ensuite. Votre
-        email identifie votre compte GDS (clé SSH, membre de projets) ; votre nom
-        git est réglé automatiquement (localement, jamais en global). Stockée hors
-        projet (<code>~/.pilot/gds_secrets.json</code>, 0600).
-      </div>
-      <div class="gds-grid2">
-        <div>
-          <label class="gds-label">Email (identité globale)</label>
-          <input id="gds-id-email" class="gds-input" value="${esc(identity.email)}" placeholder="dev@exemple.com" autocomplete="off">
-        </div>
-        <div>
-          <label class="gds-label">Nom git</label>
-          <input id="gds-id-name" class="gds-input" value="${esc(identity.git_name)}" placeholder="Prénom Nom" autocomplete="off">
-        </div>
-      </div>
-      <div id="gds-id-err" class="gds-error"></div>
-      <div id="gds-id-ok" class="gds-ok"></div>
-      <div class="gds-actions">
-        <button id="gds-id-save" class="web-btn"><i data-lucide="check" class="icon-sm"></i> Enregistrer l'identité</button>
-      </div>
-    `;
-    bodyEl.appendChild(panel);
-    refreshIcons(container);
-
-    const err = panel.querySelector("#gds-id-err");
-    const ok = panel.querySelector("#gds-id-ok");
-    panel.querySelector("#gds-id-save").addEventListener("click", async () => {
-      const email = panel.querySelector("#gds-id-email").value.trim();
-      const name = panel.querySelector("#gds-id-name").value.trim();
-      err.textContent = ""; ok.textContent = "";
-      if (!email) { err.textContent = "L'email est requis (il identifie votre compte GDS)."; return; }
-      try {
-        await invoke("gds_save_identity", { email, gitName: name });
-        ok.textContent = "✅ Identité globale enregistrée.";
-      } catch (e) {
-        err.textContent = String(e);
-      }
-    });
-  }
+  // NB (refonte GDS, L5.3) : le bloc « Identité » a été DÉPLACÉ vers l'onglet
+  // transverse « ⚙️ GDS — paramétrage » → Mon identité (mêmes commandes
+  // `gds_identity_prefs` / `gds_save_identity`, mêmes règles, même stockage).
+  // Il n'est donc plus affiché ici : l'identité reste globale (hors projet) et
+  // pré-remplit ce formulaire via la variable `identity`.
 
   // ── Charge la liste des serveurs mémorisés validés (hôte/user seulement) ──
   function loadSavedServers(select, onLoaded) {
@@ -190,9 +149,9 @@ export function createGds(container) {
         Active le GDS pour ce projet : crée la base <code>pilot_gds</code> + les
         tables + votre compte admin, et prépare le dossier de repos centralisé
         (<code>.pilot/gds.json</code>). Les mots de passe restent hors projet.
-        L'email admin est votre <strong>identité globale</strong> (ci-dessus) — aucun champ à resaisir.
+        L'email admin est votre <strong>identité globale</strong> (onglet « ⚙️ GDS — paramétrage » → Mon identité) — aucun champ à resaisir.
       </div>
-      ${!emailOk ? `<div class="gds-warn">⚠️ Définissez d'abord votre <strong>email d'identité</strong> dans le bloc « Identité » en haut.</div>` : ""}
+      ${!emailOk ? `<div class="gds-warn">⚠️ Définissez d'abord votre <strong>email d'identité</strong> dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité.</div>` : ""}
       <div class="gds-panel-desc" style="margin-top:8px"><strong>Réutiliser un serveur déjà mémorisé</strong> (mots de passe jamais affichés) :</div>
       <div class="gds-grid2">
         <div>
@@ -236,7 +195,7 @@ export function createGds(container) {
           </div>
         </div>
         <div class="gds-note-box">
-          <em>L'email admin est votre identité globale (ci-dessus).</em>
+          <em>L'email admin est votre identité globale (onglet « ⚙️ GDS — paramétrage » → Mon identité).</em>
         </div>
       </div>
       <div id="gds-provision-err" class="gds-error"></div>
@@ -310,7 +269,7 @@ export function createGds(container) {
     async function persists(withPasswords) {
       const project = currentProjectPath();
       if (!project) throw new Error("Aucun projet ouvert.");
-      if (!email) throw new Error("Définissez d'abord votre email d'identité (bloc « Identité » en haut).");
+      if (!email) throw new Error("Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).");
       const args = { project, cfg: readConfig() };
       if (withPasswords) {
         args.dbPassword = panel.querySelector("#gds-db-password").value;
@@ -396,7 +355,7 @@ export function createGds(container) {
     btn.addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
-      if (!email) { err.textContent = "Définissez d'abord votre email d'identité (bloc « Identité » en haut)."; return; }
+      if (!email) { err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité)."; return; }
       const dbHost = panel.querySelector("#gds-db-host").value.trim();
       const dbPort = panel.querySelector("#gds-db-port").value.trim();
       const dbUser = panel.querySelector("#gds-db-user").value.trim();
@@ -479,7 +438,7 @@ export function createGds(container) {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
       const email = (identity.email || "").trim();
-      if (!email) { err.textContent = "Définissez d'abord votre email d'identité (bloc « Identité » en haut)."; return; }
+      if (!email) { err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité)."; return; }
       err.textContent = ""; ok.textContent = "";
       btn.disabled = true;
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Ajout…';
@@ -872,7 +831,6 @@ export function createGds(container) {
     const provisioned = !!(cfg && cfg.enabled);
 
     setStateBadge(status, onServer);
-    renderIdentity(identity);
 
     if (pendingNotice) {
       const notice = document.createElement("div");

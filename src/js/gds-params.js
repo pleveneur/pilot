@@ -9,7 +9,7 @@
 //
 // Sections remplies au fil des micro-tâches du LOT 5 :
 //   L5.2 « Serveurs GDS »      → PARAMS_SECTIONS[0]  (IMPLÉMENTÉ)
-//   L5.3 « Mon identité »      → PARAMS_SECTIONS[1]
+//   L5.3 « Mon identité »      → PARAMS_SECTIONS[1]  (IMPLÉMENTÉ)
 //   L5.4 « Mes clés »          → PARAMS_SECTIONS[2]
 //   L5.5 « Mes projets GDS »   → PARAMS_SECTIONS[3]
 //
@@ -258,6 +258,57 @@ export function renderServersSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L5.3 — « Mon identité » : rendus purs et câblage
+//
+// DÉPLACEMENT du bloc identité de l'onglet PAR PROJET (gds.js) vers cet onglet
+// transverse, SANS CHANGEMENT DE LOGIQUE : mêmes commandes
+// (`gds_identity_prefs` / `gds_save_identity`), même stockage
+// (`~/.pilot/gds_secrets.json`, 0600), même résolution côté Rust de l'email
+// réellement utilisé (identité globale vs email par projet,
+// `effective_identity_email`, gds.rs). Aucun nouveau traitement n'est introduit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** État initial de la section « Mon identité » (pure). Aucun secret. */
+export function initialIdentityState() {
+  return { loading: true, email: "", gitName: "", status: null };
+}
+
+/**
+ * Rend la section « Mon identité » (pure, testable). Remplace le squelette
+ * « À venir — L5.3 ». Affiche l'email d'identité GLOBALE et le nom git ; jamais
+ * de secret (l'identité n'est pas un secret, mais elle vit hors du HTML du
+ * projet dans le stockage chiffré 0600).
+ * @param {Object} state état de la section (voir `initialIdentityState`)
+ */
+export function renderIdentitySectionHtml(state = {}) {
+  const s = { ...initialIdentityState(), ...(state || {}) };
+  const body = s.loading
+    ? `<div class="gds-admin-status loading">Chargement de l'identité…</div>`
+    : `
+        <div class="gds-admin-form">
+          <label class="gds-admin-field"><span>Email (identité globale)</span>
+            <input id="gds-params-id-email" type="text" autocomplete="off" placeholder="dev@exemple.com" value="${esc(s.email)}">
+          </label>
+          <label class="gds-admin-field"><span>Nom git</span>
+            <input id="gds-params-id-name" type="text" autocomplete="off" placeholder="Prénom Nom" value="${esc(s.gitName)}">
+          </label>
+        </div>
+        <div class="gds-admin-hint">Saisie <strong>une seule fois</strong> : cet email identifie votre compte GDS (clé SSH, membre de projets) et pré-remplit l'ajout d'un projet au GDS. Le nom git est réglé <strong>localement</strong> au projet (jamais en global). Stocké hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600).</div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn primary" id="gds-params-id-save"><i data-lucide="save" class="icon-sm"></i> Enregistrer l'identité</button>
+        </div>`;
+  return `
+      <section class="gds-admin-section" data-section-id="identity">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="user-round" class="icon-sm"></i> Mon identité</div>
+        </div>
+        <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[1].desc)}</div>
+        ${body}
+        <div id="gds-params-id-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
+      </section>`;
+}
+
 /**
  * Rend le HTML de la coquille de l'écran de paramétrage (pure, testable).
  * RÉUTILISE `renderAdminShellHtml` (gds-admin.js) : la coquille et le rendu de
@@ -288,9 +339,9 @@ export function createGdsParams(container) {
   container.classList.add("gds-admin-view", "gds-params-view");
 
   let disposed = false;
-  let identityEmail = "";
   const state = initialServersState();
-
+  /** L5.3 — état de la section « Mon identité » (source unique de l'email global). */
+  const identityState = initialIdentityState();
   const q = (sel) => container.querySelector(sel);
 
   /** Projet actif (chaîne vide si aucun). */
@@ -319,11 +370,28 @@ export function createGdsParams(container) {
     };
   }
 
+  /**
+   * Récupère la saisie « Mon identité » AVANT tout redessin (L5.3) : évite de
+   * perdre une saisie en cours si un autre bloc (ex. rafraîchissement des
+   * serveurs) redessine l'écran. Sans champ à l'écran (chargement), no-op.
+   */
+  function captureIdentity() {
+    const email = q("#gds-params-id-email");
+    if (!email) return;
+    identityState.email = email.value;
+    const name = q("#gds-params-id-name");
+    if (name) identityState.gitName = name.value;
+  }
+
   function draw() {
     if (disposed) return;
     state.hasProject = !!activeProject();
+    captureIdentity();
     container.innerHTML = renderParamsShellHtml({
-      sectionHtml: { servers: renderServersSectionHtml(state) },
+      sectionHtml: {
+        servers: renderServersSectionHtml(state),
+        identity: renderIdentitySectionHtml(identityState),
+      },
     });
     refreshIcons(container);
     bind();
@@ -476,7 +544,7 @@ export function createGdsParams(container) {
       state.status = { kind: "loading", text: `Application à « ${project} »…` };
       draw();
       try {
-        await invoke("gds_apply_server", { project, host, port, user, email: identityEmail });
+        await invoke("gds_apply_server", { project, host, port, user, email: identityState.email.trim() });
         state.status = { kind: "ok", text: `✅ Serveur appliqué au projet actif (hôte, port, utilisateur, identité pré-remplis).` };
       } catch (e) {
         state.status = { kind: "error", text: friendlyGdsError(e) };
@@ -495,6 +563,46 @@ export function createGdsParams(container) {
     for (const btn of container.querySelectorAll("[data-srv-action]")) {
       btn.addEventListener("click", () => rowAction(btn));
     }
+    // ── L5.3 : identité globale ──
+    const idSave = q("#gds-params-id-save");
+    if (idSave) idSave.addEventListener("click", () => saveIdentity());
+  }
+
+  // ── L5.3 : chargement / enregistrement de l'identité globale ──
+
+  function loadIdentity() {
+    identityState.loading = true;
+    draw();
+    Promise.resolve()
+      .then(() => invoke("gds_identity_prefs"))
+      .then((prefs) => {
+        identityState.email = String((prefs && prefs.email) || "");
+        identityState.gitName = String((prefs && prefs.git_name) || "");
+      })
+      .catch(() => {})
+      .finally(() => {
+        identityState.loading = false;
+        draw();
+      });
+  }
+
+  async function saveIdentity() {
+    captureIdentity();
+    const email = identityState.email.trim();
+    if (!email) {
+      identityState.status = { kind: "error", text: "L'email est requis : il identifie votre compte GDS." };
+      draw();
+      return;
+    }
+    identityState.status = { kind: "loading", text: "Enregistrement de l'identité…" };
+    draw();
+    try {
+      await invoke("gds_save_identity", { email, gitName: identityState.gitName.trim() });
+      identityState.status = { kind: "ok", text: "✅ Identité globale enregistrée." };
+    } catch (e) {
+      identityState.status = { kind: "error", text: friendlyGdsError(e) };
+    }
+    draw();
   }
 
   /** Message d'erreur lisible (les commandes renvoient déjà des messages). */
@@ -503,18 +611,12 @@ export function createGdsParams(container) {
     return s.replace(/^Error:\s*/, "");
   }
 
-  // Premier rendu (chargement) puis rafraîchissement de la liste.
+  // Premier rendu (chargement) puis rafraîchissement des listes/états.
   draw();
   refreshServers();
-
-  // Identité globale (email) : nécessaire pour « appliquer » un serveur à un
-  // projet (pré-remplissage de l'identité). Fail-open — jamais bloquant.
-  Promise.resolve()
-    .then(() => invoke("gds_identity_prefs"))
-    .then((prefs) => {
-      identityEmail = String((prefs && prefs.email) || "").trim();
-    })
-    .catch(() => {});
+  // L5.3 (identité globale) : chargement indépendant, fail-open — jamais
+  // bloquant pour les autres sections.
+  loadIdentity();
 
   // Aucune ressource système à libérer ; on renvoie néanmoins le contrat commun
   // des écrans (wrapper + unlisten) pour l'homogénéité de tabs.js.
