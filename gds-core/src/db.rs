@@ -2322,4 +2322,129 @@ mod tests {
 
         pool.close().await;
     }
+
+    // ── L3.1 — contraintes de vocabulaire des rôles et des statuts ──
+    //
+    // Base **vierge jetable** (même isolation que les tests T5) : sur une base
+    // neuve, les contraintes `users_role_check` / `users_status_check` doivent
+    // exister et être validées ; un rôle (ou un statut) hors vocabulaire doit
+    // être REFUSÉ par la base ; les valeurs admises doivent passer. Test
+    // facultatif : sans `PILOT_GDS_TEST_URL`, il ne s'exécute pas (CI verte).
+    #[tokio::test]
+    async fn role_and_status_constraints_are_enforced_on_a_fresh_db() {
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "role_and_status_constraints_are_enforced_on_a_fresh_db: \
+                     PILOT_GDS_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        if !env_db.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_TEST_URL doit viser une base de test `pilot_gds_test_*` \
+                 (base visée: {:?}) — test ignoré",
+                env_db
+            );
+            return;
+        }
+        assert_ne!(env_db, GDS_DB_NAME, "la base réelle ne doit jamais être ciblée");
+
+        let test_db = unique_test_db_name();
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création base de test");
+        let _guard = GdsTestDbGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let app_options = base_opts.clone().database(&test_db);
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_options)
+            .await
+            .expect("connexion base de test");
+
+        // 1) Base vierge : toutes les migrations s'appliquent (dont 0006).
+        migrate(&pool).await.expect("migration sur base vierge");
+
+        // 2) Les deux contraintes sont présentes ET validées.
+        for name in ["users_role_check", "users_status_check"] {
+            let convalidated: Option<bool> = sqlx::query_scalar(
+                "SELECT convalidated FROM pg_constraint \
+                 WHERE conrelid = 'users'::regclass AND contype = 'c' AND conname = $1",
+            )
+            .bind(name)
+            .fetch_optional(&pool)
+            .await
+            .expect("lecture de pg_constraint");
+            assert_eq!(
+                convalidated,
+                Some(true),
+                "contrainte {} absente ou non validée",
+                name
+            );
+        }
+
+        // 3) Un rôle inconnu est REFUSÉ, avec le nom de contrainte attendu.
+        let err = create_user(&pool, "bad-role@gds.test", "", "", "root", "active")
+            .await
+            .expect_err("un rôle inconnu doit être refusé par la base");
+        assert!(
+            err.contains("users_role_check"),
+            "le refus doit nommer la contrainte de rôle, obtenu : {}",
+            err
+        );
+
+        // 4) Un statut inconnu est REFUSÉ, avec le nom de contrainte attendu.
+        let err = create_user(&pool, "bad-status@gds.test", "", "", "dev", "zzz")
+            .await
+            .expect_err("un statut inconnu doit être refusé par la base");
+        assert!(
+            err.contains("users_status_check"),
+            "le refus doit nommer la contrainte de statut, obtenu : {}",
+            err
+        );
+
+        // 5) Les valeurs admises passent (dont 'standard' / 'disabled').
+        let id = create_user(&pool, "standard@gds.test", "", "", "standard", "disabled")
+            .await
+            .expect("un rôle et un statut admis doivent être acceptés");
+        let user = get_user_by_email(&pool, "standard@gds.test")
+            .await
+            .expect("lecture")
+            .expect("le compte doit exister");
+        assert_eq!(user.id, id);
+        assert_eq!(user.role, "standard");
+        assert_eq!(user.status, "disabled");
+
+        // 6) Aucune ligne interdite n'a été écrite (échecs transactionnels).
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .expect("comptage des utilisateurs");
+        assert_eq!(count, 1, "seul le compte admis doit exister");
+
+        pool.close().await;
+    }
 }
