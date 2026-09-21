@@ -1,0 +1,172 @@
+# gds-server/docker-compose.yml — serveur GDS tout-en-un (refonte GDS, L2.8)
+#
+# OBJET DE CE FICHIER : rendre le conteneur tout-en-un (L2.7) utilisable TEL QUEL
+# sur un poste Windows (Docker Desktop, moteur WSL2), sans shell Unix côté poste :
+# un seul service, des volumes NOMMÉS (l'état survit à la reconstruction) et les
+# trois ports publiés sur le poste. Rien d'autre n'est exécuté sur l'hôte : toutes
+# les commandes de ce fichier sont des champs Compose, jamais des commandes shell.
+#
+# DÉCISION FIGÉE (lot L2) : un SEUL service. La base de données, les dépôts git
+# et le service HTTP vivent dans le même conteneur (image unique construite par
+# `gds-server/Dockerfile`, L2.7) ; le socket du moteur Docker n'est JAMAIS monté.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# PREMIÈRE INSTALLATION (Windows)
+#   1. copier le modèle de variables puis le remplir (jamais versionné) :
+#        PowerShell : Copy-Item .env.example .env
+#        cmd.exe    : copy .env.example .env
+#   2. ouvrir `.env` et renseigner `POSTGRES_PASSWORD` (obligatoire, voir le
+#      modèle : c'est le SEUL secret à saisir) ;
+#   3. construire et démarrer :  docker compose up -d --build
+#   4. créer le compte administrateur : formulaire de première initialisation
+#      `POST /api/gds/setup` (aucun mot de passe admin par défaut, décision 2),
+#      ou variables `GDS_ADMIN_EMAIL`/`GDS_ADMIN_PASSWORD` pour un démarrage non
+#      interactif (voir `.env.example`) ;
+#   5. vérifier :  curl http://127.0.0.1:8080/api/gds/health
+#   Le détail (commandes, dépannage) est dans `gds-server/README.md`.
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠️ SÉCURITÉ — INTERDIT (à lire avant d'ouvrir quoi que ce soit)
+#   Les trois ports publiés ci-dessous (`8080` API, `2222` SSH git, `5432`
+#   PostgreSQL) sont destinés au POSTE LUI-MÊME, au RÉSEAU LOCAL et au RÉSEAU
+#   PRIVÉ TAILSCALE. Il est INTERDIT de les exposer au-delà :
+#     - ne JAMAIS rediriger ces ports depuis une box / un routeur (NAT) ;
+#     - ne JAMAIS publier l'image ou le conteneur via un tunnel public
+#       (Cloudflare Tunnel, ngrok, Funnel sans tailnet, IP publique…) ;
+#     - ne JAMAIS supprimer la restriction d'adresse ci-dessous pour écouter
+#       sur une interface publique.
+#   `5432` (synchronisations directes des projets) et `2222` (dépôts git) sont
+#   publiés EN CLAIR, sans TLS : les laisser joignables depuis Internet expose
+#   la base et les dépôts. L'accès distant légitime passe par Tailscale
+#   (micro-tâche L2.9, `docs/gds-server-setup.md`).
+#   Pour ne publier QUE sur le poste (aucun accès LAN/tailnet), mettre
+#   `GDS_BIND_ADDR=127.0.0.1` dans `.env` : c'est la seule valeur plus
+#   restrictive, et elle reste suffisante pour le poste lui-même.
+# ═══════════════════════════════════════════════════════════════════════════
+# PORTS ET VOLUMES — justification de chaque élément
+#   Ports (publication hôte → conteneur) :
+#     - 8080 → 8080 : API HTTP d'administration `/api/gds/*` (route de santé,
+#       écrans d'administration). Décision 9/10.
+#     - 2222 → 22   : accès SSH aux dépôts git (le port INTERNE reste 22, cf.
+#       `GDS_SSH_PORT` ; `2222` est le réglage du conteneur). Décision 5.
+#     - 5432 → 5432 : PostgreSQL, accès DIRECT du poste. IMPOSÉ par la décision
+#       « le poste parle en direct à la base » : les synchronisations de projet
+#       ne passent PAS par l'API HTTP. Décision 11.
+#       ⚠️ COLLISION FRÉQUENTE, À VÉRIFIER : si un autre PostgreSQL écoute DÉJÀ
+#       sur le poste en `127.0.0.1:5432` (cas de Pilot lui-même — il provisionne
+#       une base locale — et de toute installation PostgreSQL native), le port
+#       publié par le conteneur n'est PAS joignable en boucle locale : Windows
+#       route `127.0.0.1:5432` vers le service natif, le conteneur ne reçoit que
+#       le trafic non-loopback, et le poste parle alors à la MAUVAISE base
+#       (symptôme : « password authentication failed » sur un mot de passe
+#       pourtant juste). Vérifier, puis décaler le port publié :
+#         netstat -ano | findstr :5432     (Windows)
+#         ss -ltnp | grep :5432            (Linux/macOS)
+#       … puis `GDS_HOST_DB_PORT=55432` dans `.env` et `docker compose up -d`.
+#   Volumes NOMMÉS (jamais des montages de dossier Windows : les dépôts bare et
+#   le cluster PostgreSQL dépendent des permissions POSIX, qu'un montage NTFS
+#   ne conserve pas) :
+#     - pgdata         → /var/lib/postgresql/data : le cluster PostgreSQL (sans
+#                        lui, la base et le suivi sont perdus) ;
+#     - repos          → /srv/git/repos : les dépôts bare (sans lui, l'historique
+#                        git est perdu) ;
+#     - ssh-host-keys  → /etc/ssh/host_keys : les clefs d'hôte sshd (sans lui,
+#                        l'empreinte du serveur change à chaque reconstruction et
+#                        chaque poste doit ré-autoriser le serveur) ;
+#     - supervisor     → /var/log/supervisor : le journal du superviseur interne
+#                        (L2.7), conservé d'un conteneur à l'autre pour garder la
+#                        trace des redémarrages et des états FATAL. Les journaux
+#                        exploitables restent dans `docker logs` (sortie standard
+#                        des trois processus).
+#
+# NOM DU PROJET : figé (`pilot-gds`) pour que les noms de conteneur et de volumes
+# soient les mêmes quel que soit le nom du dossier du dépôt sur le poste :
+#   conteneur `pilot-gds`, volumes `pilot-gds_pgdata`, `pilot-gds_repos`,
+#   `pilot-gds_ssh-host-keys`, `pilot-gds_supervisor`.
+#
+# USAGE :
+#   docker compose up -d --build     # construit si besoin puis démarre
+#   docker compose ps                # état (santé) du service
+#   docker compose logs -f gds       # journaux des trois processus
+#   docker compose stop              # arrête le conteneur (volumes conservés)
+#   docker compose down              # supprime le conteneur (volumes conservés)
+#   docker compose down -v           # ⚠️ supprime AUSSI les volumes = données perdues
+#   docker compose pull && docker compose up -d   # mise à jour (L2.9, registre)
+
+# Nom du projet Compose : figé (voir ci-dessus).
+name: pilot-gds
+
+services:
+  # Service UNIQUE : PostgreSQL + sshd + gds-server dans le même conteneur.
+  gds:
+    # Image locale construite par le Dockerfile de L2.7. Aucun préfixe de
+    # registre : elle n'est ni tirée ni poussée nulle part (pas de `registry:`
+    # ni de `push`), elle se construit sur le poste.
+    image: pilot-gds:local
+    build:
+      # Le contexte est la RACINE du dépôt (le workspace Cargo déclare
+      # `src-tauri` comme membre et le binaire dépend de `gds-core/`) : le
+      # chemin est relatif à ce fichier, et le filtrage est porté par
+      # `/.dockerignore` (sans lui, le contexte embarquerait plus de 130 Go).
+      context: ..
+      dockerfile: gds-server/Dockerfile
+    # Nom fixe : les commandes de diagnostic (`docker exec pilot-gds …`,
+    # `docker logs pilot-gds`) sont les mêmes partout, y compris sous Windows.
+    container_name: pilot-gds
+    # Redémarrage automatique après un redémarrage du poste (ou du moteur).
+    # `docker compose stop`/`down` restent prioritaires.
+    restart: unless-stopped
+    # Arrêt PROPRE : le superviseur interne arrête PostgreSQL en mode « fast »
+    # (`stopsignal=INT`, `stopwaitsecs=60` dans `supervisord.conf`) ; la marge
+    # évite que le moteur ne tue le conteneur avant la fin de l'écriture.
+    stop_grace_period: 70s
+    # Toutes les variables viennent du fichier `.env` (voir `.env.example`) :
+    # aucun secret n'est écrit dans ce fichier, qui est versionné.
+    env_file:
+      - .env
+    # Ouverture de l'accès DIRECT à la base par MOT DE PASSE (`scram-sha-256`,
+    # jamais `trust`) aux plages ci-dessous : une connexion qui arrive par le port
+    # publié est vue par PostgreSQL comme venant de la passerelle du réseau Docker
+    # (ex. `172.18.0.1`), JAMAIS de `127.0.0.1` — sans cette ouverture, toute
+    # connexion du poste est refusée (« no pg_hba.conf entry for host … »).
+    # Le défaut `0.0.0.0/0` signifie « tout ce qui ATTEINT le port publié » : la
+    # restriction RÉELLE reste la PUBLICATION des ports (`GDS_BIND_ADDR` et
+    # l'encadré SÉCURITÉ ci-dessus) — ne jamais l'élargir au-delà du LAN et du
+    # réseau privé Tailscale. Pour restreindre davantage (ex. LAN + tailnet sous
+    # Linux, où la source est l'adresse réelle du client), mettre la liste de
+    # plages CIDR séparées par des virgules dans `.env`.
+    environment:
+      GDS_PG_ALLOWED_NETWORKS: "${GDS_PG_ALLOWED_NETWORKS:-0.0.0.0/0}"
+    # Publication des trois ports, RESTREINTE par défaut au poste, au LAN et au
+    # réseau privé Tailscale (`GDS_BIND_ADDR`, défaut `0.0.0.0`). Voir l'encadré
+    # SÉCURITÉ en tête de fichier : au-delà de ces réseaux, c'est INTERDIT.
+    ports:
+      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_HTTP_PORT:-8080}:8080"
+      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_SSH_PORT:-2222}:22"
+      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - repos:/srv/git/repos
+      - ssh-host-keys:/etc/ssh/host_keys
+      - supervisor:/var/log/supervisor
+    # Santé du conteneur : PostgreSQL répond, c'est-à-dire que l'état annoncé
+    # par `docker compose ps` correspond à « la base répond » (le service HTTP
+    # dépend de la base, cf. la politique de reprise de `gds-server`). La sonde
+    # est celle de l'image (aucun outil à installer) et n'utilise aucun secret :
+    # `pg_isready` ne teste que la réponse du serveur.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-d", "pilot_gds", "-U", "pilot"]
+      interval: 20s
+      timeout: 5s
+      start_period: 120s
+      retries: 5
+
+# Volumes NOMMÉS (gérés par le moteur, stockés dans la VM Linux du poste) :
+# jamais des chemins `C:\…` (permissions POSIX perdues). Sans ces volumes, le
+# conteneur DÉMARRE quand même (base vierge au démarrage, décision 1) mais ne
+# CONSERVE rien : la base, les dépôts et les empreintes de clefs recommencent à
+# zéro à chaque `docker compose down -v`.
+volumes:
+  pgdata:
+  repos:
+  ssh-host-keys:
+  supervisor:

@@ -11,6 +11,10 @@ src-tauri/target/
 # Environment
 .env
 .env.*
+# Le MODÈLE de variables d'environnement du serveur GDS est versionné : il ne
+# contient aucun secret (`gds-server/.env.example`, refonte GDS L2.8). Seul le
+# fichier réel `.env` reste ignoré.
+!**/.env.example
 
 # OS
 .DS_Store

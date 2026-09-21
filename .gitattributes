@@ -3,3 +3,14 @@
 # même avec core.autocrlf=true (Windows) : un CRLF dans le worktree
 # invalide le registre _sqlx_migrations (MigrateError::VersionMismatch).
 *.sql text eol=lf
+
+# Scripts d'amorçage du serveur GDS : LF obligatoire sur toutes les plateformes.
+# `gds-server/entrypoint.sh` est copié DANS l'image et exécuté par `/bin/sh` :
+# avec core.autocrlf=true (Windows), un `git checkout` / `git stash` en
+# produirait une version CRLF, dont le shebang (`#!/bin/sh\r`) n'est plus
+# résoluble et dont la première ligne (`set -eu\r`) est rejetée — le conteneur
+# ne démarre plus. Les recettes de construction sont concernées aussi (une
+# continuation de ligne `\` suivie d'un CR casse la commande).
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf

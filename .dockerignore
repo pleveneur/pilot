@@ -58,6 +58,18 @@ release-notes
 templates
 scripts
 
+# ── Secrets locaux (modèle de variables d'environnement, L2.8) ──────────────
+# Le fichier `.env` du dossier `gds-server/` porte le mot de passe de la base :
+# il ne doit JAMAIS entrer dans le contexte de construction (l'étage builder
+# recopie `gds-server/` tel quel — le secret se retrouverait dans une couche
+# locale). Le MODÈLE `.env.example` ne contient aucun secret et reste admis.
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
 # ── Divers de développement ──────────────────────────────────────────────────
 Cargo.head.toml
 *.log

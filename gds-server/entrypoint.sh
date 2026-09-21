@@ -9,6 +9,12 @@
 #      est VIDE — un datadir déjà initialisé est CONSERVÉ tel quel (aucune
 #      réinitialisation, les données du volume ne sont jamais effacées) ;
 #   2. mise en route de l'instance si elle n'écoute pas encore ;
+#   2bis. L2.8 — ouverture de l'accès DIRECT (par MOT DE PASSE) à la base depuis
+#      les plages déclarées dans `GDS_PG_ALLOWED_NETWORKS` : `initdb` n'ouvre par
+#      défaut que la boucle locale (`127.0.0.1/32`), or une connexion qui arrive
+#      par le port PUBLIÉ du conteneur présente la passerelle du réseau Docker
+#      comme source — elle serait refusée (« no pg_hba.conf entry ») et le poste
+#      ne pourrait pas « parler en direct à la base » (décision figée du lot) ;
 #   3. préparation de la base de service par le socle, via le binaire :
 #      `gds-server --init-db` (création du rôle et de la base `pilot_gds` s'ils
 #      sont absents, puis migrations embarquées — idempotent) ;
@@ -41,13 +47,17 @@
 # pilote jamais le moteur qui l'héberge).
 #
 # Hors périmètre (micro-tâches suivantes, à ne pas traiter ici) : orchestration
-# compose et publication des ports (L2.8), exposition publique (L2.9).
+# compose et publication des ports (L2.8 — `docker-compose.yml`, dont ce script
+# complète l'accès direct à la base), exposition publique (L2.9).
 #
 # Variables reconnues : `PGDATA` (défaut /var/lib/postgresql/data),
 # `POSTGRES_PASSWORD` (secret du compte d'administration, cf. spec §6.4),
 # `GDS_DB_ADMIN_USER` (défaut « postgres »), `GDS_DB_ADMIN_PASSWORD` (défaut
 # POSTGRES_PASSWORD), `GDS_DB_ADMIN_HOST` (défaut GDS_DB_HOST puis localhost),
-# `GDS_DB_PORT` (défaut 5432), `GDS_REPOS_ROOT` (défaut /srv/git/repos : racine des
+# `GDS_DB_PORT` (défaut 5432), `GDS_PG_ALLOWED_NETWORKS` (défaut 0.0.0.0/0 :
+# plages CIDR, séparées par des virgules, autorisées à joindre la base par MOT DE
+# PASSE depuis le port publié, cf. `ensure_pg_hba` — jamais de `trust` en TCP),
+# `GDS_REPOS_ROOT` (défaut /srv/git/repos : racine des
 # dépôts bare, sur volume), `GDS_SSH_PORT` (défaut 22 : port INTERNE de sshd, le
 # port publié 2222 étant un réglage du conteneur), `GDS_SSH_HOST_KEYS_DIR`
 # (défaut /etc/ssh/host_keys : dossier des clefs d'hôte, sur volume),
@@ -65,6 +75,14 @@ GDS_DB_ADMIN_USER="${GDS_DB_ADMIN_USER:-postgres}"
 GDS_DB_ADMIN_PASSWORD="${GDS_DB_ADMIN_PASSWORD:-${POSTGRES_PASSWORD:-}}"
 GDS_DB_ADMIN_HOST="${GDS_DB_ADMIN_HOST:-${GDS_DB_HOST:-localhost}}"
 GDS_DB_PORT="${GDS_DB_PORT:-5432}"
+# L2.8 — réseaux autorisés à joindre la base EN DIRECT (mot de passe) sur le port
+# publié. Une connexion qui arrive par ce port vient de la passerelle du réseau
+# Docker (ex. 172.18.0.1) et non de 127.0.0.1 : sans cette ouverture, le poste est
+# refusé. Le défaut (0.0.0.0/0) autorise « tout ce qui ATTEINT le port publié » —
+# le filtrage réel est la PUBLICATION des ports côté hôte (docker-compose.yml,
+# plages LAN/Tailscale uniquement) ; restreindre est possible (ex.
+# « 192.168.1.0/24,100.64.0.0/10 »).
+GDS_PG_ALLOWED_NETWORKS="${GDS_PG_ALLOWED_NETWORKS:-0.0.0.0/0}"
 # Racine des dépôts bare (volume monté). Explicité ici : la valeur alimente la
 # préparation du compte `git` (L2.5) et sera réutilisée par la création des
 # dépôts (L2.6).
@@ -87,6 +105,7 @@ GDS_SUPERVISORD_CONFIG="${GDS_SUPERVISORD_CONFIG:-/etc/gds/supervisord.conf}"
 GDS_PG_BIN="${GDS_PG_BIN:-postgres}"
 GDS_SSHD_BIN="${GDS_SSHD_BIN:-/usr/sbin/sshd}"
 export PGDATA GDS_DB_ADMIN_USER GDS_DB_ADMIN_PASSWORD GDS_DB_ADMIN_HOST GDS_DB_PORT GDS_REPOS_ROOT
+export GDS_PG_ALLOWED_NETWORKS
 export GDS_SSH_PORT GDS_SSH_HOST_KEYS_DIR GDS_SSHD_CONFIG GDS_SUPERVISORD_CONFIG
 export GDS_PG_BIN GDS_SSHD_BIN
 
@@ -113,10 +132,57 @@ as_cluster_owner() {
     return 1
 }
 
+# L2.8 — Accès DIRECT à la base depuis le port publié (`pg_hba.conf`).
+#
+# `initdb` n'écrit que les entrées de la boucle locale ; une connexion arrivant
+# par le port publié du conteneur est vue comme venant de la passerelle du réseau
+# Docker (ex. 172.18.0.1) : elle est refusée tant qu'aucune ligne ne la couvre.
+# Le bloc ci-dessous ouvre l'accès par MOT DE PASSE (`scram-sha-256`, jamais
+# `trust` en TCP) aux plages de `GDS_PG_ALLOWED_NETWORKS`. Il est RÉÉCRIT à
+# chaque démarrage entre ses deux marqueurs (modifier la variable suffit ; une
+# modification manuelle de ce bloc est écrasée, le reste du fichier est
+# conservé). Sans fichier `pg_hba.conf`, on ne fait rien : l'instance gérée hors
+# du conteneur n'est jamais modifiée.
+ensure_pg_hba() {
+    hba="$PGDATA/pg_hba.conf"
+    if [ ! -s "$hba" ]; then
+        return 0
+    fi
+    tmp="$(mktemp)"
+    # Le fichier est TRONQUÉ, jamais recréé : son propriétaire (`postgres`) et ses
+    # droits (600) sont conservés, sinon le moteur ne pourrait plus le relire.
+    sed '/^# GDS:acces-direct/,/^# GDS:fin$/d' "$hba" >"$tmp"
+    {
+        echo "# GDS:acces-direct — bloc réécrit au démarrage, ne pas éditer"
+        for net in $(printf '%s' "$GDS_PG_ALLOWED_NETWORKS" | tr ',' ' '); do
+            # Garde-fou : une plage est un CIDR/une adresse, jamais une ligne
+            # ajoutée par surprise au fichier (même discipline que la validation
+            # des clefs SSH du socle).
+            case "$net" in
+                "") continue ;;
+                *[!0-9a-fA-F:./]*) log "plage ignorée (format inattendu) : $net"; continue ;;
+            esac
+            echo "host all all $net scram-sha-256"
+        done
+        echo "# GDS:fin"
+    } >>"$tmp"
+    cat "$tmp" >"$hba"
+    rm -f "$tmp"
+    log "accès direct à la base (mot de passe) ouvert pour : $GDS_PG_ALLOWED_NETWORKS"
+    # À chaud (instance déjà à l'écoute), le moteur doit relire le fichier ; un
+    # démarrage normal le lit de toute façon au lancement du postmaster.
+    if command -v pg_isready >/dev/null 2>&1 && pg_isready -h 127.0.0.1 -p "$GDS_DB_PORT" -q 2>/dev/null; then
+        as_cluster_owner pg_ctl --pgdata="$PGDATA" reload >/dev/null 2>&1 || true
+    fi
+}
+
 # 1. Instance PostgreSQL : créée sur un volume VIDE, conservée sinon.
 ensure_database_instance() {
     if [ -s "$PGDATA/PG_VERSION" ]; then
         log "instance PostgreSQL déjà présente dans $PGDATA : données conservées"
+        # L2.8 : le bloc d'accès direct est réécrit même sur un volume DÉJÀ
+        # initialisé (mise à jour d'une installation existante).
+        ensure_pg_hba
         return 0
     fi
     if ! command -v initdb >/dev/null 2>&1; then
@@ -149,6 +215,7 @@ ensure_database_instance() {
         log "aucun mot de passe d'administration fourni : administration par la socket locale uniquement"
     fi
     log "instance PostgreSQL créée (superutilisateur $GDS_DB_ADMIN_USER)"
+    ensure_pg_hba
 }
 
 # 2. Mise en route de l'instance si elle n'écoute pas encore.
