@@ -74,6 +74,22 @@ pub fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(), String
     Ok(())
 }
 
+/// Refonte GDS **L3.4** — l'appartenance à un projet est un **droit** : plus
+/// d'inscription automatique pour un développeur non administrateur.
+///
+/// À la création d'un projet, seul un **administrateur** est rattaché d'office
+/// (responsable de ses projets) ; l'email d'un créateur `dev`/`standard` n'est
+/// **pas** inscrit. Un développeur doit être attribué explicitement
+/// (`db::assign_project`, opération d'administration) pour obtenir des droits
+/// d'écriture sur le projet.
+async fn enroll_admin_creator(pool: &PgPool, project_id: i64, email: &str) {
+    if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
+        if user.role == "admin" {
+            let _ = db::assign_project(pool, project_id, user.id, "dev").await;
+        }
+    }
+}
+
 /// Crée le repo bare + enregistre le projet et le repo en base. `git_init_bare`
 /// est bloquant → exécuté dans `spawn_blocking`. Retourne un résumé JSON.
 pub async fn add_project(
@@ -104,10 +120,11 @@ pub async fn add_project(
     if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
         db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
     }
-    // Associer l'utilisateur (email) au projet (V1 : tous accès, table prête V2).
-    if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
-        let _ = db::create_project_member(pool, project_id, user.id, "dev").await;
-    }
+    // Refonte GDS L3.4 : l'appartenance à un projet est un **droit**, plus une
+    // inscription automatique. Seul un **administrateur** est rattaché d'office
+    // au projet qu'il crée ; un développeur non admin doit être attribué
+    // explicitement (`db::assign_project`) pour obtenir des droits dessus.
+    enroll_admin_creator(pool, project_id, email).await;
     Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
 }
 
@@ -303,9 +320,9 @@ pub async fn add_project_remote(
     if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
         db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
     }
-    if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
-        let _ = db::create_project_member(pool, project_id, user.id, "dev").await;
-    }
+    // Refonte GDS L3.4 : même règle qu'en local — seule une création par un
+    // administrateur rattache son auteur d'office au projet.
+    enroll_admin_creator(pool, project_id, email).await;
     Ok(json!({
         "project_id": project_id,
         "name": name,

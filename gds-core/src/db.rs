@@ -641,13 +641,33 @@ pub async fn create_git_repo(
 }
 
 /// Associe un utilisateur à un projet (project_members).
+///
+/// Délègue à [`assign_project`] : conservée pour la compatibilité du socle
+/// (l'appartenance est désormais un **droit** attribué explicitement, L3.4).
 pub async fn create_project_member(
     pool: &PgPool,
     project_id: i64,
     user_id: i64,
     role: &str,
 ) -> Result<(), String> {
-    sqlx::query(
+    assign_project(pool, project_id, user_id, role)
+        .await
+        .map(|_| ())
+}
+
+/// Attribue un utilisateur à un projet (refonte GDS, **L3.4**).
+///
+/// L'appartenance est un **droit** (§2.7) : ce n'est plus une inscription
+/// automatique mais une décision explicite de l'administrateur. Idempotent :
+/// ré-attribuer un membre déjà rattaché ne fait rien et retourne `false`.
+/// Retourne `true` si l'association vient d'être créée.
+pub async fn assign_project(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+    role: &str,
+) -> Result<bool, String> {
+    let res = sqlx::query(
         "INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3) \
          ON CONFLICT (project_id, user_id) DO NOTHING",
     )
@@ -656,8 +676,96 @@ pub async fn create_project_member(
     .bind(role)
     .execute(pool)
     .await
-    .map_err(|e| format!("Association membre: {}", e))?;
-    Ok(())
+    .map_err(|e| format!("Attribution projet: {}", e))?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Retire l'attribution d'un utilisateur à un projet (refonte GDS, **L3.4**).
+///
+/// Retourne `true` si une association a effectivement été supprimée. Les droits
+/// d'écriture de l'utilisateur sur ce projet tombent immédiatement
+/// (`is_project_member` redevient faux).
+pub async fn unassign_project(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+) -> Result<bool, String> {
+    let res = sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
+        .bind(project_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Retrait attribution projet: {}", e))?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Liste les membres d'un projet (refonte GDS, **L3.4**) : `user_id`, `email`,
+/// `name`, `role` (rôle **dans le projet**) et `created_at` (ISO).
+pub async fn list_project_members(
+    pool: &PgPool,
+    project_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rows = sqlx::query(
+        "SELECT pm.user_id, u.email, u.name, pm.role, pm.created_at \
+           FROM project_members pm \
+           JOIN users u ON u.id = pm.user_id \
+          WHERE pm.project_id = $1 \
+          ORDER BY pm.created_at, u.email",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste membres projet: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            let created_at: chrono::DateTime<Utc> = r.get("created_at");
+            serde_json::json!({
+                "user_id": r.get::<i64, _>("user_id"),
+                "email": r.get::<String, _>("email"),
+                "name": r.get::<String, _>("name"),
+                "role": r.get::<String, _>("role"),
+                "created_at": created_at.to_rfc3339(),
+            })
+        })
+        .collect())
+}
+
+/// Liste les projets **attribués** à un utilisateur (refonte GDS, **L3.4**).
+///
+/// Même forme que [`list_projects`] (compatibilité du rendu), mais filtrée par
+/// `project_members` : c'est la lecture restreinte d'un développeur non
+/// administrateur (un projet non attribué n'apparaît jamais).
+pub async fn list_projects_for_user(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
+    let rows = sqlx::query(
+        "SELECT p.id, p.name, p.repo_name, p.repo_url, p.path_on_server, p.status, \
+                p.description \
+           FROM projects p \
+           JOIN project_members pm ON pm.project_id = p.id \
+          WHERE pm.user_id = $1 \
+          ORDER BY p.name",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Liste projets attribués: {}", e))?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.get::<i64, _>("id"),
+                "name": r.get::<String, _>("name"),
+                "repo_name": r.get::<String, _>("repo_name"),
+                "repo_url": r.get::<String, _>("repo_url"),
+                "path_on_server": r.get::<String, _>("path_on_server"),
+                "status": r.get::<String, _>("status"),
+                "description": r.get::<String, _>("description"),
+            })
+        })
+        .collect())
 }
 
 /// Indique si un utilisateur est membre d'un projet (project_members).

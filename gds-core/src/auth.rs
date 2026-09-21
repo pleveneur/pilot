@@ -34,6 +34,12 @@ struct Session {
     /// inconnu, cas des sessions du mode remote du poste). Consommé par le garde
     /// « administrateur uniquement » des routes d'administration GDS (L2.2).
     role: String,
+    /// Identifiant du compte GDS (`users.id`) au moment de la création de la
+    /// session ; `0` si inconnu (sessions historiques du mode remote du poste).
+    /// Consommé par la lecture restreinte de l'appartenance aux projets
+    /// (refonte GDS, L3.4) : un développeur non administrateur ne voit que les
+    /// projets qui lui sont attribués.
+    user_id: i64,
 }
 
 /// Stock des sessions en mémoire vive. La map disparaît au redémarrage du process :
@@ -87,7 +93,18 @@ impl WebAuth {
     /// (base64url) à transmettre au client. Le token brut n'est **jamais**
     /// stocké ; seul son hash SHA-256 l'est. Le rôle accompagne la session pour
     /// que les gardes de routes n'aient pas à relire la base à chaque requête.
+    ///
+    /// L'identité du compte (`users.id`) reste inconnue (`0`) : réservée aux
+    /// sessions qui n'ont besoin que du rôle (tests, comptes admin).
     pub fn create_session_as(&self, role: &str, ttl: Duration) -> String {
+        self.create_session_for(0, role, ttl)
+    }
+
+    /// Crée une session portant **le rôle et l'identité** du compte GDS (refonte
+    /// GDS, **L3.4**). `user_id` est l'identifiant `users.id` ; `0` signifie
+    /// « inconnu » (aucune restriction d'appartenance ne peut alors être
+    /// appliquée). Renvoie le token brut (base64url).
+    pub fn create_session_for(&self, user_id: i64, role: &str, ttl: Duration) -> String {
         let mut bytes = [0u8; 32];
         OsRng.fill_bytes(&mut bytes);
         let token = encode_token(&bytes);
@@ -95,6 +112,7 @@ impl WebAuth {
             token_hash: hash_token(&token),
             expires_at: Instant::now() + ttl,
             role: role.to_string(),
+            user_id,
         };
         self.sessions
             .lock()
@@ -113,6 +131,25 @@ impl WebAuth {
         let mut sessions = self.sessions.lock().unwrap();
         match sessions.get(&key) {
             Some(sess) if sess.expires_at > Instant::now() => Some(sess.role.clone()),
+            Some(_) => {
+                sessions.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Identifiant du compte (`users.id`) associé à un token valide (refonte
+    /// GDS, **L3.4**) ; `None` si le token est inconnu ou expiré. `Some(0)` est
+    /// renvoyé pour une session historique du poste (rôle sans compte GDS).
+    pub fn user_id_of(&self, token: &str) -> Option<i64> {
+        if token.is_empty() {
+            return None;
+        }
+        let key = hash_token(token);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get(&key) {
+            Some(sess) if sess.expires_at > Instant::now() => Some(sess.user_id),
             Some(_) => {
                 sessions.remove(&key);
                 None
@@ -228,6 +265,21 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(auth.role_of(&token), None);
         assert_eq!(auth.active_count(), 0);
+    }
+
+    #[test]
+    fn user_id_is_bound_to_the_session() {
+        // L3.4 : la session porte l'identité du compte pour la lecture
+        // restreinte des projets attribués.
+        let auth = WebAuth::new();
+        let dev = auth.create_session_for(42, "dev", Duration::from_secs(60));
+        let legacy = auth.create_session(Duration::from_secs(60));
+        assert_eq!(auth.user_id_of(&dev), Some(42));
+        assert_eq!(auth.role_of(&dev).as_deref(), Some("dev"));
+        // Session historique du poste : rôle vide et identité inconnue (0).
+        assert_eq!(auth.user_id_of(&legacy), Some(0));
+        assert_eq!(auth.user_id_of("bogus-token"), None);
+        assert_eq!(auth.user_id_of(""), None);
     }
 
     #[test]

@@ -671,6 +671,75 @@ mod tests {
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// L3.4 — l'attribution d'un projet est une **écriture d'administration** :
+    /// un jeton `dev` reçoit 403 (un non-admin ne peut pas s'attribuer un
+    /// projet), un jeton `admin` franchit le garde et atteint le handler (pool
+    /// absent → 500). Même règle pour le listing des membres.
+    #[tokio::test]
+    async fn project_assignment_routes_are_admin_only() {
+        let body = serde_json::json!({ "project_id": 1, "email": "dev-l34@gds.test" });
+        for uri in [
+            "/api/gds/admin/projects/assign",
+            "/api/gds/admin/projects/unassign",
+        ] {
+            let ctx = null_ctx();
+            let dev = ctx
+                .auth
+                .create_session_for(7, "dev", std::time::Duration::from_secs(60));
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request("POST", uri, &dev, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{}", uri);
+
+            let ctx = null_ctx();
+            let admin = ctx
+                .auth
+                .create_session_as("admin", std::time::Duration::from_secs(60));
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request("POST", uri, &admin, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "{}", uri);
+        }
+
+        // Listing des membres : même garde.
+        let members_uri = "/api/gds/admin/projects/members?project_id=1";
+        let ctx = null_ctx();
+        let dev = ctx
+            .auth
+            .create_session_for(7, "dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "GET",
+                members_uri,
+                &dev,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let ctx = null_ctx();
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "GET",
+                members_uri,
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     // ── L2.4 — initialisation du compte administrateur ──
 
     /// L2.4 — l'initialisation est **publique** : sans jeton, la requête atteint
@@ -1361,6 +1430,267 @@ mod tests {
             .unwrap()
             .expect("compte présent");
         assert_eq!(user.status, "active");
+
+        pool.close().await;
+        admin_pool.close().await;
+    }
+
+    /// L3.4 — scénario sur une base réelle jetable (facultatif) : l'appartenance
+    /// est un **droit**. Un projet attribué au développeur A n'apparaît pas dans
+    /// la liste de B (lecture restreinte) et B ne peut pas s'attribuer le projet
+    /// (écriture d'administration refusée, 403). L'attribution puis le retrait
+    /// par l'admin pilotent la visibilité de A.
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test sort proprement (CI verte).
+    #[tokio::test]
+    async fn project_assignment_restricts_read_and_write_on_real_db() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "project_assignment_restricts_read_and_write_on_real_db: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_l34_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        let hash = WebAuth::hash_password("pw-l34").unwrap();
+        gds_core::db::create_user(
+            &pool,
+            "admin-l34@gds.test",
+            "Admin",
+            &hash,
+            "admin",
+            "active",
+        )
+        .await
+        .unwrap();
+        let a_id =
+            gds_core::db::create_user(&pool, "a-l34@gds.test", "Dev A", &hash, "dev", "active")
+                .await
+                .unwrap();
+        let b_id =
+            gds_core::db::create_user(&pool, "b-l34@gds.test", "Dev B", &hash, "dev", "active")
+                .await
+                .unwrap();
+        let project_id = gds_core::db::create_project(
+            &pool,
+            "projet-l34",
+            "projet-l34.git",
+            "",
+            "/srv/git/projet-l34.git",
+            "active",
+            "Projet L3.4",
+        )
+        .await
+        .unwrap();
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: std::env::temp_dir(),
+        });
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let token_a = ctx
+            .auth
+            .create_session_for(a_id, "dev", std::time::Duration::from_secs(60));
+        let token_b = ctx
+            .auth
+            .create_session_for(b_id, "dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+
+        // 0) Avant toute attribution : ni A ni B ne voit le projet.
+        for token in [&token_a, &token_b] {
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "GET",
+                    "/api/gds/projects",
+                    token,
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let value = json_body(res).await;
+            assert_eq!(value["projects"].as_array().unwrap().len(), 0);
+        }
+
+        // 1) B (non admin) ne peut pas s'attribuer le projet : écriture refusée.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/assign",
+                &token_b,
+                serde_json::json!({ "project_id": project_id, "email": "b-l34@gds.test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2) L'admin attribue le projet à A (idempotent).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/assign",
+                &admin,
+                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["created"], serde_json::json!(true));
+        assert!(gds_core::db::is_project_member(&pool, project_id, a_id)
+            .await
+            .unwrap());
+
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/assign",
+                &admin,
+                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["created"], serde_json::json!(false));
+
+        // 3) A voit le projet, B non.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/projects",
+                &token_a,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let value = json_body(res).await;
+        let names: Vec<String> = value["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["projet-l34".to_string()]);
+
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/projects",
+                &token_b,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let value = json_body(res).await;
+        assert_eq!(
+            value["projects"].as_array().unwrap().len(),
+            0,
+            "B ne doit rien voir"
+        );
+
+        // 4) Le listing admin des membres expose A.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                &format!("/api/gds/admin/projects/members?project_id={}", project_id),
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        let members = value["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["email"], serde_json::json!("a-l34@gds.test"));
+
+        // 5) Retrait : A ne voit plus le projet.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/admin/projects/unassign",
+                &admin,
+                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["removed"], serde_json::json!(true));
+        assert!(!gds_core::db::is_project_member(&pool, project_id, a_id)
+            .await
+            .unwrap());
+
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/projects",
+                &token_a,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        let value = json_body(res).await;
+        assert_eq!(value["projects"].as_array().unwrap().len(), 0);
 
         pool.close().await;
         admin_pool.close().await;

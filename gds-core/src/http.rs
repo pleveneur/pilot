@@ -23,7 +23,7 @@ use crate::auth::WebAuth;
 use crate::db as gds_db;
 use crate::rate::{token_key, WebGuard};
 use crate::server_status;
-use axum::extract::{ConnectInfo, Extension, Path, Request, State};
+use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
@@ -256,6 +256,19 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
         )
         // ── L3.3 : validation d'un compte (ex-limite V1) réservée à l'admin ──
         .route("/api/gds/users/validate", post(gds_validate::<S>))
+        // ── L3.4 : attribution des projets aux développeurs ──
+        .route(
+            "/api/gds/admin/projects/members",
+            get(gds_admin_project_members::<S>),
+        )
+        .route(
+            "/api/gds/admin/projects/assign",
+            post(gds_admin_project_assign::<S>),
+        )
+        .route(
+            "/api/gds/admin/projects/unassign",
+            post(gds_admin_project_unassign::<S>),
+        )
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -687,12 +700,15 @@ fn err_response(e: String) -> Response {
 /// et émettre un audit log (origine + sujet) sans re-extraire le bearer.
 /// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source,
 /// `role` = rôle du compte porté par la session (chaîne vide si la session ne
-/// porte pas de rôle — cas du mode remote du poste).
+/// porte pas de rôle — cas du mode remote du poste), `user_id` = identifiant
+/// `users.id` du compte (`0` si la session ne porte pas d'identité — refonte
+/// GDS **L3.4**, pour la lecture restreinte des projets attribués).
 #[derive(Clone)]
 pub struct AuthedClient {
     pub key: String,
     pub ip: String,
     pub role: String,
+    pub user_id: i64,
 }
 
 /// Middleware d'authentification : valide le header `Authorization: Bearer <token>`.
@@ -714,6 +730,7 @@ pub async fn auth_middleware<S: GdsCtx>(
                 key: token_key(&token),
                 ip,
                 role: ctx.auth().role_of(&token).unwrap_or_default(),
+                user_id: ctx.auth().user_id_of(&token).unwrap_or(0),
             });
             return next.run(req).await;
         }
@@ -861,7 +878,7 @@ async fn gds_login<S: GdsCtx>(
     if !WebAuth::verify_password(&body.password, &user.password_hash) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Identifiants invalides" }))).into_response();
     }
-    let token = ctx.auth().create_session_as(&user.role, GDS_SESSION_TTL);
+    let token = ctx.auth().create_session_for(user.id, &user.role, GDS_SESSION_TTL);
     Json(json!({ "ok": true, "email": user.email, "role": user.role, "token": token }))
         .into_response()
 }
@@ -897,14 +914,174 @@ async fn gds_validate<S: GdsCtx>(
     }
 }
 
-// ── Projets & dépôts git ──
+// ── L3.4 : attribution des projets (routes d'administration) ──
 
-async fn gds_projects<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
+#[derive(Deserialize)]
+struct ProjectMembersQuery {
+    project_id: i64,
+}
+
+/// `GET /api/gds/admin/projects/members?project_id=N` — **réservée au rôle
+/// `admin`**. Liste les membres (développeurs attribués) d'un projet.
+async fn gds_admin_project_members<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Query(q): Query<ProjectMembersQuery>,
+) -> Response {
     let pool = match ctx.pool() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    match gds_db::list_projects(&pool).await {
+    match gds_db::list_project_members(&pool, q.project_id).await {
+        Ok(members) => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                "project_members_list",
+                &q.project_id.to_string(),
+                true,
+            );
+            Json(json!({ "members": members })).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectAssignBody {
+    project_id: i64,
+    email: String,
+    #[serde(default)]
+    role: String,
+}
+
+/// `POST /api/gds/admin/projects/assign` — **réservée au rôle `admin`**.
+///
+/// Attribue un compte (par email) à un projet : c'est l'unique voie d'accès
+/// d'un développeur non administrateur (refonte GDS **L3.4**, l'inscription
+/// automatique a été supprimée). `role` dans le projet vaut `dev` par défaut.
+async fn gds_admin_project_assign<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectAssignBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    let user = match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Compte inconnu" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    };
+    let role = if body.role.trim().is_empty() {
+        "dev"
+    } else {
+        body.role.trim()
+    };
+    match gds_db::assign_project(&pool, body.project_id, user.id, role).await {
+        Ok(created) => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                "project_assign",
+                &format!("{}:{}", body.project_id, email),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "created": created,
+                "project_id": body.project_id,
+                "email": email,
+                "role": role,
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectUnassignBody {
+    project_id: i64,
+    email: String,
+}
+
+/// `POST /api/gds/admin/projects/unassign` — **réservée au rôle `admin`**.
+/// Retire l'attribution d'un compte à un projet (refonte GDS **L3.4**).
+async fn gds_admin_project_unassign<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectUnassignBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    let user = match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Compte inconnu" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    };
+    match gds_db::unassign_project(&pool, body.project_id, user.id).await {
+        Ok(removed) => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                "project_unassign",
+                &format!("{}:{}", body.project_id, email),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "removed": removed,
+                "project_id": body.project_id,
+                "email": email,
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+// ── Projets & dépôts git ──
+
+/// `GET /api/gds/projects` — liste les projets visibles par l'appelant.
+///
+/// Lecture **restreinte** (refonte GDS, **L3.4**) : un compte portant un rôle
+/// et une identité (`dev`/`standard`) ne voit que les projets qui lui sont
+/// **attribués** (`project_members`). Un administrateur voit tout ; une session
+/// historique du poste (rôle vide, sans identité GDS) conserve le comportement
+/// antérieur — c'est le propriétaire, il voit tout (aucune régression desk).
+async fn gds_projects<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let restricted = !authed.role.is_empty() && authed.role != "admin" && authed.user_id != 0;
+    let list = if restricted {
+        gds_db::list_projects_for_user(&pool, authed.user_id).await
+    } else {
+        gds_db::list_projects(&pool).await
+    };
+    match list {
         Ok(list) => Json(json!({ "projects": list })).into_response(),
         Err(e) => err_response(e),
     }
