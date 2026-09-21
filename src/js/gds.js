@@ -72,8 +72,8 @@ export function createGds(container) {
   const bodyEl = container.querySelector("#gds-body");
   const subtitleEl = container.querySelector("#gds-subtitle");
   const badgeEl = container.querySelector("#gds-state-badge");
-  // Message affiché au rendu suivant (ex: préparation serveur MANUELLE pour un
-  // serveur GDS distant — cf. docs/gds-linux-setup.md). Jamais de secret.
+  // Message affiché au rendu suivant (ex: clé du poste à enregistrer sur un
+  // serveur GDS). Jamais de secret.
   let pendingNotice = "";
 
   // ── Badge d'état global (Connecté / En attente / À configurer) ──
@@ -217,7 +217,7 @@ export function createGds(container) {
           <input id="gds-local-dir" class="gds-input" value="${esc(localDir)}" placeholder="(défaut : ~/Pilot/GDS)" autocomplete="off">
         </div>
         <div class="gds-note-box">
-          <em>Serveur <strong>distant</strong> : indiquez la racine des dépôts (ex. <code>/home/git/repos</code>) et le port SSH. La préparation du serveur (utilisateur <code>git</code>, dépôt bare, clefs) est <strong>manuelle</strong> — voir <code>docs/gds-linux-setup.md</code>.</em>
+          <em>Serveur <strong>distant</strong> : indiquez la racine des dépôts (ex. <code>/home/git/repos</code>) et le port SSH. La clé du poste s'enregistre depuis l'onglet « ⚙️ GDS — paramétrage » → Mes clés.</em>
         </div>
       </div>
       ${missingPw ? `<div class="gds-warn">⚠️ Mot de passe manquant (projet déjà provisionné) : ressaisissez-le puis cliquez « Enregistrer les mots de passe » — <strong>aucune nouvelle activation n'est nécessaire</strong>.</div>` : ""}
@@ -388,11 +388,12 @@ export function createGds(container) {
           adminEmail: email, adminPassword,
         });
         if (res && res.manual_setup) {
-          // Serveur DISTANT : préparation MANUELLE (docs/gds-linux-setup.md).
+          // Serveur DISTANT : la clé du poste s'enregistre depuis l'onglet
+          // transverse « ⚙️ GDS — paramétrage » → Mes clés (le serveur applique
+          // lui-même authorized_keys depuis la base).
           pendingNotice =
-            "✅ Base provisionnée. Serveur GDS DISTANT : préparez-le manuellement " +
-            "(utilisateur git, dépôt bare, authorized_keys — docs/gds-linux-setup.md) " +
-            "puis ajoutez la clef publique du poste (bloc « Avancé » → Clefs SSH).";
+            "✅ Base provisionnée. Enregistrez la clé du poste sur le serveur " +
+            "depuis l'onglet « ⚙️ GDS — paramétrage » → Mes clés.";
         }
         await refresh();
         const okEl = bodyEl.querySelector("#gds-provision-ok");
@@ -710,7 +711,6 @@ export function createGds(container) {
         <div id="gds-adv-projects" class="gds-list"></div>
         <div id="gds-adv-repos" class="gds-list"></div>
         ` : ""}
-        ${provisioned ? renderSshHtml() : ""}
         ${provisioned && !connected ? renderRemoveHtml("gds-adv-remove") : ""}
       </div>
     `;
@@ -732,69 +732,16 @@ export function createGds(container) {
     // transverse « ⚙️ GDS — paramétrage ». Le sélecteur « Réutiliser un serveur
     // déjà mémorisé » ci-dessus reste (action propre au projet).
 
+    // NB (refonte GDS, L5.4) : le bloc « Clefs SSH » a été RETIRÉ de cet onglet
+    // PAR PROJET : l'affichage/copie/enregistrement de la clé PUBLIQUE du poste
+    // vit désormais dans l'onglet transverse « ⚙️ GDS — paramétrage » → Mes clés.
+    // Le cas « clé ajoutée manuellement » n'a plus lieu d'être : le serveur
+    // applique lui-même `authorized_keys` depuis la base.
+
     if (provisioned) {
-      wireSsh(panel);
       if (!connected) wireRemove(panel, "gds-adv-remove");
       renderLists()(panel);
     }
-  }
-
-  // ── HTML des clefs SSH (phase A3) ──
-  function renderSshHtml() {
-    return `
-      <div class="gds-panel-desc" style="margin-top:14px; margin-bottom:6px"><strong>Clefs SSH</strong> (gérées automatiquement ; utile pour une clef de dev externe) :</div>
-      <div class="gds-note-box" style="margin-bottom:6px"><em>Serveur <strong>distant</strong> : les clefs publiques s'ajoutent <strong>manuellement</strong> dans <code>~git/.ssh/authorized_keys</code> du serveur (voir <code>docs/gds-linux-setup.md</code>) — le bouton « Enregistrer la clef » ne vaut que pour un serveur local.</em></div>
-      <div id="gds-ssh-poste" class="gds-ssh-poste"></div>
-      <div class="gds-actions">
-        <button id="gds-ssh-key-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Générer / afficher la clef du poste</button>
-      </div>
-      <div class="gds-panel-desc" style="margin-top:8px"><strong>Enregistrer une clef de dev</strong> (liée à un email) :</div>
-      <label class="gds-label">Email</label>
-      <input id="gds-ssh-email" class="gds-input" placeholder="dev@exemple.com" autocomplete="off">
-      <label class="gds-label">Clef publique</label>
-      <textarea id="gds-ssh-pubkey" class="gds-input gds-textarea" rows="2" placeholder="ssh-ed25519 AAAA..." autocomplete="off"></textarea>
-      <div id="gds-ssh-err" class="gds-error"></div>
-      <div id="gds-ssh-ok" class="gds-ok"></div>
-      <div class="gds-actions">
-        <button id="gds-ssh-register-btn" class="web-btn"><i data-lucide="plus" class="icon-sm"></i> Enregistrer la clef</button>
-      </div>
-    `;
-  }
-
-  function wireSsh(panel) {
-    const err = panel.querySelector("#gds-ssh-err");
-    const ok = panel.querySelector("#gds-ssh-ok");
-    const posteEl = panel.querySelector("#gds-ssh-poste");
-    async function showPosteKey() {
-      try {
-        const res = await invoke("gds_ssh_key");
-        posteEl.innerHTML = `
-          <div class="gds-row">
-            <div class="gds-row-info">
-              <div class="gds-row-title">${res.generated ? "Clef générée" : "Clef existante"}</div>
-              <div class="gds-row-sub">${esc(res.path)}</div>
-              <div class="gds-ssh-key">${esc(res.public_key)}</div>
-            </div>
-          </div>`;
-      } catch (e) {
-        posteEl.innerHTML = `<div class="gds-error">${esc(String(e))}</div>`;
-      }
-    }
-    panel.querySelector("#gds-ssh-key-btn").addEventListener("click", showPosteKey);
-    panel.querySelector("#gds-ssh-register-btn").addEventListener("click", async () => {
-      const email = panel.querySelector("#gds-ssh-email").value.trim();
-      const publicKey = panel.querySelector("#gds-ssh-pubkey").value.trim();
-      if (!email) { err.textContent = "L'email est requis."; return; }
-      if (!publicKey) { err.textContent = "La clef publique est requise."; return; }
-      err.textContent = ""; ok.textContent = "";
-      try {
-        await invoke("gds_register_ssh_key", { email, publicKey });
-        ok.textContent = "✅ Clef enregistrée et authorized_keys à jour.";
-      } catch (e) {
-        err.textContent = String(e);
-      }
-    });
-    showPosteKey();
   }
 
   // ── Rendu complet (écran-état-machine) ──

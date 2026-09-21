@@ -10,7 +10,7 @@
 // Sections remplies au fil des micro-tâches du LOT 5 :
 //   L5.2 « Serveurs GDS »      → PARAMS_SECTIONS[0]  (IMPLÉMENTÉ)
 //   L5.3 « Mon identité »      → PARAMS_SECTIONS[1]  (IMPLÉMENTÉ)
-//   L5.4 « Mes clés »          → PARAMS_SECTIONS[2]
+//   L5.4 « Mes clés »          → PARAMS_SECTIONS[2]  (IMPLÉMENTÉ)
 //   L5.5 « Mes projets GDS »   → PARAMS_SECTIONS[3]
 //
 // Règle secrets : aucun mot de passe, aucune clé privée n'est renvoyé à
@@ -309,6 +309,66 @@ export function renderIdentitySectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L5.4 — « Mes clés » : clé PUBLIQUE du poste (affichage, copie, enregistrement)
+//
+// Le cas « clé ajoutée MANUELLEMENT » (coller une clé arbitraire) est SUPPRIMÉ :
+// le serveur applique lui-même `authorized_keys` depuis la base (L2.5), donc le
+// message « ajoutez la clé à la main » n'a plus lieu d'être. Seule la clé
+// PUBLIQUE du poste est affichée (la clé privée ne quitte jamais le poste) et
+// enregistrée via les commandes existantes `gds_ssh_key` /
+// `gds_register_ssh_key` (RÉUTILISÉES telles quelles).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** État initial de la section « Mes clés » (pure). Aucun secret. */
+export function initialKeysState() {
+  return {
+    loading: true,
+    publicKey: "",
+    keyPath: "",
+    generated: false,
+    status: null,
+  };
+}
+
+/**
+ * Rend la section « Mes clés » (pure, testable). Remplace le squelette
+ * « À venir — L5.4 ». Clé PUBLIQUE uniquement — jamais la clé privée.
+ * `email` (identité globale) : passée à l'affichage par le câblage, sans être
+ * stockée dans l'état de la section (source unique = section identité).
+ * @param {Object} state état de la section (voir `initialKeysState`)
+ */
+export function renderKeysSectionHtml(state = {}) {
+  const s = { ...initialKeysState(), ...(state || {}) };
+  const email = String(s.email || "").trim();
+  let body;
+  if (s.loading) {
+    body = `<div class="gds-admin-status loading">Lecture de la clé SSH du poste…</div>`;
+  } else if (!s.publicKey) {
+    body = `<div class="gds-admin-hint">Clé publique indisponible sur ce poste.</div>`;
+  } else {
+    body = `
+        <div class="gds-ssh-poste">
+          <div class="gds-admin-hint">Clé <strong>publique</strong> du poste${s.keyPath ? ` (<code>${esc(s.keyPath)}</code>)` : ""}${s.generated ? " — générée à l'instant" : ""} :</div>
+          <div class="gds-ssh-key">${esc(s.publicKey)}</div>
+        </div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn" id="gds-params-key-copy"><i data-lucide="copy" class="icon-sm"></i> Copier la clé publique</button>
+          <button class="gds-admin-btn primary" id="gds-params-key-register"${email ? "" : ` disabled title="Définissez d'abord votre identité"`}><i data-lucide="upload" class="icon-sm"></i> Enregistrer ma clé sur le serveur GDS</button>
+        </div>
+        <div class="gds-admin-hint">Enregistrement sur le serveur GDS, pour l'identité <strong>${esc(email || "—")}</strong>. La clé privée ne quitte jamais le poste.</div>`;
+  }
+  return `
+      <section class="gds-admin-section" data-section-id="keys">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="key-round" class="icon-sm"></i> Mes clés</div>
+        </div>
+        <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[2].desc)}</div>
+        ${body}
+        <div id="gds-params-key-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
+      </section>`;
+}
+
 /**
  * Rend le HTML de la coquille de l'écran de paramétrage (pure, testable).
  * RÉUTILISE `renderAdminShellHtml` (gds-admin.js) : la coquille et le rendu de
@@ -342,6 +402,9 @@ export function createGdsParams(container) {
   const state = initialServersState();
   /** L5.3 — état de la section « Mon identité » (source unique de l'email global). */
   const identityState = initialIdentityState();
+  /** L5.4 — état de la section « Mes clés » (clé publique du poste). */
+  const keysState = initialKeysState();
+
   const q = (sel) => container.querySelector(sel);
 
   /** Projet actif (chaîne vide si aucun). */
@@ -391,6 +454,7 @@ export function createGdsParams(container) {
       sectionHtml: {
         servers: renderServersSectionHtml(state),
         identity: renderIdentitySectionHtml(identityState),
+        keys: renderKeysSectionHtml({ ...keysState, email: identityState.email }),
       },
     });
     refreshIcons(container);
@@ -566,6 +630,11 @@ export function createGdsParams(container) {
     // ── L5.3 : identité globale ──
     const idSave = q("#gds-params-id-save");
     if (idSave) idSave.addEventListener("click", () => saveIdentity());
+    // ── L5.4 : clé publique du poste ──
+    const keyCopy = q("#gds-params-key-copy");
+    if (keyCopy) keyCopy.addEventListener("click", () => copyKey());
+    const keyReg = q("#gds-params-key-register");
+    if (keyReg) keyReg.addEventListener("click", () => registerKey());
   }
 
   // ── L5.3 : chargement / enregistrement de l'identité globale ──
@@ -605,6 +674,69 @@ export function createGdsParams(container) {
     draw();
   }
 
+  // ── L5.4 : lecture / copie / enregistrement de la clé publique ──
+
+  function loadKeys() {
+    keysState.loading = true;
+    draw();
+    Promise.resolve()
+      .then(() => invoke("gds_ssh_key"))
+      .then((res) => {
+        keysState.publicKey = String((res && res.public_key) || "");
+        keysState.keyPath = String((res && res.path) || "");
+        keysState.generated = !!(res && res.generated);
+      })
+      .catch((e) => {
+        keysState.publicKey = "";
+        keysState.status = { kind: "error", text: friendlyGdsError(e) };
+      })
+      .finally(() => {
+        keysState.loading = false;
+        draw();
+      });
+  }
+
+  async function copyKey() {
+    const key = keysState.publicKey;
+    if (!key) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(key);
+        ok = true;
+      }
+    } catch (_) {
+      ok = false;
+    }
+    keysState.status = ok
+      ? { kind: "ok", text: "✅ Clé publique copiée dans le presse-papiers." }
+      : { kind: "error", text: "Copie automatique refusée — sélectionnez le texte de la clé pour la copier." };
+    draw();
+  }
+
+  async function registerKey() {
+    const email = identityState.email.trim();
+    if (!email) {
+      keysState.status = { kind: "error", text: "Définissez d'abord votre identité (section « Mon identité »)." };
+      draw();
+      return;
+    }
+    if (!keysState.publicKey) {
+      keysState.status = { kind: "error", text: "Aucune clé publique à enregistrer sur ce poste." };
+      draw();
+      return;
+    }
+    keysState.status = { kind: "loading", text: "Enregistrement de la clé sur le serveur GDS…" };
+    draw();
+    try {
+      await invoke("gds_register_ssh_key", { email, publicKey: keysState.publicKey });
+      keysState.status = { kind: "ok", text: "✅ Clé publique enregistrée sur le serveur GDS." };
+    } catch (e) {
+      keysState.status = { kind: "error", text: friendlyGdsError(e) };
+    }
+    draw();
+  }
+
   /** Message d'erreur lisible (les commandes renvoient déjà des messages). */
   function friendlyGdsError(e) {
     const s = String(e == null ? "" : e);
@@ -614,9 +746,10 @@ export function createGdsParams(container) {
   // Premier rendu (chargement) puis rafraîchissement des listes/états.
   draw();
   refreshServers();
-  // L5.3 (identité globale) : chargement indépendant, fail-open — jamais
-  // bloquant pour les autres sections.
+  // L5.3 (identité globale) et L5.4 (clé publique du poste) : chargements
+  // indépendants, fail-open — jamais bloquants pour les autres sections.
   loadIdentity();
+  loadKeys();
 
   // Aucune ressource système à libérer ; on renvoie néanmoins le contrat commun
   // des écrans (wrapper + unlisten) pour l'homogénéité de tabs.js.

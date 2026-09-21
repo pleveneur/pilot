@@ -18,6 +18,8 @@ import {
   renderServersSectionHtml,
   initialIdentityState,
   renderIdentitySectionHtml,
+  initialKeysState,
+  renderKeysSectionHtml,
 } from "./gds-params.js";
 import { renderAdminShellHtml } from "./gds-admin.js";
 
@@ -211,5 +213,61 @@ describe("gds-params — section Mon identité (L5.3)", () => {
     const shell = renderParamsShellHtml({ sectionHtml: { identity: section } });
     expect(shell).not.toContain("À venir — L5.3");
     expect(shell).toContain("À venir — L5.4");
+  });
+});
+
+describe("gds-params — section Mes clés (L5.4)", () => {
+  it("initialKeysState démarre en chargement, sans clé ni secret", () => {
+    const s = initialKeysState();
+    expect(s.loading).toBe(true);
+    expect(s.publicKey).toBe("");
+    expect(s.keyPath).toBe("");
+    expect(s.generated).toBe(false);
+    expect(s.status).toBeNull();
+  });
+
+  it("renderKeysSectionHtml affiche l'état de chargement", () => {
+    const html = renderKeysSectionHtml(initialKeysState());
+    expect(html).toContain('data-section-id="keys"');
+    expect(html).toContain("Lecture de la clé SSH du poste");
+    expect(html).not.toContain('id="gds-params-key-copy"');
+  });
+
+  it("renderKeysSectionHtml affiche la clé PUBLIQUE + copie + enregistrement sur le serveur", () => {
+    const html = renderKeysSectionHtml({
+      loading: false,
+      publicKey: "ssh-ed25519 AAAAC3Nz pilot@poste",
+      keyPath: "/home/u/.ssh/pilot_gds.pub",
+      generated: true,
+      email: "dev@exemple.com",
+    });
+    expect(html).toContain("ssh-ed25519 AAAAC3Nz pilot@poste");
+    expect(html).toContain("/home/u/.ssh/pilot_gds.pub");
+    expect(html).toContain("générée à l'instant");
+    expect(html).toContain('id="gds-params-key-copy"');
+    expect(html).toContain('id="gds-params-key-register"');
+    expect(html).toContain("dev@exemple.com");
+    // Plus aucune invitation à une manipulation manuelle de la clé.
+    expect(html).not.toMatch(/manuel/i);
+    expect(html).not.toContain("authorized_keys");
+  });
+
+  it("renderKeysSectionHtml désactive l'enregistrement sans identité (email)", () => {
+    const html = renderKeysSectionHtml({ loading: false, publicKey: "ssh-ed25519 AAA", email: "" });
+    expect(html).toMatch(/id="gds-params-key-register"[^>]*disabled/);
+  });
+
+  it("renderKeysSectionHtml signale une clé indisponible sans planter", () => {
+    const html = renderKeysSectionHtml({ loading: false, publicKey: "", status: { kind: "error", text: "boom" } });
+    expect(html).toContain("Clé publique indisponible");
+    expect(html).toContain("boom");
+  });
+
+  it("renderKeysSectionHtml échappe la clé et remplace le squelette L5.4", () => {
+    const section = renderKeysSectionHtml({ loading: false, publicKey: 'k"><script>', email: "e@x" });
+    expect(section).not.toContain("<script>");
+    const shell = renderParamsShellHtml({ sectionHtml: { keys: section } });
+    expect(shell).not.toContain("À venir — L5.4");
+    expect(shell).toContain("À venir — L5.5");
   });
 });
