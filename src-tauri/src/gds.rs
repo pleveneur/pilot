@@ -462,7 +462,6 @@ pub fn gds_apply_server(
         ssh_port: 22,
         gds_server_repos: None,
         ssh_host: format!("{}:22", host.trim()),
-        urgent_email: None,
     };
     write_gds_config(&project, &cfg)?;
     Ok(json!({
@@ -544,10 +543,6 @@ pub(crate) struct GdsConfig {
     /// Utilisé pour construire l'URL du remote git (transport SSH).
     #[serde(default)]
     pub ssh_host: String,
-    /// Email de la personne désignée autorisée à passer en mode urgent (Phase B).
-    /// Vide = aucun urgent autorisé (arbitrage 6 : réservé à la personne désignée).
-    #[serde(default)]
-    pub urgent_email: Option<String>,
 }
 
 impl GdsConfig {
@@ -1090,7 +1085,6 @@ pub async fn gds_provision(
         ssh_port,
         gds_server_repos,
         ssh_host: ssh_host_from_db_host(&host, ssh_port),
-        urgent_email: None,
     };
     // Serveur LOCAL : provision SSH locale (user git + authorized_keys + sshd) et
     // dossier des repos local — comportement historique INCHANGÉ. Serveur
@@ -1354,7 +1348,7 @@ pub fn gds_get_config(project: String) -> Result<Option<GdsConfig>, String> {
 /// Commande Tauri : écrit la config GDS du projet (`.pilot/gds.json`).
 ///
 /// - Dérive `ssh_host` depuis l'hôte PostgreSQL si vide ou si l'adresse a changé.
-/// - Préserve `urgent_email`, `gds_local_dir`, `db_host`, `db_port`, `db_user`
+/// - Préserve `gds_local_dir`, `db_host`, `db_port`, `db_user`
 ///   si le payload ne les inclut pas (l'UI simplifiée n'envoie plus que
 ///   `enabled` + `identity_email`) — sinon perte de données à chaque sauvegarde.
 /// - L'UI n'envoie plus jamais d'URL à mot de passe : `server_url` est toujours
@@ -1367,11 +1361,6 @@ pub fn gds_save_config(
     admin_password: Option<String>,
 ) -> Result<(), String> {
     let existing = read_gds_config(&project).ok();
-    if cfg.urgent_email.is_none() {
-        if let Some(ex) = &existing {
-            cfg.urgent_email = ex.urgent_email.clone();
-        }
-    }
     if cfg.gds_local_dir.is_none() {
         if let Some(ex) = &existing {
             cfg.gds_local_dir = ex.gds_local_dir.clone();
@@ -1566,7 +1555,6 @@ async fn connect_dir_to_gds(
         ssh_port: cfg.ssh_port,
         gds_server_repos: cfg.gds_server_repos.clone(),
         ssh_host: cfg.ssh_host.clone(),
-        urgent_email: cfg.urgent_email.clone(),
     };
     write_gds_config(target, &target_cfg)?;
     // Clef du poste : enregistrée + synchronisée dans `authorized_keys` pour un
@@ -2152,7 +2140,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: "old.host:22".to_string(),
-            urgent_email: Some("admin@kalico".to_string()),
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
@@ -2167,7 +2154,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: String::new(),
-            urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
@@ -2176,8 +2162,6 @@ mod tests {
         let saved = read_gds_config(&project).unwrap();
         // ssh_host recalculé depuis la nouvelle URL.
         assert_eq!(saved.ssh_host, "new.host:22");
-        // urgent_email préservé (non envoyé par l'UI).
-        assert_eq!(saved.urgent_email.as_deref(), Some("admin@kalico"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2193,7 +2177,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: "custom:2222".to_string(),
-            urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
@@ -2208,7 +2191,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: String::new(),
-            urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
@@ -2232,7 +2214,6 @@ mod tests {
             ssh_port: 22,
             gds_server_repos: None,
             ssh_host: ssh_host_from_db_addr(db_addr, 22),
-            urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
@@ -2288,7 +2269,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: Some("/home/git/repos".to_string()),
             ssh_host: "127.0.0.1:22".to_string(),
-            urgent_email: None,
             db_host: "127.0.0.1".to_string(),
             db_port: "5432".to_string(),
             db_user: "postgres".to_string(),
@@ -2312,7 +2292,6 @@ mod tests {
             ssh_port: 2222,
             gds_server_repos: Some("/home/git/repos".to_string()),
             ssh_host: String::new(),
-            urgent_email: None,
             db_host: "gds.example.com".to_string(),
             db_port: "5432".to_string(),
             db_user: "postgres".to_string(),
@@ -2350,7 +2329,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: "gds.example.com:22".to_string(),
-            urgent_email: None,
             db_host: "gds.example.com".to_string(),
             db_port: "5432".to_string(),
             db_user: "postgres".to_string(),
@@ -2397,7 +2375,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: String::new(),
-            urgent_email: None,
             db_host: "host".to_string(),
             db_port: "5432".to_string(),
             db_user: "postgres".to_string(),
@@ -2624,7 +2601,6 @@ mod tests {
             ssh_port: 0,
             gds_server_repos: None,
             ssh_host: String::new(),
-            urgent_email: None,
             db_host: String::new(),
             db_port: String::new(),
             db_user: String::new(),
