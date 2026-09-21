@@ -1,0 +1,64 @@
+# .dockerignore — contexte de construction du conteneur GDS (refonte GDS, L2.7)
+#
+# Le Dockerfile vit dans `gds-server/` mais son contexte est la RACINE du dépôt :
+# le binaire `gds-server` dépend du socle partagé `gds-core/`, et le manifeste
+# racine du workspace Cargo déclare `src-tauri` comme membre (l'omettre ferait
+# échouer la résolution du workspace, cf. `04-plan-developpement.md` §2.9).
+#
+# Ce fichier tient l'image (et la taille du contexte) : sans lui, l'image
+# embarquerait le desktop, le frontend Vite et l'historique git — dont le
+# `src-tauri/target/` local, qui pèse à lui seul plus de 100 Go.
+#
+# Règle de correspondance retenue : les motifs sont écrits à la fois sans et avec
+# `**/` pour `target`/`node_modules`, car la correspondance se fait sur le chemin
+# COMPLET relatif à la racine (un motif `target` ne couvre pas
+# `src-tauri/target`).
+
+# ── Dépendances et sorties de compilation npm / Vite ─────────────────────────
+node_modules
+node_modules/**
+**/node_modules
+**/node_modules/**
+dist
+dist/**
+
+# ── Sorties de compilation Rust (le workspace est compilé DANS l'image) ──────
+target
+target/**
+**/target
+**/target/**
+src-tauri/target
+src-tauri/target/**
+
+# ── Historique et outillage du dépôt ─────────────────────────────────────────
+.git
+.git/**
+.gitattributes
+.github
+.vscode
+.idea
+
+# ── Données locales du poste (jamais dans l'image) ───────────────────────────
+.pilot
+.pilot/**
+.pi
+.pi/**
+
+# ── Application desktop et frontend : le serveur n'en a aucun besoin ─────────
+src
+src-tauri/gen
+src-tauri/nsis
+src-tauri/icons
+public
+web
+images
+help
+docs
+release-notes
+templates
+scripts
+
+# ── Divers de développement ──────────────────────────────────────────────────
+Cargo.head.toml
+*.log
+nul

@@ -2,8 +2,9 @@
 # gds-server/entrypoint.sh — démarrage du conteneur tout-en-un GDS.
 #
 # Périmètre des micro-tâches L2.3 (« base à partir d'un volume vide »), L2.5
-# (« dépôts git : utilisateur git, racine, clefs autorisées ») et L2.6
-# (« service SSH : sshd, clefs d'hôte persistantes, coquille git ») :
+# (« dépôts git : utilisateur git, racine, clefs autorisées »), L2.6
+# (« service SSH : sshd, clefs d'hôte persistantes, coquille git ») et L2.7
+# (« conteneur unique + supervision des trois processus ») :
 #   1. création de l'INSTANCE PostgreSQL sur le volume (`initdb`) si le datadir
 #      est VIDE — un datadir déjà initialisé est CONSERVÉ tel quel (aucune
 #      réinitialisation, les données du volume ne sont jamais effacées) ;
@@ -24,17 +25,23 @@
 #      (`$GDS_SSH_HOST_KEYS_DIR`, défaut /etc/ssh/host_keys) si elles manquent —
 #      jamais écrasées, donc empreinte stable après reconstruction —, modèle
 #      `sshd_config` rendu avec le port interne (`GDS_SSH_PORT`) et validé
-#      (`sshd -t`), puis démarrage de sshd. Authentification par clef uniquement,
-#      compte `git` uniquement, coquille `git-shell` ;
-#   6. lancement du service HTTP (`gds-server`, micro-tâche L2.1), qui continue de
+#      (`sshd -t`). Authentification par clef uniquement, compte `git`
+#      uniquement, coquille `git-shell` ;
+#   6. L2.7 — fin du bootstrap : l'instance PostgreSQL de BOOTSTRAP est arrêtée
+#      (sinon elle se disputerait le port avec le postmaster surveillé), puis le
+#      script se REMPLACE par `supervisord`, qui devient le processus du
+#      conteneur (PID 1) et surveille les TROIS services : instance PostgreSQL,
+#      sshd et `gds-server` (API HTTP + jobs de maintenance, qui continue de
 #      rafraîchir `authorized_keys` et de matérialiser les dépôts bare
-#      périodiquement (le poste enregistre ses clefs et ses projets directement
-#      en base, donc sans notification possible).
+#      périodiquement). Chacun est redémarré s'il tombe ; un échec répété est
+#      annoncé en FATAL dans les journaux, donc jamais silencieux.
 #
-# Hors périmètre (micro-tâches suivantes, à ne pas traiter ici) : supervision
-# complète des processus et assemblage de l'image (L2.7), orchestration compose
-# (L2.8). Le démarrage de l'instance PostgreSQL (étape 2) et de sshd (étape 5)
-# sera repris par le superviseur en L2.7.
+# Décision figée du lot L2 : conteneur TOUT-EN-UN, base de données DANS l'image,
+# supervision INTERNE (aucun socket du moteur Docker n'est monté, le conteneur ne
+# pilote jamais le moteur qui l'héberge).
+#
+# Hors périmètre (micro-tâches suivantes, à ne pas traiter ici) : orchestration
+# compose et publication des ports (L2.8), exposition publique (L2.9).
 #
 # Variables reconnues : `PGDATA` (défaut /var/lib/postgresql/data),
 # `POSTGRES_PASSWORD` (secret du compte d'administration, cf. spec §6.4),
@@ -45,7 +52,11 @@
 # port publié 2222 étant un réglage du conteneur), `GDS_SSH_HOST_KEYS_DIR`
 # (défaut /etc/ssh/host_keys : dossier des clefs d'hôte, sur volume),
 # `GDS_SSHD_CONFIG_SRC` (modèle sshd_config à rendre, sinon celui livré à côté de
-# ce script). Aucun secret n'est journalisé.
+# ce script), `GDS_SSHD_CONFIG` (fichier rendu, défaut /etc/ssh/sshd_config.gds),
+# `GDS_SUPERVISORD_CONFIG` (configuration du superviseur, défaut
+# /etc/gds/supervisord.conf), `GDS_PG_BIN` / `GDS_SSHD_BIN` (chemins absolus des
+# binaires fournis au superviseur, résolus automatiquement).
+# Aucun secret n'est journalisé.
 
 set -eu
 
@@ -63,12 +74,21 @@ GDS_REPOS_ROOT="${GDS_REPOS_ROOT:-/srv/git/repos}"
 # l'empreinte du serveur changerait à chaque reconstruction.
 GDS_SSH_PORT="${GDS_SSH_PORT:-22}"
 GDS_SSH_HOST_KEYS_DIR="${GDS_SSH_HOST_KEYS_DIR:-/etc/ssh/host_keys}"
-# Fichier rendu (port substitué) et journal de sshd : le conteneur n'a pas de
-# démon syslog, sshd écrit donc dans un fichier.
+# Fichier rendu (port substitué) : sshd le reçoit par `-f`, avec `-D -e` pour
+# que ses journaux arrivent sur la sortie d'erreur — le conteneur n'a pas de
+# démon syslog, et `docker logs` doit rester exploitable.
 GDS_SSHD_CONFIG="${GDS_SSHD_CONFIG:-/etc/ssh/sshd_config.gds}"
-GDS_SSHD_LOG="${GDS_SSHD_LOG:-/var/log/gds-sshd.log}"
+# L2.7 — configuration du superviseur : elle décrit les TROIS processus
+# surveillés et reçoit du script d'entrée le port PostgreSQL et les chemins
+# absolus des binaires (supervisord n'accepte pas de commande ambiguë).
+GDS_SUPERVISORD_CONFIG="${GDS_SUPERVISORD_CONFIG:-/etc/gds/supervisord.conf}"
+# Chemins absolus fournis au superviseur : valeurs de repli, remplacées par la
+# résolution réelle juste avant de lancer supervisord.
+GDS_PG_BIN="${GDS_PG_BIN:-postgres}"
+GDS_SSHD_BIN="${GDS_SSHD_BIN:-/usr/sbin/sshd}"
 export PGDATA GDS_DB_ADMIN_USER GDS_DB_ADMIN_PASSWORD GDS_DB_ADMIN_HOST GDS_DB_PORT GDS_REPOS_ROOT
-export GDS_SSH_PORT GDS_SSH_HOST_KEYS_DIR GDS_SSHD_CONFIG GDS_SSHD_LOG
+export GDS_SSH_PORT GDS_SSH_HOST_KEYS_DIR GDS_SSHD_CONFIG GDS_SUPERVISORD_CONFIG
+export GDS_PG_BIN GDS_SSHD_BIN
 
 log() { echo "entrypoint: $*"; }
 
@@ -195,7 +215,7 @@ resolve_sshd() {
 render_sshd_config() {
     src=""
     for candidate in "${GDS_SSHD_CONFIG_SRC:-}" "$(dirname "$0")/sshd_config" \
-                     /usr/local/share/gds/sshd_config; do
+                     /etc/gds/sshd_config /usr/local/share/gds/sshd_config; do
         if [ -n "$candidate" ] && [ -f "$candidate" ]; then
             src="$candidate"
             break
@@ -224,42 +244,71 @@ render_sshd_config() {
     log "configuration sshd rendue depuis $src (port interne $GDS_SSH_PORT)"
 }
 
-# Démarre sshd en arrière-plan (il se détache de lui-même) ; idempotent : un
-# sshd déjà en cours n'est pas relancé. Le superviseur reprendra ce démarrage en
-# L2.7.
-start_ssh_service() {
-    if command -v pgrep >/dev/null 2>&1 && pgrep -x sshd >/dev/null 2>&1; then
-        log "service SSH déjà en cours"
-        return 0
-    fi
-    if ! resolve_sshd; then
-        log "sshd absent de l'image : service SSH non démarré"
-        return 1
-    fi
-    log "démarrage du service SSH (port interne $GDS_SSH_PORT, clefs uniquement)"
-    "$SSHD_BIN" -f "$GDS_SSHD_CONFIG" -E "$GDS_SSHD_LOG"
+# Résout le chemin ABSOLU du postmaster (variable globale GDS_PG_BIN) : le
+# superviseur doit lancer le binaire du moteur, pas un synonyme de `PATH`.
+resolve_postgres() {
+    GDS_PG_BIN="$(command -v postgres 2>/dev/null || true)"
+    [ -n "$GDS_PG_BIN" ] || GDS_PG_BIN="postgres"
 }
 
-# 3-6. Préparation de la base, préparation des dépôts git, service SSH puis
-# service HTTP. Sans binaire (image non encore assemblée, micro-tâche L2.7), on
-# s'arrête sans laisser croire à un démarrage.
+# L2.7 — Arrête l'instance de BOOTSTRAP avant de confier PostgreSQL au
+# superviseur. Sans cet arrêt, deux postmasters se disputeraient le port : l'un
+# mourrait aussitôt et le conteneur resterait « à moitié mort » sans le dire.
+# Le port est vérifié LIBÉRÉ avant de continuer, sinon le postmaster surveillé
+# ne pourrait pas démarrer.
+stop_bootstrap_database() {
+    if ! command -v pg_ctl >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! pg_isready -h 127.0.0.1 -p "$GDS_DB_PORT" -q 2>/dev/null; then
+        return 0
+    fi
+    log "arrêt de l'instance PostgreSQL de bootstrap (le superviseur la relance surveillée)"
+    as_cluster_owner pg_ctl --pgdata="$PGDATA" --wait --timeout=60 -m fast stop || true
+    i=0
+    while [ "$i" -lt 15 ]; do
+        pg_isready -h 127.0.0.1 -p "$GDS_DB_PORT" -q 2>/dev/null || break
+        i=$((i + 1))
+        sleep 1
+    done
+    if pg_isready -h 127.0.0.1 -p "$GDS_DB_PORT" -q 2>/dev/null; then
+        log "AVERTISSEMENT : le port $GDS_DB_PORT répond encore après l'arrêt de l'instance de bootstrap"
+    else
+        log "instance de bootstrap arrêtée : port $GDS_DB_PORT libre pour le superv"
+    fi
+}
+
+# 3-6. Préparation (base, dépôts git, clefs d'hôte, configuration sshd) puis
+# confiage des TROIS processus au superviseur (L2.7). Sans binaire (image non
+# assemblée), on s'arrête sans laisser croire à un démarrage.
 if command -v gds-server >/dev/null 2>&1; then
     log "préparation de la base de service (gds-server --init-db)"
     gds-server --init-db
     log "préparation du compte git, de la racine des dépôts et des clefs autorisées (gds-server --init-ssh)"
     gds-server --init-ssh
     if command -v ssh-keygen >/dev/null 2>&1; then
-        # Un échec de génération laisse le service HTTP démarrer : le diagnostic
-        # reste dans les journaux au lieu de rendre le conteneur inutilisable.
+        # Un échec ici n'arrête PAS le conteneur : le superviseur signalera
+        # l'absence de sshd (FATAL) et le diagnostic reste dans les journaux,
+        # au lieu d'un conteneur inutilisable sans explication.
         if ensure_ssh_host_keys && render_sshd_config; then
-            start_ssh_service || log "service SSH non démarré (voir $GDS_SSHD_LOG)"
+            log "configuration SSH prête (sshd sera démarré et surveillé par supervisord)"
         else
-            log "service SSH non démarré (clefs d'hôte ou configuration sshd indisponibles)"
+            log "configuration SSH indisponible (clefs d'hôte ou modèle sshd) : sshd ne pourra pas démarrer"
         fi
     else
-        log "ssh-keygen absent de l'image : service SSH non démarré"
+        log "ssh-keygen absent de l'image : sshd ne pourra pas démarrer"
     fi
-    log "lancement du service gds-server"
+    # L'instance de bootstrap rend le port : le superviseur relance PostgreSQL
+    # comme processus surveillé.
+    stop_bootstrap_database
+    if command -v supervisord >/dev/null 2>&1; then
+        resolve_postgres
+        if resolve_sshd; then GDS_SSHD_BIN="$SSHD_BIN"; else GDS_SSHD_BIN="/usr/sbin/sshd"; fi
+        export GDS_PG_BIN GDS_SSHD_BIN
+        log "confiage des trois processus (PostgreSQL, sshd, gds-server) au superviseur"
+        exec supervisord -c "$GDS_SUPERVISORD_CONFIG"
+    fi
+    log "supervisord absent de l'image : lancement direct de gds-server (SANS supervision)"
     exec gds-server
 fi
 log "binaire gds-server absent de l'image : rien à lancer (assemblage de l'image en L2.7)"

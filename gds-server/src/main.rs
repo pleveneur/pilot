@@ -320,6 +320,27 @@ async fn run() -> Result<(), String> {
     // 3. Migrations embarquées (idempotent).
     gds_core::db::migrate(&pool).await?;
 
+    // 3b. Journaux de démarrage attendus par l'exploitation (L2.7, conteneur
+    //     supervisé) : la base est prête, la version de migration atteinte est
+    //     annoncée, et l'état du compte administrateur est dit EXPLICITEMENT.
+    //     Tant qu'aucun administrateur n'existe, l'initialisation
+    //     (`POST /api/gds/setup`, L2.4) reste à faire : le journal le signale,
+    //     pour qu'un service « sans compte » ne passe jamais inaperçu. Le
+    //     message nomme la route à utiliser, mais ne contient aucun secret.
+    println!("gds-server : base prête");
+    println!(
+        "gds-server : migrations appliquées jusqu'à la version {:04}",
+        server_status::applied_migration(&pool).await?
+    );
+    match gds_core::db::count_admins(&pool).await {
+        Ok(0) => println!(
+            "gds-server : administrateur en attente d'initialisation (POST /api/gds/setup)"
+        ),
+        Ok(n) => println!("gds-server : administrateur déjà initialisé ({} compte(s))", n),
+        // Un état inconnu n'empêche pas le service de démarrer, mais il est dit.
+        Err(e) => eprintln!("gds-server : état des administrateurs inconnu : {}", e),
+    }
+
     // 4. Contexte autonome du service, puis montage du routeur partagé du socle.
     let keys_pool = pool.clone();
     let ctx = Arc::new(ServerCtx {
