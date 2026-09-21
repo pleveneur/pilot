@@ -68,6 +68,10 @@ describe("shouldCloseTab (T2 — keepAgents)", () => {
     expect(shouldCloseTab({ mode: "dashboard" }, false)).toBe(false);
     expect(shouldCloseTab({ mode: "dashboard" }, true)).toBe(false);
   });
+  it("conserve l'onglet transverse GDS Serveur (gds-admin, L4.1) dans tous les cas", () => {
+    expect(shouldCloseTab({ mode: "gds-admin" }, false)).toBe(false);
+    expect(shouldCloseTab({ mode: "gds-admin" }, true)).toBe(false);
+  });
   it("ferme toujours les onglets edit même avec keepAgents=true", () => {
     expect(shouldCloseTab(editTab("a.md"), true)).toBe(true);
   });

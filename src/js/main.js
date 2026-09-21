@@ -535,6 +535,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("GDS", "gds");
   });
 
+  // 🖥️ GDS Serveur : onglet transverse d'administration du serveur — LOT 4 (L4.1).
+  document.getElementById("btn-gds-admin").addEventListener("click", () => {
+    tabs.openFile("GDS Serveur", "gds-admin");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

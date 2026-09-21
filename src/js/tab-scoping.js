@@ -28,14 +28,19 @@ export function findAgentTab(tabs, agentId, projectPath) {
   );
 }
 
+// Onglets TRANSVERSES : indépendants du projet actif, jamais fermés lors d'un
+// changement/fermeture de projet. `gds-params` (L5.1) rejoindra cette liste.
+const GLOBAL_TAB_MODES = new Set(["superagent", "dashboard", "gds-admin"]);
+
 /**
  * T2 : détermine si un onglet doit être fermé lors d'un changement de projet.
  * `keepAgents=true` conserve les onglets agents (scopés par projet) ; seuls les
- * onglets edit/preview/terminal sont fermés. Les onglets globaux (superagent,
- * dashboard) ne sont jamais fermés ici (ils persistent à travers les bascules).
+ * onglets edit/preview/terminal sont fermés. Les onglets transverses/globaux
+ * (superagent, dashboard, gds-admin) ne sont jamais fermés ici : ils persistent
+ * à travers les bascules et les fermetures de projets (ouverts sans projet).
  */
 export function shouldCloseTab(tab, keepAgents) {
-  if (tab.mode === "superagent" || tab.mode === "dashboard") return false;
+  if (GLOBAL_TAB_MODES.has(tab.mode)) return false;
   if (keepAgents && tab.mode === "agent") return false;
   return true;
 }

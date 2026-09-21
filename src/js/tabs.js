@@ -340,6 +340,13 @@ export class TabsManager {
       return;
     }
 
+    // Onglet GDS Serveur (🖥️) — LOT 4 : écran d'ADMINISTRATION du serveur,
+    // TRANSVERSE (non lié à un projet, distinct de l'onglet 🌐 par projet).
+    if (mode === "gds-admin") {
+      await this._openGdsAdmin(path || "GDS Serveur");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -1155,6 +1162,46 @@ export class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">🌐</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">GDS</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet GDS Serveur (🖥️) — LOT 4 : écran d'ADMINISTRATION du
+   * serveur GDS, TRANSVERSE (non lié à un projet). Squelette L4.1 : coquille +
+   * sections vides, remplies par les micro-tâches L4.2 → L4.6.
+   */
+  async _openGdsAdmin(label = "GDS Serveur") {
+    const existing = this.tabs.find((t) => t.mode === "gds-admin");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "gds-admin");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper gds-admin-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createGdsAdmin } = await import("./gds-admin.js");
+      const result = createGdsAdmin(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenGdsAdmin = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet GDS Serveur:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">🖥️</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">GDS Serveur</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -2835,7 +2882,7 @@ export class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard"].includes(tab.mode);
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 
