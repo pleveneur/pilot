@@ -195,14 +195,16 @@ fn build_router(ctx: Arc<WebCtx>) -> Router {
         // Issue #61 : mode d'interface du web remote (assistant/agents), persisté
         // côté serveur (config) au lieu du localStorage.
         .route("/api/settings", get(web_settings_get).post(web_settings_set))
-        // GDS (spec_gds.md) : routeur partagé `gds_core::http` (authentification
-        // + routes purement base : suivi, tickets, utilisateurs, projets et
-        // dépôts git en lecture — L1.8a) puis routes métier propres au poste
-        // (provision, ajout de projet, poussée forcée, sync locale — L1.8b/c).
-        // Les deux routeurs déclarent des méthodes disjointes sur
+        // GDS (spec_gds.md) : l'adaptateur de montage du poste
+        // (`gds_web::gds_router`) monte **en un seul point** le routeur partagé
+        // `gds_core::http::gds_routes` (authentification + routes purement base :
+        // suivi, tickets, utilisateurs, projets et dépôts git en lecture —
+        // L1.8a) puis les routes métier propres au poste (provision, ajout de
+        // projet, poussée forcée, sync locale — L1.8b/c). Aucune copie locale du
+        // routeur partagé : `web_server.rs` ne connaît que l'adaptateur.
+        // Les deux groupes déclarent des méthodes disjointes sur
         // `/api/gds/projects` (GET partagé / POST poste) : `merge` les combine.
-        .merge(gds_core::http::gds_routes::<WebCtx>())
-        .merge(crate::gds_web::gds_desktop_routes())
+        .merge(crate::gds_web::gds_router::<WebCtx>())
         .layer(from_fn_with_state(ctx.clone(), auth_middleware::<WebCtx>));
 
     Router::new()

@@ -29,7 +29,10 @@ regex = "1"
 # ── Serveur web distant (mode remote) ──
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
-tower = "0.4"
+# `tower` est aligné sur la version déjà tirée par axum 0.7 (0.5) : la feature
+# `util` fournit `ServiceExt::oneshot`, utilisée par les tests de montage du
+# routeur GDS (`gds_web.rs`). Aucun autre code du desk n'utilise `tower`.
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 argon2 = "0.5"
 aes-gcm = "0.10"

@@ -14,6 +14,11 @@
 // `WebCtx` implémente `gds_core::http::GdsCtx` pour être monté sans changement
 // dans le même routeur protégé : le pool GDS y est résolu par requête (projet
 // actif, provisionnement à chaud), ce que `ServerCtx` ne peut pas figer.
+//
+// L1.8d (adaptateur de montage côté application) : `gds_router()` ci-dessous est
+// le **seul** point d'appel de `gds_core::http::gds_routes` côté poste — donc une
+// source unique pour le routeur partagé, sans copie locale. Il est générique sur
+// le contexte (`DesktopGdsCtx`) pour être monté et **testé** sans Tauri.
 
 use crate::gds;
 use crate::gds_client;
@@ -33,16 +38,47 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tauri::Manager;
 
-/// Routes GDS du poste (fusionnées dans le router protégé de `web_server.rs`,
-/// donc derrière `auth_middleware`, comme le routeur partagé).
-pub(crate) fn gds_desktop_routes() -> Router<Arc<WebCtx>> {
+/// Routes GDS propres au poste (montées par `gds_router`, donc derrière
+/// `auth_middleware` dans `web_server.rs`, comme le routeur partagé).
+pub(crate) fn gds_desktop_routes<S: DesktopGdsCtx>() -> Router<Arc<S>> {
     Router::new()
-        .route("/api/gds/provision", post(gds_provision_web))
-        .route("/api/gds/projects", post(gds_add_project_web))
+        .route("/api/gds/provision", post(gds_provision_web::<S>))
+        .route("/api/gds/projects", post(gds_add_project_web::<S>))
         // ── Phase B : synchronisation (verrou retiré en L6) ──
-        .route("/api/gds/sync", post(gds_sync_web))
+        .route("/api/gds/sync", post(gds_sync_web::<S>))
         // ── Phase C1.3 : forçage serveur du suivi (membres du projet) ──
-        .route("/api/gds/tracking/force", post(gds_tracking_force_web))
+        .route("/api/gds/tracking/force", post(gds_tracking_force_web::<S>))
+}
+
+/// **Adaptateur de montage de l'application** : monte le routeur partagé du
+/// socle puis les routes propres au poste. Seul point d'appel de
+/// `gds_core::http::gds_routes` côté desktop (source unique) ; `web_server.rs`
+/// se contente de fusionner ce routeur derrière l'authentification.
+pub(crate) fn gds_router<S: DesktopGdsCtx>() -> Router<Arc<S>> {
+    gds_core::http::gds_routes::<S>().merge(gds_desktop_routes::<S>())
+}
+
+/// Capacités du **poste** requises par les routes GDS desktop : résolution du
+/// pool depuis `AppState` (projet actif) et provisionnement à chaud. Le routeur
+/// partagé (`gds_core::http::gds_routes`) n'a besoin que de `GdsCtx` ; ce trait
+/// n'existe que pour l'adaptateur de montage, ce qui le rend testable avec un
+/// contexte léger (sans Tauri).
+pub trait DesktopGdsCtx: GdsCtx {
+    /// Pool GDS courant du poste ; `Err` = GDS indisponible (non provisionné,
+    /// désactivé globalement…).
+    fn desktop_pool(&self) -> Result<PgPool, String>;
+    /// Mémorise un pool fraîchement provisionné (route `provision`).
+    fn set_desktop_pool(&self, pool: PgPool);
+}
+
+impl DesktopGdsCtx for WebCtx {
+    fn desktop_pool(&self) -> Result<PgPool, String> {
+        gds_pool(self)
+    }
+
+    fn set_desktop_pool(&self, pool: PgPool) {
+        *self.app_handle.state::<AppState>().gds_pool.lock().unwrap() = Some(pool);
+    }
 }
 
 /// Pool GDS depuis AppState (clone court, jamais tenu en lock pendant un await).
@@ -91,8 +127,10 @@ struct ProvisionBody {
     admin_password: String,
 }
 
-async fn gds_provision_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<ProvisionBody>) -> Response {
-    let app = ctx.app_handle.clone();
+async fn gds_provision_web<S: DesktopGdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Json(body): Json<ProvisionBody>,
+) -> Response {
     let db_addr = body.db_addr;
     let db_user = body.db_user;
     let db_password = body.db_password;
@@ -102,7 +140,7 @@ async fn gds_provision_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<Prov
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     };
-    *app.state::<AppState>().gds_pool.lock().unwrap() = Some(pool);
+    ctx.set_desktop_pool(pool);
     Json(json!({ "ok": true, "db": gds_db::GDS_DB_NAME })).into_response()
 }
 
@@ -115,8 +153,11 @@ struct AddProjectBody {
     git_name: Option<String>,
 }
 
-async fn gds_add_project_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<AddProjectBody>) -> Response {
-    let pool = match gds_pool(&ctx) {
+async fn gds_add_project_web<S: DesktopGdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Json(body): Json<AddProjectBody>,
+) -> Response {
+    let pool = match ctx.desktop_pool() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
@@ -138,20 +179,20 @@ struct SyncBody {
 ///
 /// Décision de la refonte : cette route **reste côté application** (copie de
 /// travail locale) et n'entre pas dans le routeur partagé du serveur (L1.8c).
-async fn gds_sync_web(
-    State(ctx): State<Arc<WebCtx>>,
+async fn gds_sync_web<S: DesktopGdsCtx>(
+    State(ctx): State<Arc<S>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     Json(body): Json<SyncBody>,
 ) -> Response {
     let ip = addr.ip().to_string();
-    if !ctx.guard.check_login(&ip) {
+    if !ctx.guard().check_login(&ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
         )
             .into_response();
     }
-    let pool = match gds_pool(&ctx) {
+    let pool = match ctx.desktop_pool() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
@@ -163,20 +204,20 @@ async fn gds_sync_web(
 
 /// POST /api/gds/tracking/force — force la poussée du suivi local vers Postgres
 /// (réservé aux membres du projet). Phase C1.3.
-async fn gds_tracking_force_web(
-    State(ctx): State<Arc<WebCtx>>,
+async fn gds_tracking_force_web<S: DesktopGdsCtx>(
+    State(ctx): State<Arc<S>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     Json(body): Json<SyncBody>,
 ) -> Response {
     let ip = addr.ip().to_string();
-    if !ctx.guard.check_login(&ip) {
+    if !ctx.guard().check_login(&ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
         )
             .into_response();
     }
-    let pool = match gds_pool(&ctx) {
+    let pool = match ctx.desktop_pool() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
@@ -188,4 +229,152 @@ async fn gds_tracking_force_web(
 
 fn err_response(e: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use axum::middleware::from_fn_with_state;
+    use gds_core::audit::WebAudit;
+    use gds_core::auth::WebAuth;
+    use gds_core::rate::WebGuard;
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    /// Contexte léger : aucune dépendance Tauri ni base réelle. Sans jeton,
+    /// `auth_middleware` répond 401 avant tout accès au pool : `pool()` /
+    /// `desktop_pool()` ne sont jamais appelés par les requêtes testées.
+    struct TestCtx {
+        auth: Arc<WebAuth>,
+        guard: Arc<WebGuard>,
+        audit: Arc<WebAudit>,
+        pool: Mutex<Option<PgPool>>,
+    }
+
+    impl TestCtx {
+        fn new() -> Self {
+            Self {
+                auth: Arc::new(WebAuth::new()),
+                guard: Arc::new(WebGuard::new()),
+                audit: Arc::new(WebAudit::new()),
+                pool: Mutex::new(None),
+            }
+        }
+    }
+
+    impl GdsCtx for TestCtx {
+        fn pool(&self) -> Result<PgPool, String> {
+            self.desktop_pool()
+        }
+        fn auth(&self) -> &Arc<WebAuth> {
+            &self.auth
+        }
+        fn guard(&self) -> &Arc<WebGuard> {
+            &self.guard
+        }
+        fn audit(&self) -> &Arc<WebAudit> {
+            &self.audit
+        }
+    }
+
+    impl DesktopGdsCtx for TestCtx {
+        fn desktop_pool(&self) -> Result<PgPool, String> {
+            self.pool
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| "GDS non provisionné".to_string())
+        }
+        fn set_desktop_pool(&self, pool: PgPool) {
+            *self.pool.lock().unwrap() = Some(pool);
+        }
+    }
+
+    /// Monte le routeur du poste (`gds_router`, source unique) **sans** la
+    /// couche d'authentification : le statut renvoyé distingue alors « route
+    /// montée » (handler atteint, ou 405 pour une autre méthode) de « route
+    /// absente » (404).
+    async fn status_for(method: Method, uri: &str) -> StatusCode {
+        let ctx = Arc::new(TestCtx::new());
+        let app = gds_router::<TestCtx>().with_state(ctx);
+        app.oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+    }
+
+    /// Monte `gds_router` **avec** l'authentification, comme `web_server.rs`.
+    async fn status_behind_auth(method: Method, uri: &str) -> StatusCode {
+        let ctx = Arc::new(TestCtx::new());
+        let app = gds_router::<TestCtx>()
+            .layer(from_fn_with_state(
+                ctx.clone(),
+                gds_core::http::auth_middleware::<TestCtx>,
+            ))
+            .with_state(ctx);
+        app.oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+    }
+
+    /// Le montage desktop inclut bien le **routeur partagé du socle** : une route
+    /// purement base (`GET /api/gds/projects`) atteint son handler — sans pool il
+    /// répond 500, alors qu'un montage partagé manquant donnerait 404.
+    #[tokio::test]
+    async fn shared_core_route_is_mounted() {
+        assert_eq!(
+            status_for(Method::GET, "/api/gds/projects").await,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// Les routes métier du poste restent montées sur le même routeur (L1.8c :
+    /// `/api/gds/sync` déclarée en POST) : une autre méthode donne 405 (chemin
+    /// connu), pas 404.
+    #[tokio::test]
+    async fn desktop_route_is_mounted() {
+        assert_eq!(
+            status_for(Method::GET, "/api/gds/sync").await,
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+    }
+
+    /// Contre-épreuve : une route absente renvoie 404 (et non 405), ce qui montre
+    /// que les statuts précédents traduisent bien la présence des routes.
+    #[tokio::test]
+    async fn unknown_route_is_not_mounted() {
+        assert_eq!(
+            status_for(Method::GET, "/api/gds/does-not-exist").await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Le routeur GDS monté reste derrière l'authentification (sans jeton : 401),
+    /// pour les routes partagées comme pour les routes du poste.
+    #[tokio::test]
+    async fn gds_router_is_behind_auth() {
+        assert_eq!(
+            status_behind_auth(Method::GET, "/api/gds/projects").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status_behind_auth(Method::POST, "/api/gds/sync").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
