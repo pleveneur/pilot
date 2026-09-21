@@ -11,7 +11,7 @@ installation de PostgreSQL ou de serveur SSH sur le poste.
 | `docker-compose.yml` | **le fichier à utiliser** : service unique, ports, volumes |
 | `.env.example` | **modèle** des variables d'environnement (aucun secret dedans) |
 | `entrypoint.sh` | amorçage : base, migrations, dépôts, clefs, puis supervision |
-| `supervisord.conf` | surveillance des trois processus internes |
+| `supervisord.conf` | surveillance des trois processus internes + socket de pilotage du service (L2.10) |
 | `sshd_config` | service SSH des dépôts (clef uniquement, compte `git`) |
 
 > L'image se construit **localement** sur le poste (`docker compose up -d --build`).
@@ -135,7 +135,7 @@ permissions POSIX, qu'un montage NTFS ne conserve pas.
 | `pilot-gds_pgdata` | `/var/lib/postgresql/data` | cluster PostgreSQL (base + suivi) | oui — base perdue |
 | `pilot-gds_repos` | `/srv/git/repos` | dépôts bare | oui — historique perdu |
 | `pilot-gds_ssh-host-keys` | `/etc/ssh/host_keys` | clefs d'hôte sshd | oui — chaque poste doit ré-autoriser le serveur |
-| `pilot-gds_supervisor` | `/var/log/supervisor` | journal du superviseur interne | non — confort (redémarrages, états FATAL) |
+| `pilot-gds_supervisor` | `/var/log/supervisor` | journal du superviseur interne **+ journal d'audit du service** (`web_audit.jsonl`) | non — confort (redémarrages, états FATAL) |
 
 Les journaux exploitables restent dans `docker logs` : les trois processus
 écrivent sur la sortie standard. Le volume `supervisor` garde en plus le journal
@@ -191,7 +191,70 @@ Les données, les dépôts et les empreintes de clefs **survivent** à
 Seul `down -v` les détruit.
 
 L'arrêt et le redémarrage **du service** depuis Pilot (sans toucher au
-conteneur) relèvent de la micro-tâche **L2.10**.
+conteneur) sont décrits au §4bis.
+
+---
+
+## 4bis. Arrêter et redémarrer le SERVICE depuis Pilot (L2.10)
+
+« Le service » désigne les deux processus qui composent l'accès :
+`gds-server` (l'API HTTP `/api/gds/*`) et `sshd` (l'accès aux dépôts git par
+clef). **PostgreSQL n'en fait pas partie** : la base reste en marche, donc les
+données et le suivi sont intacts. L'arrêt du **conteneur** entier (base comprise)
+reste un choix du propriétaire, sur le poste : `docker compose stop`.
+
+L'écran d'administration de Pilot (onglet **GDS**, encadré « Contrôle du
+serveur ») propose deux boutons, réservés au rôle `admin` :
+
+| Bouton | Route appelée | Effet |
+|---|---|---|
+| **Redémarrer le service** | `POST /api/gds/admin/service/restart` | redémarre `gds-server` et `sshd` |
+| **Arrêter le service** | `POST /api/gds/admin/service/stop` | arrête `gds-server` et `sshd` |
+
+L'état courant (PID du service, état de chaque programme) est lisible par
+`GET /api/gds/admin/service`.
+
+Ce qui se passe, dans l'ordre :
+
+1. le service **vérifie d'abord** que le superviseur interne répond
+   (`supervisorctl status` sur le socket Unix, `/run/supervisor.sock`) ; la route
+   s'arrête en erreur si ce n'est pas le cas — jamais de faux « c'est fait » ;
+2. il **répond à Pilot** (l'écran affiche « redémarrage demandé ») ;
+3. quelques centièmes de seconde plus tard (`GDS_SERVICE_ACTION_DELAY_MS`,
+   défaut `750`), un processus détaché exécute l'ordre auprès du superviseur :
+   `supervisorctl restart gds-server sshd` ou `… stop gds-server sshd`.
+
+Le délai est **nécessaire** : le processus qui répond à la requête est celui qui
+va être coupé, donc l'ordre doit partir après la réponse. L'écran suit ensuite
+l'état réel (il interroge la route de santé et `GET …/service`) : un redémarrage
+est constaté par un **nouveau PID**, un arrêt par l'absence de réponse.
+
+### Après un arrêt
+
+Un arrêt est un **état stable** : `autorestart` ne redémarre pas un processus
+arrêté volontairement. Restaurer le service (le conteneur, lui, tourne
+toujours) :
+
+```powershell
+docker compose restart gds                    # le plus simple
+docker exec pilot-gds supervisorctl -c /etc/gds/supervisord.conf start gds-server sshd
+```
+
+`sshd` arrêté signifie que les clones / `fetch` / `push` des projets échouent
+(les synchronisations de suivi, elles, continuent : elles passent par la base,
+restée en marche). `gds-server` arrêté signifie que les écrans de
+l'administration ne répondent plus — ils se rouvrent au redémarrage.
+
+### Trace des actions
+
+Chaque action **acceptée** écrit une entrée dans le journal d'audit du service
+(`service_restart` / `service_stop`, avec le demandeur et son adresse) ; une
+action **refusée** (superviseur injoignable) y écrit aussi, avec `ok = false`.
+Le journal est **persistant** (`GDS_AUDIT_FILE`, défaut
+`/var/log/supervisor/web_audit.jsonl`, sur le volume `pilot-gds_supervisor`) :
+la trace d'un redémarrage survit donc au redémarrage lui-même, et à la
+recréation du conteneur. Ces actions apparaissent dans l'onglet
+« 🔐 Journal » de l'écran GDS de Pilot.
 
 ---
 

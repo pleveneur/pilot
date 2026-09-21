@@ -108,6 +108,9 @@ pub fn admin_actions() -> Vec<String> {
         "project_remove",
         "project_remove_purge",
         "ssh_key_revoke",
+        // Cycle de vie du service (L2.10) : redémarrage / arrêt du service GDS.
+        "service_restart",
+        "service_stop",
         "project_create",
         "project_open",
         "project_select",

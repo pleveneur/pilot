@@ -24,6 +24,7 @@ use crate::db as gds_db;
 use crate::rate::{token_key, WebGuard};
 use crate::roles;
 use crate::server_status;
+use crate::service_control::{self, ServiceAction, SupervisorEnv};
 use axum::extract::{ConnectInfo, Extension, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
@@ -281,6 +282,18 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
         .route(
             "/api/gds/admin/ssh-keys/revoke",
             post(gds_admin_ssh_key_revoke::<S>),
+        )
+        // ── L2.10 : cycle de vie du SERVICE (redémarrer / arrêter) ──
+        // Le service et l'accès par clef (sshd), jamais PostgreSQL : l'arrêt du
+        // conteneur entier reste une commande documentée sur le poste.
+        .route("/api/gds/admin/service", get(gds_admin_service))
+        .route(
+            "/api/gds/admin/service/restart",
+            post(gds_admin_service_restart::<S>),
+        )
+        .route(
+            "/api/gds/admin/service/stop",
+            post(gds_admin_service_stop::<S>),
         )
 }
 
@@ -1300,6 +1313,110 @@ async fn gds_admin_ssh_key_revoke<S: GdsCtx>(
     }
 }
 
+// ── L2.10 : cycle de vie du service (redémarrer / arrêter) ──
+
+/// `GET /api/gds/admin/service` — **réservée au rôle `admin`** (voir
+/// `require_admin`).
+///
+/// État des deux processus du service (`gds-server` et `sshd`) tel que les voit
+/// le superviseur interne, plus le PID du processus qui répond. Ce PID **change
+/// à chaque redémarrage** : l'écran s'en sert pour constater qu'un redémarrage a
+/// réellement eu lieu (et pas seulement que la route de santé répond).
+///
+/// PostgreSQL n'apparaît pas : l'arrêt du service ne le concerne jamais.
+/// Réponse : `200 { pid, action_delay_ms, programs, states, error }` ;
+/// `error` est renseigné (et `states` vide) si le superviseur n'a pas pu être
+/// interrogé — l'écran affiche alors un état « inconnu » plutôt que de mentir.
+async fn gds_admin_service() -> Response {
+    let env = SupervisorEnv::from_env();
+    let pid = std::process::id();
+    match tokio::task::spawn_blocking(move || service_control::ServiceReport::collect(&env, pid))
+        .await
+    {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => err_response(format!("supervision du service: {}", e)),
+    }
+}
+
+/// `POST /api/gds/admin/service/restart` — **réservée au rôle `admin`**.
+async fn gds_admin_service_restart<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    admin_service_action(&*ctx, &authed, ServiceAction::Restart).await
+}
+
+/// `POST /api/gds/admin/service/stop` — **réservée au rôle `admin`**.
+async fn gds_admin_service_stop<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+) -> Response {
+    admin_service_action(&*ctx, &authed, ServiceAction::Stop).await
+}
+
+/// Séquence commune aux deux actions de service : **vérifier** que le
+/// superviseur interne répond (lecture seule, `supervisorctl status`), puis
+/// **programmer** l'ordre dans un processus détaché qui attend
+/// `action_delay_ms` avant de l'exécuter.
+///
+/// L'ordre est différé par nécessité : le processus qui répond à la requête est
+/// précisément celui que `restart`/`stop` va couper. La réponse HTTP part donc
+/// toujours, et le client peut ensuite suivre l'état du service (sonde de santé).
+///
+/// Le journal d'audit reçoit une entrée `service_restart` / `service_stop` dans
+/// les deux cas : `ok = false` (avec le motif) si le superviseur ne répond pas ou
+/// si l'ordre n'a pas pu être transmis, `ok = true` s'il a été accepté. Aucun
+/// secret n'y figure : seuls les noms des programmes pilotés.
+async fn admin_service_action<S: GdsCtx>(
+    ctx: &S,
+    authed: &AuthedClient,
+    action: ServiceAction,
+) -> Response {
+    let env = SupervisorEnv::from_env();
+    let detail = service_control::SERVICE_PROGRAMS.join(",");
+
+    // 1. Précondition : le superviseur répond (sinon l'ordre serait perdu).
+    let probe = env.clone();
+    let states = match tokio::task::spawn_blocking(move || service_control::query_status(&probe)).await
+    {
+        Ok((states, None)) => states,
+        Ok((_, Some(e))) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, action.audit_code(), &detail, false);
+            return err_response(format!("{} : {}", action.label(), e));
+        }
+        Err(e) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, action.audit_code(), &detail, false);
+            return err_response(format!("{} : superviseur interne ({})", action.label(), e));
+        }
+    };
+
+    // 2. Ordre différé, transmis par un processus détaché.
+    let pid = std::process::id();
+    match service_control::schedule_action(&env, action) {
+        Ok(()) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, action.audit_code(), &detail, true);
+            Json(json!({
+                "ok": true,
+                "action": action.verb(),
+                "programs": service_control::SERVICE_PROGRAMS,
+                "detail": detail,
+                "delay_ms": env.delay_ms,
+                "pid": pid,
+                "states": states,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, action.audit_code(), &detail, false);
+            err_response(e)
+        }
+    }
+}
+
 // ── Projets & dépôts git ──
 
 /// `GET /api/gds/projects` — liste les projets visibles par l'appelant.
@@ -1948,6 +2065,8 @@ mod tests {
             "project_remove",
             "project_remove_purge",
             "ssh_key_revoke",
+            "service_restart",
+            "service_stop",
         ] {
             assert!(actions.iter().any(|x| x == a), "action absente du journal: {}", a);
         }

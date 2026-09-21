@@ -74,6 +74,22 @@ const INIT_SSH_FLAG: &str = "--init-ssh";
 /// rafraîchissement immédiat des clefs (L2.5).
 const SSH_KEYS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Fichier du journal d'audit **persistant** du service (L2.10). Réglable par
+/// `GDS_AUDIT_FILE` ; la valeur par défaut vit sur le **volume du superviseur**
+/// (`pilot-gds_supervisor` → `/var/log/supervisor`), qui survit au redémarrage
+/// du service comme à la recréation du conteneur.
+const DEFAULT_AUDIT_FILE: &str = "/var/log/supervisor/web_audit.jsonl";
+
+/// Chemin du journal d'audit persistant (`GDS_AUDIT_FILE` sinon le défaut).
+fn audit_file() -> std::path::PathBuf {
+    std::env::var("GDS_AUDIT_FILE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_AUDIT_FILE))
+}
+
 /// Modes de démarrage du binaire (dispatch pur — testable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupMode {
@@ -343,11 +359,18 @@ async fn run() -> Result<(), String> {
 
     // 4. Contexte autonome du service, puis montage du routeur partagé du socle.
     let keys_pool = pool.clone();
+    // 4a. Journal d'audit PERSISTANT (L2.10) : sans fichier, les entrées ne
+    //     vivraient qu'en mémoire et disparaîtraient au redémarrage — or c'est
+    //     précisément l'action de service qu'on veut pouvoir tracer APRÈS coup.
+    //     Le fichier vit sur le volume du superviseur (`/var/log/supervisor`) :
+    //     il survit au redémarrage du service comme à la recréation du conteneur.
+    let audit = Arc::new(WebAudit::new());
+    audit.set_file(audit_file());
     let ctx = Arc::new(ServerCtx {
         pool,
         auth: Arc::new(WebAuth::new()),
         guard: Arc::new(WebGuard::new()),
-        audit: Arc::new(WebAudit::new()),
+        audit,
         // Racine des dépôts bare : volume supervisé par la route d'état (L2.2).
         repos_root: cfg.repos_root.clone().into(),
     });
@@ -2320,5 +2343,103 @@ mod tests {
 
         pool.close().await;
         admin_pool.close().await;
+    }
+
+    /// L2.10 — cycle de vie du service : `GET /api/gds/admin/service` et les deux
+    /// actions sont réservés au rôle `admin` (un `dev` reçoit 403, sans jeton
+    /// 401). L'état est lisible sans base : en l'absence de superviseur (cas des
+    /// tests et du poste de développement), la route répond 200 avec `error`
+    /// renseigné — l'écran sait alors afficher un état « inconnu » plutôt qu'un
+    /// état inventé. Une action, elle, échoue proprement (500) : mieux vaut
+    /// refuser que de prétendre avoir redémarré.
+    #[tokio::test]
+    async fn service_control_routes_are_admin_only() {
+        // 1) État : refusé à un dev, accordé à un admin.
+        let ctx = null_ctx();
+        let dev = ctx
+            .auth
+            .create_session_for(7, "dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/admin/service",
+                &dev,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let ctx = null_ctx();
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/admin/service",
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert!(value["pid"].as_u64().unwrap_or(0) > 0);
+        assert_eq!(
+            value["programs"],
+            serde_json::json!(["gds-server", "sshd"]),
+            "le service pilote le service et l'accès par clef, jamais postgres"
+        );
+        assert!(value["action_delay_ms"].as_u64().unwrap_or(0) >= 50);
+
+        // 2) Actions : refusées à un dev (403)…
+        let body = serde_json::json!({});
+        for uri in [
+            "/api/gds/admin/service/restart",
+            "/api/gds/admin/service/stop",
+        ] {
+            let ctx = null_ctx();
+            let dev = ctx
+                .auth
+                .create_session_for(7, "dev", std::time::Duration::from_secs(60));
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request("POST", uri, &dev, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{}", uri);
+
+            // 3) …et sans jeton : 401 (le garde s'applique avant tout le reste).
+            let app = server_router(null_ctx());
+            let res = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{}", uri);
+
+            // 4) Pour un admin : le superviseur est injoignable ici (la
+            //    configuration `/etc/gds/supervisord.conf` n'existe que dans
+            //    l'image) → refus net, jamais un faux succès.
+            let ctx = null_ctx();
+            let admin = ctx
+                .auth
+                .create_session_as("admin", std::time::Duration::from_secs(60));
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request("POST", uri, &admin, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "{}", uri);
+        }
     }
 }

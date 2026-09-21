@@ -21,4 +21,8 @@ pub mod rate;
 // module pur, sans dépendance base/réseau, partagé par le socle et le poste.
 pub mod roles;
 pub mod server_status;
+// Cycle de vie du SERVICE depuis l'écran d'administration (L2.10) : pilotage du
+// superviseur interne (redémarrer / arrêter `gds-server` et `sshd`, jamais la
+// base). Module sans base ni Tauri, compilé par `gds-server`.
+pub mod service_control;
 pub mod ssh;
