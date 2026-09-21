@@ -638,51 +638,6 @@ export function createGds(container) {
     });
   }
 
-  // ── Listes serveur & projets (Avancé) ──
-  function renderLists() {
-    async function run(panel) {
-      const projEl = panel.querySelector("#gds-adv-projects");
-      const repoEl = panel.querySelector("#gds-adv-repos");
-      let projects = [];
-      let repos = [];
-      try { projects = await invoke("gds_list_projects"); } catch (_) { projects = null; }
-      try { repos = await invoke("gds_list_git_repos"); } catch (_) { repos = null; }
-      if (projects == null) {
-        projEl.innerHTML = `<div class="gds-empty">GDS non provisionné — liste indisponible.</div>`;
-      } else if (!projects.length) {
-        projEl.innerHTML = `<div class="gds-empty">Aucun projet enregistré sur le serveur.</div>`;
-      } else {
-        projEl.innerHTML = "";
-        for (const p of projects) {
-          const row = document.createElement("div");
-          row.className = "gds-row";
-          row.innerHTML = `
-            <div class="gds-row-info">
-              <div class="gds-row-title">${esc(p.name)}</div>
-              <div class="gds-row-sub">${esc(p.repo_url || "")}</div>
-            </div>
-            <span class="gds-chip">${esc(p.status || "")}</span>`;
-          projEl.appendChild(row);
-        }
-      }
-      if (repos == null) {
-        repoEl.innerHTML = `<div class="gds-empty">GDS non provisionné — liste indisponible.</div>`;
-      } else if (!repos.length) {
-        repoEl.innerHTML = `<div class="gds-empty">Aucun dépôt git enregistré.</div>`;
-      } else {
-        repoEl.innerHTML = "";
-        for (const r of repos) {
-          const row = document.createElement("div");
-          row.className = "gds-row";
-          row.innerHTML = `<div class="gds-row-info"><div class="gds-row-title">${esc(r.bare_path || "")}</div><div class="gds-row-sub">projet #${esc(r.project_id)}</div></div>`;
-          repoEl.appendChild(row);
-        }
-      }
-      refreshIcons(container);
-    }
-    return (panel) => { const _ = panel; run(panel); };
-  }
-
   // ── Bloc « Avancé » replié par défaut ──
   function renderAdvanced(cfg, provisioned, connected, onServer) {
     const panel = document.createElement("div");
@@ -707,9 +662,7 @@ export function createGds(container) {
         </div>
         ` : ""}
         ${provisioned ? `
-        <div class="gds-panel-desc" style="margin-top:12px; margin-bottom:6px"><strong>Projets & dépôts du serveur</strong> :</div>
-        <div id="gds-adv-projects" class="gds-list"></div>
-        <div id="gds-adv-repos" class="gds-list"></div>
+        <div class="gds-note-box" style="margin-top:12px"><em>La liste des projets &amp; dépôts du serveur est visible dans l'onglet « ⚙️ GDS — paramétrage » → Mes projets GDS et dans l'onglet « GDS — administration ».</em></div>
         ` : ""}
         ${provisioned && !connected ? renderRemoveHtml("gds-adv-remove") : ""}
       </div>
@@ -738,9 +691,13 @@ export function createGds(container) {
     // Le cas « clé ajoutée manuellement » n'a plus lieu d'être : le serveur
     // applique lui-même `authorized_keys` depuis la base.
 
-    if (provisioned) {
-      if (!connected) wireRemove(panel, "gds-adv-remove");
-      renderLists()(panel);
+    // NB (refonte GDS, L5.6) : les listes « Projets & dépôts du serveur »
+    // (données SERVEUR, identiques quel que soit le projet) ont été RETIRÉES de
+    // cet onglet PAR PROJET : cette vue transverse vit dans l'onglet « GDS —
+    // administration » (projets & dépôts) et dans « Mes projets GDS ».
+
+    if (provisioned && !connected) {
+      wireRemove(panel, "gds-adv-remove");
     }
   }
 
