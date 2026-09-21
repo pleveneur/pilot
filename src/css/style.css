@@ -8556,6 +8556,129 @@ body.pilot-loading *::after {
   padding-left: 8px;
 }
 
+/* ── L4.2 — bloc « Connexion serveur » ── */
+.gds-admin-badge {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.gds-admin-badge.ok {
+  color: var(--success, #4ade80);
+  background: color-mix(in srgb, var(--success, #4ade80) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #4ade80) 35%, transparent);
+}
+.gds-admin-form {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 10px 12px;
+  margin-top: 4px;
+}
+.gds-admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.gds-admin-field > span {
+  font-size: 11px;
+  color: var(--text-secondary, #a0a6b4);
+}
+.gds-admin-field input {
+  background: var(--bg-app, #0f1115);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  color: var(--text-primary, #e6e8ee);
+  font-size: 13px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+.gds-admin-field input:focus {
+  outline: none;
+  border-color: var(--accent, #6b8cff);
+}
+.gds-admin-field-narrow input {
+  text-align: center;
+}
+.gds-admin-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.gds-admin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-2, #1e2127);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  color: var(--text-primary, #e6e8ee);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.gds-admin-btn:hover {
+  border-color: var(--accent, #6b8cff);
+}
+.gds-admin-btn.primary {
+  background: color-mix(in srgb, var(--accent, #6b8cff) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #6b8cff) 45%, transparent);
+}
+.gds-admin-status-area {
+  margin-top: 4px;
+}
+.gds-admin-status {
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
+  color: var(--text-secondary, #a0a6b4);
+}
+.gds-admin-status.idle {
+  font-style: italic;
+  color: var(--text-muted, #6b7280);
+}
+.gds-admin-status.loading {
+  color: var(--text-primary, #e6e8ee);
+}
+.gds-admin-status.ok {
+  border-color: color-mix(in srgb, var(--success, #4ade80) 30%, transparent);
+  background: color-mix(in srgb, var(--success, #4ade80) 8%, transparent);
+  color: var(--text-primary, #e6e8ee);
+}
+.gds-admin-status.error {
+  border-color: color-mix(in srgb, var(--danger, #f87171) 35%, transparent);
+  background: color-mix(in srgb, var(--danger, #f87171) 8%, transparent);
+  color: var(--danger, #f87171);
+}
+.gds-admin-status-line {
+  margin-bottom: 6px;
+}
+.gds-admin-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+}
+.gds-admin-metrics b {
+  color: var(--text-secondary, #a0a6b4);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.gds-admin-muted {
+  color: var(--text-muted, #6b7280);
+}
+.gds-admin-hint {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.5;
+  border-left: 2px solid var(--border-subtle, rgba(255,255,255,0.07));
+  padding-left: 8px;
+}
+
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)
    Overlay plein écran : tout est masqué sauf le chat. Barre du haut

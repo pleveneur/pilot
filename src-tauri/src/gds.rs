@@ -64,6 +64,30 @@ fn default_validated() -> bool {
     true
 }
 
+/// Identifiants d'**administration** d'un serveur GDS (refonte GDS, L4.2).
+///
+/// Volontairement SÉPARÉS de `ServerCredentials` (connexions projet) : l'écran
+/// d'administration transverse se connecte à l'API HTTP du serveur avec un
+/// compte administrateur, qui n'est pas nécessairement l'identité employée
+/// pour les projets. Mélanger les deux polluerait la liste des serveurs de
+/// projet (`servers` est indexée `user@host` et listée telle quelle).
+/// `admin_password` est un secret : il n'est JAMAIS renvoyé à l'UI ni journalisé.
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub(crate) struct AdminServerCredentials {
+    /// Adresse du serveur telle que saisie à l'écran (sans schéma, sans port).
+    #[serde(default)]
+    pub host: String,
+    /// Port **HTTP** de l'API GDS (chaîne vide = port par défaut côté UI).
+    #[serde(default)]
+    pub http_port: String,
+    /// Email du compte administrateur du serveur.
+    #[serde(default)]
+    pub admin_email: String,
+    /// Mot de passe administrateur — **SECRET**, jamais renvoyé à l'UI.
+    #[serde(default)]
+    pub admin_password: Option<String>,
+}
+
 /// Fichier de secrets global (`~/.pilot/gds_secrets.json`, 0600, hors git),
 /// indexé par nom de projet (chaque projet a son propre serveur GDS). Évolution
 /// 1 : conserve le champ `projects` (rétrocompat) et ajoute une map `servers`
@@ -80,6 +104,12 @@ pub(crate) struct GdsSecrets {
     /// Connexions mémorisées par serveur (Évolution 1) — clé `user@host`.
     #[serde(default)]
     pub servers: BTreeMap<String, ServerCredentials>,
+    /// Identifiants d'ADMINISTRATION du serveur, pour l'écran transverse
+    /// « GDS Serveur » (refonte GDS, L4.2) — clé `host|email` (voir
+    /// `admin_server_key`). Entrée SÉPARÉE de `servers` (connexions projet) :
+    /// une entrée admin ne doit jamais apparaître comme un serveur de projet.
+    #[serde(default)]
+    pub admin_servers: BTreeMap<String, AdminServerCredentials>,
     /// Nom git mémorisé (identité git auto, GDS). Vide = jamais saisi.
     #[serde(default)]
     pub git_name: String,
@@ -266,6 +296,92 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
                 "user": user,
                 "validated": true,
+            })
+        })
+        .collect()
+}
+
+// ── Écran d'administration transverse (refonte GDS, L4.2) ──
+//
+// Le mot de passe administrateur d'un serveur est mémorisé à part des
+// connexions projet : l'écran d'administration « GDS Serveur » ne mélange
+// jamais l'identité admin avec l'identité projet (exigence de la micro-tâche
+// L4.2). Aucune de ces fonctions ne renvoie le mot de passe à l'UI.
+
+/// Clé de la map `admin_servers` : hôte + email d'administration. Volontairement
+/// NON analysée (on ne la redécoupe jamais) : les champs sont relus depuis la
+/// valeur stockée, ce qui évite toute ambiguïté (un email contient un `@`).
+/// Pure — testable.
+pub(crate) fn admin_server_key(host: &str, email: &str) -> String {
+    format!("{}|{}", host.trim(), email.trim().to_lowercase())
+}
+
+/// Mémorise les identifiants d'ADMINISTRATION d'un serveur (écran d'administration,
+/// L4.2). Écrit dans `admin_servers` — **jamais** dans `servers`. Le mot de passe
+/// n'est écrit que s'il est non vide : recharger l'écran (sans ressaisir le mot de
+/// passe) ne doit pas effacer un secret déjà mémorisé. Un mot de passe vide ne
+/// crée pas l'entrée si elle n'existe pas.
+pub(crate) fn save_admin_credentials(
+    host: &str,
+    http_port: &str,
+    email: &str,
+    password: &str,
+) -> Result<(), String> {
+    let host = host.trim();
+    let email = email.trim();
+    if host.is_empty() || email.is_empty() {
+        return Err("Adresse du serveur et email administrateur requis".to_string());
+    }
+    let mut secrets = read_gds_secrets()?;
+    let key = admin_server_key(host, email);
+    if password.is_empty() && !secrets.admin_servers.contains_key(&key) {
+        return Ok(());
+    }
+    let entry = secrets.admin_servers.entry(key).or_default();
+    entry.host = host.to_string();
+    entry.admin_email = email.to_string();
+    entry.http_port = http_port.trim().to_string();
+    if !password.is_empty() {
+        // Verbatim : un mot de passe n'est jamais rogné (un espace peut en faire
+        // partie, et le secret doit correspondre exactement à celui que
+        // `users/login` a accepté).
+        entry.admin_password = Some(password.to_string());
+    }
+    write_gds_secrets(&secrets)
+}
+
+/// Identifiants d'administration mémorisés pour (hôte, email). `None` si jamais
+/// vus. Les valeurs ne sont JAMAIS renvoyées à l'UI : seuls les appels HTTP
+/// internes les utilisent.
+pub(crate) fn get_admin_credentials(
+    host: &str,
+    email: &str,
+) -> Result<Option<AdminServerCredentials>, String> {
+    let secrets = read_gds_secrets()?;
+    Ok(secrets
+        .admin_servers
+        .get(&admin_server_key(host, email))
+        .cloned())
+}
+
+/// Serveurs mémorisés pour l'écran d'administration : hôte, port HTTP et email
+/// administrateur — **jamais** le mot de passe (un simple booléen `has_password`
+/// indique qu'un secret est disponible). Alimente le pré-remplissage du bloc
+/// « Connexion serveur » (L4.2).
+pub(crate) fn list_admin_servers() -> Vec<Value> {
+    let secrets = match read_gds_secrets() {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    secrets
+        .admin_servers
+        .values()
+        .map(|e| {
+            json!({
+                "host": e.host,
+                "http_port": e.http_port,
+                "email": e.admin_email,
+                "has_password": e.admin_password.as_deref().map(|p| !p.is_empty()).unwrap_or(false),
             })
         })
         .collect()
@@ -2313,6 +2429,62 @@ mod tests {
         assert_eq!(v["email_configured"], false);
         assert_eq!(v["git_name"], "Alice", "nom mémorisé pré-rempli");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn admin_server_key_is_stable_and_case_insensitive_on_email() {
+        assert_eq!(admin_server_key(" host ", "Root@X.Y"), "host|root@x.y");
+        assert_eq!(
+            admin_server_key("host", "root@x.y"),
+            admin_server_key(" host ", "ROOT@X.Y")
+        );
+    }
+
+    #[test]
+    fn admin_credentials_are_separate_from_project_servers_and_never_returned() {
+        // Secrets isolés dans un fichier TEMPORAIRE (jamais ~/.pilot réel).
+        let _guard = TestGdsSecretsGuard::new();
+        // Entrée admin SÉPARÉE : elle ne doit PAS apparaître dans la liste des
+        // serveurs de projet (`servers`), ni y créer la moindre entrée (L4.2).
+        save_admin_credentials("192.168.1.77", "8090", "root@gds.example", "s3cret").unwrap();
+        assert!(
+            list_saved_servers().is_empty(),
+            "aucune entrée admin ne doit apparaître comme serveur de projet"
+        );
+        assert!(
+            read_gds_secrets().unwrap().servers.is_empty(),
+            "la map `servers` (projets) doit rester intacte"
+        );
+        // Retrouvée par (hôte, email), avec le mot de passe mémorisé.
+        let saved = get_admin_credentials("192.168.1.77", "root@gds.example")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.http_port, "8090");
+        assert_eq!(saved.admin_password.as_deref(), Some("s3cret"));
+        // La liste destinée à l'UI NE révèle JAMAIS le mot de passe.
+        let list = list_admin_servers();
+        let serialized = serde_json::to_string(&list).unwrap();
+        assert!(!serialized.contains("s3cret"));
+        assert!(list.iter().any(|v| v["host"] == "192.168.1.77"
+            && v["email"] == "root@gds.example"
+            && v["has_password"] == true));
+    }
+
+    #[test]
+    fn admin_credentials_empty_password_does_not_create_nor_erase() {
+        let _guard = TestGdsSecretsGuard::new();
+        // Mot de passe vide sur une entrée inexistante → aucune création.
+        save_admin_credentials("h", "8080", "a@b", "").unwrap();
+        assert!(list_admin_servers().is_empty());
+        // Mot de passe mémorisé, puis re-sauvegarde SANS mot de passe → conservé.
+        save_admin_credentials("h", "8080", "a@b", "pw1").unwrap();
+        save_admin_credentials("h", "8081", "a@b", "").unwrap();
+        let saved = get_admin_credentials("h", "a@b").unwrap().unwrap();
+        assert_eq!(saved.admin_password.as_deref(), Some("pw1"), "secret conservé");
+        assert_eq!(saved.http_port, "8081", "le port a bien été mis à jour");
+        // Hôte ou email vide → refus explicite (jamais d'entrée anonyme).
+        assert!(save_admin_credentials("", "8080", "a@b", "pw").is_err());
+        assert!(save_admin_credentials("h", "8080", "", "pw").is_err());
     }
 
     #[test]

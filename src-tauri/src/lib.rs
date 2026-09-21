@@ -103,6 +103,9 @@ use gds_core::git as gds_git;
 mod gds_sync;
 mod gds_ssh;
 mod gds_web;
+// Écran d'administration GDS du poste (refonte GDS, lot L4) : onglet transverse
+// « GDS Serveur » — appels HTTP à l'API du serveur, jamais de SQL direct.
+mod gds_admin;
 mod group_assistant;
 mod plface;
 
@@ -3042,6 +3045,12 @@ pub fn run() {
             gds::gds_connection_status,
             // ── GDS (R1) : provision automatique à l'ouverture / Activer GDS ──
             gds::gds_auto_provision,
+            // ── GDS (refonte, L4.2) : écran d'administration transverse ──
+            // Connexion au serveur par son API HTTP (aucune connexion SQL
+            // directe) ; le mot de passe n'est jamais renvoyé à l'UI.
+            gds_admin::gds_admin_saved_servers,
+            gds_admin::gds_admin_test_connection,
+            gds_admin::gds_admin_connect,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──
