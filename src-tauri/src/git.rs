@@ -20,14 +20,12 @@ use std::os::windows::process::CommandExt;
 use crate::{run_captured, AppState};
 
 // ── Helpers git génériques (GDS, spec_gds.md §4) ──
-// Opérations git serveur/poste réutilisées par `gds.rs` (Phase A3) : init bare,
-// clone, remote add, push, pull. `git_init_bare` a été déplacé dans `gds-core`
-// (`gds_core::git_cmd`, refonte GDS L1.5a) car le serveur GDS en a besoin ; les
-// autres restent ici et passent par `run_captured` (helper process partagé).
-
-// Ré-export : les appels existants `crate::git::git_init_bare` (et son test) sont
-// inchangés.
-pub use gds_core::git_cmd::git_init_bare;
+// Opérations git serveur/poste réutilisées par `gds.rs` (Phase A3) : clone,
+// remote add, push, pull. Elles passent par `run_captured` (helper process
+// partagé) et retournent une erreur lisible en cas d'échec.
+// `git_init_bare` a été déplacé dans `gds-core` (`gds_core::git_cmd`, refonte
+// GDS L1.5a) : depuis L1.5, seul le serveur GDS crée des dépôts bare, le desk
+// ne l'appelle plus que dans ses tests (`gds_core::git_cmd::git_init_bare`).
 
 /// Clone un dépôt distant dans un dossier local. `git clone` écrit sa
 /// progression ET ses erreurs sur stderr (stdout vide) → on vérifie le code de
@@ -430,7 +428,7 @@ mod tests {
 
         let bare = std::env::temp_dir().join(format!("pilot-git-bare-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&bare);
-        git_init_bare(&bare.to_string_lossy()).unwrap();
+        gds_core::git_cmd::git_init_bare(&bare.to_string_lossy()).unwrap();
         let branch = git_current_branch(&work);
         assert!(!branch.is_empty() && branch != "HEAD");
         git_remote_add(&work, "gds", &bare.to_string_lossy()).unwrap();

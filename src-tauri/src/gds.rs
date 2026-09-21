@@ -2480,7 +2480,7 @@ mod tests {
         let bare = std::env::temp_dir().join(format!("pilot-gds-bare-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&bare);
         let bare = bare.to_string_lossy().to_string();
-        crate::git::git_init_bare(&bare).unwrap();
+        gds_core::git_cmd::git_init_bare(&bare).unwrap();
 
         // 1. invariant : non-repo → initialisé avec premier commit.
         assert!(!crate::git::git_is_repo(&work));

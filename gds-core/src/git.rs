@@ -1,35 +1,35 @@
-// gds_git.rs — Dépôts git serveur GDS (spec_gds.md §4)
+// git.rs — Dépôts git serveur GDS (spec_gds.md §4)
 //
-// Un repo bare par projet (`<gds_repos_dir>/<projet>.git`), transport SSH par
-// clef liée à l'email. Réutilise les helpers git de `git.rs` (git_init_bare,
-// git_remote_add, git_push, git_current_branch). Valide les chemins (anti path
-// traversal).
+// Déplacé de `src-tauri/src/gds_git.rs` (refonte GDS, L1.5) : un repo bare par
+// projet (`<gds_repos_dir>/<projet>.git`), transport SSH par clef liée à
+// l'email. Réutilise `git_init_bare` de `git_cmd` (le desk ne s'en sert plus
+// que dans ses tests). Valide les chemins (anti path traversal).
 
-use crate::gds_db;
-use crate::git::git_init_bare;
+use crate::db;
+use crate::git_cmd::git_init_bare;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::path::PathBuf;
 
 /// Dossier des repos serveur (`<gds_local_dir>/repos`).
-pub(crate) fn repos_dir(gds_local_dir: &str) -> PathBuf {
+pub fn repos_dir(gds_local_dir: &str) -> PathBuf {
     PathBuf::from(gds_local_dir).join("repos")
 }
 
 /// Chemin du repo bare d'un projet (`<gds_repos_dir>/<projet>.git`).
-pub(crate) fn repo_bare_path(gds_local_dir: &str, project_name: &str) -> PathBuf {
+pub fn repo_bare_path(gds_local_dir: &str, project_name: &str) -> PathBuf {
     repos_dir(gds_local_dir).join(format!("{}.git", project_name))
 }
 
 /// Vrai si le repo bare d'un projet existe déjà sur le serveur GDS local
 /// (`<gds_local_dir>/repos/<projet>.git`). V1 = serveur local, le dossier des
 /// repos est sous `gds_local_dir` partagé (chantier UX GDS, Etape 5).
-pub(crate) fn bare_repo_exists(gds_local_dir: &str, project_name: &str) -> bool {
+pub fn bare_repo_exists(gds_local_dir: &str, project_name: &str) -> bool {
     repo_bare_path(gds_local_dir, project_name).exists()
 }
 
 /// Valide un nom de projet (anti path traversal) : pas de séparateur, pas de `..`.
-pub(crate) fn validate_project_name(name: &str) -> Result<String, String> {
+pub fn validate_project_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Nom de projet vide".to_string());
@@ -44,14 +44,14 @@ pub(crate) fn validate_project_name(name: &str) -> Result<String, String> {
 /// Nom du dépôt bare (`<nom>.git`) — nom validé (anti path traversal).
 /// Partagé par les deux modes : LOCAL (`add_project`) et DISTANT
 /// (`add_project_remote`), pour garantir le MÊME contrat de nommage.
-pub(crate) fn repo_name_for(project_name: &str) -> Result<String, String> {
+pub fn repo_name_for(project_name: &str) -> Result<String, String> {
     Ok(format!("{}.git", validate_project_name(project_name)?))
 }
 
 /// Supprime le repo bare d'un projet du serveur GDS (Évolution 2). Chemin
 /// validé via `validate_project_name` (anti path traversal) et verrouillé sur
 /// le dossier `repos` GDS : on ne supprime JAMAIS hors du dossier repos.
-pub(crate) fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(), String> {
+pub fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(), String> {
     let name = validate_project_name(project_name)?;
     let bare = repo_bare_path(gds_local_dir, &name);
     // Ceinture + bretelles : le chemin doit rester sous le dossier repos GDS.
@@ -68,7 +68,7 @@ pub(crate) fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(),
 
 /// Crée le repo bare + enregistre le projet et le repo en base. `git_init_bare`
 /// est bloquant → exécuté dans `spawn_blocking`. Retourne un résumé JSON.
-pub(crate) async fn add_project(
+pub async fn add_project(
     pool: &PgPool,
     gds_local_dir: &str,
     name: &str,
@@ -95,19 +95,19 @@ pub(crate) async fn add_project(
     // Idempotent : si le projet existe déjà en base (ex: tentative précédente
     // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
     // sur la contrainte UNIQUE `projects.name`.
-    let project_id = match gds_db::get_project_by_name(pool, &name).await? {
+    let project_id = match db::get_project_by_name(pool, &name).await? {
         Some(id) => id,
         None => {
-            gds_db::create_project(pool, &name, &repo_name, "", &path_on_server, "active", description).await?
+            db::create_project(pool, &name, &repo_name, "", &path_on_server, "active", description).await?
         }
     };
     // git_repos.project_id est UNIQUE → idempotent aussi.
-    if gds_db::get_git_repo_by_project(pool, project_id).await?.is_none() {
-        gds_db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
+    if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
+        db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
     }
     // Associer l'utilisateur (email) au projet (V1 : tous accès, table prête V2).
-    if let Ok(Some(user)) = gds_db::get_user_by_email(pool, email).await {
-        let _ = gds_db::create_project_member(pool, project_id, user.id, "dev").await;
+    if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
+        let _ = db::create_project_member(pool, project_id, user.id, "dev").await;
     }
     Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
 }
@@ -117,7 +117,7 @@ pub(crate) async fn add_project(
 /// MANUELLEMENT sur le serveur (docs/gds-linux-setup.md). `path_on_server` est
 /// le chemin POSIX du bare côté serveur, `remote_url` l'URL git SSH.
 /// Idempotent (projet/dépôt déjà en base → réutilisés).
-pub(crate) async fn add_project_remote(
+pub async fn add_project_remote(
     pool: &PgPool,
     name: &str,
     path_on_server: &str,
@@ -127,10 +127,10 @@ pub(crate) async fn add_project_remote(
 ) -> Result<Value, String> {
     let name = validate_project_name(name)?;
     let repo_name = repo_name_for(&name)?;
-    let project_id = match gds_db::get_project_by_name(pool, &name).await? {
+    let project_id = match db::get_project_by_name(pool, &name).await? {
         Some(id) => id,
         None => {
-            gds_db::create_project(
+            db::create_project(
                 pool,
                 &name,
                 &repo_name,
@@ -142,11 +142,11 @@ pub(crate) async fn add_project_remote(
             .await?
         }
     };
-    if gds_db::get_git_repo_by_project(pool, project_id).await?.is_none() {
-        gds_db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
+    if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
+        db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
     }
-    if let Ok(Some(user)) = gds_db::get_user_by_email(pool, email).await {
-        let _ = gds_db::create_project_member(pool, project_id, user.id, "dev").await;
+    if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
+        let _ = db::create_project_member(pool, project_id, user.id, "dev").await;
     }
     Ok(json!({
         "project_id": project_id,
