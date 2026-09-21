@@ -537,7 +537,7 @@ export function createGds(container) {
         </div>
         <div id="gds-sync-err" class="gds-error"></div>
         <div id="gds-sync-ok" class="gds-ok"></div>
-        <div id="gds-sync-status" class="gds-lock-state"></div>
+        <div id="gds-sync-status" class="gds-sync-state"></div>
         <div class="gds-actions">
           <button id="gds-sync-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Synchroniser</button>
         </div>
