@@ -11,7 +11,7 @@
 //   L5.2 « Serveurs GDS »      → PARAMS_SECTIONS[0]  (IMPLÉMENTÉ)
 //   L5.3 « Mon identité »      → PARAMS_SECTIONS[1]  (IMPLÉMENTÉ)
 //   L5.4 « Mes clés »          → PARAMS_SECTIONS[2]  (IMPLÉMENTÉ)
-//   L5.5 « Mes projets GDS »   → PARAMS_SECTIONS[3]
+//   L5.5 « Mes projets GDS »   → PARAMS_SECTIONS[3]  (IMPLÉMENTÉ)
 //
 // Règle secrets : aucun mot de passe, aucune clé privée n'est renvoyé à
 // l'interface ni injecté dans le HTML. Les rendus ci-dessous sont purs et ne
@@ -369,6 +369,136 @@ export function renderKeysSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L5.5 — « Mes projets GDS » : opérations courantes par projet
+//
+// Réutilise les commandes/procédures EXISTANTES (aucune logique réécrite) :
+//   - `get_recent_projects`       → projets locaux connus de ce poste
+//   - `gds_get_config`            → projet provisionné ? (`.pilot/gds.json`)
+//   - `gds_connection_status`     → état de connexion + présent sur le serveur
+//   - `gds_sync_project`          → synchroniser
+//   - `gds_add_project`           → ajouter un projet local au serveur GDS
+//   - `gds_remove_project`        → retirer (avec ou sans purge serveur)
+//   - `sidebar.openProjectByPath` → ouvrir le projet local dans Pilot
+// Aucun secret n'est affiché : seuls le nom, le chemin et l'état le sont.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Nom de dossier d'un chemin (affichage). Pure — testable. */
+export function projectBasename(path) {
+  return (
+    String(path == null ? "" : path)
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() || ""
+  );
+}
+
+/** État initial de la section « Mes projets GDS » (pure). Aucun secret. */
+export function initialProjectsState() {
+  return {
+    loading: true,
+    projects: [],
+    error: "",
+    status: null,
+    pendingRemove: null, // chemin du projet en attente de confirmation de retrait
+  };
+}
+
+/**
+ * Badge d'état d'un projet GDS (pure, testable).
+ * `status` : « connected » | « error » | « not_configured » (valeurs renvoyées
+ * par `gds_connection_status`) ; `provisioned` : `.pilot/gds.json` présent et
+ * actif ; `onServer` : projet déjà enregistré sur le serveur GDS.
+ */
+export function projectStatusBadge(status, provisioned, onServer) {
+  if (status === "connected") return { kind: "ok", text: "Connecté" };
+  if (onServer) return { kind: "warn", text: "Sur le serveur — non connecté" };
+  if (status === "error") return { kind: "warn", text: "Connexion en attente" };
+  if (provisioned) return { kind: "warn", text: "Provisionné — non ajouté" };
+  return { kind: "off", text: "Non configuré" };
+}
+
+/**
+ * Rend la ligne d'un projet GDS (pure, testable) : nom + chemin + état, puis les
+ * actions disponibles selon l'état (ouvrir, synchroniser, ajouter, retirer).
+ * Le retrait exige une double confirmation avec case « purger le serveur ».
+ * @param {Object} p entrée projet `{ path, name, provisioned, status, onServer }`
+ * @param {string|null} pendingRemove chemin du projet en attente de confirmation
+ */
+export function renderProjectRowHtml(p = {}, pendingRemove = null) {
+  const path = String(p.path || "");
+  const name = String(p.name || projectBasename(path));
+  const badge = projectStatusBadge(p.status, p.provisioned, p.onServer);
+  const connected = p.status === "connected";
+  const canAdd = !!p.provisioned && !p.onServer && !connected;
+  const canRemove = connected || !!p.onServer;
+  const isPend = !!pendingRemove && pendingRemove === path;
+  return `<div class="gds-params-srv-row" data-path="${esc(path)}">
+        <div class="gds-params-srv-main">
+          <div class="gds-params-srv-title">${esc(name)} <span class="gds-badge gds-badge-${badge.kind}">${esc(badge.text)}</span></div>
+          <div class="gds-params-srv-sub">${esc(path)}</div>
+        </div>
+        <div class="gds-params-srv-actions">
+          <button class="gds-admin-btn" data-proj-action="open">Ouvrir</button>
+          ${connected ? `<button class="gds-admin-btn" data-proj-action="sync">Synchroniser</button>` : ""}
+          ${canAdd ? `<button class="gds-admin-btn" data-proj-action="add">Ajouter au GDS</button>` : ""}
+          ${
+            canRemove
+              ? isPend
+                ? `<button class="gds-admin-btn danger" data-proj-action="remove-confirm">Confirmer le retrait</button>
+                   <button class="gds-admin-btn" data-proj-action="remove-cancel">Annuler</button>`
+                : `<button class="gds-admin-btn" data-proj-action="remove">Retirer</button>`
+              : ""
+          }
+        </div>
+        ${isPend ? `<label class="gds-check"><input type="checkbox" data-proj-purge> Purger aussi le serveur (dépôt bare + entrées en base)</label>` : ""}
+      </div>`;
+}
+
+/**
+ * Rend la liste des projets GDS (pure, testable) : chargement / erreur / vide /
+ * une ligne par projet.
+ * @param {Object} state état de la section (voir `initialProjectsState`)
+ */
+export function renderProjectsListHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...(state || {}) };
+  if (s.loading) {
+    return `<div class="gds-admin-status loading">Chargement de vos projets…</div>`;
+  }
+  if (s.error) {
+    return `<div class="gds-admin-status error">⚠️ ${esc(s.error)}</div>`;
+  }
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  if (!projects.length) {
+    return `<div class="gds-admin-status idle">Aucun projet local connu. Ouvrez un projet, activez le GDS dans son onglet « 🌐 GDS », puis revenez ici pour le synchroniser, l'ajouter ou le retirer.</div>`;
+  }
+  return projects.map((p) => renderProjectRowHtml(p, s.pendingRemove)).join("");
+}
+
+/**
+ * Rend la section « Mes projets GDS » complète (pure, testable). Remplace le
+ * squelette « À venir — L5.5 » de la coquille transverse.
+ * @param {Object} state état de la section (voir `initialProjectsState`)
+ */
+export function renderProjectsSectionHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...(state || {}) };
+  const count = Array.isArray(s.projects) ? s.projects.length : 0;
+  const badge = s.loading
+    ? `<span class="gds-admin-todo">Chargement…</span>`
+    : `<span class="gds-admin-badge ok">${count} projet${count > 1 ? "s" : ""}</span>`;
+  return `
+      <section class="gds-admin-section" data-section-id="projects">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="folder-git-2" class="icon-sm"></i> Mes projets GDS</div>
+          ${badge}
+        </div>
+        <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[3].desc)}</div>
+        <div id="gds-params-proj-list" class="gds-params-srv-list">${renderProjectsListHtml(s)}</div>
+        <div id="gds-params-proj-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
+        <div class="gds-admin-hint">« Ouvrir » active le projet dans Pilot. « Synchroniser », « Ajouter au GDS » et « Retirer » opèrent sur le projet choisi, même s'il n'est pas le projet actif. Ajouter exige votre identité globale (section « Mon identité »).</div>
+      </section>`;
+}
+
 /**
  * Rend le HTML de la coquille de l'écran de paramétrage (pure, testable).
  * RÉUTILISE `renderAdminShellHtml` (gds-admin.js) : la coquille et le rendu de
@@ -404,6 +534,8 @@ export function createGdsParams(container) {
   const identityState = initialIdentityState();
   /** L5.4 — état de la section « Mes clés » (clé publique du poste). */
   const keysState = initialKeysState();
+  /** L5.5 — état de la section « Mes projets GDS » (opérations courantes). */
+  const projectsState = initialProjectsState();
 
   const q = (sel) => container.querySelector(sel);
 
@@ -455,6 +587,7 @@ export function createGdsParams(container) {
         servers: renderServersSectionHtml(state),
         identity: renderIdentitySectionHtml(identityState),
         keys: renderKeysSectionHtml({ ...keysState, email: identityState.email }),
+        projects: renderProjectsSectionHtml(projectsState),
       },
     });
     refreshIcons(container);
@@ -627,6 +760,10 @@ export function createGdsParams(container) {
     for (const btn of container.querySelectorAll("[data-srv-action]")) {
       btn.addEventListener("click", () => rowAction(btn));
     }
+    // ── L5.5 : mes projets GDS ──
+    for (const btn of container.querySelectorAll("[data-proj-action]")) {
+      btn.addEventListener("click", () => projectRowAction(btn));
+    }
     // ── L5.3 : identité globale ──
     const idSave = q("#gds-params-id-save");
     if (idSave) idSave.addEventListener("click", () => saveIdentity());
@@ -737,6 +874,142 @@ export function createGdsParams(container) {
     draw();
   }
 
+  // ── L5.5 : chargement + opérations courantes par projet GDS ──
+
+  function refreshProjects() {
+    projectsState.loading = true;
+    projectsState.error = "";
+    draw();
+    Promise.resolve()
+      .then(() => invoke("get_recent_projects"))
+      .then(async (paths) => {
+        const list = Array.isArray(paths) ? paths : [];
+        const rows = [];
+        for (const raw of list) {
+          const path = String(raw || "");
+          if (!path) continue;
+          let cfg = null;
+          try {
+            cfg = await invoke("gds_get_config", { project: path });
+          } catch (_) {
+            cfg = null;
+          }
+          const provisioned = !!(cfg && cfg.enabled);
+          let status = "not_configured";
+          let onServer = false;
+          if (provisioned) {
+            try {
+              const conn = await invoke("gds_connection_status", { project: path });
+              status = (conn && conn.status) || "not_configured";
+              onServer = !!(conn && conn.on_server);
+            } catch (_) {
+              status = "error";
+            }
+          }
+          rows.push({ path, name: projectBasename(path), provisioned, status, onServer });
+        }
+        projectsState.projects = rows;
+      })
+      .catch((e) => {
+        projectsState.projects = [];
+        projectsState.error = friendlyGdsError(e);
+      })
+      .finally(() => {
+        projectsState.loading = false;
+        draw();
+      });
+  }
+
+  async function projectRowAction(btn) {
+    const row = btn.closest("[data-path]");
+    if (!row) return;
+    const path = row.dataset.path || "";
+    const entry = projectsState.projects.find((p) => p.path === path);
+    if (!entry) return;
+    const action = btn.dataset.projAction;
+
+    if (action === "open") {
+      const sb = window._pilotGetSidebar ? window._pilotGetSidebar() : null;
+      if (!sb || typeof sb.openProjectByPath !== "function") {
+        projectsState.status = { kind: "error", text: "Ouverture de projet indisponible." };
+        draw();
+        return;
+      }
+      try {
+        await sb.openProjectByPath(path);
+        projectsState.status = { kind: "ok", text: `✅ Projet ouvert : ${entry.name}` };
+      } catch (e) {
+        projectsState.status = { kind: "error", text: friendlyGdsError(e) };
+      }
+      draw();
+      return;
+    }
+
+    if (action === "sync") {
+      projectsState.status = { kind: "loading", text: `Synchronisation de « ${entry.name} »…` };
+      draw();
+      try {
+        const res = await invoke("gds_sync_project", { project: path });
+        projectsState.status = { kind: "ok", text: `✅ Synchronisé (${(res && res.action) || "ok"}).` };
+        await refreshProjects();
+      } catch (e) {
+        projectsState.status = { kind: "error", text: friendlyGdsError(e) };
+        draw();
+      }
+      return;
+    }
+
+    if (action === "add") {
+      const email = identityState.email.trim();
+      if (!email) {
+        projectsState.status = { kind: "error", text: "Définissez d'abord votre identité (section « Mon identité »)." };
+        draw();
+        return;
+      }
+      projectsState.status = { kind: "loading", text: `Ajout de « ${entry.name} » au GDS…` };
+      draw();
+      try {
+        await invoke("gds_add_project", { project: path, email, gitName: identityState.gitName.trim() || null });
+        projectsState.status = { kind: "ok", text: `✅ Projet « ${entry.name} » ajouté au GDS.` };
+        await refreshProjects();
+      } catch (e) {
+        projectsState.status = { kind: "error", text: friendlyGdsError(e) };
+        draw();
+      }
+      return;
+    }
+
+    if (action === "remove") {
+      projectsState.pendingRemove = path;
+      projectsState.status = null;
+      draw();
+      return;
+    }
+    if (action === "remove-cancel") {
+      projectsState.pendingRemove = null;
+      draw();
+      return;
+    }
+    if (action === "remove-confirm") {
+      const purgeEl = row.querySelector("[data-proj-purge]");
+      const purgeServer = !!(purgeEl && purgeEl.checked);
+      projectsState.pendingRemove = null;
+      projectsState.status = { kind: "loading", text: `Retrait de « ${entry.name} »…` };
+      draw();
+      try {
+        const res = await invoke("gds_remove_project", { project: path, purgeServer });
+        projectsState.status = res && res.purged_server
+          ? { kind: "ok", text: `✅ Retiré du GDS (purge serveur effectuée) : ${entry.name}` }
+          : { kind: "ok", text: `✅ Retiré du GDS (sans purge serveur) : ${entry.name}` };
+        await refreshProjects();
+      } catch (e) {
+        projectsState.status = { kind: "error", text: friendlyGdsError(e) };
+        draw();
+      }
+      return;
+    }
+  }
+
   /** Message d'erreur lisible (les commandes renvoient déjà des messages). */
   function friendlyGdsError(e) {
     const s = String(e == null ? "" : e);
@@ -750,6 +1023,8 @@ export function createGdsParams(container) {
   // indépendants, fail-open — jamais bloquants pour les autres sections.
   loadIdentity();
   loadKeys();
+  // L5.5 (mes projets GDS) : liste + état, fail-open.
+  refreshProjects();
 
   // Aucune ressource système à libérer ; on renvoie néanmoins le contrat commun
   // des écrans (wrapper + unlisten) pour l'homogénéité de tabs.js.

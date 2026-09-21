@@ -20,6 +20,12 @@ import {
   renderIdentitySectionHtml,
   initialKeysState,
   renderKeysSectionHtml,
+  initialProjectsState,
+  projectBasename,
+  projectStatusBadge,
+  renderProjectRowHtml,
+  renderProjectsListHtml,
+  renderProjectsSectionHtml,
 } from "./gds-params.js";
 import { renderAdminShellHtml } from "./gds-admin.js";
 
@@ -269,5 +275,85 @@ describe("gds-params — section Mes clés (L5.4)", () => {
     const shell = renderParamsShellHtml({ sectionHtml: { keys: section } });
     expect(shell).not.toContain("À venir — L5.4");
     expect(shell).toContain("À venir — L5.5");
+  });
+});
+
+describe("gds-params — section Mes projets GDS (L5.5)", () => {
+  it("initialProjectsState démarre en chargement, sans projet ni secret", () => {
+    const s = initialProjectsState();
+    expect(s.loading).toBe(true);
+    expect(s.projects).toEqual([]);
+    expect(s.error).toBe("");
+    expect(s.status).toBeNull();
+    expect(s.pendingRemove).toBeNull();
+  });
+
+  it("projectBasename gère les séparateurs Windows et POSIX", () => {
+    expect(projectBasename("C:\\dev\\pilot\\mon-projet")).toBe("mon-projet");
+    expect(projectBasename("/home/u/pilot/mon-projet/")).toBe("mon-projet");
+    expect(projectBasename("")).toBe("");
+    expect(projectBasename(null)).toBe("");
+  });
+
+  it("projectStatusBadge distingue connecté / sur le serveur / provisionné / non configuré", () => {
+    expect(projectStatusBadge("connected", true, true)).toEqual({ kind: "ok", text: "Connecté" });
+    expect(projectStatusBadge("error", true, true).kind).toBe("warn");
+    expect(projectStatusBadge("not_configured", false, false)).toEqual({ kind: "off", text: "Non configuré" });
+    expect(projectStatusBadge("not_configured", true, false).text).toMatch(/Provisionné/);
+  });
+
+  it("renderProjectsListHtml couvre chargement / erreur / vide", () => {
+    expect(renderProjectsListHtml({ loading: true })).toContain("Chargement de vos projets");
+    expect(renderProjectsListHtml({ loading: false, error: "boom" })).toContain("boom");
+    expect(renderProjectsListHtml({ loading: false, projects: [] })).toContain("Aucun projet local connu");
+  });
+
+  it("renderProjectRowHtml : un projet connecté propose Ouvrir + Synchroniser + Retirer", () => {
+    const html = renderProjectRowHtml({ path: "C:\\dev\\p", name: "p", provisioned: true, status: "connected", onServer: true });
+    expect(html).toContain('data-proj-action="open"');
+    expect(html).toContain('data-proj-action="sync"');
+    expect(html).toContain('data-proj-action="remove"');
+    expect(html).not.toContain('data-proj-action="add"');
+  });
+
+  it("renderProjectRowHtml : un projet provisionné non ajouté propose « Ajouter au GDS »", () => {
+    const html = renderProjectRowHtml({ path: "/p", name: "p", provisioned: true, status: "not_configured", onServer: false });
+    expect(html).toContain('data-proj-action="add"');
+    expect(html).not.toContain('data-proj-action="sync"');
+    expect(html).not.toContain('data-proj-action="remove"');
+  });
+
+  it("renderProjectRowHtml : un projet non configuré ne propose que Ouvrir", () => {
+    const html = renderProjectRowHtml({ path: "/p", name: "p", provisioned: false, status: "not_configured", onServer: false });
+    expect(html).toContain('data-proj-action="open"');
+    expect(html).not.toContain('data-proj-action="add"');
+    expect(html).not.toContain('data-proj-action="sync"');
+    expect(html).not.toContain('data-proj-action="remove"');
+    expect(html).toContain("Non configuré");
+  });
+
+  it("renderProjectRowHtml : le retrait exige une double confirmation avec case de purge", () => {
+    const pending = renderProjectRowHtml(
+      { path: "/p", name: "p", provisioned: true, status: "connected", onServer: true },
+      "/p"
+    );
+    expect(pending).toContain('data-proj-action="remove-confirm"');
+    expect(pending).toContain('data-proj-action="remove-cancel"');
+    expect(pending).toContain("data-proj-purge");
+    expect(pending).not.toContain('data-proj-action="remove"');
+  });
+
+  it("renderProjectRowHtml échappe le nom et le chemin", () => {
+    const html = renderProjectRowHtml({ path: '/x"><script>', name: 'n<script>', provisioned: false, status: "not_configured" });
+    expect(html).not.toContain("<script>");
+  });
+
+  it("renderProjectsSectionHtml remplace le squelette L5.5", () => {
+    const section = renderProjectsSectionHtml({ loading: false, projects: [] });
+    expect(section).toContain('data-section-id="projects"');
+    expect(section).toContain('id="gds-params-proj-list"');
+    expect(section).not.toContain("À venir — L5.5");
+    const shell = renderParamsShellHtml({ sectionHtml: { projects: section } });
+    expect(shell).not.toContain("À venir — L5.5");
   });
 });
