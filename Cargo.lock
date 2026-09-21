@@ -1644,6 +1644,7 @@ version = "0.4.16"
 dependencies = [
  "axum",
  "gds-core",
+ "serde_json",
  "sqlx",
  "tokio",
  "tower",

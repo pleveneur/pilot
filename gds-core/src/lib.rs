@@ -17,4 +17,5 @@ pub mod git_cmd;
 pub mod http;
 pub mod proc;
 pub mod rate;
+pub mod server_status;
 pub mod ssh;

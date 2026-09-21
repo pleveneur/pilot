@@ -30,6 +30,10 @@ struct Session {
     #[allow(dead_code)]
     token_hash: Vec<u8>,
     expires_at: Instant,
+    /// Rôle du compte au moment de la création de la session (chaîne vide si
+    /// inconnu, cas des sessions du mode remote du poste). Consommé par le garde
+    /// « administrateur uniquement » des routes d'administration GDS (L2.2).
+    role: String,
 }
 
 /// Stock des sessions en mémoire vive. La map disparaît au redémarrage du process :
@@ -72,21 +76,49 @@ impl WebAuth {
             .is_ok()
     }
 
-    /// Crée une session, renvoie le token brut (base64url) à transmettre au client.
-    /// Le token brut n'est **jamais** stocké ; seul son hash SHA-256 l'est.
+    /// Crée une session **sans rôle** (comportement historique du mode remote
+    /// du poste, où l'identité est celle du propriétaire et non d'un compte
+    /// GDS), renvoie le token brut (base64url).
     pub fn create_session(&self, ttl: Duration) -> String {
+        self.create_session_as("", ttl)
+    }
+
+    /// Crée une session **portant un rôle** (compte GDS), renvoie le token brut
+    /// (base64url) à transmettre au client. Le token brut n'est **jamais**
+    /// stocké ; seul son hash SHA-256 l'est. Le rôle accompagne la session pour
+    /// que les gardes de routes n'aient pas à relire la base à chaque requête.
+    pub fn create_session_as(&self, role: &str, ttl: Duration) -> String {
         let mut bytes = [0u8; 32];
         OsRng.fill_bytes(&mut bytes);
         let token = encode_token(&bytes);
         let entry = Session {
             token_hash: hash_token(&token),
             expires_at: Instant::now() + ttl,
+            role: role.to_string(),
         };
         self.sessions
             .lock()
             .unwrap()
             .insert(entry.token_hash.clone(), entry);
         token
+    }
+
+    /// Rôle associé à un token valide ; `None` si le token est inconnu ou
+    /// expiré (la session expirée est nettoyée au passage, comme `validate`).
+    pub fn role_of(&self, token: &str) -> Option<String> {
+        if token.is_empty() {
+            return None;
+        }
+        let key = hash_token(token);
+        let mut sessions = self.sessions.lock().unwrap();
+        match sessions.get(&key) {
+            Some(sess) if sess.expires_at > Instant::now() => Some(sess.role.clone()),
+            Some(_) => {
+                sessions.remove(&key);
+                None
+            }
+            None => None,
+        }
     }
 
     /// Valide un token brut : true si une session correspondante existe et n'est pas
@@ -174,6 +206,28 @@ mod tests {
         assert_eq!(auth.active_count(), 0);
         assert!(!auth.validate(&t1));
         assert!(!auth.validate(&t2));
+    }
+
+    #[test]
+    fn role_is_bound_to_the_session() {
+        let auth = WebAuth::new();
+        let admin = auth.create_session_as("admin", Duration::from_secs(60));
+        let legacy = auth.create_session(Duration::from_secs(60));
+        assert_eq!(auth.role_of(&admin).as_deref(), Some("admin"));
+        // Session historique (mode remote du poste) : rôle vide, jamais "admin".
+        assert_eq!(auth.role_of(&legacy).as_deref(), Some(""));
+        assert_eq!(auth.role_of("bogus-token"), None);
+        assert_eq!(auth.role_of(""), None);
+    }
+
+    #[test]
+    fn role_of_expired_session_is_none_and_cleans_up() {
+        let auth = WebAuth::new();
+        let token = auth.create_session_as("admin", Duration::from_millis(30));
+        assert_eq!(auth.role_of(&token).as_deref(), Some("admin"));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(auth.role_of(&token), None);
+        assert_eq!(auth.active_count(), 0);
     }
 
     #[test]

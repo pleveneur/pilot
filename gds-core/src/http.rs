@@ -22,6 +22,7 @@ use crate::audit::WebAudit;
 use crate::auth::WebAuth;
 use crate::db as gds_db;
 use crate::rate::{token_key, WebGuard};
+use crate::server_status;
 use axum::extract::{ConnectInfo, Extension, Path, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
@@ -51,6 +52,13 @@ pub trait GdsCtx: Send + Sync + 'static {
     fn guard(&self) -> &Arc<WebGuard>;
     /// Journal d'audit distant.
     fn audit(&self) -> &Arc<WebAudit>;
+    /// Racine des dépôts bare du serveur, pour l'état administrateur (L2.2).
+    /// `None` par défaut : un contexte qui ne gère pas de dépôts (le poste) ne
+    /// déclare aucun volume — la route d'administration n'est de toute façon
+    /// montée que par le serveur autonome.
+    fn repos_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 /// Contexte du serveur GDS autonome (conteneur) : un seul pool, fixe.
@@ -59,6 +67,8 @@ pub struct ServerCtx {
     pub auth: Arc<WebAuth>,
     pub guard: Arc<WebGuard>,
     pub audit: Arc<WebAudit>,
+    /// Racine des dépôts bare (supervision administrateur L2.2).
+    pub repos_root: std::path::PathBuf,
 }
 
 impl GdsCtx for ServerCtx {
@@ -76,6 +86,10 @@ impl GdsCtx for ServerCtx {
 
     fn audit(&self) -> &Arc<WebAudit> {
         &self.audit
+    }
+
+    fn repos_root(&self) -> Option<std::path::PathBuf> {
+        Some(self.repos_root.clone())
     }
 }
 
@@ -132,18 +146,69 @@ pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
         )
 }
 
-/// Assemble le routeur HTTP du **service autonome** `gds-server` : les routes
-/// partagées du socle (`gds_routes`), protégées par l'authentification par
-/// token (`auth_middleware`), prêtes à être servies (`axum::serve`).
+/// Assemble le routeur HTTP du **service autonome** `gds-server`.
+///
+/// Trois zones distinctes (refonte GDS, L2.2) :
+///
+///  1. **Routes publiques** (`public_routes`) : `GET /api/gds/health`, aucune
+///     authentification — un point de supervision doit répondre sans jeton et
+///     ne divulgue aucune donnée sensible ;
+///  2. **Routes partagées du socle** (`gds_routes`) : derrière
+///     `auth_middleware` (token opaque), comportement inchangé ;
+///  3. **Routes d'administration** (`admin_routes`) : derrière
+///     `auth_middleware` **puis** `require_admin` (rôle `admin` exigé).
 ///
 /// Le poste (`src-tauri`) monte les **mêmes** `gds_routes` derrière son propre
 /// middleware dans `web_server.rs` ; ce point de montage est propre au service
 /// (contexte figé, une seule base) et n'y est donc pas partagé.
 pub fn server_router<S: GdsCtx>(ctx: Arc<S>) -> Router {
-    Router::new()
+    // Garde de rôle appliqué aux seules routes d'administration (L2.2).
+    let admin = admin_routes::<S>().layer(from_fn_with_state(ctx.clone(), require_admin::<S>));
+    // Authentification appliquée à tout ce qui n'est pas public.
+    let protected = Router::new()
         .merge(gds_routes::<S>())
-        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<S>))
+        .merge(admin)
+        .layer(from_fn_with_state(ctx.clone(), auth_middleware::<S>));
+    Router::new()
+        .merge(public_routes::<S>())
+        .merge(protected)
         .with_state(ctx)
+}
+
+/// Routes **publiques** du service (aucune authentification).
+///
+/// À ce jour : la santé. Elle ne lit que des compteurs d'entités et des
+/// métadonnées de version ; aucune donnée personnelle ni secret.
+pub fn public_routes<S: GdsCtx>() -> Router<Arc<S>> {
+    Router::new().route("/api/gds/health", get(gds_health::<S>))
+}
+
+/// Routes **d'administration** du service (montées derrière `require_admin`).
+///
+/// À ce jour : l'état serveur (volumes + dernière entrée d'audit). Les routes
+/// d'administration à venir (comptes, dépôts, audit, contrôle) viendront ici.
+pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
+    Router::new().route("/api/gds/admin/server", get(gds_admin_server::<S>))
+}
+
+/// `GET /api/gds/health` — **route publique**.
+///
+/// Répond toujours en 200, même base injoignable (compteurs `null`) : la
+/// supervision doit distinguer « service vivant » de « base prête ».
+async fn gds_health<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
+    let pool = ctx.pool().ok();
+    let report = server_status::collect_health(pool.as_ref(), server_status::started_at()).await;
+    Json(report).into_response()
+}
+
+/// `GET /api/gds/admin/server` — **réservée au rôle `admin`** (voir
+/// `require_admin`). Volumes (dépôts + base) et dernière entrée d'audit.
+async fn gds_admin_server<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
+    let pool = ctx.pool().ok();
+    let repos_root = ctx.repos_root();
+    let last_audit = ctx.audit().recent(1).into_iter().next();
+    let report = server_status::collect_admin(pool.as_ref(), repos_root.as_deref(), last_audit).await;
+    Json(report).into_response()
 }
 
 fn err_response(e: String) -> Response {
@@ -155,11 +220,14 @@ fn err_response(e: String) -> Response {
 /// Client authentifié injecté par `auth_middleware` dans les extensions de la
 /// requête, pour que les handlers puissent appliquer un rate limiting par token
 /// et émettre un audit log (origine + sujet) sans re-extraire le bearer.
-/// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source.
+/// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source,
+/// `role` = rôle du compte porté par la session (chaîne vide si la session ne
+/// porte pas de rôle — cas du mode remote du poste).
 #[derive(Clone)]
 pub struct AuthedClient {
     pub key: String,
     pub ip: String,
+    pub role: String,
 }
 
 /// Middleware d'authentification : valide le header `Authorization: Bearer <token>`.
@@ -180,11 +248,50 @@ pub async fn auth_middleware<S: GdsCtx>(
             req.extensions_mut().insert(AuthedClient {
                 key: token_key(&token),
                 ip,
+                role: ctx.auth().role_of(&token).unwrap_or_default(),
             });
             return next.run(req).await;
         }
     }
     (StatusCode::UNAUTHORIZED, Json(json!({"error": "Non authentifié"}))).into_response()
+}
+
+/// Garde « administrateur uniquement » (L2.2), monté **après**
+/// `auth_middleware` sur les seules routes d'administration : l'appelant doit
+/// être authentifié (sinon 401) et sa session doit porter le rôle `admin`
+/// (sinon 403, avec une entrée d'audit `admin_denied`).
+///
+/// Le rôle provient de la **session existante** (`WebAuth::create_session_as`),
+/// il n'est donc jamais relu depuis la base à chaque requête. Le contrôle fin
+/// des rôles et statuts (matrice de droits, revalidation `status = active`)
+/// appartient au lot L3.3 qui étendra ce garde ; ici il est volontairement
+/// **fermé par défaut** : une session sans rôle est refusée.
+async fn require_admin<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let (ip, key, role, path) = match req.extensions().get::<AuthedClient>() {
+        Some(c) => (
+            c.ip.clone(),
+            c.key.clone(),
+            c.role.clone(),
+            req.uri().path().to_string(),
+        ),
+        None => {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Non authentifié"})))
+                .into_response()
+        }
+    };
+    if role == "admin" {
+        return next.run(req).await;
+    }
+    ctx.audit().record(&ip, &key, "admin_denied", &path, false);
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "Accès réservé à l'administrateur" })),
+    )
+        .into_response()
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Option<String> {

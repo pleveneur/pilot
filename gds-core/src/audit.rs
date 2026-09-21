@@ -43,7 +43,7 @@ const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 /// Nombre de lignes conservées après rotation.
 const ROTATE_KEEP: usize = 1000;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuditEntry {
     /// Timestamp epoch en millisecondes.
     pub ts: u64,
@@ -55,7 +55,7 @@ pub struct AuditEntry {
     /// | "set_model" | "project_open" | "project_create" | "ws_open" | "ws_close"
     /// | "kick" | "set_password" | "rate_limited" | "file_save" | "file_create"
     /// | "file_meta" | "tracking_create" | "tracking_update" | "tracking_delete"
-    /// | "tracking_list".
+    /// | "tracking_list" | "admin_denied".
     /// Les actions de suivi fusionné (GDS Phase C1.5) portent le détail
     /// "<entité>:<clé>" (ex: "clients:Acme", "tasks:42").
     pub action: String,

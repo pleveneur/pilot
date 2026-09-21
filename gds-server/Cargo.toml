@@ -19,7 +19,9 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 
 # `tower` permet de tester le montage du routeur (`ServiceExt::oneshot`) sans
-# base de données. `tokio` (macros) pour les tests asynchrones.
+# base de données. `tokio` (macros) pour les tests asynchrones. `serde_json`
+# (L2.2) pour inspecter la forme exacte des réponses de supervision.
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tower = { version = "0.5", features = ["util"] }
+serde_json = "1"
