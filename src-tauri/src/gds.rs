@@ -8,7 +8,6 @@ use crate::gds_db;
 use crate::gds_git;
 use crate::gds_ssh;
 use crate::git::{ensure_git_repo_with_identity, git_clone, git_config_user_email, git_config_user_name, git_current_branch, git_has_remote, git_is_repo, git_push, git_remote_add, git_remote_remove};
-use crate::web_auth::WebAuth;
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -18,6 +17,11 @@ use std::path::PathBuf;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::State;
+
+// L1.8b : la « préparation de la base » (`provision_db`) vit désormais dans le
+// socle partagé (`gds_core::db`) — le serveur autonome en a besoin. Réexportée
+// ici pour laisser intacts tous les appelants du desk.
+pub(crate) use gds_core::db::provision_db;
 
 /// Nom du fichier de secrets GDS (mots de passe), stocké HORS du projet
 /// (dans `~/.pilot/`), en 0600, jamais commité. Les mots de passe ne vivent
@@ -835,35 +839,6 @@ pub(crate) fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
         }
     }
     format!("ssh://git@{}/{}.git", host, project_name)
-}
-
-/// Provisionne la base GDS (test connexion → provision → migrate → admin) et
-/// retourne le pool applicatif. Partagé entre la commande Tauri et la route web.
-pub(crate) async fn provision_db(
-    db_addr: &str,
-    db_user: &str,
-    db_password: &str,
-    admin_email: &str,
-    admin_password: &str,
-) -> Result<PgPool, String> {
-    // 1. Test connexion PostgreSQL AVANT activation.
-    let _test = gds_db::connect(db_addr).await?;
-    // 2. Provision base + user dédié.
-    gds_db::provision(db_addr, gds_db::GDS_DB_NAME, db_user, db_password).await?;
-    // 3. Pool applicatif + migrations.
-    let app_url = gds_db::app_url_from_admin(db_addr, gds_db::GDS_DB_NAME, db_user, db_password)?;
-    let pool = gds_db::connect(&app_url).await?;
-    gds_db::migrate(&pool).await?;
-    // 4. Provision premier user admin (idempotent).
-    let admin_email = admin_email.trim().to_string();
-    if !admin_email.is_empty() {
-        let existing = gds_db::get_user_by_email(&pool, &admin_email).await?;
-        if existing.is_none() {
-            let hash = WebAuth::hash_password(admin_password).unwrap_or_default();
-            let _ = gds_db::create_user(&pool, &admin_email, "admin", &hash, "admin", "active").await;
-        }
-    }
-    Ok(pool)
 }
 
 /// Ajoute un projet au GDS (initialisation git auto + bare + enregistrement +

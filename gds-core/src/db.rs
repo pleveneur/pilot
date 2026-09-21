@@ -1377,6 +1377,79 @@ pub async fn ticket_event_add(
     Ok(())
 }
 
+/// Provisionne la base GDS (test connexion → provision → migrate → admin) et
+/// retourne le pool applicatif. Partagé entre la commande Tauri et la route web.
+///
+/// Déplacé depuis `src-tauri/src/gds.rs` (refonte GDS, L1.8b) : le serveur
+/// autonome (`gds-server`) doit pouvoir provisionner la base sans le desk.
+/// Seules adaptations : `gds_db::` → appels directs (même module) et
+/// `pub(crate)` → `pub`.
+pub async fn provision_db(
+    db_addr: &str,
+    db_user: &str,
+    db_password: &str,
+    admin_email: &str,
+    admin_password: &str,
+) -> Result<PgPool, String> {
+    // 1. Test connexion PostgreSQL AVANT activation.
+    let _test = connect(db_addr).await?;
+    // 2. Provision base + user dédié.
+    provision(db_addr, GDS_DB_NAME, db_user, db_password).await?;
+    // 3. Pool applicatif + migrations.
+    let app_url = app_url_from_admin(db_addr, GDS_DB_NAME, db_user, db_password)?;
+    let pool = connect(&app_url).await?;
+    migrate(&pool).await?;
+    // 4. Provision premier user admin (idempotent).
+    let admin_email = admin_email.trim().to_string();
+    if !admin_email.is_empty() {
+        let existing = get_user_by_email(&pool, &admin_email).await?;
+        if existing.is_none() {
+            let hash = crate::auth::WebAuth::hash_password(admin_password).unwrap_or_default();
+            let _ = create_user(&pool, &admin_email, "admin", &hash, "admin", "active").await;
+        }
+    }
+    Ok(pool)
+}
+
+/// Garde de publication du suivi : vérifie que `email` est MEMBRE du projet
+/// `project_name` et retourne l'identifiant interne du projet.
+///
+/// Refonte GDS L6 : le verrou de projet a été supprimé ; le forçage de
+/// publication du suivi reste réservé aux MEMBRES du projet, un client non
+/// membre étant refusé avec une entrée d'audit. (La distinction de rôle
+/// dev/admin vs standard relève de L3.6.)
+///
+/// Extrait de `gds_sync::force_push_tracking` (refonte GDS, L1.8b) vers le
+/// socle : c'est la partie dont le serveur autonome a besoin (données déjà en
+/// base, aucune dépendance au poste). `source` est la provenance à journaliser
+/// dans l'audit (`"desktop"` côté desk, `"server"` côté serveur).
+pub async fn ensure_project_member(
+    pool: &PgPool,
+    project_name: &str,
+    email: &str,
+    source: &str,
+) -> Result<i64, String> {
+    let project_id = get_project_by_name(pool, project_name)
+        .await?
+        .ok_or("Projet non enregistré sur le serveur GDS")?;
+    let user = get_user_by_email(pool, email).await?;
+    let user_id = user.map(|u| u.id).unwrap_or(0);
+    let is_member = user_id != 0 && is_project_member(pool, project_id, user_id).await?;
+    if !is_member {
+        audit_gds(
+            pool,
+            source,
+            email,
+            "tracking.force.denied",
+            "not a project member",
+            false,
+        )
+        .await?;
+        return Err("Forçage réservé aux membres du projet".to_string());
+    }
+    Ok(project_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

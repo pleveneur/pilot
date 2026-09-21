@@ -948,28 +948,10 @@ pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<
         return Err("GDS non activé pour ce projet".to_string());
     }
     let name = gds::project_name(project);
-    let project_id = gds_db::get_project_by_name(pool, &name)
-        .await?
-        .ok_or("Projet non enregistré sur le serveur GDS")?;
-    // Refonte GDS L6 : le verrou a été supprimé. Le forçage de publication du
-    // suivi reste réservé aux MEMBRES du projet ; un client non membre est
-    // refusé avec une entrée d'audit. (La distinction de rôle dev/admin vs
-    // standard relève de L3.6.)
-    let user = gds_db::get_user_by_email(pool, &cfg.identity_email).await?;
-    let user_id = user.map(|u| u.id).unwrap_or(0);
-    let is_member = user_id != 0 && gds_db::is_project_member(pool, project_id, user_id).await?;
-    if !is_member {
-        gds_db::audit_gds(
-            pool,
-            "desktop",
-            &cfg.identity_email,
-            "tracking.force.denied",
-            "not a project member",
-            false,
-        )
-        .await?;
-        return Err("Forçage réservé aux membres du projet".to_string());
-    }
+    // L1.8b : la garde de publication (membres du projet — le verrou a été
+    // supprimé en L6) vit désormais dans le socle partagé, car le serveur
+    // autonome en a besoin. Comportement identique (mêmes messages, même audit).
+    gds_db::ensure_project_member(pool, &name, &cfg.identity_email, "desktop").await?;
     // Lire tout le suivi local (since 0) en mémoire, puis pousser en écrasant.
     let (clients, projects, tasks, decisions, client_names) = read_all_sqlite()?;
     let mut pushed: i64 = 0;
