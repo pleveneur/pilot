@@ -1,4 +1,5 @@
-# gds-server/docker-compose.yml — serveur GDS tout-en-un (refonte GDS, L2.8)
+# gds-server/docker-compose.yml — serveur GDS tout-en-un (refonte GDS, L2.8 ;
+# accès réseau privé L2.9)
 #
 # OBJET DE CE FICHIER : rendre le conteneur tout-en-un (L2.7) utilisable TEL QUEL
 # sur un poste Windows (Docker Desktop, moteur WSL2), sans shell Unix côté poste :
@@ -23,6 +24,9 @@
 #      ou variables `GDS_ADMIN_EMAIL`/`GDS_ADMIN_PASSWORD` pour un démarrage non
 #      interactif (voir `.env.example`) ;
 #   5. vérifier :  curl http://127.0.0.1:8080/api/gds/health
+#   6. accès depuis un autre appareil (réseau privé Tailscale) : voir
+#      `docs/gds-server-setup.md` (L2.9) — aucune commande réseau n'est exécutée
+#      par ce fichier.
 #   Le détail (commandes, dépannage) est dans `gds-server/README.md`.
 # ═══════════════════════════════════════════════════════════════════════════
 # ⚠️ SÉCURITÉ — INTERDIT (à lire avant d'ouvrir quoi que ce soit)
@@ -32,12 +36,18 @@
 #     - ne JAMAIS rediriger ces ports depuis une box / un routeur (NAT) ;
 #     - ne JAMAIS publier l'image ou le conteneur via un tunnel public
 #       (Cloudflare Tunnel, ngrok, Funnel sans tailnet, IP publique…) ;
+#       `tailscale serve` (réseau privé) est permis, `tailscale funnel` (grand
+#       public) est INTERDIT ;
 #     - ne JAMAIS supprimer la restriction d'adresse ci-dessous pour écouter
 #       sur une interface publique.
 #   `5432` (synchronisations directes des projets) et `2222` (dépôts git) sont
 #   publiés EN CLAIR, sans TLS : les laisser joignables depuis Internet expose
-#   la base et les dépôts. L'accès distant légitime passe par Tailscale
-#   (micro-tâche L2.9, `docs/gds-server-setup.md`).
+#   la base et les dépôts. L'accès distant légitime passe par le réseau privé
+#   Tailscale (micro-tâche L2.9, `docs/gds-server-setup.md`) :
+#     - l'interface d'administration (`8080`) reste LOCALE et n'est exposée à
+#       distance que par `tailscale serve` (HTTPS sur le tailnet) ;
+#     - la base (`5432`) et les dépôts (`2222`) n'écoutent QUE sur le réseau
+#       privé (IP Tailscale du poste).
 #   Pour ne publier QUE sur le poste (aucun accès LAN/tailnet), mettre
 #   `GDS_BIND_ADDR=127.0.0.1` dans `.env` : c'est la seule valeur plus
 #   restrictive, et elle reste suffisante pour le poste lui-même.
@@ -90,7 +100,11 @@
 #   docker compose stop              # arrête le conteneur (volumes conservés)
 #   docker compose down              # supprime le conteneur (volumes conservés)
 #   docker compose down -v           # ⚠️ supprime AUSSI les volumes = données perdues
-#   docker compose pull && docker compose up -d   # mise à jour (L2.9, registre)
+#   # ⚠️ l'image est LOCALE : la mise à jour se fait par RECONSTRUCTION
+#   #    (`docker compose up -d --build`), jamais par `docker compose pull`
+#   #    (aucun registre n'est renseigné).
+# Accès depuis un autre appareil du réseau privé (Tailscale) — L2.9 :
+#   `docs/gds-server-setup.md` (commandes exactes à exécuter par le propriétaire).
 
 # Nom du projet Compose : figé (voir ci-dessus).
 name: pilot-gds
@@ -137,12 +151,21 @@ services:
     environment:
       GDS_PG_ALLOWED_NETWORKS: "${GDS_PG_ALLOWED_NETWORKS:-0.0.0.0/0}"
     # Publication des trois ports, RESTREINTE par défaut au poste, au LAN et au
-    # réseau privé Tailscale (`GDS_BIND_ADDR`, défaut `0.0.0.0`). Voir l'encadré
-    # SÉCURITÉ en tête de fichier : au-delà de ces réseaux, c'est INTERDIT.
+    # réseau privé Tailscale. Chaque port a sa propre adresse d'écoute ; à
+    # défaut elle retombe sur `GDS_BIND_ADDR` (`0.0.0.0`), donc une installation
+    # L2.8 qui ne règle que `GDS_BIND_ADDR` se comporte EXACTEMENT comme avant.
+    # Le profil L2.9 (réseau privé uniquement) est décrit dans `.env.example`
+    # (§2bis) et `docs/gds-server-setup.md` :
+    #   GDS_HTTP_BIND_ADDR=127.0.0.1     (interface d'administration locale,
+    #                                     exposée à distance par `tailscale serve`)
+    #   GDS_DB_BIND_ADDR=100.x.y.z       (base : réseau privé uniquement)
+    #   GDS_SSH_BIND_ADDR=100.x.y.z      (dépôts git : réseau privé uniquement)
+    # Voir l'encadré SÉCURITÉ en tête de fichier : au-delà de ces réseaux,
+    # c'est INTERDIT.
     ports:
-      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_HTTP_PORT:-8080}:8080"
-      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_SSH_PORT:-2222}:22"
-      - "${GDS_BIND_ADDR:-0.0.0.0}:${GDS_HOST_DB_PORT:-5432}:5432"
+      - "${GDS_HTTP_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_HTTP_PORT:-8080}:8080"
+      - "${GDS_SSH_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_SSH_PORT:-2222}:22"
+      - "${GDS_DB_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - repos:/srv/git/repos
