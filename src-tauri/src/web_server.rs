@@ -16,10 +16,11 @@
 use crate::web_auth::WebAuth;
 use crate::web_audit::WebAudit;
 use crate::web_rate::{token_key, WebGuard};
-// L1.8a : l'authentification et son intermédiaire de contrôle vivent désormais
-// dans le socle partagé `gds-core` (mêmes types pour le desk et le serveur GDS
-// autonome). Ré-export local : aucun appelant du desk ne change.
-pub(crate) use gds_core::http::{auth_middleware, AuthedClient};
+// L1.8a/L1.10 : l'authentification et son intermédiaire de contrôle vivent dans
+// le socle partagé `gds-core` (mêmes types pour le desk et le serveur GDS
+// autonome). Consommés DIRECTEMENT depuis `gds_core` : plus de ré-export
+// `pub(crate)` intermédiaire (aucun autre module du desk n'utilise ces noms).
+use gds_core::http::{auth_middleware, AuthedClient};
 use crate::{
     agents::do_compact_agent_context, build_tree, do_abort_agent, do_get_agent_messages,
     do_get_agent_state, do_get_session_stats, do_list_agent_models, do_new_agent_session,

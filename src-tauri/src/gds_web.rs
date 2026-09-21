@@ -5,7 +5,7 @@
 // projets/dépôts git en lecture) vit désormais dans `gds_core::http` et est
 // monté par `web_server.rs`. Ce fichier ne conserve que les routes qui font de
 // la **logique métier côté poste** et qui restent hors du serveur autonome :
-//   - provision de la base (`gds::provision_db`)            → L1.8b ;
+//   - provision de la base (`gds_core::db::provision_db`)    → L1.8b ;
 //   - ajout d'un projet au GDS (`gds::add_project_to_gds`)  → L1.8b ;
 //   - poussée forcée du suivi (`gds_sync::force_push_tracking`) → L1.8b ;
 //   - synchronisation locale du poste (`gds_client::sync_project`) → L1.8c
@@ -136,7 +136,7 @@ async fn gds_provision_web<S: DesktopGdsCtx>(
     let db_password = body.db_password;
     let admin_email = body.admin_email;
     let admin_password = body.admin_password;
-    let pool = match gds::provision_db(&db_addr, &db_user, &db_password, &admin_email, &admin_password).await {
+    let pool = match gds_core::db::provision_db(&db_addr, &db_user, &db_password, &admin_email, &admin_password).await {
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     };

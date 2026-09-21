@@ -9,6 +9,7 @@
 use crate::gds;
 use crate::gds_db;
 use crate::AppState;
+use gds_core::config::project_name;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -947,7 +948,7 @@ pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
-    let name = gds::project_name(project);
+    let name = project_name(project);
     // L1.8b : la garde de publication (membres du projet — le verrou a été
     // supprimé en L6) vit désormais dans le socle partagé, car le serveur
     // autonome en a besoin. Comportement identique (mêmes messages, même audit).

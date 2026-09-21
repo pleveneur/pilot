@@ -10,6 +10,9 @@ use crate::gds_ssh;
 use crate::gds_sync;
 use crate::git;
 use crate::AppState;
+use gds_core::config::{
+    default_gds_local_dir, gds_remote_url, is_local_gds_server, project_name,
+};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tauri::State;
@@ -38,14 +41,14 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
-    let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(gds::default_gds_local_dir);
-    let name = gds::project_name(project);
+    let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
+    let name = project_name(project);
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
     // remote SSH soit utilisable. Serveur LOCAL : enregistrement + synchro
     // `authorized_keys` (historique inchangé). Serveur DISTANT : enregistrement
     // en base uniquement — la clef est ajoutée MANUELLEMENT sur le serveur
     // (docs/gds-linux-setup.md) : on n'administre JAMAIS une machine distante.
-    let is_local = gds::is_local_gds_server(&cfg);
+    let is_local = is_local_gds_server(&cfg);
     if is_local {
         gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
     } else {
@@ -59,7 +62,7 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     } else {
         branch
     };
-    let url = gds::gds_remote_url(&cfg, &name);
+    let url = gds_remote_url(&cfg, &name);
 
     // Etape 5 : le dossier cible existe sans `.git` → l'initialiser au lieu de
     // `git_fetch` qui échoue (« git fetch a échoué (remote gds) »). (a)

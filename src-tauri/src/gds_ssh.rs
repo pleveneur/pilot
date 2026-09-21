@@ -24,10 +24,11 @@ use tauri::State;
 // ── Helpers serveur déplacés dans `gds-core` (refonte GDS, L1.6) ──
 // Le serveur GDS (conteneur Linux) partage ces helpers avec le desk : décisions
 // par OS, provision SSH (`~git/.ssh/authorized_keys`), synchro DB →
-// authorized_keys et formatage des lignes de clef. Ré-export pour laisser les
-// appelants du desk inchangés (`gds_ssh::provision_server_ssh` dans `gds.rs`) ;
-// L1.10 recâblera le desk directement sur `gds_core`.
-pub(crate) use gds_core::ssh::{format_authorized_key, provision_server_ssh, sync_authorized_keys};
+// authorized_keys et formatage des lignes de clef. Consommés DIRECTEMENT depuis
+// `gds_core` (L1.10) : plus de ré-export `pub(crate)` intermédiaire.
+// `provision_server_ssh` n'est plus appelé dans ce module — son unique appelant
+// (`gds.rs`) pointe lui aussi directement sur `gds_core::ssh`.
+use gds_core::ssh::{format_authorized_key, sync_authorized_keys};
 
 /// Chemin de la clef privée ed25519 du poste dev (`~/.ssh/id_ed25519`).
 pub(crate) fn ssh_key_path() -> String {

@@ -18,10 +18,10 @@ use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::State;
 
-// L1.8b : la « préparation de la base » (`provision_db`) vit désormais dans le
-// socle partagé (`gds_core::db`) — le serveur autonome en a besoin. Réexportée
-// ici pour laisser intacts tous les appelants du desk.
-pub(crate) use gds_core::db::provision_db;
+// L1.8b/L1.10 : la « préparation de la base » (`provision_db`) vit dans le socle
+// partagé (`gds_core::db`) — le serveur autonome en a besoin. Consommée
+// DIRECTEMENT depuis `gds_core` (plus de ré-export `pub(crate)` intermédiaire).
+use gds_core::db::provision_db;
 
 /// Nom du fichier de secrets GDS (mots de passe), stocké HORS du projet
 /// (dans `~/.pilot/`), en 0600, jamais commité. Les mots de passe ne vivent
@@ -493,19 +493,22 @@ pub(crate) fn url_encode(s: &str) -> String {
     out
 }
 
-// L1.9 : la configuration pure du POSTE (`GdsConfig`) et les helpers purs qui
-// en dérivent (URL du remote git, chemins POSIX côté serveur, détection de
-// serveur local) vivent désormais dans le socle partagé
-// (`gds_core::config`), car le serveur autonome en aura besoin. Réexportés ici
-// pour laisser intacts tous les appelants du desk, qui ne changent pas de
-// comportement. Deux d'entre eux ne sont plus appelés DANS ce crate (leur usage
-// desk a migré avec le code) : on garde la surface à l'identique en attendant le
-// recâblage L1.10, d'où l'allow ciblé.
-#[allow(unused_imports)]
-pub(crate) use gds_core::config::{
-    default_gds_local_dir, effective_ssh_port, gds_remote_url, is_local_gds_server, is_local_host,
-    is_local_host_with, join_posix_path, project_name, server_host, server_repo_path,
-    ssh_host_from_db_addr, ssh_host_from_db_host, ssh_host_from_server_url, GdsConfig,
+// L1.9/L1.10 : la configuration pure du POSTE (`GdsConfig`) et les helpers purs
+// qui en dérivent (URL du remote git, chemins POSIX côté serveur, détection de
+// serveur local) vivent dans le socle partagé (`gds_core::config`), car le
+// serveur autonome en a besoin. Consommés DIRECTEMENT depuis `gds_core` : plus
+// de ré-export `pub(crate)` intermédiaire, donc la dérogation « imports
+// inutilisés » disparaît. Deux helpers n'avaient plus AUCUN appelant
+// (`effective_ssh_port`, `is_local_host`) : ils ne sont plus importés. Les
+// helpers sollicités uniquement par les tests de ce module restent importés sous
+// `cfg(test)` pour ne pas produire d'avertissement au build normal.
+use gds_core::config::{
+    default_gds_local_dir, gds_remote_url, is_local_gds_server, project_name, server_repo_path,
+    ssh_host_from_db_host, ssh_host_from_server_url, GdsConfig,
+};
+#[cfg(test)]
+use gds_core::config::{
+    is_local_host_with, join_posix_path, server_host, ssh_host_from_db_addr,
 };
 
 pub(crate) fn gds_config_path(project: &str) -> PathBuf {
@@ -768,7 +771,7 @@ pub async fn gds_provision(
     let mut repos_dir_str = String::new();
     let ssh_public_key: String;
     if is_local {
-        gds_ssh::provision_server_ssh()?;
+        gds_core::ssh::provision_server_ssh()?;
         let key = gds_ssh::ensure_poste_key(&pool, &admin_email).await?;
         ssh_public_key = key["public_key"].as_str().unwrap_or("").to_string();
         let repos = gds_git::repos_dir(&local_dir);
