@@ -446,9 +446,11 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   contrôle exhaustif des appelants restants.
 - **L7 — Documentation & tests de bout en bout** 🟡 : L7.1 (`spec_gds.md`),
   L7.2 (ce document), L7.3 (`docs/gds-server-setup.md`), L7.4 (sync assistants
-  sans verrou), L7.5 (socle documentaire Pilot) et **L7.6 (banc de bout en bout
-  en conteneur : `gds-server/tests/e2e.sh` + `docker-compose.test.yml`)** faits ;
-  reste L7.7 (non-régression desktop étendue) et L7.8 (CI de l'image serveur).
+  sans verrou), L7.5 (socle documentaire Pilot), **L7.6 (banc de bout en bout
+  en conteneur : `gds-server/tests/e2e.sh` + `docker-compose.test.yml`)** et
+  **L7.7 (non-régression : couverture des modules purs vérifiée — 883 → 890
+  tests, `src/js/gds-e2e-isolation.test.js` verrouille l'isolation du banc
+  d'essai)** faits ; reste L7.8 (CI de l'image serveur).
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 
