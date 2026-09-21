@@ -7,6 +7,11 @@
 > s'intègre, pour que l'assistant du poste qui prend le relais soit
 > immédiatement au courant du travail déjà fait.
 >
+> **Mis à jour 2026-08 (refonte GDS, L7.4)** : les **verrous de projet ont été
+> supprimés** du GDS. La synchronisation devient **sans verrou** — le risque de
+> concurrence est **accepté** (« dernier qui écrit gagne »), les conflits restent
+> **journalisés** et **aucune fusion horodatée** n'est réalisée.
+>
 > **Statut : 🟡 Plan validé avec l'utilisateur — design défini, aucune
 > implémentation.**
 > **Prérequis : GDS de base (phases A→B→C) en place et stable.**
@@ -96,8 +101,8 @@ départ de données protégées).
 
 ## 4. Cycle de vie d'un projet GDS
 
-1. **Verrou projet posé** : un seul modifieur à la fois → pas de conflit en
-   théorie.
+1. Le **poste A ouvre le projet** (aucun verrou : plusieurs postes peuvent le
+   modifier en parallèle).
 2. Le **poste A travaille** ; son **assistant accumule le contexte**.
 3. **A termine** → **synchronisation automatique** : le **suivi + l'historique**
    du projet **partent au serveur** (selon la **config d'envoi de A**).
@@ -112,12 +117,20 @@ départ de données protégées).
 ## 5. Déclenchement & conflits
 
 - **Déclenchement automatique** : l'assistant lance l'agent dédié à la fin de
-  la session de travail sur un projet GDS (ou dès que le serveur répond) — le
-  projet étant verrouillé, la sync est **sans compétition d'écriture**.
-- **Conflits** : normalement **impossibles** grâce au **verrou global projet**
-  (un seul modifieur à la fois). Si un conflit survient **quand même** → le
-  **signaler à l'utilisateur**, ne **pas écraser silencieusement** (pas de
-  « dernier écrit gagne » silencieux).
+  la session de travail sur un projet GDS (ou dès que le serveur répond). Il
+  n'y a **plus de verrou de projet** (supprimé avec la refonte GDS) : plusieurs
+  postes peuvent travailler **en parallèle** sur le même projet.
+- **Concurrence — risque ACCEPTÉ (« dernier qui écrit gagne »)** : en l'absence
+  de verrou, deux postes qui poussent en même temps peuvent se recouvrir. Ce
+  risque est **accepté** : l'écriture la plus récente **fait foi**. Il n'y a
+  **pas de fusion horodatée** (aucun merge champ par champ, pas de résolution
+  automatique) — ce chantier est **volontairement écarté** avec la suppression
+  des verrous.
+- **Conflits toujours JOURNALISÉS** : les chevauchements détectés (un côté plus
+  récent que l'autre) sont **tracés dans le journal d'audit du GDS**
+  (`tracking.conflict`) et **signalés à l'utilisateur**. Jamais d'écrasement
+  totalement silencieux : la trace reste consultable même si l'écriture la plus
+  récente gagne.
 
 ---
 
@@ -143,7 +156,7 @@ départ de données protégées).
 
 ---
 
-*Voir aussi : `spec_gds.md` (§6 suivi fusionné, §5 verrous, §8 assistant de
-groupe), `spec_super_agent.md` (suivi multi-projets, base SQLite
+*Voir aussi : `spec_gds.md` (§6 suivi fusionné, §8 assistant de groupe),
+`spec_super_agent.md` (suivi multi-projets, base SQLite
 `~/.pilot/super-agent.db`, tables clients/projects/tasks/decisions/
 session_summaries/milestones), `plan_gds.md` (roadmap).*
