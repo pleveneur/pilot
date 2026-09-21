@@ -10,6 +10,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod config;
 pub mod db;
 pub mod git;
 pub mod git_cmd;
