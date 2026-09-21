@@ -84,23 +84,20 @@ export function flattenAgents(supervision, lastActivityMap) {
       const label = a.agent || "";
       const state = a.state || "stopped";
       const busy = state === "running" || state === "compacting";
-      //Hide project agents whose tab was closed (visible === false) and that
-      // are at rest: still registered in the registry, but a display-only
-      // residue in the supervisor list. Busy agents always stay listed, even
-      // without a tab (e.g. an agent parked during a project switch keeps
-      // working in the background). Missing `visible` (old backend payload)
-      // is treated as visible. The superagent (project "") and the assistant
-      // agents (ASSISTANT_SPACE) are never filtered.
-      // Delegated background agents (launched by the assistant via run_agents,
-      // mode agent_process / assistant_agent — no tab, visible=false) that
-      // are STILL ALIVE stay listed too, even at rest: between the dispatch
-      // and their first agent_start, then between each agent_settled and the
-      // next agent_start, they are alive but idle — hiding them made the
-      // open summary list look like it never refreshed. A stopped delegate
-      // (alive=false) is filtered like before (process is gone).
+      // Owner requirement: the list must show EVERY live agent, whatever the
+      // launch mode. The assistant's discreet delegation (startAgentInvisible
+      // → set_agent_visible(false) + start_agent_session) creates a `main`
+      // session, so restricting the exception to agent_process/assistant_agent
+      // hid the most common delegate whenever it was idle (between two turns).
+      // Any ALIVE process without a tab stays listed, even at rest, and remains
+      // recoverable via "Afficher l'onglet". A stopped agent (alive=false, pi
+      // process gone) is filtered as before — no lingering false positive.
+      // Missing `visible` (old backend payload) is treated as visible. The
+      // superagent (project "") and the assistant agents (ASSISTANT_SPACE) are
+      // never filtered.
       if (!isSuper && !isAssistant && a.visible === false && !busy) {
-        const delegatedAlive = a.alive && (a.mode === "agent_process" || a.mode === "assistant_agent");
-        if (!delegatedAlive) continue;
+        const aliveBackground = a.alive; // pi process alive, all modes (main / agent_process / assistant_agent)
+        if (!aliveBackground) continue;
       }
       // Identité UNIQUE par agent : deux agents peuvent porter le même nom
       // (« codeur ») sur des PROJETS différents. Pour l'assistant (projet ""),

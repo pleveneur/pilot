@@ -273,9 +273,21 @@ describe("flattenAgents — filtrage des agents de projet sans onglet (visible=f
     expect(flattenAgents(sup)).toEqual([]);
   });
 
-  it("filtre toujours un agent de mode main parké au repos (visible=false) — résidu de registre", () => {
+  it("garde un agent de mode main VIVANT sans onglet, même au repos (délégation discrète de l'assistant)", () => {
+    // Le lancement discret de l'assistant crée une session de mode `main`
+    // (startAgentInvisible) : entre deux tours, elle est alive mais idle et
+    // sans onglet — elle doit rester listée (exigence propriétaire).
     const sup = makeSupervision([
-      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "paused", visible: false, mode: "main", alive: true }] },
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "idle", visible: false, mode: "main", alive: true }, { agent: "doc", state: "paused", visible: false, mode: "main", alive: true }] },
+    ]);
+    const list = flattenAgents(sup);
+    expect(list.map((a) => a.rawId)).toEqual(["codeur", "doc"]);
+    expect(list.every((a) => a.busy === false)).toBe(true);
+  });
+
+  it("filtre un agent de mode main NON vivant (alive=false) au repos — agent terminé, pas de faux positif", () => {
+    const sup = makeSupervision([
+      { path: "C:/proj/a", name: "a", agents: [{ agent: "codeur", state: "stopped", visible: false, mode: "main", alive: false }] },
     ]);
     expect(flattenAgents(sup)).toEqual([]);
   });
