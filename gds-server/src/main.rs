@@ -11,9 +11,9 @@
 //! destiné au conteneur tout-en-un (lot L2).
 //!
 //! Hors périmètre de L2.1 (micro-tâches suivantes) : initialisation de la base
-//! (`L2.3`), compte admin (`L2.4`), clés SSH (`L2.5`/`L2.6`), supervision
-//! (`L2.7`), conteneur (`L2.8`). L2.2 (routes de santé publique et d'état
-//! administrateur) est monté par `gds_core::http::server_router`.
+//! (`L2.3`), compte admin (`L2.4`), supervision (`L2.7`), conteneur (`L2.8`).
+//! L2.2 (routes de santé publique et d'état administrateur) est monté par
+//! `gds_core::http::server_router`.
 //!
 //! Initialisation de la base (micro-tâche L2.3) : `gds-server --init-db` prépare
 //! la base à partir d'un cluster **vide** (création du rôle et de la base
@@ -22,18 +22,26 @@
 //! ce mode AVANT de lancer le service ; l'opération est idempotente, donc un
 //! second démarrage conserve les données du volume.
 //!
-//! Dépôts git dans le conteneur (micro-tâche L2.5) : `gds-server --init-ssh`
+//! Dépôts git dans le conteneur (micro-tâches L2.5 et L2.6) : `gds-server --init-ssh`
 //! prépare le compte système `git` (sans mot de passe utilisable), son dossier
 //! de clefs `~git/.ssh` (700) et son fichier `authorized_keys` (600), crée la
-//! **racine des dépôts** (`GDS_REPOS_ROOT`, volume) au nom de `git`, puis
-//! **régénère** le fichier des clefs autorisées **depuis la base** (source de
-//! vérité : les clefs enregistrées deviennent utilisables, les clefs révoquées
-//! disparaissent). Comme le poste enregistre ses clefs **directement en base**
-//! (décision 11, aucune notification possible), le service régénère aussi ce
-//! fichier **périodiquement** en tâche de fond (`SSH_KEYS_REFRESH_INTERVAL`).
-//! Le service SSH lui-même (sshd, `sshd_config`, `git-shell`), la création du
-//! dépôt bare à l'ajout d'un projet, le superviseur de processus et l'image
-//! restent hors de cette micro-tâche (L2.6, L2.7, L2.8).
+//! **racine des dépôts** (`GDS_REPOS_ROOT`, volume) au nom de `git`, **restreint
+//! la coquille de connexion du compte `git` à `git-shell`** (aucun shell
+//! généraliste ouvert), **matérialise les dépôts bare annoncés en base**
+//! (équivalent automatique du `git init --bare` manuel) et **régénère** le
+//! fichier des clefs autorisées **depuis la base** (source de vérité : les clefs
+//! enregistrées deviennent utilisables, les clefs révoquées disparaissent).
+//! Comme le poste enregistre clefs et projets **directement en base** (décision
+//! 11, aucune notification possible), le service repasse ces opérations
+//! **périodiquement** en tâche de fond (`maintenance_job`,
+//! `SSH_KEYS_REFRESH_INTERVAL`). La matière première du dépôt bare est la table
+//! `git_repos` ; la création réutilise le code existant (`git_init_bare`, le même
+//! que `add_project`) et vise `<racine>/<projet>.git` (spec §2.3/§2.4).
+//!
+//! Le **service SSH** lui-même (sshd_config, clefs d'hôte sur volume, coquille
+//! `git-shell` côté démon, démarrage de sshd) est du ressort de `entrypoint.sh` ;
+//! la supervision de processus et l'assemblage de l'image restent hors de ces
+//! micro-tâches (L2.7, L2.8).
 
 mod config;
 
@@ -50,17 +58,20 @@ use std::time::Duration;
 /// l'entrypoint du conteneur, cf. « Initialisation de la base » ci-dessus).
 const INIT_DB_FLAG: &str = "--init-db";
 
-/// Option de démarrage reconnue : prépare le compte `git`, la racine des dépôts
-/// et les clefs autorisées puis rend la main (L2.5, appelée par l'entrypoint
-/// APRÈS `--init-db` et AVANT le lancement du service).
+/// Option de démarrage reconnue : prépare le compte `git`, la racine des dépôts,
+/// la restriction du compte à `git-shell` et les clefs autorisées, puis rend la
+/// main (L2.5/L2.6, appelée par l'entrypoint APRÈS `--init-db` et AVANT le
+/// lancement du service).
 const INIT_SSH_FLAG: &str = "--init-ssh";
 
-/// Intervalle du job serveur de rafraîchissement des clefs autorisées (L2.5).
-/// Le poste enregistre ses clefs **directement en base** : le service ne peut pas
-/// être notifié, il rafraîchit donc le fichier périodiquement. La régénération
-/// est idempotente (aucune écriture tant que la base ne change pas), donc ce
-/// cycle ne produit ni duplication ni corruption. La route d'administration
-/// `POST /api/gds/admin/ssh-keys/refresh` permet un rafraîchissement immédiat.
+/// Intervalle du job serveur de maintenance (L2.5/L2.6) : rafraîchissement du
+/// fichier des clefs autorisées ET matérialisation des dépôts bare annoncés en
+/// base. Le poste enregistre clefs et projets **directement en base** : le
+/// service ne peut pas être notifié, il repasse donc périodiquement. Les deux
+/// opérations sont idempotentes (aucune écriture tant que la base ne change pas),
+/// donc ce cycle ne produit ni duplication ni corruption. La route
+/// d'administration `POST /api/gds/admin/ssh-keys/refresh` permet un
+/// rafraîchissement immédiat des clefs (L2.5).
 const SSH_KEYS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Modes de démarrage du binaire (dispatch pur — testable).
@@ -174,20 +185,28 @@ async fn init_db() -> Result<(), String> {
     Ok(())
 }
 
-/// Prépare les dépôts git du service à partir du conteneur (micro-tâche L2.5) :
+/// Prépare les dépôts git du service à partir du conteneur (micro-tâches L2.5 et
+/// L2.6) :
 ///
 /// 1. compte système `git` (sans mot de passe utilisable : l'accès se fait par
 ///    clef), dossier de clefs `~git/.ssh` en **700** et fichier
 ///    `~git/.ssh/authorized_keys` en **600** (droits exigés par sshd) ;
 /// 2. **racine des dépôts** (`GDS_REPOS_ROOT`, volume) créée puis confiée à
-///    `git` — sans elle, aucun dépôt bare ne pourrait être créé (L2.6) ;
-/// 3. **régénération** du fichier des clefs autorisées **depuis la base** : les
+///    `git` ;
+/// 3. compte `git` **restreint à `git-shell`** (L2.6) : le service SSH ne sert
+///    que les dépôts, jamais une session interactive généraliste ;
+/// 4. **régénération** du fichier des clefs autorisées **depuis la base** : les
 ///    clefs enregistrées deviennent utilisables, les clefs révoquées
 ///    disparaissent. L'opération est idempotente (un fichier déjà conforme n'est
-///    pas réécrit).
+///    pas réécrit) ;
+/// 5. **matérialisation des dépôts bare annoncés en base** (L2.6) : c'est
+///    l'équivalent automatique du `git init --bare` manuel, le poste écrivant le
+///    projet directement en base. Le service le refait de toute façon
+///    périodiquement en marche (voir `maintenance_job`).
 ///
 /// Appelé par `entrypoint.sh` à chaque démarrage, avant le lancement du service.
-/// Ne touche **pas** au service SSH (L2.6) et ne crée aucun dépôt bare (L2.6).
+/// Le **service SSH** lui-même (sshd_config, clefs d'hôte, démarrage de sshd) est
+/// préparé par `entrypoint.sh` : rien de tel ici.
 async fn init_ssh() -> Result<(), String> {
     let cfg = ServerConfig::from_env()?;
 
@@ -197,7 +216,16 @@ async fn init_ssh() -> Result<(), String> {
         println!("gds-server : {}", line);
     }
 
-    // 3. Fichier des clefs autorisées régénéré depuis la base (source de vérité).
+    // 3. Compte `git` restreint à la coquille git (L2.6) : le service SSH ne
+    //    sert que les dépôts, jamais une session interactive. Un échec ici
+    //    laisserait un shell généraliste ouvert sur le serveur → refus explicite.
+    let shell = gds_core::ssh::restrict_git_account_to_git_shell()?;
+    for line in shell.summary_lines() {
+        println!("gds-server : {}", line);
+    }
+
+    // 4-5. Fichier des clefs autorisées régénéré puis dépôts bare matérialisés,
+    //      depuis la base (source de vérité).
     let pool = config::open_pool_with_retry(config::pg_options(&cfg), "base applicative").await?;
     let sync = gds_core::ssh::regenerate_authorized_keys(&pool).await?;
     println!(
@@ -210,19 +238,26 @@ async fn init_ssh() -> Result<(), String> {
             "fichier déjà conforme"
         }
     );
+    let bares = gds_core::git::ensure_project_bares(&pool, &cfg.repos_root).await?;
+    for line in bares.summary_lines() {
+        println!("gds-server : {}", line);
+    }
     pool.close().await;
     Ok(())
 }
 
-/// Job serveur (L2.5) : régénère `~git/.ssh/authorized_keys` **depuis la base**
-/// tant que le service tourne (premier passage immédiat au démarrage, puis
-/// `SSH_KEYS_REFRESH_INTERVAL`). Le poste enregistrant ses clefs directement en
-/// base, ce cycle est le seul moyen d'appliquer une nouvelle clef (ou un
-/// retrait) sans attendre un redémarrage du conteneur.
+/// Job serveur de maintenance (L2.5 et L2.6) : tant que le service tourne,
+/// régénère `~git/.ssh/authorized_keys` **depuis la base** (premier passage
+/// immédiat au démarrage, puis `SSH_KEYS_REFRESH_INTERVAL`) et **matérialise**
+/// les dépôts bare annoncés en base. Le poste enregistrant clefs et projets
+/// directement en base, ce cycle est le seul moyen d'appliquer une nouvelle clef
+/// (ou un retrait) et de créer le dépôt d'un projet ajouté pendant la vie du
+/// conteneur, sans attendre un redémarrage.
 ///
-/// Toute erreur est journalisée puis ignorée : le fichier des clefs n'est pas
-/// critique pour l'API et ne doit **jamais** arrêter le service.
-async fn ssh_keys_refresh_job(pool: sqlx::PgPool) {
+/// Toute erreur est journalisée puis ignorée : ni le fichier des clefs ni un
+/// dépôt manquant ne sont critiques pour l'API, et rien de tout cela ne doit
+/// **jamais** arrêter le service.
+async fn maintenance_job(pool: sqlx::PgPool, repos_root: String) {
     loop {
         match gds_core::ssh::regenerate_authorized_keys(&pool).await {
             Ok(sync) if sync.rewritten => println!(
@@ -232,6 +267,16 @@ async fn ssh_keys_refresh_job(pool: sqlx::PgPool) {
             Ok(_) => {}
             Err(e) => {
                 eprintln!("gds-server : régénération des clefs autorisées ignorée : {}", e)
+            }
+        }
+        match gds_core::git::ensure_project_bares(&pool, &repos_root).await {
+            Ok(bares) if !bares.created.is_empty() => println!(
+                "gds-server : dépôts bare créés : {}",
+                bares.created.join(", ")
+            ),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("gds-server : matérialisation des dépôts bare ignorée : {}", e)
             }
         }
         tokio::time::sleep(SSH_KEYS_REFRESH_INTERVAL).await;
@@ -285,10 +330,12 @@ async fn run() -> Result<(), String> {
         // Racine des dépôts bare : volume supervisé par la route d'état (L2.2).
         repos_root: cfg.repos_root.clone().into(),
     });
-    // 4b. Job serveur (L2.5) : rafraîchissement du fichier des clefs autorisées
-    //     depuis la base (le poste enregistre ses clefs sans pouvoir notifier le
-    //     service). Une erreur du job n'arrête jamais le service.
-    tokio::spawn(ssh_keys_refresh_job(keys_pool));
+    // 4b. Job serveur de maintenance (L2.5/L2.6) : rafraîchissement du fichier
+    //     des clefs autorisées ET matérialisation des dépôts bare annoncés en
+    //     base. Le poste enregistre clefs et projets sans pouvoir notifier le
+    //     service, d'où ce repassage périodique. Une erreur du job n'arrête
+    //     jamais le service.
+    tokio::spawn(maintenance_job(keys_pool, cfg.repos_root.clone()));
     let app = server_router(ctx);
 
     // 5. Écoute HTTP sur l'adresse donnée par l'environnement.

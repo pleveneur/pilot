@@ -4,6 +4,14 @@
 // projet (`<gds_repos_dir>/<projet>.git`), transport SSH par clef liée à
 // l'email. Réutilise `git_init_bare` de `git_cmd` (le desk ne s'en sert plus
 // que dans ses tests). Valide les chemins (anti path traversal).
+//
+// L2.6 — conteneur : `ensure_project_bares` matérialise les dépôts annoncés en
+// base dans la **racine du serveur** (`<racine>/<projet>.git`, spec §2.3/§2.4 :
+// `/srv/git/repos`), en réutilisant le MÊME code de création que `add_project`
+// (`git_init_bare`, via `ensure_bare`). Le poste écrit dans la base sans pouvoir
+// exécuter quoi que ce soit sur le serveur (décision 11) : la matérialisation
+// automatique remplace le `git init --bare` manuel de
+// `docs/gds-linux-setup.md`.
 
 use crate::db;
 use crate::git_cmd::git_init_bare;
@@ -77,19 +85,10 @@ pub async fn add_project(
 ) -> Result<Value, String> {
     let name = validate_project_name(name)?;
     let repo_name = repo_name_for(&name)?;
-    let dir = repos_dir(gds_local_dir);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Création dossier repos: {}", e))?;
+    // Création du dépôt bare : code PARTAGÉ avec la matérialisation côté
+    // conteneur (L2.6, `ensure_project_bares`) — une seule implémentation.
     let bare = repo_bare_path(gds_local_dir, &name);
-    let bare_str = bare.to_string_lossy().to_string();
-    // git_init_bare est bloquant (sous-processus git) → spawn_blocking.
-    tokio::task::spawn_blocking(move || {
-        if !std::path::Path::new(&bare_str).exists() {
-            git_init_bare(&bare_str)?;
-        }
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    ensure_bare(bare.clone()).await?;
 
     let path_on_server = bare.to_string_lossy().to_string();
     // Idempotent : si le projet existe déjà en base (ex: tentative précédente
@@ -110,6 +109,165 @@ pub async fn add_project(
         let _ = db::create_project_member(pool, project_id, user.id, "dev").await;
     }
     Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
+}
+
+/// Crée le dépôt bare s'il est absent (idempotent). `git_init_bare` est
+/// bloquant (sous-processus git) → `spawn_blocking`. Le dossier parent est créé
+/// au besoin. Retourne `true` si le dépôt a été créé par cet appel.
+async fn ensure_bare(bare: PathBuf) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        if bare.exists() {
+            return Ok(false);
+        }
+        if let Some(parent) = bare.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Création dossier des dépôts {}: {}", parent.display(), e))?;
+        }
+        git_init_bare(&bare.to_string_lossy())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── Conteneur (L2.6) : racine des dépôts et matérialisation depuis la base ──
+
+/// Chemin du dépôt bare d'un projet **dans la racine du serveur** : la racine
+/// fournie EST le dossier parent des dépôts (`<racine>/<projet>.git`), à la
+/// différence du poste où `gds_local_dir` contient un sous-dossier `repos`
+/// (`repos_dir`). Nom validé (anti path traversal) et chemin verrouillé sous la
+/// racine.
+pub fn bare_path_in_root(bare_root: &str, project_name: &str) -> Result<PathBuf, String> {
+    let repo_name = repo_name_for(project_name)?;
+    let root = PathBuf::from(bare_root);
+    let bare = root.join(&repo_name);
+    // Ceinture + bretelles : le nom est déjà validé, le chemin reste sous la racine.
+    if !bare.starts_with(&root) {
+        return Err(format!(
+            "Chemin bare invalide (hors racine des dépôts): {}",
+            bare.display()
+        ));
+    }
+    Ok(bare)
+}
+
+/// Chemin retenu pour le dépôt d'un projet (pure — testable sans base) :
+///
+/// * le `path_on_server` **enregistré** est respecté s'il désigne un chemin
+///   **sous la racine** des dépôts (cas normal : le poste calcule ce chemin à
+///   partir de la racine du serveur, champ « Racine des dépôts serveur ») ;
+/// * sinon le chemin canonique `<racine>/<projet>.git` est utilisé — un chemin
+///   hors racine n'est JAMAIS suivi (anti path traversal), et un poste ancien
+///   peut avoir enregistré un chemin local à lui-même.
+///
+/// Un nom de projet invalide est refusé (même validation que `add_project`).
+pub fn resolve_repo_path(
+    bare_root: &str,
+    project_name: &str,
+    path_on_server: &str,
+) -> Result<PathBuf, String> {
+    let canonical = bare_path_in_root(bare_root, project_name)?;
+    let stored = path_on_server.trim();
+    if stored.is_empty() {
+        return Ok(canonical);
+    }
+    let stored_path = PathBuf::from(stored);
+    if stored_path.starts_with(PathBuf::from(bare_root)) {
+        Ok(stored_path)
+    } else {
+        Ok(canonical)
+    }
+}
+
+/// Résultat de la matérialisation des dépôts bare (L2.6).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BareReposSync {
+    /// Noms des projets dont le dépôt a été **créé** par cet appel.
+    pub created: Vec<String>,
+    /// Nombre de dépôts **déjà présents** (aucune écriture).
+    pub present: usize,
+    /// Projets ignorés : nom non exploitable (le dépôt ne peut pas être nommé).
+    pub skipped: Vec<String>,
+}
+
+impl BareReposSync {
+    /// Lignes lisibles (journalisation côté service).
+    pub fn summary_lines(&self) -> Vec<String> {
+        let mut lines = vec![format!(
+            "dépôts bare : {} créé(s), {} déjà présent(s)",
+            self.created.len(),
+            self.present
+        )];
+        if !self.created.is_empty() {
+            lines.push(format!("dépôts créés : {}", self.created.join(", ")));
+        }
+        if !self.skipped.is_empty() {
+            lines.push(format!(
+                "projets ignorés (nom inexploitable) : {}",
+                self.skipped.join(", ")
+            ));
+        }
+        lines
+    }
+}
+
+/// Matérialise les dépôts bare d'une liste `(projet, path_on_server)` donnée
+/// (pure vis-à-vis de la base : testable avec un dossier temporaire). Chaque
+/// dépôt manquant est créé par le code PARTAGÉ `ensure_bare` ; un dépôt existant
+/// n'est jamais touché (idempotence).
+pub async fn ensure_bares_for(
+    bare_root: &str,
+    entries: &[(String, String)],
+) -> Result<BareReposSync, String> {
+    let mut sync = BareReposSync::default();
+    for (name, path_on_server) in entries {
+        let bare = match resolve_repo_path(bare_root, name, path_on_server) {
+            Ok(path) => path,
+            Err(_) => {
+                sync.skipped.push(name.clone());
+                continue;
+            }
+        };
+        if ensure_bare(bare).await? {
+            sync.created.push(name.clone());
+        } else {
+            sync.present += 1;
+        }
+    }
+    Ok(sync)
+}
+
+/// Matérialise côté **serveur** les dépôts bare annoncés en base (L2.6) : pour
+/// chaque ligne de `git_repos`, le dépôt correspondant est créé s'il manque.
+///
+/// C'est l'équivalent **automatique** de `git init --bare` sur un serveur
+/// distant : le poste écrit le projet et son dépôt directement en base (décision
+/// 11, aucune notification possible), donc le service découvre les dépôts à
+/// matérialiser en relisant la base — au démarrage puis périodiquement.
+///
+/// Idempotent : un dépôt existant n'est jamais modifié ni supprimé.
+pub async fn ensure_project_bares(
+    pool: &PgPool,
+    bare_root: &str,
+) -> Result<BareReposSync, String> {
+    let repos = db::list_git_repos(pool).await?;
+    let entries: Vec<(String, String)> = repos
+        .iter()
+        .map(|repo| {
+            let name = repo
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let path = repo
+                .get("path_on_server")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (name, path)
+        })
+        .collect();
+    ensure_bares_for(bare_root, &entries).await
 }
 
 /// Serveur DISTANT : enregistre le projet et le dépôt en base SANS RIEN créer
@@ -181,6 +339,81 @@ mod tests {
         assert!(repo_name_for("../evil").is_err());
         assert!(repo_name_for("a/b").is_err());
         assert!(repo_name_for("").is_err());
+    }
+
+    #[test]
+    fn bare_path_in_root_is_flat_and_validated() {
+        let root = "/srv/git/repos";
+        assert_eq!(
+            bare_path_in_root(root, "  pilot  ").unwrap(),
+            PathBuf::from("/srv/git/repos/pilot.git")
+        );
+        // Pas de sous-dossier `repos` ajouté (contrairement au poste) : c'est la
+        // racine du serveur qui EST le dossier parent des dépôts.
+        assert!(!bare_path_in_root(root, "pilot").unwrap().to_string_lossy().contains("repos/repos"));
+        assert!(bare_path_in_root(root, "../evil").is_err());
+        assert!(bare_path_in_root(root, "a/b").is_err());
+        assert!(bare_path_in_root(root, "").is_err());
+    }
+
+    #[test]
+    fn resolve_repo_path_prefers_stored_path_only_under_root() {
+        let root = "/srv/git/repos";
+        // Chemin enregistré sous la racine : respecté tel quel.
+        assert_eq!(
+            resolve_repo_path(root, "pilot", "/srv/git/repos/pilot.git").unwrap(),
+            PathBuf::from("/srv/git/repos/pilot.git")
+        );
+        // Chemin vide : chemin canonique.
+        assert_eq!(
+            resolve_repo_path(root, "pilot", "   ").unwrap(),
+            PathBuf::from("/srv/git/repos/pilot.git")
+        );
+        // Chemin HORS racine (poste local, ou tentative d'évasion) : jamais suivi.
+        for outside in ["/etc/passwd", "/srv/git-elsewhere/pilot.git", "G:\\IA_PL\\pilot\\.pilot\\repos\\pilot.git"] {
+            assert_eq!(
+                resolve_repo_path(root, "pilot", outside).unwrap(),
+                PathBuf::from("/srv/git/repos/pilot.git"),
+                "chemin hors racine : {}",
+                outside
+            );
+        }
+    }
+
+    /// L2.6 — la matérialisation crée les dépôts MANQUANTS (même code que
+    /// `add_project` : `git init --bare`) et n'écrit RIEN pour un dépôt existant.
+    /// Le dossier `repos` n'est pas ajouté sous la racine.
+    #[tokio::test]
+    async fn ensure_bares_for_creates_missing_and_spares_existing() {
+        let dir = std::env::temp_dir().join(format!("pilot-gds-bares-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.to_string_lossy().to_string();
+        // Dépôt préexistant (marqueur : on vérifie qu'il n'est pas retouché).
+        let existing = dir.join("deja-la.git");
+        std::fs::create_dir_all(&existing).unwrap();
+        let marker = existing.join("marqueur.txt");
+        std::fs::write(&marker, "intact").unwrap();
+        // Projet ignoré : nom inexploitable (aucun dépôt créé pour lui).
+        let entries = vec![
+            ("nouveau".to_string(), format!("{}/nouveau.git", root)),
+            ("deja-la".to_string(), format!("{}/deja-la.git", root)),
+            ("../evil".to_string(), String::new()),
+        ];
+        let sync = ensure_bares_for(&root, &entries).await.unwrap();
+        assert_eq!(sync.created, vec!["nouveau".to_string()]);
+        assert_eq!(sync.present, 1);
+        assert_eq!(sync.skipped, vec!["../evil".to_string()]);
+        // Dépôt créé : un dépôt bare git (dossier HEAD/config présents).
+        assert!(dir.join("nouveau.git").join("HEAD").exists());
+        assert!(!dir.join("repos").exists(), "aucun sous-dossier repos sous la racine");
+        // Dépôt préexistant : intact.
+        assert!(marker.exists());
+        // Idempotence : second passage → rien de créé.
+        let again = ensure_bares_for(&root, &entries).await.unwrap();
+        assert!(again.created.is_empty());
+        assert_eq!(again.present, 2);
+        assert!(again.summary_lines().iter().any(|l| l.contains("dépôts bare")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

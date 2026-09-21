@@ -1,0 +1,73 @@
+# sshd_config — service SSH du conteneur GDS (refonte GDS, micro-tâche L2.6)
+#
+# Rôle : servir les dépôts git par SSH (clone / fetch / push), pour le seul
+# compte `git`, par clef publique UNIQUEMENT, en réutilisant le fichier
+# `~git/.ssh/authorized_keys` tenu à jour depuis la base (L2.5).
+#
+# Ce fichier est un MODÈLE. Le script d'entrée (`entrypoint.sh`) le rend en
+# remplaçant le jeton `__GDS_SSH_PORT__` par le port interne (variable
+# `GDS_SSH_PORT`, défaut 22), valide le résultat (`sshd -t`) puis démarre sshd.
+# Un fichier `sshd_config` n'étend AUCUNE variable d'environnement : la
+# substitution est donc faite explicitement — sans elle, le port ne serait
+# jamais pris en compte. Le port PUBLIÉ (2222, spec §2.5) est un réglage du
+# conteneur (compose, L2.8) : il ne concerne pas ce fichier.
+#
+# Les clefs d'hôte vivent sur un VOLUME (`gds-ssh` → /etc/ssh/host_keys, spec
+# §2.4) : elles sont générées une seule fois par l'entrypoint et jamais
+# écrasées, donc l'empreinte reste identique après reconstruction du conteneur
+# (sinon chaque poste devrait ré-autoriser le serveur). Le dossier
+# `/etc/ssh/host_keys` et chaque clef appartiennent à root (700 / 600).
+
+# ── Écoute ───────────────────────────────────────────────────────────────────
+Port __GDS_SSH_PORT__
+AddressFamily any
+ListenAddress 0.0.0.0
+Protocol 2
+# Fichier de PID dédié : ne dépend pas de la présence d'un init/superviseur.
+PidFile /run/sshd.gds.pid
+
+# ── Clefs d'hôte (volume) ────────────────────────────────────────────────────
+HostKey /etc/ssh/host_keys/ssh_host_ed25519_key
+HostKey /etc/ssh/host_keys/ssh_host_rsa_key
+
+# ── Authentification : clefs UNIQUEMENT ──────────────────────────────────────
+# Aucun mot de passe, aucune authentification interactive, aucun compte
+# privilégié : l'accès est entièrement porté par `authorized_keys` (source de
+# vérité = table `ssh_keys`, régénérée depuis la base).
+PermitRootLogin no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+UsePAM no
+AuthenticationMethods publickey
+MaxAuthTries 3
+LoginGraceTime 20
+StrictModes yes
+HostbasedAuthentication no
+IgnoreRhosts yes
+PermitUserEnvironment no
+
+# ── Comptes et canaux ────────────────────────────────────────────────────────
+# Le service n'existe que pour git : un seul compte, aucun transfert, aucun
+# tunnel, aucun agent. La coquille de connexion du compte `git` est
+# `git-shell` (posée par `gds-server --init-ssh`, cf. `ssh.rs`), donc même en
+# cas de session interactive aucune commande arbitraire n'est possible.
+AllowUsers git
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+PermitUserRC no
+GatewayPorts no
+MaxSessions 4
+
+# ── Journalisation ───────────────────────────────────────────────────────────
+# `-E` (journal de fichier) est passé par l'entrypoint : le conteneur n'a pas de
+# démon syslog. VERBOSE permet de diagnostiquer un refus de clef.
+SyslogFacility AUTH
+LogLevel VERBOSE
+PrintMotd no
+PrintLastLog no
+Banner none

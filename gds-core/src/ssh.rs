@@ -16,6 +16,10 @@
 //     `sync_authorized_keys` est autoritatif : une clef retirée en base est
 //     retirée du fichier (voir `merge_authorized_keys` pour l'ancienne
 //     sémantique de fusion, conservée).
+//   - L2.6 : la restriction du compte `git` à la coquille `git-shell`
+//     (`restrict_git_account_to_git_shell`, appliquée par le conteneur
+//     uniquement) : le service SSH n'a qu'un usage (git), donc jamais de shell
+//     généraliste ouvert.
 //
 // Le côté **poste dev** (génération de clef, `ensure_poste_key`,
 // `poste_key_response`, `ensure_poste_key_remote`) reste dans
@@ -538,6 +542,237 @@ fn provision_git_account_core(
     })
 }
 
+// ── Restriction de la coquille de connexion du compte `git` (conteneur, L2.6) ──
+//
+// Le compte `git` est créé avec un shell de connexion (L2.5, contrat partagé
+// avec le poste dev : `useradd -m -s /bin/bash git`). Dans le **conteneur**, ce
+// shell doit être remplacé par `git-shell` : le service SSH n'a qu'un usage
+// (`git-upload-pack` / `git-receive-pack`), et un shell généraliste ouvrirait une
+// session interactive complète sur le serveur. La restriction est une étape
+// **explicite** du démarrage (`--init-ssh`) : elle n'est jamais appliquée au
+// poste dev.
+
+/// Coquilles de connexion acceptées pour le compte `git` : seule la coquille
+/// `git-shell` est conforme (un shell généraliste ouvrirait une session
+/// interactive). Pure — testable.
+pub fn is_git_only_login_shell(shell: &str) -> bool {
+    let shell = shell.trim();
+    if shell.is_empty() {
+        return false;
+    }
+    let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell);
+    matches!(base, "git-shell" | "git-shell.exe")
+}
+
+/// Emplacements usuels de `git-shell`, dans l'ordre de recherche (pure — testable).
+pub fn git_shell_candidates() -> Vec<&'static str> {
+    vec![
+        "/usr/bin/git-shell",
+        "/usr/local/bin/git-shell",
+        "/bin/git-shell",
+        "/usr/lib/git-core/git-shell",
+    ]
+}
+
+/// Coquille de connexion (7e champ) d'une ligne `getent passwd` (pure — testable).
+/// Un champ vide ou une ligne vide ne donne aucune coquille.
+pub fn login_shell_from_passwd(passwd_line: &str) -> Option<String> {
+    let line = passwd_line.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return None;
+    }
+    line.split(':')
+        .nth(6)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// `true` si le champ mot de passe d'une entrée `shadow` interdit TOUTE connexion
+/// — y compris par clef — parce que le compte est **verrouillé** (`!`, `!!`,
+/// `!*`, `*LK*` : c'est ce que pose `useradd` sans mot de passe, ou `passwd -l`).
+///
+/// Distinction essentielle : `*` signifie « aucun mot de passe utilisable » sans
+/// verrou, et sshd accepte alors l'authentification par clef ; `!` verrouille et
+/// sshd refuse (« User git not allowed because account is locked »). Pure.
+pub fn is_locked_password_field(field: &str) -> bool {
+    let field = field.trim();
+    !field.is_empty() && (field.starts_with('!') || field.starts_with("*LK*"))
+}
+
+/// Rapport de la restriction du compte `git` à `git-shell` (L2.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitShellReport {
+    /// `true` sur un serveur Linux (conteneur). `false` ailleurs : la restriction
+    /// ne concerne pas le poste dev.
+    pub applicable: bool,
+    /// Coquille attendue (`git-shell`) quand elle a été trouvée.
+    pub shell: Option<String>,
+    /// Coquille de connexion observée **avant** l'opération.
+    pub previous: Option<String>,
+    /// `true` si la coquille a été changée par cet appel.
+    pub changed: bool,
+    /// `true` si le compte était verrouillé et a été déverrouillé **sans** lui
+    /// donner de mot de passe utilisable (sans quoi sshd refuserait aussi
+    /// l'authentification par clef).
+    pub password_unlocked: bool,
+}
+
+impl GitShellReport {
+    /// Lignes lisibles (journalisation du démarrage du service).
+    pub fn summary_lines(&self) -> Vec<String> {
+        if !self.applicable {
+            return vec!["restriction à git-shell : sans objet hors serveur Linux".to_string()];
+        }
+        if !self.changed {
+            let mut lines = vec![format!(
+                "compte `git` déjà restreint à `git-shell` ({})",
+                self.previous.as_deref().unwrap_or("?")
+            )];
+            if self.password_unlocked {
+                lines.push("compte `git` déverrouillé sans mot de passe utilisable".to_string());
+            }
+            return lines;
+        }
+        vec![format!(
+            "compte `git` restreint à `git-shell` ({})",
+            self.shell.as_deref().unwrap_or("?")
+        )]
+    }
+}
+
+/// Coquille de connexion actuelle du compte `git` (`getent passwd`, champ 7).
+fn read_git_login_shell() -> Option<String> {
+    let out = run_captured("getent", &["passwd", GIT_USER], Duration::from_secs(5));
+    login_shell_from_passwd(&out)
+}
+
+/// Champ mot de passe (2e) de l'entrée `shadow` du compte `git` — lecture
+/// réservée à root : `None` si le fichier n'est pas consultable.
+fn read_git_shadow_field() -> Option<String> {
+    let out = run_captured("getent", &["shadow", GIT_USER], Duration::from_secs(5));
+    let line = out.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return None;
+    }
+    line.split(':')
+        .nth(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Chemin réel de `git-shell` : emplacements usuels puis `command -v`.
+fn find_git_shell() -> Option<String> {
+    for candidate in git_shell_candidates() {
+        if std::path::Path::new(candidate).exists() {
+            return Some(candidate.to_string());
+        }
+    }
+    let out = run_captured("sh", &["-c", "command -v git-shell"], Duration::from_secs(5));
+    let path = out.trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// Restreint le compte `git` à `git-shell` **et** le rend utilisable par SSH
+/// (L2.6, conteneur).
+///
+/// * hors serveur Linux : sans objet (`applicable = false`) — le poste dev garde
+///   son shell de connexion ;
+/// * `git-shell` introuvable : **échec explicite** (le service refuserait de
+///   tourner avec un shell généraliste ouvert) ;
+/// * compte verrouillé (`!` dans `shadow`, ce que pose `useradd` sans mot de
+///   passe) : sshd refuse alors TOUTE connexion, même par clef (« account is
+///   locked ») → le verrou est remplacé par `*` (aucun mot de passe utilisable,
+///   `PasswordAuthentication no` de toute façon). Aucun mot de passe n'est créé et
+///   PAM n'est pas requis ;
+/// * idempotent : un compte déjà restreint et déverrouillé n'est pas modifié.
+///
+/// Ne touche à aucun fichier : seules l'entrée du compte (`usermod -s`) et son
+/// état de verrouillage (`usermod -p`) changent.
+pub fn restrict_git_account_to_git_shell() -> Result<GitShellReport, String> {
+    let os = detect_os();
+    if os != SshOs::Linux {
+        return Ok(GitShellReport {
+            applicable: false,
+            shell: None,
+            previous: None,
+            changed: false,
+            password_unlocked: false,
+        });
+    }
+    if !git_user_exists() {
+        return Err(
+            "Restriction du compte `git` impossible : le compte système `git` n'existe pas \
+             (exécutez d'abord la préparation des dépôts, `--init-ssh`)"
+                .to_string(),
+        );
+    }
+    let shell = find_git_shell().ok_or_else(|| {
+        "`git-shell` introuvable : le paquet `git` doit être installé dans l'image (le service \
+         SSH du serveur n'accepte que la coquille git — jamais un shell généraliste)"
+            .to_string()
+    })?;
+
+    // 1. Déverrouillage du compte sans lui donner de mot de passe utilisable.
+    let mut password_unlocked = false;
+    if let Some(field) = read_git_shadow_field() {
+        if is_locked_password_field(&field) {
+            run_captured("usermod", &["-p", "*", GIT_USER], Duration::from_secs(10));
+            let observed = read_git_shadow_field();
+            if observed
+                .as_deref()
+                .map(is_locked_password_field)
+                .unwrap_or(true)
+            {
+                return Err(
+                    "Échec du déverrouillage du compte `git` : sshd refuserait l'authentification \
+                     par clef (« account is locked ») — droits root requis"
+                        .to_string(),
+                );
+            }
+            password_unlocked = true;
+        }
+    }
+
+    // 2. Coquille de connexion restreinte à `git-shell`.
+    let previous = read_git_login_shell();
+    if previous
+        .as_deref()
+        .map(is_git_only_login_shell)
+        .unwrap_or(false)
+        && previous.as_deref() == Some(shell.as_str())
+    {
+        return Ok(GitShellReport {
+            applicable: true,
+            shell: Some(shell),
+            previous,
+            changed: false,
+            password_unlocked,
+        });
+    }
+    run_captured("usermod", &["-s", &shell, GIT_USER], Duration::from_secs(10));
+    // Le succès est jugé par l'ÉTAT OBSERVÉ, jamais par la sortie de la commande
+    // (`usermod` n'écrit rien en cas de succès).
+    let observed = read_git_login_shell();
+    if observed.as_deref() != Some(shell.as_str()) {
+        return Err(format!(
+            "Échec de la restriction du compte `git` à `git-shell` (coquille observée : {:?}, \
+             attendue : {:?}) — droits root requis",
+            observed, shell
+        ));
+    }
+    Ok(GitShellReport {
+        applicable: true,
+        shell: Some(shell),
+        previous,
+        changed: true,
+        password_unlocked,
+    })
+}
+
 // ── Régénération autoritative de authorized_keys (DB → fichier, L2.5) ──
 
 /// Résultat d'une régénération de `authorized_keys`.
@@ -747,6 +982,116 @@ mod tests {
             authorized_keys_path_in("C:\\Users\\git"),
             "C:\\Users\\git/.ssh/authorized_keys"
         );
+    }
+
+    #[test]
+    fn is_git_only_login_shell_accepts_only_git_shell() {
+        assert!(is_git_only_login_shell("/usr/bin/git-shell"));
+        assert!(is_git_only_login_shell("  /usr/local/bin/git-shell  "));
+        assert!(is_git_only_login_shell("git-shell"));
+        // Un shell généraliste n'est JAMAIS conforme (session interactive).
+        for shell in ["/bin/bash", "/bin/sh", "/usr/bin/zsh", "", "   ", "/usr/sbin/nologin"] {
+            assert!(!is_git_only_login_shell(shell), "shell {:?}", shell);
+        }
+    }
+
+    #[test]
+    fn git_shell_candidates_are_absolute_paths() {
+        let candidates = git_shell_candidates();
+        assert!(!candidates.is_empty());
+        for candidate in candidates {
+            assert!(candidate.starts_with('/'), "chemin non absolu : {}", candidate);
+            assert!(candidate.ends_with("git-shell"), "chemin inattendu : {}", candidate);
+        }
+    }
+
+    #[test]
+    fn login_shell_from_passwd_reads_seventh_field() {
+        assert_eq!(
+            login_shell_from_passwd("git:x:1001:1001::/home/git:/usr/bin/git-shell\n").as_deref(),
+            Some("/usr/bin/git-shell")
+        );
+        assert_eq!(login_shell_from_passwd("").as_deref(), None);
+        // Entrée incomplète (pas de 7e champ) : aucune coquille.
+        assert_eq!(login_shell_from_passwd("git:x:1001:1001::/home/git").as_deref(), None);
+        // 7e champ vide : aucune coquille.
+        assert_eq!(login_shell_from_passwd("git:x:1001:1001::/home/git:").as_deref(), None);
+    }
+
+    #[test]
+    fn is_locked_password_field_distinguishes_lock_from_disabled() {
+        // Verrouillé (useradd sans mot de passe, passwd -l) : sshd refuse même
+        // l'authentification par clef.
+        for locked in ["!", "!!", "!*", "*LK*", "  !  "] {
+            assert!(is_locked_password_field(locked), "champ {:?}", locked);
+        }
+        // `*` et les empreintes = aucun mot de passe utilisable SANS verrou :
+        // l'authentification par clef reste possible.
+        for ok in ["*", "$6$abc$def", "NP"] {
+            assert!(!is_locked_password_field(ok), "champ {:?}", ok);
+        }
+        assert!(!is_locked_password_field(""));
+    }
+
+    /// L2.6 — le rapport mentionne le déverrouillage sans mot de passe quand il a
+    /// eu lieu (et reste muet sinon).
+    #[test]
+    fn git_shell_report_mentions_password_unlock() {
+        let report = GitShellReport {
+            applicable: true,
+            shell: Some("/usr/bin/git-shell".to_string()),
+            previous: Some("/usr/bin/git-shell".to_string()),
+            changed: false,
+            password_unlocked: true,
+        };
+        let lines = report.summary_lines();
+        assert!(lines[0].contains("déjà restreint"));
+        assert!(lines[1].contains("déverrouillé sans mot de passe"));
+        let quiet = GitShellReport {
+            password_unlocked: false,
+            ..report.clone()
+        };
+        assert_eq!(quiet.summary_lines().len(), 1);
+    }
+
+    #[test]
+    fn git_shell_report_summary_is_readable() {
+        let not_applicable = GitShellReport {
+            applicable: false,
+            shell: None,
+            previous: None,
+            changed: false,
+            password_unlocked: false,
+        };
+        assert!(not_applicable.summary_lines()[0].contains("sans objet"));
+        let already = GitShellReport {
+            applicable: true,
+            shell: Some("/usr/bin/git-shell".to_string()),
+            previous: Some("/usr/bin/git-shell".to_string()),
+            changed: false,
+            password_unlocked: false,
+        };
+        assert!(already.summary_lines()[0].contains("déjà restreint"));
+        let changed = GitShellReport {
+            applicable: true,
+            shell: Some("/usr/bin/git-shell".to_string()),
+            previous: Some("/bin/bash".to_string()),
+            changed: true,
+            password_unlocked: false,
+        };
+        let line = &changed.summary_lines()[0];
+        assert!(line.contains("restreint à `git-shell`"), "{}", line);
+        assert!(!line.contains("/bin/bash"), "le rapport ne mentionne pas l'ancien shell");
+    }
+
+    /// Hors serveur Linux, la restriction est explicitement « sans objet » (le
+    /// poste dev conserve son shell de connexion).
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn restrict_git_account_is_not_applicable_off_linux() {
+        let report = restrict_git_account_to_git_shell().unwrap();
+        assert!(!report.applicable);
+        assert!(!report.changed);
     }
 
     #[test]
