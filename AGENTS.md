@@ -293,8 +293,10 @@ Quand l'utilisateur demande la publication :
    workflow le prenne en compte comme `notes` de la release et de la modale de
    mise à jour. S'il est absent, le workflow retombe sur un `git log` catégorisé.
 
-1. **Bumper la version** dans les **4 fichiers** (tauri.conf.json, Cargo.toml, package.json,
-   Cargo.lock) — même valeur partout (ex: `0.2.3` → `0.2.4`).
+1. **Bumper la version** dans les **4 fichiers** (tauri.conf.json, Cargo.toml,
+   package.json, `Cargo.lock` — ce dernier vit désormais à la **racine du dépôt**,
+   et non plus dans `src-tauri/`, depuis la création du workspace Cargo racine) —
+   même valeur partout (ex: `0.2.3` → `0.2.4`).
 
    ⚠️ **Cargo.lock — PIÈGE À ÉVITER (incident v0.2.30)** : `Cargo.lock` contient de
    NOMBREUSES lignes `version = "X.Y.Z"` (une par dépendance). **Ne jamais utiliser de
@@ -339,7 +341,8 @@ npx tauri signer generate -w ~/.tauri/pilot-updater.key
 
 # Publier une nouvelle version :
 # 1. Bumper la version dans tauri.conf.json, Cargo.toml, package.json ET Cargo.lock
-#    (Cargo.lock : cibler le package `pilot` précisément, jamais de sed global —
+#    (Cargo.lock vit à la RACINE du dépôt — workspace Cargo — et non plus dans
+#    src-tauri/ ; cibler le package `pilot` précisément, jamais de sed global —
 #    cf. la précaution ci-dessus).
 # 2. Vérifier cargo test --lib (anti-régression).
 # 3. Committer, tagger, pousser.

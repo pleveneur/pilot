@@ -59,8 +59,6 @@ tree-sitter-rust = "0.24.2"
 winreg = "0.55"
 windows-sys = { version = "0.59", features = ["Win32_System_Environment"] }
 
-# ── Patch local de wry (autorise le micro du WebView desktop pour la dictée vocale) ──
-# Voir `vendor/wry/src/webview2/mod.rs` (handler PermissionRequested).
-# À re-appliquer à chaque montée de version de Tauri / wry.
-[patch.crates-io]
-wry = { path = "vendor/wry" }
+# Note : le patch local de wry (dictée vocale, `vendor/wry`) est déclaré à la
+# RACINE du workspace (`../Cargo.toml`) — cargo n'honore les sections `[patch]`
+# que dans le manifeste racine.

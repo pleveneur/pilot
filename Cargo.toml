@@ -1,0 +1,25 @@
+# Workspace Cargo du mono-repo Pilot (refonte GDS, décision 12).
+#
+# Membres :
+#   - `src-tauri`  : application desktop (Tauri v2).
+#   - `gds-core`   : socle partagé desktop ↔ serveur (créé en L1.2).
+#   - `gds-server` : binaire serveur GDS headless (créé en L1.2).
+#
+# Conséquence de la création du workspace : le verrou de dépendances
+# (`Cargo.lock`) et le répertoire de compilation (`target/`) vivent désormais à
+# la RACINE du dépôt (auparavant `src-tauri/`). Les deux sont couverts par
+# `.gitignore` (`target/` pour la compilation).
+[workspace]
+resolver = "2"
+members = ["src-tauri"]
+
+# ── Patch local de wry (autorise le micro du WebView desktop pour la dictée vocale) ──
+# Voir `src-tauri/vendor/wry/src/webview2/mod.rs` (handler PermissionRequested).
+# À re-appliquer à chaque montée de version de Tauri / wry.
+#
+# IMPORTANT : une section `[patch]` n'est honorée QUE par le manifeste racine du
+# workspace. Elle a donc été déplacée depuis `src-tauri/Cargo.toml` lors de la
+# création du workspace : la laisser dans un membre la ferait silencieusement
+# ignorer (le correctif de dictée vocale disparaîtrait).
+[patch.crates-io]
+wry = { path = "src-tauri/vendor/wry" }
