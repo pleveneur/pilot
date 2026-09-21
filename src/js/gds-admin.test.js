@@ -13,10 +13,19 @@ import {
   buildAccountRoleArgs,
   buildAccountStatusArgs,
   buildAccountsConnArgs,
+  buildGitReposArgs,
+  buildProjectAssignArgs,
+  buildProjectListArgs,
+  buildProjectMembersArgs,
+  buildProjectRemoveArgs,
+  buildProjectUnassignArgs,
+  findRepoForProject,
   formatAccountDate,
   formatBytes,
+  formatProjectRemoveConfirmation,
   initialAccountsState,
   initialConnectionState,
+  initialProjectsState,
   nextStatusToggle,
   pickPrefill,
   renderAccountsSectionHtml,
@@ -26,6 +35,11 @@ import {
   renderAdminShellHtml,
   renderConnectionSectionHtml,
   renderConnectionStatusHtml,
+  renderProjectMembersHtml,
+  renderProjectRemoveConfirmHtml,
+  renderProjectsSectionHtml,
+  renderProjectsStatusHtml,
+  renderProjectsTableHtml,
 } from "./gds-admin.js";
 
 describe("ADMIN_SECTIONS (squelette L4.1)", () => {
@@ -500,5 +514,172 @@ describe("gds-admin — comptes (L4.3)", () => {
       sectionHtml: { connection: "<div id='conn'></div>" },
     });
     expect(shell).toContain("À venir — L4.3");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.4 — « Dépôts / projets »
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
+  const conn = { host: "h", httpPort: "8080", email: "admin@b" };
+
+  it("initialise l'état des projets sans liste chargée ni secret", () => {
+    const s = initialProjectsState();
+    expect(s.projects).toBeNull();
+    expect(s.repos).toBeNull();
+    expect(s.loading).toBe(false);
+    expect(s.selected).toBeNull();
+    expect(s.members).toBeNull();
+    expect(s.removing).toBeNull();
+    expect(s.memberForm).toEqual({ email: "", role: "dev" });
+  });
+
+  it("construit les charges utiles des commandes projets (mot de passe vide)", () => {
+    expect(buildProjectListArgs(conn)).toEqual(buildAccountsConnArgs(conn));
+    expect(buildGitReposArgs(conn)).toEqual(buildAccountsConnArgs(conn));
+    expect(buildProjectMembersArgs(conn, 4)).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      projectId: 4,
+    });
+    expect(buildProjectAssignArgs(conn, 4, "dev@x", "dev")).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      projectId: 4,
+      targetEmail: "dev@x",
+      targetRole: "dev",
+    });
+    expect(buildProjectUnassignArgs(conn, 4, "dev@x")).toMatchObject({
+      projectId: 4,
+      targetEmail: "dev@x",
+      password: "",
+    });
+    // `purge` est un drapeau EXPLICITE : absent → faux (aucune destruction).
+    expect(buildProjectRemoveArgs(conn, 4, true)).toMatchObject({ projectId: 4, purge: true });
+    expect(buildProjectRemoveArgs(conn, 4, false)).toMatchObject({ purge: false });
+    expect(buildProjectRemoveArgs(conn, 4, undefined)).toMatchObject({ purge: false });
+  });
+
+  it("relie un dépôt à son projet par project_id", () => {
+    const repos = [
+      { id: 1, project_id: 2, bare_path: "/srv/repos/beta.git" },
+      { id: 2, project_id: 5, bare_path: "/srv/repos/alpha.git" },
+    ];
+    expect(findRepoForProject(repos, 5).bare_path).toBe("/srv/repos/alpha.git");
+    expect(findRepoForProject(repos, 9)).toBeNull();
+    expect(findRepoForProject(null, 1)).toBeNull();
+  });
+
+  it("décrit la confirmation : ce qui est détruit, purge distinguée", () => {
+    const project = { id: 3, name: "alpha" };
+    const noPurge = formatProjectRemoveConfirmation(project, false);
+    expect(noPurge).toContain("alpha");
+    expect(noPurge).toContain("entrées en base");
+    expect(noPurge).toContain("purge est désactivée");
+    expect(noPurge).toContain("reste sur le disque");
+    expect(noPurge).not.toContain("IRRÉVERSIBLE");
+    const purge = formatProjectRemoveConfirmation(project, true);
+    expect(purge).toContain("purge est ACTIVÉE");
+    expect(purge).toContain("IRRÉVERSIBLE");
+    expect(purge).toContain("dépôt bare");
+  });
+
+  it("rend la zone d'état (idle / chargement / erreur / notice / nombre)", () => {
+    expect(renderProjectsStatusHtml(initialProjectsState())).toContain("Connectez-vous au serveur");
+    expect(renderProjectsStatusHtml({ loading: true })).toContain("Chargement des projets");
+    expect(renderProjectsStatusHtml({ error: "boum" })).toContain("boum");
+    expect(renderProjectsStatusHtml({ notice: "ok" })).toContain("ok");
+    expect(renderProjectsStatusHtml({ projects: [{}, {}, {}] })).toContain("3 projet(s)");
+  });
+
+  it("rend le tableau des projets (dépôt relié, actions membres/retirer)", () => {
+    expect(renderProjectsTableHtml(initialProjectsState())).toBe("");
+    expect(renderProjectsTableHtml({ projects: [] })).toContain("Aucun projet");
+    const html = renderProjectsTableHtml({
+      projects: [{ id: 5, name: "alpha" }],
+      repos: [{ id: 1, project_id: 5, bare_path: "/srv/repos/alpha.git" }],
+    });
+    expect(html).toContain("alpha");
+    expect(html).toContain("/srv/repos/alpha.git");
+    expect(html).toContain('data-prj-action="members"');
+    expect(html).toContain('data-prj-action="remove"');
+    expect(html).toContain('data-id="5"');
+  });
+
+  it("rend les membres du projet déplié, avec attribution et retrait", () => {
+    expect(renderProjectMembersHtml(initialProjectsState())).toBe("");
+    const html = renderProjectMembersHtml({
+      selected: 5,
+      projects: [{ id: 5, name: "alpha" }],
+      repos: [],
+      members: [{ user_id: 9, email: "dev@x", name: "Dev", role: "dev" }],
+      memberForm: { email: "", role: "dev" },
+    });
+    expect(html).toContain("dev@x");
+    expect(html).toContain('data-mem-action="assign"');
+    expect(html).toContain('data-mem-action="unassign"');
+    expect(html).toContain('id="gds-admin-prj-member-email"');
+  });
+
+  it("rend le panneau de confirmation avec purge décochée par défaut", () => {
+    expect(renderProjectRemoveConfirmHtml(initialProjectsState())).toBe("");
+    const html = renderProjectRemoveConfirmHtml({
+      projects: [{ id: 5, name: "alpha" }],
+      removing: { project_id: 5, name: "alpha", purge: false },
+    });
+    expect(html).toContain("Confirmation");
+    expect(html).toContain('data-prj-action="remove-confirm"');
+    expect(html).toContain('data-prj-action="remove-cancel"');
+    expect(html).toContain('id="gds-admin-prj-purge"');
+    expect(html).not.toMatch(/id="gds-admin-prj-purge"[^>]*checked/);
+    // Purge cochée : la case est rendue cochée et le texte est explicite.
+    const withPurge = renderProjectRemoveConfirmHtml({
+      projects: [{ id: 5, name: "alpha" }],
+      removing: { project_id: 5, name: "alpha", purge: true },
+    });
+    expect(withPurge).toMatch(/id="gds-admin-prj-purge"[^>]*checked/);
+    expect(withPurge).toContain("IRRÉVERSIBLE");
+  });
+
+  it("compose la section complète et échappe le contenu du serveur", () => {
+    const html = renderProjectsSectionHtml({
+      ...initialProjectsState(),
+      projects: [{ id: 1, name: '<script>alert(1)</script>' }],
+      repos: [],
+    });
+    expect(html).toContain('data-section-id="repos"');
+    expect(html).toContain('id="gds-admin-prj-refresh"');
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("n'expose jamais un secret présent dans l'état projets", () => {
+    const html = renderProjectsSectionHtml({
+      ...initialProjectsState(),
+      projects: [{ id: 1, name: "alpha" }],
+      repos: [],
+      password: "S3CR3T-PW",
+      token: "TOKEN-PW",
+      members: [],
+      selected: 1,
+    });
+    expect(html).not.toContain("S3CR3T-PW");
+    expect(html).not.toContain("TOKEN-PW");
+  });
+
+  it("remplace la section L4.4 dans le shell et garde les suivantes en squelette", () => {
+    const shell = renderAdminShellHtml({
+      title: "t",
+      subtitle: "s",
+      sections: ADMIN_SECTIONS,
+      sectionHtml: { repos: renderProjectsSectionHtml(initialProjectsState()) },
+    });
+    expect(shell).not.toContain("À venir — L4.4");
+    expect(shell).toContain("À venir — L4.5");
   });
 });

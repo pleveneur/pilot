@@ -270,6 +270,11 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/admin/projects/unassign",
             post(gds_admin_project_unassign::<S>),
         )
+        // ── L4.4 : retrait d'un projet du serveur, avec option de purge ──
+        .route(
+            "/api/gds/admin/projects/remove",
+            post(gds_admin_project_remove::<S>),
+        )
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -1053,6 +1058,87 @@ async fn gds_admin_project_unassign<S: GdsCtx>(
                 "removed": removed,
                 "project_id": body.project_id,
                 "email": email,
+            }))
+            .into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectRemoveBody {
+    project_id: i64,
+    /// Supprime aussi le dépôt bare du serveur. Par défaut `false` : le retrait
+    /// seul ne touche jamais aux fichiers du dépôt.
+    #[serde(default)]
+    purge: bool,
+}
+
+/// `POST /api/gds/admin/projects/remove` — **réservée au rôle `admin`**.
+///
+/// Retire un projet du serveur (refonte GDS **L4.4**) : les entrées en base
+/// (projet, dépôt, membres, suivi) partent toujours en cascade. Le **dépôt bare**
+/// n'est supprimé du disque que si `purge` est vrai : la purge est une action
+/// destructive, elle est donc optionnelle et jamais implicite. Le nom du projet
+/// est relu côté serveur depuis `project_id` (jamais celui fourni par l'écran),
+/// et `git::remove_bare` valide le chemin (anti path traversal) et le verrouille
+/// sous le dossier `repos` du serveur.
+async fn gds_admin_project_remove<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectRemoveBody>,
+) -> Response {
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    // Le nom est relu dans la base : l'écran ne fait pas autorité sur la cible.
+    let name = match gds_db::project_name_by_id(&pool, body.project_id).await {
+        Ok(Some(n)) => n,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Projet introuvable" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    };
+
+    // 1. Purge des fichiers du dépôt bare UNIQUEMENT si demandée explicitement.
+    if body.purge {
+        if let Some(root) = ctx.repos_root() {
+            let root_str = root.to_string_lossy().to_string();
+            if let Err(e) = crate::git::remove_bare(&root_str, &name) {
+                return err_response(e);
+            }
+        }
+    }
+
+    // 2. Suppression des entrées en base (cascade : dépôt, membres, suivi).
+    match gds_db::delete_project_by_id(&pool, body.project_id).await {
+        Ok(0) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Projet introuvable" })),
+        )
+            .into_response(),
+        Ok(_) => {
+            ctx.audit().record(
+                &authed.ip,
+                &authed.key,
+                if body.purge {
+                    "project_remove_purge"
+                } else {
+                    "project_remove"
+                },
+                &format!("{}:{}", body.project_id, name),
+                true,
+            );
+            Json(json!({
+                "ok": true,
+                "project_id": body.project_id,
+                "name": name,
+                "purged": body.purge,
             }))
             .into_response()
         }

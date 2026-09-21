@@ -518,6 +518,254 @@ export function renderAccountsSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.4 — « Dépôts / projets » : rendus purs (jamais de secret) et câblage
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Description affichée de la section « Dépôts / projets ». */
+export const PROJECTS_DESC =
+  "Projets enregistrés sur le serveur, dépôt bare associé et développeurs qui y sont attribués. Un développeur non administrateur ne voit QUE les projets qui lui sont attribués : l'attribution est la seule voie d'accès. Le retrait d'un projet est confirmé explicitement ; la purge du dépôt bare ne se fait que si vous la cochez.";
+
+/** État initial de la section « Dépôts / projets » (pure). */
+export function initialProjectsState() {
+  return {
+    projects: null, // null = liste jamais chargée
+    repos: null, // dépôts git (bare_path par projet)
+    loading: false,
+    error: "",
+    notice: "",
+    selected: null, // id du projet déplié (membres)
+    members: null, // membres du projet déplié (null = pas chargés)
+    membersLoading: false,
+    memberForm: { email: "", role: "dev" },
+    removing: null, // { project_id, name, purge } : panneau de confirmation ouvert
+    busy: "", // id du projet en cours d'opération
+  };
+}
+
+/** Charge utile : lister les projets (identité admin, mot de passe mémorisé). Pure. */
+export function buildProjectListArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/** Charge utile : lister les dépôts git. Pure. */
+export function buildGitReposArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/** Charge utile : lister les membres attribués à un projet. Pure. */
+export function buildProjectMembersArgs(conn, projectId) {
+  return { ...buildAccountsConnArgs(conn), projectId: Number(projectId) };
+}
+
+/** Charge utile : attribuer un compte (email) à un projet. Pure. */
+export function buildProjectAssignArgs(conn, projectId, email, role) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    projectId: Number(projectId),
+    targetEmail: String(email || ""),
+    targetRole: String(role || ""),
+  };
+}
+
+/** Charge utile : retirer un compte d'un projet. Pure. */
+export function buildProjectUnassignArgs(conn, projectId, email) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    projectId: Number(projectId),
+    targetEmail: String(email || ""),
+  };
+}
+
+/**
+ * Charge utile : retirer un projet du serveur. `purge` est un drapeau EXPLICITE :
+ * par défaut faux, le retrait ne détruit rien sur le disque. Pure — testable.
+ */
+export function buildProjectRemoveArgs(conn, projectId, purge) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    projectId: Number(projectId),
+    purge: !!purge,
+  };
+}
+
+/**
+ * Texte de confirmation du retrait d'un projet (pure, testable). Dit
+ * EXACTEMENT ce qui est détruit, et distingue clairement le retrait (entrées en
+ * base) de la purge (dépôt bare sur le disque, irréversible).
+ */
+export function formatProjectRemoveConfirmation(project, purge) {
+  const p = project || {};
+  const name = String(p.name || p.project_id || "");
+  const lines = [
+    `Retirer le projet « ${name} » du serveur GDS.`,
+    "Ses entrées en base seront supprimées : le projet, son dépôt associé, ses membres attribués et son suivi fusionné.",
+  ];
+  if (purge) {
+    lines.push(
+      "La purge est ACTIVÉE : le dépôt bare sera AUSSI supprimé du disque du serveur. Cette suppression est IRRÉVERSIBLE — le contenu du dépôt ne sera plus récupérable depuis le serveur."
+    );
+  } else {
+    lines.push(
+      "La purge est désactivée : le dépôt bare reste sur le disque du serveur (il n'est pas supprimé)."
+    );
+  }
+  return lines.join(" ");
+}
+
+/** Trouve le dépôt associé à un projet (par `project_id`). Pure. */
+export function findRepoForProject(repos, projectId) {
+  for (const r of repos || []) {
+    if (r && Number(r.project_id) === Number(projectId)) return r;
+  }
+  return null;
+}
+
+/** Rend la zone d'état de la section projets (pure, sans secret). */
+export function renderProjectsStatusHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...state };
+  if (s.loading) return `<div class="gds-admin-status loading">Chargement des projets…</div>`;
+  if (s.error) return `<div class="gds-admin-status error">⚠️ ${esc(s.error)}</div>`;
+  if (s.notice) return `<div class="gds-admin-status ok">${esc(s.notice)}</div>`;
+  if (s.projects == null) {
+    return `<div class="gds-admin-status idle">Connectez-vous au serveur pour afficher les projets.</div>`;
+  }
+  return `<div class="gds-admin-status idle">${s.projects.length} projet(s) sur ce serveur.</div>`;
+}
+
+/** Rend le tableau des projets (pure). */
+export function renderProjectsTableHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...state };
+  if (s.projects == null) return "";
+  if (s.projects.length === 0) {
+    return `<div class="gds-admin-section-placeholder">Aucun projet enregistré sur ce serveur.</div>`;
+  }
+  const rows = s.projects
+    .map((p) => {
+      const id = Number(p && p.id);
+      const repo = findRepoForProject(s.repos, id);
+      const busy = String(s.busy) === String(id);
+      const dis = busy ? " disabled" : "";
+      const open = String(s.selected) === String(id);
+      const bare = repo && repo.bare_path ? repo.bare_path : "—";
+      return `
+      <tr data-project-id="${esc(id)}">
+        <td class="gds-admin-cell-email">${esc((p && p.name) || "—")}</td>
+        <td class="gds-admin-cell-path" title="${esc(bare)}">${esc(bare)}</td>
+        <td class="gds-admin-cell-actions">
+          <button class="gds-admin-btn small" data-prj-action="members" data-id="${esc(id)}"${dis}><i data-lucide="users" class="icon-sm"></i> ${open ? "Masquer" : "Membres"}</button>
+          <button class="gds-admin-btn small danger" data-prj-action="remove" data-id="${esc(id)}"${dis}><i data-lucide="trash-2" class="icon-sm"></i> Retirer</button>
+        </td>
+      </tr>`;
+    })
+    .join("");
+  return `
+      <table class="gds-admin-table">
+        <thead>
+          <tr><th>Projet</th><th>Dépôt bare</th><th>Actions</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+}
+
+/** Rend la liste des membres du projet déplié (pure). */
+export function renderProjectMembersHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...state };
+  if (s.selected == null) return "";
+  const project = (s.projects || []).find((p) => String(p && p.id) === String(s.selected));
+  const name = project ? project.name : `#${s.selected}`;
+  const roleOptions = ACCOUNT_ROLES.map(
+    (r) =>
+      `<option value="${esc(r.value)}"${r.value === s.memberForm.role ? " selected" : ""}>${esc(r.label)}</option>`
+  ).join("");
+  let body;
+  if (s.membersLoading) {
+    body = `<div class="gds-admin-status loading">Chargement des membres…</div>`;
+  } else if (s.members == null) {
+    body = `<div class="gds-admin-status idle">Membres non chargés.</div>`;
+  } else if (s.members.length === 0) {
+    body = `<div class="gds-admin-section-placeholder">Aucun membre attribué : seuls les administrateurs voient ce projet.</div>`;
+  } else {
+    const rows = s.members
+      .map(
+        (m) => `
+        <tr>
+          <td class="gds-admin-cell-email">${esc((m && m.email) || "—")}</td>
+          <td>${esc((m && m.name) || "—")}</td>
+          <td><span class="gds-admin-badge">${esc((m && m.role) || "dev")}</span></td>
+          <td class="gds-admin-cell-actions"><button class="gds-admin-btn small danger" data-mem-action="unassign" data-id="${esc(s.selected)}" data-email="${esc((m && m.email) || "")}"><i data-lucide="user-minus" class="icon-sm"></i> Retirer</button></td>
+        </tr>`
+      )
+      .join("");
+    body = `<table class="gds-admin-table"><thead><tr><th>Adresse</th><th>Nom</th><th>Rôle projet</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  return `
+      <div class="gds-admin-members">
+        <div class="gds-admin-reset-title">Développeurs attribués au projet <b>${esc(name)}</b></div>
+        <div class="gds-admin-form gds-admin-form-create">
+          <label class="gds-admin-field"><span>Adresse (email)</span>
+            <input id="gds-admin-prj-member-email" type="text" autocomplete="off" placeholder="prenom.nom@exemple.com" value="${esc(s.memberForm.email)}">
+          </label>
+          <label class="gds-admin-field"><span>Rôle projet</span>
+            <select id="gds-admin-prj-member-role">${roleOptions}</select>
+          </label>
+        </div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn primary small" data-mem-action="assign" data-id="${esc(s.selected)}"><i data-lucide="user-plus" class="icon-sm"></i> Attribuer</button>
+        </div>
+        ${body}
+      </div>`;
+}
+
+/**
+ * Rend le panneau de confirmation du retrait d'un projet (pure). Le texte
+ * décrit exactement ce qui est détruit ; la case « purger » est décochée par
+ * défaut (le retrait seul ne détruit rien sur le disque).
+ */
+export function renderProjectRemoveConfirmHtml(state = {}) {
+  const s = { ...initialProjectsState(), ...state };
+  if (!s.removing) return "";
+  const project = (s.projects || []).find(
+    (p) => String(p && p.id) === String(s.removing.project_id)
+  ) || { name: s.removing.name, id: s.removing.project_id };
+  return `
+      <div class="gds-admin-confirm danger">
+        <div class="gds-admin-reset-title">Confirmation — retrait de <b>${esc(project.name || s.removing.name || s.removing.project_id)}</b></div>
+        <div class="gds-admin-section-desc">${esc(formatProjectRemoveConfirmation(project, !!s.removing.purge))}</div>
+        <label class="gds-admin-check"><input type="checkbox" id="gds-admin-prj-purge"${s.removing.purge ? " checked" : ""}> Purger aussi le dépôt bare sur le disque (irréversible)</label>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn danger" data-prj-action="remove-confirm" data-id="${esc(s.removing.project_id)}"><i data-lucide="trash-2" class="icon-sm"></i> Confirmer le retrait</button>
+          <button class="gds-admin-btn" data-prj-action="remove-cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
+        </div>
+      </div>`;
+}
+
+/** Rend la section « Dépôts / projets » complète (pure, testable). */
+export function renderProjectsSectionHtml(state = {}) {
+  const base = initialProjectsState();
+  const s = {
+    ...base,
+    ...state,
+    memberForm: { ...base.memberForm, ...((state && state.memberForm) || {}) },
+    removing: (state && state.removing) || null,
+  };
+  const count =
+    s.projects == null ? "" : ` <span class="gds-admin-muted">(${s.projects.length})</span>`;
+  return `
+      <section class="gds-admin-section" data-section-id="repos">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="folder-git-2" class="icon-sm"></i> Dépôts / projets${count}</div>
+          <button class="gds-admin-btn small" id="gds-admin-prj-refresh"><i data-lucide="refresh-cw" class="icon-sm"></i> Rafraîchir</button>
+        </div>
+        <div class="gds-admin-section-desc">${esc(PROJECTS_DESC)}</div>
+        <div id="gds-admin-projects-status">${renderProjectsStatusHtml(s)}</div>
+        ${renderProjectsTableHtml(s)}
+        ${renderProjectMembersHtml(s)}
+        ${renderProjectRemoveConfirmHtml(s)}
+        <div class="gds-admin-hint">Attribuer un développeur est la seule façon de lui donner accès au projet. Le retrait d'un projet demande une confirmation explicite ; la purge du dépôt bare (destructive) ne se fait que si vous la cochez, jamais par défaut.</div>
+      </section>`;
+}
+
 /**
  * Crée l'onglet « GDS Serveur » (transverse) dans `container`.
  * Ne dépend d'AUCUN projet ouvert : aucune lecture de `window._pilotProjectPath`.
@@ -531,6 +779,8 @@ export function createGdsAdmin(container) {
   let state = initialConnectionState();
   /** État de la section « Comptes » (L4.3) — jamais de mot de passe conservé. */
   let accounts = initialAccountsState();
+  /** État de la section « Dépôts / projets » (L4.4) — jamais de secret. */
+  let projects = initialProjectsState();
   /** Identité admin de la dernière connexion réussie (hôte + email bruts) : la
    *  clé des identifiants mémorisés côté poste (repli du mot de passe). */
   let adminConn = null;
@@ -538,8 +788,8 @@ export function createGdsAdmin(container) {
 
   const q = (sel) => container.querySelector(sel);
 
-  /** Récupère la saisie courante AVANT tout redessin (hors mot de passe, qui
-   *  n'est lu qu'au moment de l'envoi puis oublié). */
+  /** Récupère la saisie AVANT tout redessin (hors mot de passe, qui n'est lu
+   *  qu'au moment de l'envoi puis oublié). */
   function readFields() {
     const host = q("#gds-admin-host");
     const port = q("#gds-admin-port");
@@ -547,6 +797,22 @@ export function createGdsAdmin(container) {
     if (host) state.host = host.value;
     if (port) state.port = port.value;
     if (email) state.email = email.value;
+  }
+
+  /** Récupère la saisie du bloc « Dépôts / projets » AVANT tout redessin. */
+  function readProjectFields() {
+    const email = q("#gds-admin-prj-member-email");
+    const role = q("#gds-admin-prj-member-role");
+    if (email || role) {
+      projects.memberForm = {
+        email: email ? email.value : projects.memberForm.email,
+        role: role ? role.value : projects.memberForm.role,
+      };
+    }
+    const purge = q("#gds-admin-prj-purge");
+    if (purge && projects.removing) {
+      projects.removing = { ...projects.removing, purge: !!purge.checked };
+    }
   }
 
   /** Récupère la saisie de création AVANT tout redessin (sans mot de passe). */
@@ -566,6 +832,7 @@ export function createGdsAdmin(container) {
   function draw() {
     readFields();
     captureAccountForm();
+    readProjectFields();
     container.innerHTML = renderAdminShellHtml({
       title: "🖥️ GDS Serveur — administration",
       subtitle:
@@ -574,6 +841,7 @@ export function createGdsAdmin(container) {
       sectionHtml: {
         connection: renderConnectionSectionHtml(state),
         accounts: renderAccountsSectionHtml(accounts),
+        repos: renderProjectsSectionHtml(projects),
       },
     });
     refreshIcons(container);
@@ -591,6 +859,176 @@ export function createGdsAdmin(container) {
     if (create) create.addEventListener("click", () => createAccount());
     for (const btn of container.querySelectorAll("[data-acc-action]")) {
       btn.addEventListener("click", () => onAccountAction(btn));
+    }
+    const prjRefresh = q("#gds-admin-prj-refresh");
+    if (prjRefresh) prjRefresh.addEventListener("click", () => loadProjects());
+    for (const btn of container.querySelectorAll("[data-prj-action]")) {
+      btn.addEventListener("click", () => onProjectAction(btn));
+    }
+    for (const btn of container.querySelectorAll("[data-mem-action]")) {
+      btn.addEventListener("click", () => onMemberAction(btn));
+    }
+    const purge = q("#gds-admin-prj-purge");
+    if (purge) purge.addEventListener("change", () => draw());
+  }
+
+  // ── L4.4 : projets & dépôts (toutes via l'API HTTP du serveur) ──
+
+  /** Charge les projets et leurs dépôts (nécessite une connexion admin). */
+  async function loadProjects({ silent = false } = {}) {
+    if (!adminConn) {
+      projects.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    if (!silent) {
+      projects.loading = true;
+      projects.error = "";
+      projects.notice = "";
+    }
+    draw();
+    const [pr, rr] = await Promise.all([
+      invokeAccounts("gds_admin_projects", buildProjectListArgs(adminConn)),
+      invokeAccounts("gds_admin_git_repos", buildGitReposArgs(adminConn)),
+    ]);
+    if (disposed) return;
+    projects.loading = false;
+    if (pr && pr.ok) {
+      projects.projects = Array.isArray(pr.projects) ? pr.projects : [];
+    } else {
+      projects.error = (pr && pr.error) || "Chargement des projets impossible.";
+    }
+    projects.repos = rr && rr.ok && Array.isArray(rr.git_repos) ? rr.git_repos : [];
+    draw();
+  }
+
+  /** Charge les membres du projet déplié. */
+  async function loadMembers(projectId, { silent = false } = {}) {
+    if (!adminConn) return;
+    if (!silent) projects.membersLoading = true;
+    draw();
+    const res = await invokeAccounts(
+      "gds_admin_project_members",
+      buildProjectMembersArgs(adminConn, projectId)
+    );
+    if (disposed) return;
+    projects.membersLoading = false;
+    if (res && res.ok) {
+      projects.members = Array.isArray(res.members) ? res.members : [];
+    } else {
+      projects.members = [];
+      projects.error = (res && res.error) || "Chargement des membres impossible.";
+    }
+    draw();
+  }
+
+  /** Exécute une opération sur un projet puis recharge la liste. */
+  async function runProjectOp({ id, command, args, success, after }) {
+    if (!adminConn) {
+      projects.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    projects.busy = id != null ? String(id) : "__all__";
+    projects.error = "";
+    projects.notice = "";
+    draw();
+    const res = await invokeAccounts(command, args);
+    if (disposed) return;
+    projects.busy = "";
+    if (res && res.ok) {
+      projects.notice = success || "Opération effectuée.";
+      if (after) after();
+    } else {
+      projects.error = (res && res.error) || "Opération refusée par le serveur.";
+    }
+    await loadProjects({ silent: true });
+    if (projects.selected != null) await loadMembers(projects.selected, { silent: true });
+  }
+
+  /** Traite un clic du bloc « Dépôts / projets ». */
+  async function onProjectAction(btn) {
+    const action = btn.getAttribute("data-prj-action");
+    const id = btn.getAttribute("data-id");
+    if (action === "members") {
+      if (String(projects.selected) === String(id)) {
+        projects.selected = null;
+        projects.members = null;
+        return draw();
+      }
+      projects.selected = Number(id);
+      projects.members = null;
+      projects.memberForm = { email: "", role: "dev" };
+      projects.error = "";
+      projects.notice = "";
+      draw();
+      return loadMembers(projects.selected);
+    }
+    if (action === "remove") {
+      const project = (projects.projects || []).find((p) => String(p && p.id) === String(id));
+      projects.removing = {
+        project_id: Number(id),
+        name: project ? project.name : "",
+        purge: false,
+      };
+      projects.error = "";
+      projects.notice = "";
+      return draw();
+    }
+    if (action === "remove-cancel") {
+      projects.removing = null;
+      return draw();
+    }
+    if (action === "remove-confirm") {
+      const removing = projects.removing || { project_id: Number(id), purge: false };
+      const purge = !!removing.purge;
+      return runProjectOp({
+        id: removing.project_id,
+        command: "gds_admin_project_remove",
+        args: buildProjectRemoveArgs(adminConn, removing.project_id, purge),
+        success: purge
+          ? `Projet retiré du serveur (dépôt bare purgé).`
+          : `Projet retiré du serveur (dépôt bare conservé sur le disque).`,
+        after: () => {
+          projects.removing = null;
+          if (String(projects.selected) === String(removing.project_id)) {
+            projects.selected = null;
+            projects.members = null;
+          }
+        },
+      });
+    }
+  }
+
+  /** Traite un clic du panneau des membres (attribution / retrait). */
+  async function onMemberAction(btn) {
+    const action = btn.getAttribute("data-mem-action");
+    const id = Number(btn.getAttribute("data-id"));
+    if (action === "assign") {
+      const emailEl = q("#gds-admin-prj-member-email");
+      const roleEl = q("#gds-admin-prj-member-role");
+      const email = emailEl ? emailEl.value.trim() : "";
+      const role = roleEl ? roleEl.value : "dev";
+      if (!email) {
+        projects.error = "Adresse (email) du développeur requise.";
+        return draw();
+      }
+      return runProjectOp({
+        id,
+        command: "gds_admin_project_assign",
+        args: buildProjectAssignArgs(adminConn, id, email, role),
+        success: `« ${email} » attribué au projet.`,
+        after: () => {
+          projects.memberForm = { email: "", role };
+        },
+      });
+    }
+    if (action === "unassign") {
+      const email = btn.getAttribute("data-email") || "";
+      return runProjectOp({
+        id,
+        command: "gds_admin_project_unassign",
+        args: buildProjectUnassignArgs(adminConn, id, email),
+        success: `« ${email} » retiré du projet.`,
+      });
     }
   }
 
@@ -795,6 +1233,7 @@ export function createGdsAdmin(container) {
         accounts.notice = "";
         draw();
         loadAccounts({ silent: true });
+        loadProjects({ silent: true });
         return;
       }
       state.ok = false;

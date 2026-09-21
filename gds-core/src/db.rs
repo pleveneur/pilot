@@ -866,6 +866,31 @@ pub async fn delete_project_by_name(pool: &PgPool, name: &str) -> Result<u64, St
     Ok(res.rows_affected())
 }
 
+/// Nom d'un projet GDS par son id (None si absent). Utilisé par le retrait
+/// d'un projet depuis l'écran d'administration (L4.4) : le nom est relu côté
+/// serveur (jamais fait confiance à l'écran) avant toute suppression de dépôt.
+pub async fn project_name_by_id(pool: &PgPool, id: i64) -> Result<Option<String>, String> {
+    let row = sqlx::query("SELECT name FROM projects WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Lecture projet: {}", e))?;
+    Ok(row.map(|r| r.get::<String, _>("name")))
+}
+
+/// Supprime un projet GDS par son id. Comme [`delete_project_by_name`], on ne
+/// cible que le projet GDS (path IS NULL) pour ne jamais toucher aux projets de
+/// suivi ; les dépendances (git_repos, project_members, tasks, decisions,
+/// tickets) partent en cascade. Retourne le nombre de lignes supprimées.
+pub async fn delete_project_by_id(pool: &PgPool, id: i64) -> Result<u64, String> {
+    let res = sqlx::query("DELETE FROM projects WHERE id = $1 AND path IS NULL")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Suppression projet GDS: {}", e))?;
+    Ok(res.rows_affected())
+}
+
 /// Instant courant en epoch millis (utilisé par le suivi fusionné).
 pub fn now_millis() -> i64 {
     std::time::SystemTime::now()

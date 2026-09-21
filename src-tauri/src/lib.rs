@@ -3060,6 +3060,16 @@ pub fn run() {
             gds_admin::gds_admin_account_set_role,
             gds_admin::gds_admin_account_set_status,
             gds_admin::gds_admin_account_set_password,
+            // ── GDS (refonte, L4.4) : dépôts / projets du serveur ──
+            // Lecture (projets, dépôts, membres) et écriture (attribution,
+            // retrait, retrait purgé) via les routes HTTP du serveur ; le retrait
+            // purgé est destructif et n'est déclenché qu'après confirmation.
+            gds_admin::gds_admin_projects,
+            gds_admin::gds_admin_git_repos,
+            gds_admin::gds_admin_project_members,
+            gds_admin::gds_admin_project_assign,
+            gds_admin::gds_admin_project_unassign,
+            gds_admin::gds_admin_project_remove,
             // ── PLface : contrôle/lancement à la demande (seconde moitié) ──
             check_and_launch_plface,
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──

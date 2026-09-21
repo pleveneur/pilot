@@ -8768,6 +8768,51 @@ body.pilot-loading *::after {
   color: var(--text-secondary, #a0a6b4);
 }
 
+/* ── L4.4 — bloc « Depôts / projets » ── */
+.gds-admin-btn.danger {
+  color: var(--danger, #f87171);
+  border-color: color-mix(in srgb, var(--danger, #f87171) 35%, transparent);
+}
+.gds-admin-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #f87171) 12%, transparent);
+}
+.gds-admin-cell-path {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  word-break: break-all;
+}
+.gds-admin-members {
+  background: var(--surface-2, #1e2127);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.gds-admin-confirm {
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  background: color-mix(in srgb, var(--danger, #f87171) 6%, transparent);
+}
+.gds-admin-confirm.danger {
+  border-color: color-mix(in srgb, var(--danger, #f87171) 35%, transparent);
+}
+.gds-admin-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #a0a6b4);
+}
+
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)
    Overlay plein écran : tout est masqué sauf le chat. Barre du haut
