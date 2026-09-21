@@ -540,6 +540,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     tabs.openFile("GDS Serveur", "gds-admin");
   });
 
+  // ⚙️ GDS Paramétrage : onglet transverse de paramétrage utilisateur — LOT 5 (L5.1).
+  document.getElementById("btn-gds-params").addEventListener("click", () => {
+    tabs.openFile("GDS — paramétrage", "gds-params");
+  });
+
   // 💬 Feedback : onglet de remarques/évolutions utilisateurs — spec_feedback.md.
   document.getElementById("btn-feedback").addEventListener("click", () => {
     tabs.openFile("Feedback", "feedback");

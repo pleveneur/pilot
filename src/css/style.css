@@ -8486,6 +8486,13 @@ body.pilot-loading *::after {
   height: 100%;
   background: var(--bg-app, #0f1115);
 }
+/* ── LOT 5 — écran PARAMÉTRAGE utilisateur ──
+   Réutilise la coquille `gds-admin-*` (aucune duplication d'affichage) ; seul
+   l'en-tête reçoit un discret liseré pour distinguer les deux onglets. */
+.gds-params-view .gds-admin-title {
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+}
 .gds-admin-scroll {
   flex: 1;
   overflow-y: auto;

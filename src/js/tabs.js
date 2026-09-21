@@ -347,6 +347,13 @@ export class TabsManager {
       return;
     }
 
+    // Onglet GDS Paramétrage (⚙️) — LOT 5 : écran de PARAMÉTRAGE UTILISATEUR,
+    // TRANSVERSE (non lié à un projet, pendant « utilisateur » de gds-admin).
+    if (mode === "gds-params") {
+      await this._openGdsParams(path || "GDS — paramétrage");
+      return;
+    }
+
     // Onglet Prompt Builder
     if (mode === "prompt-builder") {
       await this._openPromptBuilder();
@@ -1202,6 +1209,46 @@ export class TabsManager {
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
           <div style="font-size:48px;margin-bottom:16px;">🖥️</div>
           <div style="font-size:18px;font-weight:600;margin-bottom:8px;">GDS Serveur</div>
+          <div style="font-size:13px;">❌ Erreur: ${e}</div>
+        </div>`;
+    }
+  }
+
+  /**
+   * Ouvre l'onglet GDS Paramétrage (⚙️) — LOT 5 : écran de PARAMÉTRAGE
+   * UTILISATEUR, TRANSVERSE (non lié à un projet). Squelette L5.1 : coquille +
+   * sections vides, remplies par les micro-tâches L5.2 → L5.5.
+   */
+  async _openGdsParams(label = "GDS — paramétrage") {
+    const existing = this.tabs.find((t) => t.mode === "gds-params");
+    if (existing) {
+      this.switchTab(existing.id);
+      return;
+    }
+
+    const id = ++tabIdCounter;
+    const tab = new Tab(id, "", label, "gds-params");
+
+    tab.wrapper = document.createElement("div");
+    tab.wrapper.className = "editor-wrapper gds-params-wrapper";
+    tab.wrapper.style.display = "none";
+
+    this.container.appendChild(tab.wrapper);
+    this.tabs.push(tab);
+    this._renderTabButton(tab);
+    this.switchTab(id);
+
+    try {
+      const { createGdsParams } = await import("./gds-params.js");
+      const result = createGdsParams(tab.wrapper);
+      tab.view = result.wrapper;
+      tab.unlistenGdsParams = result.unlisten;
+    } catch (e) {
+      console.error("Erreur onglet GDS Paramétrage:", e);
+      tab.wrapper.innerHTML = `
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--danger);">
+          <div style="font-size:48px;margin-bottom:16px;">⚙️</div>
+          <div style="font-size:18px;font-weight:600;margin-bottom:8px;">GDS — paramétrage</div>
           <div style="font-size:13px;">❌ Erreur: ${e}</div>
         </div>`;
     }
@@ -2882,7 +2929,7 @@ export class TabsManager {
 
   _renderTabButton(tab) {
     const btn = document.createElement("div");
-    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin"].includes(tab.mode);
+    const special = ["agent", "terminal", "help", "review", "history", "feedback", "agents", "prompt-builder", "superagent", "dashboard", "gds-admin", "gds-params"].includes(tab.mode);
     btn.className = `tab${tab.mode === "preview" || tab.mode === "pdf" ? " preview" : ""}${special ? " tab-special" : ""}${tab.mode === "superagent" ? " tab-superagent" : ""}${tab.mode === "dashboard" ? " tab-dashboard" : ""}`;
     btn.dataset.tabId = tab.id;
 
