@@ -135,7 +135,11 @@ pub(crate) fn classify_checksum_divergence(
 /// `Dirty`/`VersionMissing` et les autres erreurs gardent leur comportement
 /// d'origine.
 pub(crate) async fn migrate(pool: &PgPool) -> Result<(), String> {
-    let migrator = sqlx::migrate!();
+    // Transition L1 : les migrations ont été déplacées dans `gds-core/migrations/`
+    // (L1.3) ; `gds_db.rs` rejoindra `gds-core/src/db.rs` en L1.4, où le chemin
+    // par défaut (`sqlx::migrate!()`) redeviendra correct. D'ici là le chemin est
+    // explicite, résolu relativement à `CARGO_MANIFEST_DIR` (src-tauri).
+    let migrator = sqlx::migrate!("../gds-core/migrations");
     // Connexion dédiée : les deux tentatives doivent s'exécuter dans la MÊME
     // session. En effet, `run_direct` laisse le verrou consultatif PostgreSQL
     // (`pg_advisory_lock`, portée session) posé lorsqu'il échoue en
@@ -1395,7 +1399,9 @@ mod tests {
     // (ce qui invaliderait l'empreinte SHA-384 du registre `_sqlx_migrations`).
     #[test]
     fn embedded_migrations_are_lf() {
-        let migrator = sqlx::migrate!();
+        // Cf. `migrate()` : chemin explicite pendant la transition L1
+        // (migrations dans `gds-core/migrations/`, fichier encore ici jusqu'en L1.4).
+        let migrator = sqlx::migrate!("../gds-core/migrations");
         let mut versions: Vec<i64> = Vec::new();
         for m in migrator.iter() {
             assert!(
@@ -1589,7 +1595,7 @@ mod tests {
         // 1) Migration initiale : base vierge → toutes les migrations appliquées.
         migrate(&pool).await.expect("migration initiale");
 
-        let migrator = sqlx::migrate!();
+        let migrator = sqlx::migrate!("../gds-core/migrations");
         let v1 = migrator
             .iter()
             .find(|m| m.version == 1)
@@ -1724,7 +1730,7 @@ mod tests {
 
         // Registre sain : migration initiale complète.
         migrate(&pool).await.expect("migration initiale");
-        let migrator = sqlx::migrate!();
+        let migrator = sqlx::migrate!("../gds-core/migrations");
 
         let read_checksums = |pool: PgPool| async move {
             sqlx::query(&format!(

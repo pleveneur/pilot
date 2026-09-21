@@ -35,10 +35,12 @@ jobs:
         # l'empreinte embarquée et invalide `_sqlx_migrations`
         # (MigrateError::VersionMismatch). Garde permanente : tout fichier de
         # migration doit être en LF (index ET worktree).
+        # Chemin : `gds-core/migrations/` depuis la refonte GDS (L1.3) ; ce garde
+        # est VIDE (donc sans effet) si le chemin n'existe pas.
         shell: bash
         run: |
           echo "Vérification des fins de ligne des migrations (LF attendu)"
-          ! git ls-files --eol src-tauri/migrations | grep -v 'i/lf.*w/lf'
+          ! git ls-files --eol gds-core/migrations | grep -v 'i/lf.*w/lf'
       - name: Switch apt mirror (azure → archive)
         # Le miroir par défaut des runners ubuntu-22.04 (azure.archive.ubuntu.com)
         # est mort : apt-get update bloquait le job 2h+ (suspendu indéfiniment).
