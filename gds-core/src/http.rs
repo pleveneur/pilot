@@ -110,9 +110,12 @@ impl GdsCtx for ServerCtx {
 /// Le poste, lui, la monte avec le reste (`gds_router`) : sa table de routes est
 /// ainsi rigoureusement inchangée (L1.10).
 ///
-/// Seule la **connexion** est concernée : `users/register` (auto-inscription) et
-/// `users/validate` restent dans `gds_routes`, donc derrière l'authentification
-/// sur le service — la création de comptes y relève de l'administration (L3.2).
+/// Seule la **connexion** est concernée : `users/register` (auto-inscription)
+/// reste dans `gds_routes`, donc derrière l'authentification sur le service — la
+/// création de comptes y relève de l'administration (L3.2). Depuis **L3.3**,
+/// `users/validate` est montée dans `admin_routes` (réservée au rôle `admin`) et
+/// non plus dans `gds_routes` : la limite V1 « validation ouverte à tout client
+/// authentifié » est supprimée.
 pub fn login_routes<S: GdsCtx>() -> Router<Arc<S>> {
     Router::new().route("/api/gds/users/login", post(gds_login::<S>))
 }
@@ -121,7 +124,8 @@ pub fn login_routes<S: GdsCtx>() -> Router<Arc<S>> {
 pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
     Router::new()
         .route("/api/gds/users/register", post(gds_register::<S>))
-        .route("/api/gds/users/validate", post(gds_validate::<S>))
+        // L3.3 : `users/validate` a quitté `gds_routes` pour `admin_routes`
+        // (réservée au rôle `admin`) — la limite V1 est supprimée.
         .route("/api/gds/projects", get(gds_projects::<S>))
         .route("/api/gds/git-repos", get(gds_git_repos::<S>))
         // ── Phase C1.5 : routes API suivi fusionné (lecture/écriture) ──
@@ -250,6 +254,8 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/admin/users/password",
             post(gds_admin_user_password::<S>),
         )
+        // ── L3.3 : validation d'un compte (ex-limite V1) réservée à l'admin ──
+        .route("/api/gds/users/validate", post(gds_validate::<S>))
 }
 
 /// `GET /api/gds/health` — **route publique**.
@@ -721,10 +727,12 @@ pub async fn auth_middleware<S: GdsCtx>(
 /// (sinon 403, avec une entrée d'audit `admin_denied`).
 ///
 /// Le rôle provient de la **session existante** (`WebAuth::create_session_as`),
-/// il n'est donc jamais relu depuis la base à chaque requête. Le contrôle fin
-/// des rôles et statuts (matrice de droits, revalidation `status = active`)
-/// appartient au lot L3.3 qui étendra ce garde ; ici il est volontairement
-/// **fermé par défaut** : une session sans rôle est refusée.
+/// il n'est donc jamais relu depuis la base à chaque requête. Depuis **L3.3**,
+/// ce garde protège **toutes** les routes d'administration, y compris la
+/// validation d'un compte (`users/validate`, ex-limite V1). Il est
+/// volontairement **fermé par défaut** : une session sans rôle est refusée. La
+/// matrice fine des droits étendue (revalidation `status = active`) relève du
+/// lot L3.5.
 async fn require_admin<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
     req: Request,
@@ -863,14 +871,16 @@ struct ValidateBody {
     email: String,
 }
 
-/// Validation superadmin : passe un compte à 'active'.
+/// Validation d'un compte : passe un compte à `status = 'active'`.
 ///
-/// ⚠️ Limite V1 : la route est derrière `auth_middleware` (tout client distant
-/// authentifié peut appeler cette route). Le contrôle du rôle superadmin
-/// (vérifier que l'appelant est bien un admin) n'est pas encore implémenté —
-/// à renforcer en Phase B (rôles + gestionnaire de verrous).
+/// **Réservée au rôle `admin`** (L3.3) : la route est montée dans
+/// `admin_routes`, donc derrière `auth_middleware` **puis** `require_admin`. La
+/// limite V1 (« tout client authentifié peut valider un compte ») est
+/// supprimée : un jeton non administrateur reçoit 403 avant d'atteindre ce
+/// handler.
 async fn gds_validate<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
     Json(body): Json<ValidateBody>,
 ) -> Response {
     let pool = match ctx.pool() {
@@ -878,7 +888,11 @@ async fn gds_validate<S: GdsCtx>(
         Err(e) => return err_response(e),
     };
     match gds_db::set_user_status(&pool, &body.email, "active").await {
-        Ok(()) => Json(json!({ "ok": true, "email": body.email, "status": "active" })).into_response(),
+        Ok(()) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "user_validate", &body.email, true);
+            Json(json!({ "ok": true, "email": body.email, "status": "active" })).into_response()
+        }
         Err(e) => err_response(e),
     }
 }

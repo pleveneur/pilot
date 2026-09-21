@@ -608,6 +608,69 @@ mod tests {
         assert_eq!(obj.len(), 3);
     }
 
+    /// L3.3 — la validation d'un compte (`POST /api/gds/users/validate`) est
+    /// désormais une route **d'administration** : un jeton de rôle `dev` reçoit
+    /// 403 (la limite V1 « tout client authentifié peut valider » est
+    /// supprimée), un jeton historique **sans rôle** aussi (fermé par défaut),
+    /// un jeton `admin` franchit le garde et **atteint le handler** (pool absent
+    /// → 500, jamais 403 ni 404). Sans jeton : 401.
+    #[tokio::test]
+    async fn user_validate_route_is_admin_only() {
+        let body = serde_json::json!({ "email": "pending-l33@gds.test" });
+
+        // 1) Jeton non administrateur (dev) : refusé avant le handler → 403.
+        for role in ["dev", "standard", ""] {
+            let ctx = null_ctx();
+            let token = ctx
+                .auth
+                .create_session_as(role, std::time::Duration::from_secs(60));
+            let app = server_router(ctx);
+            let res = app
+                .oneshot(admin_json_request(
+                    "POST",
+                    "/api/gds/users/validate",
+                    &token,
+                    body.clone(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "rôle {:?}", role);
+        }
+
+        // 2) Jeton administrateur : le garde laisse passer, le handler est
+        //    atteint et échoue faute de pool (500) — la route existe bien.
+        let ctx = null_ctx();
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/users/validate",
+                &admin,
+                body.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // 3) Sans jeton : 401 (le garde d'authentification s'applique d'abord).
+        let app = server_router(null_ctx());
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/gds/users/validate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
     // ── L2.4 — initialisation du compte administrateur ──
 
     /// L2.4 — l'initialisation est **publique** : sans jeton, la requête atteint
@@ -1180,5 +1243,126 @@ mod tests {
         let app = server_router(ctx);
         let res = app.oneshot(refresh_request(Some(&admin))).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// L3.3 — scénario sur une base réelle jetable (facultatif) : un jeton `dev`
+    /// reçoit 403 sur `POST /api/gds/users/validate` et ne modifie rien, tandis
+    /// qu'un jeton `admin` obtient 200 et passe le compte `pending` à `active`.
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test sort proprement (CI verte).
+    #[tokio::test]
+    async fn user_validate_route_admin_ok_dev_forbidden_on_real_db() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "user_validate_route_admin_ok_dev_forbidden_on_real_db: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_http_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        let pending_email = "pending-l33@gds.test";
+        gds_core::db::create_user(&pool, pending_email, "Pending L33", "", "dev", "pending")
+            .await
+            .expect("création du compte en attente");
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: std::env::temp_dir(),
+        });
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let dev = ctx
+            .auth
+            .create_session_as("dev", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+
+        // 1) Jeton dev : refusé (403), le compte reste `pending`.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/users/validate",
+                &dev,
+                serde_json::json!({ "email": pending_email }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let user = gds_core::db::get_user_by_email(&pool, pending_email)
+            .await
+            .unwrap()
+            .expect("compte présent");
+        assert_eq!(user.status, "pending", "le refus ne doit rien modifier");
+
+        // 2) Jeton admin : validation effective (200) → compte `active`.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/users/validate",
+                &admin,
+                serde_json::json!({ "email": pending_email }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["status"], serde_json::json!("active"));
+        let user = gds_core::db::get_user_by_email(&pool, pending_email)
+            .await
+            .unwrap()
+            .expect("compte présent");
+        assert_eq!(user.status, "active");
+
+        pool.close().await;
+        admin_pool.close().await;
     }
 }
