@@ -21,17 +21,13 @@ use crate::{run_captured, AppState};
 
 // ── Helpers git génériques (GDS, spec_gds.md §4) ──
 // Opérations git serveur/poste réutilisées par `gds.rs` (Phase A3) : init bare,
-// clone, remote add, push, pull. Toutes passent par `run_captured` (helper
-// process partagé) et retournent une erreur lisible en cas d'échec.
+// clone, remote add, push, pull. `git_init_bare` a été déplacé dans `gds-core`
+// (`gds_core::git_cmd`, refonte GDS L1.5a) car le serveur GDS en a besoin ; les
+// autres restent ici et passent par `run_captured` (helper process partagé).
 
-/// Initialise un dépôt bare (côté serveur GDS).
-pub fn git_init_bare(path: &str) -> Result<(), String> {
-    let out = run_captured("git", &["init", "--bare", path], Duration::from_secs(10));
-    if out.trim().is_empty() {
-        return Err("git init --bare a échoué (git absent ?)".to_string());
-    }
-    Ok(())
-}
+// Ré-export : les appels existants `crate::git::git_init_bare` (et son test) sont
+// inchangés.
+pub use gds_core::git_cmd::git_init_bare;
 
 /// Clone un dépôt distant dans un dossier local. `git clone` écrit sa
 /// progression ET ses erreurs sur stderr (stdout vide) → on vérifie le code de

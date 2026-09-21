@@ -91,11 +91,6 @@ pub fn get_agent_event_channel(state: State<AppState>, agent_id: Option<String>,
 }
 use crate::AppState;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-#[cfg(windows)]
-use crate::CREATE_NO_WINDOW;
-
 #[derive(Clone)]
 pub(crate) struct BackendProbe {
     pub(crate) kind: String,
@@ -223,85 +218,11 @@ pub(crate) fn run_pi_captured(
     run_captured(&exe, &refs, deadline_dur)
 }
 
-/// Lance `<exe> <args...>`, capture stdout, kill si `deadline` dépassé.
-pub(crate) fn run_captured(exe: &str, args: &[&str], deadline_dur: std::time::Duration) -> String {
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    let mut cmd = Command::new(exe);
-    cmd.args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    let deadline = Instant::now() + deadline_dur;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    return String::new();
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return String::new(),
-        }
-    }
-    match child.wait_with_output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
-        Err(_) => String::new(),
-    }
-}
-
-/// Exécute `<exe> <args...>`, capture stdout ET stderr, kill si `deadline`
-/// dépassé. Retourne `(stdout, stderr, success)`. Utilisé par les helpers qui
-/// ont besoin du stderr (ex: `git clone`, qui écrit sa progression et ses
-/// erreurs sur stderr) pour remonter la cause réelle d'un échec au lieu d'un
-/// message générique.
-pub(crate) fn run_captured_full(
-    exe: &str,
-    args: &[&str],
-    deadline_dur: std::time::Duration,
-) -> (String, String, bool) {
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-    let mut cmd = Command::new(exe);
-    cmd.args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(_) => return (String::new(), String::new(), false),
-    };
-    let deadline = Instant::now() + deadline_dur;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_status)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    return (String::new(), String::new(), false);
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return (String::new(), String::new(), false),
-        }
-    }
-    match child.wait_with_output() {
-        Ok(o) => (
-            String::from_utf8_lossy(&o.stdout).to_string(),
-            String::from_utf8_lossy(&o.stderr).to_string(),
-            o.status.success(),
-        ),
-        Err(_) => (String::new(), String::new(), false),
-    }
-}
+// `run_captured` / `run_captured_full` ont été déplacés dans `gds-core`
+// (`gds_core::proc`, refonte GDS L1.5a) : le serveur GDS a besoin du même
+// lanceur de sous-processus que le desk. Ré-export pour que `crate::run_captured`
+// (ré-exporté par `lib.rs`) reste inchangé pour tous les appelants.
+pub(crate) use gds_core::proc::{run_captured, run_captured_full};
 
 /// Fenêtre (s) pendant laquelle un projet reste « occupé » après sa dernière
 /// activité RPC, même après un `agent_settled`. Évite que la pastille n'oscille

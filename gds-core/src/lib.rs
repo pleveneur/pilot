@@ -9,4 +9,6 @@
 //! du lot L1, à comportement identique.
 
 pub mod db;
+pub mod git_cmd;
+pub mod proc;
 pub mod ssh;

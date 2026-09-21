@@ -18,6 +18,9 @@ serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "chrono"] }
+# `git` s'appuie sur `tokio::task::spawn_blocking` (création du dépôt bare,
+# bloquante). Le runtime complet n'est pas nécessaire côté bibliothèque.
+tokio = { version = "1", features = ["rt"] }
 
 # `db` embarque ses tests (`#[tokio::test]`) : il leur faut un runtime tokio.
 [dev-dependencies]
