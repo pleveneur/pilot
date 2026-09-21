@@ -1744,19 +1744,21 @@ pub async fn provision_initial_admin(
     create_initial_admin(pool, admin_email, admin_password).await
 }
 
-/// Garde de publication du suivi : vérifie que `email` est MEMBRE du projet
-/// `project_name` et retourne l'identifiant interne du projet.
+/// Garde de publication **forcée** du suivi (refonte GDS, **L3.6**) : vérifie
+/// que `email` a le droit de publier le suivi du projet `project_name` et
+/// retourne l'identifiant interne du projet.
 ///
-/// Refonte GDS L6 : le verrou de projet a été supprimé ; le forçage de
-/// publication du suivi reste réservé aux MEMBRES du projet, un client non
-/// membre étant refusé avec une entrée d'audit. (La distinction de rôle
-/// dev/admin vs standard relève de L3.6.)
+/// Règle resserrée (spec cible §8.2) : le verrou de projet ayant été supprimé
+/// (L6), l'appartenance ne suffit plus — il faut être **administrateur**, ou
+/// **développeur attribué** au projet (rôle `dev` ET membre). Un compte
+/// `standard`, inconnu ou non attribué est refusé, avec la **trace d'audit**
+/// `tracking.force.denied` conservée (sujet + rôle + appartenance).
 ///
 /// Extrait de `gds_sync::force_push_tracking` (refonte GDS, L1.8b) vers le
 /// socle : c'est la partie dont le serveur autonome a besoin (données déjà en
 /// base, aucune dépendance au poste). `source` est la provenance à journaliser
 /// dans l'audit (`"desktop"` côté desk, `"server"` côté serveur).
-pub async fn ensure_project_member(
+pub async fn ensure_project_publisher(
     pool: &PgPool,
     project_name: &str,
     email: &str,
@@ -1765,20 +1767,31 @@ pub async fn ensure_project_member(
     let project_id = get_project_by_name(pool, project_name)
         .await?
         .ok_or("Projet non enregistré sur le serveur GDS")?;
+    // Un compte inconnu (email non enregistré) n'est JAMAIS autorisé : la
+    // session historique du poste n'emprunte pas ce chemin (le compte est relu
+    // en base par email), donc aucun « fail-open » n'est nécessaire ici.
     let user = get_user_by_email(pool, email).await?;
-    let user_id = user.map(|u| u.id).unwrap_or(0);
-    let is_member = user_id != 0 && is_project_member(pool, project_id, user_id).await?;
-    if !is_member {
+    let (role, is_member) = match user {
+        Some(u) => {
+            let member = is_project_member(pool, project_id, u.id).await?;
+            (u.role, member)
+        }
+        None => (crate::roles::Role::Unknown.as_str().to_string(), false),
+    };
+    if !crate::roles::can_force_publish(&role, is_member) {
         audit_gds(
             pool,
             source,
             email,
             "tracking.force.denied",
-            "not a project member",
+            &format!("role={} member={}", role, is_member),
             false,
         )
         .await?;
-        return Err("Forçage réservé aux membres du projet".to_string());
+        return Err(
+            "Publication forcée réservée à l'administrateur ou à un développeur attribué au projet"
+                .to_string(),
+        );
     }
     Ok(project_id)
 }
@@ -2816,6 +2829,146 @@ mod tests {
         }
         assert!(!is_known_role("root"));
         assert!(!is_known_status("zzz"));
+
+        pool.close().await;
+    }
+
+    // ── L3.5 / L3.6 — la matrice des droits appliquée aux gardes de publication ──
+    //
+    // Base vierge jetable. Vérifie la règle resserrée (spec cible §8.2) :
+    //  - publication FORCÉE du suivi (`ensure_project_publisher`, L3.6) : admin
+    //    autorisé ; `dev` **attribué** autorisé ; `dev` NON attribué REFUSÉ avec
+    //    la trace d'audit `tracking.force.denied` ; `standard` REFUSÉ ; compte
+    //    inconnu REFUSÉ ;
+    //  - ajout / publication initiale (`ensure_can_add_project`, L3.5) : admin et
+    //    `dev` autorisés sur un projet NEUF ; `standard` REFUSÉ ; `dev` non
+    //    attribué REFUSÉ sur un projet EXISTANT ; email sans compte GDS toléré
+    //    (compatibilité des installations historiques).
+    #[tokio::test]
+    async fn publication_guards_apply_role_matrix() {
+        let (pool, _guard) = match fresh_migrated_test_db().await {
+            Some(v) => v,
+            None => return,
+        };
+
+        // Comptes : un admin, un dev, un standard.
+        create_user(&pool, "admin@gds.test", "", "", "admin", "active")
+            .await
+            .expect("admin");
+        create_user(&pool, "dev@gds.test", "", "", "dev", "active")
+            .await
+            .expect("dev");
+        create_user(&pool, "std@gds.test", "", "", "standard", "active")
+            .await
+            .expect("standard");
+
+        // Un projet EXISTANT, auquel SEUL le dev est attribué.
+        let project_id = create_project(
+            &pool,
+            "proj-l35",
+            "proj-l35.git",
+            "",
+            "/tmp/proj-l35.git",
+            "active",
+            "",
+        )
+        .await
+        .expect("projet");
+        let dev = get_user_by_email(&pool, "dev@gds.test")
+            .await
+            .unwrap()
+            .expect("dev existant");
+        assign_project(&pool, project_id, dev.id, "dev")
+            .await
+            .expect("attribution dev");
+
+        // 1) Publication forcée : admin et dev attribué autorisés.
+        assert!(
+            ensure_project_publisher(&pool, "proj-l35", "admin@gds.test", "server")
+                .await
+                .is_ok(),
+            "un administrateur publie sans attribution"
+        );
+        assert!(
+            ensure_project_publisher(&pool, "proj-l35", "dev@gds.test", "server")
+                .await
+                .is_ok(),
+            "un développeur attribué publie"
+        );
+
+        // 2) Un SECOND dev, non attribué à ce projet : REFUSÉ.
+        create_user(&pool, "dev2@gds.test", "", "", "dev", "active")
+            .await
+            .expect("dev2");
+        let err = ensure_project_publisher(&pool, "proj-l35", "dev2@gds.test", "server")
+            .await
+            .expect_err("un dev non attribué doit être refusé");
+        assert!(
+            err.contains("administrateur"),
+            "message de refus explicite, obtenu: {}",
+            err
+        );
+
+        // 3) Standard et compte inconnu : REFUSÉS.
+        assert!(
+            ensure_project_publisher(&pool, "proj-l35", "std@gds.test", "server")
+                .await
+                .is_err(),
+            "le rôle standard ne publie jamais"
+        );
+        assert!(
+            ensure_project_publisher(&pool, "proj-l35", "inconnu@gds.test", "server")
+                .await
+                .is_err(),
+            "un email sans compte GDS ne publie pas"
+        );
+
+        // 4) La TRACE D'AUDIT du refus est bien conservée.
+        let denied: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_gds \
+             WHERE action = 'tracking.force.denied' AND ok = false AND subject = $1",
+        )
+        .bind("dev2@gds.test")
+        .fetch_one(&pool)
+        .await
+        .expect("lecture audit");
+        assert_eq!(denied, 1, "le refus du dev non attribué doit être audité");
+
+        // 5) Ajout d'un projet NEUF : admin et dev autorisés, standard refusé.
+        assert!(ensure_can_add_project(&pool, "neuf-admin", "admin@gds.test")
+            .await
+            .is_ok());
+        assert!(ensure_can_add_project(&pool, "neuf-dev", "dev@gds.test")
+            .await
+            .is_ok());
+        assert!(
+            ensure_can_add_project(&pool, "neuf-std", "std@gds.test")
+                .await
+                .is_err(),
+            "le rôle standard ne peut pas ajouter de projet"
+        );
+
+        // 6) Projet EXISTANT : dev non attribué refusé, dev attribué/admin OK.
+        assert!(
+            ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test")
+                .await
+                .is_err(),
+            "un dev non attribué ne republie pas un projet existant"
+        );
+        assert!(ensure_can_add_project(&pool, "proj-l35", "dev@gds.test")
+            .await
+            .is_ok());
+        assert!(ensure_can_add_project(&pool, "proj-l35", "admin@gds.test")
+            .await
+            .is_ok());
+
+        // 7) Compatibilité : un email sans compte GDS n'est pas bloqué.
+        assert!(
+            ensure_can_add_project(&pool, "neuf-legacy", "pas-de-compte@gds.test")
+                .await
+                .is_ok(),
+            "installation historique : identité non rattachée à un compte"
+        );
 
         pool.close().await;
     }

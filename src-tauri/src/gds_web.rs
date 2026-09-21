@@ -210,7 +210,8 @@ async fn gds_sync_web<S: DesktopGdsCtx>(
 }
 
 /// POST /api/gds/tracking/force — force la poussée du suivi local vers Postgres
-/// (réservé aux membres du projet). Phase C1.3.
+/// (réservé à l'administrateur ou à un développeur attribué au projet — L3.6).
+/// Phase C1.3.
 async fn gds_tracking_force_web<S: DesktopGdsCtx>(
     State(ctx): State<Arc<S>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,

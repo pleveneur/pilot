@@ -3,8 +3,8 @@
 // Pont bidirectionnel SQLite↔Postgres du suivi (clients/projets/tâches/
 // décisions) : fusion « dernier écrit gagne » sur updated_at, journalisation des
 // conflits (audit_gds), watermark local, et forçage de publication du suivi
-// (réservé aux membres du projet). Le verrou global projet a été supprimé lors
-// de la refonte GDS (L6).
+// (réservé à l'administrateur ou à un développeur attribué au projet — L3.6).
+// Le verrou global projet a été supprimé lors de la refonte GDS (L6).
 
 use crate::gds;
 use crate::gds_db;
@@ -941,18 +941,20 @@ fn read_all_sqlite() -> Result<
 }
 
 /// Force la poussée du suivi local vers Postgres, en ÉCRASANT les données
-/// distantes. Réservé aux MEMBRES du projet — le verrou de projet a été
-/// supprimé (refonte GDS, L6 ; spec 03 cible §8.2). Phase C1.3.
+/// distantes. Réservé à l'**administrateur** ou à un **développeur attribué**
+/// au projet — le verrou de projet a été supprimé (refonte GDS, L6) et la
+/// règle de rôle resserrée en **L3.6** (spec 03 cible §8.2). Phase C1.3.
 pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<Value, String> {
     let cfg = gds::read_gds_config(project)?;
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
     let name = project_name(project);
-    // L1.8b : la garde de publication (membres du projet — le verrou a été
-    // supprimé en L6) vit désormais dans le socle partagé, car le serveur
-    // autonome en a besoin. Comportement identique (mêmes messages, même audit).
-    gds_db::ensure_project_member(pool, &name, &cfg.identity_email, "desktop").await?;
+    // L1.8b : la garde de publication vit désormais dans le socle partagé, car
+    // le serveur autonome en a besoin. L3.6 : elle vérifie le RÔLE (admin, ou
+    // dev attribué) et non plus la seule appartenance. Même trace d'audit
+    // `tracking.force.denied` en cas de refus.
+    gds_db::ensure_project_publisher(pool, &name, &cfg.identity_email, "desktop").await?;
     // Lire tout le suivi local (since 0) en mémoire, puis pousser en écrasant.
     let (clients, projects, tasks, decisions, client_names) = read_all_sqlite()?;
     let mut pushed: i64 = 0;
