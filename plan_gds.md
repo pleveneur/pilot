@@ -1,10 +1,15 @@
 # ROADMAP — GDS (Gestionnaire de Sources) + Composant web de discussion (issue #56)
 
-> **Statut : 🟢 Phases A + B implémentées — C à venir.**
+> **Statut : 🟢 Phases A + B + C implémentées et refonte serveur GDS (lots
+> L1 → L6) réalisée ; LOT 7 (documentation & tests de bout en bout) en cours ;
+> seule la phase D (composant web, issue #56) reste à faire.**
 >
-> Document de planification. Les **phases A (bloc serveur) et B (synchronisation
-> + verrous)** sont implémentées (voir `spec_gds.md` §PHASE A et §PHASE B) ; la
-> phase C et le composant web restent à faire. Chaque chantier passe au
+> Document de planification. Les **phases A (fondations serveur), B
+> (synchronisation, désormais **sans verrou**) et C (suivi fusionné + assistant
+> de groupe)** sont implémentées (voir `spec_gds.md` §PHASE A/§PHASE B/§PHASE C),
+> puis le serveur a été **refondu en 7 lots** (serveur conteneurisé, rôles,
+> écrans transverses, suppression du verrou projet). La **phase D (composant
+> web)** est **inchangée** et reste à faire. Chaque chantier passe au
 > **protocole quality-gate** (`.pi/skills/quality-gate/SKILL.md`).
 >
 > **Décision du 29/08/2026 (non négociable)** : le GDS est **activé par projet**
@@ -71,8 +76,8 @@
   de « serveur GDS » + héberge l'API web) + les dépôts git.
 - Les **postes de dev** (Pilot desktop sur chaque poste) se connectent au VPS
   pour : configurer le GDS, ajouter des projets, **synchroniser** un projet
-  (clone/fetch dans un dossier local paramétrable), **verrouiller/déverrouiller**,
-  **pousser** leurs commits, et piloter l'**assistant de groupe**.
+  (clone/fetch dans un dossier local paramétrable), **pousser** leurs commits, et
+  piloter l'**assistant de groupe**.
 - Les **clients finaux** accèdent au composant web (widget) via l'API du VPS.
 
 ### 1.2 Briques à réutiliser (déjà en place) vs à créer
@@ -84,7 +89,7 @@
 | Serveur web axum + WS | `web_server.rs` | Socle HTTP/WebSocket, fan-out événements, routes `/api/*` |
 | Auth web | `web_auth.rs` | Mot de passe argon2 + token opaque révocable, sessions en mémoire |
 | Rate limiting | `web_rate.rs` | Garde-fous login/prompt/WS (à étendre aux endpoints GDS/tickets) |
-| Audit log | `web_audit.rs` | Journal des actions sensibles (à étendre : sync, verrou, tickets) |
+| Audit log | `web_audit.rs` | Journal des actions sensibles (à étendre : sync, tickets) |
 | Git CLI | `git.rs` | Wrapper `git` (status/diff/snapshot) — à étendre pour clone/fetch/push/bare |
 | RPC agents pi/plh | `rpc_manager.rs` / `rpc.rs` | Lancer l'assistant de groupe (session RPC dédiée) |
 | Super-agent | `super_agent.rs` | Socle du suivi multi-projets / base SQLite → à migrer/augmenter vers Postgres |
@@ -99,12 +104,18 @@
 | `gds.rs` | Config GDS, auto-provisioning, enregistrement de projet, états (source de vérité côté VPS) |
 | `gds_db.rs` | Accès **PostgreSQL** (pool sqlx), schéma, migrations |
 | `gds_git.rs` | Gestion des dépôts git serveur (bare), création par projet, hooks (optionnel) |
-| `gds_sync.rs` | Synchronisation poste, **verrou global projet** + **mode urgent**, détection de lock obsolète (TTL) |
+| `gds_sync.rs` | Pont de synchronisation du suivi (SQLite ↔ Postgres), publication forcée (rôles) — **sans verrou** |
 | `gds_web.rs` | Routes GDS ajoutées à `web_server.rs` (ou module axum dédié) |
-| `gds_client.rs` | Côté **poste de dev** : commandes de sync/verrou/push, dossier GDS paramétrable |
+| `gds_client.rs` | Côté **poste de dev** : commandes de sync/push, dossier GDS paramétrable |
 | `group_assistant.rs` | **Assistant de groupe** (lecture seule) : questions sur projets + ajout de demandes au suivi — basé sur `super_agent.rs` |
 | `tickets.rs` | Modèle de demandes/tickets, statuts, commentaires, visibilité |
 | `web_component.rs` | API serveur dédiée au widget marque blanche (issue #56) |
+
+> Depuis la refonte (phase B ci-dessous, lots L1-L2), la partie serveur ne vit
+> plus dans le binaire desktop : elle est extraite dans le **workspace Cargo** —
+> `gds-core/` (lib partagée : base, git, SSH, auth, routeur HTTP, config) et
+> `gds-server/` (binaire serveur, conteneur tout-en-un). Le desktop n'en garde
+> que les commandes Tauri et l'UI.
 
 ### 1.3 Schéma des couches (logique, côté VPS)
 
@@ -127,7 +138,7 @@ Pilot VPS (assistant de groupe) ─► group_assistant.rs (session RPC pi/plh) �
 ### 2.1 Rôle
 
 **Base unique** qui **fusionne** : gestionnaire de sources (projets, repos,
-verrous, membres), suivi interne (clients, projets, tâches, décisions — déjà
+membres, rôles), suivi interne (clients, projets, tâches, décisions — déjà
 modélisés en SQLite par le super-agent), et **demandes clients / tickets**
 (issue #56).
 
@@ -141,11 +152,8 @@ projects(
   client_id FK, status, description,
   created_at, updated_at
 )
-project_members(project_id FK, user_id FK, role, created_at)   -- V1 : tous accès, table pour V2
-project_locks(                                -- verrou global projet (UN par projet actif)
-  id, project_id UNIQUE, user_id FK, email,
-  locked_at, expires_at, urgent BOOL, reason, created_at
-)
+project_members(project_id FK, user_id FK, role, created_at)   -- attribution projet ↔ dev (rôle par projet)
+ssh_keys(id, user_id FK, public_key UNIQUE, fingerprint, created_at, last_used_at)
 tickets(
   id, project_id FK, client_id FK,
   reporter_user_id FK (NULL si visiteur anonyme),
@@ -159,10 +167,14 @@ git_repos(id, project_id FK UNIQUE, path_on_server, bare_path, created_at)
 session_tracking / audit_gds(ts, ip, subject, action, detail, ok)    -- étendre web_audit
 ```
 
-- V1 : **pas de granularité par fichier** — le verrou est **par projet**.
-- V1 : tous les inscrits (ayant les codes d'accès serveur) ont accès à **tous**
-  les projets (`project_members` est rempli « tout le monde » par défaut ; la
-  table est prête pour une restriction V2).
+- **Plus de verrou projet** (refonte, décision 3) : la table `project_locks` est
+  **supprimée** par la migration `0007_drop_project_locks.sql` ; la concurrence
+  est assumée en « **dernier qui écrit gagne** », conflits journalisés
+  (`tracking.conflict`). Le **mode urgent** disparaît avec le verrou.
+- **Rôles** (migration `0006_roles.sql` : `admin` / `dev` / `standard` +
+  statuts) : la **lecture** est ouverte aux comptes actifs, l'**écriture** (dont
+  la publication forcée du suivi) dépend du rôle et de l'**attribution** du
+  projet (`project_members`) — matrice détaillée dans `spec_gds.md` §2.2.
 
 ### 2.3 Migrations
 
@@ -234,8 +246,9 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
 
 ### 3.4 Accès par adresse email
 - **Objectif** : chaque dev est identifié par son **email** (identité du repo git
-  + utilisateur de la base). V1 : les inscrits (ayant les codes d'accès serveur)
-  accèdent à **tous** les projets.
+  + utilisateur de la base). La **lecture** est ouverte aux comptes actifs ;
+  l'**écriture** dépend du **rôle** (`admin` / `dev` / `standard`) et de
+  l'**attribution** du projet.
 - **Inscription** : premier user provisionné à l'auto-provisioning ; les suivants
   via l'admin desktop (invitation par email, mot de passe initial) ou auto-ajout
   par clef SSH fournie.
@@ -243,21 +256,21 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
 - **Critère de fin** : deux devs avec deux emails se connectent et voient le même
   ensemble de projets.
 
-### 3.5 Synchronisation poste + verrou global projet + mode urgent
-- **Objectif** : un dev qui veut **modifier** un projet → **synchronise** sur son
-  poste (dossier des projets GDS **paramétrable**, champ config `gds_local_dir`),
-  le projet est **bloqué côté GDS** pour les autres devs.
-- **Verrou global** : `project_locks` (UN par projet). Posé à la sync de
-  modification, relâché au push/à la fin. **TTL/lease** (`expires_at`) pour
-  nettoyer les verrous orphelins (crash du dev) avec renouvellement périodique.
-- **Mode urgent** : permet à un second dev de **passer outre** le verrou (le
-  projet devient « en conflit potentiel » — log événement + avertissement des
-  deux parties). V1 : tout utilisateur peut passer en urgent (à confirmer §6).
-- **Modules** : `gds_sync.rs`, `gds_web.rs`, `gds_client.rs`, commandes desktop
-  `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock`.
-- **Critère de fin** : dev A sync → dev B voit le projet **verrouillé** et ne
-  peut pas le modifier ; dev B urgent → avertissement + déblocage forcé ; verrou
-  expiré → récupéré automatiquement.
+### 3.5 Synchronisation poste & concurrence (sans verrou)
+- **Objectif** : un dev qui veut **modifier** un projet **synchronise** sur son
+  poste (clone/fetch/pull dans le dossier des projets GDS **paramétrable**,
+  champ config `gds_local_dir` — §3.6), puis pousse ses commits sur le remote
+  `gds` (SSH).
+- **Verrou projet supprimé (refonte, décision 3)** : la table `project_locks`, le
+  **mode urgent** et leurs commandes/routes ont été **retirés** (migration
+  `0007_drop_project_locks.sql`). La concurrence est **assumée** :
+  « **dernier qui écrit gagne** », conflits du suivi **journalisés**
+  (`tracking.conflict`) ; la **publication forcée** est réservée aux comptes
+  habilités (rôle `admin`, ou `dev` attribué) — cf. §6.3 de `spec_gds.md`.
+- **Modules** : `gds_client.rs` (sync), `gds_sync.rs` (pont du suivi),
+  `gds_web.rs` (route `POST /api/gds/sync`), `gds_git.rs` (dépôt bare, clefs).
+- **Critère de fin** : deux postes synchronisent et poussent le même projet sans
+  blocage, sans conflit **silencieux** ; aucun verrou à libérer.
 
 ### 3.6 Dossier des projets GDS paramétrable
 - **Objectif** : le dossier local où les projets GDS sont clonés est configurable
@@ -351,6 +364,8 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 ### PHASE A — GDS : fondations serveur (prérequis, à faire en premier)
 
 > ✅ **Implémentée (bloc serveur + clefs SSH + serveur distant)** — `cargo test --lib` vert.
+> Les chemins de modules cités ci-dessous sont ceux d'origine : depuis la refonte
+> (phase B, lots L1-L2), ces modules vivent dans le workspace `gds-core/`.
 
 **A1. Provisionnement PostgreSQL + socle GDS** ✅
 - Objectif : auto-provisioning de la base + connecteur Postgres côté Rust.
@@ -395,25 +410,51 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   Critère : serveur distant provisionnable/ajoutable manuellement, local inchangé,
   `cargo test --lib` + `npm test` verts.
 
-### PHASE B — GDS : synchronisation & verrous
+### PHASE B — Refonte serveur GDS : 7 lots (remplace « synchronisation & verrous »)
 
-> ✅ **Implémentée** — `cargo test --lib` vert (163 tests).
+> 🟢 **Lots L1 → L6 réalisés ; LOT 7 (documentation & tests de bout en bout) en
+> cours.** L'ancienne phase B « synchronisation & verrous » est **caduque** : le
+> **verrou global projet et le mode urgent ont été retirés** (lot L6, décision 3).
+> La synchronisation poste (dossier paramétrable `gds_local_dir`, clone/fetch/pull
+> — `gds_client.rs`, `git.rs::git_fetch`) reste valide, **sans verrou** (§3.5).
+> Détails : `spec_gds.md` §1.4 (serveur conteneurisé), §2.2 (rôles), §5
+> (concurrence), §11 (phases).
 
-**B1. Dossier GDS paramétrable + clone/fetch/pull** ✅
-- Modules : `gds_client.rs`, config `gds_local_dir`, `git.rs` (`git_fetch`). Dépendance : A3.
-- Critère : sync d'un projet dans le dossier paramétré.
-
-**B2. Verrou global projet + TTL + mode urgent** ✅
-- Modules : `gds_sync.rs`, `project_locks` (migration 0002), commandes desktop
-  `gds_sync_project` / `gds_release_lock` / `gds_urgent_lock` / `gds_get_lock`, UI.
-- Tests : verrou exclusif, TTL récupère un verrou orphelin, urgent passe outre,
-  avertissement des deux parties. Critère : §3.5 complet.
+- **L1 — Serveur GDS autonome** ✅ : workspace Cargo à la racine (`gds-core` lib,
+  `gds-server` bin) ; migrations, couche base, git serveur, SSH, auth, routeur
+  HTTP et config serveur extraits du desktop ; desktop recâblé sur `gds-core`
+  (comportement identique).
+- **L2 — Conteneur tout-en-un** ✅ : **un seul conteneur**
+  (`gds-server/docker-compose.yml`, `pilot-gds`) supervisant **PostgreSQL +
+  sshd + `gds-server`** ; base vierge initialisée, compte `git` +
+  `authorized_keys` + git-shell, **compte admin défini au premier démarrage**
+  (jamais généré), ports/volumes, accès Tailscale, arrêt/redémarrage depuis Pilot.
+- **L3 — Rôles et droits** ✅ : migration `0006_roles.sql` (`admin` / `dev` /
+  `standard` + statuts `pending`/`active`/`disabled`), CRUD utilisateurs côté
+  serveur, garde HTTP « admin », attribution des projets aux développeurs,
+  matrice de droits (`gds-core/src/roles.rs`), garde de la **publication forcée**
+  redéfinie (§6.3 de la spec).
+- **L4 — Écran d'administration** ✅ : onglet **transverse** « 🖥️ GDS Serveur »
+  (`src/js/gds-admin.js`) : connexion serveur, comptes, dépôts/projets, espace
+  utilisé + journal des connexions, actions de service (double confirmation).
+- **L5 — Écran de paramétrage utilisateur** ✅ : onglet transverse
+  « ⚙️ GDS — paramétrage » (`src/js/gds-params.js`) : serveurs + identifiants,
+  identité, clés SSH, « Mes projets GDS » ; l'onglet projet « 🌐 GDS » est réduit
+  à sa part **projet** (synchro, retrait, config).
+- **L6 — Suppression du verrou projet** ✅ : interface, logique, modèle de données
+  (migration `0007_drop_project_locks.sql`) et routes HTTP du verrou retirés ;
+  contrôle exhaustif des appelants restants.
+- **L7 — Documentation & tests de bout en bout** 🟡 : L7.1 (`spec_gds.md` :
+  verrou retiré, conteneur + rôles documentés) et L7.2 (ce document) faits ;
+  L7.3 (`docs/gds-server-setup.md`) écrit ; reste L7.4 → L7.8 (socle
+  documentaire Pilot, tests d'intégration conteneur, non-régression desktop,
+  CI de l'image serveur).
 
 ### PHASE C — GDS : suivi fusionné + assistant de groupe
 
 **C1. Migrer/synchroniser le suivi (SQLite → Postgres)** ✅
 - Modules : `gds_sync.rs` (pont bidirectionnel), `gds_db.rs` (clients/projects/tasks/decisions).
-- Dépendance : A1, B2. Tests : synchro SQLite↔Postgres, divergence résolue.
+- Dépendance : A1. Tests : synchro SQLite↔Postgres, divergence résolue.
 - Critère : le suivi desktop apparaît dans Postgres (décision §6.1).
 - **C1.1 CRUD suivi** ✅ (migration 0004, upserts par clé naturelle/id,
   `get_*_modified_since`, `delete_*`).
@@ -423,11 +464,12 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   + commande `gds_sync_tracking` + déclenchement auto au démarrage ; paramètre
   global `gds_enabled` actif par défaut qui coupe toutes les opérations GDS
   quand désactivé).
-- **C1.3 Forçage serveur par titulaire du verrou** ✅ (`gds_sync.rs` :
+- **C1.3 Publication forcée du suivi (rôles)** ✅ (`gds_sync.rs` :
   `force_push_tracking` pousse TOUT le suivi local vers Postgres en écrasant les
-  données distantes, réservé au membre qui détient le verrou du projet — refus
-  sinon (audit `tracking.force.denied`) ; commande Tauri `gds_force_push_suivi`
-  + route web `POST /api/gds/tracking/force` ; respecte `gds_enabled`).
+  données distantes, réservé à un **compte habilité** — `admin`, ou `dev`
+  attribué au projet (`gds-core/src/roles.rs`) — refus sinon (audit
+  `tracking.force.denied`) ; commande Tauri `gds_force_push_suivi` + route web
+  `POST /api/gds/tracking/force` ; respecte `gds_enabled`).
 - **C1.4 Mode déconnecté + résumés visuels** ✅ (`gds_sync.rs` + `gds.js` :
   accumulation locale en SQLite sans blocage quand le serveur est injoignable ;
   état de synchro persisté dans `gds_sync_state` ; resynchronisation automatique
@@ -470,7 +512,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   frontend `src/js/group-assistant.js` (écoute `rpc-event-group`, sentinels
   `PILOT_GROUP_*`). `cargo test --lib` vert (209 tests).
 
-### PHASE D — Composant web (issue #56) — UNIQUEMENT après A/B/C stables
+### PHASE D — Composant web (issue #56) — **inchangée**, UNIQUEMENT après A/B/C stables
 
 **D1. API tickets & contexte widget**
 - Modules : `web_component.rs` (routes §4.3), `tickets.rs`, `gds_db.rs` (tickets/
@@ -509,8 +551,8 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 5. **Identité / login utilisateur final** : email + mot de passe par site (table
    `widget_users` par client) ; qui crée les comptes (auto-inscription, invitation
    par le site, ou comptes administrés par Kalico) ?
-6. **Mode urgent** : qui peut passer outre le verrou ? (tout utilisateur / seul
-   l'admin / un quota) → *V1 proposé : tout utilisateur, avec journal + avertissement.*
+6. ~~**Mode urgent**~~ → **tranché : retiré** avec le verrou projet (décision 3) ;
+   les droits d'écriture passent par les rôles `admin` / `dev` / `standard`.
 7. **Visibilité des tickets des autres** : un utilisateur voit-il tous les tickets
    du client, ou seulement les siens + un flux « problèmes en cours » filtré ? → *V1
    proposé : voir tous les tickets du client en lecture, détail complet seulement si
@@ -536,9 +578,9 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 - **Git serveur** : repos bare centralisés, droits par utilisateur (V1 : tous), hooks
   `post-receive` optionnels (notification, déclencheur d'assistant), gestion des
   gros fichiers (Git LFS si besoin).
-- **Verrous / concurrence** : consistance du verrou global (UNIQUE sur
-  `project_locks.project_id`), TTL/lease avec renouvellement, récupération après
-  crash, avertissement en mode urgent.
+- **Concurrence (sans verrou)** : écritures simultanées **assumées** en
+  « dernier qui écrit gagne » (décision 3) ; conflits du suivi **journalisés**
+  (`tracking.conflict`) ; publication forcée réservée aux comptes habilités.
 - **PostgreSQL** : sauvegardes planifiées (pg_dump), migrations versionnées (sqlx),
   pool configuré (max_connections), index sur `tickets.status` / `tickets.client_id`.
 - **Assistant de groupe** : coût/ressources du moteur pi/plh sur le VPS (clé API
@@ -556,8 +598,9 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
 En plus de la **validation globale de ce document**, je te demande un arbitrage
 sur les points suivants :
 
-1. **Ordre & périmètre V1 du GDS** : valides-tu le découpage A→B→C (fondations →
-   sync/verrous → suivi/assistant) avec **verrou par projet** (pas par fichier) en V1 ?
+1. **Ordre & périmètre V1 du GDS** : découpage A→B→C validé (fondations →
+   synchronisation → suivi/assistant), **sans verrou projet** (retiré par la
+   refonte, décision 3 — cf. §3.5).
 2. **Migration SQLite → Postgres** : Option A (cohabitation + pont de sync) ou
    Option B (migration complète) pour le suivi du super-agent ?
 3. **Transport git poste↔VPS** : SSH par clef (email) ou HTTPS avec token ?
@@ -566,7 +609,7 @@ sur les points suivants :
 5. **Format du widget** : `<iframe>` ou `<script>` injecté ?
 6. **Comptes utilisateurs finaux** : qui crée les comptes du widget (auto /
    invitation / administrés) ?
-7. **Mode urgent** : qui peut passer outre le verrou projet ?
+7. **Mode urgent** : **retiré** avec le verrou projet (remplacé par les rôles).
 8. **Visibilité des tickets des autres utilisateurs** : niveau de lecture autorisé.
 9. **Assistant de groupe** : moteur (cloud vs local) et session dédiée `group`.
 10. **Dimensionnement / sauvegardes du VPS OVH** : qui provisionne et maintient l'OS ?
