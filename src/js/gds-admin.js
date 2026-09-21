@@ -255,6 +255,269 @@ export function renderConnectionSectionHtml(state = {}) {
       </section>`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.3 — « Comptes » : rendus purs (jamais de secret) et charges utiles
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Rôles du vocabulaire du socle (`gds-core::db::USER_ROLES`). Sert seulement à
+ * l'affichage : le serveur reste l'autorité qui valide (un rôle hors vocabulaire
+ * est refusé côté serveur).
+ */
+export const ACCOUNT_ROLES = [
+  { value: "admin", label: "Administrateur" },
+  { value: "dev", label: "Développeur" },
+  { value: "standard", label: "Standard" },
+];
+
+/** Statuts du vocabulaire du socle (`gds-core::db::USER_STATUSES`). */
+export const ACCOUNT_STATUSES = [
+  { value: "pending", label: "En attente" },
+  { value: "active", label: "Actif" },
+  { value: "disabled", label: "Désactivé" },
+];
+
+/** Description affichée de la section « Comptes ». */
+export const ACCOUNTS_DESC =
+  "Liste des comptes du serveur (adresse, nom, rôle, statut, date de création) et gestion : créer un compte (adresse + rôle + mot de passe initial), changer son rôle, le désactiver/réactiver, réinitialiser son mot de passe. Le serveur interdit de désactiver le dernier administrateur actif ; son message est relayé tel quel.";
+
+/** Libellé français d'un statut (repli : la valeur brute). */
+function statusLabel(status) {
+  const s = ACCOUNT_STATUSES.find((x) => x.value === status);
+  return s ? s.label : String(status || "—");
+}
+
+/**
+ * Formate une date ISO 8601 (celle renvoyée par `list_users`) en `JJ/MM/AAAA`.
+ * Valeur absente ou illisible → « — » (jamais une date inventée). Pure.
+ */
+export function formatAccountDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(String(iso));
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+/**
+ * Prochaine action de statut pour le bouton d'une ligne : désactivation d'un
+ * compte actif (ou en attente), réactivation d'un compte désactivé. Pure.
+ */
+export function nextStatusToggle(status) {
+  if (status === "disabled") {
+    return { target: "active", label: "Réactiver", icon: "user-check" };
+  }
+  return { target: "disabled", label: "Désactiver", icon: "user-x" };
+}
+
+/** État initial de la section « Comptes » (pure). */
+export function initialAccountsState() {
+  return {
+    accounts: null, // null = liste jamais chargée
+    loading: false,
+    error: "",
+    notice: "",
+    busy: "", // email de la ligne en cours d'opération (boutons neutralisés)
+    form: { email: "", name: "", role: "dev" },
+    reset: { email: "", password: "" },
+  };
+}
+
+/**
+ * Charge utile commune à toutes les commandes « comptes » : l'identité
+ * administrateur connectée. Le mot de passe est **toujours vide** : le poste
+ * réutilise celui mémorisé par « Se connecter » (il n'est jamais renvoyé à
+ * l'interface, ni conservé ici). Pure — testable.
+ */
+export function buildAccountsConnArgs(conn) {
+  const c = conn || {};
+  return {
+    host: String(c.host || ""),
+    httpPort: String(c.httpPort || ""),
+    email: String(c.email || ""),
+    password: "",
+  };
+}
+
+/** Charge utile : lister les comptes. Pure. */
+export function buildAccountListArgs(conn) {
+  return buildAccountsConnArgs(conn);
+}
+
+/** Charge utile : créer un compte. Pure. */
+export function buildAccountCreateArgs(conn, form) {
+  const f = form || {};
+  return {
+    ...buildAccountsConnArgs(conn),
+    targetEmail: String(f.email || ""),
+    targetName: String(f.name || ""),
+    targetRole: String(f.role || ""),
+    targetPassword: String(f.password || ""),
+  };
+}
+
+/** Charge utile : changer le rôle d'un compte. Pure. */
+export function buildAccountRoleArgs(conn, email, role) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    targetEmail: String(email || ""),
+    targetRole: String(role || ""),
+  };
+}
+
+/** Charge utile : activer/désactiver un compte. Pure. */
+export function buildAccountStatusArgs(conn, email, status) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    targetEmail: String(email || ""),
+    targetStatus: String(status || ""),
+  };
+}
+
+/** Charge utile : réinitialiser le mot de passe d'un compte. Pure. */
+export function buildAccountPasswordArgs(conn, email, password) {
+  return {
+    ...buildAccountsConnArgs(conn),
+    targetEmail: String(email || ""),
+    targetPassword: String(password || ""),
+  };
+}
+
+/** Badge de statut (active = vert, pending = orange, disabled = gris). */
+function renderStatusBadge(status) {
+  const cls = status === "active" ? "ok" : status === "disabled" ? "off" : "warn";
+  return `<span class="gds-admin-badge ${cls}">${esc(statusLabel(status))}</span>`;
+}
+
+/**
+ * Rend la zone d'état de la section (pure). Ne reçoit QUE l'état : aucun champ
+ * sensible n'existe côté commandes, donc aucun ne peut être affiché.
+ */
+export function renderAccountsStatusHtml(state = {}) {
+  const base = initialAccountsState();
+  const s = { ...base, ...state };
+  if (s.loading) return `<div class="gds-admin-status loading">Chargement des comptes…</div>`;
+  if (s.error) return `<div class="gds-admin-status error">⚠️ ${esc(s.error)}</div>`;
+  if (s.notice) return `<div class="gds-admin-status ok">${esc(s.notice)}</div>`;
+  if (s.accounts == null) {
+    return `<div class="gds-admin-status idle">Connectez-vous au serveur pour afficher la liste des comptes.</div>`;
+  }
+  return `<div class="gds-admin-status idle">${s.accounts.length} compte(s) sur ce serveur.</div>`;
+}
+
+/** Rend une ligne du tableau des comptes (pure). */
+function renderAccountRowHtml(a, state) {
+  const email = String((a && a.email) || "");
+  const role = String((a && a.role) || "");
+  const status = String((a && a.status) || "");
+  const busy = !!state && state.busy === email;
+  const dis = busy ? " disabled" : "";
+  const toggle = nextStatusToggle(status);
+  const options = ACCOUNT_ROLES.map(
+    (r) =>
+      `<option value="${esc(r.value)}"${r.value === role ? " selected" : ""}>${esc(r.label)}</option>`
+  ).join("");
+  return `
+      <tr data-email="${esc(email)}">
+        <td class="gds-admin-cell-email">${esc(email)}</td>
+        <td>${esc((a && a.name) || "—")}</td>
+        <td><select class="gds-admin-acc-role" data-email="${esc(email)}"${dis}>${options}</select></td>
+        <td>${renderStatusBadge(status)}</td>
+        <td class="gds-admin-cell-date">${esc(formatAccountDate(a && a.created_at))}</td>
+        <td class="gds-admin-cell-actions">
+          <button class="gds-admin-btn small" data-acc-action="role" data-email="${esc(email)}"${dis}><i data-lucide="check" class="icon-sm"></i> Rôle</button>
+          <button class="gds-admin-btn small" data-acc-action="toggle" data-email="${esc(email)}" data-target="${esc(toggle.target)}"${dis}><i data-lucide="${esc(toggle.icon)}" class="icon-sm"></i> ${esc(toggle.label)}</button>
+          <button class="gds-admin-btn small" data-acc-action="reset" data-email="${esc(email)}"${dis}><i data-lucide="key-round" class="icon-sm"></i> Mot de passe</button>
+        </td>
+      </tr>`;
+}
+
+/** Rend le tableau des comptes (pure). */
+export function renderAccountsTableHtml(state = {}) {
+  const base = initialAccountsState();
+  const s = { ...base, ...state };
+  if (s.accounts == null) return "";
+  if (s.accounts.length === 0) {
+    return `<div class="gds-admin-section-placeholder">Aucun compte sur ce serveur pour le moment.</div>`;
+  }
+  const rows = s.accounts.map((a) => renderAccountRowHtml(a, s)).join("");
+  return `
+      <table class="gds-admin-table">
+        <thead>
+          <tr><th>Adresse</th><th>Nom</th><th>Rôle</th><th>Statut</th><th>Créé le</th><th>Actions</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+}
+
+/** Rend le panneau de réinitialisation de mot de passe (pure). Le champ est
+ *  TOUJOURS vide : le mot de passe n'est jamais réinjecté dans le HTML. */
+function renderAccountsResetHtml(state) {
+  const email = state && state.reset ? state.reset.email : "";
+  if (!email) return "";
+  return `
+      <div class="gds-admin-reset">
+        <div class="gds-admin-reset-title">Nouveau mot de passe pour <b>${esc(email)}</b></div>
+        <label class="gds-admin-field"><span>Nouveau mot de passe</span>
+          <input id="gds-admin-acc-reset-password" type="password" autocomplete="new-password" placeholder="nouveau mot de passe">
+        </label>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn primary small" data-acc-action="reset-save" data-email="${esc(email)}"><i data-lucide="check" class="icon-sm"></i> Enregistrer</button>
+          <button class="gds-admin-btn small" data-acc-action="reset-cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
+        </div>
+      </div>`;
+}
+
+/**
+ * Rend la section « Comptes » complète (pure, testable) : formulaire de
+ * création, zone d'état, panneau de réinitialisation et tableau. Les mots de
+ * passe ne sont JAMAIS rendus (aucun `value`) ni reçus dans l'état.
+ */
+export function renderAccountsSectionHtml(state = {}) {
+  const base = initialAccountsState();
+  const s = {
+    ...base,
+    ...state,
+    form: { ...base.form, ...((state && state.form) || {}) },
+    reset: { ...base.reset, ...((state && state.reset) || {}) },
+  };
+  const count =
+    s.accounts == null ? "" : ` <span class="gds-admin-muted">(${s.accounts.length})</span>`;
+  const roleOptions = ACCOUNT_ROLES.map(
+    (r) =>
+      `<option value="${esc(r.value)}"${r.value === s.form.role ? " selected" : ""}>${esc(r.label)}</option>`
+  ).join("");
+  return `
+      <section class="gds-admin-section" data-section-id="accounts">
+        <div class="gds-admin-section-head">
+          <div class="gds-admin-section-title"><i data-lucide="users" class="icon-sm"></i> Comptes${count}</div>
+          <button class="gds-admin-btn small" id="gds-admin-acc-refresh"><i data-lucide="refresh-cw" class="icon-sm"></i> Rafraîchir</button>
+        </div>
+        <div class="gds-admin-section-desc">${esc(ACCOUNTS_DESC)}</div>
+        <div class="gds-admin-form gds-admin-form-create">
+          <label class="gds-admin-field"><span>Adresse (email)</span>
+            <input id="gds-admin-acc-new-email" type="text" autocomplete="off" placeholder="prenom.nom@exemple.com" value="${esc(s.form.email)}">
+          </label>
+          <label class="gds-admin-field"><span>Nom (facultatif)</span>
+            <input id="gds-admin-acc-new-name" type="text" autocomplete="off" placeholder="Prénom Nom" value="${esc(s.form.name)}">
+          </label>
+          <label class="gds-admin-field"><span>Rôle</span>
+            <select id="gds-admin-acc-new-role">${roleOptions}</select>
+          </label>
+          <label class="gds-admin-field"><span>Mot de passe initial</span>
+            <input id="gds-admin-acc-new-password" type="password" autocomplete="new-password" placeholder="mot de passe initial">
+          </label>
+        </div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn primary" id="gds-admin-acc-create"><i data-lucide="user-plus" class="icon-sm"></i> Créer le compte</button>
+        </div>
+        <div id="gds-admin-accounts-status">${renderAccountsStatusHtml(s)}</div>
+        ${renderAccountsResetHtml(s)}
+        ${renderAccountsTableHtml(s)}
+        <div class="gds-admin-hint">Le mot de passe initial n'est jamais renvoyé à l'interface ni affiché ; il sert seulement à créer le compte sur le serveur. La désactivation du dernier administrateur actif est refusée par le serveur : son message d'erreur est relayé tel quel.</div>
+      </section>`;
+}
+
 /**
  * Crée l'onglet « GDS Serveur » (transverse) dans `container`.
  * Ne dépend d'AUCUN projet ouvert : aucune lecture de `window._pilotProjectPath`.
@@ -266,29 +529,52 @@ export function createGdsAdmin(container) {
 
   /** État local du formulaire de connexion (le mot de passe n'y est jamais rendu). */
   let state = initialConnectionState();
+  /** État de la section « Comptes » (L4.3) — jamais de mot de passe conservé. */
+  let accounts = initialAccountsState();
+  /** Identité admin de la dernière connexion réussie (hôte + email bruts) : la
+   *  clé des identifiants mémorisés côté poste (repli du mot de passe). */
+  let adminConn = null;
   let disposed = false;
 
   const q = (sel) => container.querySelector(sel);
 
-  /** Récupère la saisie courante AVANT tout redessin (le rendu ne la conserve pas). */
+  /** Récupère la saisie courante AVANT tout redessin (hors mot de passe, qui
+   *  n'est lu qu'au moment de l'envoi puis oublié). */
   function readFields() {
     const host = q("#gds-admin-host");
     const port = q("#gds-admin-port");
     const email = q("#gds-admin-email");
-    const password = q("#gds-admin-password");
     if (host) state.host = host.value;
     if (port) state.port = port.value;
     if (email) state.email = email.value;
-    if (password) state.password = password.value;
+  }
+
+  /** Récupère la saisie de création AVANT tout redessin (sans mot de passe). */
+  function captureAccountForm() {
+    const email = q("#gds-admin-acc-new-email");
+    const name = q("#gds-admin-acc-new-name");
+    const role = q("#gds-admin-acc-new-role");
+    if (email || name || role) {
+      accounts.form = {
+        email: email ? email.value : accounts.form.email,
+        name: name ? name.value : accounts.form.name,
+        role: role ? role.value : accounts.form.role,
+      };
+    }
   }
 
   function draw() {
+    readFields();
+    captureAccountForm();
     container.innerHTML = renderAdminShellHtml({
       title: "🖥️ GDS Serveur — administration",
       subtitle:
         "Gestion du serveur GDS (comptes, dépôts, journal, service). Cet onglet est indépendant du projet ouvert.",
       sections: ADMIN_SECTIONS,
-      sectionHtml: { connection: renderConnectionSectionHtml(state) },
+      sectionHtml: {
+        connection: renderConnectionSectionHtml(state),
+        accounts: renderAccountsSectionHtml(accounts),
+      },
     });
     refreshIcons(container);
     bind();
@@ -299,10 +585,167 @@ export function createGdsAdmin(container) {
     const c = q("#gds-admin-connect");
     if (t) t.addEventListener("click", () => runConnectionTest(false));
     if (c) c.addEventListener("click", () => runConnectionTest(true));
+    const refresh = q("#gds-admin-acc-refresh");
+    if (refresh) refresh.addEventListener("click", () => loadAccounts());
+    const create = q("#gds-admin-acc-create");
+    if (create) create.addEventListener("click", () => createAccount());
+    for (const btn of container.querySelectorAll("[data-acc-action]")) {
+      btn.addEventListener("click", () => onAccountAction(btn));
+    }
+  }
+
+  // ── L4.3 : actions sur les comptes (toutes via l'API HTTP du serveur) ──
+
+  /** Émet une commande « comptes » et normalise l'erreur en objet JSON. */
+  async function invokeAccounts(command, args) {
+    try {
+      return await invoke(command, args);
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e || "Erreur inattendue") };
+    }
+  }
+
+  /** Charge la liste des comptes (nécessite une connexion admin réussie). */
+  async function loadAccounts({ silent = false } = {}) {
+    if (!adminConn) {
+      accounts.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    if (!silent) {
+      accounts.loading = true;
+      accounts.error = "";
+      accounts.notice = "";
+    }
+    draw();
+    const res = await invokeAccounts("gds_admin_accounts", buildAccountListArgs(adminConn));
+    if (disposed) return;
+    accounts.loading = false;
+    if (res && res.ok) {
+      accounts.accounts = Array.isArray(res.users) ? res.users : [];
+    } else {
+      accounts.error = (res && res.error) || "Chargement des comptes impossible.";
+    }
+    draw();
+  }
+
+  /**
+   * Exécute une opération d'administration d'un compte puis recharge la liste.
+   * `success` produit le message de réussite ; les erreurs du serveur (dont le
+   * garde-fou « dernier administrateur ») sont relayées telles quelles.
+   */
+  async function runAccountOp({ email, command, args, success, after }) {
+    if (!adminConn) {
+      accounts.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
+      return draw();
+    }
+    accounts.busy = email || "__all__";
+    accounts.error = "";
+    accounts.notice = "";
+    draw();
+    const res = await invokeAccounts(command, args);
+    if (disposed) return;
+    accounts.busy = "";
+    if (res && res.ok) {
+      accounts.notice = success || "Opération effectuée.";
+      if (after) after();
+    } else {
+      accounts.error = (res && res.error) || "Opération refusée par le serveur.";
+    }
+    await loadAccounts({ silent: true });
+  }
+
+  /** Crée un compte à partir du formulaire de la section. */
+  async function createAccount() {
+    const emailEl = q("#gds-admin-acc-new-email");
+    const nameEl = q("#gds-admin-acc-new-name");
+    const roleEl = q("#gds-admin-acc-new-role");
+    const pwEl = q("#gds-admin-acc-new-password");
+    const form = {
+      email: emailEl ? emailEl.value : "",
+      name: nameEl ? nameEl.value : "",
+      role: roleEl ? roleEl.value : "dev",
+      password: pwEl ? pwEl.value : "",
+    };
+    // Le mot de passe n'est jamais conservé dans l'état ; le reste est conservé
+    // pour ne pas perdre la saisie en cas d'erreur de validation.
+    accounts.form = { email: form.email, name: form.name, role: form.role };
+    if (!String(form.email).trim()) {
+      accounts.error = "Adresse (email) du compte requise.";
+      return draw();
+    }
+    if (!form.password) {
+      accounts.error = "Mot de passe initial requis.";
+      return draw();
+    }
+    await runAccountOp({
+      email: "__create__",
+      command: "gds_admin_account_create",
+      args: buildAccountCreateArgs(adminConn, form),
+      success: `Compte « ${String(form.email).trim()} » créé.`,
+      after: () => {
+        accounts.form = { email: "", name: "", role: form.role };
+      },
+    });
+  }
+
+  /** Traite un clic d'action d'une ligne / du panneau de réinitialisation. */
+  async function onAccountAction(btn) {
+    const action = btn.getAttribute("data-acc-action");
+    const email = btn.getAttribute("data-email") || "";
+    if (action === "reset") {
+      accounts.reset = { email, password: "" };
+      accounts.error = "";
+      accounts.notice = "";
+      return draw();
+    }
+    if (action === "reset-cancel") {
+      accounts.reset = { email: "", password: "" };
+      return draw();
+    }
+    if (action === "role") {
+      const sel = [...container.querySelectorAll(".gds-admin-acc-role")].find(
+        (el) => el.getAttribute("data-email") === email
+      );
+      const role = sel ? sel.value : "";
+      return runAccountOp({
+        email,
+        command: "gds_admin_account_set_role",
+        args: buildAccountRoleArgs(adminConn, email, role),
+        success: `Rôle de « ${email} » mis à jour.`,
+      });
+    }
+    if (action === "toggle") {
+      const status = btn.getAttribute("data-target") || "active";
+      return runAccountOp({
+        email,
+        command: "gds_admin_account_set_status",
+        args: buildAccountStatusArgs(adminConn, email, status),
+        success: `Statut de « ${email} » mis à jour.`,
+      });
+    }
+    if (action === "reset-save") {
+      const pwEl = q("#gds-admin-acc-reset-password");
+      const password = pwEl ? pwEl.value : "";
+      if (!password) {
+        accounts.error = "Nouveau mot de passe requis.";
+        return draw();
+      }
+      return runAccountOp({
+        email,
+        command: "gds_admin_account_set_password",
+        args: buildAccountPasswordArgs(adminConn, email, password),
+        success: `Mot de passe de « ${email} » réinitialisé.`,
+        after: () => {
+          accounts.reset = { email: "", password: "" };
+        },
+      });
+    }
   }
 
   async function runConnectionTest(memorize) {
     readFields();
+    const connPwEl = q("#gds-admin-password");
+    state.password = connPwEl ? connPwEl.value : "";
     if (!String(state.host).trim()) {
       state.loading = false;
       state.ok = false;
@@ -340,11 +783,23 @@ export function createGdsAdmin(container) {
         state.server = res;
         state.error = "";
         if (memorize && hadPassword) state.hasPassword = true;
-      } else {
-        state.ok = false;
-        state.server = null;
-        state.error = (res && res.error) || "Échec du test de connexion.";
+        // Identité admin utilisable pour les opérations sur les comptes : les
+        // commandes s'appuient sur le mot de passe mémorisé (jamais renvoyé ni
+        // conservé ici).
+        adminConn = {
+          host: String(state.host).trim(),
+          httpPort: String(state.port || "").trim(),
+          email: String(state.email).trim(),
+        };
+        accounts.error = "";
+        accounts.notice = "";
+        draw();
+        loadAccounts({ silent: true });
+        return;
       }
+      state.ok = false;
+      state.server = null;
+      state.error = (res && res.error) || "Échec du test de connexion.";
     } catch (e) {
       if (disposed) return;
       state.loading = false;

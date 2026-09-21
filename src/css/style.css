@@ -8679,6 +8679,95 @@ body.pilot-loading *::after {
   padding-left: 8px;
 }
 
+/* ── L4.3 — bloc « Comptes » ── */
+.gds-admin-form-create {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.gds-admin-field select {
+  background: var(--bg-app, #0f1115);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  color: var(--text-primary, #e6e8ee);
+  font-size: 13px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+.gds-admin-field select:focus {
+  outline: none;
+  border-color: var(--accent, #6b8cff);
+}
+.gds-admin-btn.small {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.gds-admin-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.gds-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.gds-admin-table th {
+  text-align: left;
+  color: var(--text-secondary, #a0a6b4);
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
+  white-space: nowrap;
+}
+.gds-admin-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
+  vertical-align: middle;
+}
+.gds-admin-cell-email {
+  word-break: break-all;
+}
+.gds-admin-cell-date {
+  white-space: nowrap;
+  color: var(--text-muted, #6b7280);
+}
+.gds-admin-cell-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.gds-admin-acc-role {
+  background: var(--bg-app, #0f1115);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 6px;
+  color: var(--text-primary, #e6e8ee);
+  font-size: 12px;
+  padding: 4px 6px;
+  max-width: 150px;
+}
+.gds-admin-badge.warn {
+  color: var(--warning, #fbbf24);
+  background: color-mix(in srgb, var(--warning, #fbbf24) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #fbbf24) 35%, transparent);
+}
+.gds-admin-badge.off {
+  color: var(--text-muted, #6b7280);
+  background: color-mix(in srgb, var(--text-muted, #6b7280) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-muted, #6b7280) 35%, transparent);
+}
+.gds-admin-reset {
+  background: var(--surface-2, #1e2127);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gds-admin-reset-title {
+  font-size: 12px;
+  color: var(--text-secondary, #a0a6b4);
+}
+
 /* ================================================================
    A19 — Mode « Assistant Only » immersif (super-agent)
    Overlay plein écran : tout est masqué sauf le chat. Barre du haut

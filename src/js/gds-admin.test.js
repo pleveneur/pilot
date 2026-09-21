@@ -2,11 +2,26 @@
 // Couvre les aides de rendu PURES (réutilisées par l'écran de paramétrage L5.1).
 import { describe, it, expect } from "vitest";
 import {
+  ACCOUNT_ROLES,
+  ACCOUNT_STATUSES,
+  ACCOUNTS_DESC,
   ADMIN_SECTIONS,
   DEFAULT_HTTP_PORT,
+  buildAccountCreateArgs,
+  buildAccountListArgs,
+  buildAccountPasswordArgs,
+  buildAccountRoleArgs,
+  buildAccountStatusArgs,
+  buildAccountsConnArgs,
+  formatAccountDate,
   formatBytes,
+  initialAccountsState,
   initialConnectionState,
+  nextStatusToggle,
   pickPrefill,
+  renderAccountsSectionHtml,
+  renderAccountsStatusHtml,
+  renderAccountsTableHtml,
   renderAdminSectionHtml,
   renderAdminShellHtml,
   renderConnectionSectionHtml,
@@ -271,5 +286,219 @@ describe("renderConnectionSectionHtml (pure) — secrets", () => {
     });
     expect(html).toContain("gds-admin-badge ok");
     expect(html).not.toContain("À connecter — L4.2");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// L4.3 — section « Comptes »
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("gds-admin — comptes (L4.3)", () => {
+  it("expose les vocabulaires de rôles et de statuts du socle", () => {
+    expect(ACCOUNT_ROLES.map((r) => r.value)).toEqual(["admin", "dev", "standard"]);
+    expect(ACCOUNT_STATUSES.map((s) => s.value)).toEqual(["pending", "active", "disabled"]);
+    expect(ACCOUNT_ROLES.every((r) => r.label)).toBe(true);
+    expect(ACCOUNT_STATUSES.every((s) => s.label)).toBe(true);
+  });
+
+  it("formate une date ISO en JJ/MM/AAAA et reste tolérant sinon", () => {
+    expect(formatAccountDate("2026-07-10T12:34:56Z")).toMatch(/^\d{2}\/\d{2}\/2026$/);
+    expect(formatAccountDate("")).toBe("—");
+    expect(formatAccountDate(null)).toBe("—");
+    expect(formatAccountDate("pas une date")).toBe("—");
+  });
+
+  it("calcule la bascule de statut (désactiver / réactiver)", () => {
+    expect(nextStatusToggle("active")).toEqual({
+      target: "disabled",
+      label: "Désactiver",
+      icon: "user-x",
+    });
+    expect(nextStatusToggle("pending").target).toBe("disabled");
+    expect(nextStatusToggle("disabled")).toEqual({
+      target: "active",
+      label: "Réactiver",
+      icon: "user-check",
+    });
+  });
+
+  it("initialise l'état des comptes sans liste chargée ni secret", () => {
+    const s = initialAccountsState();
+    expect(s.accounts).toBeNull();
+    expect(s.loading).toBe(false);
+    expect(s.error).toBe("");
+    expect(s.notice).toBe("");
+    expect(s.form).toEqual({ email: "", name: "", role: "dev" });
+    expect(s.reset).toEqual({ email: "", password: "" });
+  });
+
+  it("rend la zone d'état (idle / chargement / erreur / notice / compte)", () => {
+    expect(renderAccountsStatusHtml(initialAccountsState())).toContain(
+      "Connectez-vous au serveur"
+    );
+    expect(renderAccountsStatusHtml({ ...initialAccountsState(), loading: true })).toContain(
+      "Chargement des comptes"
+    );
+    expect(renderAccountsStatusHtml({ ...initialAccountsState(), error: "boum" })).toContain(
+      "boum"
+    );
+    expect(renderAccountsStatusHtml({ ...initialAccountsState(), notice: "ok" })).toContain("ok");
+    const s = { ...initialAccountsState(), accounts: [{}, {}] };
+    expect(renderAccountsStatusHtml(s)).toContain("2 compte(s)");
+  });
+
+  it("rend un tableau vide ou une liste d'absence pour un serveur sans compte", () => {
+    expect(renderAccountsTableHtml(initialAccountsState())).toBe("");
+    expect(
+      renderAccountsTableHtml({ ...initialAccountsState(), accounts: [] })
+    ).toContain("Aucun compte");
+  });
+
+  it("rend une ligne complète (adresse, rôle, statut, date, actions)", () => {
+    const html = renderAccountsTableHtml({
+      ...initialAccountsState(),
+      accounts: [
+        {
+          email: "dev@exemple.com",
+          name: "Dev Un",
+          role: "dev",
+          status: "active",
+          created_at: "2026-07-10T00:00:00Z",
+        },
+      ],
+    });
+    expect(html).toContain("dev@exemple.com");
+    expect(html).toContain('class="gds-admin-acc-role"');
+    expect(html).toContain('data-acc-action="role"');
+    expect(html).toContain('data-acc-action="toggle"');
+    expect(html).toContain('data-acc-action="reset"');
+    // Un compte actif propose la désactivation.
+    expect(html).toContain('data-target="disabled"');
+    expect(html).toContain("Désactiver");
+    expect(html).toContain("gds-admin-badge ok");
+    expect(html).toContain("10/07/2026");
+  });
+
+  it("propose la réactivation et l'activation d'un compte selon son statut", () => {
+    const html = renderAccountsTableHtml({
+      ...initialAccountsState(),
+      accounts: [
+        { email: "a@b", role: "admin", status: "disabled", created_at: "2026-01-02T00:00:00Z" },
+        { email: "c@d", role: "standard", status: "pending", created_at: "2026-01-02T00:00:00Z" },
+      ],
+    });
+    expect(html).toContain("Réactiver");
+    expect(html).toContain("gds-admin-badge off");
+    expect(html).toContain("gds-admin-badge warn");
+  });
+
+  it("rend le formulaire de création et les boutons (aucun mot de passe rendu)", () => {
+    const html = renderAccountsSectionHtml({
+      ...initialAccountsState(),
+      accounts: [],
+      form: { email: "a@b.com", name: "A", role: "admin" },
+    });
+    expect(html).toContain('id="gds-admin-acc-new-email"');
+    expect(html).toContain('id="gds-admin-acc-new-name"');
+    expect(html).toContain('id="gds-admin-acc-new-role"');
+    expect(html).toContain('id="gds-admin-acc-new-password"');
+    expect(html).toContain('id="gds-admin-acc-create"');
+    expect(html).toContain('id="gds-admin-acc-refresh"');
+    expect(html).toContain('value="a@b.com"');
+    expect(html).toContain("selected");
+    expect(html).not.toMatch(/id="gds-admin-acc-new-password"[^>]*value=/);
+  });
+
+  it("ouvre le panneau de réinitialisation sans jamais préremplir le mot de passe", () => {
+    const html = renderAccountsSectionHtml({
+      ...initialAccountsState(),
+      accounts: [],
+      reset: { email: "a@b.com", password: "SECRET" },
+    });
+    expect(html).toContain('id="gds-admin-acc-reset-password"');
+    expect(html).toContain('data-acc-action="reset-save"');
+    expect(html).toContain('data-acc-action="reset-cancel"');
+    expect(html).not.toContain("SECRET");
+  });
+
+  it("n'expose jamais un secret présent dans l'état (mot de passe, token)", () => {
+    const html = renderAccountsSectionHtml({
+      ...initialAccountsState(),
+      accounts: [
+        { email: "a@b", role: "admin", status: "active", created_at: "2026-01-02T00:00:00Z" },
+      ],
+      password: "S3CR3T-PW",
+      token: "TOKEN-PW",
+      reset: { email: "a@b", password: "RESET-PW" },
+    });
+    expect(html).not.toContain("S3CR3T-PW");
+    expect(html).not.toContain("TOKEN-PW");
+    expect(html).not.toContain("RESET-PW");
+  });
+
+  it("échappe le contenu du serveur (pas d'injection HTML)", () => {
+    const html = renderAccountsTableHtml({
+      ...initialAccountsState(),
+      accounts: [{ email: '<img src=x onerror=alert(1)>', role: "x", status: "y" }],
+    });
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
+  });
+
+  it("construit les charges utiles des commandes (identité admin + cible)", () => {
+    const conn = { host: "h", httpPort: "8080", email: "admin@b" };
+    expect(buildAccountsConnArgs(conn)).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+    });
+    expect(buildAccountListArgs(conn)).toEqual(buildAccountsConnArgs(conn));
+    expect(buildAccountCreateArgs(conn, { email: "e", name: "n", role: "dev", password: "p" })).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      targetEmail: "e",
+      targetName: "n",
+      targetRole: "dev",
+      targetPassword: "p",
+    });
+    expect(buildAccountRoleArgs(conn, "e", "admin")).toEqual({
+      host: "h",
+      httpPort: "8080",
+      email: "admin@b",
+      password: "",
+      targetEmail: "e",
+      targetRole: "admin",
+    });
+    expect(buildAccountStatusArgs(conn, "e", "disabled")).toMatchObject({
+      targetEmail: "e",
+      targetStatus: "disabled",
+    });
+    expect(buildAccountPasswordArgs(conn, "e", "np")).toMatchObject({
+      targetEmail: "e",
+      targetPassword: "np",
+    });
+  });
+
+  it("tolère une connexion absente dans les charges utiles", () => {
+    expect(buildAccountListArgs(null)).toEqual({
+      host: "",
+      httpPort: "",
+      email: "",
+      password: "",
+    });
+  });
+
+  it("décrit la section et garde le squelette L4.3 dans le shell brut", () => {
+    expect(ACCOUNTS_DESC.length).toBeGreaterThan(40);
+    const shell = renderAdminShellHtml({
+      title: "t",
+      subtitle: "s",
+      sections: ADMIN_SECTIONS,
+      sectionHtml: { connection: "<div id='conn'></div>" },
+    });
+    expect(shell).toContain("À venir — L4.3");
   });
 });
