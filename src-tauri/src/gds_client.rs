@@ -2,8 +2,8 @@
 //
 // Commande `gds_sync_project` : lit `.pilot/gds.json`, résout `gds_local_dir`
 // (défaut `~/Pilot/GDS`), clone si absent sinon fetch/pull depuis le remote
-// dédié `gds`, puis acquiert le verrou global projet (Phase B). Réutilise
-// git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
+// dédié `gds`. Le verrou global projet a été supprimé (refonte GDS, L6).
+// Réutilise git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
 
 use crate::gds;
 use crate::gds_ssh;
@@ -19,8 +19,8 @@ use tauri::State;
 pub(crate) const GDS_REMOTE: &str = "gds";
 
 /// Synchronise un projet depuis le remote GDS (clone si absent, sinon
-/// fetch/pull) puis acquiert le verrou global projet. Partagé entre la commande
-/// Tauri et la route web. `project` = chemin absolu du projet local.
+/// fetch/pull). Partagé entre la commande Tauri et la route web. `project` =
+/// chemin absolu du projet local.
 pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, String> {
     // Refonte dossier-unique : un dossier de travail non connecté (pas encore de
     // `.pilot/gds.json`) est ORIENTÉ vers la connexion (`gds_connect_existing`, via
@@ -138,9 +138,6 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     .await
     .map_err(|e| e.to_string())??;
 
-    // Verrou global projet (acquisition exclusive, TTL).
-    let lock = gds_sync::acquire_project_lock(pool, project, "sync").await?;
-
     // Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres (dernier écrit
     // gagne). Non bloquant : une erreur de suivi ne casse pas la sync git.
     let tracking = match gds_sync::sync_tracking(pool).await {
@@ -153,7 +150,6 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
         "project": name,
         "local_dir": local_dir,
         "action": action,
-        "lock": lock,
         "tracking": tracking,
         "initialized": action == "initialized",
     }))

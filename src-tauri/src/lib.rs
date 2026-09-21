@@ -3013,19 +3013,13 @@ pub fn run() {
             // ── GDS Évolution 1 : mémoriser les connexions par serveur ──
             gds::gds_list_saved_servers,
             gds::gds_apply_server,
-            // ── GDS Phase B : synchronisation + verrous (spec_gds.md §5) ──
+            // ── GDS Phase B : synchronisation (verrou retiré en L6) ──
             gds_client::gds_sync_project,
-            gds_sync::gds_release_lock,
-            gds_sync::gds_urgent_lock,
-            gds_sync::gds_get_lock,
-            // ── GDS Évol 2/3/4 : verrouillage (sync+lock) & état agrégé du verrou ──
-            gds_sync::gds_lock_project,
-            gds_sync::gds_lock_state,
             // ── GDS Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres ──
             gds_sync::gds_sync_tracking,
             // ── GDS Phase C1.4 : mode déconnecté + résumés visuels ──
             gds_sync::gds_sync_status,
-            // ── GDS Phase C1.3 : forçage serveur par titulaire du verrou ──
+            // ── GDS Phase C1.3 : forçage serveur par membres du projet ──
             gds_sync::gds_force_push_suivi,
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
             gds_ssh::gds_ssh_key,

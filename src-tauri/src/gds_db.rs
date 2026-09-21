@@ -442,6 +442,23 @@ pub(crate) async fn create_project_member(
     Ok(())
 }
 
+/// Indique si un utilisateur est membre d'un projet (project_members).
+/// Utilisé par la garde de forçage de publication du suivi après la suppression
+/// du verrou projet (refonte GDS, L6).
+pub(crate) async fn is_project_member(
+    pool: &PgPool,
+    project_id: i64,
+    user_id: i64,
+) -> Result<bool, String> {
+    let row = sqlx::query("SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2")
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Vérification membre projet: {}", e))?;
+    Ok(row.is_some())
+}
+
 /// Liste les projets (id, name, repo_name, repo_url, path_on_server, status).
 pub(crate) async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(

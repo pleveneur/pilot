@@ -35,12 +35,9 @@ pub(crate) fn gds_routes() -> Router<Arc<WebCtx>> {
         .route("/api/gds/users/validate", post(gds_validate))
         .route("/api/gds/projects", get(gds_projects).post(gds_add_project_web))
         .route("/api/gds/git-repos", get(gds_git_repos))
-        // ── Phase B : sync + verrous (implémentées) ──
+        // ── Phase B : synchronisation (verrou retiré en L6) ──
         .route("/api/gds/sync", post(gds_sync_web))
-        .route("/api/gds/lock/release", post(gds_lock_release_web))
-        .route("/api/gds/lock/urgent", post(gds_lock_urgent_web))
-        .route("/api/gds/locks", get(gds_locks_web))
-        // ── Phase C1.3 : forçage serveur du suivi (titulaire du verrou) ──
+        // ── Phase C1.3 : forçage serveur du suivi (membres du projet) ──
         .route("/api/gds/tracking/force", post(gds_tracking_force_web))
         // ── Phase C1.5 : routes API suivi fusionné (lecture/écriture) ──
         .route(
@@ -260,16 +257,15 @@ async fn gds_add_project_web(State(ctx): State<Arc<WebCtx>>, Json(body): Json<Ad
     }
 }
 
-// ── Phase B : synchronisation & verrous ──
+// ── Phase B : synchronisation (verrou retiré en L6) ──
 
 #[derive(Deserialize)]
 struct SyncBody {
     project: String,
-    reason: Option<String>,
 }
 
-/// POST /api/gds/sync — synchronise un projet depuis le remote GDS + acquiert
-/// le verrou global. Rate limiting login réutilisé (garde-fou).
+/// POST /api/gds/sync — synchronise un projet depuis le remote GDS.
+/// Rate limiting login réutilisé (garde-fou).
 async fn gds_sync_web(
     State(ctx): State<Arc<WebCtx>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
@@ -293,69 +289,10 @@ async fn gds_sync_web(
     }
 }
 
-/// POST /api/gds/lock/release — relâche le verrou global du projet.
-async fn gds_lock_release_web(
-    State(ctx): State<Arc<WebCtx>>,
-    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    Json(body): Json<SyncBody>,
-) -> Response {
-    let ip = addr.ip().to_string();
-    if !ctx.guard.check_login(&ip) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
-        )
-            .into_response();
-    }
-    let pool = match gds_pool(&ctx) {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    match gds_sync::release_project_lock(&pool, &body.project).await {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
-    }
-}
-
-/// POST /api/gds/lock/urgent — passe le verrou en mode urgent (personne désignée).
-async fn gds_lock_urgent_web(
-    State(ctx): State<Arc<WebCtx>>,
-    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    Json(body): Json<SyncBody>,
-) -> Response {
-    let ip = addr.ip().to_string();
-    if !ctx.guard.check_login(&ip) {
-        return (
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
-        )
-            .into_response();
-    }
-    let pool = match gds_pool(&ctx) {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    let reason = body.reason.unwrap_or_default();
-    match gds_sync::urgent_project_lock(&pool, &body.project, &reason).await {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
-    }
-}
-
-/// GET /api/gds/locks — liste les verrous actifs.
-async fn gds_locks_web(State(ctx): State<Arc<WebCtx>>) -> Response {
-    let pool = match gds_pool(&ctx) {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    match gds_db::list_locks(&pool).await {
-        Ok(list) => Json(json!({ "locks": list })).into_response(),
-        Err(e) => err_response(e),
-    }
-}
+/// GET /api/gds/locks — (supprimé : verrou retiré en L6).
 
 /// POST /api/gds/tracking/force — force la poussée du suivi local vers Postgres
-/// (réservé au titulaire du verrou de projet). Phase C1.3.
+/// (réservé aux membres du projet). Phase C1.3.
 async fn gds_tracking_force_web(
     State(ctx): State<Arc<WebCtx>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,

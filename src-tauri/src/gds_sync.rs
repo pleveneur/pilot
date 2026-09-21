@@ -1,11 +1,10 @@
-// gds_sync.rs — Verrou global projet (spec_gds.md §5, Phase B)
+// gds_sync.rs — Pont de synchronisation du suivi (spec_gds.md §6, Phase C1)
 //
-// Logique de verrou global projet : acquisition exclusive (échec si déjà
-// verrouillé par un autre), TTL/lease (expires_at) + renouvellement,
-// récupération des verrous orphelins expirés, relâchement, mode urgent
-// (réservé à la personne désignée). Journalise dans audit_gds + avertissement
-// des deux parties. Les décisions pures (decide_acquire, can_urgent) sont
-// testables sans base de données.
+// Pont bidirectionnel SQLite↔Postgres du suivi (clients/projets/tâches/
+// décisions) : fusion « dernier écrit gagne » sur updated_at, journalisation des
+// conflits (audit_gds), watermark local, et forçage de publication du suivi
+// (réservé aux membres du projet). Le verrou global projet a été supprimé lors
+// de la refonte GDS (L6).
 
 use crate::gds;
 use crate::gds_db;
@@ -16,304 +15,6 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::path::PathBuf;
 use tauri::{Manager, State};
-
-/// TTL par défaut d'un verrou (secondes) : 30 min. Renouvelable (lease).
-pub(crate) const LOCK_TTL_SECS: i64 = 1800;
-
-/// Décision d'acquisition d'un verrou (pure — testable sans DB).
-#[derive(Debug, PartialEq)]
-pub(crate) enum AcquireDecision {
-    /// Aucun verrou → acquisition possible.
-    Acquired,
-    /// Déjà verrouillé par un autre (non expiré) — contient l'email du titulaire.
-    HeldBy(String),
-    /// Verrou expiré (orphelin) → peut être récupéré.
-    Expired,
-}
-
-/// Décide si un verrou peut être acquis, étant donné le verrou courant (None si
-/// aucun) et l'instant courant (epoch millis). Pure — testable sans DB.
-pub(crate) fn decide_acquire(current: Option<&gds_db::LockRow>, now_ms: i64) -> AcquireDecision {
-    match current {
-        None => AcquireDecision::Acquired,
-        Some(l) if l.expires_at < now_ms => AcquireDecision::Expired,
-        Some(l) => AcquireDecision::HeldBy(l.email.clone()),
-    }
-}
-
-/// Décide si un utilisateur peut passer en mode urgent. `designated` = email de
-/// la personne désignée (vide = aucun urgent autorisé). Pure — testable.
-pub(crate) fn can_urgent(requester: &str, designated: &str) -> bool {
-    !designated.is_empty() && requester == designated
-}
-
-/// Acquiert le verrou global du projet (exclusif). Retourne l'état du verrou.
-/// - Aucun verrou → acquis.
-/// - Verrou expiré (orphelin) → récupéré (expire_stale_locks puis ré-acquisition).
-/// - Verrou détenu par un autre (non expiré) → échec avec avertissement.
-pub(crate) async fn acquire_project_lock(
-    pool: &PgPool,
-    project: &str,
-    reason: &str,
-) -> Result<Value, String> {
-    let cfg = gds::read_gds_config(project)?;
-    let name = gds::project_name(project);
-    let project_id = gds_db::get_project_by_name(pool, &name)
-        .await?
-        .ok_or("Projet non enregistré sur le serveur GDS")?;
-    let user = gds_db::get_user_by_email(pool, &cfg.identity_email).await?;
-    let user_id = user.map(|u| u.id).unwrap_or(0);
-
-    // 1. Décision pure sur l'état courant du verrou.
-    let current = gds_db::get_lock_by_project(pool, project_id).await?;
-    match decide_acquire(current.as_ref(), gds_db::now_millis()) {
-        AcquireDecision::HeldBy(email) => {
-            // Déjà verrouillé par un autre (non expiré) — avertir (refus).
-            gds_db::audit_gds(
-                pool,
-                "desktop",
-                &cfg.identity_email,
-                "lock.denied",
-                &format!("held by {}", email),
-                false,
-            )
-            .await?;
-            return Ok(json!({
-                "acquired": false,
-                "held_by": email,
-                "expires_at": current.as_ref().map(|l| l.expires_at).unwrap_or(0),
-                "urgent": current.as_ref().map(|l| l.urgent).unwrap_or(false),
-            }));
-        }
-        // Aucun verrou, ou verrou expiré (orphelin) → récupérable.
-        AcquireDecision::Acquired | AcquireDecision::Expired => {}
-    }
-    // 2. Récupérer les verrous orphelins expirés (TTL).
-    gds_db::expire_stale_locks(pool).await?;
-    // 3. Acquisition exclusive (ON CONFLICT DO NOTHING).
-    let acquired = gds_db::acquire_lock(
-        pool,
-        project_id,
-        user_id,
-        &cfg.identity_email,
-        LOCK_TTL_SECS,
-        false,
-        reason,
-    )
-    .await?;
-    if acquired {
-        gds_db::audit_gds(pool, "desktop", &cfg.identity_email, "lock.acquire", reason, true).await?;
-        return Ok(json!({ "acquired": true, "email": cfg.identity_email, "ttl_secs": LOCK_TTL_SECS }));
-    }
-    // 4. Course : un autre a acquis entre-temps — avertir.
-    let lock = gds_db::get_lock_by_project(pool, project_id).await?;
-    match lock {
-        Some(l) => {
-            gds_db::audit_gds(
-                pool,
-                "desktop",
-                &cfg.identity_email,
-                "lock.denied",
-                &format!("held by {}", l.email),
-                false,
-            )
-            .await?;
-            Ok(json!({
-                "acquired": false,
-                "held_by": l.email,
-                "expires_at": l.expires_at,
-                "urgent": l.urgent,
-            }))
-        }
-        None => Err("Verrou introuvable après échec d'acquisition".to_string()),
-    }
-}
-
-/// Passe un verrou en mode urgent (réservé à la personne désignée). Si le
-/// verrou est détenu par un autre, l'urgent le remplace (le projet devient
-/// « en conflit potentiel ») et avertit les deux parties.
-pub(crate) async fn urgent_project_lock(pool: &PgPool, project: &str, reason: &str) -> Result<Value, String> {
-    let cfg = gds::read_gds_config(project)?;
-    let name = gds::project_name(project);
-    let project_id = gds_db::get_project_by_name(pool, &name)
-        .await?
-        .ok_or("Projet non enregistré sur le serveur GDS")?;
-    let user = gds_db::get_user_by_email(pool, &cfg.identity_email).await?;
-    let user_id = user.map(|u| u.id).unwrap_or(0);
-    let designated = cfg.urgent_email.clone().unwrap_or_default();
-
-    if !can_urgent(&cfg.identity_email, &designated) {
-        gds_db::audit_gds(
-            pool,
-            "desktop",
-            &cfg.identity_email,
-            "lock.urgent.denied",
-            "not designated",
-            false,
-        )
-        .await?;
-        return Err("Mode urgent réservé à la personne désignée".to_string());
-    }
-    // Récupérer l'ancien titulaire pour l'avertissement.
-    let prev = gds_db::get_lock_by_project(pool, project_id).await?;
-    // Remplacer le verrou (supprime puis ré-acquiert en urgent).
-    gds_db::release_lock(pool, project_id).await?;
-    let acquired = gds_db::acquire_lock(
-        pool,
-        project_id,
-        user_id,
-        &cfg.identity_email,
-        LOCK_TTL_SECS,
-        true,
-        reason,
-    )
-    .await?;
-    if !acquired {
-        return Err("Échec de l'acquisition du verrou urgent".to_string());
-    }
-    gds_db::audit_gds(pool, "desktop", &cfg.identity_email, "lock.urgent", reason, true).await?;
-    let warned = prev.map(|l| l.email).unwrap_or_default();
-    Ok(json!({ "acquired": true, "urgent": true, "replaced": warned, "email": cfg.identity_email }))
-}
-
-/// Relâche le verrou global du projet.
-pub(crate) async fn release_project_lock(pool: &PgPool, project: &str) -> Result<Value, String> {
-    let cfg = gds::read_gds_config(project)?;
-    let name = gds::project_name(project);
-    let project_id = gds_db::get_project_by_name(pool, &name)
-        .await?
-        .ok_or("Projet non enregistré sur le serveur GDS")?;
-    gds_db::release_lock(pool, project_id).await?;
-    gds_db::audit_gds(pool, "desktop", &cfg.identity_email, "lock.release", "", true).await?;
-    Ok(json!({ "released": true }))
-}
-
-/// Commande Tauri : relâche le verrou global du projet.
-#[tauri::command]
-pub async fn gds_release_lock(state: State<'_, AppState>, project: String) -> Result<Value, String> {
-    if !crate::gds_globally_enabled(&state) {
-        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
-    }
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    release_project_lock(&pool, &project).await
-}
-
-/// Commande Tauri : retourne l'état du verrou global du projet (None si absent).
-#[tauri::command]
-pub async fn gds_get_lock(state: State<'_, AppState>, project: String) -> Result<Option<Value>, String> {
-    if !crate::gds_globally_enabled(&state) {
-        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
-    }
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    let name = gds::project_name(&project);
-    let project_id = gds_db::get_project_by_name(&pool, &name)
-        .await?
-        .ok_or("Projet non enregistré sur le serveur GDS")?;
-    let lock = gds_db::get_lock_by_project(&pool, project_id).await?;
-    Ok(lock.map(|l| {
-        json!({
-            "email": l.email,
-            "locked_at": l.locked_at,
-            "expires_at": l.expires_at,
-            "urgent": l.urgent,
-            "reason": l.reason,
-        })
-    }))
-}
-
-/// Commande Tauri : synchronise PUIS verrouille un projet GDS (Évol 2/3).
-/// 1) Synchronisation automatique (fetch/pull sans écrasement) via
-///    `gds_client::sync_project` — celle-ci réalise aussi l'acquisition du
-///    verrou (`acquire_project_lock`), refusée si détenu par un autre non
-///    expiré (HeldBy), avec TTL/orphelins + audit_gds.
-/// 2) Retourne l'état du verrou (satisfait « synchronisation automatique à
-///    l'appui » pour les boutons VERROUILLER et l'ouverture de projet GDS).
-/// On n'appelle PAS `acquire_project_lock` une seconde fois : la sync vient de
-/// l'acquérir → une 2e acquisition renverrait `HeldBy` par le titulaire
-/// lui-même (fausse négative). Fail-open pour le suivi (jamais bloquant),
-/// PAS pour le verrou (une erreur de sync/lock remonte en erreur).
-#[tauri::command]
-pub async fn gds_lock_project(
-    state: State<'_, AppState>,
-    project: String,
-    reason: String,
-) -> Result<Value, String> {
-    let _ = &reason; // raison conservée pour la signature de la commande (Tauri) ;
-    // l'acquisition du verrou est réalisée dans sync_project (raison "sync").
-    if !crate::gds_globally_enabled(&state) {
-        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
-    }
-    // Pool : repli `restore_pool_for_project` si le pool AppState est absent
-    // (sortie de garde AVANT l'await — garde non-Send à ne pas porter).
-    let pool_opt = state.gds_pool.lock().unwrap().clone();
-    let pool = match pool_opt {
-        Some(p) => p,
-        None => crate::gds::restore_pool_for_project(&project)
-            .await
-            .map_err(|e| format!("GDS non provisionné : {}", e))?,
-    };
-    // sync + acquisition du verrou (fetch/pull sans écrasement, HeldBy refusé).
-    let sync = crate::gds_client::sync_project(&pool, &project).await?;
-    Ok(sync.get("lock").cloned().unwrap_or(json!({ "acquired": false })))
-}
-
-/// Commande Tauri : état agrégé du verrou GDS d'un projet (Évol 3/4).
-/// Retourne `{ locked, email, expires_at, ... }` en agrégeant `gds_get_lock` :
-/// verrou absent / projet non enregistré → `{ locked: false, email, null,
-/// expires_at: null }`. Fail-open côté lecture (jamais bloquant).
-#[tauri::command]
-pub async fn gds_lock_state(state: State<'_, AppState>, project: String) -> Result<Value, String> {
-    if !crate::gds_globally_enabled(&state) {
-        return Ok(json!({ "locked": false, "email": null, "expires_at": null }));
-    }
-    let pool_opt = state.gds_pool.lock().unwrap().clone();
-    let pool = match pool_opt {
-        Some(p) => p,
-        None => crate::gds::restore_pool_for_project(&project)
-            .await
-            .map_err(|_| "GDS non provisionné".to_string())?,
-    };
-    let name = gds::project_name(&project);
-    let project_id = match gds_db::get_project_by_name(&pool, &name).await? {
-        Some(id) => id,
-        None => return Ok(json!({ "locked": false, "email": null, "expires_at": null })),
-    };
-    match gds_db::get_lock_by_project(&pool, project_id).await? {
-        Some(l) => Ok(json!({
-            "locked": true,
-            "email": l.email,
-            "expires_at": l.expires_at,
-            "urgent": l.urgent,
-            "reason": l.reason,
-        })),
-        None => Ok(json!({ "locked": false, "email": null, "expires_at": null })),
-    }
-}
-
-/// Commande Tauri : passe le verrou du projet en mode urgent (personne désignée).
-#[tauri::command]
-pub async fn gds_urgent_lock(state: State<'_, AppState>, project: String, reason: String) -> Result<Value, String> {
-    if !crate::gds_globally_enabled(&state) {
-        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
-    }
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    urgent_project_lock(&pool, &project, &reason).await
-}
 
 // ── Pont bidirectionnel SQLite↔Postgres (Phase C1.2, spec_gds.md §6) ──
 //
@@ -1239,8 +940,8 @@ fn read_all_sqlite() -> Result<
 }
 
 /// Force la poussée du suivi local vers Postgres, en ÉCRASANT les données
-/// distantes. Réservé au titulaire du verrou de projet (le membre courant doit
-/// détenir le verrou GDS du projet). Phase C1.3.
+/// distantes. Réservé aux MEMBRES du projet — le verrou de projet a été
+/// supprimé (refonte GDS, L6 ; spec 03 cible §8.2). Phase C1.3.
 pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<Value, String> {
     let cfg = gds::read_gds_config(project)?;
     if !cfg.enabled {
@@ -1250,39 +951,24 @@ pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<
     let project_id = gds_db::get_project_by_name(pool, &name)
         .await?
         .ok_or("Projet non enregistré sur le serveur GDS")?;
-    // Vérifier que le membre courant est bien le titulaire du verrou.
-    let lock = gds_db::get_lock_by_project(pool, project_id).await?;
-    match lock {
-        Some(l) if l.email == cfg.identity_email => {}
-        Some(l) => {
-            gds_db::audit_gds(
-                pool,
-                "desktop",
-                &cfg.identity_email,
-                "tracking.force.denied",
-                &format!("lock held by {}", l.email),
-                false,
-            )
-            .await?;
-            return Err(format!(
-                "Forçage réservé au titulaire du verrou (détenu par {})",
-                l.email
-            ));
-        }
-        None => {
-            gds_db::audit_gds(
-                pool,
-                "desktop",
-                &cfg.identity_email,
-                "tracking.force.denied",
-                "no lock",
-                false,
-            )
-            .await?;
-            return Err(
-                "Aucun verrou détenu — synchronisez d'abord pour acquérir le verrou".to_string(),
-            );
-        }
+    // Refonte GDS L6 : le verrou a été supprimé. Le forçage de publication du
+    // suivi reste réservé aux MEMBRES du projet ; un client non membre est
+    // refusé avec une entrée d'audit. (La distinction de rôle dev/admin vs
+    // standard relève de L3.6.)
+    let user = gds_db::get_user_by_email(pool, &cfg.identity_email).await?;
+    let user_id = user.map(|u| u.id).unwrap_or(0);
+    let is_member = user_id != 0 && gds_db::is_project_member(pool, project_id, user_id).await?;
+    if !is_member {
+        gds_db::audit_gds(
+            pool,
+            "desktop",
+            &cfg.identity_email,
+            "tracking.force.denied",
+            "not a project member",
+            false,
+        )
+        .await?;
+        return Err("Forçage réservé aux membres du projet".to_string());
     }
     // Lire tout le suivi local (since 0) en mémoire, puis pousser en écrasant.
     let (clients, projects, tasks, decisions, client_names) = read_all_sqlite()?;
@@ -1349,8 +1035,8 @@ pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<
     Ok(json!({ "ok": true, "forced": true, "pushed": pushed }))
 }
 
-/// Commande Tauri : force la poussée du suivi local vers Postgres (réservé au
-/// titulaire du verrou de projet). Phase C1.3.
+/// Commande Tauri : force la poussée du suivi local vers Postgres (réservé aux
+/// membres du projet). Phase C1.3.
 #[tauri::command]
 pub async fn gds_force_push_suivi(state: State<'_, AppState>, project: String) -> Result<Value, String> {
     if !crate::gds_globally_enabled(&state) {
@@ -1368,47 +1054,6 @@ pub async fn gds_force_push_suivi(state: State<'_, AppState>, project: String) -
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn lock_row(expires_at: i64, email: &str) -> gds_db::LockRow {
-        gds_db::LockRow {
-            id: 1,
-            project_id: 1,
-            user_id: 1,
-            email: email.to_string(),
-            locked_at: 0,
-            expires_at,
-            urgent: false,
-            reason: String::new(),
-        }
-    }
-
-    #[test]
-    fn acquire_no_lock_is_acquired() {
-        assert_eq!(decide_acquire(None, 1000), AcquireDecision::Acquired);
-    }
-
-    #[test]
-    fn acquire_held_by_other_is_denied() {
-        let lock = lock_row(5000, "alice@x");
-        assert_eq!(decide_acquire(Some(&lock), 1000), AcquireDecision::HeldBy("alice@x".to_string()));
-    }
-
-    #[test]
-    fn acquire_expired_lock_is_recoverable() {
-        // Verrou orphelin expiré (expires_at < now) → récupérable.
-        let lock = lock_row(500, "alice@x");
-        assert_eq!(decide_acquire(Some(&lock), 1000), AcquireDecision::Expired);
-    }
-
-    #[test]
-    fn urgent_only_for_designated_person() {
-        // Personne désignée → autorisé.
-        assert!(can_urgent("alice@x", "alice@x"));
-        // Autre utilisateur → refusé.
-        assert!(!can_urgent("bob@x", "alice@x"));
-        // Aucune personne désignée (vide) → aucun urgent autorisé.
-        assert!(!can_urgent("alice@x", ""));
-    }
 
     // ── Pont bidirectionnel SQLite↔Postgres (Phase C1.2) ──
 
