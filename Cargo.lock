@@ -1626,6 +1626,15 @@ dependencies = [
 [[package]]
 name = "gds-core"
 version = "0.4.16"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tokio",
+]
 
 [[package]]
 name = "gds-server"
@@ -3319,6 +3328,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "embed-resource",
+ "gds-core",
  "include_dir",
  "open",
  "portable-pty",

@@ -206,25 +206,6 @@ pub(crate) fn merge_authorized_keys(existing: &str, new_lines: &[String]) -> Str
     out
 }
 
-/// Empreinte SHA256 d'une clef publique (convention `ssh-keygen -lf` :
-/// SHA256 du blob base64 décodé, encodé en base64). Pure — testable.
-pub(crate) fn public_key_fingerprint(public_key: &str) -> String {
-    use base64::Engine;
-    use sha2::{Digest, Sha256};
-    let parts: Vec<&str> = public_key.split_whitespace().collect();
-    if parts.len() < 2 {
-        return String::new();
-    }
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(parts[1])
-        .unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(&decoded);
-    let digest = hasher.finalize();
-    let fp = base64::engine::general_purpose::STANDARD.encode(digest);
-    format!("SHA256:{}", fp)
-}
-
 // ── Provision serveur (GDS V1 = serveur local) ──
 
 /// Exécute une commande shell (cmd /C sur Windows, sh -c ailleurs).
@@ -644,18 +625,6 @@ mod tests {
         // Idempotence : re-fusionner ne change rien.
         let merged2 = merge_authorized_keys(&merged, &new1);
         assert_eq!(merged, merged2);
-    }
-
-    #[test]
-    fn public_key_fingerprint_is_deterministic() {
-        let k = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey==";
-        let fp1 = public_key_fingerprint(k);
-        let fp2 = public_key_fingerprint(k);
-        assert!(!fp1.is_empty());
-        assert_eq!(fp1, fp2);
-        assert!(fp1.starts_with("SHA256:"));
-        // Clef invalide → empreinte vide.
-        assert_eq!(public_key_fingerprint("bogus"), "");
     }
 
     #[test]

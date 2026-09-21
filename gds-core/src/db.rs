@@ -1,10 +1,14 @@
-// gds_db.rs — Accès PostgreSQL du GDS (spec_gds.md §2)
+// db.rs — Accès PostgreSQL du GDS (spec_gds.md §2)
+//
+// Couche base du crate partagé `gds-core` (refonte GDS, lot L1) : extraite à
+// l'identique de `src-tauri/src/gds_db.rs`, elle est consommée par le desk
+// (`src-tauri`, via `gds_db`) et par le serveur `gds-server`.
 //
 // Pool sqlx async (tokio) construit depuis une adresse locale OU distante
 // (IP publique / URL). `provision` crée la base `pilot_gds` + un utilisateur
 // dédié (pas `postgres` superuser), de façon idempotente. `migrate` applique
-// les migrations embarquées (`migrations/`). Helpers CRUD users/projects/
-// git_repos.
+// les migrations embarquées de ce crate (`gds-core/migrations/`). Helpers CRUD
+// users/projects/git_repos.
 //
 // Règles : jamais de `.await` en tenant un Mutex std ; secrets hors code
 // (env/.env) — les mots de passe sont passés en paramètre, jamais codés.
@@ -18,11 +22,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 /// Nom de la base applicative GDS.
-pub(crate) const GDS_DB_NAME: &str = "pilot_gds";
+pub const GDS_DB_NAME: &str = "pilot_gds";
 
 /// Construit un pool sqlx depuis une adresse de connexion PostgreSQL
 /// (locale : `localhost`/socket, ou distante : IP publique / URL).
-pub(crate) async fn connect(addr: &str) -> Result<PgPool, String> {
+pub async fn connect(addr: &str) -> Result<PgPool, String> {
     PgPoolOptions::new()
         .max_connections(5)
         .acquire_timeout(Duration::from_secs(10))
@@ -34,7 +38,7 @@ pub(crate) async fn connect(addr: &str) -> Result<PgPool, String> {
 /// Provisionne la base GDS : crée `db_name` + l'utilisateur dédié (idempotent).
 /// `admin_url` = URL d'un compte superuser (ex: postgres://postgres:pass@host:5432/postgres).
 /// Le mot de passe de l'utilisateur dédié est passé en paramètre (jamais codé).
-pub(crate) async fn provision(
+pub async fn provision(
     admin_url: &str,
     db_name: &str,
     user: &str,
@@ -88,7 +92,7 @@ const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 /// enregistrée dans `_sqlx_migrations`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum ChecksumDivergence {
+pub enum ChecksumDivergence {
     /// Empreintes identiques (cas normal).
     Identical,
     /// Même SQL, seules les fins de ligne diffèrent (LF ↔ CRLF).
@@ -98,7 +102,7 @@ pub(crate) enum ChecksumDivergence {
 }
 
 /// SHA-384 d'un contenu (algorithme d'empreinte des migrations sqlx).
-pub(crate) fn sha384_bytes(data: &[u8]) -> Vec<u8> {
+pub fn sha384_bytes(data: &[u8]) -> Vec<u8> {
     Sha384::digest(data).to_vec()
 }
 
@@ -107,7 +111,7 @@ pub(crate) fn sha384_bytes(data: &[u8]) -> Vec<u8> {
 /// `stored` est comparé à `embedded_checksum` puis aux empreintes du SQL
 /// embarqué converti dans LES DEUX SENS (LF → CRLF et CRLF → LF) : une base
 /// écrite par une build CRLF peut recevoir une build LF (et inversement).
-pub(crate) fn classify_checksum_divergence(
+pub fn classify_checksum_divergence(
     embedded_checksum: &[u8],
     embedded_sql: &str,
     stored: &[u8],
@@ -134,12 +138,10 @@ pub(crate) fn classify_checksum_divergence(
 /// divergence de contenu réel continue de remonter en erreur ;
 /// `Dirty`/`VersionMissing` et les autres erreurs gardent leur comportement
 /// d'origine.
-pub(crate) async fn migrate(pool: &PgPool) -> Result<(), String> {
-    // Transition L1 : les migrations ont été déplacées dans `gds-core/migrations/`
-    // (L1.3) ; `gds_db.rs` rejoindra `gds-core/src/db.rs` en L1.4, où le chemin
-    // par défaut (`sqlx::migrate!()`) redeviendra correct. D'ici là le chemin est
-    // explicite, résolu relativement à `CARGO_MANIFEST_DIR` (src-tauri).
-    let migrator = sqlx::migrate!("../gds-core/migrations");
+pub async fn migrate(pool: &PgPool) -> Result<(), String> {
+    // Migrations embarquées depuis `gds-core/migrations/` (chemin par défaut du
+    // macro, résolu relativement à `CARGO_MANIFEST_DIR` = `gds-core`).
+    let migrator = sqlx::migrate!();
     // Connexion dédiée : les deux tentatives doivent s'exécuter dans la MÊME
     // session. En effet, `run_direct` laisse le verrou consultatif PostgreSQL
     // (`pg_advisory_lock`, portée session) posé lorsqu'il échoue en
@@ -267,7 +269,7 @@ async fn repair_eol_only_mismatch(
 
 /// Construit l'URL applicative depuis l'URL admin (même hôte/port, base + user
 /// dédiés). `postgres://user:pass@host:port/db` → `postgres://<user>:<pwd>@<host:port>/<db>`.
-pub(crate) fn app_url_from_admin(
+pub fn app_url_from_admin(
     admin_url: &str,
     db_name: &str,
     user: &str,
@@ -283,7 +285,7 @@ pub(crate) fn app_url_from_admin(
 
 /// Ligne utilisateur (lecture).
 #[derive(Debug, Clone)]
-pub(crate) struct UserRow {
+pub struct UserRow {
     pub id: i64,
     pub email: String,
     #[allow(dead_code)]
@@ -294,7 +296,7 @@ pub(crate) struct UserRow {
 }
 
 /// Crée un utilisateur, retourne son id.
-pub(crate) async fn create_user(
+pub async fn create_user(
     pool: &PgPool,
     email: &str,
     name: &str,
@@ -317,7 +319,7 @@ pub(crate) async fn create_user(
 }
 
 /// Retourne un utilisateur par email (None si absent).
-pub(crate) async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<UserRow>, String> {
+pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<UserRow>, String> {
     let row = sqlx::query(
         "SELECT id, email, name, password_hash, role, status FROM users WHERE email = $1",
     )
@@ -336,7 +338,7 @@ pub(crate) async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Opti
 }
 
 /// Passe un utilisateur à `status` (ex: 'active' après validation superadmin).
-pub(crate) async fn set_user_status(pool: &PgPool, email: &str, status: &str) -> Result<(), String> {
+pub async fn set_user_status(pool: &PgPool, email: &str, status: &str) -> Result<(), String> {
     sqlx::query("UPDATE users SET status = $1, updated_at = now() WHERE email = $2")
         .bind(status)
         .bind(email)
@@ -347,7 +349,7 @@ pub(crate) async fn set_user_status(pool: &PgPool, email: &str, status: &str) ->
 }
 
 /// Retourne l'id d'un projet par nom (None si absent).
-pub(crate) async fn get_project_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
+pub async fn get_project_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM projects WHERE name = $1")
         .bind(name)
         .fetch_optional(pool)
@@ -357,7 +359,7 @@ pub(crate) async fn get_project_by_name(pool: &PgPool, name: &str) -> Result<Opt
 }
 
 /// Crée un projet, retourne son id.
-pub(crate) async fn create_project(
+pub async fn create_project(
     pool: &PgPool,
     name: &str,
     repo_name: &str,
@@ -383,7 +385,7 @@ pub(crate) async fn create_project(
 }
 
 /// Retourne l'id d'un dépôt git par projet (None si absent).
-pub(crate) async fn get_git_repo_by_project(pool: &PgPool, project_id: i64) -> Result<Option<i64>, String> {
+pub async fn get_git_repo_by_project(pool: &PgPool, project_id: i64) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM git_repos WHERE project_id = $1")
         .bind(project_id)
         .fetch_optional(pool)
@@ -395,7 +397,7 @@ pub(crate) async fn get_git_repo_by_project(pool: &PgPool, project_id: i64) -> R
 /// Vrai si un dépôt git (bare) est enregistré pour un projet donné par NOM.
 /// Utilisé pour les serveurs GDS DISTANTS : la base fait foi (on ne teste pas
 /// le disque distant). Fail-open côté appelant (erreur → false).
-pub(crate) async fn project_has_git_repo(pool: &PgPool, name: &str) -> Result<bool, String> {
+pub async fn project_has_git_repo(pool: &PgPool, name: &str) -> Result<bool, String> {
     let row = sqlx::query(
         "SELECT 1 FROM git_repos g JOIN projects p ON p.id = g.project_id \
          WHERE p.name = $1 LIMIT 1",
@@ -408,7 +410,7 @@ pub(crate) async fn project_has_git_repo(pool: &PgPool, name: &str) -> Result<bo
 }
 
 /// Enregistre un dépôt git (bare) pour un projet.
-pub(crate) async fn create_git_repo(
+pub async fn create_git_repo(
     pool: &PgPool,
     project_id: i64,
     path_on_server: &str,
@@ -427,7 +429,7 @@ pub(crate) async fn create_git_repo(
 }
 
 /// Associe un utilisateur à un projet (project_members).
-pub(crate) async fn create_project_member(
+pub async fn create_project_member(
     pool: &PgPool,
     project_id: i64,
     user_id: i64,
@@ -449,7 +451,7 @@ pub(crate) async fn create_project_member(
 /// Indique si un utilisateur est membre d'un projet (project_members).
 /// Utilisé par la garde de forçage de publication du suivi après la suppression
 /// du verrou projet (refonte GDS, L6).
-pub(crate) async fn is_project_member(
+pub async fn is_project_member(
     pool: &PgPool,
     project_id: i64,
     user_id: i64,
@@ -464,7 +466,7 @@ pub(crate) async fn is_project_member(
 }
 
 /// Liste les projets (id, name, repo_name, repo_url, path_on_server, status).
-pub(crate) async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
+pub async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
         "SELECT id, name, repo_name, repo_url, path_on_server, status, description FROM projects ORDER BY name",
     )
@@ -493,7 +495,7 @@ pub(crate) async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value
 /// d'identité de son membre (réutilisé par gds_clone_repo / gds_add_project).
 /// Les champs initiaux (id, project_id, path_on_server, bare_path) sont
 /// conservés ADDITIF pour ne pas casser le rendu existant de `src/js/gds.js`.
-pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
+pub async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
         "SELECT g.id, g.project_id, g.path_on_server, g.bare_path, p.name, \
             (SELECT u.email FROM project_members pm \
@@ -528,7 +530,7 @@ pub(crate) async fn list_git_repos(pool: &PgPool) -> Result<Vec<serde_json::Valu
 /// purgées en cascade (tables au `ON DELETE CASCADE`). On cible uniquement le
 /// projet GDS (path IS NULL) pour ne jamais toucher aux projets de suivi.
 /// Retourne le nombre de lignes supprimées (0 si absent).
-pub(crate) async fn delete_project_by_name(pool: &PgPool, name: &str) -> Result<u64, String> {
+pub async fn delete_project_by_name(pool: &PgPool, name: &str) -> Result<u64, String> {
     if name.trim().is_empty() {
         return Err("Nom de projet vide".to_string());
     }
@@ -541,7 +543,7 @@ pub(crate) async fn delete_project_by_name(pool: &PgPool, name: &str) -> Result<
 }
 
 /// Instant courant en epoch millis (utilisé par le suivi fusionné).
-pub(crate) fn now_millis() -> i64 {
+pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -555,7 +557,7 @@ pub(crate) fn now_millis() -> i64 {
 /// Enregistre une clef publique pour un utilisateur (idempotent : ON CONFLICT
 /// DO NOTHING sur public_key UNIQUE). Retourne l'id de la clef (0 si déjà
 /// présente).
-pub(crate) async fn create_ssh_key(pool: &PgPool, user_id: i64, public_key: &str) -> Result<i64, String> {
+pub async fn create_ssh_key(pool: &PgPool, user_id: i64, public_key: &str) -> Result<i64, String> {
     let row = sqlx::query(
         "INSERT INTO ssh_keys (user_id, public_key) VALUES ($1, $2) \
          ON CONFLICT (public_key) DO NOTHING RETURNING id",
@@ -570,7 +572,7 @@ pub(crate) async fn create_ssh_key(pool: &PgPool, user_id: i64, public_key: &str
 
 /// Retourne les clefs publiques d'un utilisateur (par id).
 #[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
-pub(crate) async fn get_ssh_keys_by_user(pool: &PgPool, user_id: i64) -> Result<Vec<String>, String> {
+pub async fn get_ssh_keys_by_user(pool: &PgPool, user_id: i64) -> Result<Vec<String>, String> {
     let rows = sqlx::query("SELECT public_key FROM ssh_keys WHERE user_id = $1 ORDER BY id")
         .bind(user_id)
         .fetch_all(pool)
@@ -580,7 +582,7 @@ pub(crate) async fn get_ssh_keys_by_user(pool: &PgPool, user_id: i64) -> Result<
 }
 
 /// Retourne l'id d'une clef publique exacte (None si absente).
-pub(crate) async fn get_ssh_key_by_key(pool: &PgPool, public_key: &str) -> Result<Option<i64>, String> {
+pub async fn get_ssh_key_by_key(pool: &PgPool, public_key: &str) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM ssh_keys WHERE public_key = $1")
         .bind(public_key)
         .fetch_optional(pool)
@@ -593,14 +595,14 @@ pub(crate) async fn get_ssh_key_by_key(pool: &PgPool, public_key: &str) -> Resul
 /// L'empreinte est calculée sur la partie base64 de la clef (même convention
 /// que `ssh-keygen -lf`).
 #[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
-pub(crate) async fn get_ssh_key_by_fingerprint(pool: &PgPool, fingerprint: &str) -> Result<Option<i64>, String> {
+pub async fn get_ssh_key_by_fingerprint(pool: &PgPool, fingerprint: &str) -> Result<Option<i64>, String> {
     let rows = sqlx::query("SELECT id, public_key FROM ssh_keys")
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Lecture clefs SSH: {}", e))?;
     for r in rows {
         let key: String = r.get("public_key");
-        if crate::gds_ssh::public_key_fingerprint(&key) == fingerprint {
+        if crate::ssh::public_key_fingerprint(&key) == fingerprint {
             return Ok(Some(r.get::<i64, _>("id")));
         }
     }
@@ -609,7 +611,7 @@ pub(crate) async fn get_ssh_key_by_fingerprint(pool: &PgPool, fingerprint: &str)
 
 /// Supprime une clef publique par id.
 #[allow(dead_code)] // API CRUD clefs SSH (Phase A3) — exposée pour l'UI/API.
-pub(crate) async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<(), String> {
+pub async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM ssh_keys WHERE id = $1")
         .bind(id)
         .execute(pool)
@@ -619,7 +621,7 @@ pub(crate) async fn delete_ssh_key(pool: &PgPool, id: i64) -> Result<(), String>
 }
 
 /// Journalise une action GDS dans `audit_gds` (Phase B : verrous, sync).
-pub(crate) async fn audit_gds(
+pub async fn audit_gds(
     pool: &PgPool,
     ip: &str,
     subject: &str,
@@ -656,7 +658,7 @@ pub(crate) async fn audit_gds(
 
 /// Ligne client (suivi).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct ClientRow {
+pub struct ClientRow {
     pub id: i64,
     pub name: String,
     pub notes: String,
@@ -664,7 +666,7 @@ pub(crate) struct ClientRow {
 }
 
 /// Upsert un client par `name` (clé naturelle). Retourne l'id.
-pub(crate) async fn upsert_client(
+pub async fn upsert_client(
     pool: &PgPool,
     name: &str,
     notes: &str,
@@ -685,7 +687,7 @@ pub(crate) async fn upsert_client(
 }
 
 /// Retourne les clients modifiés depuis `since` (résolution de divergence).
-pub(crate) async fn get_clients_modified_since(
+pub async fn get_clients_modified_since(
     pool: &PgPool,
     since: DateTime<Utc>,
 ) -> Result<Vec<ClientRow>, String> {
@@ -709,7 +711,7 @@ pub(crate) async fn get_clients_modified_since(
 
 /// Supprime un client par `name`.
 #[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
-pub(crate) async fn delete_client(pool: &PgPool, name: &str) -> Result<(), String> {
+pub async fn delete_client(pool: &PgPool, name: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM clients WHERE name = $1")
         .bind(name)
         .execute(pool)
@@ -719,7 +721,7 @@ pub(crate) async fn delete_client(pool: &PgPool, name: &str) -> Result<(), Strin
 }
 
 /// Liste tous les clients (API suivi fusionné, Phase C1.5).
-pub(crate) async fn list_clients(pool: &PgPool) -> Result<Vec<ClientRow>, String> {
+pub async fn list_clients(pool: &PgPool) -> Result<Vec<ClientRow>, String> {
     let rows = sqlx::query("SELECT id, name, notes, updated_at FROM clients ORDER BY name")
         .fetch_all(pool)
         .await
@@ -737,7 +739,7 @@ pub(crate) async fn list_clients(pool: &PgPool) -> Result<Vec<ClientRow>, String
 
 /// Ligne projet de suivi (path non NULL).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct ProjectRow {
+pub struct ProjectRow {
     pub id: i64,
     pub path: String,
     pub name: String,
@@ -748,7 +750,7 @@ pub(crate) struct ProjectRow {
 
 /// Upsert un projet de suivi par `path` (clé naturelle). Retourne l'id.
 /// `client_id` = id du client (None si non rattaché).
-pub(crate) async fn upsert_project(
+pub async fn upsert_project(
     pool: &PgPool,
     path: &str,
     name: &str,
@@ -774,7 +776,7 @@ pub(crate) async fn upsert_project(
 }
 
 /// Retourne les projets de suivi (path non NULL) modifiés depuis `since`.
-pub(crate) async fn get_projects_modified_since(
+pub async fn get_projects_modified_since(
     pool: &PgPool,
     since: DateTime<Utc>,
 ) -> Result<Vec<ProjectRow>, String> {
@@ -801,7 +803,7 @@ pub(crate) async fn get_projects_modified_since(
 
 /// Supprime un projet de suivi par `path`.
 #[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
-pub(crate) async fn delete_project(pool: &PgPool, path: &str) -> Result<(), String> {
+pub async fn delete_project(pool: &PgPool, path: &str) -> Result<(), String> {
     sqlx::query("DELETE FROM projects WHERE path = $1")
         .bind(path)
         .execute(pool)
@@ -811,7 +813,7 @@ pub(crate) async fn delete_project(pool: &PgPool, path: &str) -> Result<(), Stri
 }
 
 /// Liste tous les projets de suivi (path non NULL) — API suivi fusionné, Phase C1.5.
-pub(crate) async fn list_tracking_projects(pool: &PgPool) -> Result<Vec<ProjectRow>, String> {
+pub async fn list_tracking_projects(pool: &PgPool) -> Result<Vec<ProjectRow>, String> {
     let rows = sqlx::query(
         "SELECT id, path, name, client_id, status, updated_at FROM projects \
          WHERE path IS NOT NULL ORDER BY name",
@@ -834,7 +836,7 @@ pub(crate) async fn list_tracking_projects(pool: &PgPool) -> Result<Vec<ProjectR
 
 /// Ligne tâche (suivi).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct TaskRow {
+pub struct TaskRow {
     pub id: i64,
     pub project_id: i64,
     pub title: String,
@@ -847,7 +849,7 @@ pub(crate) struct TaskRow {
 }
 
 /// Upsert une tâche par `id` (pas de clé naturelle en SQLite). Retourne l'id.
-pub(crate) async fn upsert_task(
+pub async fn upsert_task(
     pool: &PgPool,
     id: i64,
     project_id: i64,
@@ -884,7 +886,7 @@ pub(crate) async fn upsert_task(
 }
 
 /// Retourne les tâches modifiées depuis `since`.
-pub(crate) async fn get_tasks_modified_since(
+pub async fn get_tasks_modified_since(
     pool: &PgPool,
     since: DateTime<Utc>,
 ) -> Result<Vec<TaskRow>, String> {
@@ -914,7 +916,7 @@ pub(crate) async fn get_tasks_modified_since(
 
 /// Supprime une tâche par `id`.
 #[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
-pub(crate) async fn delete_task(pool: &PgPool, id: i64) -> Result<(), String> {
+pub async fn delete_task(pool: &PgPool, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM tasks WHERE id = $1")
         .bind(id)
         .execute(pool)
@@ -924,7 +926,7 @@ pub(crate) async fn delete_task(pool: &PgPool, id: i64) -> Result<(), String> {
 }
 
 /// Liste toutes les tâches — API suivi fusionné, Phase C1.5.
-pub(crate) async fn list_tasks(pool: &PgPool) -> Result<Vec<TaskRow>, String> {
+pub async fn list_tasks(pool: &PgPool) -> Result<Vec<TaskRow>, String> {
     let rows = sqlx::query(
         "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, updated_at \
          FROM tasks ORDER BY id",
@@ -950,7 +952,7 @@ pub(crate) async fn list_tasks(pool: &PgPool) -> Result<Vec<TaskRow>, String> {
 
 /// Ligne décision (suivi).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct DecisionRow {
+pub struct DecisionRow {
     pub id: i64,
     pub project_id: Option<i64>,
     pub task_id: Option<i64>,
@@ -960,7 +962,7 @@ pub(crate) struct DecisionRow {
 }
 
 /// Upsert une décision par `id` (pas de clé naturelle en SQLite). Retourne l'id.
-pub(crate) async fn upsert_decision(
+pub async fn upsert_decision(
     pool: &PgPool,
     id: i64,
     project_id: Option<i64>,
@@ -990,7 +992,7 @@ pub(crate) async fn upsert_decision(
 }
 
 /// Retourne les décisions modifiées depuis `since`.
-pub(crate) async fn get_decisions_modified_since(
+pub async fn get_decisions_modified_since(
     pool: &PgPool,
     since: DateTime<Utc>,
 ) -> Result<Vec<DecisionRow>, String> {
@@ -1017,7 +1019,7 @@ pub(crate) async fn get_decisions_modified_since(
 
 /// `updated_at` d'un client par `name` (None si absent) — résolution de
 /// divergence « dernier écrit gagne » du pont C1.2.
-pub(crate) async fn get_client_updated_at(
+pub async fn get_client_updated_at(
     pool: &PgPool,
     name: &str,
 ) -> Result<Option<DateTime<Utc>>, String> {
@@ -1030,7 +1032,7 @@ pub(crate) async fn get_client_updated_at(
 }
 
 /// `updated_at` d'un projet de suivi par `path` (None si absent).
-pub(crate) async fn get_project_updated_at(
+pub async fn get_project_updated_at(
     pool: &PgPool,
     path: &str,
 ) -> Result<Option<DateTime<Utc>>, String> {
@@ -1043,7 +1045,7 @@ pub(crate) async fn get_project_updated_at(
 }
 
 /// `updated_at` d'une tâche par `id` (None si absente).
-pub(crate) async fn get_task_updated_at(
+pub async fn get_task_updated_at(
     pool: &PgPool,
     id: i64,
 ) -> Result<Option<DateTime<Utc>>, String> {
@@ -1056,7 +1058,7 @@ pub(crate) async fn get_task_updated_at(
 }
 
 /// `updated_at` d'une décision par `id` (None si absente).
-pub(crate) async fn get_decision_updated_at(
+pub async fn get_decision_updated_at(
     pool: &PgPool,
     id: i64,
 ) -> Result<Option<DateTime<Utc>>, String> {
@@ -1069,7 +1071,7 @@ pub(crate) async fn get_decision_updated_at(
 }
 
 /// Id d'un client par `name` (None si absent) — mapping client_id du pont C1.2.
-pub(crate) async fn get_client_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
+pub async fn get_client_by_name(pool: &PgPool, name: &str) -> Result<Option<i64>, String> {
     let row = sqlx::query("SELECT id FROM clients WHERE name = $1")
         .bind(name)
         .fetch_optional(pool)
@@ -1079,7 +1081,7 @@ pub(crate) async fn get_client_by_name(pool: &PgPool, name: &str) -> Result<Opti
 }
 
 /// Nom d'un client par `id` (None si absent) — mapping client_id du pont C1.2.
-pub(crate) async fn get_client_by_id(pool: &PgPool, id: i64) -> Result<Option<String>, String> {
+pub async fn get_client_by_id(pool: &PgPool, id: i64) -> Result<Option<String>, String> {
     let row = sqlx::query("SELECT name FROM clients WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
@@ -1090,7 +1092,7 @@ pub(crate) async fn get_client_by_id(pool: &PgPool, id: i64) -> Result<Option<St
 
 /// Supprime une décision par `id`.
 #[allow(dead_code)] // API CRUD suivi (Phase C1.1) — branchée par le pont C1.2.
-pub(crate) async fn delete_decision(pool: &PgPool, id: i64) -> Result<(), String> {
+pub async fn delete_decision(pool: &PgPool, id: i64) -> Result<(), String> {
     sqlx::query("DELETE FROM decisions WHERE id = $1")
         .bind(id)
         .execute(pool)
@@ -1100,7 +1102,7 @@ pub(crate) async fn delete_decision(pool: &PgPool, id: i64) -> Result<(), String
 }
 
 /// Liste toutes les décisions — API suivi fusionné, Phase C1.5.
-pub(crate) async fn list_decisions(pool: &PgPool) -> Result<Vec<DecisionRow>, String> {
+pub async fn list_decisions(pool: &PgPool) -> Result<Vec<DecisionRow>, String> {
     let rows = sqlx::query(
         "SELECT id, project_id, task_id, summary, source_session, updated_at \
          FROM decisions ORDER BY id",
@@ -1130,7 +1132,7 @@ pub(crate) async fn list_decisions(pool: &PgPool) -> Result<Vec<DecisionRow>, St
 
 /// Ligne ticket (lecture).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct TicketRow {
+pub struct TicketRow {
     pub id: i64,
     pub project_id: Option<i64>,
     pub client_id: Option<i64>,
@@ -1146,7 +1148,7 @@ pub(crate) struct TicketRow {
 }
 
 /// Crée un ticket. Retourne l'id. `source` ∈ 'web' | 'interne' | 'assistant'.
-pub(crate) async fn ticket_create(
+pub async fn ticket_create(
     pool: &PgPool,
     project_id: Option<i64>,
     client_id: Option<i64>,
@@ -1175,7 +1177,7 @@ pub(crate) async fn ticket_create(
 
 /// Retourne un ticket par id (None si absent).
 #[allow(dead_code)] // API CRUD tickets (Phase C2.3) — exposée pour l'UI/API.
-pub(crate) async fn get_ticket_by_id(pool: &PgPool, id: i64) -> Result<Option<TicketRow>, String> {
+pub async fn get_ticket_by_id(pool: &PgPool, id: i64) -> Result<Option<TicketRow>, String> {
     let row = sqlx::query(
         "SELECT id, project_id, client_id, reporter_user_id, title, description, status, priority, source, \
                 created_at, updated_at, resolved_at \
@@ -1205,7 +1207,7 @@ pub(crate) async fn get_ticket_by_id(pool: &PgPool, id: i64) -> Result<Option<Ti
 /// Tous les filtres sont optionnels (chaîne vide = non filtré). Retourne les
 /// tickets correspondants triés par `updated_at` décroissant (les plus récents
 /// d'abord).
-pub(crate) async fn ticket_search(
+pub async fn ticket_search(
     pool: &PgPool,
     query: &str,
     status: &str,
@@ -1273,7 +1275,7 @@ pub(crate) async fn ticket_search(
 }
 
 /// Liste tous les tickets (API suivi fusionné, Phase C2.3).
-pub(crate) async fn list_tickets(pool: &PgPool) -> Result<Vec<TicketRow>, String> {
+pub async fn list_tickets(pool: &PgPool) -> Result<Vec<TicketRow>, String> {
     let rows = sqlx::query(
         "SELECT id, project_id, client_id, reporter_user_id, title, description, status, priority, source, \
                 created_at, updated_at, resolved_at \
@@ -1302,7 +1304,7 @@ pub(crate) async fn list_tickets(pool: &PgPool) -> Result<Vec<TicketRow>, String
 }
 
 /// Ajoute un commentaire à un ticket. Retourne l'id du commentaire.
-pub(crate) async fn ticket_comment_add(
+pub async fn ticket_comment_add(
     pool: &PgPool,
     ticket_id: i64,
     user_id: Option<i64>,
@@ -1331,7 +1333,7 @@ pub(crate) async fn ticket_comment_add(
 /// Met à jour le statut d'un ticket. `status` ∈ 'ouvert' | 'en cours' |
 /// 'en correction' | 'fermé'. Quand le statut passe à 'fermé', `resolved_at`
 /// est posé à now() (sinon conservé).
-pub(crate) async fn ticket_status_update(pool: &PgPool, ticket_id: i64, status: &str) -> Result<(), String> {
+pub async fn ticket_status_update(pool: &PgPool, ticket_id: i64, status: &str) -> Result<(), String> {
     let status = status.trim().to_string();
     if status.is_empty() {
         return Err("Statut ticket vide".to_string());
@@ -1355,7 +1357,7 @@ pub(crate) async fn ticket_status_update(pool: &PgPool, ticket_id: i64, status: 
 }
 
 /// Journalise un événement de ticket (audit visibilité).
-pub(crate) async fn ticket_event_add(
+pub async fn ticket_event_add(
     pool: &PgPool,
     ticket_id: i64,
     actor: &str,
@@ -1399,9 +1401,7 @@ mod tests {
     // (ce qui invaliderait l'empreinte SHA-384 du registre `_sqlx_migrations`).
     #[test]
     fn embedded_migrations_are_lf() {
-        // Cf. `migrate()` : chemin explicite pendant la transition L1
-        // (migrations dans `gds-core/migrations/`, fichier encore ici jusqu'en L1.4).
-        let migrator = sqlx::migrate!("../gds-core/migrations");
+        let migrator = sqlx::migrate!();
         let mut versions: Vec<i64> = Vec::new();
         for m in migrator.iter() {
             assert!(
@@ -1595,7 +1595,7 @@ mod tests {
         // 1) Migration initiale : base vierge → toutes les migrations appliquées.
         migrate(&pool).await.expect("migration initiale");
 
-        let migrator = sqlx::migrate!("../gds-core/migrations");
+        let migrator = sqlx::migrate!();
         let v1 = migrator
             .iter()
             .find(|m| m.version == 1)
@@ -1730,7 +1730,7 @@ mod tests {
 
         // Registre sain : migration initiale complète.
         migrate(&pool).await.expect("migration initiale");
-        let migrator = sqlx::migrate!("../gds-core/migrations");
+        let migrator = sqlx::migrate!();
 
         let read_checksums = |pool: PgPool| async move {
             sqlx::query(&format!(

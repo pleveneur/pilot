@@ -10,3 +10,15 @@ publish = false
 # Les modules (db, git, git_cmd, ssh, auth, rate, audit, http, config, roles,
 # server_status) sont extraits depuis `src-tauri` au fil du lot L1.
 [dependencies]
+# Accès PostgreSQL du GDS (`db`) — mêmes versions/features que le desk pour
+# n'avoir qu'une seule version résolue dans le workspace.
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+base64 = "0.22"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros", "chrono"] }
+
+# `db` embarque ses tests (`#[tokio::test]`) : il leur faut un runtime tokio.
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

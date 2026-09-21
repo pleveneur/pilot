@@ -86,7 +86,11 @@ mod anomaly;
 mod telegram;
 mod gds;
 mod gds_client;
-mod gds_db;
+// `gds_db` a été extrait dans le crate partagé `gds-core` (refonte GDS, L1.4)
+// sous le nom `gds_core::db`. Cet alias garde inchangés tous les
+// `use crate::gds_db;` et `gds_db::…` du desk (le code a été déplacé, pas
+// transformé) ; L1.10 recâblera le desktop directement sur `gds_core`.
+use gds_core::db as gds_db;
 mod gds_git;
 mod gds_sync;
 mod gds_ssh;

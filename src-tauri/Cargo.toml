@@ -9,6 +9,10 @@ embed-resource = "3"
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+# Socle GDS partagé (refonte GDS, lot L1) : le desk réutilise la couche base
+# extraite à comportement identique (`gds_db` est un alias de `gds_core::db`
+# dans `src/lib.rs`).
+gds-core = { path = "../gds-core" }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

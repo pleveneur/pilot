@@ -7,3 +7,6 @@
 //! Les modules (`db`, `git`, `git_cmd`, `ssh`, `auth`, `rate`, `audit`, `http`,
 //! `config`, `roles`, `server_status`) sont déplacés depuis `src-tauri` au fil
 //! du lot L1, à comportement identique.
+
+pub mod db;
+pub mod ssh;
