@@ -40,8 +40,10 @@
 > identité globale) ; badge « ✅ Déjà ajouté » + bouton d'ajout masqué quand
 > `on_server` (`gds_connection_status → on_server`) ; état connecté compact
 > (synchro, verrou/relâcher, retirer avec confirmation) ; bloc « ▶ Avancé »
-> replié (SSH, listes, purge, config en lecture seule) masqué tant que rien de
-> provisionné ; **auto-provisionnement background** à l'ouverture du projet
+> replié (SSH, purge, config en lecture seule) masqué tant que rien de
+> provisionné ; les listes serveur « projets & dépôts » ont été retirées de
+> l'onglet par projet (refonte L5.6) et vivent dans l'onglet « GDS —
+> administration » et dans « ⚙️ GDS — paramétrage » → Mes projets GDS ; **auto-provisionnement background** à l'ouverture du projet
 > (`gds_auto_provision` → `auto_provision_pool`, fail-open, jamais bloquant,
 > n'écrase jamais un projet déjà lié) ; R5 pleine largeur + multi-colonnes
 > (`gds-cols`).
