@@ -25,7 +25,7 @@
 > vérifiée en base, aucune suppression distante), ressaisie de mot de passe sans
 > re-provision, UI (port SSH, racine serveur, dossier local) — contrat détaillé
 > §0.4 et §4.1. Procédure serveur + protocole de test :
-> `docs/gds-linux-setup.md`. Le mode **localhost reste strictement inchangé**.
+> `docs/gds-server-setup.md`. Le mode **localhost reste strictement inchangé**.
 >
 > **Évolutions UX (implémentées)** : (1) **Mémoriser les connexions par serveur**
 > — map `servers` dans `~/.pilot/gds_secrets.json` (clé `user@host`, mots de
@@ -545,7 +545,7 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
 
 | Étape | Serveur LOCAL | Serveur DISTANT |
 |---|---|---|
-| Utilisateur système `git`, dossier de repos, `authorized_keys`, `sshd` | préparés par Pilot (`gds_ssh`) | **manuels** (procédure : `docs/gds-linux-setup.md`) |
+| Utilisateur système `git`, dossier de repos, `authorized_keys`, `sshd` | préparés par Pilot (`gds_ssh`) | **manuels** (procédure : `docs/gds-server-setup.md`) |
 | `ensure_poste_key` / `ensure_poste_key_remote` | clef en base **+** synchro `authorized_keys` locale | clef en base **uniquement** (`manual: true`) |
 | Dépôt bare du projet | créé par Pilot sous `<gds_local_dir>/repos/` | **créé manuellement** sur le serveur, sous `gds_server_repos` |
 | `gds_provision` | provision + préparation serveur locale | provision DB seulement (`manual_setup: true` dans la réponse) |

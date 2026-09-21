@@ -7,14 +7,18 @@
 > l'exposer au grand public**.
 >
 > **Statut : 🟢 Implémenté** — micro-tâche **L2.9** du plan de refonte GDS
-> (`04-plan-developpement.md`, LOT 2). Voir aussi `spec_gds.md`
-> (spécification fonctionnelle) et `gds-server/README.md` (référence rapide du
-> dossier serveur).
+> (`plan_gds.md`, LOT 2), **complété par L7.3**. C'est **le** document
+> d'installation retenu : il remplace `docs/gds-linux-setup.md` (préparation
+> manuelle d'un serveur Linux), supprimé car devenu inutile avec le conteneur
+> tout-en-un. Voir aussi `spec_gds.md` (spécification fonctionnelle) et
+> `gds-server/README.md` (référence rapide du dossier serveur).
 >
-> ⚠️ **Ce document ne s'exécute pas tout seul.** Toutes les commandes réseau
-> (`tailscale …`) sont **à lancer par le propriétaire** : elles modifient la
-> configuration réseau du poste. Pilot n'exécute **jamais** ces réglages à votre
-> place.
+> ⚠️ **Ce document ne s'exécute pas tout seul — les manipulations du poste
+> sont À LA CHARGE DU PROPRIÉTAIRE.** Les commandes `docker …` (construction,
+> démarrage, inspection du conteneur) agissent sur le poste ; les commandes
+> `tailscale …` modifient sa configuration réseau. Toutes sont **à lancer par le
+> propriétaire**, y compris l'installation de Docker Desktop et de Tailscale
+> (§1). Pilot n'exécute **jamais** ces réglages à votre place.
 
 ---
 
@@ -132,6 +136,15 @@ chemins, au choix :
   conteneur crée alors l'administrateur lui-même. Un mot de passe
   d'administration n'est **jamais** généré : c'est vous qui le choisissez.
 
+> **Le mot de passe administrateur n'est PAS un mot de passe PostgreSQL.** Le
+> rôle de la base (`pilot`) est déjà préparé par le conteneur ; ce mot de passe
+> ne concerne que le **premier compte GDS** (rôle `admin`) des tables de suivi.
+> Il n'est jamais affiché ni renvoyé par le serveur.
+>
+> Les mots de passe saisis dans l'écran **🌐 GDS** de Pilot restent **sur le
+> poste** (`~/.pilot/gds_secrets.json`, droits restreints) : ils ne sont jamais
+> écrits dans `.pilot/gds.json`, qui ne porte que la configuration.
+
 ### 2.5 Vérifier depuis le poste
 
 ```powershell
@@ -157,7 +170,8 @@ Attendu : une ligne `1`.
 
 **Ordre des opérations** : trouver l'adresse Tailscale (§3.2) → régler les
 adresses d'écoute (§3.3) → publier l'interface d'administration sur le réseau
-privé (§3.4) → vérifier depuis l'autre appareil (§3.5).
+privé (§3.4) → vérifier depuis l'autre appareil (§3.5) → laisser le service
+créer le dépôt du projet (§3.6).
 
 ### 3.1 Vérifier que Tailscale est connecté
 
@@ -218,6 +232,12 @@ chose comme :
 > l'adresse Tailscale, le poste lui-même s'y connecte **par cette adresse**
 > (et non plus par `127.0.0.1`). Dans l'écran **🌐 GDS** de Pilot, saisissez
 > **`100.x.y.z`** (ou le nom MagicDNS du poste) comme **Hôte PostgreSQL**.
+>
+> Dans ce même écran, renseignez aussi **Racine des dépôts côté serveur** =
+> **`/srv/git/repos`** : c'est le point de montage du volume des dépôts
+> (voir le tableau des volumes du `gds-server/README.md` §2). Sans cette
+> valeur, « Ajouter ce projet au GDS » s'arrête sur « Racine des dépôts serveur
+> non renseignée ».
 
 ### 3.4 Publier l'interface d'administration sur le réseau privé
 
@@ -272,17 +292,52 @@ Depuis l'**autre appareil** (connecté au même tailnet) :
 # 1) l'interface d'administration répond (remplacez le port si vous avez utilisé 8443)
 curl https://<machine>.ts.net/api/gds/health
 
-# 2) les dépôts git répondent (port 2222, adresse Tailscale du poste)
-git ls-remote ssh://git@100.x.y.z:2222/mon-projet.git
+# 2) les dépôts git répondent (port 2222, chemin ABSOLU côté serveur)
+git ls-remote ssh://git@100.x.y.z:2222/srv/git/repos/mon-projet.git
 
 # 3) la base répond (port 5432, adresse Tailscale du poste)
 psql -h 100.x.y.z -p 5432 -U pilot -d pilot_gds -c "select 1"
 ```
 
 Attendus : le JSON de santé pour (1), la liste des références du dépôt pour
-(2), une ligne `1` pour (3). Si le dépôt n'existe pas encore, l'erreur est
+(2), une ligne `1` pour (3). Si le dépôt **n'existe pas encore**, l'erreur est
 attendue ; l'essentiel est que la **connexion** SSH aboutisse (pas de
-« connection timed out »).
+« connection timed out »). Le chemin de l'URL git est **absolu** (sémantique
+`ssh://`) et suit la racine des dépôts : `/<racine>/<projet>.git`.
+
+> Si le dépôt n'a pas encore été créé côté serveur, voir §3.6 : c'est le
+> conteneur qui s'en charge, sans aucune commande `git init`.
+
+---
+
+### 3.6 Le dépôt d'un projet se crée tout seul
+
+Il n'y a **aucun** `git init --bare` à lancer (l'ancien document le demandait
+pour un serveur préparé à la main). Le conteneur **matérialise** lui-même les
+dépôts bare annoncés en base : un cycle de maintenance du service — premier
+passage au démarrage, puis toutes les **30 secondes** — crée le dépôt manquant
+sous `/srv/git/repos/<projet>.git` et régénère `authorized_keys` depuis la base.
+C'est ce qui permet d'enregistrer une clef ou d'ajouter un projet **sans
+redémarrer** le conteneur.
+
+Après « Ajouter ce projet au GDS » dans Pilot :
+
+1. le projet est écrit **en base** (immédiat) ;
+2. le dépôt bare apparaît **dans les 30 secondes** ;
+3. le `push` initial part **tout de suite** : s'il tombe dans cette petite
+   fenêtre, il échoue — **relancez simplement « Ajouter ce projet au GDS »**
+   (l'opération est idempotente).
+
+Vérifier côté conteneur :
+
+```powershell
+# le motif « bare » évite tout problème d'accentuation dans la console
+docker compose logs gds | Select-String "bare"
+docker exec pilot-gds ls /srv/git/repos
+```
+
+Attendu : la ligne `gds-server : dépôts bare créés : <projet>.git` dans les
+journaux, puis le dossier `<projet>.git` dans le conteneur.
 
 ---
 
@@ -401,6 +456,9 @@ restreindre davantage, ex. `GDS_PG_ALLOWED_NETWORKS=100.64.0.0/10`
 | L'URL `https://<machine>.ts.net/…` affiche le mauvais service | le port 443 sert déjà l'accès web de Pilot | utiliser `--https=8443` (§3.4) |
 | Depuis l'autre appareil : « connection timed out » sur `5432`/`2222` | appareil hors tailnet, ou ports restés sur `GDS_BIND_ADDR=0.0.0.0` | vérifier `tailscale status` sur les deux appareils ; appliquer §3.3 |
 | `Permission denied (publickey)` en SSH | clef du poste non enregistrée dans le GDS | enregistrer la clef publique via l'écran GDS de Pilot |
+| Le `push` initial échoue juste après l'ajout du projet | dépôt bare pas encore matérialisé (fenêtre < 30 s) | patienter, puis relancer « Ajouter ce projet au GDS » (§3.6) |
+| `Racine des dépôts serveur non renseignée` | champ vide dans l'écran GDS de Pilot | renseigner `/srv/git/repos` (§3.3) |
+| Port SSH ignoré / erreur git étrange sur un poste Windows | variante SSH de git indéfinie | définir `GIT_SSH_VARIANT=ssh` dans l'environnement du poste, puis relancer Pilot |
 | Le conteneur ne démarre plus après une modification à la main | fins de ligne CRLF dans `entrypoint.sh` | §5.2 |
 
 ---
@@ -417,17 +475,26 @@ tailscale serve reset
 docker compose stop
 ```
 
+> ⚠️ `tailscale serve reset` retire **toutes** les publications Tailscale du
+> poste — y compris l'**accès web distant de Pilot** s'il est activé. Après ce
+> reset, réactivez-le depuis les Paramètres de Pilot (accès web distant) pour
+> que son automatisation republie son service.
+
 Pour revenir à une installation **strictement locale** (aucun accès par le
 réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis de
 `.env`, puis `docker compose up -d`.
 
 ---
 
-## 8. Ce qui relève d'autres lots
+## 8. Document retenu et suites
 
+- **Consolidation documentaire (L7.3, faite)** : ce document est **le** mode
+  d'emploi d'installation du serveur GDS. `docs/gds-linux-setup.md` a été
+  **supprimé** : il décrivait la préparation manuelle d'un serveur Linux
+  (compte `git`, `authorized_keys`, PostgreSQL, `git init --bare`), devenue
+  inutile avec le conteneur tout-en-un.
 - **Arrêter / redémarrer le service depuis Pilot** (sans toucher au conteneur) :
-  micro-tâche **L2.10**.
-- **Consolidation documentaire** : ce document remplacera à terme
-  `docs/gds-linux-setup.md` (serveur Linux manuel), qui décrit une préparation
-  devenue inutile avec le conteneur tout-en-un — micro-tâche **L7.3**. En
-  attendant, les deux cohabitent.
+  micro-tâche **L2.10**, **implémentée** — voir `gds-server/README.md` §4bis.
+- **Tests de bout en bout en conteneur** : micro-tâche ultérieure. Le protocole
+  de test de l'ancien document n'est **pas** repris ici : il portait sur un
+  serveur préparé à la main et sur des routes de verrou qui n'existent plus.

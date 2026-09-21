@@ -404,7 +404,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   `gds_db.rs` (`project_has_git_repo`), `gds_client.rs` (sync), `src/js/gds.js`
   (port SSH, racine serveur, dossier local, enregistrement config, ressaisie des
   mots de passe, instructions manuelles).
-- Docs : `docs/gds-linux-setup.md` (procédure serveur + protocole de test).
+- Docs : `docs/gds-server-setup.md` (procédure serveur + protocole de test).
 - Tests : purs (is_local_host, URL locale inchangée / URL distante, rétrocompat
   `gds.json` ancien, `join_posix_path`, `repo_name_for`, `poste_key_response`).
   Critère : serveur distant provisionnable/ajoutable manuellement, local inchangé,

@@ -206,7 +206,7 @@ pub(crate) fn poste_key_response(
 /// Comme `ensure_poste_key`, mais pour un serveur GDS DISTANT : la clef du poste
 /// est générée localement puis enregistrée en BASE uniquement. AUCUNE écriture
 /// dans `~git/.ssh/authorized_keys` (celle-ci vit sur la machine distante et est
-/// ajoutée MANUELLEMENT par l'administrateur, cf. docs/gds-linux-setup.md) : on
+/// ajoutée MANUELLEMENT par l'administrateur, cf. docs/gds-server-setup.md) : on
 /// n'administre jamais un serveur distant depuis le poste. La clef publique est
 /// retournée (`manual: true`) pour être copiée sur le serveur.
 pub(crate) async fn ensure_poste_key_remote(pool: &PgPool, email: &str) -> Result<Value, String> {

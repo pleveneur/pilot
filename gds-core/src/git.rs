@@ -11,7 +11,7 @@
 // (`git_init_bare`, via `ensure_bare`). Le poste écrit dans la base sans pouvoir
 // exécuter quoi que ce soit sur le serveur (décision 11) : la matérialisation
 // automatique remplace le `git init --bare` manuel de
-// `docs/gds-linux-setup.md`.
+// `docs/gds-server-setup.md`.
 
 use crate::db;
 use crate::git_cmd::git_init_bare;
@@ -289,7 +289,7 @@ pub async fn ensure_project_bares(
 
 /// Serveur DISTANT : enregistre le projet et le dépôt en base SANS RIEN créer
 /// ni administrer sur le poste (aucun bare local). Le dépôt bare est créé
-/// MANUELLEMENT sur le serveur (docs/gds-linux-setup.md). `path_on_server` est
+/// MANUELLEMENT sur le serveur (docs/gds-server-setup.md). `path_on_server` est
 /// le chemin POSIX du bare côté serveur, `remote_url` l'URL git SSH.
 /// Idempotent (projet/dépôt déjà en base → réutilisés).
 pub async fn add_project_remote(

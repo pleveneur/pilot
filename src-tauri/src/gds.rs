@@ -851,7 +851,7 @@ pub(crate) async fn add_project_to_gds(
     // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable. Serveur
     // LOCAL : clef enregistrée en base ET synchronisée dans authorized_keys.
     // Serveur DISTANT : clef enregistrée en base UNIQUEMENT (l'ajout à
-    // `authorized_keys` est MANUEL sur le serveur, voir docs/gds-linux-setup.md) —
+    // `authorized_keys` est MANUEL sur le serveur, voir docs/gds-server-setup.md) —
     // on n'administre JAMAIS une machine distante depuis le poste.
     let is_local = is_local_gds_server(&cfg);
     if is_local {
@@ -901,7 +901,7 @@ pub(crate) async fn add_project_to_gds(
     // créé sur le poste (`<gds_local_dir>/repos/<nom>.git`), comportement
     // INCHANGÉ. Serveur DISTANT : AUCUN bare local ; on enregistre seulement le
     // projet/le dépôt en base avec le chemin POSIX côté serveur (le bare est créé
-    // manuellement sur le serveur, docs/gds-linux-setup.md).
+    // manuellement sur le serveur, docs/gds-server-setup.md).
     let res = if is_local {
         gds_git::add_project(pool, &local_dir, &name, email, "").await?
     } else {
@@ -949,7 +949,7 @@ pub(crate) async fn add_project_to_gds(
             }
             return Err(format!(
                 "{} — vérifiez que le dépôt bare existe sur le serveur \
-                 (docs/gds-linux-setup.md)",
+                 (docs/gds-server-setup.md)",
                 inner_err
             ));
         }
@@ -1048,7 +1048,7 @@ pub async fn gds_provision(
     // Serveur LOCAL : provision SSH locale (user git + authorized_keys + sshd) et
     // dossier des repos local — comportement historique INCHANGÉ. Serveur
     // DISTANT : AUCUNE administration ni création sur le poste (la préparation
-    // du serveur est MANUELLE, voir docs/gds-linux-setup.md) ; on génère
+    // du serveur est MANUELLE, voir docs/gds-server-setup.md) ; on génère
     // seulement la clef du poste et on l'enregistre en base pour affichage.
     let is_local = is_local_gds_server(&cfg);
     let mut repos_dir_str = String::new();
@@ -1727,7 +1727,7 @@ pub async fn gds_clone_repo(
     // Phase A3 : la clef du poste doit être enregistrée pour le remote SSH.
     // Serveur LOCAL : enregistrement + synchro `authorized_keys` (historique
     // inchangé). Serveur DISTANT : enregistrement en base uniquement, la clef
-    // est ajoutée MANUELLEMENT sur le serveur (docs/gds-linux-setup.md).
+    // est ajoutée MANUELLEMENT sur le serveur (docs/gds-server-setup.md).
     if is_local_gds_server(&cfg) {
         gds_ssh::ensure_poste_key(&pool, &email).await?;
     } else {
@@ -1819,7 +1819,7 @@ pub async fn gds_remove_project(
     if purge_server {
         // Serveur LOCAL : suppression du bare sur le poste. Serveur DISTANT :
         // on ne touche JAMAIS au disque (ni local ni distant) — la préparation
-        // et le nettoyage du serveur sont manuels (docs/gds-linux-setup.md) ; on
+        // et le nettoyage du serveur sont manuels (docs/gds-server-setup.md) ; on
         // purge seulement les entrées de la base GDS.
         if purge_cfg.as_ref().map(is_local_gds_server).unwrap_or(true) {
             gds_git::remove_bare(&local_dir, &name)?;

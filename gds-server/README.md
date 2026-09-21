@@ -21,6 +21,12 @@ installation de PostgreSQL ou de serveur SSH sur le poste.
 
 ## 1. Première installation (Windows, Docker Desktop)
 
+> **Procédure complète, pas à pas** (depuis zéro, puis accès depuis un autre
+> appareil par le réseau privé Tailscale) :
+> [`docs/gds-server-setup.md`](../docs/gds-server-setup.md). C'est **le** mode
+> d'emploi d'installation retenu ; le résumé ci-dessous suffit pour un serveur
+> utilisé uniquement depuis le poste.
+
 Aucun shell Unix n'est nécessaire sur le poste : tout est un champ du fichier de
 composition.
 
@@ -72,6 +78,11 @@ composition.
 > **Profil réseau privé (L2.9, §5)** : si la base écoute sur l'adresse
 > Tailscale (`GDS_DB_BIND_ADDR=100.x.y.z`), remplacez **Hôte PostgreSQL** par
 > cette adresse (ou le nom MagicDNS du poste) — `localhost` ne répondrait plus.
+
+> **Aucune commande git à lancer côté serveur** : le service crée lui-même le
+> dépôt bare d'un projet (`/srv/git/repos/<projet>.git`) dès qu'il est annoncé
+> en base — premier passage au démarrage, puis toutes les 30 secondes. Voir
+> [`docs/gds-server-setup.md`](../docs/gds-server-setup.md) §3.6.
 
 ---
 

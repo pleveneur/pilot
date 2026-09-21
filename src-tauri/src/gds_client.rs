@@ -47,7 +47,7 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // remote SSH soit utilisable. Serveur LOCAL : enregistrement + synchro
     // `authorized_keys` (historique inchangé). Serveur DISTANT : enregistrement
     // en base uniquement — la clef est ajoutée MANUELLEMENT sur le serveur
-    // (docs/gds-linux-setup.md) : on n'administre JAMAIS une machine distante.
+    // (docs/gds-server-setup.md) : on n'administre JAMAIS une machine distante.
     let is_local = is_local_gds_server(&cfg);
     if is_local {
         gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
