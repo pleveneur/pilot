@@ -144,6 +144,12 @@ utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
 - Badges de statut Git dans l'explorateur : `M` (orange = modifié working tree), `M`/`A` (vert = staged/add), `D` (rouge = supprimé), `?` (gris = non suivi) ; dossiers contenant un fichier modifié marqués `•`. Via CLI `git status --porcelain` (zéro dep Cargo). Rafraîchi sur watcher, en parallèle de `refresh_tree`.
 - **Diff visuel** : clic droit → « 🔖 Voir le diff Git » → modale plein écran read-only réutilisant le moteur de diff d'A4 (`diff-view.js`), `before` = `git show HEAD:<path>`, `after` = contenu disque. Désactivé gracieusement si le projet n'est pas un repo Git (ou `git` absent).
 
+### GDS (gestionnaire de sources)
+- **Serveur conteneurisé** : `gds-server/` = **un seul service** (PostgreSQL + sshd + service HTTP) ; socle partagé `gds-core/` **sans dépendance Tauri**. Sources Git + **suivi fusionné** dans une base PostgreSQL unique. Activation **par projet** (`.pilot/gds.json`).
+- **Trois rôles** appliqués par le serveur : `admin` (comptes + dépôts), `dev` (publier / forcer le suivi des projets attribués), `standard` (lecture seule).
+- **Sans verrou** : concurrence « **dernier qui écrit gagne** », conflits **journalisés** (`tracking.conflict`), pas de fusion horodatée.
+- **Deux écrans transverses** (ouverts sans projet, boutons de la barre d'outils) : « 🖥️ GDS Serveur — administration » (connexion, comptes, dépôts, espace/journal, contrôle du service) et « ⚙️ GDS — paramétrage » (serveurs, identité, clés, projets). L'onglet « 🌐 GDS » reste **par projet** (statut suivi fusionné, synchroniser, retirer). Voir [`spec_gds.md`](spec_gds.md), [`spec_assistant_sync.md`](spec_assistant_sync.md).
+
 ### Revue de code assistée (H5)
 - Onglet **🔍 Review** (bouton 🔍) : l'agent joue le rôle de **second reviewer** sur le diff Git. Portée : modifs non commitées (`git diff HEAD`) ou dernier commit (`git diff HEAD~1 HEAD`). Process pi temporaire cadré (`ask_pi_caged`, réutilise l'aide intégrée) — **lecture seule**, aucune modification du projet. Revue structurée (bugs, sécurité, perfs, style, cohérence specs) + questions de suivi. Voir [`spec_review.md`](spec_review.md).
 

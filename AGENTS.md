@@ -150,6 +150,8 @@ pilot/
 │   └── release.yml            # Build + publication multi-plateforme (tag v*)
 ├── .github/ISSUE_TEMPLATE/   # Templates d'issue GitHub (bug/feature/remark + config contact)
 ├── package.json               # Dépendances npm
+├── Cargo.toml                 # MANIFESTE RACINE du workspace Cargo (membres : src-tauri, gds-core, gds-server)
+├── Cargo.lock                 # Verrou de dépendances du workspace — vit à la RACINE (plus dans src-tauri/)
 ├── vite.config.js             # Configuration Vite
 ├── index.html                 # Point d'entrée HTML
 ├── src/
@@ -200,10 +202,23 @@ pilot/
 │   ├── index.html
 │   ├── css/web.css
 │   └── js/ (app, chat, files, projects)
+├── gds-core/                  # Socle partagé desktop ↔ serveur (aucune dépendance Tauri)
+│   ├── Cargo.toml
+│   ├── migrations/            # Migrations SQL GDS partagées (0001_init → 0007_drop_project_locks)
+│   └── src/                   # config, db (pool sqlx + migrations), auth, roles, git, ssh, audit, service_control…
+├── gds-server/                # Serveur GDS headless (binaire axum, sans Tauri) + conteneur tout-en-un
+│   ├── Cargo.toml             # dépend de gds-core, axum, sqlx, tokio
+│   ├── src/                   # main.rs (amorçage, routeur, écoute), config.rs
+│   ├── Dockerfile             # image serveur (PostgreSQL 16 + sshd + service)
+│   ├── docker-compose.yml     # service unique, ports, volumes (le fichier à utiliser)
+│   ├── .env.example           # modèle des variables d'environnement (aucun secret)
+│   ├── entrypoint.sh          # amorçage : base, migrations, dépôts, clefs, puis supervision
+│   ├── supervisord.conf       # supervision des 3 processus internes + socket de pilotage
+│   ├── sshd_config            # SSH des dépôts (clef uniquement, compte `git`)
+│   └── README.md              # installation du serveur en conteneur
 └── src-tauri/
     ├── Cargo.toml             # Dépendances Rust
     ├── tauri.conf.json        # Configuration Tauri
-    ├── migrations/            # Migrations SQL GDS (sqlx) : 0001_init.sql (users, projects, project_members, git_repos, audit_gds)
     ├── capabilities/
     │   └── default.json       # Permissions Tauri
     ├── icons/                 # Icônes de l'application
@@ -266,6 +281,30 @@ pilot/
 ## Commandes importantes
 
 Toujours indiquer les commandes à taper après une modification de code.
+
+### Tests
+
+```bash
+# Frontend (Vitest)
+npm test
+
+# Rust — espace de travail complet (desktop + socle + serveur)
+cargo test --workspace
+
+# Rust — uniquement le desktop (Tauri)
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+# Rust — socle partagé / serveur GDS headless (sans Tauri, sans base requise)
+cargo test -p gds-core
+cargo test -p gds-server
+cargo build -p gds-server
+
+# Régénérer l'aide intégrée (après toute modification d'un bloc <!-- HELP:* -->)
+npm run build:handbook
+```
+
+Le serveur GDS **ne dépend pas de Tauri** : ses tests (`gds-core`, `gds-server`)
+s'exécutent sans application graphique ni base PostgreSQL.
 
 ### Publication des versions (workflow de release)
 

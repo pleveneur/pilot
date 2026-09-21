@@ -190,6 +190,32 @@ procédure à reproduire sur chaque poste qui héberge Pilot :
 
 ---
 
+## Serveur GDS (gestionnaire de sources)
+
+Le **GDS** (gestionnaire de sources) est un **serveur optionnel** qui centralise
+les sources de tes projets — dépôts Git **et** suivi partagé — sur ta propre
+machine ou ton réseau, au lieu d'un hébergement externe.
+
+- **Installation simple** : un **seul service à démarrer** réunit la base de
+  données, l'accès aux dépôts Git et le service. Le guide d'installation est
+  fourni avec le projet (`gds-server/README.md`).
+- **Trois rôles** pour les comptes : **administrateur** (gère les comptes et les
+  dépôts), **développeur** (publie et force le suivi des projets qui lui sont
+  attribués) ou **standard** (lecture seule).
+- **Deux écrans dédiés** dans Pilot, accessibles sans projet ouvert :
+  **« 🖥️ GDS Serveur — administration »** (connexion, comptes, dépôts/projets,
+  espace et journal, contrôle du service) et **« ⚙️ GDS — paramétrage »**
+  (serveurs, mon identité, mes clés, mes projets).
+- **Activation projet par projet** : un projet qui n'utilise pas le GDS reste
+  100 % local.
+- **Synchronisation sans verrou** : plusieurs postes peuvent travailler en même
+  temps sur un projet ; l'écriture la plus récente fait foi et les conflits
+  détectés sont **signalés** (jamais d'écrasement totalement silencieux).
+- **Aide intégrée** : le bouton **❓** répond aussi aux questions sur le GDS
+  (rôles, serveur, synchronisation).
+
+---
+
 ## Mises à jour automatiques
 
 Pilot vérifie automatiquement les mises à jour au démarrage. Si une nouvelle
