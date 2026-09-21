@@ -55,7 +55,14 @@ pub(crate) fn gds_desktop_routes<S: DesktopGdsCtx>() -> Router<Arc<S>> {
 /// `gds_core::http::gds_routes` côté desktop (source unique) ; `web_server.rs`
 /// se contente de fusionner ce routeur derrière l'authentification.
 pub(crate) fn gds_router<S: DesktopGdsCtx>() -> Router<Arc<S>> {
-    gds_core::http::gds_routes::<S>().merge(gds_desktop_routes::<S>())
+    // L2.4 : `login_routes` est montée séparément par le **service** (elle doit
+    // précéder l'authentification, sinon aucun jeton ne peut être obtenu). Le
+    // poste la remonte ici pour que sa table de routes reste **rigoureusement
+    // identique** à avant (L1.10 : aucune modification de comportement du
+    // desk — la connexion GDS y reste derrière `auth_middleware`).
+    gds_core::http::login_routes::<S>()
+        .merge(gds_core::http::gds_routes::<S>())
+        .merge(gds_desktop_routes::<S>())
 }
 
 /// Capacités du **poste** requises par les routes GDS desktop : résolution du
@@ -365,7 +372,10 @@ mod tests {
     }
 
     /// Le routeur GDS monté reste derrière l'authentification (sans jeton : 401),
-    /// pour les routes partagées comme pour les routes du poste.
+    /// pour les routes partagées comme pour les routes du poste. La connexion
+    /// (`/api/gds/users/login`) est du nombre : le socle la monte séparément pour
+    /// le service (elle doit y être publique), mais la table de routes du **poste**
+    /// est inchangée (L2.4 / L1.10).
     #[tokio::test]
     async fn gds_router_is_behind_auth() {
         assert_eq!(
@@ -374,6 +384,10 @@ mod tests {
         );
         assert_eq!(
             status_behind_auth(Method::POST, "/api/gds/sync").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            status_behind_auth(Method::POST, "/api/gds/users/login").await,
             StatusCode::UNAUTHORIZED
         );
     }

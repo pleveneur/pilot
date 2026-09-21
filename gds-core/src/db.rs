@@ -409,6 +409,47 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
     }))
 }
 
+/// Nombre de comptes de rôle `admin` présents en base (L2.4).
+///
+/// Sert de **verrou d'initialisation** : le compte administrateur n'est créé
+/// que s'il n'en existe encore aucun (cf. `create_initial_admin`).
+pub async fn count_admins(pool: &PgPool) -> Result<i64, String> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Comptage des administrateurs: {}", e))
+}
+
+/// Crée le compte administrateur **initial** avec le mot de passe **choisi**
+/// par le propriétaire (L2.4).
+///
+/// Contrat :
+/// - opération à **usage unique** : retourne `false` sans rien modifier dès
+///   qu'un administrateur existe déjà (aucune promotion implicite) ;
+/// - **aucun** mot de passe n'est fabriqué par le programme : un email ou un
+///   mot de passe vide est refusé (erreur), il n'y a pas de valeur de repli ;
+/// - le mot de passe est haché (Argon2id, `WebAuth::hash_password`) et n'est
+///   jamais journalisé, stocké en clair, ni retourné.
+pub async fn create_initial_admin(
+    pool: &PgPool,
+    email: &str,
+    password: &str,
+) -> Result<bool, String> {
+    let email = email.trim().to_string();
+    if email.is_empty() {
+        return Err("Email administrateur vide".to_string());
+    }
+    if password.is_empty() {
+        return Err("Mot de passe administrateur vide".to_string());
+    }
+    if count_admins(pool).await? > 0 {
+        return Ok(false);
+    }
+    let hash = crate::auth::WebAuth::hash_password(password)?;
+    create_user(pool, &email, "admin", &hash, "admin", "active").await?;
+    Ok(true)
+}
+
 /// Passe un utilisateur à `status` (ex: 'active' après validation superadmin).
 pub async fn set_user_status(pool: &PgPool, email: &str, status: &str) -> Result<(), String> {
     sqlx::query("UPDATE users SET status = $1, updated_at = now() WHERE email = $2")
@@ -1471,16 +1512,29 @@ pub async fn provision_db(
     let app_url = app_url_from_admin(db_addr, GDS_DB_NAME, db_user, db_password)?;
     let pool = connect(&app_url).await?;
     migrate(&pool).await?;
-    // 4. Provision premier user admin (idempotent).
-    let admin_email = admin_email.trim().to_string();
-    if !admin_email.is_empty() {
-        let existing = get_user_by_email(&pool, &admin_email).await?;
-        if existing.is_none() {
-            let hash = crate::auth::WebAuth::hash_password(admin_password).unwrap_or_default();
-            let _ = create_user(&pool, &admin_email, "admin", &hash, "admin", "active").await;
-        }
-    }
+    // 4. Provision du compte administrateur INITIAL (L2.4) : la création n'est
+    //    plus systématique (cf. `provision_initial_admin`).
+    provision_initial_admin(&pool, admin_email, admin_password).await?;
     Ok(pool)
+}
+
+/// Étape « compte administrateur » de `provision_db` (L2.4), isolée pour être
+/// vérifiable sur une base jetable.
+///
+/// Ne crée **rien** si l'email ou le mot de passe est vide : le poste peut
+/// provisionner une base sans secret d'administration (champs vides), c'est
+/// alors l'initialisation (`POST /api/gds/setup`) qui définit le compte — aucun
+/// mot de passe n'est jamais fabriqué. Ne crée rien non plus si un
+/// administrateur existe déjà (usage unique, cf. `create_initial_admin`).
+pub async fn provision_initial_admin(
+    pool: &PgPool,
+    admin_email: &str,
+    admin_password: &str,
+) -> Result<bool, String> {
+    if admin_email.trim().is_empty() || admin_password.is_empty() {
+        return Ok(false);
+    }
+    create_initial_admin(pool, admin_email, admin_password).await
 }
 
 /// Garde de publication du suivi : vérifie que `email` est MEMBRE du projet
@@ -2141,5 +2195,131 @@ mod tests {
             "aucune migration supplémentaire ne doit être appliquée"
         );
         app_pool.close().await;
+    }
+
+    // ── L2.4 — compte administrateur défini, jamais généré ──
+    //
+    // Test d'intégration facultatif, même isolation que les tests L2.3 : sans
+    // `PILOT_GDS_TEST_URL` il ne s'exécute pas (la CI reste verte). L'URL sert de
+    // base d'ADMINISTRATION ; la base visée est jetable (`pilot_gds_test_*`) et
+    // supprimée à la fin par la garde `Drop`, y compris en cas de panique.
+    #[tokio::test]
+    async fn initial_admin_is_created_once_with_the_chosen_password() {
+        let url = match std::env::var("PILOT_GDS_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "initial_admin_is_created_once_with_the_chosen_password: \
+                     PILOT_GDS_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let base_opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let env_db = base_opts.get_database().unwrap_or("").to_string();
+        if !env_db.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_TEST_URL doit viser une base de test \
+                 `pilot_gds_test_*` (base visée: {:?}) — test ignoré",
+                env_db
+            );
+            return;
+        }
+
+        let test_db = unique_test_db_name();
+        let admin_pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(base_opts.clone())
+            .await
+            .expect("connexion admin de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création base de test");
+        let _guard = GdsTestDbGuard {
+            admin_options: base_opts.clone(),
+            db_name: test_db.clone(),
+        };
+
+        let app_opts = base_opts.clone().database(&test_db);
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(app_opts)
+            .await
+            .expect("connexion base de test");
+        migrate(&pool).await.expect("migration initiale");
+
+        // 1) Base fraîche : AUCUN administrateur (la migration ne fabrique
+        //    aucun compte, aucun mot de passe par défaut).
+        assert_eq!(count_admins(&pool).await.unwrap(), 0);
+
+        // 2) Un mot de passe (ou un email) vide est REFUSÉ : le programme ne
+        //    fabrique jamais de mot de passe, il n'y a pas de repli.
+        assert!(create_initial_admin(&pool, "owner@gds.test", "").await.is_err());
+        assert!(create_initial_admin(&pool, "   ", "choisi-par-le-proprietaire").await.is_err());
+        assert_eq!(count_admins(&pool).await.unwrap(), 0, "rien ne doit être créé");
+
+        // 3) Chemin du POSTE (`provision_db` → `provision_initial_admin`) :
+        //    sans mot de passe d'administration, RIEN n'est créé — c'est la
+        //    disparition de la création automatique et systématique.
+        assert!(!provision_initial_admin(&pool, "owner-desk@gds.test", "")
+            .await
+            .expect("provision sans mot de passe"));
+        assert!(!provision_initial_admin(&pool, "   ", "mot-de-passe-choisi")
+            .await
+            .expect("provision sans email"));
+        assert_eq!(
+            count_admins(&pool).await.unwrap(),
+            0,
+            "aucun administrateur ne doit être créé par un provisionnement sans secret"
+        );
+
+        // 4) Premier appel d'initialisation : le compte est créé avec le mot de
+        //    passe CHOISI.
+        let chosen = "mot-de-passe-choisi-l24";
+        assert!(create_initial_admin(&pool, "owner@gds.test", chosen)
+            .await
+            .expect("création de l'administrateur initial"));
+        assert_eq!(count_admins(&pool).await.unwrap(), 1);
+        let admin = get_user_by_email(&pool, "owner@gds.test")
+            .await
+            .expect("lecture de l'administrateur")
+            .expect("l'administrateur doit exister");
+        assert_eq!(admin.role, "admin");
+        assert_eq!(admin.status, "active");
+        assert_ne!(admin.password_hash, chosen, "jamais de mot de passe en clair");
+        assert!(
+            crate::auth::WebAuth::verify_password(chosen, &admin.password_hash),
+            "le mot de passe saisi doit être celui qui a été enregistré"
+        );
+        assert!(
+            !crate::auth::WebAuth::verify_password("autre-mot-de-passe", &admin.password_hash),
+            "un autre mot de passe ne doit pas ouvrir le compte"
+        );
+
+        // 5) Appels suivants : usage UNIQUE, refusés, aucune promotion implicite
+        //    (ni par l'initialisation, ni par le chemin du poste).
+        assert!(!create_initial_admin(&pool, "second@gds.test", "autre-mot-de-passe")
+            .await
+            .expect("second appel"));
+        assert!(!provision_initial_admin(&pool, "second@gds.test", "autre-mot-de-passe")
+            .await
+            .expect("provision sur base déjà initialisée"));
+        assert_eq!(count_admins(&pool).await.unwrap(), 1);
+        assert!(get_user_by_email(&pool, "second@gds.test")
+            .await
+            .unwrap()
+            .is_none());
+
+        pool.close().await;
     }
 }

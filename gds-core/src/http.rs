@@ -34,6 +34,15 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Durée de vie des sessions délivrées par le service GDS
+/// (`POST /api/gds/users/login`, L2.4).
+///
+/// Alignée sur le défaut du poste (`AppConfig::web_token_ttl_hours` = 168 h) pour
+/// qu'un même jeton ait la même durée de vie des deux côtés. Le renouvellement et
+/// le choix par instance appartiennent aux lots suivants.
+const GDS_SESSION_TTL: Duration = Duration::from_secs(168 * 3600);
 
 /// Contrat minimal du contexte consommé par les handlers partagés.
 ///
@@ -93,11 +102,25 @@ impl GdsCtx for ServerCtx {
     }
 }
 
+/// Routes d'**identité** du socle : la connexion (`POST /api/gds/users/login`).
+///
+/// Elle délivre le **premier** jeton : elle doit donc être joignable sans
+/// authentification préalable, sinon aucun client ne pourrait jamais en obtenir
+/// un (montée derrière `auth_middleware`, elle répondrait 401 à tout le monde).
+/// Le poste, lui, la monte avec le reste (`gds_router`) : sa table de routes est
+/// ainsi rigoureusement inchangée (L1.10).
+///
+/// Seule la **connexion** est concernée : `users/register` (auto-inscription) et
+/// `users/validate` restent dans `gds_routes`, donc derrière l'authentification
+/// sur le service — la création de comptes y relève de l'administration (L3.2).
+pub fn login_routes<S: GdsCtx>() -> Router<Arc<S>> {
+    Router::new().route("/api/gds/users/login", post(gds_login::<S>))
+}
+
 /// Router des routes GDS « pures base » (derrière `auth_middleware`).
 pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
     Router::new()
         .route("/api/gds/users/register", post(gds_register::<S>))
-        .route("/api/gds/users/login", post(gds_login::<S>))
         .route("/api/gds/users/validate", post(gds_validate::<S>))
         .route("/api/gds/projects", get(gds_projects::<S>))
         .route("/api/gds/git-repos", get(gds_git_repos::<S>))
@@ -150,12 +173,18 @@ pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
 ///
 /// Trois zones distinctes (refonte GDS, L2.2) :
 ///
-///  1. **Routes publiques** (`public_routes`) : `GET /api/gds/health`, aucune
-///     authentification — un point de supervision doit répondre sans jeton et
-///     ne divulgue aucune donnée sensible ;
-///  2. **Routes partagées du socle** (`gds_routes`) : derrière
+///  1. **Routes publiques** (`public_routes`) : `GET /api/gds/health` et
+///     `POST /api/gds/setup` (initialisation à usage unique du compte
+///     administrateur, L2.4), aucune authentification — un point de supervision
+///     doit répondre sans jeton et l'initialisation a lieu avant qu'un jeton
+///     puisse exister ; la santé ne divulgue aucune donnée sensible ;
+///  2. **Connexion** (`login_routes`) : elle délivre le premier jeton, elle ne
+///     peut donc pas être derrière `auth_middleware` (L2.4 : « connexion avec le
+///     mot de passe saisi → jeton ») ; elle est protégée par le rate limiting
+///     `check_login` du handler ;
+///  3. **Routes partagées du socle** (`gds_routes`) : derrière
 ///     `auth_middleware` (token opaque), comportement inchangé ;
-///  3. **Routes d'administration** (`admin_routes`) : derrière
+///  4. **Routes d'administration** (`admin_routes`) : derrière
 ///     `auth_middleware` **puis** `require_admin` (rôle `admin` exigé).
 ///
 /// Le poste (`src-tauri`) monte les **mêmes** `gds_routes` derrière son propre
@@ -171,16 +200,28 @@ pub fn server_router<S: GdsCtx>(ctx: Arc<S>) -> Router {
         .layer(from_fn_with_state(ctx.clone(), auth_middleware::<S>));
     Router::new()
         .merge(public_routes::<S>())
+        .merge(login_routes::<S>())
         .merge(protected)
         .with_state(ctx)
 }
 
 /// Routes **publiques** du service (aucune authentification).
 ///
-/// À ce jour : la santé. Elle ne lit que des compteurs d'entités et des
-/// métadonnées de version ; aucune donnée personnelle ni secret.
+/// À ce jour :
+/// - `GET /api/gds/health` : la santé. Elle ne lit que des compteurs d'entités et
+///   des métadonnées de version ; aucune donnée personnelle ni secret ;
+/// - `POST /api/gds/setup` (L2.4) : l'initialisation du compte administrateur.
+///   Elle doit être joignable **sans jeton** (au premier démarrage, le service
+///   n'a encore aucun compte, donc aucun jeton possible) et devient inopérante
+///   (409) dès qu'un administrateur existe.
+///
+/// La connexion (`login_routes`) est publique elle aussi, mais montée à part :
+/// elle ne dépend pas de l'initialisation, elle est le seul moyen d'obtenir un
+/// jeton.
 pub fn public_routes<S: GdsCtx>() -> Router<Arc<S>> {
-    Router::new().route("/api/gds/health", get(gds_health::<S>))
+    Router::new()
+        .route("/api/gds/health", get(gds_health::<S>))
+        .route("/api/gds/setup", post(gds_setup::<S>))
 }
 
 /// Routes **d'administration** du service (montées derrière `require_admin`).
@@ -209,6 +250,82 @@ async fn gds_admin_server<S: GdsCtx>(State(ctx): State<Arc<S>>) -> Response {
     let last_audit = ctx.audit().recent(1).into_iter().next();
     let report = server_status::collect_admin(pool.as_ref(), repos_root.as_deref(), last_audit).await;
     Json(report).into_response()
+}
+
+// ── Initialisation du compte administrateur (L2.4) ──
+
+#[derive(Deserialize)]
+struct SetupBody {
+    email: String,
+    password: String,
+}
+
+/// `POST /api/gds/setup` — **initialisation à usage unique** du compte
+/// administrateur (L2.4). Route **publique** : au premier démarrage, le service
+/// n'a aucun compte, donc aucun jeton n'est possible.
+///
+/// Réponses :
+/// - `200 { ok: true, email }` : un administrateur vient d'être créé avec
+///   l'email et le mot de passe **saisis par le propriétaire** (aucun mot de
+///   passe fabriqué par le programme) ;
+/// - `409` : un administrateur existe déjà — l'initialisation n'est plus
+///   possible (les comptes suivants relèvent des routes d'administration L3.2) ;
+/// - `400` : email ou mot de passe vide (il n'y a **pas** de valeur de repli) ;
+/// - `429` : trop de tentatives depuis la même IP (garde-fou partagé avec la
+///   connexion) ;
+/// - `500` : base injoignable ou erreur d'écriture.
+///
+/// Le mot de passe n'est ni journalisé, ni renvoyé, ni conservé en clair : il est
+/// seulement haché (Argon2id) par le socle (`WebAuth::hash_password`).
+async fn gds_setup<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<SetupBody>,
+) -> Response {
+    let ip = addr.ip().to_string();
+    if !ctx.guard().check_login(&ip) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "Trop de tentatives. Réessayez dans 1 min." })),
+        )
+            .into_response();
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = body.email.trim().to_string();
+    if email.is_empty() || body.password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Email et mot de passe administrateur requis" })),
+        )
+            .into_response();
+    }
+    // Verrou d'initialisation : un administrateur existe → refus définitif.
+    match gds_db::count_admins(&pool).await {
+        Ok(0) => {}
+        Ok(_) => return already_initialized(),
+        Err(e) => return err_response(e),
+    }
+    match gds_db::create_initial_admin(&pool, &email, &body.password).await {
+        Ok(true) => Json(json!({ "ok": true, "email": email })).into_response(),
+        // Deux appels simultanés : le second n'a rien créé, même réponse qu'un
+        // administrateur préexistant.
+        Ok(false) => already_initialized(),
+        Err(e) => err_response(e),
+    }
+}
+
+/// Réponse **409** de `POST /api/gds/setup` (déjà initialisé).
+fn already_initialized() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "Un administrateur existe déjà : l'initialisation n'est plus possible"
+        })),
+    )
+        .into_response()
 }
 
 fn err_response(e: String) -> Response {
@@ -358,6 +475,13 @@ struct LoginBody {
 }
 
 /// Login : vérifie argon2 + refuse si status != active.
+///
+/// L2.4 : délivre un **jeton de session portant le rôle** du compte, via le
+/// mécanisme étendu de L2.2 (`WebAuth::create_session_as`) — sans lui, aucun
+/// client distant ne pourrait appeler les routes authentifiées (dont la route
+/// d'administration réservée au rôle `admin`). Ajout de champ uniquement : les
+/// clients existants (desk) reçoivent `ok`/`email`/`role` comme avant.
+///
 /// Rate limiting login (5/60 s/IP) réutilisé (garde-fou brute-force).
 async fn gds_login<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
@@ -387,7 +511,9 @@ async fn gds_login<S: GdsCtx>(
     if !WebAuth::verify_password(&body.password, &user.password_hash) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Identifiants invalides" }))).into_response();
     }
-    Json(json!({ "ok": true, "email": user.email, "role": user.role })).into_response()
+    let token = ctx.auth().create_session_as(&user.role, GDS_SESSION_TTL);
+    Json(json!({ "ok": true, "email": user.email, "role": user.role, "token": token }))
+        .into_response()
 }
 
 #[derive(Deserialize)]

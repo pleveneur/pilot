@@ -160,16 +160,27 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("écoute HTTP sur {} impossible : {}", cfg.http_bind, e))?;
     println!("gds-server : à l'écoute sur {}", cfg.http_bind);
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| format!("serveur HTTP : {}", e))
+    // `into_make_service_with_connect_info` est **nécessaire** : `auth_middleware`,
+    // `gds_register`, `gds_login` et `gds_setup` extraient
+    // `ConnectInfo<SocketAddr>` (IP source pour le rate limiting et l'audit).
+    // Sans lui, ces routes répondraient 500 au lieu de 200/401/400 (le poste,
+    // lui, passe déjà par `into_make_service_with_connect_info`).
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("serveur HTTP : {}", e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::ConnectInfo;
     use gds_core::http::GdsCtx;
+    use sqlx::postgres::PgConnectOptions;
     use sqlx::PgPool;
+    use std::str::FromStr;
     use tower::ServiceExt;
 
     use axum::body::Body;
@@ -231,9 +242,13 @@ mod tests {
     /// répondrait 404, pas 401) : la couche d'authentification s'applique avant
     /// le routage, donc on vérifie que le chemin est bien couvert par le
     /// routeur monté et non par le fallback.
+    ///
+    /// L2.4 : `/api/gds/users/login` a quitté cette liste — la connexion doit
+    /// précéder l'authentification (elle délivre le premier jeton) et est
+    /// désormais publique (cf. `login_route_is_public`).
     #[tokio::test]
     async fn server_router_covers_several_shared_routes() {
-        for uri in ["/api/gds/users/login", "/api/gds/git-repos", "/api/gds/tickets"] {
+        for uri in ["/api/gds/git-repos", "/api/gds/tickets"] {
             let app = server_router(null_ctx());
             let res = app
                 .oneshot(
@@ -263,6 +278,38 @@ mod tests {
             .uri("/api/gds/admin/server")
             .header("authorization", format!("Bearer {}", token))
             .body(Body::empty())
+            .unwrap()
+    }
+
+    /// Adresse source injectée dans les requêtes de test : en production elle
+    /// est posée par `into_make_service_with_connect_info` (cf. `run`).
+    fn test_addr() -> std::net::SocketAddr {
+        std::net::SocketAddr::from(([127, 0, 0, 1], 4242))
+    }
+
+    /// `POST /api/gds/setup` (email + mot de passe choisis, L2.4).
+    fn setup_request(email: &str, password: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/gds/setup")
+            .header("content-type", "application/json")
+            .extension(ConnectInfo(test_addr()))
+            .body(Body::from(
+                serde_json::json!({ "email": email, "password": password }).to_string(),
+            ))
+            .unwrap()
+    }
+
+    /// `POST /api/gds/users/login`.
+    fn login_request(email: &str, password: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/api/gds/users/login")
+            .header("content-type", "application/json")
+            .extension(ConnectInfo(test_addr()))
+            .body(Body::from(
+                serde_json::json!({ "email": email, "password": password }).to_string(),
+            ))
             .unwrap()
     }
 
@@ -355,5 +402,170 @@ mod tests {
         assert!(obj.contains_key("db_bytes"));
         assert!(obj.contains_key("last_audit"));
         assert_eq!(obj.len(), 3);
+    }
+
+    // ── L2.4 — initialisation du compte administrateur ──
+
+    /// L2.4 — l'initialisation est **publique** : sans jeton, la requête atteint
+    /// le handler (ici le pool est absent → 500 « base injoignable » et aucune
+    /// création). Un montage manquant répondrait 404 et un montage derrière
+    /// l'authentification répondrait 401 : l'un comme l'autre rendrait le
+    /// premier démarrage impossible (aucun jeton ne peut exister avant que le
+    /// premier compte ne soit créé). Ce test ne touche à aucune base.
+    #[tokio::test]
+    async fn setup_route_is_public() {
+        let app = server_router(null_ctx());
+        let res = app
+            .oneshot(setup_request("owner@gds.test", "mot-de-passe-choisi"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let value = json_body(res).await;
+        assert!(
+            value.get("error").is_some(),
+            "réponse d'erreur attendue, obtenue : {}",
+            value
+        );
+    }
+
+    /// L2.4 — la **connexion** est publique : sans jeton, la requête atteint le
+    /// handler (pool absent → 500 « base injoignable »). Derrière
+    /// l'authentification, elle répondrait 401 et **aucun jeton ne pourrait
+    /// jamais être obtenu** ; absente, elle répondrait 404.
+    #[tokio::test]
+    async fn login_route_is_public() {
+        let app = server_router(null_ctx());
+        let res = app
+            .oneshot(login_request("owner@gds.test", "mot-de-passe-choisi"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// L2.4 — **bout en bout sur une base réelle jetable** (facultatif) :
+    /// initialisation (200, un seul administrateur, mot de passe **choisi**),
+    /// second appel (409), connexion avec le mot de passe saisi (200 + jeton
+    /// portant le rôle), connexion avec un autre mot de passe (401), puis route
+    /// d'administration ouverte par ce jeton (200).
+    ///
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test ne s'exécute pas (CI verte).
+    /// L'URL doit désigner une base **jetable** `pilot_gds_test_*` : le test ne
+    /// la supprime pas, mais remet la table `users` dans son état initial (il est
+    /// ainsi rejouable).
+    #[tokio::test]
+    async fn setup_then_login_then_admin_route() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "setup_then_login_then_admin_route: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let pool = gds_core::db::connect(&url)
+            .await
+            .expect("connexion à la base de test");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base de test");
+        // État initial : aucun compte (le test est rejouable tel quel).
+        sqlx::query("DELETE FROM users")
+            .execute(&pool)
+            .await
+            .expect("remise à zéro de la table users");
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: std::env::temp_dir(),
+        });
+        let app = server_router(ctx);
+        let email = "owner-l24@gds.test";
+        let password = "mot-de-passe-choisi-l24";
+
+        // 1) Aucun administrateur : le premier appel crée le compte.
+        assert_eq!(gds_core::db::count_admins(&pool).await.unwrap(), 0);
+        let res = app
+            .clone()
+            .oneshot(setup_request(email, password))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["ok"], serde_json::json!(true));
+        assert_eq!(value["email"], serde_json::json!(email));
+        assert!(
+            !value.to_string().contains(password),
+            "la réponse ne doit jamais contenir le mot de passe"
+        );
+        assert_eq!(
+            gds_core::db::count_admins(&pool).await.unwrap(),
+            1,
+            "exactement un administrateur"
+        );
+
+        // 2) Second appel : refusé (409), aucun second compte.
+        let res = app
+            .clone()
+            .oneshot(setup_request("autre@gds.test", "encore-un-autre"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        assert_eq!(gds_core::db::count_admins(&pool).await.unwrap(), 1);
+
+        // 3) Connexion avec le mot de passe SAISI : jeton portant le rôle.
+        let res = app
+            .clone()
+            .oneshot(login_request(email, password))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["role"], serde_json::json!("admin"));
+        let token = value["token"]
+            .as_str()
+            .expect("jeton de session délivré par la connexion")
+            .to_string();
+        assert!(!token.is_empty());
+
+        // 4) Un AUTRE mot de passe est refusé (c'est bien celui saisi qui compte).
+        let res = app
+            .clone()
+            .oneshot(login_request(email, "mot-de-passe-errone"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 5) Ce jeton ouvre la route réservée au rôle `admin`.
+        let res = app.clone().oneshot(bearer(&token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Nettoyage : la base jetable revient à son état initial.
+        sqlx::query("DELETE FROM users")
+            .execute(&pool)
+            .await
+            .expect("nettoyage de la table users");
+        pool.close().await;
     }
 }
