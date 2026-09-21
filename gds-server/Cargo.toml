@@ -1,0 +1,11 @@
+[package]
+name = "gds-server"
+version = "0.4.16"
+edition = "2021"
+description = "Serveur GDS autonome (headless) : API HTTP d'administration GDS."
+publish = false
+
+# Contrainte structurelle (plan de refonte GDS, §2.10) : ce binaire ne doit
+# dépendre NI de Tauri, NI de ses plugins, NI de `wry` — sinon il embarquerait
+# WebKit/WebView2 et ne serait plus conteneurisable.
+[dependencies]

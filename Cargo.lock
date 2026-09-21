@@ -1624,6 +1624,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gds-core"
+version = "0.4.16"
+
+[[package]]
+name = "gds-server"
+version = "0.4.16"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

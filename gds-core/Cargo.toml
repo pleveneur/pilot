@@ -1,0 +1,12 @@
+[package]
+name = "gds-core"
+version = "0.4.16"
+edition = "2021"
+description = "Socle GDS partagé entre l'application desktop Pilot et le binaire serveur gds-server."
+publish = false
+
+# Aucune dépendance Tauri dans ce crate : il est aussi compilé par `gds-server`,
+# binaire headless destiné au conteneur (plan de refonte GDS, §2.10).
+# Les modules (db, git, git_cmd, ssh, auth, rate, audit, http, config, roles,
+# server_status) sont extraits depuis `src-tauri` au fil du lot L1.
+[dependencies]

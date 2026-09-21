@@ -11,7 +11,7 @@
 # `.gitignore` (`target/` pour la compilation).
 [workspace]
 resolver = "2"
-members = ["src-tauri"]
+members = ["src-tauri", "gds-core", "gds-server"]
 
 # ── Patch local de wry (autorise le micro du WebView desktop pour la dictée vocale) ──
 # Voir `src-tauri/vendor/wry/src/webview2/mod.rs` (handler PermissionRequested).
