@@ -625,16 +625,19 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
   revenez ici. L'e-mail saisi doit être **celui du compte** créé en **2.2** (ou
   le vôtre si vous êtes seul).
 
-### 2.4 — Enregistrer sa clef SSH (une seule fois par poste)
+### 2.4 — Enregistrer sa clef SSH (rien à faire en local)
 
-- **Dans Pilot, vous faites :** **« ⚙️ GDS — paramétrage » → Mes clés** :
-  **Copier la clé publique**, puis **Enregistrer ma clé sur le serveur GDS**.
-- **Vous voyez :** la confirmation d'enregistrement. Le serveur reprend la liste
-  **toutes les 30 secondes** : inutile de redémarrer quoi que ce soit.
+- **Dans Pilot, vous faites :** **Activer GDS** sur votre projet (**2.6**) : la clé
+de votre poste est enregistrée **automatiquement**, sans autre geste. Seul cas où
+vous cliquez ici : un **serveur distant** exige que la clé soit déposée à la main
+→ **« ⚙️ GDS — paramétrage » → Mes clés** → **Enregistrer ma clé sur le serveur
+GDS**.
+- **Vous voyez :** la clé arrive sur le serveur sans redémarrage — le serveur
+  reprend la liste **toutes les 30 secondes**.
 - **Si ce n'est pas ça :** après 30 secondes, une commande `git ls-remote` en SSH
   qui demande un mot de passe ou répond `Permission denied (publickey)` → la
-  clef n'a pas été enregistrée, ou l'attente de 30 s n'est pas écoulée ; refaites
-  l'étape.
+  clef n'est pas arrivée : activez le GDS sur le projet (**2.6**) ou refaites
+  l'enregistrement, puis attendez 30 s.
 
 ### 2.5 — Mémoriser le serveur dans Pilot
 
@@ -1179,7 +1182,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 | `password authentication failed for user "pilot"` | **c'est le piège du port** : voir l'**encadré en tête de ce document**, puis `docs/gds-server-setup.md` §5.1 |
 | plusieurs lignes sur le port `5432` (dont `postgres`) | **piège du port** : détection et correction **en tête de ce document** |
 | `Failed to parse the request body as JSON` | la commande `curl.exe` de 1.6.a est passée sans fichier — refaire avec `Set-Content` + `--data-binary` |
-| `Permission denied (publickey)` en SSH | clef du poste non enregistrée (2.4), ou pas encore reprise (attendre 30 s) |
+| `Permission denied (publickey)` en SSH | clef du poste non transmise — le GDS activé sur le projet l'enregistre automatiquement (2.4) —, ou pas encore reprise (attendre 30 s) |
 | `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) |
 | le `push` initial échoue juste après l'ajout | fenêtre < 30 s : **relancer « Ajouter ce projet au GDS »** (2.6.e) |
 | `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` (2.6.c) |
