@@ -477,13 +477,13 @@ export function renderProjectRowHtml(p = {}, pendingRemove = null) {
           ${
             canRemove
               ? isPend
-                ? `<button class="gds-admin-btn danger" data-proj-action="remove-confirm">Confirmer le retrait</button>
+                ? `<button class="gds-admin-btn danger" data-proj-action="remove-confirm">Confirmer le détachement</button>
                    <button class="gds-admin-btn" data-proj-action="remove-cancel">Annuler</button>`
-                : `<button class="gds-admin-btn" data-proj-action="remove">Retirer</button>`
+                : `<button class="gds-admin-btn" data-proj-action="remove">Détacher</button>`
               : ""
           }
         </div>
-        ${isPend ? `<label class="gds-check"><input type="checkbox" data-proj-purge> Purger aussi le serveur (dépôt bare + entrées en base)</label>` : ""}
+        ${isPend ? `<label class="gds-check"><input type="checkbox" data-proj-purge> Retirer aussi le travail côté serveur (dépôt bare et entrées en base) — <b>décoché</b> : le travail reste sur le serveur.</label>` : ""}
       </div>`;
 }
 
@@ -527,7 +527,7 @@ export function renderProjectsSectionHtml(state = {}) {
         <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[3].desc)}</div>
         <div id="gds-params-proj-list" class="gds-params-srv-list">${renderProjectsListHtml(s)}</div>
         <div id="gds-params-proj-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
-        <div class="gds-admin-hint">« Ouvrir » active le projet dans Pilot. « Synchroniser », « Ajouter au GDS » et « Retirer » opèrent sur le projet choisi, même s'il n'est pas le projet actif. Ajouter exige votre identité globale (section « Mon identité »).</div>
+        <div class="gds-admin-hint">« Ouvrir » active le projet dans Pilot. « Synchroniser », « Ajouter au GDS » et « Détacher » opèrent sur le projet choisi, même s'il n'est pas le projet actif. Par défaut, « Détacher » <b>conserve</b> le travail côté serveur ; cochez la case pour le retirer aussi. Ajouter exige votre identité globale (section « Mon identité »).</div>
       </section>`;
 }
 
@@ -1071,13 +1071,13 @@ export function createGdsParams(container) {
       const purgeEl = row.querySelector("[data-proj-purge]");
       const purgeServer = !!(purgeEl && purgeEl.checked);
       projectsState.pendingRemove = null;
-      projectsState.status = { kind: "loading", text: `Retrait de « ${entry.name} »…` };
+      projectsState.status = { kind: "loading", text: `Détachement de « ${entry.name} »…` };
       draw();
       try {
         const res = await invoke("gds_remove_project", { project: path, purgeServer });
         projectsState.status = res && res.purged_server
-          ? { kind: "ok", text: `✅ Retiré du GDS (purge serveur effectuée) : ${entry.name}` }
-          : { kind: "ok", text: `✅ Retiré du GDS (sans purge serveur) : ${entry.name}` };
+          ? { kind: "ok", text: `✅ Détaché du GDS (travail retiré du serveur) : ${entry.name}` }
+          : { kind: "ok", text: `✅ Détaché du GDS (travail conservé sur le serveur) : ${entry.name}` };
         await refreshProjects();
       } catch (e) {
         projectsState.status = { kind: "error", text: friendlyGdsError(e) };

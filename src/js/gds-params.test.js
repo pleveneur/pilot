@@ -243,6 +243,15 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     );
   });
 
+  it("renderProjectRowHtml : détachement explicite, travail conservé par défaut (lot 3)", () => {
+    const html = renderProjectRowHtml({ path: "/p/a", name: "a", provisioned: true, status: "ok", onServer: true });
+    expect(html).toContain("Détacher");
+    expect(html).not.toContain("Retirer");
+    const pending = renderProjectRowHtml({ path: "/p/a", name: "a", provisioned: true, status: "ok", onServer: true }, "/p/a");
+    expect(pending).toContain("Confirmer le détachement");
+    expect(pending).toMatch(/décoché.{0,40}reste sur le serveur/s);
+  });
+
   it("renderParamsStatusHtml distingue ok / loading / error", () => {
     expect(renderParamsStatusHtml(null)).toBe("");
     expect(renderParamsStatusHtml({ kind: "ok", text: "bien" })).toContain("gds-admin-status ok");
