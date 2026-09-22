@@ -87,9 +87,28 @@
 > prennent l'identité (ajout = clé sur l'e-mail ; modification = clé inchangée,
 > mot de passe vide conservé, changement d'adresse = renommage de clé) et
 > `gds_test_saved_server` reste le test PostgreSQL des fiches héritées. «
-> Appliquer » est **neutralisé** sur une fiche d'identité sans compte technique
-> (le rattachement d'un projet au compte GDS arrive avec un lot ultérieur) et
+> Appliquer » est **actif dès qu'une fiche porte une identité** (lot 4 : une
+> fiche « compte GDS » n'utilise plus le compte technique de la base) et reste
 > **inchangé** sur les fiches héritées.
+>
+> **Opérations projet par le SERVICE, avec le compte de l'utilisateur (lots 2
+> à 4, implémentés)** — le poste ne parle plus à la base du GDS : pour ajouter
+> un projet, synchroniser et publier le suivi, il appelle l'**API du service**
+> (`POST /api/gds/users/login` pour un **jeton de session**, puis les routes
+> §1.5) avec l'**identité du compte GDS** du projet — le **serveur** applique
+> les gardes de rôle, crée le dépôt bare dans **sa** racine de dépôts et
+> rattache la clef du poste au compte du jeton. La **base du serveur est
+> préparée par le serveur** à son démarrage (`entrypoint.sh` : provision +
+> migrations, idempotent) : le poste n'ouvre **plus aucun pool PostgreSQL**, ne
+> connaît **plus le compte technique** (utilisateur / mot de passe dédiés) et
+> n'a **aucun secret de base** à saisir. Client : `src-tauri/src/gds_service.rs`
+> (`resolve_service_identity` / `pick_identity` — identité choisie sur l'hôte du
+> projet et l'e-mail du compte, **jamais** celle d'un autre compte ou d'un autre
+> serveur, cache de jeton par couple serveur|compte) ; `gds::resolve_server_side`
+> / `optional_pool` prennent la voie **Service** dès qu'une identité est
+> mémorisée, **sinon** le repli **hérité** reste strictement inchangé (connexion
+> base + compte technique) pour que les serveurs déjà déclarés restent
+> utilisables **sans rien ressaisir**.
 >
 > **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
@@ -332,6 +351,29 @@ Le serveur est livré comme **un seul conteneur** (dossier `gds-server/` :
     **projet choisi**), identité, clés SSH, « Mes projets GDS » (état,
     synchroniser, ajouter, ouvrir, **détacher** — travail conservé côté serveur
     par défaut).
+
+### 1.5 API du service — opérations projet (compte GDS, lots 2 à 4)
+
+Routes ajoutées au routeur **partagé** `gds_core::http::gds_routes` (servi par
+`gds-server`). L'identité est **prouvée par le jeton de session** (aucun rôle
+dans le corps) ; tout passe par le **corps JSON** (le socle dépend d'axum 0.7 :
+un paramètre de chemin serait un piège de syntaxe).
+
+| Route | Méthode | Garde de rôle | Corps → Réponse |
+|---|---|---|---|
+| `/api/gds/projects/create` | POST | écriture (`roles::can_write`) — `standard` **403** | `{name, description?}` → `{ok, project_id, name, repo_name, bare_path, bare_created}` |
+| `/api/gds/projects/repo-exists` | POST | lecture (tout jeton authentifié) | `{name}` → `{name, exists, in_db, on_disk, path}` |
+| `/api/gds/ssh-keys` | POST | compte **avec identité** (tout rôle) ; `user_id == 0` → **403** | `{public_key}` → `{ok, id, created, fingerprint, authorized_keys_rewritten}` |
+
+- **Idempotence** : `projects.name` UNIQUE + `git_repos.project_id` UNIQUE +
+  `ensure_bare` → second appel = même `project_id`, `bare_created: false` ;
+  `ssh_keys.public_key` UNIQUE + `ON CONFLICT DO NOTHING` → `created: false`.
+  Le refus d'une clef sans propriétaire (`user_id == 0`) est **journalisé**.
+- **Aucune migration** : les tables (`users`, `projects`, `git_repos`,
+  `ssh_keys`) existent depuis `0001`/`0003` ; la dernière reste
+  `0007_drop_project_locks.sql`.
+- `exists` = dépôt présent **en base ET** sur le disque (un dépôt non
+  matérialisé n'est pas encore joignable en SSH).
 
 ---
 

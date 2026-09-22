@@ -294,7 +294,11 @@ d'un hébergement externe type GitHub.
 - **Saisie unique & secrets hors projet** : à la configuration, l'adresse
   PostgreSQL se renseigne en **champs séparés** (hôte, port, utilisateur dédié) et
   les **mots de passe sont stockés hors du projet** dans un fichier protégé
-  de l'utilisateur — ils ne figurent jamais dans `.pilot/gds.json`. Aucune URL à
+  de l'utilisateur — ils ne figurent jamais dans `.pilot/gds.json`. Sur la voie
+  **compte GDS** (le cas normal), **aucun secret de base** n'est demandé : le
+  serveur prépare **sa** base et le poste n'ouvre plus de connexion PostgreSQL ;
+  seuls les serveurs déjà déclarés (fiches **héritées**) gardent ce chemin, sans
+  rien à ressaisir. Aucune URL à
   mot de passe n'est affichée ni demandée à nouveau après la première saisie :
   au démarrage, Pilot se **reconnecte automatiquement** (auto-provisionnement
   en arrière-plan, sans jamais bloquer l'ouverture du projet) au serveur déjà
@@ -317,15 +321,16 @@ d'un hébergement externe type GitHub.
   Selon l'état, seuls les blocs utiles sont affichés :
   - **À configurer / En attente** : l'étape **« Connecter un serveur GDS »** —
     réutiliser un **serveur mémorisé** (sélecteur, mots de passe jamais
-    affichés) ou renseigner un **nouveau serveur** (hôte, port, utilisateur
-    dédié, mot de passe dédié, mot de passe admin). Deux boutons :
+    affichés) : votre **compte GDS** porte l'identité, et c'est le **serveur**
+    qui prépare **sa** base (les champs de **compte technique** — utilisateur
+    dédié, mot de passe dédié, mot de passe admin — ne concernent plus que les
+    fiches héritées). Deux boutons :
     **« Enregistrer la configuration »** (mémorise les champs **sans rien
-    créer**) et **« Activer GDS »** (crée la base `pilot_gds`, les tables et
-    votre compte admin, puis active le GDS pour le projet). Un bouton
-    **« Enregistrer les mots de passe »** permet de (re)saisir un mot de passe
-    **sans refaire l'activation**. Juste en dessous, le **Port SSH du serveur**,
-    la **Racine des dépôts serveur** et le **Dossier local de clonage** sont
-    réglables ;
+    créer**) et **« Activer GDS »** (le serveur garantit sa base, puis active le
+    GDS pour le projet). Un bouton **« Enregistrer les mots de passe »** permet
+    de (re)saisir un mot de passe de fiche héritée **sans refaire
+    l'activation**. Juste en dessous, le **Port SSH du serveur**, la **Racine
+    des dépôts serveur** et le **Dossier local de clonage** sont réglables ;
   - **Ajouter ce projet au GDS** : une fois activé (si le projet n'est pas déjà
     sur le serveur), crée un dépôt git bare sur le serveur, ajoute le remote
     `gds` (sans toucher à un éventuel `origin`) et pousse la branche courante.
@@ -379,10 +384,10 @@ d'un hébergement externe type GitHub.
   même s'il n'est pas le projet ouvert. **Appliquer un serveur** mémorisé
   pré-remplit l'hôte, le port, l'utilisateur et l'identité, mais **conserve** le
   port SSH et la racine des dépôts déjà configurés dans le projet visé. Une
-  fiche **« compte GDS »** neuve ne porte pas le compte technique de la base :
-  son bouton **Appliquer** est neutralisé (avec l'explication affichée) le temps
-  que le rattachement d'un projet à votre **compte GDS** arrive ; les fiches
-  écrites avant cette version **gardent** leur bouton actif, comme avant.
+  fiche **« compte GDS »** ne porte pas le compte technique de la base : c'est
+  le **serveur** qui prépare **sa** base, et son bouton **Appliquer** est
+  **actif** ; les fiches écrites avant cette version **gardent** leur bouton
+  actif, comme avant.
 - **Synchronisation — sans verrou** : une fois connecté, **Synchroniser**
   rapatrie le projet depuis le remote `gds` (clone si absent, sinon fetch/pull).
   Il n'y a **plus de verrou de projet** ni de mode urgent : deux postes peuvent

@@ -672,14 +672,17 @@ serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
   **conservés**.
 - **Appliquer un serveur** : le bouton **« Appliquer »** d'une fiche remplit la
   configuration GDS du **projet choisi** dans le sélecteur (et non plus
-  forcément le projet ouvert). Il pré-remplit hôte, port, utilisateur et
-  identité, mais **conserve** le **port SSH** et la **racine des dépôts** déjà
+  forcément le projet ouvert). Il pré-remplit l'hôte, le port et l'identité,
+  mais **conserve** le **port SSH** et la **racine des dépôts** déjà
   configurés dans ce projet — vous n'avez pas à les ressaisir. Sur une fiche
-  **« compte GDS »** neuve, ce bouton est **neutralisé** (l'explication
-  s'affiche au survol) tant que le rattachement d'un projet à votre compte GDS
-  n'est pas livré : le rattachement se fait pour l'instant par la
-  configuration du projet (**2.6.a**), qui demande encore le compte technique
-  de la base.
+  **« compte GDS »**, le bouton est **actif** : le serveur prépare **sa** base
+  (plus aucun compte technique de la base à saisir) ; les fiches héritées
+  gardent leur bouton actif, comme avant.
+- **Le compte technique de la base n'est plus demandé** : sur une fiche
+  « compte GDS », le poste n'ouvre plus de connexion PostgreSQL — c'est le
+  **serveur** qui prépare sa base. Les champs **Utilisateur dédié**, **Mot de
+  passe dédié** et **Mot de passe admin** ne servent plus qu'aux **fiches
+  héritées** (installations antérieures à cette version).
 - **Si ce n'est pas ça :** le test refuse → « Adresse » et « Port » du
   **service** (8080, pas 5432), **E-mail GDS** = un compte **existant** sur ce
   serveur (créez-le dans l'administration), mot de passe exact. Un compte
@@ -691,16 +694,18 @@ Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du pann
 **Vues**). L'en-tête affiche un badge : **« ○ À configurer »**,
 **« ● En attente »** ou **« ● Connecté »** ; seuls les blocs utiles s'affichent.
 
-- [ ] **2.6.a Connecter un serveur** : choisissez le serveur mémorisé
+- [ ] **2.6.a Connecter un serveur** : choisissez votre serveur mémorisé
       (sélecteur **« Serveur mémorisé »**, bouton **« Réutiliser ce serveur »**)
-      ou saisissez-le : **Hôte PostgreSQL** = `127.0.0.1`, **Port** = `5432`
-      (ou `55432` si vous avez corrigé le piège du port), **Utilisateur dédié**
-      (`pilot`), **Mot de passe dédié** (= la ligne `POSTGRES_PASSWORD` du
-      fichier `.env`), **Mot de passe admin** (= celui du compte
-      administrateur).
-      **Vous voyez** les champs remplis ; les blocs suivants (2.6.b → 2.6.e)
-      deviennent accessibles. **Si ce n'est pas ça :** le serveur mémorisé
-      n'apparaît pas dans le sélecteur → mémorisez-le d'abord (**2.5**).
+      et laissez **Hôte PostgreSQL** = l'adresse de votre serveur
+      (`127.0.0.1`) : c'est le seul champ utile sur ce chemin.
+      **Vous voyez** les champs remplis, **aucun mot de passe PostgreSQL
+      demandé** et les blocs suivants (2.6.b → 2.6.e) accessibles : votre
+      **compte GDS** (mémorisé en **2.5**) porte l'identité, et c'est le
+      **serveur** qui prépare **sa** base (les champs **Utilisateur dédié**,
+      **Mot de passe dédié** et **Mot de passe admin** ne concernent plus que
+      les fiches héritées — laissez-les vides).
+      **Si ce n'est pas ça :** le serveur mémorisé n'apparaît pas dans le
+      sélecteur → mémorisez-le d'abord (**2.5**).
 - [ ] **2.6.b Enregistrer la configuration** : mémorise **sans rien créer**.
       **Vous voyez :** le bouton confirme, et **rien** n'apparaît encore côté
       serveur. **Si ce n'est pas ça :** un message de configuration manquante →
