@@ -48,11 +48,20 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // `authorized_keys` (historique inchangé). Serveur DISTANT : enregistrement
     // en base uniquement — la clef est ajoutée MANUELLEMENT sur le serveur
     // (docs/gds-server-setup.md) : on n'administre JAMAIS une machine distante.
-    let is_local = is_local_gds_server(&cfg);
-    if is_local {
-        gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
-    } else {
-        gds_ssh::ensure_poste_key_remote(pool, &cfg.identity_email).await?;
+    // Voie SERVICE (lot 3) : la clef est enregistrée par le service, rattachée au
+    // compte GDS prouvé par le jeton.
+    let side = gds::resolve_server_side(&cfg, pool);
+    match &side {
+        gds::ServerSide::Legacy(pool) => {
+            if is_local_gds_server(&cfg) {
+                gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
+            } else {
+                gds_ssh::ensure_poste_key_remote(pool, &cfg.identity_email).await?;
+            }
+        }
+        gds::ServerSide::Service(ident) => {
+            crate::gds_service::register_poste_key(ident).await?;
+        }
     }
     let dest = std::path::Path::new(&local_dir).join(&name);
     let dest_str = dest.to_string_lossy().to_string();
@@ -72,8 +81,16 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // (ex: testsnake2 sans `.git`) autrement que via gds_add_project (qui n'agit
     // que si c'est un repo Git). (b) Le remote `gds` est ajouté s'il est absent.
     // Serveur LOCAL : test du disque (historique inchangé). Serveur DISTANT : la
-    // base `git_repos` fait foi (jamais d'accès au disque distant).
-    if !gds::server_bare_exists(Some(pool), &cfg, &name).await {
+    // base `git_repos` fait foi (jamais d'accès au disque distant). Voie SERVICE
+    // (lot 3) : c'est LE SERVICE qui répond, seul maître de sa racine de dépôts
+    // (une panne remonte au lieu de conclure « absent » à tort).
+    let bare_on_server = match &side {
+        gds::ServerSide::Legacy(_) => gds::server_bare_exists(Some(pool), &cfg, &name).await,
+        gds::ServerSide::Service(ident) => {
+            crate::gds_service::repo_exists(ident, &name).await?
+        }
+    };
+    if !bare_on_server {
         let work_is_repo = git::git_is_repo(project);
         let email = cfg.identity_email.trim().to_string();
         if work_is_repo && !email.is_empty() {
