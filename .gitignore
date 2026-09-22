@@ -66,3 +66,7 @@ runs.txt
 # Release artefacts (jetables, générés par scripts/gen-latest-json.js)
 rel.json
 latest.json
+
+# Sauvegardes locales des volumes GDS (scripts/gds-reload.js) — volumineuses et
+# propres au poste : jamais versionnées.
+gds-server/backups/
