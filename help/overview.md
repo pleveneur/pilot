@@ -254,11 +254,23 @@ d'un hébergement externe type GitHub.
   Docker** (dossier `gds-server/` du dépôt Pilot) qui réunit la base
   PostgreSQL, l'accès SSH aux dépôts git et le service HTTP. Un seul service à
   démarrer : inutile d'installer PostgreSQL ou un serveur SSH sur le poste.
-- **Mise en place guidée** : `docs/gds-guide-mise-en-place.md` déroule le
-  parcours complet en langage simple — **partie 1 serveur** (installer le
-  conteneur, créer le premier administrateur, ouvrir l'accès réseau) puis
-  **partie 2 utilisateur** (obtenir un compte, se connecter, rattacher un
-  projet). Le détail technique d'installation reste `docs/gds-server-setup.md`.
+- **Mise en place guidée** : `docs/gds-guide-mise-en-place.md` est le **parcours
+  de retest complet** — une **liste de contrôle à cocher**, du poste vierge à
+  l'usage **à plusieurs** (partie 0 ce qu'il faut avoir sous la main, partie 1
+  serveur, partie 2 usage, partie 3 à plusieurs, partie 4 modifier le serveur,
+  partie 5 tout refaire à la main, partie 6 gestes dangereux). Chaque étape dit
+  **ce que vous faites**, le **résultat attendu** et le **point de contrôle**
+  qui le prouve, commandes exactes comprises. Le détail technique
+  d'installation reste `docs/gds-server-setup.md`.
+- **Premier compte administrateur** : au tout premier démarrage, **aucun**
+  administrateur n'existe. Soit vous renseignez **les deux** variables
+  `GDS_ADMIN_EMAIL` **et** `GDS_ADMIN_PASSWORD` dans le fichier `.env` du
+  serveur (**avant** le premier démarrage) et le service **crée le compte
+  lui-même** (un compte déjà présent n'est **jamais** écrasé ; une seule
+  variable renseignée = simple avertissement, rien n'est créé), soit vous
+  appelez **une seule fois** la route d'initialisation `POST /api/gds/setup`
+  (elle répond ensuite `409`). Un mot de passe d'administration n'est **jamais**
+  généré et **jamais** journalisé : c'est vous qui le choisissez.
 - **Activé projet par projet** : le GDS n'est jamais activé globalement.
   Chaque projet choisit explicitement son serveur via un fichier de
   configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
@@ -359,7 +371,20 @@ d'un hébergement externe type GitHub.
   branche vers le raccourci `gds` (le bouton **Synchroniser** ne fait que
   rapatrier). Seul un **administrateur** peut redémarrer / arrêter le **service**
   du serveur (la base, elle, continue de tourner).
+- **Modifier le serveur (conteneur)** : toute modification du **code** du
+  serveur ou d'un fichier du conteneur (`Dockerfile`, `entrypoint.sh`,
+  `sshd_config`, `supervisord.conf`) demande de **reconstruire l'image**
+  (`docker compose up -d --build`) **et** de **recréer le conteneur** ; un
+  changement de **`.env`** ou de `docker-compose.yml` ne demande qu'une
+  **recréation** (`docker compose up -d`). Les **données survivent** dans tous
+  les cas : comptes, suivi et dépôts vivent dans des **volumes nommés**
+  séparés du conteneur, les migrations sont **rejouées au démarrage**
+  (idempotentes) et un administrateur existant n'est **jamais écrasé**. Seul
+  `docker compose down -v` **détruit les volumes**. Sauvegarde préalable :
+  arrêter le service puis copier les volumes (`docs/gds-server-setup.md` §9).
 - **Documentation technique** : installation du serveur en conteneur dans
-  `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot ; parcours
-  guidé complet (serveur puis utilisateur) dans `docs/gds-guide-mise-en-place.md`.
+  `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot (dont
+  **§9 : modifier le serveur — ce qui change pour le conteneur**, preuves
+  fichier par fichier) ; **parcours de retest complet** (serveur puis usage à
+  plusieurs) dans `docs/gds-guide-mise-en-place.md`.
 <!-- /HELP:gds -->

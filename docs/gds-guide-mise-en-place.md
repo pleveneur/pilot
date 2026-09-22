@@ -1,23 +1,36 @@
-# Guide GDS — mettre en place le serveur de sources, puis s'en servir
+# Parcours de retest GDS — de la machine vierge à l'usage à plusieurs
 
-> Document d'utilisation — décrit, en deux parties, le parcours complet du
-> **GDS** (gestionnaire de sources) de Pilot : **installer le serveur** (une
-> fois, sur le poste qui l'héberge), puis **s'en servir** depuis Pilot (pour
-> chaque personne qui travaille sur les projets).
->
-> - **Partie 1 — côté serveur** : à faire **une fois**, par le propriétaire du
->   poste serveur.
-> - **Partie 2 — côté utilisateur** : à faire par **chaque personne** qui
->   travaille sur les projets.
+> **Document de retest** — c'est la **liste de contrôle complète** du GDS
+> (gestionnaire de sources) de Pilot : on part d'un poste **vierge** et on
+> rejoue **tout** le parcours, dans l'ordre, jusqu'à l'usage normal **à
+> plusieurs**. Chaque étape dit ce que vous faites, le résultat attendu et le
+> point de contrôle qui prouve que c'est bon.
 >
 > **Statut : 🟡 Branche de travail** — rédigé sur la branche `gds-refonte-l2` de
 > la refonte GDS. Rien de tout cela n'est encore dans la version installée de
-> Pilot : la version publiée ne contient pas encore ces nouveautés.
-> Spécification fonctionnelle : `spec_gds.md` ; mode d'emploi détaillé du
-> serveur : `docs/gds-server-setup.md` ; référence du dossier serveur :
-> `gds-server/README.md`.
+> Pilot.
+>
+> - Mode d'emploi **technique** d'installation (commandes, pièges, dépannage) :
+>   `docs/gds-server-setup.md`.
+> - Référence du dossier serveur (volumes, variables, service) :
+>   `gds-server/README.md`.
+> - Spécification fonctionnelle : `spec_gds.md`.
 
-**Vocabulaire utile** (une phrase chacun) :
+**Comment s'en servir**
+
+- Déroulez les parties **1 → 2 → 3 dans l'ordre**. Ne sautez aucune case :
+  chaque partie suppose la précédente terminée.
+- Chaque étape a trois lignes : **Vous faites** (le geste à exécuter),
+  **Résultat attendu** (ce qui doit se produire), **Point de contrôle** (la
+  preuve mesurable, à regarder soi-même).
+- **🅰** = le serveur fait ce geste **tout seul** au démarrage ; l'équivalent
+  **à la main** est en **partie 5**. **⚠️** = geste réseau ou sensible.
+- Un point de contrôle qui ne passe pas → **§8 Dépannage**, puis
+  `docs/gds-server-setup.md` §6.
+- Les commandes sont données **PowerShell** (poste serveur Windows) ; les
+  variantes `cmd.exe`/Linux sont dans `docs/gds-server-setup.md`.
+
+**Vocabulaire utile** (une phrase chacun)
 
 - **GDS** : « gestionnaire de sources » — le serveur qui garde vos projets et
   l'historique de leur suivi au même endroit.
@@ -25,291 +38,744 @@
   toute préparée, qu'on démarre d'une seule commande.
 - **Base de données PostgreSQL** : le meuble de classement où le serveur range
   les comptes, les projets et le suivi.
-- **Dépôt git** : le dossier qui contient l'historique des versions d'un projet.
+- **Dépôt git** (« bare ») : le dossier qui contient l'historique des versions
+  d'un projet.
 - **SSH** (clef) : le mot de passe « long » qui prouve votre identité pour
   publier du code, sans saisir de mot de passe à chaque fois.
 - **Réseau privé Tailscale** : un tunnel chiffré qui relie **vos** appareils
   entre eux, invisible depuis Internet.
-- **API HTTP** : la « porte d'entrée » technique que Pilot utilise pour parler à
-  l'interface d'administration du serveur.
+- **Service** : les deux processus internes `gds-server` (API HTTP) et `sshd`
+  (accès aux dépôts). **PostgreSQL n'en fait pas partie** : la base tourne
+  toujours.
 
 ---
 
-# PARTIE 1 — CÔTÉ SERVEUR (à faire une fois)
+# PARTIE 0 — À avoir sous la main AVANT de commencer
 
-C'est la partie « je prépare la machine qui héberge tout ». Elle se fait sur
-**un seul poste** : celui du propriétaire.
+Sur le **poste qui hébergera le serveur** :
 
-> ⚠️ **Toutes les manipulations de cette partie sont à faire par vous.** Pilot
-> n'exécute jamais ces réglages à votre place : les commandes `docker …` agissent
-> sur la machine, les commandes `tailscale …` modifient sa configuration réseau.
+- [ ] **Docker Desktop** installé et **démarré** (moteur Linux / WSL2).
+- [ ] Le **dépôt de Pilot** présent sur le poste (le dossier `gds-server/` en
+      fait partie).
+- [ ] Un **terminal PowerShell** ouvert dans `gds-server/`.
+- [ ] *(seulement si vous voulez l'accès depuis un autre appareil)*
+      **Tailscale** installé et **connecté**.
+- [ ] *(facultatif)* un client PostgreSQL si vous voulez tester la base
+      directement ; sinon le client déjà présent dans l'image suffit.
 
-> **Le pas-à-pas exact vit dans `docs/gds-server-setup.md`** (document de
-> référence : prérequis, commandes, premier administrateur, accès par le réseau
-> privé, pièges, dépannage). Ce guide n'en recopie pas les commandes : il en
-> donne le fil, les règles à ne pas enfreindre, et la suite utilisateur
-> (partie 2) qui n'existe nulle part ailleurs.
+Sur **chaque appareil qui utilisera le GDS** :
 
-**Aucun serveur PostgreSQL ni serveur SSH n'est à installer sur le poste** :
-ils sont déjà à l'intérieur du conteneur tout-en-un (dossier `gds-server/` du
-dépôt Pilot).
+- [ ] **Pilot** lancé (la version qui contient la refonte GDS — branche de
+      travail).
+- [ ] *(accès distant)* **Tailscale** connecté au **même tailnet**.
+- [ ] *(publier du code)* `git` installé.
 
-## Le fil des opérations
+**À décider et noter maintenant** (vous les ressaisirez plus loin) :
 
-Toutes les commandes `docker` se lancent **depuis le dossier `gds-server/`**,
-dans **PowerShell**.
-
-| Étape | Ce qu'il faut faire | Détail |
+| À choisir | Exemple | Où ça sert |
 |---|---|---|
-| 1 | Rassembler Docker Desktop (démarré) et, pour l'accès depuis un autre appareil, Tailscale (connecté). | `docs/gds-server-setup.md` §1 |
-| 2 | Créer `.env` (`Copy-Item .env.example .env`) et y remplir **le seul secret obligatoire** : `POSTGRES_PASSWORD`. | §2.1 → §2.2 |
-| 3 | Construire et démarrer : `docker compose up -d --build`, puis attendre l'état **`healthy`** (jusqu'à deux minutes au premier démarrage). | §2.3 |
-| 4 | Créer le **premier compte administrateur** (route à usage unique, ou **les deux** variables `GDS_ADMIN_EMAIL` + `GDS_ADMIN_PASSWORD` dans `.env` avant le démarrage). | §2.4 |
-| 5 | Vérifier que le serveur tourne vraiment (interface `/api/gds/health`, puis la base). | §2.5 |
-| 6 | *(facultatif)* Ouvrir l'accès depuis **un autre appareil** via le réseau privé Tailscale. | §3 |
+| Mot de passe PostgreSQL (`POSTGRES_PASSWORD`) | long et unique | `.env` **et** écran GDS de Pilot |
+| Adresse e-mail de l'administrateur | `vous@exemple.com` | compte admin GDS |
+| Mot de passe de l'administrateur | choisi par vous | compte admin GDS |
+| Adresse e-mail + nom git d'un utilisateur | `dev@exemple.com`, « Dev Un » | identité GDS de la personne |
 
-La commande à retenir :
+> ⛔ **Règles à ne jamais enfreindre** (le détail : `docs/gds-server-setup.md` §4) :
+> ne **jamais** rediriger les ports `8080`, `5432`, `2222` depuis la box/le
+> routeur ; ne **jamais** les publier par un tunnel public (Cloudflare Tunnel,
+> ngrok, `tailscale funnel`) ; ne **jamais** les faire écouter sur une adresse
+> publique. L'accès distant légitime passe par le **réseau privé Tailscale**.
+
+**Point de contrôle 0 —**
 
 ```powershell
-cd G:\IA_PL\pilot\gds-server      # remplacer par votre chemin
-docker compose up -d --build      # construit et démarre ; « healthy » = prêt
+docker compose version      # doit afficher une version
+tailscale status            # (si utilisé) doit lister vos appareils, pas « Logged out »
 ```
 
-Après **toute** modification de `.env`, réappliquez par `docker compose up -d`.
-
-> Les données, les dépôts et les clefs **survivent** à `stop`, `start`, `down`
-> et `up` : ils vivent dans des volumes séparés du conteneur. **Seul
-> `docker compose down -v` les détruit.** L'image est locale : une mise à jour se
-> fait par **reconstruction** (`up -d --build`), jamais par `docker compose pull`.
-
-## Les trois portes, et la règle à ne jamais enfreindre
-
-Le serveur publie **trois portes** sur le poste. Chacune a un usage précis :
-
-| Porte | Numéro | À quoi elle sert | Qui peut y entrer |
-|---|---|---|---|
-| Interface d'administration | **8080** | connexion au serveur, gestion des comptes, dépôts, journal | **le poste uniquement** (et, à distance, via Tailscale) |
-| Base de données | **5432** | les synchronisations de projet, en direct | le poste, le réseau local, le réseau privé Tailscale |
-| Dépôts git (SSH) | **2222** | publier et récupérer le code (clone / push) | le poste, le réseau local, le réseau privé Tailscale |
-
-Concrètement : **rien d'obligatoire** si vous n'utilisez le serveur que depuis
-le poste ; si Windows affiche une demande du **pare-feu** pour Docker, autorisez
-les **réseaux privés** uniquement (jamais « public ») ; pour l'accès depuis un
-autre appareil, passez par Tailscale (`docs/gds-server-setup.md` §3).
-
-> ⛔ **Ce qui est INTERDIT** (ce n'est pas « déconseillé », c'est interdit) :
-> - **ne jamais** rediriger ces ports depuis la box / le routeur (« NAT ») ;
-> - **ne jamais** les publier par un service public (Cloudflare Tunnel, ngrok,
->   « Funnel » sans réseau privé, adresse IP publique…) ;
-> - **ne jamais** remplacer l'adresse d'écoute par une adresse publique.
->
-> Raison : les portes **5432** (base) et **2222** (dépôts) sont publiées **en
-> clair, sans chiffrement**. Les ouvrir sur Internet reviendrait à publier le
-> suivi de vos projets et tout l'historique de votre code. L'accès distant
-> légitime passe par le **réseau privé Tailscale** (chiffré, réservé à vos
-> appareils).
-
-> **Conséquence à connaître** (profil Tailscale) : quand la base n'écoute plus
-> que sur l'adresse Tailscale du poste, le poste lui-même s'y connecte **par
-> cette adresse** (`100.x.y.z` ou le nom MagicDNS), et **non** `localhost`. C'est
-> cette adresse qui se saisit dans le champ « Hôte PostgreSQL » de Pilot
-> (voir partie 2, §3).
+- [ ] Les deux commandes répondent.
 
 ---
 
-# PARTIE 2 — CÔTÉ UTILISATEUR (à faire par chaque personne)
+# PARTIE 1 — LE SERVEUR (une fois, sur le poste hôte)
 
-C'est la partie « je branche mon Pilot sur le serveur et je travaille ».
+Toutes les commandes se lancent **depuis `gds-server/`**, dans **PowerShell**.
 
-## 1. Comment obtenir un compte
+### 1.1 — Créer le fichier de variables
 
-Un compte ne se crée **pas tout seul** : c'est l'**administrateur** qui le crée,
-depuis Pilot, dans l'écran d'administration.
+- [ ] **Vous faites :**
 
-1. Dans Pilot, ouvrez l'écran **« 🖥️ GDS Serveur — administration »** (bouton de
-   la barre d'outils) : cet écran s'ouvre **sans avoir besoin d'un projet**.
-2. Dans le bloc **Connexion serveur**, saisissez l'adresse du serveur (l'hôte),
-   son port, l'adresse e-mail de l'administrateur et son mot de passe, puis
-   cliquez **Tester**. Vous devez voir la version du serveur et son état.
-3. Ouvrez le bloc **Comptes** et **créez le compte** : adresse e-mail, **rôle**
-   (`standard`, `dev` ou `admin`) et un **mot de passe initial**. Transmettez
-   l'e-mail et ce mot de passe à la personne concernée.
-4. Si le compte doit **publier du code**, attribuez-lui le projet : bloc
-   **Dépôts / projets** → associer le projet au développeur. Un développeur ne
-   peut publier que les projets **qui lui sont attribués**.
+  ```powershell
+  cd G:\IA_PL\pilot\gds-server      # remplacer par votre chemin
+  Copy-Item .env.example .env      # cmd.exe : copy .env.example .env
+  ```
 
-> Le compte est le plus souvent créé directement « actif ». L'administrateur peut
-> ensuite **désactiver / réactiver**, **changer le rôle** ou **réinitialiser le
-> mot de passe** d'un compte. Le **dernier administrateur actif ne peut pas être
-> désactivé** (le serveur refuse) — c'est volontaire, pour ne jamais se
-> retrouver enfermé dehors.
+- **Résultat attendu :** `gds-server/.env` existe, à côté du modèle.
+- **Point de contrôle :** `git status --porcelain gds-server/.env` n'affiche
+  **rien** (le fichier est ignoré par git ; il ne partira jamais dans un commit
+  ni dans une image).
 
-## 2. Comment se connecter
+### 1.2 — Renseigner le seul secret obligatoire
 
-### a. Renseigner son identité (une seule fois)
+- [ ] **Vous faites :** ouvrez `.env`, remplissez **une** ligne :
+      `POSTGRES_PASSWORD=<votre mot de passe long et unique>` (sans guillemets).
+- **Résultat attendu :** aucune autre valeur n'est nécessaire pour un premier
+  démarrage sur le poste (toutes ont un défaut sûr).
+- **Point de contrôle :** `POSTGRES_PASSWORD` est non vide.
+- ⚠️ **Piège :** ce mot de passe est **fixé au premier démarrage** (il est posé
+  dans la base à la création). Le **changer plus tard casse l'accès** : le rôle
+  `pilot` et le compte `postgres` gardent l'ancien. Voir **§6** pour la
+  correction à la main.
 
-Dans l'écran **« ⚙️ GDS — paramétrage »** (sans projet ouvert), section
-**Mon identité** : votre **adresse e-mail** (elle identifie votre compte sur le
-serveur) et votre **nom git**. Ces informations sont ensuite réutilisées partout
-automatiquement — vous ne les ressaisirez plus.
+### 1.3 — (facultatif) Préparer la création automatique de l'administrateur
 
-### b. Enregistrer sa clef SSH (une seule fois par poste)
+- [ ] **Vous faites :** si vous voulez **zéro commande manuelle**, renseignez
+      **les deux** lignes ci-dessous dans `.env`, **avant** le premier
+      démarrage :
 
-Toujours dans **« ⚙️ GDS — paramétrage »**, section **Mes clés** : affichez et
-**copiez votre clef publique**, puis **enregistrez-la sur le serveur**. C'est
-elle qui vous autorisera à publier / récupérer le code sans mot de passe.
+  ```dotenv
+  GDS_ADMIN_EMAIL=vous@exemple.com
+  GDS_ADMIN_PASSWORD=<mot de passe administrateur>
+  ```
 
-> Le serveur reprend automatiquement la liste des clefs **toutes les 30
-> secondes** : inutile de redémarrer quoi que ce soit.
+- **Résultat attendu :** le service créera lui-même ce compte au démarrage
+  (voir **1.6**). Si vous laissez les deux lignes vides, vous utiliserez la
+  route d'initialisation manuelle en **1.6**.
+- **Point de contrôle :** les deux lignes sont soit **toutes deux** remplies,
+  soit **toutes deux** vides.
 
-### c. Mémoriser le serveur et son mot de passe
+### 1.4 — Construire et démarrer
 
-- Section **Serveurs GDS** : ajoutez le serveur (hôte, port), testez la
-  connexion, et appliquez-le à un projet le moment venu.
-- Les mots de passe saisis dans Pilot restent **sur votre poste**, dans un
-  fichier protégé de votre utilisateur (`~/.pilot/gds_secrets.json`) : ils ne
-  sont **jamais** écrits dans le projet ni envoyés ailleurs.
+- [ ] **Vous faites :**
 
-## 3. Comment rattacher un projet à un serveur
+  ```powershell
+  docker compose up -d --build
+  docker compose ps                  # attendre l'état « healthy »
+  ```
+
+- **Résultat attendu :** la **première** construction prend quelques minutes ;
+  les suivantes quelques secondes. `docker compose ps` finit par afficher un
+  service **healthy** (`starting` = la base s'initialise encore : patientez,
+  jusqu'à deux minutes au premier démarrage).
+- **Point de contrôle :** la colonne d'état du service `gds` affiche
+  **`healthy`**, et le conteneur s'appelle **`pilot-gds`**.
+
+### 1.5 — Vérifier l'interface et la base
+
+- [ ] **Vous faites :**
+
+  ```powershell
+  # 1) l'interface d'administration répond
+  curl http://127.0.0.1:8080/api/gds/health
+  # 2) la base répond (client embarqué dans l'image, rien à installer)
+  docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
+    psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds -c "select 1"
+  ```
+
+- **Résultat attendu :** un JSON court du type
+  `{"version":…,"migration_version":…,"users":…,"projects":…,"git_repos":…}`,
+  puis une ligne `1`.
+- **Point de contrôle :** le JSON contient `"migration_version"` et la base
+  répond `1`. (Si le port `5432` est déjà pris par un PostgreSQL natif, voir
+  `docs/gds-server-setup.md` §5.1 : décaler `GDS_HOST_DB_PORT`.)
+
+### 1.6 — Obtenir le premier compte administrateur
+
+> Au tout premier démarrage, **aucun administrateur** n'existe. 🅰 Si vous avez
+> rempli **les deux** variables en **1.3**, il a **déjà** été créé au démarrage
+> (vérifiez la ligne dans les journaux, **1.6.b**). Sinon, créez-le **une seule
+> fois** par la route d'initialisation (**1.6.a**). Un mot de passe
+> d'administration n'est **jamais généré** : c'est vous qui le choisissez.
+
+**1.6.a — Création manuelle (chemin normal, aucun secret écrit sur disque)**
+
+- [ ] **Vous faites :**
+
+  ```powershell
+  # Sous Windows PowerShell, les guillemets internes d'un argument passé à
+  # `curl.exe` sont supprimés (le serveur répondrait « Failed to parse the
+  # request body as JSON ») : le corps passe donc par un fichier temporaire.
+  Set-Content -Path "$env:TEMP\gds-setup.json" -NoNewline -Encoding ascii `
+    -Value '{"email":"vous@exemple.com","password":"<mot de passe admin>"}'
+  curl.exe -X POST http://127.0.0.1:8080/api/gds/setup `
+    -H "Content-Type: application/json" --data-binary "@$env:TEMP\gds-setup.json"
+  # ⚠️ Ce fichier contient le mot de passe en clair : le supprimer aussitôt.
+  Remove-Item "$env:TEMP\gds-setup.json"
+  ```
+
+- **Résultat attendu :** `{"ok":true,"email":"…"}`.
+- **Point de contrôle :** un **second** appel identique répond **`409`**
+  (« un administrateur existe déjà ») : la route ne sert qu'**une fois**.
+
+**1.6.b — Vérifier le cas 🅰 (création automatique)**
+
+- [ ] **Vous faites :** `docker compose logs gds | Select-String "administrateur"`
+- **Résultat attendu (les quatre cas réels) :**
+
+  | Ce qui est dans `.env` | Ce que le journal dit | Ce qui se passe |
+  |---|---|---|
+  | les **deux** variables, **aucun** admin | `administrateur initial créé (vous@exemple.com)` | le compte existe |
+  | les **deux** variables, **admin déjà présent** | `administrateur déjà présent — GDS_ADMIN_EMAIL/GDS_ADMIN_PASSWORD ignorées` | **rien n'est écrasé** |
+  | **une seule** variable | `GDS_ADMIN_EMAIL et GDS_ADMIN_PASSWORD doivent être renseignées ENSEMBLE … amorçage ignoré` | avertissement, **rien n'est créé** |
+  | les deux, mais l'e-mail est **déjà pris** par un autre compte | `création de l'administrateur initial ignorée : …` | échec journalisé, **le service démarre quand même** |
+- **Point de contrôle :** la ligne correspondant à **votre** situation apparaît,
+  et **aucun mot de passe** n'apparaît dans les journaux.
+- **Test à faire volontairement** (facultatif, mais c'est le cœur du lot) :
+  1. partez d'un volume vierge, mettez les **deux** variables → admin créé ;
+  2. **relancez** (`docker compose up -d`) en laissant les variables → journal
+     « déjà présent », et **l'ancien mot de passe fonctionne toujours** ;
+  3. sur un volume vierge, ne mettez **qu'** `GDS_ADMIN_EMAIL` → avertissement,
+     et la route `/api/gds/setup` répond encore (aucun admin) ;
+  4. *(cas de **protection**, à forcer à la main — pas un cas normal)* placez
+     dans la base un compte **non administrateur** portant l'e-mail `X` (aucun
+     administrateur n'existe alors) :
+
+     ```powershell
+     docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
+       psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds `
+       -c "INSERT INTO users (email, role, status) VALUES ('X@exemple.com','standard','active')"
+     ```
+
+     puis mettez `GDS_ADMIN_EMAIL=X@exemple.com` et relancez → l'échec est
+     journalisé (l'e-mail est déjà pris) et `/api/gds/health` répond toujours.
+     Le code prévoit ce cas (`email` unique en base) ; il ne peut **pas** arriver
+     par l'interface, puisque seuls l'amorçage et la route `/api/gds/setup`
+     créent des comptes, et tous deux créent un administrateur.
+
+### 1.7 — ⚠️ (facultatif) Ouvrir l'accès depuis un autre appareil
+
+> Sauté si vous n'utilisez le GDS que depuis le poste serveur. Aucune commande
+> réseau n'est lancée par Pilot : **c'est vous qui les lancez**.
+
+- [ ] **Vous faites :**
+
+  ```powershell
+  tailscale ip -4                   # note l'adresse 100.x.y.z du poste
+  ```
+
+  puis, dans `.env`, dé-commentez le bloc « profil L2.9 » et remplacez
+  `100.x.y.z` par cette adresse :
+
+  ```dotenv
+  GDS_HTTP_BIND_ADDR=127.0.0.1      # admin : poste uniquement (+ Tailscale Serve)
+  GDS_DB_BIND_ADDR=100.x.y.z        # base : réseau privé uniquement
+  GDS_SSH_BIND_ADDR=100.x.y.z       # dépôts git : réseau privé uniquement
+  ```
+
+  ```powershell
+  docker compose up -d
+  docker compose ps
+  tailscale serve --bg --https=443 http://127.0.0.1:8080   # 8443 si Pilot utilise déjà 443
+  tailscale serve status
+  ```
+
+- **Résultat attendu :** la ligne des ports montre
+  `127.0.0.1:8080->8080/tcp, 100.x.y.z:2222->22/tcp, 100.x.y.z:5432->5432/tcp` ;
+  `tailscale serve status` affiche `https://<machine>.ts.net/`.
+- **Point de contrôle :** les trois adresses d'écoute sont **privées** ; aucune
+  n'est `0.0.0.0`. Et `tailscale funnel` est **absent** (interdit).
+- **Conséquence à retenir :** la base n'écoutant plus que sur l'adresse
+  Tailscale, **le poste lui-même** s'y connecte par cette adresse : dans Pilot,
+  le champ **Hôte PostgreSQL** devient `100.x.y.z` (ou le nom MagicDNS), **pas**
+  `localhost`.
+
+### 1.8 — Vérifier depuis l'autre appareil
+
+- [ ] **Vous faites** (depuis l'autre appareil du tailnet) :
+
+  ```powershell
+  curl https://<machine>.ts.net/api/gds/health
+  git ls-remote ssh://git@100.x.y.z:2222/srv/git/repos/mon-projet.git
+  psql -h 100.x.y.z -p 5432 -U pilot -d pilot_gds -c "select 1"
+  ```
+
+- **Résultat attendu :** le JSON de santé, la liste des références du dépôt (si
+  le dépôt n'existe pas encore, l'erreur « repository not found » est
+  **normale**), la ligne `1`.
+- **Point de contrôle :** la connexion **aboutit** (pas de « connection timed
+  out »). Si ça expire : mauvais tailnet, ou ports restés sur `GDS_BIND_ADDR`
+  → revoir 1.7.
+
+### 1.9 — Le dépôt d'un projet se crée tout seul 🅰
+
+- [ ] **Vous faites :** rien côté serveur. Le dépôt est créé par le service
+      après « Ajouter ce projet au GDS » (partie 2, **2.6**).
+- **Résultat attendu :** il apparaît **dans les 30 secondes**.
+- **Point de contrôle :**
+
+  ```powershell
+  docker compose logs gds | Select-String "bare"
+  docker exec pilot-gds ls /srv/git/repos
+  ```
+
+  Attendu : la ligne `gds-server : dépôts bare créés : <projet>.git`, puis le
+  dossier `<projet>.git`.
+
+**Fin de la partie 1 — point de contrôle global :**
+
+- [ ] le service est **healthy**, `/api/gds/health` répond, un administrateur
+      existe, et (si demandé) l'accès distant répond depuis l'autre appareil.
+
+---
+
+# PARTIE 2 — L'USAGE (dans Pilot, par chaque personne)
+
+### 2.1 — Ouvrir l'écran d'administration et se connecter
+
+- [ ] **Vous faites :** dans Pilot, bouton **« 🖥️ GDS Serveur — administration »**
+      (barre d'outils ; s'ouvre **sans projet**). Bloc **Connexion serveur** :
+      hôte, port, e-mail + mot de passe administrateur → **Tester**.
+- **Résultat attendu :** la version du serveur et son état s'affichent.
+- **Point de contrôle :** la version affichée **correspond** à celle de
+  `/api/gds/health`. Un mot de passe faux est **refusé** (message d'erreur, pas
+  de connexion).
+
+### 2.2 — Créer un compte développeur et lui attribuer un projet
+
+- [ ] **Vous faites :** bloc **Comptes** → créer un compte (**e-mail**, rôle
+      `dev` ou `standard`, **mot de passe initial**). Puis bloc
+      **Dépôts / projets** → associer le projet au développeur.
+- **Résultat attendu :** le compte apparaît dans la liste (état **actif** par
+  défaut) ; le projet est attribué.
+- **Point de contrôle :** le développeur peut se connecter avec ce mot de passe
+  et **voit** le projet attribué dans **« ⚙️ GDS — paramétrage » → Mes projets
+  GDS**. Transmettez-lui l'e-mail et le mot de passe.
+- **Test à faire :** désactiver le compte → la connexion est refusée ;
+  réactiver → elle remarche. Le **dernier administrateur actif** ne peut **pas**
+  être désactivé (le serveur refuse) : vérifiez le refus.
+
+### 2.3 — Renseigner son identité (une seule fois)
+
+- [ ] **Vous faites :** dans **« ⚙️ GDS — paramétrage » → Mon identité** :
+      votre **e-mail** (il identifie votre compte) et votre **nom git**.
+- **Résultat attendu :** les champs sont mémorisés.
+- **Point de contrôle :** l'e-mail saisi est **celui du compte** créé en 2.2 ;
+  les écrans suivants ne le redemandent plus (il est pré-rempli).
+
+### 2.4 — Enregistrer sa clef SSH (une seule fois par poste)
+
+- [ ] **Vous faites :** **« ⚙️ GDS — paramétrage » → Mes clés** : afficher,
+      **copier** la clef publique, puis **l'enregistrer sur le serveur**.
+- **Résultat attendu :** la clef apparaît côté serveur ; le serveur reprend la
+  liste **toutes les 30 secondes** (inutile de redémarrer).
+- **Point de contrôle :** après 30 s, une commande `git ls-remote` en SSH sur le
+  dépôt attribué **ne demande pas de mot de passe** (elle aboutit ou dit
+  « repository not found » pour un dépôt pas encore créé — jamais
+  `Permission denied (publickey)`).
+
+### 2.5 — Mémoriser le serveur (et son mot de passe)
+
+- [ ] **Vous faites :** **Serveurs GDS** → ajouter le serveur (hôte, port),
+      **Tester** la connexion.
+- **Résultat attendu :** le serveur est mémorisé ; vous pouvez l'**appliquer à
+  un projet**.
+- **Point de contrôle :** les mots de passe saisis restent **sur le poste**
+  (`~/.pilot/gds_secrets.json`) : ils ne figurent **jamais** dans le projet.
+
+### 2.6 — Rattacher un projet existant au serveur
 
 Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du panneau
-**Vues** de la barre latérale). L'en-tête affiche un badge d'état :
-**« ○ À configurer »**, **« ● En attente »** ou **« ● Connecté »**.
-Selon l'état, seuls les blocs utiles s'affichent.
+**Vues**). L'en-tête affiche un badge : **« ○ À configurer »**,
+**« ● En attente »** ou **« ● Connecté »** ; seuls les blocs utiles s'affichent.
 
-**Si le projet est un projet existant chez vous :**
+- [ ] **2.6.a Connecter un serveur** : choisissez un serveur mémorisé (sélecteur)
+      ou un nouveau — hôte, port, utilisateur dédié (`pilot`), **mot de passe
+      dédié** (= `POSTGRES_PASSWORD`), **mot de passe administrateur**.
+- [ ] **2.6.b Enregistrer la configuration** : mémorise **sans rien créer**.
+      Point de contrôle : le bouton confirme, et **rien** n'apparaît encore côté
+      serveur.
+- [ ] **2.6.c Renseigner** **Port SSH** (`2222`), **Racine des dépôts serveur**
+      (`/srv/git/repos`) et, si besoin, le **Dossier local de clonage**.
+      Point de contrôle : « Racine des dépôts serveur non renseignée » ne doit
+      **plus** apparaître à l'étape suivante.
+- [ ] **2.6.d Activer GDS** : met le projet en relation avec le serveur (vérifie
+      ou crée ce qui manque). Point de contrôle : le badge passe à l'état
+      attendu, et un mot de passe manquant plus tard se règle par
+      **« Enregistrer les mots de passe »** — **sans** refaire l'activation et
+      **sans** recréer la base.
+- [ ] **2.6.e Ajouter ce projet au GDS** : crée le dépôt bare sur le serveur,
+      ajoute le raccourci `gds` (sans toucher à un `origin` existant, p. ex.
+      GitHub) et **pousse la branche courante**.
+      - **Résultat attendu :** badge **« ✅ Déjà ajouté »**, bouton d'ajout
+        masqué ; le dépôt apparaît côté serveur en moins de 30 s (voir 1.9).
+      - **Point de contrôle :** `docker exec pilot-gds ls /srv/git/repos` montre
+        `<projet>.git` ; le `git remote -v` du projet local montre le raccourci
+        `gds`.
+      - **Piège connu :** si le `push` initial tombe dans la fenêtre des 30 s, il
+        échoue — **relancez simplement « Ajouter ce projet au GDS »**
+        (l'opération est idempotente).
 
-1. **Connecter un serveur GDS** : choisissez un **serveur mémorisé** (le
-   sélecteur), ou renseignez un nouveau serveur — hôte, port, utilisateur dédié
-   (par défaut `pilot`), **mot de passe dédié** (= le mot de passe de la base,
-   `POSTGRES_PASSWORD` de la partie 1) et **mot de passe administrateur**.
-2. **Enregistrer la configuration** : mémorise cette configuration **sans rien
-   créer** sur le serveur. Utile pour vérifier avant d'agir.
-3. Juste en dessous, renseignez **Port SSH du serveur** (`2222`), **Racine des
-   dépôts serveur** (**`/srv/git/repos`**) et, si besoin, le **Dossier local de
-   clonage**.
-4. **Activer GDS** : met le projet en relation avec le serveur (et vérifie ou
-   crée ce qui manque côté serveur). Si un mot de passe manque plus tard
-   (changement de poste, secret perdu), le bouton **« Enregistrer les mots de
-   passe »** suffit : **aucune nouvelle activation** n'est nécessaire, et la
-   base du serveur n'est **jamais** recréée.
-5. **Ajouter ce projet au GDS** : crée le dépôt du projet sur le serveur, ajoute
-   un « raccourci » nommé `gds` dans votre projet local (sans toucher à un
-   éventuel autre raccourci, par exemple GitHub) et **pousse la branche
-   courante**. L'identité git du projet est réglée automatiquement depuis votre
-   identité globale.
+### 2.7 — Récupérer un projet qui n'existe pas encore chez soi 🅰
 
-**Si le projet n'existe pas encore chez vous :** utilisez le menu **Projet** →
-**« Ajouter un projet depuis le GDS »** : vous obtenez la **liste des dépôts du
-serveur**, et vous pouvez en récupérer un (clone) puis ouvrir le projet local,
-déjà connecté.
+- [ ] **Vous faites :** menu **Projet** → **« Ajouter un projet depuis le GDS »**
+      → choisir le dépôt → récupérer (clone).
+- **Résultat attendu :** le projet local s'ouvre, **déjà connecté**.
+- **Point de contrôle :** le badge de l'onglet **🌐 GDS** est **« ● Connecté »**
+  sans avoir rien resaisi.
 
-> Le dépôt côté serveur est créé **automatiquement** par le serveur dans les
-> **30 secondes** qui suivent l'ajout : il n'y a **aucune** commande git à taper
-> sur le serveur.
+### 2.8 — Le travail quotidien : synchroniser, publier
 
-## 4. Les rôles, et ce que chacun a le droit de faire
+- [ ] **Vous faites :** bouton **Synchroniser** (rapatrie : clone si absent,
+      sinon récupération).
+- **Résultat attendu :** les nouveautés d'un collègue arrivent dans votre copie.
+- **Point de contrôle :** **Synchroniser ne publie pas** vos propres
+  modifications. Pour publier, **vous** poussez votre branche vers le raccourci
+  `gds` (terminal intégré de Pilot ou votre outil git habituel) : vos commits ne
+  partent **jamais** tout seuls.
 
-| Rôle | Ce qu'il peut faire | Ce qu'il ne peut pas faire |
+### 2.9 — Les rôles : vérifier les refus attendus
+
+| Rôle | Doit pouvoir | Doit être **refusé** |
 |---|---|---|
-| **Administrateur** (`admin`) | gérer les **comptes** (créer, désactiver, changer le rôle, réinitialiser un mot de passe) et les **dépôts** ; publier et forcer le suivi sur **tous** les projets ; redémarrer ou arrêter le **service** du serveur | — |
-| **Développeur** (`dev`) | publier et forcer le suivi des projets **qui lui sont attribués** ; récupérer (clone / mise à jour) tous les projets en lecture | gérer les comptes ou les dépôts ; publier un projet qui ne lui est **pas** attribué |
-| **Standard** (`standard`) | **consulter** les projets et les récupérer en lecture | publier quoi que ce soit ; publier du suivi |
+| **Administrateur** (`admin`) | gérer comptes + dépôts, publier et forcer le suivi sur **tous** les projets, redémarrer/arrêter le **service** | — |
+| **Développeur** (`dev`) | publier et forcer le suivi des projets **attribués**, récupérer **tous** les projets en lecture | gérer les comptes/dépôts ; publier un projet **non attribué** |
+| **Standard** (`standard`) | consulter et récupérer en lecture | publier quoi que ce soit |
 
-En clair : **administrateur** = le chef de la maison, **développeur** = publie
-sur ses projets, **standard** = regarde sans modifier.
+- [ ] **Vous faites :** connectez-vous successivement avec un compte `dev` non
+      attribué à un projet, puis un compte `standard`.
+- **Résultat attendu :** la publication est **refusée**, et le refus est
+  **journalisé**.
+- **Point de contrôle :** le refus apparaît dans le **journal d'audit** —
+  écran d'administration, bloc **« Espace utilisé + journal »**, portée *Tout le
+  journal* : une action avec `ok = false` (et, pour la publication forcée
+  refusée, l'action `tracking.force.denied`).
 
-## 5. Ce qui se passe si deux personnes modifient la même chose
+### 2.10 — Le suivi partagé et les conflits (sans verrou)
 
-Le mécanisme de « verrou » qui empêchait deux personnes de travailler en même
-temps sur un projet a été **supprimé** — c'était une décision assumée.
+- [ ] **Vous faites :** depuis deux postes, modifiez le **suivi partagé** (un
+      projet, une tâche, une décision) sur le **même** élément, puis
+      **Synchroniser** des deux côtés.
+- **Résultat attendu :** personne n'est bloqué (plus de verrou de projet). La
+      règle est « **le dernier qui écrit gagne** » : la dernière écriture
+      **remplace** la précédente.
+- **Point de contrôle :** le conflit **détecté** est **journalisé** — action
+      `tracking.conflict` dans le journal d'audit du serveur (bloc « Espace utilisé
+      + journal », portée *Tout le journal*) — jamais silencieux. Le **code**, lui,
+      suit git normalement (récupérez avant de commencer, poussez tôt).
 
-- **Deux personnes peuvent donc travailler en même temps** sur le même projet :
-  personne n'est bloqué, personne n'est « mis à la porte » du projet.
-- La règle est « **le dernier qui écrit gagne** » : la modification enregistrée
-  en dernier **remplace** la précédente. Il n'y a **pas** de fusion automatique
-  des deux versions.
-- Les conflits **détectés** sur le suivi partagé ne sont jamais silencieux : ils
-  sont **consignés dans le journal** du serveur (visibles par
-  l'administrateur), sous l'action `tracking.conflict`.
-- **Conséquence pratique** : pour le **code**, utilisez le réflexe git habituel —
-  récupérez (`Synchroniser`) avant de commencer, et poussez tôt. Deux commits
-  concurrents sur les **mêmes lignes** se disputent toujours le fichier : c'est
-  le git standard qui s'applique.
-- Un **développeur attribué** au projet (ou un administrateur) peut **forcer** la
-  mise à jour du suivi côté serveur : sa version écrase alors l'état serveur.
-  Un compte `standard` n'en a pas le droit (le refus est journalisé).
+### 2.11 — Contrôler le service depuis Pilot (rôle `admin`)
 
-## 6. Ce que l'utilisateur doit faire lui-même après une modification
+- [ ] **Vous faites :** écran d'administration → **Contrôle du serveur** →
+      **Redémarrer le service**, puis **Arrêter le service**.
+- **Résultat attendu :** les deux processus `gds-server` et `sshd` sont
+      relancés / arrêtés ; **PostgreSQL continue de tourner** (données et suivi
+      intacts).
+- **Point de contrôle :** après un **redémarrage**, `GET /api/gds/admin/service`
+      liste les trois programmes internes (`postgres`, `sshd`, `gds-server`) avec
+      leurs identifiants de processus et un **PID neuf** pour `gds-server` ; après
+      un **arrêt**, la route ne répond plus (`gds-server` et `sshd` sont arrêtés,
+      `postgres` continue). L'écran attend le retour de la santé tout seul.
+      Restauration :
 
-Voici le partage des rôles entre Pilot et vous, une fois le projet connecté :
+  ```powershell
+  docker compose restart gds
+  # ou, sans toucher au conteneur :
+  docker exec pilot-gds supervisorctl -c /etc/gds/supervisord.conf start gds-server sshd
+  ```
 
-| Après… | Qui s'en charge |
-|---|---|
-| la **création** du projet sur le serveur | Pilot : dépôt créé et branche poussée automatiquement lors de « Ajouter ce projet au GDS » |
-| vos **propres modifications de code** | **vous** : vos commits ne partent **pas** tout seuls. Poussez votre branche vers le raccourci `gds` (depuis le terminal intégré de Pilot, ou votre outil git habituel) |
-| la modification de code d'**un collègue** | **vous** : le bouton **Synchroniser** ne fait que **rapatrier** les nouveautés (récupérer) ; il ne publie pas vos travaux |
-| le **suivi partagé** (projets, tâches, décisions) | Pilot : il est poussé / rapatrié lors d'une synchronisation, en « dernier qui écrit gagne » |
-| l'ouverture d'un projet connecté | Pilot : une synchronisation est lancée automatiquement, sans blocage (si le serveur est injoignable, vous continuez à travailler localement) |
-| le **serveur injoignable** | **vous** continuez à travailler : le local reste la référence, et tout ce qui a bougé se resynchronise au retour du serveur |
-| **retirer** un projet du GDS | **vous** : bouton **Retirer du GDS** (avec confirmation). Le retrait peut aussi **purger** le côté serveur — à ne cocher que si c'est bien voulu |
-| **redémarrer / arrêter le service** du serveur | l'**administrateur** : boutons dédiés dans l'écran « 🖥️ GDS Serveur — administration » (la base, elle, continue de tourner) |
+  Chaque action acceptée (ou refusée) laisse une trace **persistante** dans le
+  journal d'audit (`service_restart` / `service_stop`).
 
-> En résumé : **Pilot s'occupe du suivi et des opérations liées au serveur ;
-> publier votre code reste votre geste** (pousser vos commits), exactement comme
-> avec n'importe quel autre dépôt git.
+### 2.12 — Retirer un projet du GDS
+
+- [ ] **Vous faites :** onglet **🌐 GDS** → **Retirer du GDS** (confirmation).
+      Ne cochez la **purge** côté serveur que si vous le voulez vraiment.
+- **Résultat attendu :** le projet redevient **100 % local** ; avec la purge, les
+  données serveur du projet sont retirées.
+- **Point de contrôle :** sans la purge, le dépôt existe **toujours** sur le
+  serveur (`docker exec pilot-gds ls /srv/git/repos`) ; avec la purge, il a
+  disparu. Le projet local, lui, **n'est jamais** supprimé.
 
 ---
 
-# ENCADRÉ FINAL — ce qui est vérifié / ce qui n'a pas été testé
+# PARTIE 3 — À PLUSIEURS (le test final)
 
-## ✅ Ce qui est vérifié
+### 3.1 — Deux personnes publient des commits différents
 
-- **Le serveur se construit et se lance** : `docker compose up -d --build` sur un
-  volume vide donne un serveur utilisable, avec la base, les migrations et les
-  trois processus supervisés. C'est couvert par un **banc d'essai de bout en
-  bout** livré avec le serveur (`gds-server/tests/e2e.sh`), qui rejoue le
-  parcours complet sur un environnement **jetable** (compte administrateur,
-  connexion, création d'un développeur, attribution d'un projet, enregistrement
-  d'une clef SSH, `push` réel en SSH, journal, redémarrage du service, état de
-  santé) puis supprime tout.
-- **Les commandes, noms de ports, de volumes et de variables** de la partie 1
-  sont ceux réellement écrits dans `gds-server/docker-compose.yml`,
-  `gds-server/.env.example` et `gds-server/README.md`.
-- **Les trois rôles** et la règle « dernier qui écrit gagne + conflits
-  journalisés » sont **appliqués côté serveur** (contrôlés par des tests
-  unitaires du socle partagé).
-- **Les deux écrans transverses** et l'onglet par projet existent dans le code de
-  Pilot (`gds-admin.js`, `gds-params.js`, `gds.js`) et ont leurs tests unitaires.
-- **La procédure d'accès distant** (adresses d'écoute + `tailscale serve`) est
-  décrite à l'identique dans `docs/gds-server-setup.md` et
-  `gds-server/README.md`.
+- [ ] **Vous faites :** sur le poste A, modifiez un fichier, committez, poussez
+      vers `gds`. Sur le poste B (déjà à jour), bouton **Synchroniser**.
+- **Résultat attendu :** B reçoit la modification de A.
+- **Point de contrôle :** le fichier modifié sur A est présent sur B après
+      synchronisation.
 
-## ⚠️ Ce qui n'a pas été testé
+### 3.2 — Deux personnes modifient le **même** fichier
 
-- **La branche de travail n'est pas publiée** : ces nouveautés **ne sont pas**
-  dans la version installée de Pilot. Il faut travailler sur la branche de la
-  refonte GDS pour les voir.
+- [ ] **Vous faites :** A et B modifient le **même** fichier sans se
+      synchroniser, puis poussent / synchronisent.
+- **Résultat attendu :** le **git standard** s'applique : soit la poussée de B
+      est refusée (« non fast-forward », à tirer puis fusionner), soit un conflit
+      de fusion apparaît.
+- **Point de contrôle :** aucune donnée n'est écrasée silencieusement ; le
+      conflit est **visible** (message git), et se résout avec les gestes git
+      habituels.
+
+### 3.3 — Deux personnes modifient le **suivi** en même temps
+
+- [ ] **Vous faites :** voir **2.10** (dernier qui écrit gagne) et vérifier la
+      ligne `tracking.conflict` dans le journal du serveur.
+- **Point de contrôle :** le journal contient la trace du conflit.
+
+### 3.4 — Le serveur tombe : le local continue
+
+- [ ] **Vous faites :** sur un poste connecté, **arrêtez le service** (2.11) ou
+      débranchez le serveur, puis ouvrez le projet et travaillez.
+- **Résultat attendu :** Pilot **n'est pas bloqué** : le local reste la
+      référence ; tout ce qui a bougé se **resynchronise** au retour du serveur.
+- **Point de contrôle :** au retour du service, une synchronisation fait
+      converger les deux côtés (et un conflit éventuel est journalisé, cf. 2.10).
+
+### 3.5 — Vérifier que rien n'a fui côté sécurité
+
+- [ ] **Vous faites :**
+
+  ```powershell
+  docker compose ps                    # adresses d'écoute réellement publiées
+  netstat -ano | findstr ":8080 :2222 :5432"
+  tailscale serve status
+  ```
+
+- **Résultat attendu :** `8080` sur `127.0.0.1`, `5432`/`2222` sur l'adresse
+  privée (`100.x.y.z`) — **jamais** l'adresse de la box, **jamais** `0.0.0.0` si
+  vous avez appliqué 1.7.
+- **Point de contrôle :** aucune des trois portes n'est joignable depuis
+  Internet ; `tailscale funnel` n'est **pas** utilisé.
+
+---
+
+# PARTIE 4 — MODIFIER LE SERVEUR : CE QUI CHANGE POUR LE CONTENEUR
+
+> Question : après avoir modifié quelque chose **côté serveur**, faut-il
+> reconstruire l'image, faut-il recréer le conteneur, mes données
+> (comptes, projets, dépôts) survivent-elles, et combien de temps ça coupe ?
+
+## 4.1 — La réponse, en une table
+
+| Ce que vous modifiez | Reconstruire l'image ? | Recréer le conteneur ? | Comptes / projets / dépôts conservés ? | Interruption |
+|---|---|---|---|---|
+| **Code** du serveur (`gds-server/`, `gds-core/`) | **Oui** — `docker compose up -d --build` | **Oui** (l'image change) | **Oui** (volumes nommés) | le temps du redémarrage |
+| `Dockerfile`, `entrypoint.sh`, `sshd_config`, `supervisord.conf` | **Oui** | **Oui** | **Oui** | le temps du redémarrage |
+| **`.env` seulement** (mot de passe, adresses, variables admin) | Non | **Oui** (`.env` décrit le conteneur) | **Oui** | le temps du redémarrage |
+| **`docker-compose.yml` seulement** (ports, volumes) | Non | **Oui** | **Oui** | le temps du redémarrage |
+| Rien : arrêter/redémarrer le **service** depuis Pilot | Non | **Non** (conteneur intact) | **Oui** | quelques secondes |
+| `docker compose stop` puis `start` | Non | Non (même conteneur) | **Oui** | le temps de l'arrêt/démarrage |
+| `docker compose down` puis `up -d` | Non | **Oui** (supprimé puis recréé) | **Oui** — les volumes ne sont pas supprimés | le temps du redémarrage |
+| `docker compose down -v` | Non | Oui | ❌ **NON : tout est effacé** | — |
+
+**En une phrase :** une modification du serveur demande **toujours** une
+**reconstruction de l'image** (`--build`) **et** une **recréation du
+conteneur** (`up -d`) ; les **données survivent** parce qu'elles vivent dans des
+**volumes nommés** séparés du conteneur — **seul `down -v` les détruit**.
+
+## 4.2 — Les preuves, lues dans les fichiers
+
+| Preuve | Fichier (lu) | Ce qu'il montre |
+|---|---|---|
+| L'image est **locale** : ni tirée, ni poussée | `gds-server/docker-compose.yml` — `image: pilot-gds:local` + bloc `build:` (aucun registre) | une modification du code **ne peut pas** arriver par `docker compose pull` : il faut **reconstruire** |
+| Le conteneur est **recréé** au prochain `up -d` | `docker-compose.yml` — `env_file: - .env` (toute modification de `.env` change la configuration du conteneur) | on ne peut pas appliquer une nouvelle configuration « à chaud » |
+| L'état vit **hors** du conteneur | `docker-compose.yml` — `volumes:` (`pgdata`, `repos`, `ssh-host-keys`, `supervisor`) + déclaration finale des 4 volumes nommés ; `Dockerfile` — `VOLUME ["/var/lib/postgresql/data", "/srv/git/repos", "/etc/ssh/host_keys"]` | reconstruire ou recréer **ne touche pas** aux volumes |
+| **Les données ne sont jamais écrasées au démarrage** | `entrypoint.sh` — « création de l'INSTANCE PostgreSQL sur le volume si le datadir est VIDE — un datadir déjà initialisé est **CONSERVÉ tel quel (aucune réinitialisation, les données du volume ne sont jamais effacées)** » | démarrer/redémarrer **ne réinitialise pas** la base |
+| Le bootstrap est **idempotent** | `entrypoint.sh` — `gds-server --init-db` (rôle et base créés s'ils sont absents, puis migrations embarquées — idempotent) ; `--init-ssh` (idempotent : un fichier conforme n'est pas réécrit) | relancer mille fois donne le même état |
+| Les **migrations** sont rejouées à chaque démarrage | `gds-server/src/main.rs` — au démarrage : « migrations appliquées jusqu'à la version … » | une nouvelle version du serveur met le schéma à jour **toute seule**, au redémarrage |
+| Les **clefs d'hôte SSH** sont stables | `entrypoint.sh` — clefs « générées … si elles manquent — **jamais écrasées**, donc empreinte stable après reconstruction » | après reconstruction, les postes ne ré-autorisent pas le serveur |
+| L'**administrateur** n'est jamais écrasé | `gds-server/src/main.rs` — `BootstrapAdminDecision::AlreadyInitialized` → « administrateur déjà présent — GDS_ADMIN_EMAIL/GDS_ADMIN_PASSWORD ignorées » | redémarrer avec les variables ne casse **pas** le compte existant |
+| L'**arrêt est propre** avant recréation | `docker-compose.yml` — `restart: unless-stopped`, `stop_grace_period: 70s` ; `supervisord.conf` — PostgreSQL arrêté en mode « fast » | le moteur laisse jusqu'à 70 s pour écrire avant de tuer |
+
+## 4.3 — Ce qui reste à vérifier **en conditions réelles**
+
+- **La durée exacte de l'interruption** : les fichiers donnent un **plafond**
+  (`stop_grace_period: 70s`) et un **délai de santé** (`healthcheck.start_period:
+  120s`, `interval: 20s`), mais **pas** la durée réelle. À chronométrer sur
+  votre poste (`Measure-Command { docker compose up -d }`).
+- **Le temps de reconstruction** : la première construction « quelques minutes »,
+  les suivantes « quelques secondes » (dixit `README.md` §1) : c'est une
+  **indication d'auteur**, pas une mesure.
+- **Le cas « montée de version »** : reconstruire sur une nouvelle version de
+  l'image de base (PostgreSQL 16) **réutilise le même volume** ; le
+  comportement exact (réutilisation sans migration de cluster) n'a **pas** été
+  essayé ici.
+- **Le comportement du `healthcheck` pendant une recréation** (fenêtre où
+  `docker compose ps` n'affiche rien) : non mesuré.
+
+## 4.4 — Sauvegarder AVANT toute modification du serveur
+
+> On sauvegarde les **volumes**, pas le conteneur : le conteneur ne contient
+> aucune donnée (elle est dans les volumes). On **arrête** le service le temps de
+> la copie, pour une image cohérente de la base.
+
+```powershell
+# 0. se placer dans gds-server/ et préparer un dossier de sauvegarde
+cd G:\IA_PL\pilot\gds-server
+New-Item -ItemType Directory -Force G:\sauvegarde-gds | Out-Null
+
+# 1. arrêter proprement (les volumes sont CONSERVÉS)
+docker compose stop
+
+# 2. copier les trois volumes qui portent de l'état (image locale : rien à
+#    télécharger ; l'écriture se fait par tar, jamais par une redirection
+#    PowerShell qui corromprait le binaire)
+docker run --rm -v pilot-gds_pgdata:/data:ro        -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/pgdata.tgz -C /data .
+docker run --rm -v pilot-gds_repos:/data:ro         -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/repos.tgz -C /data .
+docker run --rm -v pilot-gds_ssh-host-keys:/data:ro -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/ssh-host-keys.tgz -C /data .
+
+# 3. vérifier les tailles, puis relancer
+Get-ChildItem G:\sauvegarde-gds
+docker compose start
+```
+
+- **Point de contrôle :** les trois fichiers `.tgz` existent et ne sont pas
+  vides ; après `start`, `/api/gds/health` répond et le compteur d'utilisateurs
+  du JSON est **inchangé**.
+- *(Variante base seule, sans arrêter le service :)*
+  `docker exec pilot-gds pg_dump -U pilot -d pilot_gds -f /tmp/pilot_gds.sql`
+  puis `docker cp pilot-gds:/tmp/pilot_gds.sql .` — mais elle **ne sauvegarde
+  pas** les dépôts git.
+
+## 4.5 — La bonne séquence pour une modification (interruption minimale)
+
+```powershell
+# 1. reconstruire PENDANT que le service tourne (le service n'est pas coupé)
+docker compose build
+# 2. basculer : recréation, seule interruption réelle
+docker compose up -d
+# 3. vérifier
+docker compose ps
+curl http://127.0.0.1:8080/api/gds/health
+```
+
+- Un changement de **`.env`** ne demande que l'étape 2 (`docker compose up -d`).
+- Une seule ligne de commande suffit si l'interruption n'est pas un souci :
+  `docker compose up -d --build`.
+
+---
+
+# PARTIE 5 — TOUT REFAIRE À LA MAIN (ce que le conteneur fait tout seul)
+
+> Chaque automatisme ci-dessous est **refaisable à la main**, dans cet **ordre**.
+> Les commandes s'exécutent depuis le poste, sur un conteneur **démarré**
+> (`docker exec …`). ⚠️ = efface ou modifie de l'état.
+
+| # | Ce que le conteneur fait 🅰 | Équivalent à la main | Ordre |
+|---|---|---|---|
+| 1 | crée l'instance PostgreSQL sur un volume **vide** (`initdb`), le mot de passe du superutilisateur passant par un **fichier** (jamais en argument de commande, donc jamais visible dans `ps`) | `docker exec -u postgres pilot-gds sh -c "umask 077; printf '%s\n' '<POSTGRES_PASSWORD>' > /tmp/pw; initdb -D /var/lib/postgresql/data --username=postgres --pwfile=/tmp/pw --auth-local=trust --auth-host=scram-sha-256; rm -f /tmp/pw"` | 1er, **volume vierge uniquement** |
+| 2 | démarre l'instance PostgreSQL | `docker exec -u postgres pilot-gds pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/data/postgresql.log start` | 2e |
+| 3 | ouvre l'accès direct par mot de passe (`pg_hba.conf`) | éditer `/var/lib/postgresql/data/pg_hba.conf` et y ajouter `host all all <plage> scram-sha-256` | 3e |
+| 4 | prépare rôle + base + migrations (`--init-db`) | `docker exec pilot-gds gds-server --init-db` | 4e |
+| 5 | prépare le compte `git`, `authorized_keys`, les dépôts bare (`--init-ssh`) | `docker exec pilot-gds gds-server --init-ssh` | 5e |
+| 6 | génère les clefs d'hôte sshd (si absentes) | `docker exec pilot-gds ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/host_keys/ssh_host_ed25519_key` (idem `rsa`) | 6e |
+| 7 | rend `sshd_config` (port interne) et le valide | `docker exec pilot-gds sh -c "sed \"s/__GDS_SSH_PORT__/22/g\" /etc/gds/sshd_config > /etc/ssh/sshd_config.gds && sshd -t -f /etc/ssh/sshd_config.gds"` | 7e |
+| 8 | crée le **premier administrateur** (ou route `/api/gds/setup`) | `Set-Content` + `curl.exe -X POST http://127.0.0.1:8080/api/gds/setup …` (voir **1.6.a**) | 8e |
+| 9 | matérialise le dépôt bare d'un projet (< 30 s) | `docker exec pilot-gds git init --bare /srv/git/repos/<projet>.git && docker exec pilot-gds chown -R git:git /srv/git/repos/<projet>.git` | quand un projet est annoncé en base |
+| 10 | régénère `authorized_keys` depuis la base (< 30 s) | `docker exec pilot-gds gds-server --init-ssh` | après chaque ajout/révocation de clef |
+| 11 | supervise les trois processus (redémarrage automatique) | `docker exec pilot-gds supervisorctl -c /etc/gds/supervisord.conf status` / `restart gds-server sshd` | à tout moment |
+
+**Deux précisions lues dans les fichiers :** les programmes surveillés portent
+exactement les noms `postgres`, `sshd`, `gds-server` (`supervisord.conf`) ; et le
+script d'entrée **arrête l'instance de « bootstrap »** avant de confier
+PostgreSQL au superviseur (sans quoi deux postmasters se disputeraient le port).
+
+**Ce qu'aucune commande manuelle ne remplace :** le **suivi fusionné** (la
+synchronisation des projets/tâches/décisions entre PostgreSQL et chaque poste)
+est fait par **Pilot** ; il n'y a pas de commande unique « tout synchroniser » à
+taper à la main — passez par le bouton **Synchroniser**.
+
+---
+
+# PARTIE 6 — GESTES DANGEREUX (ce qui efface ou casse des données)
+
+| ⚠️ Geste | Effet | Réversible ? |
+|---|---|---|
+| `docker compose down -v` | supprime les **4 volumes** : base (comptes, suivi), dépôts git, clefs d'hôte, journal d'audit | ❌ **non** |
+| `docker volume rm pilot-gds_pgdata` (ou `_repos`) | idem, ciblé | ❌ non — sauf sauvegarde (4.4) |
+| `rm -rf /srv/git/repos/<projet>.git` (dans le conteneur) | historique git du projet perdu | ❌ non |
+| changer `POSTGRES_PASSWORD` après le premier démarrage | **n'est pas appliqué** à la base existante : le service ne peut plus s'y connecter | ⚠️ oui, à la main (voir ci-dessous) |
+| `tailscale serve reset` | retire **toutes** les publications Tailscale du poste, **y compris l'accès web distant de Pilot** | oui, à republier |
+| `git push --force` depuis un poste | écrase l'historique du dépôt (git standard) | ⚠️ souvent non |
+| `docker compose pull` | inutile (image **locale** : aucun registre) — ne « met » rien à jour | — |
+| supprimer un compte `admin` « en trop » | si c'est le **dernier** admin actif, le serveur refuse | — |
+
+**Réparer un mot de passe PostgreSQL changé à tort** (le mot de passe du rôle
+est fixé à la création) :
+
+```powershell
+docker exec pilot-gds psql -U postgres -c "ALTER ROLE pilot WITH PASSWORD '<nouveau mot de passe>'"
+docker exec pilot-gds psql -U postgres -c "ALTER ROLE postgres WITH PASSWORD '<nouveau mot de passe>'"
+docker compose up -d          # puis remettre la même valeur dans .env et dans Pilot
+```
+
+> La connexion locale au sein du conteneur passe par la **socket** (ouverte en
+> `trust`), donc ces commandes fonctionnent **sans** saisir le mot de passe.
+
+**Retirer / arrêter sans rien perdre :**
+
+```powershell
+tailscale serve reset     # ⚠️ retire TOUTES les publications (y compris Pilot)
+docker compose stop       # arrête le conteneur — volumes CONSERVÉS
+docker compose start      # redémarre
+docker compose down       # supprime le conteneur — volumes CONSERVÉS
+```
+
+---
+
+# PARTIE 7 — CE QUI EST PROUVÉ / CE QUI RESTE À VÉRIFIER
+
+## ✅ Prouvé par les fichiers et les tests du projet
+
+- Le serveur **se construit et se lance** sur un volume vide (base, migrations,
+  dépôts, clefs d'hôte, supervision) : couvert par le banc d'essai
+  `gds-server/tests/e2e.sh` sur un environnement **jetable**.
+- Les **commandes, ports, volumes, variables** de la partie 1 sont ceux réellement
+  écrits dans `gds-server/docker-compose.yml`, `gds-server/.env.example`,
+  `gds-server/Dockerfile`, `gds-server/entrypoint.sh` et `gds-server/README.md`.
+- Les **trois cas usuels de l'administrateur automatique** (les deux variables /
+  déjà présent / une seule) sont décidés par une fonction **pure** testée sans
+  base (`gds-core/src/config.rs`, `plan_bootstrap_admin`) ; le 4e cas (échec
+  journalisé **sans bloquer le démarrage**) est écrit dans `gds-server/src/main.rs`
+  — il suppose qu'un compte **non administrateur** porte déjà l'e-mail demandé
+  (`email` unique en base), état qui ne s'obtient **pas** par l'interface :
+  détaillé en **1.6.b**.
+- Les **trois rôles** et la règle « dernier qui écrit gagne + conflits
+  journalisés » sont appliqués **côté serveur** (tests unitaires du socle).
+- La **séquence de conteneur** de la partie 4 : chaque affirmation est adossée
+  au fichier qui la porte (tableau 4.2).
+
+## ⚠️ Reste à vérifier en conditions réelles (par vous)
+
+- **La branche n'est pas publiée** : ces nouveautés **ne sont pas** dans la
+  version installée de Pilot.
 - **Ce document n'a pas été exécuté de bout en bout par son rédacteur** : il a
   été écrit à partir du code et des documents du projet, **sans** démarrer le
-  conteneur, **sans** lancer Pilot et **sans** lancer l'application. Les
-  commandes sont celles du code, mais le parcours complet « depuis zéro, sur un
-  poste vierge » **reste à dérouler par vous**.
-- **La partie utilisateur n'est pas couverte par un test automatique** : les
-  tests unitaires portent sur les morceaux testables des écrans et sur le
-  serveur, **pas** sur un parcours complet « écran → serveur → dépôt git » piloté
-  depuis l'interface graphique. Le « cliquer partout » reste manuel.
-- **Le geste « pousser son code » (§6)** est déduit du code (Pilot ne pousse la
-  branche qu'au moment de « Ajouter ce projet au GDS » ; le bouton Synchroniser
-  ne fait que rapatrier). Il n'a pas été vérifié par un essai réel
-  modification → push → reprise par un second poste.
-- **Les cas « plusieurs personnes en même temps »** sont le comportement
-  **annoncé** : la concurrence est assumée, mais aucun essai à deux postes
-  simultanés n'a été réalisé ici.
-- **Docker Desktop et Tailscale sur le poste** : ni l'un ni l'autre n'a été
-  installé/vérifié par le rédacteur ; seule leur présence est exigée (partie 1).
-- **Le piège du port 5432 déjà occupé** est un cas réel documenté dans le projet,
-  mais il dépend de ce qui tourne **sur votre poste** : à vérifier chez vous.
+  conteneur, **sans** lancer Pilot. Le parcours « depuis zéro, sur un poste
+  vierge » **reste à dérouler par vous**, case à case.
+- **La partie utilisateur n'a pas de test automatique** : les tests portent sur
+  les morceaux testables des écrans et sur le serveur, **pas** sur un parcours
+  « écran → serveur → dépôt git » piloté depuis l'interface.
+- **La durée d'interruption** d'une reconstruction/recréation : non mesurée
+  (voir 4.3).
+- **L'usage à deux postes simultanés** (partie 3) : comportement **annoncé**, non
+  essayé ici à deux postes réels.
+- **Docker Desktop et Tailscale** : seul leur présence est exigée ici ; ni l'un
+  ni l'autre n'a été installé/vérifié par le rédacteur.
+- **Le piège du port 5432 déjà occupé** dépend de ce qui tourne **sur votre
+  poste**.
+
+---
+
+# PARTIE 8 — DÉPANNAGE RAPIDE
+
+| Symptôme | Où aller |
+|---|---|
+| `docker compose ps` reste `starting` | patienter (jusqu'à 2 min) ; `docker compose logs gds` |
+| « mot de passe de la base … non défini » | remplir `POSTGRES_PASSWORD` dans `.env` (1.2), puis `docker compose up -d` |
+| `password authentication failed for user "pilot"` | collision de port `5432` — `docs/gds-server-setup.md` §5.1 |
+| `Failed to parse the request body as JSON` | la commande `curl.exe` de 1.6.a est passée sans fichier — refaire avec `Set-Content` + `--data-binary` |
+| `Permission denied (publickey)` en SSH | clef du poste non enregistrée (2.4), ou pas encore reprise (attendre 30 s) |
+| `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) |
+| le `push` initial échoue juste après l'ajout | fenêtre < 30 s : **relancer « Ajouter ce projet au GDS »** (2.6.e) |
+| `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` (2.6.c) |
+| l'URL Tailscale affiche le mauvais service | le port 443 sert déjà Pilot : utiliser `--https=8443` |
+| « connection timed out » depuis l'autre appareil | appareil hors tailnet, ou ports restés sur `GDS_BIND_ADDR` |
+| détection de conflit / verrou | le verrou n'existe **plus** : « dernier qui écrit gagne », conflits **journalisés** |
+
+Voir aussi le **dépannage complet** : `docs/gds-server-setup.md` §6.
 
 ---
 
@@ -317,7 +783,7 @@ Voici le partage des rôles entre Pilot et vous, une fois le projet connecté :
 
 | Document | Ce qu'on y trouve |
 |---|---|
-| `docs/gds-server-setup.md` | **Le** mode d'emploi pas à pas du serveur (installation, accès réseau privé, pièges, dépannage). |
+| `docs/gds-server-setup.md` | Mode d'emploi pas à pas du serveur (installation, accès réseau privé, pièges, dépannage, **modifier le serveur** §9). |
 | `gds-server/README.md` | Référence rapide du dossier serveur (volumes, variables, service, banc d'essai). |
 | `spec_gds.md` | Spécification fonctionnelle du GDS (rôles, synchronisation, écrans). |
-| `help/overview.md` (§ `HELP:gds`) | L'aide intégrée de Pilot (résumé de ce guide dans l'onglet « ❓ Aide »). |
+| `help/overview.md` (§ `HELP:gds`) | L'aide intégrée de Pilot (onglet « ❓ Aide ») : résumé de ce parcours. |

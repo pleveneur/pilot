@@ -77,7 +77,7 @@ Pour minimiser les tokens consommés en nouvelle session, applique ces règles �
 | Assistant (suivi multi-projets, lecture seule) | `spec_super_agent.md` |
 | Tableau de bord projet (métriques, Git, langages) | `spec_dashboard.md` |
 | Coffre fort de mots de passe (chiffré) | `spec_vault.md` |
-| GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours guidé serveur → utilisateur) |
+| GDS (gestionnaire de sources) | `plan_gds.md` (roadmap) → `spec_gds.md` (spec détaillée, phases A→B→C) ; mise en place : `docs/gds-server-setup.md` (serveur, référence) + `docs/gds-guide-mise-en-place.md` (parcours de retest complet, checklist serveur → usage à plusieurs) |
 | Composant web de discussion (issue #56) | `spec_web_component.md` (spec détaillée, phase D) |
 | Roadmap restante | `plan_dev.md` + `idees_evolutions.md` |
 | Protocole anti-régression | `.pi/skills/quality-gate/SKILL.md` |

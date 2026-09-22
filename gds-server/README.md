@@ -207,6 +207,16 @@ Seul `down -v` les détruit.
 L'arrêt et le redémarrage **du service** depuis Pilot (sans toucher au
 conteneur) sont décrits au §4bis.
 
+**Après une modification du serveur** : tout changement de **code** ou de fichier
+du serveur (`Dockerfile`, `entrypoint.sh`, `sshd_config`, `supervisord.conf`)
+exige une **reconstruction** de l'image locale (`docker compose up -d --build`) ;
+un changement de **`.env`** ou de `docker-compose.yml` exige seulement une
+**recréation** du conteneur (`docker compose up -d`). Dans tous les cas les
+**volumes sont conservés** (seul `down -v` les détruit), les migrations sont
+**rejouées au démarrage** (idempotentes) et l'administrateur existant n'est
+**jamais écrasé**. Preuves fichier par fichier, sauvegarde préalable et gestes
+dangereux : [`docs/gds-server-setup.md`](../docs/gds-server-setup.md) **§9**.
+
 ---
 
 ## 4bis. Arrêter et redémarrer le SERVICE depuis Pilot (L2.10)

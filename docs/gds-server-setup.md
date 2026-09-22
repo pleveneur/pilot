@@ -12,8 +12,9 @@
 > manuelle d'un serveur Linux), supprimé car devenu inutile avec le conteneur
 > tout-en-un. Voir aussi `spec_gds.md` (spécification fonctionnelle),
 > `gds-server/README.md` (référence rapide du dossier serveur) et
-> `docs/gds-guide-mise-en-place.md` (**parcours guidé** serveur → utilisateur,
-> en langage simple).
+> `docs/gds-guide-mise-en-place.md` (**parcours de retest complet** serveur →
+> utilisateur : liste de contrôle à cocher, du poste vierge à l'usage à
+> plusieurs, avec les commandes exactes).
 >
 > ⚠️ **Ce document ne s'exécute pas tout seul — les manipulations du poste
 > sont À LA CHARGE DU PROPRIÉTAIRE.** Les commandes `docker …` (construction,
@@ -30,7 +31,7 @@
 |---|---|
 | Construire et démarrer le conteneur | vous (une commande `docker compose`) |
 | Créer la base, les tables, les dépôts, les clefs d'hôte | le conteneur, automatiquement |
-| Créer le compte administrateur | vous (route d'initialisation à usage unique) |
+| Créer le compte administrateur | le conteneur, automatiquement (variables `GDS_ADMIN_EMAIL` + `GDS_ADMIN_PASSWORD` dans `.env`), **ou** vous (route d'initialisation à usage unique) — §2.4 |
 | Exposer l'interface d'administration sur le réseau privé | vous (`tailscale serve`) |
 | Ouvrir la base et les dépôts au réseau privé | vous (réglages d'adresse d'écoute) |
 | Rediriger des ports depuis la box / le routeur | **jamais** (interdit, cf. §4) |
@@ -508,13 +509,14 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
 
 ## 8. Document retenu et suites
 
-- **Parcours guidé (fait)** : `docs/gds-guide-mise-en-place.md` propose le
-  parcours complet en langage simple — **partie 1 serveur** (le fil des étapes,
-  avec renvoi au présent document pour les commandes) puis **partie 2 côté
-  utilisateur** (obtenir un compte, identité, clef SSH, rattacher un projet,
-  rôles, concurrence, gestes à faire soi-même). Ce document-ci **reste la
-  référence technique d'installation** ; le guide n'en recopie pas les
-  commandes.
+- **Parcours de retest complet (fait)** : `docs/gds-guide-mise-en-place.md` est
+  la **liste de contrôle à cocher** du GDS, du poste vierge à l'usage à
+  plusieurs (partie 0 « à avoir sous la main », partie 1 serveur, partie 2
+  usage, partie 3 à plusieurs, partie 4 « modifier le serveur », partie 5 « tout
+  refaire à la main », partie 6 gestes dangereux, partie 7 prouvé/à vérifier).
+  Il **reprend volontairement les commandes exactes** de ce document : il doit
+  être utilisable seul, sans aller-retour. Ce document-ci **reste la référence
+  technique d'installation** (variantes, pièges, dépannage détaillé).
 - **Consolidation documentaire (L7.3, faite)** : ce document est **le** mode
   d'emploi d'installation du serveur GDS. `docs/gds-linux-setup.md` a été
   **supprimé** : il décrivait la préparation manuelle d'un serveur Linux
@@ -535,3 +537,110 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
   reconstruire l'image de test).
 - **Protocole de test de l'ancien document** : **non repris** — il portait sur un
   serveur préparé à la main et sur des routes de verrou qui n'existent plus.
+
+---
+
+## 9. Modifier le serveur : ce qui change pour le conteneur
+
+> Réponse courte : une modification du serveur demande **toujours** une
+> **reconstruction de l'image** (`--build`) **et** une **recréation du
+> conteneur** (`up -d`) ; les **données survivent**, parce qu'elles vivent dans
+> des **volumes nommés** séparés du conteneur. **Seul `docker compose down -v`
+> les détruit.**
+
+### 9.1 Table de décision
+
+| Ce que vous modifiez | Reconstruire l'image ? | Recréer le conteneur ? | Comptes / projets / dépôts conservés ? |
+|---|---|---|---|
+| **Code** du serveur (`gds-server/`, `gds-core/`) | **Oui** (`docker compose up -d --build`) | **Oui** | **Oui** |
+| `Dockerfile`, `entrypoint.sh`, `sshd_config`, `supervisord.conf` | **Oui** | **Oui** | **Oui** |
+| **`.env` seulement** | Non | **Oui** (`.env` décrit le conteneur) | **Oui** |
+| **`docker-compose.yml` seulement** | Non | **Oui** | **Oui** |
+| Rien : arrêter / redémarrer le **service** depuis Pilot (`gds-server/README.md` §4bis) | Non | **Non** | **Oui** |
+| `docker compose stop` puis `start` | Non | Non (même conteneur) | **Oui** |
+| `docker compose down` puis `up -d` | Non | **Oui** (supprimé puis recréé) | **Oui** |
+| `docker compose down -v` | Non | Oui | ❌ **NON : tout est effacé** |
+
+### 9.2 Preuves, fichier par fichier
+
+| Preuve | Fichier | Ce qu'il montre |
+|---|---|---|
+| L'image est **locale** | `docker-compose.yml` : `image: pilot-gds:local` + bloc `build:` (aucun registre) | une modification du code **ne peut pas** arriver par `docker compose pull` : il faut **reconstruire** |
+| Le conteneur est **recréé** au prochain `up -d` | `docker-compose.yml` : `env_file: - .env` | une nouvelle configuration ne s'applique pas « à chaud » |
+| L'état vit **hors** du conteneur | `docker-compose.yml` : `volumes:` (`pgdata`, `repos`, `ssh-host-keys`, `supervisor`) + déclaration finale des 4 volumes nommés ; `Dockerfile` : `VOLUME ["/var/lib/postgresql/data", "/srv/git/repos", "/etc/ssh/host_keys"]` | reconstruire ou recréer **ne touche pas** aux volumes |
+| Les données ne sont **jamais écrasées** au démarrage | `entrypoint.sh` : `initdb` **seulement si le datadir est vide** — sinon l'instance « est **CONSERVÉE tel quel** (aucune réinitialisation, les données du volume ne sont jamais effacées) » | démarrer/redémarrer **ne réinitialise pas** la base |
+| Le bootstrap est **idempotent** | `entrypoint.sh` : `gds-server --init-db` (rôle + base créés s'ils sont absents, puis migrations embarquées) et `gds-server --init-ssh` (idempotent) | relancer mille fois donne le même état |
+| Les **migrations** sont rejouées à chaque démarrage | `gds-server/src/main.rs` : « migrations appliquées jusqu'à la version … » | une nouvelle version du serveur met le schéma à jour **toute seule** |
+| Les **clefs d'hôte SSH** sont stables | `entrypoint.sh` : clefs « jamais écrasées, donc empreinte stable après reconstruction » | après reconstruction, les postes ne ré-autorisent pas le serveur |
+| L'**administrateur** n'est jamais écrasé | `gds-server/src/main.rs` : décision « déjà initialisé » → « GDS_ADMIN_EMAIL/GDS_ADMIN_PASSWORD ignorées » | redémarrer avec les variables ne casse **pas** le compte existant |
+| L'**arrêt est propre** avant recréation | `docker-compose.yml` : `restart: unless-stopped`, `stop_grace_period: 70s` ; `supervisord.conf` : PostgreSQL arrêté en mode « fast » | le moteur laisse jusqu'à 70 s pour écrire avant de tuer |
+
+### 9.3 Ce qui reste à vérifier en conditions réelles
+
+- **La durée exacte de l'interruption** : les fichiers donnent un **plafond**
+  (`stop_grace_period: 70s`) et un **délai de santé**
+  (`healthcheck.start_period: 120s`, `interval: 20s`), **pas** la durée réelle.
+  À chronométrer sur votre poste (`Measure-Command { docker compose up -d }`).
+- **Le temps de reconstruction** : « quelques minutes » la première fois,
+  « quelques secondes » ensuite — indication d'auteur, pas une mesure.
+- **Une montée de version de l'image de base** (PostgreSQL 16) : le volume est
+  réutilisé ; ce cas **n'a pas été essayé** ici.
+
+### 9.4 Sauvegarder AVANT toute modification
+
+On sauvegarde les **volumes** (le conteneur ne contient aucune donnée), après un
+**arrêt** pour une image cohérente de la base :
+
+```powershell
+cd G:\IA_PL\pilot\gds-server
+New-Item -ItemType Directory -Force G:\sauvegarde-gds | Out-Null
+
+docker compose stop
+
+docker run --rm -v pilot-gds_pgdata:/data:ro        -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/pgdata.tgz -C /data .
+docker run --rm -v pilot-gds_repos:/data:ro         -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/repos.tgz -C /data .
+docker run --rm -v pilot-gds_ssh-host-keys:/data:ro -v G:\sauvegarde-gds:/backup pilot-gds:local tar czf /backup/ssh-host-keys.tgz -C /data .
+
+Get-ChildItem G:\sauvegarde-gds
+docker compose start
+```
+
+Attendu : les trois `.tgz` existent et ne sont pas vides ; après `start`,
+`/api/gds/health` répond. *(Variante base seule, sans arrêter le service :*
+`docker exec pilot-gds pg_dump -U pilot -d pilot_gds -f /tmp/pilot_gds.sql` puis
+`docker cp pilot-gds:/tmp/pilot_gds.sql .` — mais elle **ne sauvegarde pas** les
+dépôts git.)
+
+### 9.5 La séquence d'interruption minimale
+
+```powershell
+docker compose build      # reconstruire PENDANT que le service tourne
+docker compose up -d      # basculer : seule interruption réelle
+docker compose ps
+curl http://127.0.0.1:8080/api/gds/health
+```
+
+Un changement de **`.env`** ne demande que la deuxième ligne. Si l'interruption
+n'est pas un souci, une seule commande suffit : `docker compose up -d --build`.
+
+### 9.6 Gestes dangereux et réparation
+
+| ⚠️ Geste | Effet | Réversible ? |
+|---|---|---|
+| `docker compose down -v` | supprime les **4 volumes** : base (comptes, suivi), dépôts git, clefs d'hôte, journal du superviseur | ❌ non |
+| `docker volume rm pilot-gds_pgdata` (ou `_repos`) | idem, ciblé | ❌ non, sauf sauvegarde (§9.4) |
+| `rm -rf /srv/git/repos/<projet>.git` dans le conteneur | historique git du projet perdu | ❌ non |
+| changer `POSTGRES_PASSWORD` après le premier démarrage | **n'est pas appliqué** à la base existante (mot de passe fixé à la création du rôle) : le service ne peut plus s'y connecter | ⚠️ oui, à la main (ci-dessous) |
+| `tailscale serve reset` | retire **toutes** les publications Tailscale du poste, **y compris l'accès web distant de Pilot** | oui, à republier |
+| `docker compose pull` | inutile (image **locale**, aucun registre) | — |
+
+```powershell
+# mot de passe PostgreSQL changé à tort : la connexion locale du conteneur passe
+# par la SOCKET (ouverte en trust), donc aucune saisie de mot de passe n'est requise
+docker exec pilot-gds psql -U postgres -c "ALTER ROLE pilot WITH PASSWORD '<nouveau mot de passe>'"
+docker exec pilot-gds psql -U postgres -c "ALTER ROLE postgres WITH PASSWORD '<nouveau mot de passe>'"
+docker compose up -d      # puis remettre la même valeur dans .env et dans Pilot
+```
+
+> Le parcours de retest complet (cases à cocher, du poste vierge à l'usage à
+> plusieurs) est dans `docs/gds-guide-mise-en-place.md`.
