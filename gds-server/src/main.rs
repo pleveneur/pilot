@@ -2089,6 +2089,358 @@ mod tests {
         pool.close().await;
     }
 
+    // ── Lot 2 « compte utilisateur » — opérations projet côté service ──
+
+    /// **Scénario HTTP complet sur une base réelle jetable** (facultatif) :
+    ///
+    /// 1. l'administrateur **crée un projet et son dépôt bare** par le service
+    ///    (le dépôt apparaît sur le disque, à l'emplacement attendu) ;
+    /// 2. un second appel est **idempotent** (même `project_id`, pas de second
+    ///    dépôt, `bare_created: false`) ;
+    /// 3. l'existence du dépôt est interrogeable (présent / absent) et la
+    ///    **lecture** est ouverte au rôle `standard`, alors que la **création**
+    ///    lui est refusée (403) ;
+    /// 4. la clef SSH du poste est rattachée au **compte porté par le jeton**
+    ///    (jamais un email du corps), `authorized_keys` est régénéré, un second
+    ///    enregistrement ne crée pas de doublon, et une session **sans
+    ///    identité** est refusée (403).
+    ///
+    /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test ne s'exécute pas (CI verte).
+    /// L'URL doit désigner une base **jetable** `pilot_gds_test_*`.
+    #[tokio::test]
+    async fn project_operations_create_repo_and_bind_key_to_connected_account() {
+        let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                eprintln!(
+                    "project_operations_create_repo_and_bind_key_to_connected_account: \
+                     PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
+                );
+                return;
+            }
+        };
+        let opts = match PgConnectOptions::from_str(&url) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("PILOT_GDS_HTTP_TEST_URL invalide ({}) — test ignoré", e);
+                return;
+            }
+        };
+        let db_name = opts.get_database().unwrap_or("").to_string();
+        if !db_name.starts_with("pilot_gds_test_") {
+            eprintln!(
+                "REFUS: PILOT_GDS_HTTP_TEST_URL doit viser une base jetable \
+                 `pilot_gds_test_*` (base visée : {:?}) — test ignoré",
+                db_name
+            );
+            return;
+        }
+
+        let seq = HTTP_TEST_DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let test_db = format!("pilot_gds_test_l2_{}_{}", std::process::id(), seq);
+        let admin_pool = PgPool::connect(&url)
+            .await
+            .expect("connexion d'administration de la base de test");
+        let _ = sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await;
+        sqlx::query(&format!("CREATE DATABASE \"{}\"", test_db))
+            .execute(&admin_pool)
+            .await
+            .expect("création de la base jetable");
+        let _guard = HttpTestDbGuard {
+            admin_url: url.clone(),
+            db_name: test_db.clone(),
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts.clone().database(&test_db))
+            .await
+            .expect("connexion à la base jetable");
+        gds_core::db::migrate(&pool)
+            .await
+            .expect("migrations sur la base jetable");
+
+        // Bac à sable jetable : racine de dépôts ET home `git` dédiés, pour ne
+        // jamais écrire dans le vrai `~git` de la machine de test.
+        let sandbox = std::env::temp_dir().join(format!("pilot-l2-sandbox-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let repos_root = sandbox.join("repos");
+        std::fs::create_dir_all(&repos_root).expect("racine de dépôts");
+        let repos_root_str = repos_root.to_string_lossy().to_string();
+        let git_home = sandbox.join("git-home");
+        std::fs::create_dir_all(&git_home).expect("home git jetable");
+        let git_home_str = git_home.to_string_lossy().to_string();
+        std::env::set_var("PILOT_GIT_USER_HOME", &git_home_str);
+
+        let ctx = Arc::new(ServerCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+            repos_root: repos_root.clone(),
+        });
+
+        // Comptes réels : la connexion passe par la vraie route et donne un
+        // `user_id` au jeton — c'est lui qui porte l'identité (et le rôle).
+        let admin_email = "admin-l2@gds.test";
+        let dev_email = "dev-l2@gds.test";
+        let std_email = "std-l2@gds.test";
+        for (email, role, name, pw) in [
+            (admin_email, "admin", "Admin L2", "mot-de-passe-admin-l2"),
+            (dev_email, "dev", "Dev L2", "mot-de-passe-dev-l2"),
+            (std_email, "standard", "Std L2", "mot-de-passe-std-l2"),
+        ] {
+            gds_core::db::create_user(
+                &pool,
+                email,
+                name,
+                &WebAuth::hash_password(pw).unwrap(),
+                role,
+                "active",
+            )
+            .await
+            .expect("compte de test");
+        }
+        let app = server_router(ctx.clone());
+        let mut tokens: Vec<String> = Vec::new();
+        for (email, pw) in [
+            (admin_email, "mot-de-passe-admin-l2"),
+            (dev_email, "mot-de-passe-dev-l2"),
+            (std_email, "mot-de-passe-std-l2"),
+        ] {
+            let res = app
+                .clone()
+                .oneshot(login_request(email, pw))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "connexion {}", email);
+            tokens.push(
+                json_body(res).await["token"]
+                    .as_str()
+                    .expect("jeton")
+                    .to_string(),
+            );
+        }
+        let (admin_token, dev_token, std_token) = (&tokens[0], &tokens[1], &tokens[2]);
+
+        // 1) Création du projet + de son dépôt bare par le service.
+        let expected = std::path::PathBuf::from(&repos_root_str).join("projet-l2.git");
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/create",
+                admin_token,
+                serde_json::json!({ "name": "projet-l2", "description": "lot 2" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "création du projet");
+        let created = json_body(res).await;
+        assert_eq!(created["ok"], serde_json::json!(true));
+        assert_eq!(created["name"], serde_json::json!("projet-l2"));
+        assert_eq!(created["bare_created"], serde_json::json!(true));
+        let project_id = created["project_id"].as_i64().expect("project_id");
+        assert_eq!(
+            created["bare_path"].as_str().unwrap(),
+            expected.to_string_lossy(),
+            "le dépôt doit vivre dans la racine du service"
+        );
+        assert!(expected.join("HEAD").exists(), "dépôt bare absent du disque");
+
+        // 2) Second appel : idempotent (même projet, même dépôt).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/create",
+                admin_token,
+                serde_json::json!({ "name": "projet-l2" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "seconde création");
+        let again = json_body(res).await;
+        assert_eq!(again["project_id"].as_i64(), Some(project_id));
+        assert_eq!(again["bare_created"], serde_json::json!(false));
+        let project_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM projects WHERE name = $1")
+            .bind("projet-l2")
+            .fetch_all(&pool)
+            .await
+            .expect("comptage des projets");
+        assert_eq!(project_ids, vec![project_id], "un seul projet en base");
+
+        // 3) Existence du dépôt : lecture ouverte à tous, réponse exacte.
+        for token in [&dev_token, &std_token] {
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "POST",
+                    "/api/gds/projects/repo-exists",
+                    token,
+                    serde_json::json!({ "name": "projet-l2" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let value = json_body(res).await;
+            assert_eq!(value["exists"], serde_json::json!(true));
+            assert_eq!(value["in_db"], serde_json::json!(true));
+            assert_eq!(value["on_disk"], serde_json::json!(true));
+            assert_eq!(value["path"].as_str().unwrap(), expected.to_string_lossy());
+        }
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/repo-exists",
+                dev_token,
+                serde_json::json!({ "name": "projet-inexistant-l2" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let value = json_body(res).await;
+        assert_eq!(value["exists"], serde_json::json!(false));
+        assert_eq!(value["in_db"], serde_json::json!(false));
+
+        // 4) Le rôle `standard` reste en lecture seule : création refusée.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/create",
+                std_token,
+                serde_json::json!({ "name": "projet-interdit-l2" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert!(
+            gds_core::db::get_project_by_name(&pool, "projet-interdit-l2")
+                .await
+                .unwrap()
+                .is_none(),
+            "le refus ne doit rien créer"
+        );
+
+        // 5) Clef SSH du poste : rattachée au compte du jeton, appliquée tout
+        //    de suite au fichier `authorized_keys` du serveur.
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL2PosteKey==";
+        let auth_path = gds_core::ssh::authorized_keys_path_in(&git_home_str);
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                dev_token,
+                serde_json::json!({ "public_key": key }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "enregistrement de la clef");
+        let registered = json_body(res).await;
+        assert_eq!(registered["created"], serde_json::json!(true));
+        assert!(registered["fingerprint"].as_str().unwrap().starts_with("SHA256:"));
+        // Aucun secret, aucun jeton dans la réponse.
+        assert!(!registered.to_string().contains(dev_token));
+        let key_id = registered["id"].as_i64().expect("id de clef");
+        assert!(key_id > 0);
+        let dev = gds_core::db::get_user_by_email(&pool, dev_email)
+            .await
+            .unwrap()
+            .expect("compte dev");
+        let keys = gds_core::db::get_ssh_keys_by_user(&pool, dev.id).await.unwrap();
+        assert_eq!(keys.len(), 1, "une seule clef pour le compte connecté");
+        assert!(keys[0].contains("L2PosteKey"), "clef en base : {:?}", keys[0]);
+        let content = std::fs::read_to_string(&auth_path).unwrap_or_default();
+        assert!(
+            content.contains("L2PosteKey") && content.contains(dev_email),
+            "authorized_keys non régénéré ({}): {:?}",
+            auth_path,
+            content
+        );
+
+        // 6) Second enregistrement de la MÊME clef : aucun doublon.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                dev_token,
+                serde_json::json!({ "public_key": key }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let second = json_body(res).await;
+        assert_eq!(second["created"], serde_json::json!(false));
+        assert_eq!(second["id"].as_i64(), Some(key_id));
+        assert_eq!(
+            gds_core::db::get_ssh_keys_by_user(&pool, dev.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // 7) Clef invalide (injection de ligne) : refusée, rien en base.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                dev_token,
+                serde_json::json!({ "public_key": "ssh-ed25519 AAAA;rm -rf /" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 8) Session SANS identité (jeton forgé, `user_id = 0`) : refusée.
+        let anonymous = ctx
+            .auth
+            .create_session_as("dev", std::time::Duration::from_secs(60));
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                &anonymous,
+                serde_json::json!({ "public_key": key }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "clef sans identité");
+
+        // 9) Les deux actions sont journalisées et visibles pour l'admin.
+        let res = app
+            .clone()
+            .oneshot(authed_get(
+                "/api/gds/admin/audit?q=ssh_key_register",
+                admin_token,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            audit_actions(&json_body(res).await),
+            vec!["ssh_key_register".to_string()],
+            "enregistrement de clef non journalisé"
+        );
+        let res = app
+            .clone()
+            .oneshot(authed_get("/api/gds/admin/audit?q=project_create", admin_token))
+            .await
+            .unwrap();
+        assert_eq!(audit_actions(&json_body(res).await).len(), 2, "deux créations journalisées");
+
+        // Nettoyage : bac à sable jetable + base supprimée par le garde.
+        let _ = std::fs::remove_dir_all(&sandbox);
+        pool.close().await;
+        admin_pool.close().await;
+    }
+
     // ── L2.5 — dépôts git dans le conteneur ──
 
     /// `POST /api/gds/admin/ssh-keys/refresh` avec un jeton éventuel.
