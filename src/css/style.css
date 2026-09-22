@@ -8753,6 +8753,11 @@ body.pilot-loading *::after {
   border-collapse: collapse;
   font-size: 12px;
   margin-top: 4px;
+  /* Lisibilité en thème sombre : sans couleur explicite, les cellules (et les
+     badges sans variante qu'elles contiennent) héritaient du noir par défaut,
+     invisible sur fond sombre. Les variantes colorées (.gds-admin-cell-date,
+     .gds-admin-badge.ok/.warn/.off…) restent prioritaires. */
+  color: var(--text-primary, #e6e8ee);
 }
 .gds-admin-table th {
   text-align: left;
