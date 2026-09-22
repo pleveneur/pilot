@@ -82,6 +82,8 @@ export function initialServerForm() {
     mode: "add", // "add" | "edit"
     oldHost: "",
     oldUser: "",
+    name: "",
+    description: "",
     host: "",
     port: "5432",
     user: "",
@@ -114,12 +116,23 @@ export function serverLabel(s) {
 }
 
 /**
+ * Titre d'une fiche serveur : le NOM s'il est renseigné, sinon l'ancienne
+ * identification `user@host:port` (rétrocompatibilité des fiches sans nom).
+ * Pure — testable.
+ */
+export function serverTitle(s) {
+  const name = String((s || {}).name || "").trim();
+  return name || serverLabel(s);
+}
+
+/**
  * Valide le formulaire de serveur (pure, testable). Renvoie un message d'erreur
  * ou "" si valide. En mode « ajout », le mot de passe est requis pour tester la
  * connexion ; en mode « édition », un mot de passe vide CONSERVE l'existant.
  */
 export function validateServerForm(f) {
   const form = { ...initialServerForm(), ...(f || {}) };
+  if (!String(form.name || "").trim()) return "Le nom du serveur est requis (court, ex. « GDS maison »).";
   if (!String(form.host || "").trim()) return "L'hôte du serveur est requis.";
   if (!String(form.user || "").trim()) return "L'utilisateur PostgreSQL est requis.";
   if (form.mode === "add" && !String(form.dbPassword || "").trim()) {
@@ -164,10 +177,12 @@ export function renderServersListHtml(state = {}) {
       const user = String(sv.user || "").trim();
       const port = String(sv.port || "").trim() || "5432";
       const isPend = !!pend && pend.host === host && pend.user === user;
+      const desc = String(sv.description || "").trim();
       return `<div class="gds-params-srv-row" data-host="${esc(host)}" data-port="${esc(port)}" data-user="${esc(user)}">
         <div class="gds-params-srv-main">
-          <div class="gds-params-srv-title">${esc(serverLabel(sv))}</div>
-          <div class="gds-params-srv-sub">Connexion testée — identifiants conservés hors projet</div>
+          <div class="gds-params-srv-title">${esc(serverTitle(sv))}</div>
+          ${desc ? `<div class="gds-params-srv-desc">${esc(desc)}</div>` : ""}
+          <div class="gds-params-srv-sub">${esc(serverLabel(sv))} — identifiants conservés hors projet</div>
         </div>
         <div class="gds-params-srv-actions">
           <button class="gds-admin-btn" data-srv-action="test">Tester</button>
@@ -197,6 +212,12 @@ export function renderServerFormHtml(form = initialServerForm()) {
   const keepPw = editing ? "laisser vide pour conserver" : "mot de passe PostgreSQL";
   return `
         <div class="gds-admin-form">
+          <label class="gds-admin-field"><span>Nom du serveur</span>
+            <input id="gds-params-srv-name" type="text" autocomplete="off" placeholder="GDS maison" value="${esc(f.name)}">
+          </label>
+          <label class="gds-admin-field"><span>Description (facultatif)</span>
+            <input id="gds-params-srv-desc" type="text" autocomplete="off" placeholder="À quoi sert ce serveur" value="${esc(f.description)}">
+          </label>
           <label class="gds-admin-field"><span>Hôte</span>
             <input id="gds-params-srv-host" type="text" autocomplete="off" placeholder="192.168.1.50" value="${esc(f.host)}">
           </label>
@@ -557,6 +578,8 @@ export function createGdsParams(container) {
     const adminpw = q("#gds-params-srv-adminpw").value;
     state.form = {
       ...state.form,
+      name: q("#gds-params-srv-name").value,
+      description: q("#gds-params-srv-desc").value,
       host: host.value,
       port: q("#gds-params-srv-port").value,
       user: q("#gds-params-srv-user").value,
@@ -660,6 +683,8 @@ export function createGdsParams(container) {
           user: state.form.user.trim(),
           dbPassword: state.form.dbPassword,
           adminPassword: state.form.adminPassword,
+          name: state.form.name.trim(),
+          description: state.form.description.trim(),
         });
       } else {
         await invoke("gds_add_saved_server", {
@@ -668,6 +693,8 @@ export function createGdsParams(container) {
           user: state.form.user.trim(),
           dbPassword: state.form.dbPassword,
           adminPassword: state.form.adminPassword,
+          name: state.form.name.trim(),
+          description: state.form.description.trim(),
         });
       }
       state.form = initialServerForm();
@@ -689,7 +716,7 @@ export function createGdsParams(container) {
 
     if (action === "edit") {
       state.pendingDelete = null;
-      state.form = { mode: "edit", oldHost: host, oldUser: user, host, port, user, dbPassword: "", adminPassword: "" };
+      state.form = { mode: "edit", oldHost: host, oldUser: user, name: String(cur.name || ""), description: String(cur.description || ""), host, port, user, dbPassword: "", adminPassword: "" };
       state.status = { kind: "ok", text: "Modifiez les champs puis enregistrez (mot de passe vide = conservé)." };
       draw();
       return;

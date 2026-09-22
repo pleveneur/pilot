@@ -56,6 +56,14 @@ pub(crate) struct ServerCredentials {
     /// serveurs déjà enregistrés (tous issus d'une provision réussie).
     #[serde(default = "default_validated")]
     pub validated: bool,
+    /// Nom court de la fiche serveur (obligatoire à la saisie, mais facultatif
+    /// à la lecture : les fiches déjà mémorisées sans nom se lisent en chaîne
+    /// vide et retombent sur `user@host` à l'affichage).
+    #[serde(default)]
+    pub name: String,
+    /// Description libre de la fiche serveur (facultatif).
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Défaut `validated = true` : les serveurs déjà enregistrés (Évolution 1)
@@ -296,6 +304,8 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
                 "user": user,
                 "validated": true,
+                "name": c.name,
+                "description": c.description,
             })
         })
         .collect()
@@ -527,6 +537,25 @@ pub(crate) fn save_server_credentials(
     write_gds_secrets(&secrets)
 }
 
+/// Fixe le NOM et la DESCRIPTION d'une fiche serveur déjà mémorisée (clé
+/// `user@host`). Ne touche PAS aux mots de passe. Sans entrée existante :
+/// no-op silencieux (l'ajout passe par `save_server_credentials`).
+pub(crate) fn set_server_label(
+    host: &str,
+    user: &str,
+    name: &str,
+    description: &str,
+) -> Result<(), String> {
+    let mut secrets = read_gds_secrets()?;
+    let key = server_key(host, user);
+    let Some(entry) = secrets.servers.get_mut(&key) else {
+        return Ok(());
+    };
+    entry.name = name.trim().to_string();
+    entry.description = description.trim().to_string();
+    write_gds_secrets(&secrets)
+}
+
 /// Commande Tauri : liste les serveurs GDS mémorisés (hôte/port/utilisateur
 /// uniquement — jamais les mots de passe). Pour l'UI section 1 (Évolution 1).
 #[tauri::command]
@@ -686,14 +715,18 @@ pub async fn gds_add_saved_server(
     user: String,
     db_password: String,
     admin_password: String,
+    name: String,
+    description: String,
 ) -> Result<Value, String> {
     test_saved_server_connection(&host, &port, &user, &db_password).await?;
     save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
+    set_server_label(&host, &user, &name, &description)?;
     Ok(json!({
         "ok": true,
         "host": host.trim(),
         "port": if port.trim().is_empty() { "5432" } else { port.trim() },
         "user": user.trim(),
+        "name": name.trim(),
     }))
 }
 
@@ -710,6 +743,8 @@ pub async fn gds_update_saved_server(
     user: String,
     db_password: String,
     admin_password: String,
+    name: String,
+    description: String,
 ) -> Result<Value, String> {
     if host.trim().is_empty() || user.trim().is_empty() {
         return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
@@ -718,15 +753,23 @@ pub async fn gds_update_saved_server(
     // Identifiants effectifs : fournis, sinon repris sous l'ANCIENNE clé.
     let mut db_eff = db_password.trim().to_string();
     let mut admin_eff = admin_password.trim().to_string();
-    if db_eff.is_empty() {
-        db_eff = stored_server_password(&old_host, port_eff, &old_user).unwrap_or_default();
-    }
-    if admin_eff.is_empty() {
-        admin_eff = get_saved_server(&old_host, port_eff, &old_user)
-            .ok()
-            .flatten()
-            .and_then(|s| s.admin_password)
-            .unwrap_or_default();
+    // Nom/description effectifs : fournis, sinon repris sous l'ancienne clé
+    // (une fiche renommée sans toucher au libellé doit garder son nom).
+    let mut name_eff = name.trim().to_string();
+    let mut description_eff = description.trim().to_string();
+    if let Some(old) = get_saved_server(&old_host, port_eff, &old_user).ok().flatten() {
+        if db_eff.is_empty() {
+            db_eff = old.db_password.unwrap_or_default();
+        }
+        if admin_eff.is_empty() {
+            admin_eff = old.admin_password.unwrap_or_default();
+        }
+        if name_eff.is_empty() {
+            name_eff = old.name;
+        }
+        if description_eff.is_empty() {
+            description_eff = old.description;
+        }
     }
     test_saved_server_connection(&host, port_eff, &user, &db_eff).await?;
     // Renommage : retirer l'ancienne clé si l'hôte/utilisateur a changé.
@@ -738,11 +781,13 @@ pub async fn gds_update_saved_server(
         write_gds_secrets(&secrets)?;
     }
     save_server_credentials(&host, port_eff, &user, &db_eff, &admin_eff)?;
+    set_server_label(&host, &user, &name_eff, &description_eff)?;
     Ok(json!({
         "ok": true,
         "host": host.trim(),
         "port": port_eff,
         "user": user.trim(),
+        "name": name_eff,
     }))
 }
 
@@ -2703,5 +2748,53 @@ mod tests {
         assert_eq!(crate::git::git_config_user_email(&project), "admin@kalico");
         assert_eq!(crate::git::git_config_user_name(&project), "Alice");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn server_label_is_memorized_and_listed_without_password() {
+        // Lot 1 : nom + description mémorisés sur la fiche serveur et exposés à
+        // l'UI SANS jamais laisser fuir un mot de passe.
+        let _guard = TestGdsSecretsGuard::new();
+        save_server_credentials("10.9.0.1", "5432", "srv", "pw", "adm").unwrap();
+        set_server_label("10.9.0.1", "srv", "  GDS maison  ", "Serveur de test").unwrap();
+        let entry = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == "10.9.0.1")
+            .expect("serveur listé");
+        assert_eq!(entry["name"], "GDS maison", "nom rogné");
+        assert_eq!(entry["description"], "Serveur de test");
+        let serialized = serde_json::to_string(&entry).unwrap();
+        assert!(!serialized.contains("pw") && !serialized.contains("adm"));
+        // Nom libellé sur un serveur INCONNU : no-op, aucune fiche créée.
+        set_server_label("10.9.0.2", "inconnu", "X", "Y").unwrap();
+        assert!(!list_saved_servers().iter().any(|v| v["host"] == "10.9.0.2"));
+    }
+
+    #[test]
+    fn legacy_server_entry_without_label_reads_with_defaults() {
+        // Lot 1 : rétrocompatibilité stricte — une entrée écrite AVANT l'ajout
+        // du nom/description (fichier JSON sans ces champs) reste lisible.
+        let _guard = TestGdsSecretsGuard::new();
+        let legacy = r#"{
+            "servers": {
+                "srv@10.9.1.1": {
+                    "db_port": "5432",
+                    "db_password": "pw",
+                    "validated": true
+                }
+            }
+        }"#;
+        std::fs::write(secrets_path().unwrap(), legacy).unwrap();
+        let secrets = read_gds_secrets().unwrap();
+        let c = secrets.servers.get("srv@10.9.1.1").unwrap();
+        assert_eq!(c.name, "");
+        assert_eq!(c.description, "");
+        assert!(c.validated);
+        let entry = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == "10.9.1.1")
+            .unwrap();
+        assert_eq!(entry["name"], "");
+        assert_eq!(entry["description"], "");
     }
 }

@@ -10,6 +10,7 @@ import {
   initialServerForm,
   initialServersState,
   serverLabel,
+  serverTitle,
   validateServerForm,
   renderParamsStatusHtml,
   renderServersListHtml,
@@ -102,13 +103,47 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(serverLabel(null)).toBe("@:5432");
   });
 
-  it("validateServerForm exige hôte + utilisateur, et le mot de passe en AJOUT seulement", () => {
-    expect(validateServerForm({ mode: "add", host: "", user: "pilot", dbPassword: "x" })).toMatch(/hôte/i);
-    expect(validateServerForm({ mode: "add", host: "h", user: "", dbPassword: "x" })).toMatch(/utilisateur/i);
-    expect(validateServerForm({ mode: "add", host: "h", user: "u", dbPassword: "" })).toMatch(/mot de passe/i);
-    expect(validateServerForm({ mode: "add", host: "h", user: "u", dbPassword: "x" })).toBe("");
+  it("validateServerForm exige nom + hôte + utilisateur, et le mot de passe en AJOUT seulement", () => {
+    expect(validateServerForm({ mode: "add", name: "N", host: "", user: "pilot", dbPassword: "x" })).toMatch(/hôte/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "", dbPassword: "x" })).toMatch(/utilisateur/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "" })).toMatch(/mot de passe/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "x" })).toBe("");
     // En édition, un mot de passe vide est autorisé (il est conservé).
-    expect(validateServerForm({ mode: "edit", host: "h", user: "u", dbPassword: "" })).toBe("");
+    expect(validateServerForm({ mode: "edit", name: "N", host: "h", user: "u", dbPassword: "" })).toBe("");
+  });
+
+  it("serverTitle : nom si renseigné, sinon user@host:port (fiches sans nom)", () => {
+    expect(serverTitle({ name: "GDS maison", host: "h", user: "u" })).toBe("GDS maison");
+    expect(serverTitle({ name: "  ", host: "h", user: "u", port: "5433" })).toBe("u@h:5433");
+    expect(serverTitle(null)).toBe("@:5432");
+  });
+
+  it("validateServerForm exige le nom (obligatoire à la saisie)", () => {
+    expect(validateServerForm({ mode: "add", name: "", host: "h", user: "u", dbPassword: "x" })).toMatch(/nom/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "x" })).toBe("");
+  });
+
+  it("renderServersListHtml affiche le nom, la description et l'identité en second", () => {
+    const html = renderServersListHtml({
+      loading: false,
+      hasProject: true,
+      servers: [
+        { host: "10.0.0.1", port: "5432", user: "pilot", name: "GDS maison", description: "Serveur de test", db_password: "SECRET" },
+      ],
+    });
+    expect(html).toContain("GDS maison");
+    expect(html).toContain("Serveur de test");
+    expect(html).toContain("pilot@10.0.0.1:5432");
+    expect(html).not.toContain("SECRET");
+  });
+
+  it("renderServerFormHtml rend les champs nom et description, sans secret", () => {
+    const html = renderServerFormHtml({ mode: "edit", name: "N", description: "D", host: "h", user: "u", dbPassword: "SECRET" });
+    expect(html).toContain('id="gds-params-srv-name"');
+    expect(html).toContain('id="gds-params-srv-desc"');
+    expect(html).toContain('value="N"');
+    expect(html).toContain('value="D"');
+    expect(html).not.toContain("SECRET");
   });
 
   it("renderServersListHtml couvre chargement / erreur / vide", () => {
