@@ -57,9 +57,12 @@ composition.
    d'initialisation (`POST /api/gds/setup`, corps JSON
    `{"email":…,"password":…}`, puis `409`) — le détail et la commande exacte
    sont dans [`docs/gds-server-setup.md`](../docs/gds-server-setup.md) §2.4 —
-   ou renseignez `GDS_ADMIN_EMAIL` + `GDS_ADMIN_PASSWORD` dans `.env` **avant**
-   le tout premier démarrage pour un démarrage non interactif. Aucun mot de
-   passe n'est généré.
+   ou renseignez **les deux** variables `GDS_ADMIN_EMAIL` +
+   `GDS_ADMIN_PASSWORD` dans `.env` **avant** le premier démarrage : le service
+   crée alors le compte lui-même à son démarrage. Seul ce couple de variables
+   (toutes deux non vides) déclenche la création ; si un administrateur existe
+   déjà, rien n'est écrasé et le journal le dit. Aucun mot de passe n'est
+   généré, ni journalisé.
 
 5. **Vérifier depuis le poste** (voir §3 pour les commandes exactes) : la base
    répond et la route de santé répond.

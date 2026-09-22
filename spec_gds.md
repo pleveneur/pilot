@@ -276,10 +276,12 @@ Le serveur est livré comme **un seul conteneur** (dossier `gds-server/` :
   vide, applique les migrations, prépare le compte `git` + `authorized_keys`,
   puis passe la main à `supervisord` (`sshd` + `gds-server` ; les dépôts bare
   annoncés en base sont matérialisés par `gds-server` à son démarrage).
-- **Compte administrateur** : aucune génération automatique — **formulaire de
-  première initialisation** `POST /api/gds/setup` (route publique, `409` si un
-  admin existe déjà), ou variables `GDS_ADMIN_EMAIL` / `GDS_ADMIN_PASSWORD`
-  pour un démarrage non interactif.
+- **Compte administrateur** : aucun mot de passe **généré** automatiquement —
+  **formulaire de première initialisation** `POST /api/gds/setup` (route
+  publique, `409` si un admin existe déjà), ou variables `GDS_ADMIN_EMAIL` /
+  `GDS_ADMIN_PASSWORD` (les deux, non vides) : le service crée alors le compte
+  lui-même à son démarrage ; un administrateur déjà présent n'est **jamais**
+  écrasé, et aucun échec de création n'empêche le service de démarrer.
 - **Contrôle du service** : `gds-core/src/service_control.rs` pilote le
   superviseur interne (`supervisorctl`) pour **redémarrer/arrêter le service**
   sans toucher `postgres` ni `sshd` ; l'arrêt du **conteneur** entier reste une

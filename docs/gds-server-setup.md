@@ -124,19 +124,30 @@ chemins, au choix :
   JSON** (ce n'est pas une page à ouvrir dans un navigateur) :
 
   ```powershell
-  curl.exe -X POST http://127.0.0.1:8080/api/gds/setup `
-    -H "Content-Type: application/json" `
-    -d '{"email":"vous@exemple.com","password":"<mot de passe admin>"}'
+  # Le corps est écrit dans un fichier temporaire : sous Windows PowerShell,
+  # les guillemets internes d'un argument passé à `curl.exe` sont supprimés
+  # (le serveur répondrait alors « Failed to parse the request body as JSON »).
+  Set-Content -Path "$env:TEMP\gds-setup.json" -NoNewline -Encoding ascii `
+    -Value '{"email":"vous@exemple.com","password":"<mot de passe admin>"}'
+  curl.exe -X POST http://127.0.0.1:8080/api/gds/setup -H "Content-Type: application/json" --data-binary "@$env:TEMP\gds-setup.json"
+  # ⚠️ Ce fichier contient le mot de passe en clair : le supprimer aussitôt.
+  Remove-Item "$env:TEMP\gds-setup.json"
   ```
 
   Attendu : `{"ok":true,"email":"…"}`. Un second appel répond ensuite
   `409` (« Un administrateur existe déjà ») : la route ne sert qu'**une fois**.
   (`curl.exe` : sous PowerShell, `curl` est un alias ; `curl.exe` force le vrai
   outil. Le mot de passe n'est ni journalisé ni renvoyé.)
-- **Démarrage non interactif** : renseignez `GDS_ADMIN_EMAIL` **et**
-  `GDS_ADMIN_PASSWORD` dans `.env` **avant** le tout premier démarrage ; le
-  conteneur crée alors l'administrateur lui-même. Un mot de passe
-  d'administration n'est **jamais** généré : c'est vous qui le choisissez.
+- **Démarrage non interactif** : renseignez **les deux** variables
+  `GDS_ADMIN_EMAIL` **et** `GDS_ADMIN_PASSWORD` dans `.env` **avant** le premier
+  démarrage ; le service GDS crée alors lui-même le compte administrateur au
+  démarrage. C'est le **seul** déclencheur (les deux variables non vides sont
+  nécessaires). Si un administrateur existe déjà, rien n'est écrasé et le
+  journal l'indique ; si **une seule** des deux variables est renseignée, le
+  service avertit et continue sans rien créer ; un échec de création est
+  journalisé **sans jamais empêcher le service de démarrer**. Le mot de passe
+  n'est jamais journalisé ni renvoyé. Un mot de passe d'administration n'est
+  **jamais** généré : c'est vous qui le choisissez.
 
 > **Le mot de passe administrateur n'est PAS un mot de passe PostgreSQL.** Le
 > rôle de la base (`pilot`) est déjà préparé par le conteneur ; ce mot de passe

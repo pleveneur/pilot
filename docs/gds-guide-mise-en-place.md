@@ -64,7 +64,7 @@ dans **PowerShell**.
 | 1 | Rassembler Docker Desktop (démarré) et, pour l'accès depuis un autre appareil, Tailscale (connecté). | `docs/gds-server-setup.md` §1 |
 | 2 | Créer `.env` (`Copy-Item .env.example .env`) et y remplir **le seul secret obligatoire** : `POSTGRES_PASSWORD`. | §2.1 → §2.2 |
 | 3 | Construire et démarrer : `docker compose up -d --build`, puis attendre l'état **`healthy`** (jusqu'à deux minutes au premier démarrage). | §2.3 |
-| 4 | Créer le **premier compte administrateur** (route à usage unique, ou variables dans `.env` avant le premier démarrage). | §2.4 |
+| 4 | Créer le **premier compte administrateur** (route à usage unique, ou **les deux** variables `GDS_ADMIN_EMAIL` + `GDS_ADMIN_PASSWORD` dans `.env` avant le démarrage). | §2.4 |
 | 5 | Vérifier que le serveur tourne vraiment (interface `/api/gds/health`, puis la base). | §2.5 |
 | 6 | *(facultatif)* Ouvrir l'accès depuis **un autre appareil** via le réseau privé Tailscale. | §3 |
 

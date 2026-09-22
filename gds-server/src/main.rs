@@ -47,7 +47,7 @@ mod config;
 
 use gds_core::audit::WebAudit;
 use gds_core::auth::WebAuth;
-use gds_core::config::ServerConfig;
+use gds_core::config::{plan_bootstrap_admin, BootstrapAdminDecision, ServerConfig};
 use gds_core::http::{server_router, ServerCtx};
 use gds_core::rate::WebGuard;
 use gds_core::server_status;
@@ -343,18 +343,63 @@ async fn run() -> Result<(), String> {
     //     (`POST /api/gds/setup`, L2.4) reste à faire : le journal le signale,
     //     pour qu'un service « sans compte » ne passe jamais inaperçu. Le
     //     message nomme la route à utiliser, mais ne contient aucun secret.
+    //     Le comptage est conservé pour l'amorçage automatique ci-dessous
+    //     (3c), afin de ne lire l'état qu'une seule fois.
     println!("gds-server : base prête");
     println!(
         "gds-server : migrations appliquées jusqu'à la version {:04}",
         server_status::applied_migration(&pool).await?
     );
-    match gds_core::db::count_admins(&pool).await {
+    let admins = gds_core::db::count_admins(&pool).await;
+    match &admins {
         Ok(0) => println!(
             "gds-server : administrateur en attente d'initialisation (POST /api/gds/setup)"
         ),
         Ok(n) => println!("gds-server : administrateur déjà initialisé ({} compte(s))", n),
         // Un état inconnu n'empêche pas le service de démarrer, mais il est dit.
         Err(e) => eprintln!("gds-server : état des administrateurs inconnu : {}", e),
+    }
+
+    // 3c. Amorçage automatique du premier administrateur (L2.4) : si
+    //     `GDS_ADMIN_EMAIL` ET `GDS_ADMIN_PASSWORD` sont TOUTES DEUX
+    //     renseignées, le compte est créé ici, au démarrage. Silencieux et sûr :
+    //     rien n'est écrasé si un administrateur existe déjà, une seule variable
+    //     déclenche un avertissement (jamais un arrêt), et un échec est
+    //     journalisé sans empêcher le service de démarrer. La décision est PURE
+    //     (`plan_bootstrap_admin`, testée sans base) ; la création réutilise
+    //     `create_initial_admin`, qui porte déjà le verrou d'usage unique.
+    //     Aucun mot de passe n'apparaît dans un journal.
+    if let Ok(existing) = admins {
+        match plan_bootstrap_admin(
+            cfg.admin_email.as_deref(),
+            cfg.admin_password.as_deref(),
+            existing,
+        ) {
+            BootstrapAdminDecision::Create { email, password } => {
+                match gds_core::db::create_initial_admin(&pool, &email, &password).await {
+                    Ok(true) => {
+                        println!("gds-server : administrateur initial créé ({})", email)
+                    }
+                    // Course bénigne : un administrateur est apparu entre le
+                    // comptage et la création — rien n'est écrasé.
+                    Ok(false) => println!(
+                        "gds-server : administrateur déjà présent — amorçage sans effet"
+                    ),
+                    Err(e) => eprintln!(
+                        "gds-server : création de l'administrateur initial ignorée : {}",
+                        e
+                    ),
+                }
+            }
+            BootstrapAdminDecision::AlreadyInitialized => println!(
+                "gds-server : administrateur déjà présent — GDS_ADMIN_EMAIL/GDS_ADMIN_PASSWORD ignorées"
+            ),
+            BootstrapAdminDecision::Incomplete => eprintln!(
+                "gds-server : GDS_ADMIN_EMAIL et GDS_ADMIN_PASSWORD doivent être renseignées \
+                 ENSEMBLE pour créer l'administrateur automatiquement — amorçage ignoré"
+            ),
+            BootstrapAdminDecision::NotRequested => {}
+        }
     }
 
     // 4. Contexte autonome du service, puis montage du routeur partagé du socle.
@@ -1934,6 +1979,54 @@ mod tests {
         // Les arguments réels de `std::env::args()` (String) sont acceptés.
         let args: Vec<String> = vec!["--init-ssh".to_string()];
         assert_eq!(startup_mode(args), StartupMode::InitSsh);
+    }
+
+    /// L2.4 — décision d'amorçage du premier administrateur, SANS base : les
+    /// trois cas exigés sont couverts (les deux variables → création ; un
+    /// administrateur déjà présent → aucune création ; une seule variable →
+    /// aucune création et avertissement). La décision pure est la même que
+    /// celle appliquée au démarrage par `run()`.
+    #[test]
+    fn bootstrap_admin_creates_only_when_both_values_are_set() {
+        assert_eq!(
+            plan_bootstrap_admin(Some("owner@gds.test"), Some("mot-de-passe-choisi"), 0),
+            BootstrapAdminDecision::Create {
+                email: "owner@gds.test".to_string(),
+                password: "mot-de-passe-choisi".to_string(),
+            }
+        );
+    }
+
+    /// L2.4 — un administrateur existe déjà : rien n'est écrasé, et le mot de
+    /// passe n'est porté par AUCUNE variante de la décision (donc il ne peut
+    /// pas être journalisé par cette branche).
+    #[test]
+    fn bootstrap_admin_never_overwrites_an_existing_admin() {
+        let decision = plan_bootstrap_admin(Some("owner@gds.test"), Some("mot-de-passe-secret"), 1);
+        assert_eq!(decision, BootstrapAdminDecision::AlreadyInitialized);
+        assert!(
+            !format!("{:?}", decision).contains("mot-de-passe-secret"),
+            "la décision « déjà initialisé » ne doit pas contenir le mot de passe"
+        );
+    }
+
+    /// L2.4 — une seule des deux variables est renseignée : avertir, ne rien
+    /// créer ; aucune variable : l'initialisation reste à faire par la route
+    /// `POST /api/gds/setup`.
+    #[test]
+    fn bootstrap_admin_requires_both_variables() {
+        assert_eq!(
+            plan_bootstrap_admin(Some("owner@gds.test"), None, 0),
+            BootstrapAdminDecision::Incomplete
+        );
+        assert_eq!(
+            plan_bootstrap_admin(None, Some("mot-de-passe-choisi"), 0),
+            BootstrapAdminDecision::Incomplete
+        );
+        assert_eq!(
+            plan_bootstrap_admin(None, None, 0),
+            BootstrapAdminDecision::NotRequested
+        );
     }
 
     /// La route de rafraîchissement des clefs est montée derrière

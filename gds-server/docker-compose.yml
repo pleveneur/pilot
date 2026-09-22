@@ -21,8 +21,9 @@
 #   3. construire et démarrer :  docker compose up -d --build
 #   4. créer le compte administrateur : formulaire de première initialisation
 #      `POST /api/gds/setup` (aucun mot de passe admin par défaut, décision 2),
-#      ou variables `GDS_ADMIN_EMAIL`/`GDS_ADMIN_PASSWORD` pour un démarrage non
-#      interactif (voir `.env.example`) ;
+#      ou LES DEUX variables `GDS_ADMIN_EMAIL`/`GDS_ADMIN_PASSWORD` pour que le
+#      service crée le compte lui-même à son démarrage — rien n'est écrasé si un
+#      administrateur existe déjà (voir `.env.example`) ;
 #   5. vérifier :  curl http://127.0.0.1:8080/api/gds/health
 #   6. accès depuis un autre appareil (réseau privé Tailscale) : voir
 #      `docs/gds-server-setup.md` (L2.9) — aucune commande réseau n'est exécutée

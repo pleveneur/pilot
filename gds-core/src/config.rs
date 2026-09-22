@@ -437,10 +437,16 @@ impl ServerConfig {
 
     /// Compte administrateur initial : `Ok((email, mot_de_passe))` s'il est
     /// fourni par l'environnement, sinon une erreur explicite (français).
-    /// Appelé au premier démarrage seulement (un admin existe → plus nécessaire).
+    /// Raccourci sur `plan_bootstrap_admin` (aucun administrateur supposé
+    /// présent) : le démarrage réel passe par `plan_bootstrap_admin`, qui tient
+    /// compte des comptes déjà en base.
     pub fn bootstrap_admin(&self) -> Result<(String, String), String> {
-        match (self.admin_email.as_deref(), self.admin_password.as_deref()) {
-            (Some(email), Some(password)) => Ok((email.to_string(), password.to_string())),
+        match plan_bootstrap_admin(
+            self.admin_email.as_deref(),
+            self.admin_password.as_deref(),
+            0,
+        ) {
+            BootstrapAdminDecision::Create { email, password } => Ok((email, password)),
             _ => Err(
                 "Compte administrateur non défini : renseignez les variables \
                  d'environnement GDS_ADMIN_EMAIL et GDS_ADMIN_PASSWORD pour créer le \
@@ -448,6 +454,51 @@ impl ServerConfig {
                     .to_string(),
             ),
         }
+    }
+}
+
+/// Décision d'**amorçage** du premier compte administrateur, prise au démarrage
+/// du serveur à partir de `GDS_ADMIN_EMAIL` / `GDS_ADMIN_PASSWORD` et du nombre
+/// d'administrateurs déjà présents en base.
+///
+/// Le mot de passe n'est porté que par la variante `Create` : les branches qui
+/// ne créent rien ne le manipulent jamais, donc rien de secret ne peut être
+/// journalisé par erreur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootstrapAdminDecision {
+    /// Les deux variables sont renseignées et aucun administrateur n'existe :
+    /// créer le compte.
+    Create { email: String, password: String },
+    /// Les deux variables sont renseignées mais un administrateur existe déjà :
+    /// ne rien écraser (le noter et continuer).
+    AlreadyInitialized,
+    /// Une seule des deux variables est renseignée : avertir et continuer sans
+    /// rien créer.
+    Incomplete,
+    /// Aucune des deux : l'initialisation reste possible via
+    /// `POST /api/gds/setup`.
+    NotRequested,
+}
+
+/// Décide de l'amorçage du premier administrateur — **pure**, donc testable
+/// sans base de données (les tests serveur couvrent les trois cas : les deux
+/// variables, un administrateur déjà présent, une seule variable).
+///
+/// `admins_existing` est le nombre d'administrateurs déjà en base, lu par
+/// l'appelant (`gds_core::db::count_admins`).
+pub fn plan_bootstrap_admin(
+    admin_email: Option<&str>,
+    admin_password: Option<&str>,
+    admins_existing: i64,
+) -> BootstrapAdminDecision {
+    match (admin_email, admin_password) {
+        (Some(_), Some(_)) if admins_existing > 0 => BootstrapAdminDecision::AlreadyInitialized,
+        (Some(email), Some(password)) => BootstrapAdminDecision::Create {
+            email: email.to_string(),
+            password: password.to_string(),
+        },
+        (Some(_), None) | (None, Some(_)) => BootstrapAdminDecision::Incomplete,
+        (None, None) => BootstrapAdminDecision::NotRequested,
     }
 }
 
