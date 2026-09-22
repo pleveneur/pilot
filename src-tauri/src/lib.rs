@@ -106,6 +106,10 @@ mod gds_web;
 // Écran d'administration GDS du poste (refonte GDS, lot L4) : onglet transverse
 // « GDS Serveur » — appels HTTP à l'API du serveur, jamais de SQL direct.
 mod gds_admin;
+// Client des opérations de projet parlant au SERVICE avec le compte GDS de
+// l'utilisateur (refonte GDS, lot 3) — repli sur la base directe si le projet
+// n'a pas d'identité mémorisée.
+mod gds_service;
 mod group_assistant;
 mod plface;
 

@@ -139,7 +139,7 @@ static ADMIN_TOKENS: std::sync::Mutex<Vec<(String, String)>> =
     std::sync::Mutex::new(Vec::new());
 
 /// Clé de cache d'une session (URL de base + email, insensible à la casse).
-fn token_key(base: &str, email: &str) -> String {
+pub(crate) fn token_key(base: &str, email: &str) -> String {
     format!("{}|{}", base, email.trim().to_ascii_lowercase())
 }
 
@@ -149,24 +149,24 @@ fn lock_tokens() -> std::sync::MutexGuard<'static, Vec<(String, String)>> {
     ADMIN_TOKENS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn cached_token(key: &str) -> Option<String> {
+pub(crate) fn cached_token(key: &str) -> Option<String> {
     lock_tokens()
         .iter()
         .find(|(k, _)| k == key)
         .map(|(_, t)| t.clone())
 }
 
-fn store_token(key: &str, token: &str) {
+pub(crate) fn store_token(key: &str, token: &str) {
     let mut guard = lock_tokens();
     guard.retain(|(k, _)| k != key);
     guard.push((key.to_string(), token.to_string()));
 }
 
-fn drop_token(key: &str) {
+pub(crate) fn drop_token(key: &str) {
     lock_tokens().retain(|(k, _)| k != key);
 }
 
-fn http_client() -> Result<reqwest::blocking::Client, String> {
+pub(crate) fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(ADMIN_HTTP_TIMEOUT)
         .build()
@@ -175,24 +175,28 @@ fn http_client() -> Result<reqwest::blocking::Client, String> {
 
 /// Réponse brute d'un appel : (statut, corps). Aucun secret n'y figure (le corps
 /// est celui du serveur, jamais la requête).
-struct Reply {
-    status: u16,
+pub(crate) struct Reply {
+    pub(crate) status: u16,
     body: String,
 }
 
 impl Reply {
-    fn ok(&self) -> bool {
+    pub(crate) fn ok(&self) -> bool {
         (200..300).contains(&self.status)
     }
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         serde_json::from_str(&self.body).unwrap_or(Value::Null)
     }
-    fn error(&self) -> String {
+    pub(crate) fn error(&self) -> String {
         admin_error_message(self.status, &self.body)
     }
 }
 
-fn send_get(client: &reqwest::blocking::Client, url: &str, token: Option<&str>) -> Result<Reply, String> {
+pub(crate) fn send_get(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<Reply, String> {
     let mut req = client.get(url);
     if let Some(t) = token {
         req = req.bearer_auth(t);
@@ -203,7 +207,7 @@ fn send_get(client: &reqwest::blocking::Client, url: &str, token: Option<&str>) 
     Ok(Reply { status, body })
 }
 
-fn send_post_json(
+pub(crate) fn send_post_json(
     client: &reqwest::blocking::Client,
     url: &str,
     token: Option<&str>,

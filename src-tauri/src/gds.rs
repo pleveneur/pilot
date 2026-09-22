@@ -6,6 +6,7 @@
 
 use crate::gds_db;
 use crate::gds_git;
+use crate::gds_service;
 use crate::gds_ssh;
 use crate::git::{ensure_git_repo_with_identity, git_clone, git_config_user_email, git_config_user_name, git_current_branch, git_has_remote, git_is_repo, git_push, git_remote_add, git_remote_remove};
 use crate::AppState;
@@ -1050,6 +1051,31 @@ pub(crate) fn is_gds_enabled(project: &str) -> bool {
     read_gds_config(project).map(|c| c.enabled).unwrap_or(false)
 }
 
+/// Voie d'accès au serveur GDS pour les opérations de projet du poste.
+///
+/// * `Legacy` : écriture DIRECTE en base avec le compte technique de la base —
+///   fiches serveur **héritées** (aucune identité de compte GDS mémorisée),
+///   comportement strictement INCHANGÉ ;
+/// * `Service` : appel de l'API du service GDS avec le **jeton du compte GDS de
+///   l'utilisateur** (refonte GDS, lot 3) — le serveur applique les gardes de
+///   rôle et crée le dépôt dans SA racine de dépôts.
+///
+/// Le choix se fait une fois par opération (`resolve_server_side`) : identité de
+/// compte disponible → service, sinon repli historique.
+pub(crate) enum ServerSide<'a> {
+    Legacy(&'a PgPool),
+    Service(gds_service::ServiceIdentity),
+}
+
+/// Voie à employer pour ce projet : le service dès qu'une identité de compte GDS
+/// est mémorisée pour l'hôte du projet, la base directe sinon (fiches héritées).
+pub(crate) fn resolve_server_side<'a>(cfg: &GdsConfig, pool: &'a PgPool) -> ServerSide<'a> {
+    match gds_service::resolve_service_identity(cfg) {
+        Some(ident) => ServerSide::Service(ident),
+        None => ServerSide::Legacy(pool),
+    }
+}
+
 /// Ajoute un projet au GDS (initialisation git auto + bare + enregistrement +
 /// remote add + push initial). Partagé entre la commande Tauri et la route web.
 ///
@@ -1072,26 +1098,55 @@ pub(crate) async fn add_project_to_gds(
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
+    let side = resolve_server_side(&cfg, pool);
+    add_project_with(&cfg, side, project, email, git_name).await
+}
+
+/// Corps commun de l'ajout d'un projet, sur la voie choisie (`ServerSide`).
+/// Seuls trois points divergent entre les deux voies : la garde de droits, la
+/// clef SSH du poste et la création du dépôt bare.
+async fn add_project_with(
+    cfg: &GdsConfig,
+    side: ServerSide<'_>,
+    project: &str,
+    email: &str,
+    git_name: Option<String>,
+) -> Result<Value, String> {
+    let name = project_name(project);
     // Matrice des droits (L3.5) : l'ajout d'un projet au serveur et sa
     // publication initiale sont réservés à l'administrateur ou à un développeur
     // (attribué s'il s'agit d'un projet déjà enregistré). Refus AVANT toute
     // action (clef SSH, dépôt, push) pour ne rien modifier en cas de refus.
-    gds_db::ensure_can_add_project(pool, &project_name(project), email).await?;
+    // Sur la voie SERVICE, cette garde appartient au serveur : il relit
+    // l'identité dans le jeton (aucun e-mail déclaratif) et applique la même
+    // règle (`write_allowed`) — le poste ne la réimplémente pas.
+    if let ServerSide::Legacy(pool) = &side {
+        gds_db::ensure_can_add_project(pool, &name, email).await?;
+    }
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
     // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable. Serveur
     // LOCAL : clef enregistrée en base ET synchronisée dans authorized_keys.
     // Serveur DISTANT : clef enregistrée en base UNIQUEMENT (l'ajout à
     // `authorized_keys` est MANUEL sur le serveur, voir docs/gds-server-setup.md) —
     // on n'administre JAMAIS une machine distante depuis le poste.
-    let is_local = is_local_gds_server(&cfg);
-    if is_local {
-        gds_ssh::ensure_poste_key(pool, email).await?;
-    } else {
-        gds_ssh::ensure_poste_key_remote(pool, email).await?;
+    match &side {
+        ServerSide::Legacy(pool) => {
+            let is_local = is_local_gds_server(cfg);
+            if is_local {
+                gds_ssh::ensure_poste_key(pool, email).await?;
+            } else {
+                gds_ssh::ensure_poste_key_remote(pool, email).await?;
+            }
+        }
+        // Voie service : la clef est enregistrée par le serveur, rattachée au
+        // compte prouvé par le jeton (route `POST /api/gds/ssh-keys`).
+        ServerSide::Service(ident) => {
+            gds_service::register_poste_key(ident).await?;
+        }
     }
+    let is_local = is_local_gds_server(cfg);
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
-    let name = project_name(project);
-    let repo_url = gds_remote_url(&cfg, &name);
+    let repo_url = gds_remote_url(cfg, &name);
 
     // ── Identité git automatique (avant init/commit) ──
     // user.email (local ou global) manquant → réglé en LOCAL = email du compte
@@ -1132,15 +1187,22 @@ pub(crate) async fn add_project_to_gds(
     // INCHANGÉ. Serveur DISTANT : AUCUN bare local ; on enregistre seulement le
     // projet/le dépôt en base avec le chemin POSIX côté serveur (le bare est créé
     // manuellement sur le serveur, docs/gds-server-setup.md).
-    let res = if is_local {
-        gds_git::add_project(pool, &local_dir, &name, email, "").await?
-    } else {
-        let path_on_server = server_repo_path(&cfg, &name).ok_or_else(|| {
-            "Racine des dépôts serveur non renseignée (champ « Racine des dépôts \
-             serveur », onglet GDS) — requise pour un serveur distant"
-                .to_string()
-        })?;
-        gds_git::add_project_remote(pool, &name, &path_on_server, &repo_url, email, "").await?
+    let res = match &side {
+        ServerSide::Legacy(pool) if is_local => {
+            gds_git::add_project(pool, &local_dir, &name, email, "").await?
+        }
+        ServerSide::Legacy(pool) => {
+            let path_on_server = server_repo_path(cfg, &name).ok_or_else(|| {
+                "Racine des dépôts serveur non renseignée (champ « Racine des dépôts \
+                 serveur », onglet GDS) — requise pour un serveur distant"
+                    .to_string()
+            })?;
+            gds_git::add_project_remote(pool, &name, &path_on_server, &repo_url, email, "").await?
+        }
+        // Voie service : le serveur crée son projet ET son dépôt bare dans SA
+        // racine de dépôts (il ne dépend plus du chemin configuré sur le poste),
+        // rattachés au compte de la session. Idempotent.
+        ServerSide::Service(ident) => gds_service::create_project(ident, &name).await?,
     };
 
     // git remote add + push initial dans le projet local (bloquant → spawn_blocking).
@@ -1167,16 +1229,19 @@ pub(crate) async fn add_project_to_gds(
     // manuelle) et on renvoie un message orientant vers la préparation serveur.
     match remote_result {
         Err(join_err) => {
-            if is_local {
+            if is_local && matches!(side, ServerSide::Legacy(_)) {
                 let _ = gds_git::remove_bare(&local_dir, &name);
             }
             return Err(join_err);
         }
         Ok(Err(inner_err)) => {
-            if is_local {
+            if is_local && matches!(side, ServerSide::Legacy(_)) {
                 let _ = gds_git::remove_bare(&local_dir, &name);
                 return Err(inner_err);
             }
+            // Voie service : rien n'est retiré — le dépôt du serveur n'est pas
+            // sous la responsabilité du poste. Relancer l'ajout est sans risque
+            // (projet et dépôt déjà créés, le serveur les réutilise).
             return Err(format!(
                 "{} — vérifiez que le dépôt bare existe sur le serveur \
                  (docs/gds-server-setup.md)",
