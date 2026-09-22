@@ -23,6 +23,8 @@ import {
   renderIdentitySectionHtml,
   initialKeysState,
   renderKeysSectionHtml,
+  keysRegisterHint,
+  keysRegisterErrorMessage,
   initialProjectsState,
   projectBasename,
   projectStatusBadge,
@@ -385,6 +387,34 @@ describe("gds-params — section Mes clés (L5.4)", () => {
     // Plus aucune invitation à une manipulation manuelle de la clé.
     expect(html).not.toMatch(/manuel/i);
     expect(html).not.toContain("authorized_keys");
+  });
+
+  it("renderKeysSectionHtml explique AVANT le clic que la clé part à l'activation du GDS", () => {
+    const html = renderKeysSectionHtml({ loading: false, publicKey: "ssh-ed25519 AAA", email: "e@x" });
+    expect(html).toContain("automatiquement");
+    expect(html).toContain("activation du GDS");
+    expect(html).toContain("serveur distant"); // fin du texte permanent de la section
+  });
+
+  it("keysRegisterErrorMessage remplace « GDS non provisionné » par un chemin actionnable", () => {
+    const text = keysRegisterErrorMessage("GDS non provisionné");
+    expect(text).not.toContain("GDS non provisionné");
+    expect(text).toContain("activerez le GDS sur votre projet");
+    expect(text).toContain("Activer GDS");
+    // Les autres erreurs restent affichées telles quelles (préfixe Error: retiré).
+    expect(keysRegisterErrorMessage("Error: Permission denied (publickey)")).toBe(
+      "Permission denied (publickey)"
+    );
+  });
+
+  it("renderKeysSectionHtml affiche l'erreur non provisionnée traduite", () => {
+    const html = renderKeysSectionHtml({
+      loading: false,
+      publicKey: "ssh-ed25519 AAA",
+      email: "e@x",
+      status: { kind: "error", text: keysRegisterErrorMessage("GDS non provisionné") },
+    });
+    expect(html).toContain("activerez le GDS sur votre projet");
   });
 
   it("renderKeysSectionHtml désactive l'enregistrement sans identité (email)", () => {

@@ -393,6 +393,33 @@ export function initialKeysState() {
 }
 
 /**
+ * Explication permanente de la section « Mes clés » (pure). Une ligne, affichée
+ * AVANT le clic : la clé du poste part toute seule à l'activation du GDS.
+ */
+export function keysRegisterHint() {
+  return (
+    "En général votre clé est enregistrée automatiquement à l'activation du GDS " +
+    "sur un projet : ce bouton ne sert qu'en cas de serveur distant."
+  );
+}
+
+/**
+ * Erreur d'enregistrement de clé traduite en message actionnable (pure).
+ * Le texte brut « GDS non provisionné » n'explique rien : on le remplace par
+ * le chemin à suivre (l'activation du GDS sur le projet enregistre la clé).
+ */
+export function keysRegisterErrorMessage(e) {
+  const s = String(e == null ? "" : e).replace(/^Error:\s*/, "");
+  if (!/non provision/i.test(s)) return s;
+  return (
+    "Aucun projet n'est encore rattaché au GDS : votre clé sera enregistrée " +
+    "automatiquement quand vous activerez le GDS sur votre projet (onglet « 🌐 GDS » " +
+    "du projet → « Activer GDS »). Vous pouvez aussi la déposer vous-même sur un " +
+    "serveur distant."
+  );
+}
+
+/**
  * Rend la section « Mes clés » (pure, testable). Remplace le squelette
  * « À venir — L5.4 ». Clé PUBLIQUE uniquement — jamais la clé privée.
  * `email` (identité globale) : passée à l'affichage par le câblage, sans être
@@ -426,6 +453,7 @@ export function renderKeysSectionHtml(state = {}) {
         </div>
         <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[2].desc)}</div>
         ${body}
+        <div class="gds-admin-hint">${esc(keysRegisterHint())}</div>
         <div id="gds-params-key-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
       </section>`;
 }
@@ -977,7 +1005,7 @@ export function createGdsParams(container) {
       await invoke("gds_register_ssh_key", { email, publicKey: keysState.publicKey });
       keysState.status = { kind: "ok", text: "✅ Clé publique enregistrée sur le serveur GDS." };
     } catch (e) {
-      keysState.status = { kind: "error", text: friendlyGdsError(e) };
+      keysState.status = { kind: "error", text: keysRegisterErrorMessage(e) };
     }
     draw();
   }
