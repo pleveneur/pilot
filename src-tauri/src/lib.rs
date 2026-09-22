@@ -2761,6 +2761,7 @@ pub fn run() {
             play_assistant_sound,
             telegram::telegram_notify,
             telegram::telegram_send_buttons,
+            telegram::telegram_edit_message,
             telegram::telegram_poll_inbound,
             telegram::telegram_inbound_commit,
             set_window_title,

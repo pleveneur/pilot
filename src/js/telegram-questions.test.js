@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   formatQuestionForTelegram,
   formatQuestionReminder,
+  formatQuestionAnswered,
   buildQuestionButtons,
   parseCallbackData,
   MAX_CALLBACK_BYTES,
@@ -386,6 +387,111 @@ describe("pressCallback — appui de bouton (étape 2, lot 3)", () => {
 
     expect(bridge.pressCallback("nawak")).toBe(true);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatQuestionAnswered — message réécrit après réponse (lot 4)", () => {
+  it("conserve la question et annonce qu'elle est déjà répondue", () => {
+    const text = formatQuestionAnswered({ title: "Approche ?", options: ["A", "B"] });
+    expect(text).toContain("Approche ?");
+    expect(text).toContain("Déjà répondu");
+  });
+});
+
+describe("createTelegramQuestionBridge — message réécrit après réponse (étape 2, lot 4)", () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("retire les boutons et marque « déjà répondu » après une réponse de l'application", async () => {
+    const editMessage = vi.fn(async () => undefined);
+    const bridge = createTelegramQuestionBridge({
+      send: vi.fn(),
+      sendButtons: vi.fn(async () => ({ sent: true, messageId: 77 })),
+      editMessage,
+      timers: fakeTimers(),
+      ...silence,
+    });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, vi.fn());
+    await flush();
+
+    bridge.settle(question);
+    expect(editMessage).toHaveBeenCalledTimes(1);
+    expect(editMessage.mock.calls[0][0]).toBe(77);
+    expect(editMessage.mock.calls[0][1]).toContain("Déjà répondu");
+  });
+
+  it("une réponse arrivée par Telegram déclenche la même mise à jour", async () => {
+    const editMessage = vi.fn(async () => undefined);
+    const bridge = createTelegramQuestionBridge({
+      send: vi.fn(),
+      sendButtons: vi.fn(async () => ({ sent: true, messageId: 78 })),
+      editMessage,
+      timers: fakeTimers(),
+      ...silence,
+    });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, vi.fn());
+    await flush();
+    const gen = bridge.current().generation;
+
+    bridge.pressCallback(`q${gen}:0`);
+    bridge.settle(question); // l'application referme la question
+    expect(editMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("sans identifiant de message : aucune tentative", async () => {
+    const editMessage = vi.fn(async () => undefined);
+    const bridge = createTelegramQuestionBridge({
+      send: vi.fn(),
+      sendButtons: vi.fn(async () => ({ sent: true, messageId: null })),
+      editMessage,
+      timers: fakeTimers(),
+      ...silence,
+    });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, vi.fn());
+    await flush();
+
+    bridge.settle(question);
+    expect(editMessage).not.toHaveBeenCalled();
+  });
+
+  it("une seule tentative, même si la question est résolue plusieurs fois", async () => {
+    const editMessage = vi.fn(async () => undefined);
+    const bridge = createTelegramQuestionBridge({
+      send: vi.fn(),
+      sendButtons: vi.fn(async () => ({ sent: true, messageId: 79 })),
+      editMessage,
+      timers: fakeTimers(),
+      ...silence,
+    });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, vi.fn());
+    await flush();
+
+    bridge.settle(question);
+    bridge.settle(question);
+    expect(editMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("un échec de mise à jour est silencieux (aucune erreur remontée)", async () => {
+    const warns = [];
+    const editMessage = vi.fn(() => {
+      throw new Error("API en panne");
+    });
+    const bridge = createTelegramQuestionBridge({
+      send: vi.fn(),
+      sendButtons: vi.fn(async () => ({ sent: true, messageId: 80 })),
+      editMessage,
+      timers: fakeTimers(),
+      warn: (...a) => warns.push(a.join(" ")),
+    });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, vi.fn());
+    await flush();
+
+    expect(() => bridge.settle(question)).not.toThrow();
+    expect(warns.join("\n")).toContain("mise à jour du message ignorée");
   });
 });
 

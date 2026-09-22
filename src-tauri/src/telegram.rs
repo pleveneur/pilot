@@ -368,6 +368,75 @@ pub fn telegram_send_buttons(
     })
 }
 
+// ── ÉTAPE 2 (lot 4) : MISE À JOUR DU MESSAGE UNE FOIS RÉPONDU ──────────────
+//
+// La question répondue est RÉÉCRITE dans Telegram : les boutons sont RETIRÉS
+// (clavier inline vide) et le texte porte la mention « déjà répondu ». Un échec
+// de cette mise à jour est SILENCIEUX : l'affichage est un confort, il ne doit
+// jamais perturber la conversation ni remonter à l'utilisateur.
+
+/// Corps `editMessageText` : texte remplacé et clavier inline RETIRÉ (tableau
+/// vide). Fonction PURE.
+pub fn edit_text_body(cfg: &TelegramConfig, message_id: i64, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "chat_id": cfg.chat_id.trim(),
+        "message_id": message_id,
+        "text": clean_text(text),
+        "reply_markup": { "inline_keyboard": [] },
+    })
+}
+
+/// Cœur sans I/O de la mise à jour du message (transport INJECTÉ, comme
+/// `dispatch_buttons`).
+pub fn dispatch_edit<P>(
+    cfg: &TelegramConfig,
+    message_id: i64,
+    text: &str,
+    post: P,
+) -> TelegramOutcome
+where
+    P: FnOnce(&str, &serde_json::Value) -> Result<serde_json::Value, String>,
+{
+    if let Some(reason) = cfg.inert_reason() {
+        return TelegramOutcome::Inert(reason);
+    }
+    if message_id <= 0 {
+        return TelegramOutcome::Inert("message inconnu");
+    }
+    let body = edit_text_body(cfg, message_id, text);
+    if body["text"].as_str().unwrap_or("").is_empty() {
+        return TelegramOutcome::Inert("message vide");
+    }
+    let url = format!(
+        "{}/bot{}/editMessageText",
+        TELEGRAM_API_BASE,
+        cfg.token.trim()
+    );
+    match post(&url, &body) {
+        Ok(_) => TelegramOutcome::Sent,
+        Err(e) => TelegramOutcome::Failed(redact_token(&e, &cfg.token)),
+    }
+}
+
+/// Commande Tauri : réécrit le message d'une question répondue. N'attend pas le
+/// réseau (thread détaché) et ne renvoie JAMAIS d'erreur ; un échec n'est
+/// consigné que d'une ligne, sans le jeton.
+#[tauri::command]
+pub fn telegram_edit_message(app: AppHandle, message_id: i64, text: String) -> Result<(), String> {
+    let Some(cfg) = read_gateway_config(&app) else {
+        return Ok(());
+    };
+    if !cfg.is_ready() || message_id <= 0 {
+        return Ok(());
+    }
+    std::thread::spawn(move || {
+        if let TelegramOutcome::Failed(e) = dispatch_edit(&cfg, message_id, &text, http_post_json) {
+            eprintln!("[telegram] mise à jour du message ignorée : {}", e);
+        }
+    });
+    Ok(())
+}
+
 /// Consigne le résultat sans jamais écrire le jeton. Volontairement discret :
 /// un état inerte ne produit AUCUNE trace (c'est le cas normal et silencieux).
 fn log_outcome(outcome: &TelegramOutcome) {
@@ -1204,6 +1273,61 @@ mod tests {
         assert_eq!(poll.messages[0].text, "bonjour");
         assert_eq!(poll.messages[1].callback_data, "q1:1");
         assert_eq!(poll.next_offset, 62);
+    }
+
+    // ── Étape 2 (lot 4) : mise à jour du message après réponse ──
+
+    #[test]
+    fn edit_text_body_removes_inline_keyboard() {
+        let cfg = ready();
+        let body = edit_text_body(&cfg, 321, "✅ Déjà répondu");
+        assert_eq!(body["chat_id"], "4242");
+        assert_eq!(body["message_id"], 321);
+        assert_eq!(body["text"], "✅ Déjà répondu");
+        assert_eq!(
+            body["reply_markup"]["inline_keyboard"].as_array().unwrap().len(),
+            0,
+            "clavier inline retiré"
+        );
+    }
+
+    #[test]
+    fn dispatch_edit_targets_edit_endpoint_and_never_leaks_token() {
+        let cfg = ready();
+        let outcome = dispatch_edit(&cfg, 321, "✅ Déjà répondu", |url, body| {
+            assert!(url.ends_with("/bot123456:ABC-DEF/editMessageText"));
+            assert_eq!(body["message_id"], 321);
+            assert_eq!(body["reply_markup"]["inline_keyboard"].as_array().unwrap().len(), 0);
+            Err(format!("réseau: {url}"))
+        });
+        match outcome {
+            TelegramOutcome::Failed(msg) => {
+                assert!(!msg.contains("123456:ABC-DEF"), "jeton divulgué : {msg}");
+                assert!(msg.contains("***"));
+            }
+            other => panic!("attendu Failed, obtenu {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_edit_inert_never_touches_network() {
+        let disabled = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        assert_eq!(
+            dispatch_edit(&disabled, 5, "texte", |_, _| panic!("aucun réseau attendu")),
+            TelegramOutcome::Inert("passerelle désactivée")
+        );
+        // Message sans identifiant : rien à réécrire (aucun appel réseau).
+        assert_eq!(
+            dispatch_edit(&ready(), 0, "texte", |_, _| panic!("aucun réseau attendu")),
+            TelegramOutcome::Inert("message inconnu")
+        );
+        assert_eq!(
+            dispatch_edit(&ready(), 5, "   ", |_, _| panic!("aucun réseau attendu")),
+            TelegramOutcome::Inert("message vide")
+        );
     }
 
     // ── Curseur d'écoute : le jeton du bot a changé ──

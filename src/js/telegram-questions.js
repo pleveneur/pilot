@@ -84,6 +84,15 @@ export function formatAlreadyAnswered(descriptor = {}) {
     : "✅ Cette question a déjà été répondue. Votre réponse n'a pas été prise en compte.";
 }
 
+/**
+ * Texte du message RÉÉCRIT une fois la question répondue : la question est
+ * conservée (traçabilité) et suivie de la mention « déjà répondu ». Fonction
+ * PURE.
+ */
+export function formatQuestionAnswered(descriptor = {}) {
+  return `${formatQuestionForTelegram(descriptor)}\n\n✅ Déjà répondu — les boutons sont désactivés.`;
+}
+
 /** Préfixe des charges utiles de bouton (« q<génération>:<index> »). */
 export const TELEGRAM_CALLBACK_PREFIX = "q";
 
@@ -226,6 +235,7 @@ export function parseTelegramAnswer(text, descriptor = {}) {
  *   reopen: (question?: object) => void,
  *   answerFromApp: (question: object, apply: () => unknown) => Promise<{applied: boolean, value?: unknown}>,
  *   feed: (text: string) => boolean,
+ *   pressCallback: (data: string) => boolean,
  *   clear: () => void,
  *   current: () => object|null,
  * }}
@@ -233,6 +243,7 @@ export function parseTelegramAnswer(text, descriptor = {}) {
 export function createTelegramQuestionBridge(deps = {}) {
   const send = deps.send || (() => {});
   const sendButtons = typeof deps.sendButtons === "function" ? deps.sendButtons : null;
+  const editMessage = typeof deps.editMessage === "function" ? deps.editMessage : null;
   const reminderMs = Number.isFinite(deps.reminderMs)
     ? deps.reminderMs
     : TELEGRAM_QUESTION_REMINDER_MS;
@@ -311,6 +322,9 @@ export function createTelegramQuestionBridge(deps = {}) {
       // Identité du message Telegram à boutons (pour l'éditer une fois répondu).
       generation,
       messageId: null,
+      // Lot 4 : une seule tentative de mise à jour du message, quel que soit le
+      // nombre de résolutions observées.
+      answeredSent: false,
     };
     const text = formatQuestionForTelegram(active.descriptor);
     const buttons = buildQuestionButtons(active.descriptor, generation);
@@ -339,6 +353,26 @@ export function createTelegramQuestionBridge(deps = {}) {
   }
 
   /**
+   * Réécrit le message Telegram de la question (retrait des boutons + mention
+   * « déjà répondu »). SILENCIEUX : un échec n'a aucune conséquence (l'affichage
+   * n'est qu'un confort), une seule tentative par question, rien si le message
+   * n'a pas d'identifiant connu.
+   */
+  function markAnswered(entry) {
+    if (!entry || entry.answeredSent || !editMessage) return;
+    if (entry.messageId === null || entry.messageId === undefined) return;
+    entry.answeredSent = true;
+    try {
+      const result = editMessage(entry.messageId, formatQuestionAnswered(entry.descriptor));
+      if (result && typeof result.catch === "function") {
+        result.catch((e) => warn("[telegram-questions] mise à jour du message ignorée :", e));
+      }
+    } catch (e) {
+      warn("[telegram-questions] mise à jour du message ignorée :", e);
+    }
+  }
+
+  /**
    * Marque la question comme résolue dans l'application (première réponse
    * gagne). Sans argument, résout la question active. Un message Telegram
    * arrivant ensuite et RESSEMBLANT à une réponse est signalé « déjà répondu »
@@ -351,6 +385,7 @@ export function createTelegramQuestionBridge(deps = {}) {
       // ensuite ne doit plus rien appliquer (première réponse gagne).
       active.answered = true;
       clearReminder();
+      markAnswered(active);
     }
   }
 
@@ -392,7 +427,10 @@ export function createTelegramQuestionBridge(deps = {}) {
     clearReminder();
     try {
       const value = await apply();
-      if (active && active.question === question) active.answered = true;
+      if (active && active.question === question) {
+        active.answered = true;
+        markAnswered(active);
+      }
       return { applied: true, value };
     } catch (e) {
       reopen(question);
@@ -506,10 +544,19 @@ async function defaultSendButtons(text, buttons) {
     : { sent: false };
 }
 
+/**
+ * Réécrit le message d'une question répondue (retrait des boutons + mention
+ * « déjà répondu »). Silencieux : un échec est ignoré.
+ */
+async function defaultEditMessage(messageId, text) {
+  await invoke("telegram_edit_message", { messageId, text });
+}
+
 /** Passerelle partagée par l'application (un seul état de question active). */
 export const telegramQuestionBridge = createTelegramQuestionBridge({
   send: defaultSend,
   sendButtons: defaultSendButtons,
+  editMessage: defaultEditMessage,
 });
 
 /** Publie la question active (appelé par l'onglet Assistant). */
