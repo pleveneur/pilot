@@ -345,8 +345,13 @@ d'un hébergement externe type GitHub.
   - **Bloc « ▶ Avancé »** (replié par défaut) : configuration du projet en
     **lecture seule** (hôte, port, utilisateur, port SSH, racine serveur,
     dossier local) et, **hors connexion**, le **retrait du GDS**.
-- **Deux écrans transverses** (ouverts **sans projet**) — boutons dédiés de la
-  barre d'outils :
+- **Deux écrans transverses** (ouverts **sans projet**) — **icônes du haut de la
+  barre latérale gauche**, voisines de Brouillon, Paramètres, Coffre, Remarque et
+  Aide : la **petite tour** 🖥️ ouvre l'administration (infobulle *« GDS Serveur —
+  administration (onglet transverse, hors projet) »*), les **curseurs** ⚙️ le
+  paramétrage (infobulle *« GDS — paramétrage utilisateur (onglet transverse,
+  hors projet) »*) ; l'onglet **« 🌐 GDS »**, lui, reste **dans le projet**
+  (panneau **Vues**) :
   - **« 🖥️ GDS Serveur — administration »** : connexion au serveur (**sélecteur
     explicite** des serveurs d'administration mémorisés, ou saisie manuelle),
     **Comptes** (créer, changer le rôle, activer/désactiver, réinitialiser un

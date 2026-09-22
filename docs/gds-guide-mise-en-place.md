@@ -45,6 +45,23 @@ Le document dit **toujours** où vous êtes. Il n'y a que trois lieux :
 3. **L'application Pilot** — ses fenêtres et ses onglets. Tout ce qui est « dans
    Pilot » se fait **à la souris**, sans terminal.
 
+> **Deux écrans du GDS ne sont PAS dans le projet.** « **🖥️ GDS Serveur —
+> administration** » et « **⚙️ GDS — paramétrage** » sont **transverses** : ils
+> s'ouvrent **même sans projet ouvert**, depuis les **deux icônes du haut de la
+> barre latérale gauche** de Pilot (au-dessus de la liste des fichiers),
+> voisines de Brouillon, Paramètres, Coffre, Remarque et Aide :
+>
+> - la **petite tour informatique** 🖥️ ouvre « **GDS Serveur — administration** »
+>   (infobulle au survol : *« GDS Serveur — administration (onglet transverse,
+>   hors projet) »*) ;
+> - les **curseurs de réglages** ⚙️ ouvrent « **GDS — paramétrage** » (infobulle
+>   au survol : *« GDS — paramétrage utilisateur (onglet transverse, hors
+>   projet) »*) : **Mon identité**, **Serveurs GDS**, **Mes clés**, **Mes
+>   projets GDS**.
+>
+> L'onglet **« 🌐 GDS »**, lui, n'est **pas** dans ces icônes : il est **dans le
+> projet**, ouvert par le bouton **GDS** du panneau **Vues** de la sidebar.
+
 > Les commandes données sont **PowerShell** (poste Windows). Les variantes
 > `cmd.exe` / Linux / macOS sont dans `docs/gds-server-setup.md`.
 >
@@ -181,7 +198,8 @@ indiquée.
 **Le chemin « serveur debout, administrateur créé, rien d'autre enregistré » —
 geste par geste** (votre cas probable) :
 
-1. **Dans Pilot** → onglet **« ⚙️ GDS — paramétrage » → Mon identité** :
+1. **Dans Pilot** → onglet **« ⚙️ GDS — paramétrage » → Mon identité** (icône
+   **curseurs** ⚙️ en haut de la barre latérale gauche — voir **« Où on agit »**) :
    renseignez votre **e-mail** (celui du compte administrateur) et votre **nom
    git**, puis **Enregistrer l'identité**. *(Détail : 2.3.)*
 2. **Dans Pilot** → **« ⚙️ GDS — paramétrage » → Serveurs GDS** → **Ajouter un
@@ -547,13 +565,22 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
 > trois onglets utilisés sont ceux de la barre d'outils : **« 🌐 GDS »** (rattaché
 > au projet ouvert), **« 🖥️ GDS Serveur — administration »** et
 > **« ⚙️ GDS — paramétrage »** (indépendants du projet).
+>
+> **Où cliquer** — les deux écrans **hors projet** s'ouvrent par les **icônes du
+> haut de la barre latérale gauche** : la **petite tour** 🖥️ pour « **GDS
+> Serveur — administration** », les **curseurs** ⚙️ pour « **GDS —
+> paramétrage** ». Description complète dans **« Où on agit »**, en tête de ce
+> document. L'onglet **« 🌐 GDS »**, lui, est dans le panneau **Vues** (projet
+> ouvert).
 
 ### 2.1 — Ouvrir l'écran d'administration et se connecter
 
-- **Dans Pilot, vous faites :** cliquez sur le bouton **« GDS Serveur »** de la
-  barre d'outils (l'onglet **« 🖥️ GDS Serveur — administration »** s'ouvre, même
-  sans projet). Bloc **« Connexion serveur »**, remplissez **Adresse du
-  serveur** = `127.0.0.1`, **Port HTTP** = `8080`, **Email administrateur** et
+- **Dans Pilot, vous faites :** cliquez sur l'icône **petite tour** 🖥️ du haut
+  de la barre latérale gauche (infobulle *« GDS Serveur — administration
+  (onglet transverse, hors projet) »*) : l'onglet **« 🖥️ GDS Serveur —
+  administration »** s'ouvre, même sans projet. Bloc **« Connexion serveur »**,
+  remplissez **Adresse du serveur** = `127.0.0.1`, **Port HTTP** = `8080`,
+  **Email administrateur** et
   **Mot de passe administrateur**, puis **Tester la connexion**. Si vous avez
   déjà enregistré ce serveur d'administration, choisissez-le dans le
   **sélecteur « Serveur mémorisé »** (option *— saisie manuelle —* pour
@@ -586,9 +613,11 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
 
 ### 2.3 — Renseigner son identité (une seule fois)
 
-- **Dans Pilot, vous faites :** onglet **« ⚙️ GDS — paramétrage » → Mon
-  identité** : renseignez votre **Email (identité globale)** et votre **Nom
-  git**, puis **Enregistrer l'identité**.
+- **Dans Pilot, vous faites :** cliquez sur l'icône **curseurs** ⚙️ du haut de
+  la barre latérale gauche (infobulle *« GDS — paramétrage utilisateur (onglet
+  transverse, hors projet) »*) : l'onglet **« ⚙️ GDS — paramétrage »** s'ouvre,
+  puis **Mon identité** : renseignez votre **Email (identité globale)** et votre
+  **Nom git**, puis **Enregistrer l'identité**.
 - **Vous voyez :** les champs sont mémorisés ; les écrans suivants ne les
   redemandent plus (ils sont pré-remplis).
 - **Si ce n'est pas ça :** les boutons « enregistrer ma clé » et « ajouter le
@@ -1144,6 +1173,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 
 | Symptôme | Où aller |
 |---|---|
+| je ne trouve pas l'onglet « ⚙️ GDS — paramétrage » (ou « 🖥️ GDS Serveur — administration ») | il n'est **pas dans le projet** : ouvrez-le par les **icônes du haut de la barre latérale gauche** — **petite tour** 🖥️ pour l'administration, **curseurs** ⚙️ pour le paramétrage (voir **« Où on agit »**, en tête de ce document) |
 | `docker compose ps` reste `starting` | patienter (jusqu'à 2 min) ; `docker compose logs gds` |
 | « mot de passe de la base … non défini » | remplir `POSTGRES_PASSWORD` dans `.env` (1.2), puis `docker compose up -d` |
 | `password authentication failed for user "pilot"` | **c'est le piège du port** : voir l'**encadré en tête de ce document**, puis `docs/gds-server-setup.md` §5.1 |
