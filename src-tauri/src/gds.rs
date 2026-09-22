@@ -64,6 +64,14 @@ pub(crate) struct ServerCredentials {
     /// Description libre de la fiche serveur (facultatif).
     #[serde(default)]
     pub description: String,
+    /// Date ISO (UTC) du dernier test de connexion MÉMORISÉ pour cette fiche.
+    /// Chaîne vide = jamais testé depuis cette version.
+    #[serde(default)]
+    pub last_test_at: String,
+    /// Résultat du dernier test : `Some(true)` joignable, `Some(false)`
+    /// injoignable, `None` jamais testé. Sert à afficher l'état sur la fiche.
+    #[serde(default)]
+    pub reachable: Option<bool>,
 }
 
 /// Défaut `validated = true` : les serveurs déjà enregistrés (Évolution 1)
@@ -306,6 +314,8 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "validated": true,
                 "name": c.name,
                 "description": c.description,
+                "last_test_at": c.last_test_at,
+                "reachable": c.reachable,
             })
         })
         .collect()
@@ -556,6 +566,25 @@ pub(crate) fn set_server_label(
     write_gds_secrets(&secrets)
 }
 
+/// Horodatage ISO (UTC, secondes) des tests de connexion mémorisés.
+pub(crate) fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Mémorise le RÉSULTAT du dernier test de connexion d'une fiche serveur (date
+/// + joignable/injoignable). Ne touche PAS aux mots de passe. Sans entrée
+/// existante : no-op silencieux (les fiches non mémorisées n'ont pas d'état).
+pub(crate) fn record_server_test(host: &str, user: &str, reachable: bool) -> Result<(), String> {
+    let mut secrets = read_gds_secrets()?;
+    let key = server_key(host, user);
+    let Some(entry) = secrets.servers.get_mut(&key) else {
+        return Ok(());
+    };
+    entry.last_test_at = now_iso();
+    entry.reachable = Some(reachable);
+    write_gds_secrets(&secrets)
+}
+
 /// Commande Tauri : liste les serveurs GDS mémorisés (hôte/port/utilisateur
 /// uniquement — jamais les mots de passe). Pour l'UI section 1 (Évolution 1).
 #[tauri::command]
@@ -711,7 +740,13 @@ pub async fn gds_test_saved_server(
     user: String,
     db_password: String,
 ) -> Result<Value, String> {
-    test_saved_server_connection(&host, &port, &user, &db_password).await?;
+    let res = test_saved_server_connection(&host, &port, &user, &db_password).await;
+    // Lot 5 : mémoriser le résultat (date + joignable/injoignable) sur la fiche.
+    // `ok` vaut `false` quand la connexion échoue : c'est une information utile,
+    // pas une erreur d'exécution de la commande. L'échec est donc renvoyé à
+    // l'appelant APRÈS enregistrement.
+    let _ = record_server_test(&host, &user, res.is_ok());
+    res?;
     Ok(json!({ "ok": true }))
 }
 
@@ -731,6 +766,7 @@ pub async fn gds_add_saved_server(
     test_saved_server_connection(&host, &port, &user, &db_password).await?;
     save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
     set_server_label(&host, &user, &name, &description)?;
+    let _ = record_server_test(&host, &user, true);
     Ok(json!({
         "ok": true,
         "host": host.trim(),
@@ -792,6 +828,7 @@ pub async fn gds_update_saved_server(
     }
     save_server_credentials(&host, port_eff, &user, &db_eff, &admin_eff)?;
     set_server_label(&host, &user, &name_eff, &description_eff)?;
+    let _ = record_server_test(&host, &user, true);
     Ok(json!({
         "ok": true,
         "host": host.trim(),
@@ -2806,6 +2843,35 @@ mod tests {
             .unwrap();
         assert_eq!(entry["name"], "");
         assert_eq!(entry["description"], "");
+        assert_eq!(entry["last_test_at"], "");
+        assert!(entry["reachable"].is_null());
+    }
+
+    #[test]
+    fn server_test_state_is_memorized_and_listed() {
+        // Lot 5 : le résultat du dernier test (date + joignable/injoignable) est
+        // persisté sur la fiche et exposé à l'UI, jamais un mot de passe.
+        let _guard = TestGdsSecretsGuard::new();
+        save_server_credentials("10.9.4.1", "5432", "srv", "pw", "adm").unwrap();
+        record_server_test("10.9.4.1", "srv", false).unwrap();
+        let down = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == "10.9.4.1")
+            .unwrap();
+        assert_eq!(down["reachable"], false);
+        let date = down["last_test_at"].as_str().unwrap().to_string();
+        assert!(date.ends_with('Z') && date.contains('T'), "date ISO UTC : {}", date);
+        // Un test réussi remplace l'état précédent.
+        record_server_test("10.9.4.1", "srv", true).unwrap();
+        let up = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == "10.9.4.1")
+            .unwrap();
+        assert_eq!(up["reachable"], true);
+        assert_eq!(up["last_test_at"], down["last_test_at"]);
+        // Serveur inconnu : no-op, aucune fiche créée.
+        record_server_test("10.9.4.2", "inconnu", true).unwrap();
+        assert!(!list_saved_servers().iter().any(|v| v["host"] == "10.9.4.2"));
     }
 
     #[test]

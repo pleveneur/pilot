@@ -11,6 +11,8 @@ import {
   initialServersState,
   serverLabel,
   serverTitle,
+  formatServerTestDate,
+  serverStateBadge,
   validateServerForm,
   renderParamsStatusHtml,
   renderServersListHtml,
@@ -206,6 +208,39 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(shell).toContain("gds-params-srv-list");
     expect(shell).not.toContain("À venir — L5.2");
     expect(shell).toContain("À venir — L5.3");
+  });
+
+  it("formatServerTestDate : date locale, chaîne vide si absente ou illisible (lot 5)", () => {
+    expect(formatServerTestDate("")).toBe("");
+    expect(formatServerTestDate("pas une date")).toBe("");
+    expect(formatServerTestDate("2026-09-22T15:04:05Z")).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
+    const d = new Date("2026-09-22T15:04:05Z");
+    const p = (n) => String(n).padStart(2, "0");
+    expect(formatServerTestDate("2026-09-22T15:04:05Z")).toBe(
+      `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`
+    );
+  });
+
+  it("serverStateBadge : jamais testé / joignable / injoignable, avec date (lot 5)", () => {
+    expect(serverStateBadge({})).toEqual({ kind: "off", text: "Jamais testé" });
+    expect(serverStateBadge({ reachable: null })).toEqual({ kind: "off", text: "Jamais testé" });
+    expect(serverStateBadge({ reachable: true }).kind).toBe("ok");
+    expect(serverStateBadge({ reachable: false }).kind).toBe("warn");
+    expect(serverStateBadge({ reachable: true, last_test_at: "2026-09-22T15:04:05Z" }).text).toMatch(/^Joignable \(\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}\)$/);
+    expect(serverStateBadge({ reachable: false, last_test_at: "2026-09-22T15:04:05Z" }).text).toMatch(/^Injoignable \(/);
+    // Date illisible : l'état reste dit, sans inventer de date.
+    expect(serverStateBadge({ reachable: true, last_test_at: "x" })).toEqual({ kind: "ok", text: "Joignable" });
+  });
+
+  it("renderServersListHtml affiche l'état du serveur (lot 5)", () => {
+    const html = renderServersListHtml({
+      loading: false,
+      hasProject: true,
+      servers: [{ host: "h", port: "5432", user: "u", name: "N", reachable: false, last_test_at: "2026-09-22T15:04:05Z" }],
+    });
+    expect(html).toContain("gds-badge-warn");
+    expect(html).toMatch(/Injoignable \(/);
+    expect(html).not.toContain("db_password");
   });
 
   it("renderServersSectionHtml : sélecteur du projet cible (lot 2), repli sur hasProject", () => {

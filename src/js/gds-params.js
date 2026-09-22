@@ -130,6 +130,31 @@ export function serverTitle(s) {
 }
 
 /**
+ * Formate la date ISO du dernier test en `JJ/MM/AAAA HH:MM` local. Valeur
+ * absente ou illisible → chaîne vide (jamais une date inventée). Pure.
+ */
+export function formatServerTestDate(iso) {
+  if (!iso) return "";
+  const d = new Date(String(iso));
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * État affiché d'un serveur mémorisé : jamais testé / joignable / injoignable,
+ * avec la date du dernier test quand elle est connue. Pure — testable. Seuls
+ * des champs non sensibles entrent ici.
+ */
+export function serverStateBadge(s) {
+  const sv = s || {};
+  const date = formatServerTestDate(sv.last_test_at);
+  if (sv.reachable === true) return { kind: "ok", text: date ? `Joignable (${date})` : "Joignable" };
+  if (sv.reachable === false) return { kind: "warn", text: date ? `Injoignable (${date})` : "Injoignable" };
+  return { kind: "off", text: "Jamais testé" };
+}
+
+/**
  * Valide le formulaire de serveur (pure, testable). Renvoie un message d'erreur
  * ou "" si valide. En mode « ajout », le mot de passe est requis pour tester la
  * connexion ; en mode « édition », un mot de passe vide CONSERVE l'existant.
@@ -182,10 +207,11 @@ export function renderServersListHtml(state = {}) {
       const user = String(sv.user || "").trim();
       const port = String(sv.port || "").trim() || "5432";
       const isPend = !!pend && pend.host === host && pend.user === user;
+      const badge = serverStateBadge(sv);
       const desc = String(sv.description || "").trim();
       return `<div class="gds-params-srv-row" data-host="${esc(host)}" data-port="${esc(port)}" data-user="${esc(user)}">
         <div class="gds-params-srv-main">
-          <div class="gds-params-srv-title">${esc(serverTitle(sv))}</div>
+          <div class="gds-params-srv-title">${esc(serverTitle(sv))} <span class="gds-badge gds-badge-${badge.kind}">${esc(badge.text)}</span></div>
           ${desc ? `<div class="gds-params-srv-desc">${esc(desc)}</div>` : ""}
           <div class="gds-params-srv-sub">${esc(serverLabel(sv))} — identifiants conservés hors projet</div>
         </div>
@@ -794,7 +820,9 @@ export function createGdsParams(container) {
       } catch (e) {
         state.status = { kind: "error", text: friendlyGdsError(e) };
       }
-      draw();
+      // Lot 5 : le test met à jour la date et l'état de la fiche — on relit la
+      // liste pour afficher l'état réel (le mot de passe n'est jamais repris).
+      await refreshServers();
       return;
     }
     if (action === "apply") {
