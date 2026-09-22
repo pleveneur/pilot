@@ -1,6 +1,7 @@
 # Spécification — Passerelle Telegram (étape 1 : ENVOI · étape 2 : ÉCOUTE et RÉPONSES)
 
-> **Statut : ✅ Implémenté (lots 0, 1 et 3 inclus).** Étape 1 (envoi) en v0.4.14 ;
+> **Statut : ✅ Implémenté (lots 0, 1 et 3 inclus) + canal de discussion à
+> boutons natifs (étape 2).** Étape 1 (envoi) en v0.4.14 ;
 > **étape 2, lot 0 (socle d'écoute)**, **lot 1 (répondre depuis Telegram aux
 > questions de l'assistant)** puis **lot 3 (l'Assistant parle sur Telegram)**
 > implémentés ensuite (branche `feat/telegram-etape2-lot0-ecoute`).
@@ -10,12 +11,12 @@
 > d'activation n'est proposé que si la passerelle est **réellement
 > opérationnelle** (11.1) ; la réponse donnée dans l'application marque la
 > question résolue **avant** son envoi (course, 10.1).
-> **Passage de correctifs** (suite à la relecture indépendante) : les avis bruts
-> ne sont plus jamais **coupés** — les alertes partent toujours, les autres avis
-> sont **différés** puis envoyés si l'Assistant ne parle pas (11.4) ; le bouton
-> d'activation n'est proposé que si la passerelle est **réellement
-> opérationnelle** (11.1) ; la réponse donnée dans l'application marque la
-> question résolue **avant** son envoi (course, 10.1).
+> **Canal de discussion (branche `gds-refonte-l2`)** : les questions partent avec
+> de **vrais boutons** (un par option) ; un **appui** emprunte le **même chemin de
+> réponse qu'un texte** (première réponse gagne) et est **accusé de réception** ;
+> une fois la question répondue, son message Telegram est **réécrit** (boutons
+> retirés + mention « déjà répondu »), et un message tardif **ressemblant à une
+> réponse** est **signalé** au lieu de tomber dans la discussion (§ 12).
 > Composant : `src-tauri/src/telegram.rs` (moteur d'envoi **et** de réception) +
 > `src/js/desktop-notify.js` (avis sortants) + `src/js/telegram-inbound.js`
 > (écoute au démarrage) + `src/js/telegram-questions.js` (questions/réponses) +
@@ -81,19 +82,30 @@ Décocher le réglage suffit à tout arrêter.
 
 ⚠️ **Répondre aux questions depuis Telegram (lot 1)** : quand l'Assistant vous
 **pose une question** (choix, confirmation, saisie libre), Pilot vous l'envoie
-**aussi sur Telegram**, avec la liste numérotée des options. Répondez **en
-texte** :
+**aussi sur Telegram**.
+
+Sur une question à **choix multiples** ou une **confirmation (Oui / Non)**, le
+message comporte de **vrais boutons** : appuyez simplement sur l'option voulue,
+**sans rien recopier**. Vous pouvez toujours répondre **en texte** si vous
+préférez :
 
 - **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
 - sur une **confirmation** (Oui/Non), un accord clair (« oui », « ok », « vas-y »…) confirme et un refus clair (« non », « annule », « stop »…) refuse ; un texte ambigu **ne décide rien** : la question reste posée et vous est reposée ;
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
   précision d'un choix).
 
+Dès que la question est répondue (**bouton**, **texte sur Telegram**, ou
+réponse **dans Pilot**), le message Telegram est **mis à jour** : les boutons
+disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous voyez d'un
+coup d'œil qu'il n'y a plus rien à faire.
+
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
-Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,
-la question reste posée et Pilot vous envoie **un seul rappel discret** après
-quelques minutes. Un message écrit par une **autre personne** que vous est
-**ignoré** (jamais de réponse).
+Pilot garde la première et ignore l'autre, sans erreur. Un message **tardif qui
+ressemble à une réponse** reçoit alors « ✅ cette question a déjà été répondue » ;
+un **texte libre** tardif reste, lui, un message normal de la discussion. Si vous
+ne répondez pas, la question reste posée et Pilot vous envoie **un seul rappel
+discret** après quelques minutes. Un message **ou un appui de bouton** venant
+d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
@@ -309,11 +321,13 @@ est rangé dans **Paramètres ⚙️ → onglet Assistant**.
   réel. Le réglage est validé par la réception du prochain avis.
 - Un avis perdu (hors ligne) n'est jamais rejoué : c'est un confort, pas un
   canal garanti.
-- **Réponse par numéro ou par oui / non** : les questions se répondent en
-  **texte** (un numéro pour choisir, un accord / refus clair pour une
-  confirmation, sinon texte libre). Un texte ambigu sur une confirmation ne
-  tranche rien : la question reste posée et est reposée. Les **boutons**
-  Telegram sont réservés à un lot ultérieur.
+- **Réponse par numéro, oui / non, ou bouton** : les questions se répondent par
+  **appui sur un bouton** (questions à choix / confirmation) ou en **texte** (un
+  numéro pour choisir, un accord / refus clair pour une confirmation, sinon texte
+  libre). Un texte ambigu sur une confirmation ne tranche rien : la question
+  reste posée et est reposée. Le **rendu réel** des boutons et la mise à jour du
+  message par l'API n'ont **pas** été observés avec un bot réel (tests à
+  transports injectés).
 
 ## 9. Étape 2, lot 0 — socle d'écoute
 
@@ -662,3 +676,72 @@ l'avis retenu (doublon évité, mais l'avis brut n'est alors pas envoyé).
   comparé par `config_is_default` ; une configuration **ancienne** (champ absent)
   reste lisible et reprend son défaut ; un aller-retour de sérialisation conserve
   l'état activé.
+
+## 12. Étape 2 — canal de discussion à boutons natifs
+
+Quatre briques, un incrément chacune (branche `gds-refonte-l2`).
+
+### 12.1 Signal « déjà répondu » sur un message tardif (`telegram-questions.js`)
+
+`feed` : si la question est close (`active.resolved`) et que le message
+**ressemble à une réponse** (`option` ou `decision`), il est **consommé** et
+`formatAlreadyAnswered(descriptor)` est envoyé au propriétaire ; un **texte
+libre** reste, lui, un message normal de la discussion. L'entrée close est donc
+conservée en mémoire (sans jamais réinventer une seconde question). Limite
+assumée : une réponse tardive **libre** (saisie) ne se distingue pas d'un
+message de discussion — elle n'est pas signalée.
+
+### 12.2 Boutons natifs (`telegram_send_buttons`)
+
+`ask()` publie la question avec un clavier « inline » : `buildQuestionButtons`
+(un bouton par option, libellé borné) produit des charges utiles
+`q<génération>:<index>` (≤ `MAX_CALLBACK_BYTES = 64` **octets**), où la
+**génération** (compteur incrémenté à chaque question) périme les boutons d'une
+question remplacée. Côté Rust, `inline_keyboard_json` + `dispatch_buttons`
+(transport **injecté**) ; la commande `telegram_send_buttons` renvoie
+`{status:"sent", messageId}` / `inert` / `failed` (jamais d'erreur). L'identifiant
+est mémorisé dans l'entrée active. Sans bouton exploitable (saisie libre) la
+question part en texte simple ; si les boutons n'ont pas pu être posés,
+l'appelant replie sur l'avis texte — sauf si la question a été répondue
+entre-temps (pas de doublon).
+
+### 12.3 Appuis de bouton reçus par le même chemin que le texte
+
+`collect_inbound` retient les `callback_query` du **propriétaire** seulement
+(`callback_query.message.chat.id`, filtre **identique** à celui des messages) et
+ajoute `callbackData` / `callbackId` au message remonté.
+`telegram_poll_inbound` **accuse réception** de chaque appui
+(`answerCallbackQuery`, best-effort, jeton jamais journalisé) puis
+`telegram-inbound.js` confie l'appui à `consumeTelegramQuestionCallback` — et
+**jamais** à la conversation. `pressCallback` vérifie la **génération** puis
+délègue à `feed("<index + 1>")` : numéro d'option, garde-fou de plage,
+« première réponse gagne » et signal « déjà répondu » sont donc **exactement**
+ceux d'une réponse textuelle. Un appui périmé, hors plage ou illisible est
+consommé sans effet.
+
+### 12.4 Message réécrit après réponse (`telegram_edit_message`)
+
+À la résolution (application **ou** Telegram), `markAnswered` réécrit le message :
+`formatQuestionAnswered` (question conservée + « ✅ Déjà répondu ») et
+`reply_markup: {inline_keyboard: []}` **retire les boutons**. Une seule tentative
+par question ; l'échec est **silencieux** (thread détaché côté Rust, erreur avalée
+côté JS) : l'affichage Telegram est un confort, jamais une contrainte.
+
+### 12.5 Tests
+
+- **Rust** (`telegram.rs`) : clavier (un bouton par ligne, libellés vides et
+  charges > 64 octets écartés) ; envoi à boutons (URL, `reply_markup`, identifiant
+  extrait ; sans bouton → **aucun** clavier ; inerte → **aucun** réseau ; échec →
+  jeton `***`) ; réception des appuis (propriétaire retenu, inconnu ignoré, charge
+  vide écartée, ordre message/appui, curseur) ; édition (clavier retiré, endpoint,
+  inerte, jeton masqué).
+- **Interface** : `formatAlreadyAnswered`, `buildQuestionButtons`,
+  `parseCallbackData`, `pressCallback` (même chemin qu'un texte, péremption,
+  hors plage, sans question active, charge inconnue), envoi à boutons + repli
+  (échec, réponse entre-temps), `formatQuestionAnswered` + `markAnswered`
+  (identifiant inconnu, une seule tentative, échec silencieux), routage des
+  appuis dans `telegram-inbound.js` (jamais déposés, curseur avancé, texte
+  jamais routé par ce chemin).
+- **Non vérifié** (aucun bot réel engagé dans ces lots) : rendu effectif des
+  boutons, accusé de réception visible côté client, mise à jour du message par
+  l'API, et le comportement réel du client après un appui.

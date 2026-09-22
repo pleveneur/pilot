@@ -2067,19 +2067,30 @@ Décocher le réglage suffit à tout arrêter.
 
 ⚠️ **Répondre aux questions depuis Telegram (lot 1)** : quand l'Assistant vous
 **pose une question** (choix, confirmation, saisie libre), Pilot vous l'envoie
-**aussi sur Telegram**, avec la liste numérotée des options. Répondez **en
-texte** :
+**aussi sur Telegram**.
+
+Sur une question à **choix multiples** ou une **confirmation (Oui / Non)**, le
+message comporte de **vrais boutons** : appuyez simplement sur l'option voulue,
+**sans rien recopier**. Vous pouvez toujours répondre **en texte** si vous
+préférez :
 
 - **un numéro** (« 1 », « 2 »…) sélectionne l'option correspondante ;
 - sur une **confirmation** (Oui/Non), un accord clair (« oui », « ok », « vas-y »…) confirme et un refus clair (« non », « annule », « stop »…) refuse ; un texte ambigu **ne décide rien** : la question reste posée et vous est reposée ;
 - **tout autre texte** est pris comme réponse libre (valeur d'une saisie, ou
   précision d'un choix).
 
+Dès que la question est répondue (**bouton**, **texte sur Telegram**, ou
+réponse **dans Pilot**), le message Telegram est **mis à jour** : les boutons
+disparaissent et la mention **« ✅ Déjà répondu »** apparaît — vous voyez d'un
+coup d'œil qu'il n'y a plus rien à faire.
+
 La **première réponse gagne** : si vous répondez dans Pilot **ou** sur Telegram,
-Pilot garde la première et ignore l'autre sans erreur. Si vous ne répondez pas,
-la question reste posée et Pilot vous envoie **un seul rappel discret** après
-quelques minutes. Un message écrit par une **autre personne** que vous est
-**ignoré** (jamais de réponse).
+Pilot garde la première et ignore l'autre, sans erreur. Un message **tardif qui
+ressemble à une réponse** reçoit alors « ✅ cette question a déjà été répondue » ;
+un **texte libre** tardif reste, lui, un message normal de la discussion. Si vous
+ne répondez pas, la question reste posée et Pilot vous envoie **un seul rappel
+discret** après quelques minutes. Un message **ou un appui de bouton** venant
+d'une **autre personne** que vous est **ignoré** (jamais de réponse).
 
 📨 **L'Assistant vous parle sur Telegram** : dans l'onglet **🧭 Assistant**, un
 petit bouton de discussion permet d'**activer** cette communication. Il
