@@ -262,6 +262,41 @@ chose comme :
 > valeur, « Ajouter ce projet au GDS » s'arrête sur « Racine des dépôts serveur
 > non renseignée ».
 
+### 3.3bis Fermer le port de la base (voie « compte GDS »)
+
+Depuis que le poste travaille par le **service** (fiche de **compte GDS**, pas
+compte technique de base), **il n'ouvre plus aucune connexion PostgreSQL** :
+l'activation, l'ajout d'un projet, la synchronisation et l'état GDS passent par
+l'API HTTP (port `8080`), et la base est préparée par le **serveur lui-même** à
+son démarrage. Le port `5432` peut donc **ne plus être publié** :
+
+```dotenv
+# .env — le poste n'a plus besoin de la base : on ne la publie plus.
+# (les deux autres ports restent nécessaires : 8080 = API, 2222 = dépôts git)
+GDS_DB_BIND_ADDR=127.0.0.1
+```
+
+```powershell
+docker compose up -d
+docker compose ps
+```
+
+La ligne des ports ne doit **plus** contenir `5432->5432/tcp` (ou seulement
+`127.0.0.1:5432->5432/tcp`, joint par le poste seul). Pour aller plus loin,
+**commenter** la ligne `- "${GDS_DB_BIND_ADDR…}:5432"` du `docker-compose.yml`
+supprime complètement la publication ; c'est un geste **manuel et réversible**
+(le conteneur, lui, n'a pas besoin de ce port : il parle à sa base en interne).
+
+> **Quand NE PAS le faire** : tant qu'un projet du poste garde une **fiche
+> héritée** (compte technique de base) — c'est-à-dire tant que la migration vers
+> le compte GDS n'est pas faite pour ce projet — le poste se connecte encore
+> directement à la base et le port doit rester publié sur l'adresse du poste.
+> Le port est donc à fermer **projet par projet**, quand tous ceux du poste sont
+> passés au compte GDS.
+>
+> **Pour vérifier ce que fait un projet** : écran **🌐 GDS** du projet —
+> l'état s'obtient par la **santé du service** (aucune connexion à la base).
+
 ### 3.4 Publier l'interface d'administration sur le réseau privé
 
 C'est ici que l'**automatisation Tailscale de Pilot** est réutilisée, sans être

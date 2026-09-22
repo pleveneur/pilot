@@ -362,9 +362,10 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "gds_email": c.gds_email,
                 "gds_role": c.gds_role,
                 // Booléen (pas un secret) : la fiche porte-t-elle encore le
-                // compte technique de la base ? Seules ces fiches peuvent être
-                // appliquées à un projet tant que le client « compte GDS »
-                // n'existe pas (lot suivant).
+                // compte technique de la base ? Depuis le lot 4, une fiche
+                // « compte GDS » est applicable seule (le serveur prépare sa
+                // base) ; ce booléen ne sert plus qu'à la cible d'enregistrement
+                // de clef « Mes clés », qui passe, elle, encore par la base.
                 "has_db_password": !c.db_password.as_deref().unwrap_or("").is_empty(),
             })
         })
@@ -1069,11 +1070,77 @@ pub(crate) enum ServerSide<'a> {
 
 /// Voie à employer pour ce projet : le service dès qu'une identité de compte GDS
 /// est mémorisée pour l'hôte du projet, la base directe sinon (fiches héritées).
-pub(crate) fn resolve_server_side<'a>(cfg: &GdsConfig, pool: &'a PgPool) -> ServerSide<'a> {
+///
+/// Le pool est FACULTATIF (lot 4) : sur la voie service le poste n'a plus besoin
+/// d'aucune connexion PostgreSQL (le serveur prépare SA base). Il n'est donc
+/// requis que par la voie héritée — sans lui, l'erreur reste celle du poste non
+/// provisionné (message inchangé, rendu actionnable par l'UI).
+pub(crate) fn resolve_server_side<'a>(
+    cfg: &GdsConfig,
+    pool: Option<&'a PgPool>,
+) -> Result<ServerSide<'a>, String> {
     match gds_service::resolve_service_identity(cfg) {
-        Some(ident) => ServerSide::Service(ident),
-        None => ServerSide::Legacy(pool),
+        Some(ident) => Ok(ServerSide::Service(ident)),
+        None => match pool {
+            Some(p) => Ok(ServerSide::Legacy(p)),
+            None => Err("GDS non provisionné".to_string()),
+        },
     }
+}
+
+/// Enregistre (idempotent) la clef SSH du poste sur la voie choisie.
+///
+/// * `Legacy` : enregistrement par le poste — serveur LOCAL, en base ET dans
+///   `authorized_keys` ; serveur DISTANT, en base seulement (la clef est ajoutée
+///   à la main sur le serveur : on n'administre jamais une machine distante) ;
+/// * `Service` : le serveur la rattache lui-même au compte prouvé par le jeton.
+pub(crate) async fn register_poste_key_for(
+    side: &ServerSide<'_>,
+    cfg: &GdsConfig,
+    email: &str,
+) -> Result<(), String> {
+    match side {
+        ServerSide::Legacy(pool) => {
+            if is_local_gds_server(cfg) {
+                gds_ssh::ensure_poste_key(pool, email).await?;
+            } else {
+                gds_ssh::ensure_poste_key_remote(pool, email).await?;
+            }
+        }
+        ServerSide::Service(ident) => {
+            gds_service::register_poste_key(ident).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Pool PostgreSQL FACULTATIF d'un projet (lot 4). Ordre :
+///  1. le pool déjà ouvert dans `AppState` ;
+///  2. **rien** si la config porte une identité de COMPTE GDS : la voie service
+///     n'a besoin d'aucun pool (le serveur prépare sa base — aucune connexion
+///     PostgreSQL, donc aucun port de base à publier) ;
+///  3. sinon une reconnexion — voie héritée (compte technique), inchangée.
+///
+/// `None` n'est donc PAS une erreur ici : c'est la voie héritée sans base, que
+/// `resolve_server_side` refusera avec un message clair. Fail-open : jamais
+/// bloquant pour l'interface.
+pub(crate) async fn optional_pool(
+    state: &AppState,
+    project: &str,
+    cfg: Option<&GdsConfig>,
+) -> Option<PgPool> {
+    if let Some(p) = state.gds_pool.lock().ok().and_then(|g| g.clone()) {
+        return Some(p);
+    }
+    let owned = read_gds_config(project).ok();
+    let cfg = cfg.or(owned.as_ref());
+    if cfg
+        .map(|c| gds_service::resolve_service_identity(c).is_some())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    restore_pool_for_project(project).await.ok()
 }
 
 /// Ajoute un projet au GDS (initialisation git auto + bare + enregistrement +
@@ -1089,7 +1156,7 @@ pub(crate) fn resolve_server_side<'a>(cfg: &GdsConfig, pool: &'a PgPool) -> Serv
 /// remote add + push. En cas d'échec intermédiaire, le bare serveur créé est
 /// retiré proprement (pas d'état « à moitié attaché »).
 pub(crate) async fn add_project_to_gds(
-    pool: &PgPool,
+    pool: Option<&PgPool>,
     project: &str,
     email: &str,
     git_name: Option<String>,
@@ -1098,7 +1165,7 @@ pub(crate) async fn add_project_to_gds(
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
-    let side = resolve_server_side(&cfg, pool);
+    let side = resolve_server_side(&cfg, pool)?;
     add_project_with(&cfg, side, project, email, git_name).await
 }
 
@@ -1124,26 +1191,8 @@ async fn add_project_with(
         gds_db::ensure_can_add_project(pool, &name, email).await?;
     }
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
-    // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable. Serveur
-    // LOCAL : clef enregistrée en base ET synchronisée dans authorized_keys.
-    // Serveur DISTANT : clef enregistrée en base UNIQUEMENT (l'ajout à
-    // `authorized_keys` est MANUEL sur le serveur, voir docs/gds-server-setup.md) —
-    // on n'administre JAMAIS une machine distante depuis le poste.
-    match &side {
-        ServerSide::Legacy(pool) => {
-            let is_local = is_local_gds_server(cfg);
-            if is_local {
-                gds_ssh::ensure_poste_key(pool, email).await?;
-            } else {
-                gds_ssh::ensure_poste_key_remote(pool, email).await?;
-            }
-        }
-        // Voie service : la clef est enregistrée par le serveur, rattachée au
-        // compte prouvé par le jeton (route `POST /api/gds/ssh-keys`).
-        ServerSide::Service(ident) => {
-            gds_service::register_poste_key(ident).await?;
-        }
-    }
+    // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable.
+    register_poste_key_for(&side, cfg, email).await?;
     let is_local = is_local_gds_server(cfg);
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let repo_url = gds_remote_url(cfg, &name);
@@ -1287,7 +1336,54 @@ pub async fn gds_provision(
         db_port.trim().to_string()
     };
     let user = db_user.trim().to_string();
-    if host.is_empty() || user.is_empty() {
+    // Seul l'HÔTE est commun aux deux voies : l'utilisateur PostgreSQL n'existe
+    // que sur la voie héritée (compte technique).
+    if host.is_empty() {
+        return Err("Hôte PostgreSQL requis".to_string());
+    }
+    // ── Voie « compte GDS » (lot 4) : la préparation de la base appartient au
+    // SERVEUR (son amorçage la provisionne et rejoue les migrations, idempotent).
+    // Le poste n'ouvre AUCUNE connexion PostgreSQL : ni compte technique
+    // (utilisateur dédié, mots de passe), ni port de base. On vérifie seulement
+    // que le SERVICE répond — c'est la preuve que sa base est prête.
+    if let Some(ident) = gds_service::resolve_identity_for_host(&host, &admin_email) {
+        gds_service::service_health(&ident.host, &ident.http_port).await?;
+        let existing = read_gds_config(&project).ok();
+        let local_dir = existing
+            .as_ref()
+            .and_then(|c| c.gds_local_dir.clone())
+            .unwrap_or_else(default_gds_local_dir);
+        let ssh_port = existing.as_ref().map(|c| c.ssh_port).unwrap_or(22);
+        let gds_server_repos = existing.as_ref().and_then(|c| c.gds_server_repos.clone());
+        let cfg = GdsConfig {
+            enabled: true,
+            db_host: host.clone(),
+            db_port: port.clone(),
+            // Aucun compte technique : la base est la propriété du serveur.
+            db_user: String::new(),
+            // L'identité du projet est celle du COMPTE GDS employé (elle doit
+            // rester cohérente avec la fiche pour que la session se rouvre).
+            identity_email: ident.email.clone(),
+            server_url: String::new(),
+            gds_local_dir: Some(local_dir.clone()),
+            ssh_port,
+            gds_server_repos,
+            ssh_host: ssh_host_from_db_host(&host, ssh_port),
+        };
+        write_gds_config(&project, &cfg)?;
+        // AUCUN secret enregistré : il n'y en a aucun à enregistrer. Rien n'est
+        // effacé (les secrets d'une fiche héritée restent en place).
+        return Ok(json!({
+            "ok": true,
+            "db": gds_db::GDS_DB_NAME,
+            "repos_dir": "",
+            "manual_setup": false,
+            "service": true,
+        }));
+    }
+    // ── Voie héritée (compte technique) : seule voie où ces informations sont
+    // requises. L'utilisateur PostgreSQL est indispensable ici.
+    if user.is_empty() {
         return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
     }
     // Reprise des mots de passe depuis les secrets si non ressaisis.
@@ -1462,6 +1558,13 @@ pub(crate) async fn auto_provision_pool(project: &str) -> Result<Option<PgPool>,
     if !cfg.enabled {
         return Ok(None);
     }
+    // Voie « compte GDS » (lot 4) : aucun pool à préparer ni à restaurer côté
+    // poste — le serveur a déjà préparé SA base. On ne se connecte donc JAMAIS à
+    // PostgreSQL ici (limite n°1 levée : plus d'attente réseau du compte
+    // technique sur le chemin projet).
+    if gds_service::resolve_service_identity(&cfg).is_some() {
+        return Ok(None);
+    }
     if !cfg.db_host.is_empty() && !cfg.db_user.is_empty() {
         return match restore_pool_for_project(project).await {
             Ok(p) => Ok(Some(p)),
@@ -1527,6 +1630,13 @@ pub async fn gds_auto_provision(
     if !crate::gds_globally_enabled(&state) {
         return Ok(json!({ "ok": true, "provisioned": false, "skipped": "global_disabled" }));
     }
+    // Voie « compte GDS » : rien à provisionner côté poste — on le dit à l'UI
+    // (l'état « connecté » vient de la santé du service, pas d'un pool).
+    if let Ok(cfg) = read_gds_config(&project) {
+        if cfg.enabled && gds_service::resolve_service_identity(&cfg).is_some() {
+            return Ok(json!({ "ok": true, "provisioned": true, "service": true }));
+        }
+    }
     match auto_provision_pool(&project).await {
         Ok(Some(pool)) => {
             *state.gds_pool.lock().unwrap() = Some(pool);
@@ -1579,13 +1689,10 @@ pub async fn gds_add_project(
     email: String,
     git_name: Option<String>,
 ) -> Result<Value, String> {
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    add_project_to_gds(&pool, &project, &email, git_name).await
+    // Pool FACULTATIF (lot 4) : la voie « compte GDS » n'en a aucun besoin (le
+    // serveur prépare sa base) ; la voie héritée le retrouve comme avant.
+    let pool = optional_pool(&state, &project, None).await;
+    add_project_to_gds(pool.as_ref(), &project, &email, git_name).await
 }
 
 /// Commande Tauri : lit la config GDS du projet (`.pilot/gds.json`).
@@ -1788,7 +1895,7 @@ pub async fn gds_list_git_repos(
 /// `gds_clone_repo` (non-régression) et par la commande `gds_connect_existing`.
 /// N'inclut AUCUNE suppression — c'est un attachement, pas une purge.
 async fn connect_dir_to_gds(
-    pool: &PgPool,
+    pool: Option<&PgPool>,
     target: &str,
     cfg: &GdsConfig,
     email: &str,
@@ -1811,18 +1918,8 @@ async fn connect_dir_to_gds(
         ssh_host: cfg.ssh_host.clone(),
     };
     write_gds_config(target, &target_cfg)?;
-    // Clef du poste : enregistrée + synchronisée dans `authorized_keys` pour un
-    // serveur LOCAL ; enregistrée en base seulement pour un serveur DISTANT (la
-    // clef est ajoutée manuellement sur le serveur) — `add_project_to_gds`
-    // refait la même chose de façon idempotente.
-    if is_local_gds_server(&target_cfg) {
-        gds_ssh::ensure_poste_key(pool, email).await?;
-    } else {
-        gds_ssh::ensure_poste_key_remote(pool, email).await?;
-    }
-    // Enregistrer le dossier auprès du serveur (idempotent, fail-open) :
-    // bare/projet déjà présents → réutilisés, simple assoc. membre + remote +
-    // push. Ne touche JAMAIS au bare serveur ni à un worktree local existant.
+    // La clef du poste est enregistrée par `add_project_with` sur la voie choisie
+    // (service ou héritée) : un seul appel, aucune duplication.
     add_project_to_gds(pool, target, email, None).await?;
     Ok(())
 }
@@ -1859,13 +1956,7 @@ pub async fn gds_connect_existing(
         .gds_local_dir
         .clone()
         .unwrap_or_else(default_gds_local_dir);
-    let pool_opt = state.gds_pool.lock().unwrap().clone();
-    let pool = match pool_opt {
-        Some(p) => p,
-        None => restore_pool_for_project(&project)
-            .await
-            .map_err(|_| "GDS non provisionné — provisionnez-le d'abord dans l'onglet GDS".to_string())?,
-    };
+    let pool = optional_pool(&state, &project, Some(&cfg)).await;
 
     // (b) Si le dossier n'est pas encore un dépôt Git, initialiser le dépôt
     // local + premier commit, en réglant l'identité git (auto) si absente.
@@ -1897,7 +1988,7 @@ pub async fn gds_connect_existing(
 
     // (a)+(c) Connecter le dossier au GDS via le helper partagé (gds.json +
     // clef poste + add_project_to_gds). Aucune suppression.
-    connect_dir_to_gds(&pool, &target_dir, &cfg, &email, &local_dir).await?;
+    connect_dir_to_gds(pool.as_ref(), &target_dir, &cfg, &email, &local_dir).await?;
 
     Ok(json!({ "path": target_dir, "initialized": initialized }))
 }
@@ -2012,22 +2103,12 @@ pub async fn gds_clone_repo(
 
     // Pool : repli sur restore_pool_for_project si le pool AppState est vide.
     // Le clone sort du garde Mutex AVANT l'await (garde non-Send à ne pas porter).
-    let pool_opt = state.gds_pool.lock().unwrap().clone();
-    let pool = match pool_opt {
-        Some(p) => p,
-        None => restore_pool_for_project(&project)
-            .await
-            .map_err(|_| "GDS non provisionné — provisionnez-le d'abord dans l'onglet GDS".to_string())?,
-    };
-    // Phase A3 : la clef du poste doit être enregistrée pour le remote SSH.
-    // Serveur LOCAL : enregistrement + synchro `authorized_keys` (historique
-    // inchangé). Serveur DISTANT : enregistrement en base uniquement, la clef
-    // est ajoutée MANUELLEMENT sur le serveur (docs/gds-server-setup.md).
-    if is_local_gds_server(&cfg) {
-        gds_ssh::ensure_poste_key(&pool, &email).await?;
-    } else {
-        gds_ssh::ensure_poste_key_remote(&pool, &email).await?;
-    }
+    // Pool : facultatif (lot 4). Le clone sort du garde Mutex AVANT l'await
+    // (garde non-Send à ne pas porter).
+    let pool = optional_pool(&state, &project, Some(&cfg)).await;
+    // Phase A3 : la clef du poste doit être enregistrée pour le remote SSH
+    // (voie héritée historique ou voie service selon l'identité du projet).
+    register_poste_key_for(&resolve_server_side(&cfg, pool.as_ref())?, &cfg, &email).await?;
 
     // Opérations git bloquantes (clone / remote add) → spawn_blocking.
     let url2 = url.clone();
@@ -2055,7 +2136,7 @@ pub async fn gds_clone_repo(
     // + clef du poste + enregistrement serveur (idempotent, fail-open). Le remote
     // dédié `gds` est ajouté et un éventuel push initial est fait. Ne touche JAMAIS
     // au bare serveur ni à un worktree local existant.
-    connect_dir_to_gds(&pool, &dest_str, &cfg, &email, &local_dir).await?;
+    connect_dir_to_gds(pool.as_ref(), &dest_str, &cfg, &email, &local_dir).await?;
 
     Ok(json!({
         "path": dest_str,
@@ -2087,11 +2168,8 @@ pub async fn gds_remove_project(
         .and_then(|c| c.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
     let pool_for_purge = if purge_server {
-        let current = state.gds_pool.lock().unwrap().clone();
-        match current {
-            Some(p) => Some(p),
-            None => restore_pool_for_project(&project).await.ok(),
-        }
+        // Pool facultatif (lot 4) : la voie service n'en a pas besoin.
+        optional_pool(&state, &project, purge_cfg.as_ref()).await
     } else {
         None
     };
@@ -2342,6 +2420,32 @@ pub async fn gds_connection_status(
     };
     if !cfg.enabled {
         return Ok(json!({ "status": "not_configured" }));
+    }
+    // Voie « compte GDS » (lot 4) : l'état se lit auprès du SERVICE (santé +
+    // existence du dépôt), jamais par une connexion PostgreSQL — ni compte
+    // technique, ni port de base. Fail-open : service muet → « error ».
+    if let Some(ident) = gds_service::resolve_service_identity(&cfg) {
+        let name = project_name(&project);
+        let service_ok = gds_service::service_health(&ident.host, &ident.http_port)
+            .await
+            .is_ok();
+        let bare_ok =
+            service_ok && gds_service::repo_exists(&ident, &name).await.unwrap_or(false);
+        let project_owned = project.clone();
+        let remote_ok = tokio::task::spawn_blocking(move || {
+            crate::git::git_has_remote(&project_owned, "gds")
+        })
+        .await
+        .unwrap_or(false);
+        let status = connection_status_from_flags(
+            true,
+            true,
+            service_ok,
+            service_ok,
+            bare_ok,
+            remote_ok,
+        );
+        return Ok(json!({ "status": status, "on_server": bare_ok }));
     }
     // Mot de passe enregistré dans les secrets (valeurs jamais révélées).
     let secrets = read_gds_secrets().ok();

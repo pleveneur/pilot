@@ -6,13 +6,10 @@
 // Réutilise git.rs + gds.rs. Sous-processus git bloquants → spawn_blocking.
 
 use crate::gds;
-use crate::gds_ssh;
 use crate::gds_sync;
 use crate::git;
 use crate::AppState;
-use gds_core::config::{
-    default_gds_local_dir, gds_remote_url, is_local_gds_server, project_name,
-};
+use gds_core::config::{default_gds_local_dir, gds_remote_url, project_name};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tauri::State;
@@ -24,7 +21,7 @@ pub(crate) const GDS_REMOTE: &str = "gds";
 /// Synchronise un projet depuis le remote GDS (clone si absent, sinon
 /// fetch/pull). Partagé entre la commande Tauri et la route web. `project` =
 /// chemin absolu du projet local.
-pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, String> {
+pub(crate) async fn sync_project(pool: Option<&PgPool>, project: &str) -> Result<Value, String> {
     // Refonte dossier-unique : un dossier de travail non connecté (pas encore de
     // `.pilot/gds.json`) est ORIENTÉ vers la connexion (`gds_connect_existing`, via
     // le menu « Ajouter un projet depuis le GDS ») au lieu d'un échec générique
@@ -49,20 +46,10 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // en base uniquement — la clef est ajoutée MANUELLEMENT sur le serveur
     // (docs/gds-server-setup.md) : on n'administre JAMAIS une machine distante.
     // Voie SERVICE (lot 3) : la clef est enregistrée par le service, rattachée au
-    // compte GDS prouvé par le jeton.
-    let side = gds::resolve_server_side(&cfg, pool);
-    match &side {
-        gds::ServerSide::Legacy(pool) => {
-            if is_local_gds_server(&cfg) {
-                gds_ssh::ensure_poste_key(pool, &cfg.identity_email).await?;
-            } else {
-                gds_ssh::ensure_poste_key_remote(pool, &cfg.identity_email).await?;
-            }
-        }
-        gds::ServerSide::Service(ident) => {
-            crate::gds_service::register_poste_key(ident).await?;
-        }
-    }
+    // compte GDS prouvé par le jeton. Pool FACULTATIF (lot 4) : la voie service
+    // n'en a aucun besoin.
+    let side = gds::resolve_server_side(&cfg, pool)?;
+    gds::register_poste_key_for(&side, &cfg, &cfg.identity_email).await?;
     let dest = std::path::Path::new(&local_dir).join(&name);
     let dest_str = dest.to_string_lossy().to_string();
     let branch = git::git_current_branch(project);
@@ -85,7 +72,7 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
     // (lot 3) : c'est LE SERVICE qui répond, seul maître de sa racine de dépôts
     // (une panne remonte au lieu de conclure « absent » à tort).
     let bare_on_server = match &side {
-        gds::ServerSide::Legacy(_) => gds::server_bare_exists(Some(pool), &cfg, &name).await,
+        gds::ServerSide::Legacy(pool) => gds::server_bare_exists(Some(pool), &cfg, &name).await,
         gds::ServerSide::Service(ident) => {
             crate::gds_service::repo_exists(ident, &name).await?
         }
@@ -160,9 +147,18 @@ pub(crate) async fn sync_project(pool: &PgPool, project: &str) -> Result<Value, 
 
     // Phase C1.2 : pont bidirectionnel suivi SQLite↔Postgres (dernier écrit
     // gagne). Non bloquant : une erreur de suivi ne casse pas la sync git.
-    let tracking = match gds_sync::sync_tracking(pool).await {
-        Ok(v) => v,
-        Err(e) => json!({ "ok": false, "error": e }),
+    // Voie « compte GDS » (pool absent, lot 4) : le pont n'existe pas encore sur
+    // l'API du service — on le dit honnêtement au lieu d'échouer.
+    let tracking = match pool {
+        Some(pool) => match gds_sync::sync_tracking(pool).await {
+            Ok(v) => v,
+            Err(e) => json!({ "ok": false, "error": e }),
+        },
+        None => json!({
+            "ok": false,
+            "skipped": "service",
+            "error": "pont de suivi indisponible sur la voie « compte GDS » (à venir)",
+        }),
     };
 
     Ok(json!({
@@ -181,13 +177,9 @@ pub async fn gds_sync_project(state: State<'_, AppState>, project: String) -> Re
     if !crate::gds_globally_enabled(&state) {
         return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
     }
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    sync_project(&pool, &project).await
+    // Pool facultatif (lot 4) : la voie « compte GDS » n'en a aucun besoin.
+    let pool = gds::optional_pool(&state, &project, None).await;
+    sync_project(pool.as_ref(), &project).await
 }
 
 #[cfg(test)]

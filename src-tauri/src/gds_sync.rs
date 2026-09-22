@@ -991,16 +991,19 @@ fn projects_with_client_names(
 /// jeton du compte GDS ; la garde de rôle est appliquée par le service (même
 /// règle, à partir du rôle réel du compte) et la poussée est auditée côté
 /// serveur. Les fiches héritées gardent le chemin historique, inchangé.
-pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<Value, String> {
+pub(crate) async fn force_push_tracking(pool: Option<&PgPool>, project: &str) -> Result<Value, String> {
     let cfg = gds::read_gds_config(project)?;
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
     let name = project_name(project);
-    if let gds::ServerSide::Service(ident) = gds::resolve_server_side(&cfg, pool) {
-        let pushed = gds_service::force_push_tracking(&ident, &name, local_tracking_dump()?).await?;
+    let side = gds::resolve_server_side(&cfg, pool)?;
+    if let gds::ServerSide::Service(ident) = &side {
+        let pushed = gds_service::force_push_tracking(ident, &name, local_tracking_dump()?).await?;
         return Ok(json!({ "ok": true, "forced": true, "pushed": pushed }));
     }
+    // Voie héritée : elle a besoin du pool (compte technique).
+    let pool = pool.ok_or("GDS non provisionné")?;
     // L1.8b : la garde de publication vit désormais dans le socle partagé, car
     // le serveur autonome en a besoin. L3.6 : elle vérifie le RÔLE (admin, ou
     // dev attribué) et non plus la seule appartenance. Même trace d'audit
@@ -1078,13 +1081,9 @@ pub async fn gds_force_push_suivi(state: State<'_, AppState>, project: String) -
     if !crate::gds_globally_enabled(&state) {
         return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
     }
-    let pool = state
-        .gds_pool
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("GDS non provisionné")?;
-    force_push_tracking(&pool, &project).await
+    // Pool facultatif (lot 4) : la voie « compte GDS » n'en a aucun besoin.
+    let pool = gds::optional_pool(&state, &project, None).await;
+    force_push_tracking(pool.as_ref(), &project).await
 }
 
 #[cfg(test)]

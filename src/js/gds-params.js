@@ -249,11 +249,12 @@ export function renderServersListHtml(state = {}) {
       // l'appliquer à un projet ne peut pas fonctionner tant que le client
       // « compte GDS » n'existe pas (lot suivant) → bouton neutralisé, message
       // clair, jamais d'identifiants incomplets écrits dans le projet.
+      // « Appliquer » remplit la config GDS du projet choisi. Une fiche porteuse
+      // d'une IDENTITÉ de compte GDS est applicable : son serveur prépare SA base
+      // (aucun compte technique, aucun mot de passe PostgreSQL à reprendre).
       const applyDisabled = !canApply
         ? { disabled: " disabled", title: "Aucun projet connu" }
-        : identity && sv.has_db_password !== true
-          ? { disabled: " disabled", title: "Le rattachement d'un projet à votre compte GDS arrive avec le lot suivant." }
-          : { disabled: "", title: "" };
+        : { disabled: "", title: "" };
       return `<div class="gds-params-srv-row" data-host="${esc(host)}" data-port="${esc(port)}" data-user="${esc(user)}" data-http-port="${esc(httpPort)}" data-email="${esc(email)}" data-identity="${identity ? "1" : "0"}" data-has-db-password="${sv.has_db_password === true ? "1" : "0"}">
         <div class="gds-params-srv-main">
           <div class="gds-params-srv-title">${esc(serverTitle(sv))} <span class="gds-badge gds-badge-${badge.kind}">${esc(badge.text)}</span></div>

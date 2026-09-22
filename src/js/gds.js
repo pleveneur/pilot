@@ -417,17 +417,38 @@ export function createGds(container) {
       const dbUser = panel.querySelector("#gds-db-user").value.trim();
       const dbPassword = panel.querySelector("#gds-db-password").value;
       const adminPassword = panel.querySelector("#gds-admin-password").value;
-      if (!dbHost || !dbUser) {
-        err.textContent = "Hôte et utilisateur PostgreSQL sont requis.";
+      if (!dbHost) {
+        err.textContent = "Hôte PostgreSQL requis.";
         return;
       }
-      if (!dbPassword && !hasDbPw) {
-        err.textContent = "Le mot de passe dédié est requis (ou déjà enregistré).";
-        return;
-      }
-      if (!adminPassword && !hasAdminPw) {
-        err.textContent = "Un mot de passe admin est requis (ou déjà enregistré).";
-        return;
+      // Voie « compte GDS » : si une fiche serveur mémorisée porte une identité
+      // de compte GDS pour cet hôte, la base est préparée par le SERVEUR (son
+      // amorçage). Aucun mot de passe PostgreSQL — ni compte technique — n'est
+      // alors demandé au poste. Détection locale uniquement pour l'ergonomie :
+      // le backend reste seul juge (il n'utilise pas ces champs sur cette voie).
+      let serviceFiche = null;
+      try {
+        const fiches = await invoke("gds_list_saved_servers");
+        const h = dbHost.toLowerCase();
+        serviceFiche = (fiches || []).find(
+          (s) => s.identity && s.http_port && s.gds_email &&
+            String(s.gds_email).trim().toLowerCase() === email.trim().toLowerCase() &&
+            String(s.host || "").trim().toLowerCase() === h
+        ) || null;
+      } catch { /* fail-open : gardes historiques ci-dessous */ }
+      if (!serviceFiche) {
+        if (!dbUser) {
+          err.textContent = "Hôte et utilisateur PostgreSQL sont requis.";
+          return;
+        }
+        if (!dbPassword && !hasDbPw) {
+          err.textContent = "Le mot de passe dédié est requis (ou déjà enregistré).";
+          return;
+        }
+        if (!adminPassword && !hasAdminPw) {
+          err.textContent = "Un mot de passe admin est requis (ou déjà enregistré).";
+          return;
+        }
       }
       err.textContent = "";
       ok.textContent = "";

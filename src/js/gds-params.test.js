@@ -240,7 +240,7 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(html).toMatch(/type="password"[^>]*placeholder="laisser vide pour conserver"/);
   });
 
-  it("renderServersListHtml : fiche « compte GDS » — identité, rôle et « Appliquer » neutralisé sans compte technique", () => {
+  it("renderServersListHtml : fiche « compte GDS » — identité, rôle et « Appliquer » actif (lot 4)", () => {
     const html = renderServersListHtml({
       loading: false,
       hasProject: true,
@@ -261,7 +261,7 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     });
     expect(html).toContain("dev@exemple.com — 10.0.0.1:8080");
     expect(html).toContain("Rôle : développeur");
-    expect(html).toMatch(/data-srv-action="apply" disabled/);
+    expect(html).toMatch(/data-srv-action="apply">Appliquer/);
     expect(html).toContain('data-identity="1"');
     expect(html).not.toContain("SECRET");
     // Fiche héritée : comportement inchangé (Appliquer actif).

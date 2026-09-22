@@ -116,23 +116,58 @@ pub(crate) fn pick_identity(fiches: &[SavedIdentity], cfg: &GdsConfig) -> Option
     })
 }
 
+/// Fiches serveur mémorisées, vues comme identités candidates. Lit
+/// `~/.pilot/gds_secrets.json` ; aucun secret ne sort d'ici (le mot de passe GDS
+/// ne quitte pas le module).
+fn saved_identities() -> Vec<SavedIdentity> {
+    match crate::gds::read_gds_secrets() {
+        Ok(secrets) => secrets
+            .servers
+            .values()
+            .map(|c| SavedIdentity {
+                host: c.host.clone(),
+                http_port: c.http_port.clone(),
+                email: c.gds_email.clone(),
+                password: c.gds_password.clone().unwrap_or_default(),
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// Résout l'identité du compte GDS d'un projet depuis les fiches serveur
 /// mémorisées (`~/.pilot/gds_secrets.json`, map `servers`). Aucune autre source :
 /// une fiche **héritée** (compte technique, sans identité) ne fournit rien, donc
 /// le chemin historique reste utilisé. Ne révèle aucun secret.
 pub(crate) fn resolve_service_identity(cfg: &GdsConfig) -> Option<ServiceIdentity> {
-    let secrets = crate::gds::read_gds_secrets().ok()?;
-    let fiches: Vec<SavedIdentity> = secrets
-        .servers
-        .values()
-        .map(|c| SavedIdentity {
-            host: c.host.clone(),
-            http_port: c.http_port.clone(),
-            email: c.gds_email.clone(),
-            password: c.gds_password.clone().unwrap_or_default(),
-        })
-        .collect();
-    pick_identity(&fiches, cfg)
+    pick_identity(&saved_identities(), cfg)
+}
+
+/// Configuration minimale ne portant que l'**hôte** (et, s'il est connu,
+/// l'e-mail d'identité) : c'est tout ce dont on dispose avant que le projet ait
+/// un `.pilot/gds.json`. Pure — la règle de choix reste celle de `pick_identity`.
+pub(crate) fn host_only_cfg(host: &str, email: &str) -> GdsConfig {
+    GdsConfig {
+        enabled: true,
+        db_host: host.trim().to_string(),
+        db_port: String::new(),
+        db_user: String::new(),
+        identity_email: email.trim().to_string(),
+        server_url: String::new(),
+        gds_local_dir: None,
+        ssh_port: 0,
+        gds_server_repos: None,
+        ssh_host: String::new(),
+    }
+}
+
+/// Même résolution, **sans configuration de projet** : au moment de l'activation
+/// (« Activer GDS »), `.pilot/gds.json` n'existe pas encore — seul l'hôte est
+/// connu. Même règle de choix que pour un projet ouvert. `None` = aucune fiche
+/// de **compte GDS** pour cet hôte → la voie héritée (compte technique) reste
+/// seule possible. Ne révèle aucun secret.
+pub(crate) fn resolve_identity_for_host(host: &str, email: &str) -> Option<ServiceIdentity> {
+    pick_identity(&saved_identities(), &host_only_cfg(host, email))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -299,6 +334,25 @@ pub(crate) async fn create_project(ident: &ServiceIdentity, name: &str) -> Resul
 // ─────────────────────────────────────────────────────────────────────────────
 // Opération 2 — « Synchroniser / récupérer sa copie »
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Vérifie que le **service** répond (`GET /api/gds/health`, route PUBLIQUE :
+/// aucun jeton, aucun compte). C'est la preuve, côté poste, que le serveur est
+/// en place — donc que SA base est préparée (le serveur la provisionne à son
+/// démarrage). Remplace, sur la voie « compte GDS », la connexion PostgreSQL du
+/// poste : aucun compte technique, aucun port de base ouvert n'est requis.
+/// Renvoie les compteurs de santé (aucune donnée personnelle, aucun secret).
+pub(crate) async fn service_health(host: &str, http_port: &str) -> Result<Value, String> {
+    let base = admin_base_url(host, http_port)?;
+    blocking(move || {
+        let client = http_client()?;
+        let reply = send_get(&client, &format!("{}/api/gds/health", base), None)?;
+        if !reply.ok() {
+            return Err(format!("Service GDS injoignable: {}", reply.error()));
+        }
+        Ok(reply.json())
+    })
+    .await
+}
 
 /// Enregistre la clef publique du poste pour le compte de la session
 /// (`POST /api/gds/ssh-keys`) : le serveur la rattache au compte prouvé par le
@@ -521,6 +575,21 @@ mod tests {
             pick_identity(&[mine], &cfg).map(|i| i.email).unwrap_or_default(),
             "Dev@X"
         );
+    }
+
+    #[test]
+    fn identity_is_found_from_the_host_alone_before_any_project_config() {
+        // Activation : le projet n'a pas encore de `.pilot/gds.json` — ni compte
+        // technique, ni mot de passe PostgreSQL. La fiche doit être reconnue au
+        // SEUL nom de l'hôte (et l'e-mail du compte qui l'ouvre).
+        let fiches = [fiche("127.0.0.1", "8080", "dev@x", "pw")];
+        let picked = pick_identity(&fiches, &host_only_cfg("127.0.0.1", "dev@x"))
+            .expect("identité du compte GDS attendue");
+        assert_eq!(picked.http_port, "8080");
+        assert_eq!(picked.email, "dev@x");
+        // Jamais la session d'un autre compte, ni celle d'un autre serveur.
+        assert!(pick_identity(&fiches, &host_only_cfg("127.0.0.1", "autre@x")).is_none());
+        assert!(pick_identity(&fiches, &host_only_cfg("10.0.0.9", "dev@x")).is_none());
     }
 
     #[test]

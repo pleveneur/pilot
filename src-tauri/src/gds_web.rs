@@ -74,6 +74,12 @@ pub trait DesktopGdsCtx: GdsCtx {
     /// Pool GDS courant du poste ; `Err` = GDS indisponible (non provisionné,
     /// désactivé globalement…).
     fn desktop_pool(&self) -> Result<PgPool, String>;
+    /// Pool GDS **facultatif** (lot 4) : `Ok(None)` = aucun pool mais GDS actif.
+    /// Sur la voie « compte GDS », le serveur prépare SA base : les opérations
+    /// projet (ajout, synchro, publication du suivi) n'ont alors besoin d'aucune
+    /// connexion PostgreSQL — ni compte technique, ni port de base. `Err` = GDS
+    /// désactivé globalement (court-circuit inchangé).
+    fn desktop_pool_optional(&self) -> Result<Option<PgPool>, String>;
     /// Mémorise un pool fraîchement provisionné (route `provision`).
     fn set_desktop_pool(&self, pool: PgPool);
 }
@@ -83,9 +89,25 @@ impl DesktopGdsCtx for WebCtx {
         gds_pool(self)
     }
 
+    fn desktop_pool_optional(&self) -> Result<Option<PgPool>, String> {
+        gds_pool_optional(self)
+    }
+
     fn set_desktop_pool(&self, pool: PgPool) {
         *self.app_handle.state::<AppState>().gds_pool.lock().unwrap() = Some(pool);
     }
+}
+
+/// Pool GDS **facultatif** depuis AppState (clone court, jamais tenu en lock
+/// pendant un await). Même court-circuit que `gds_pool` si le GDS est désactivé
+/// globalement ; sinon `None` quand aucun pool n'est ouvert (voie « compte GDS »).
+fn gds_pool_optional(ctx: &WebCtx) -> Result<Option<PgPool>, String> {
+    let app_state = ctx.app_handle.state::<AppState>();
+    if !crate::gds_globally_enabled(&app_state) {
+        return Err("GDS désactivé globalement (Paramètres → GDS)".to_string());
+    }
+    let pool = app_state.gds_pool.lock().unwrap().clone();
+    Ok(pool)
 }
 
 /// Pool GDS depuis AppState (clone court, jamais tenu en lock pendant un await).
@@ -164,11 +186,11 @@ async fn gds_add_project_web<S: DesktopGdsCtx>(
     State(ctx): State<Arc<S>>,
     Json(body): Json<AddProjectBody>,
 ) -> Response {
-    let pool = match ctx.desktop_pool() {
+    let pool = match ctx.desktop_pool_optional() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    match gds::add_project_to_gds(&pool, &body.project, &body.email, body.git_name).await {
+    match gds::add_project_to_gds(pool.as_ref(), &body.project, &body.email, body.git_name).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
@@ -199,11 +221,11 @@ async fn gds_sync_web<S: DesktopGdsCtx>(
         )
             .into_response();
     }
-    let pool = match ctx.desktop_pool() {
+    let pool = match ctx.desktop_pool_optional() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    match gds_client::sync_project(&pool, &body.project).await {
+    match gds_client::sync_project(pool.as_ref(), &body.project).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
@@ -225,11 +247,11 @@ async fn gds_tracking_force_web<S: DesktopGdsCtx>(
         )
             .into_response();
     }
-    let pool = match ctx.desktop_pool() {
+    let pool = match ctx.desktop_pool_optional() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    match gds_sync::force_push_tracking(&pool, &body.project).await {
+    match gds_sync::force_push_tracking(pool.as_ref(), &body.project).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),
     }
@@ -294,6 +316,9 @@ mod tests {
                 .unwrap()
                 .clone()
                 .ok_or_else(|| "GDS non provisionné".to_string())
+        }
+        fn desktop_pool_optional(&self) -> Result<Option<PgPool>, String> {
+            Ok(self.pool.lock().unwrap().clone())
         }
         fn set_desktop_pool(&self, pool: PgPool) {
             *self.pool.lock().unwrap() = Some(pool);
