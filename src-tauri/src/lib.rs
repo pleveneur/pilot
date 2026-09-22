@@ -1765,7 +1765,13 @@ fn play_assistant_sound(sound_type: String, volume: u32) -> Result<(), String> {
 /// défaut). Distinct de l'activation par projet (`.pilot/gds.json`) : quand
 /// désactivé, AUCUNE opération GDS (sync, verrous, suivi fusionné) n'est permise.
 pub(crate) fn gds_globally_enabled(state: &AppState) -> bool {
-    state.config.lock().unwrap().gds_enabled
+    // Fail-open : sur un verrou empoisonné, on ne panique JAMAIS (une commande
+    // async Tauri laisserait alors la promesse JS sans réponse — écran vide).
+    state
+        .config
+        .lock()
+        .map(|c| c.gds_enabled)
+        .unwrap_or(true)
 }
 
 /// Reprises rapides et pas d'attente avant de considérer le verrou de

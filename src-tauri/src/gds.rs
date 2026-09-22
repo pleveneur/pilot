@@ -1978,6 +1978,19 @@ pub(crate) fn connection_status_from_flags(
     }
 }
 
+/// Délai maximal accordé à la reconnexion GDS (connexion + migrations) quand
+/// aucun pool actif n'est disponible. Passé ce délai, la vérification répond
+/// `false` : sans borne, l'étape `migrate` (verrou consultatif PostgreSQL)
+/// pouvait laisser `gds_connection_status` sans réponse — et l'onglet « 🌐 GDS »
+/// s'affichait entièrement vide (rapport onglet GDS vide, §5 et §9).
+const GDS_RESTORE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Borne une attente : renvoie `None` si `fut` ne se règle pas dans `dur`.
+/// Garantit qu'une commande async de Tauri répond TOUJOURS quelque chose.
+async fn bounded<T>(dur: Duration, fut: impl std::future::Future<Output = T>) -> Option<T> {
+    tokio::time::timeout(dur, fut).await.ok()
+}
+
 /// Cache court (TTL ~5 s) de la joignabilité du pool GDS pour un projet.
 /// Évite les appels réseau répétés (timeouts) quand la sidebar interroge
 /// plusieurs projets à chaque rendu. Fail-open : un accès à ce cache ne
@@ -2027,9 +2040,12 @@ async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bo
         }
     }
     // Aucun pool actif (ou devenu injoignable) → tentative de reconnexion en
-    // dernier recours, puis stockage du pool si elle réussit.
-    let ok = match restore_pool_for_project(project).await {
-        Ok(p) => {
+    // dernier recours, puis stockage du pool si elle réussit. L'attente est
+    // BORNÉE : l'étape de migration peut attendre indéfiniment un verrou
+    // consultatif PostgreSQL — au-delà du délai, la vérification répond (false)
+    // au lieu de laisser la commande sans réponse (écran vide côté onglet).
+    let ok = match bounded(GDS_RESTORE_TIMEOUT, restore_pool_for_project(project)).await {
+        Some(Ok(p)) => {
             let alive = tokio::time::timeout(
                 Duration::from_secs(2),
                 sqlx::query("SELECT 1").execute(&p),
@@ -2038,14 +2054,30 @@ async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bo
             .ok()
             .and_then(|r| r.ok())
             .is_some();
-            if alive {
-                *state.gds_pool.lock().unwrap() = Some(p);
+            // Verrou mémoire empoisonné : on ne panique JAMAIS (une commande doit
+            // toujours répondre) ; le pool est alors simplement fermé. Le garde
+            // est lâché AVANT tout `await` (futur non-`Send`).
+            let mut slot = Some(p);
+            let stored = if alive {
+                match state.gds_pool.lock() {
+                    Ok(mut g) => {
+                        *g = slot.take();
+                        true
+                    }
+                    Err(_) => false,
+                }
             } else {
-                let _ = p.close().await;
+                false
+            };
+            if !stored {
+                if let Some(p) = slot {
+                    let _ = p.close().await;
+                }
             }
-            alive
+            stored
         }
-        Err(_) => false,
+        // Délai dépassé (migration bloquée) ou connexion impossible.
+        Some(Err(_)) | None => false,
     };
     if let Ok(mut lock) = gds_pool_cache().lock() {
         lock.insert(name, (now, ok));
@@ -2114,7 +2146,7 @@ pub async fn gds_connection_status(
     let name = project_name(&project);
     let project_owned = project.clone();
     let bare_ok = {
-        let pool = state.gds_pool.lock().unwrap().clone();
+        let pool = state.gds_pool.lock().ok().and_then(|g| g.clone());
         server_bare_exists(pool.as_ref(), &cfg, &name).await
     };
     // Remote `gds` présent dans le dépôt local.
@@ -2128,7 +2160,7 @@ pub async fn gds_connection_status(
     // un pool joignable (sinon fail-open : false). Aucun secret révélé.
     let mut on_server = false;
     if pool_ok {
-        let pool = state.gds_pool.lock().unwrap().clone();
+        let pool = state.gds_pool.lock().ok().and_then(|g| g.clone());
         if let Some(p) = pool {
             if let Ok(id) = gds_db::get_project_by_name(&p, &name).await {
                 on_server = id.is_some();
@@ -2142,6 +2174,61 @@ pub async fn gds_connection_status(
 mod tests {
     use super::*;
     use crate::git::ensure_git_repo_with_initial_commit;
+
+    /// Attente qui ne se règle JAMAIS : c'est exactement l'étape de migration
+    /// qui attend un verrou consultatif PostgreSQL déjà occupé. La borne doit
+    /// répondre (et non laisser la commande sans réponse → écran vide).
+    #[tokio::test]
+    async fn bounded_answers_while_a_migration_lock_never_releases() {
+        let started = Instant::now();
+        let r = bounded(
+            Duration::from_millis(200),
+            std::future::pending::<Result<PgPool, String>>(),
+        )
+        .await;
+        assert!(r.is_none(), "l'attente non bornée serait restée pendue");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// Une fois prête, l'attente bornée rend bien la valeur (pas de faux délai).
+    #[tokio::test]
+    async fn bounded_returns_the_value_when_ready() {
+        assert_eq!(
+            bounded(Duration::from_secs(2), async { 42u8 }).await,
+            Some(42)
+        );
+    }
+
+    /// Base injoignable (port local fermé) : la connexion échoue et la
+    /// vérification BORNÉE répond un échec au lieu de pendre.
+    #[tokio::test]
+    async fn unreachable_base_is_reported_not_dangled() {
+        // Port libre côté OS, aucun service en écoute derrière.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port libre");
+            l.local_addr().expect("addr").port()
+        };
+        let url = format!("postgres://u:p@127.0.0.1:{}/pilot_gds", port);
+        // sqlx réessaie jusqu'à son `acquire_timeout` (10 s) : c'est justement ce
+        // que la borne doit arrêter. Aucun pool utilisable ne doit être rendu et
+        // la réponse doit arriver (jamais de commande pendue).
+        let started = Instant::now();
+        let r = bounded(Duration::from_millis(300), gds_db::connect(&url)).await;
+        assert!(
+            !matches!(r, Some(Ok(_))),
+            "aucun pool ne doit être rendu (port {}), obtenu: {}",
+            port,
+            match &r {
+                None => "délai dépassé (None)".to_string(),
+                Some(Ok(_)) => "pool ouvert".to_string(),
+                Some(Err(e)) => format!("erreur: {}", e),
+            }
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "la vérification doit être bornée, jamais pendue"
+        );
+    }
 
     #[test]
     fn server_host_handles_http_https_ssh() {
