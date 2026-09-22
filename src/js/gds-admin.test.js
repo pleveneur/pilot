@@ -38,6 +38,8 @@ import {
   initialStorageState,
   nextStatusToggle,
   pickPrefill,
+  adminServerOptionValue,
+  renderAdminServerSelectorHtml,
   renderAccountsSectionHtml,
   renderAccountsStatusHtml,
   renderAccountsTableHtml,
@@ -215,6 +217,39 @@ describe("pickPrefill (pure)", () => {
       email: "a@b",
       hasPassword: false,
     });
+  });
+});
+
+describe("adminServerOptionValue / renderAdminServerSelectorHtml (pure, lot 4)", () => {
+  const servers = [
+    { host: " 10.0.0.1 ", http_port: "8090", email: " a@b ", has_password: true },
+    { host: "10.0.0.2", email: "c@d" },
+  ];
+
+  it("clé d'affichage : hôte|email rognés", () => {
+    expect(adminServerOptionValue(servers[0])).toBe("10.0.0.1|a@b");
+    expect(adminServerOptionValue({})).toBe("|");
+  });
+
+  it("aucun serveur : aucun sélecteur (pas de bruit inutile)", () => {
+    expect(renderAdminServerSelectorHtml([])).toBe("");
+    expect(renderAdminServerSelectorHtml([{ host: "", email: "a@b" }])).toBe("");
+  });
+
+  it("liste les serveurs, sélectionne le courant, sans jamais de secret", () => {
+    const html = renderAdminServerSelectorHtml(servers, { host: "10.0.0.2", email: "c@d" });
+    expect(html).toContain('id="gds-admin-server-select"');
+    expect(html).toContain('value="10.0.0.1|a@b"');
+    expect(html).toContain('value="10.0.0.2|c@d" selected');
+    expect(html).toContain("— saisie manuelle —");
+    expect(html).not.toContain("has_password");
+    expect(html).not.toContain("password");
+  });
+
+  it("échappe les valeurs (jamais de HTML injecté)", () => {
+    const html = renderAdminServerSelectorHtml([{ host: "<b>h</b>", email: "x@y" }]);
+    expect(html).not.toContain("<b>h</b>");
+    expect(html).toContain("&lt;b&gt;h&lt;/b&gt;");
   });
 });
 

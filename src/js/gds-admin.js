@@ -160,6 +160,39 @@ export function pickPrefill(savedServers) {
   return null;
 }
 
+/** Clé d'affichage d'un serveur d'administration mémorisé (`host|email`). Pure. */
+export function adminServerOptionValue(s) {
+  const sv = s || {};
+  return `${String(sv.host || "").trim()}|${String(sv.email || "").trim()}`;
+}
+
+/**
+ * Rend le SÉLECTEUR de serveur mémorisé de l'écran d'administration (lot 4) :
+ * choisir explicitement parmi les serveurs mémorisés au lieu d'un
+ * pré-remplissage silencieux par le premier de la liste. Chaîne vide si aucune
+ * entrée : aucun sélecteur inutile. Pure — testable, aucun secret.
+ */
+export function renderAdminServerSelectorHtml(savedServers, current = {}) {
+  const list = (Array.isArray(savedServers) ? savedServers : []).filter(
+    (s) => s && String(s.host || "").trim(),
+  );
+  if (!list.length) return "";
+  const cur = adminServerOptionValue(current);
+  return `
+          <label class="gds-admin-field"><span>Serveur mémorisé</span>
+            <select id="gds-admin-server-select" class="gds-admin-select">
+              <option value="">— saisie manuelle —</option>
+              ${list
+                .map((s) => {
+                  const v = adminServerOptionValue(s);
+                  const label = `${String(s.host || "").trim()} — ${String(s.email || "").trim()}`;
+                  return `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`;
+                })
+                .join("")}
+            </select>
+          </label>`;
+}
+
 /**
  * Formate un nombre d'octets en unité lisible. `null`/absurde → « — » (valeur
  * inconnue : on ne ment pas avec un 0). Pure — testable.
@@ -232,7 +265,7 @@ export function renderConnectionSectionHtml(state = {}) {
           ${badge}
         </div>
         <div class="gds-admin-section-desc">${esc(CONNECTION_DESC)}</div>
-        <div class="gds-admin-form">
+        <div class="gds-admin-form">${renderAdminServerSelectorHtml(s.savedServers, s)}
           <label class="gds-admin-field"><span>Adresse du serveur</span>
             <input id="gds-admin-host" type="text" placeholder="192.168.1.10 ou https://gds.exemple.com" value="${esc(s.host)}">
           </label>
@@ -1340,7 +1373,8 @@ export function createGdsAdmin(container) {
     const c = q("#gds-admin-connect");
     if (t) t.addEventListener("click", () => runConnectionTest(false));
     if (c) c.addEventListener("click", () => runConnectionTest(true));
-    const refresh = q("#gds-admin-acc-refresh");
+    const srvSel = q("#gds-admin-server-select");
+    if (srvSel) srvSel.addEventListener("change", () => onServerSelectChange(srvSel));
     if (refresh) refresh.addEventListener("click", () => loadAccounts());
     const create = q("#gds-admin-acc-create");
     if (create) create.addEventListener("click", () => createAccount());
@@ -2104,16 +2138,44 @@ export function createGdsAdmin(container) {
     try {
       const list = await invoke("gds_admin_saved_servers");
       if (disposed) return;
-      const p = pickPrefill(list);
-      if (!p) return;
-      state.host = p.host;
-      state.port = p.port;
-      state.email = p.email;
-      state.hasPassword = p.hasPassword;
+      // Lot 4 : la liste alimente le SÉLECTEUR (choix explicite) ; le premier
+      // serveur exploitable reste le pré-remplissage initial par défaut.
+      state.savedServers = Array.isArray(list) ? list : [];
+      const p = pickPrefill(state.savedServers);
+      if (p) {
+        state.host = p.host;
+        state.port = p.port;
+        state.email = p.email;
+        state.hasPassword = p.hasPassword;
+      }
       draw();
     } catch {
       // Silencieux : sans liste (ou hors Tauri), le formulaire reste vide.
     }
+  }
+
+  /**
+   * Sélection explicite d'un serveur mémorisé (lot 4) : pré-remplit les trois
+   * champs non sensibles. Le mot de passe reste vide (jamais réinjecté) ; il est
+   * réutilisé depuis le fichier de secrets si `hasPassword` est vrai.
+   */
+  function onServerSelectChange(sel) {
+    const value = String((sel && sel.value) || "");
+    if (!value) {
+      state.host = "";
+      state.port = DEFAULT_HTTP_PORT;
+      state.email = "";
+      state.hasPassword = false;
+      draw();
+      return;
+    }
+    const found = (state.savedServers || []).find((s) => adminServerOptionValue(s) === value);
+    if (!found) return;
+    state.host = String(found.host || "").trim();
+    state.port = String(found.http_port || "").trim() || DEFAULT_HTTP_PORT;
+    state.email = String(found.email || "").trim();
+    state.hasPassword = !!found.has_password;
+    draw();
   }
 
   draw();
