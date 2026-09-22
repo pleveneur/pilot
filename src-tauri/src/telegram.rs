@@ -424,30 +424,77 @@ fn inbound_state_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join(INBOUND_STATE_FILE))
 }
 
-/// Lit le curseur mémorisé (0 si absent/illisible → on repart du début).
-fn read_inbound_offset(app: &AppHandle) -> i64 {
+/// Empreinte NON RÉVERSIBLE du jeton du bot (FNV-1a 64 bits, hexadécimal).
+/// Elle permet de détecter un changement de bot SANS jamais écrire le jeton
+/// dans le fichier d'état (le jeton reste uniquement dans les Paramètres).
+fn token_fingerprint(token: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in token.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Curseur contenu dans un état mémorisé, pour le jeton courant. `None` si
+/// l'état est illisible, ou s'il ne porte pas l'empreinte de CE jeton (autre
+/// bot, ou état écrit avant l'introduction de l'empreinte).
+fn stored_offset(raw: &str, token: &str) -> Option<i64> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let fingerprint = value.get("token_fingerprint").and_then(|f| f.as_str())?;
+    if fingerprint != token_fingerprint(token) {
+        return None;
+    }
+    value.get("offset").and_then(|o| o.as_i64())
+}
+
+/// Lit le curseur mémorisé.
+///
+/// CAUSE : après un changement de jeton de bot, les identifiants d'updates du
+/// nouveau bot repartent bas ; l'ancien curseur écarterait alors
+/// SILENCIEUSEMENT tous ses messages. Le curseur est donc mémorisé avec
+/// l'empreinte du jeton : si elle diffère du jeton courant (ou manque), le
+/// curseur est oublié (retour à 0) et l'état est réécrit avec la nouvelle
+/// empreinte. 0 également si l'état est absent (au premier lancement, aucun
+/// fichier n'est créé avant la première remise).
+fn read_inbound_offset(app: &AppHandle, token: &str) -> i64 {
     let Some(path) = inbound_state_path(app) else {
         return 0;
     };
     let Ok(raw) = std::fs::read_to_string(&path) else {
         return 0;
     };
-    serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()
-        .and_then(|v| v.get("offset").and_then(|o| o.as_i64()))
-        .unwrap_or(0)
+    match stored_offset(&raw, token) {
+        Some(offset) => offset,
+        None => {
+            write_inbound_state(&path, token, 0);
+            0
+        }
+    }
 }
 
-/// Mémorise le curseur (silencieux : un échec d'écriture n'interrompt rien).
-fn write_inbound_offset(app: &AppHandle, offset: i64) {
+/// Mémorise le curseur et l'empreinte du jeton (silencieux : un échec
+/// d'écriture n'interrompt rien).
+fn write_inbound_offset(app: &AppHandle, token: &str, offset: i64) {
     let Some(path) = inbound_state_path(app) else {
         return;
     };
+    write_inbound_state(&path, token, offset);
+}
+
+/// Écriture best-effort de l'état : jamais le jeton en clair, jamais d'erreur
+/// visible. Un échec fait simplement relire/remettre le message (sémantique
+/// « au moins une fois »).
+fn write_inbound_state(path: &std::path::Path, token: &str, offset: i64) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let payload = serde_json::json!({ "offset": offset }).to_string();
-    let _ = std::fs::write(&path, payload);
+    let payload = serde_json::json!({
+        "offset": offset,
+        "token_fingerprint": token_fingerprint(token),
+    })
+    .to_string();
+    let _ = std::fs::write(path, payload);
 }
 
 /// Commande Tauri : une passe de réception. Appelée à intervalle court par
@@ -479,7 +526,7 @@ pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String
             }))
         }
     };
-    let offset = read_inbound_offset(&app);
+    let offset = read_inbound_offset(&app, &cfg.token);
     match poll_inbound(&cfg, offset, http_get_updates) {
         Ok(poll) => {
             if let Some(reason) = poll.inert {
@@ -509,11 +556,16 @@ pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String
 /// Commande Tauri : mémorise le curseur de réception après remise réussie d'un
 /// message à l'assistant (accusé de lecture du côté de l'interface). Monotone :
 /// le curseur ne recule jamais, même si un appel tardif portait une valeur plus
-/// petite. Silencieux (aucune erreur visible).
+/// petite. EXCEPTION voulue : si le jeton a changé, le curseur repart de 0
+/// (cf. `read_inbound_offset`). Silencieux (aucune erreur visible). Sans
+/// configuration, il n'y a pas d'empreinte à mémoriser : rien n'est écrit (le
+/// message sera relu — sémantique « au moins une fois »).
 #[tauri::command]
 pub fn telegram_inbound_commit(app: AppHandle, offset: i64) -> Result<(), String> {
-    if offset > read_inbound_offset(&app) {
-        write_inbound_offset(&app, offset);
+    if let Some(cfg) = read_gateway_config(&app) {
+        if offset > read_inbound_offset(&app, &cfg.token) {
+            write_inbound_offset(&app, &cfg.token, offset);
+        }
     }
     Ok(())
 }
@@ -881,6 +933,37 @@ mod tests {
         assert!(poll.messages.is_empty(), "aucun message d'inconnu remonté");
         assert_eq!(poll.next_offset, 22, "le curseur avance sans rien remettre");
         assert_eq!(poll.inert, None);
+    }
+
+    // ── Curseur d'écoute : le jeton du bot a changé ──
+
+    #[test]
+    fn token_fingerprint_is_stable_hex_and_never_the_token() {
+        let fp = token_fingerprint("123456:ABC-DEF");
+        assert_eq!(fp.len(), 16, "empreinte FNV-1a 64 bits en hex");
+        assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!fp.contains("ABC-DEF"), "le jeton n'apparaît jamais");
+        assert_ne!(fp, token_fingerprint("123457:ABC-DEF"), "deux jetons diffèrent");
+        assert_eq!(fp, token_fingerprint("  123456:ABC-DEF  "), "jeton rogné");
+    }
+
+    #[test]
+    fn offset_restarts_from_zero_when_token_change_and_is_kept_when_same() {
+        let path = std::env::temp_dir().join(format!(
+            "pilot-telegram-state-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        write_inbound_state(&path, "ancien:jeton", 41);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("ancien:jeton"), "jeton jamais écrit en clair");
+        // Même jeton → curseur conservé.
+        assert_eq!(stored_offset(&raw, "ancien:jeton"), Some(41));
+        // Autre jeton → aucun curseur retenu (repart de 0).
+        assert_eq!(stored_offset(&raw, "nouveau:jeton"), None);
+        // État d'une version antérieure (sans empreinte) → idem : repart de 0.
+        assert_eq!(stored_offset(r#"{"offset":7}"#, "nouveau:jeton"), None);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
