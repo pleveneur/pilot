@@ -8,6 +8,7 @@
 
 use crate::gds;
 use crate::gds_db;
+use crate::gds_service;
 use crate::AppState;
 use gds_core::config::project_name;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -942,16 +943,64 @@ fn read_all_sqlite() -> Result<
     Ok((clients, projects, tasks, decisions, client_names))
 }
 
+/// Traduit le suivi SQLite en charge utile pour le SERVICE (voie compte
+/// utilisateur, lot 3) : les clients sont désignés par leur **NOM** (leurs
+/// identifiants diffèrent entre le poste et le serveur — le service les
+/// re-résout), les projets gardent leur identifiant de client LOCAL traduit en
+/// nom, les tâches et décisions gardent leurs identifiants (ceux du serveur,
+/// la base locale les ayant récupérés de lui).
+fn local_tracking_dump() -> Result<gds_service::TrackingDump, String> {
+    let (clients, projects, tasks, decisions, client_names) = read_all_sqlite()?;
+    Ok(gds_service::TrackingDump {
+        clients: clients.into_iter().map(|c| (c.name, c.notes)).collect(),
+        projects: projects_with_client_names(projects, &client_names),
+        tasks: tasks
+            .into_iter()
+            .map(|t| (t.id, t.project_id, t.title, t.description, t.status))
+            .collect(),
+        decisions: decisions
+            .into_iter()
+            .map(|d| (d.id, d.project_id, d.task_id, d.summary, d.source_session))
+            .collect(),
+    })
+}
+
+/// Rattache chaque projet du suivi au NOM de son client (`client_id` local →
+/// nom ; client inconnu → aucun rattachement, jamais une erreur). Pure.
+fn projects_with_client_names(
+    projects: Vec<SqliteProject>,
+    client_names: &std::collections::HashMap<i64, String>,
+) -> Vec<gds_service::LocalProject> {
+    projects
+        .into_iter()
+        .map(|p| gds_service::LocalProject {
+            path: p.path,
+            name: p.name,
+            client: p.client_id.and_then(|cid| client_names.get(&cid).cloned()),
+            status: p.status,
+        })
+        .collect()
+}
+
 /// Force la poussée du suivi local vers Postgres, en ÉCRASANT les données
 /// distantes. Réservé à l'**administrateur** ou à un **développeur attribué**
 /// au projet — le verrou de projet a été supprimé (refonte GDS, L6) et la
 /// règle de rôle resserrée en **L3.6** (spec 03 cible §8.2). Phase C1.3.
+///
+/// Voie SERVICE (lot 3) : la publication passe par l'API du service avec le
+/// jeton du compte GDS ; la garde de rôle est appliquée par le service (même
+/// règle, à partir du rôle réel du compte) et la poussée est auditée côté
+/// serveur. Les fiches héritées gardent le chemin historique, inchangé.
 pub(crate) async fn force_push_tracking(pool: &PgPool, project: &str) -> Result<Value, String> {
     let cfg = gds::read_gds_config(project)?;
     if !cfg.enabled {
         return Err("GDS non activé pour ce projet".to_string());
     }
     let name = project_name(project);
+    if let gds::ServerSide::Service(ident) = gds::resolve_server_side(&cfg, pool) {
+        let pushed = gds_service::force_push_tracking(&ident, &name, local_tracking_dump()?).await?;
+        return Ok(json!({ "ok": true, "forced": true, "pushed": pushed }));
+    }
     // L1.8b : la garde de publication vit désormais dans le socle partagé, car
     // le serveur autonome en a besoin. L3.6 : elle vérifie le RÔLE (admin, ou
     // dev attribué) et non plus la seule appartenance. Même trace d'audit
@@ -1052,6 +1101,40 @@ mod tests {
     #[test]
     fn resolve_conflict_remote_wins_when_newer() {
         assert_eq!(resolve_conflict(1000, 2000), ConflictSide::Remote);
+    }
+
+    #[test]
+    fn projects_keep_their_client_name_for_the_service() {
+        let mut names = std::collections::HashMap::new();
+        names.insert(4i64, "Client A".to_string());
+        let projects = vec![
+            SqliteProject {
+                path: "C:/p/a".to_string(),
+                name: "a".to_string(),
+                client_id: Some(4),
+                status: "active".to_string(),
+                updated_at: 0,
+            },
+            SqliteProject {
+                path: "C:/p/b".to_string(),
+                name: "b".to_string(),
+                client_id: Some(99), // client absent de la base locale
+                status: "paused".to_string(),
+                updated_at: 0,
+            },
+            SqliteProject {
+                path: "C:/p/c".to_string(),
+                name: "c".to_string(),
+                client_id: None,
+                status: "active".to_string(),
+                updated_at: 0,
+            },
+        ];
+        let out = projects_with_client_names(projects, &names);
+        assert_eq!(out[0].client.as_deref(), Some("Client A"));
+        assert_eq!(out[0].name, "a");
+        assert_eq!(out[1].client, None);
+        assert_eq!(out[2].client, None);
     }
 
     #[test]
