@@ -165,18 +165,21 @@ Depuis le poste, une fois `docker compose ps` à l'état **healthy** :
 # 1) la route de santé répond
 curl http://127.0.0.1:8080/api/gds/health
 
-# 2) la base répond
-#    a. si le poste possède un client PostgreSQL :
-psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "select 1"
-#    b. sinon — et SANS rien installer ni télécharger — le client PostgreSQL
-#       déjà présent dans l'image, qui emprunte le port publié du poste (donc
-#       le même chemin que Pilot, à travers la passerelle Docker) :
-docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
-  psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds -c "select 1"
+# 2) la base répond — commande visant la base DU CONTENEUR. Le mot de passe est
+#    lu DANS le conteneur (rien à recopier, aucun secret dans l'historique du
+#    terminal) et l'adresse visée est INTERNE : la base vit dans le conteneur.
+docker exec pilot-gds sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "select 1"'
 ```
 
-Si `GDS_HOST_DB_PORT` a été changé (cf. l'avertissement du §2), remplacer `5432`
-par sa valeur dans les deux commandes `psql`.
+> **Pourquoi cette forme** : une commande passant par le **port publié du
+> poste** (`host.docker.internal`) peut aboutir sur une **autre** base si un
+> PostgreSQL natif occupe déjà `5432` (symptôme : mot de passe refusé alors
+> qu'il est juste — cf. l'avertissement du §2). Ici, `127.0.0.1` et `5432` sont
+> l'adresse et le port **internes** du conteneur : ils ne changent pas, même si
+> `GDS_HOST_DB_PORT` a été décalé sur le poste.
+
+Dans les commandes de cette page, les textes entre chevrons `<…>` sont des
+**espaces à remplacer** : remplacez-les par votre valeur, **chevrons compris**.
 
 Attendu : `{"version":…,"migration_version":…,"users":…,"projects":…,"git_repos":…}`
 pour la route de santé, et une ligne `1` pour la base.

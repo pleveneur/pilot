@@ -89,6 +89,10 @@ obligatoire :
 POSTGRES_PASSWORD=<un mot de passe long et unique, 20 caractères et plus>
 ```
 
+> Les textes entre chevrons `<…>` sont des **espaces à remplacer** : remplacez-les
+> par votre valeur, **chevrons compris** (les chevrons ne font pas partie de la
+> valeur).
+
 - Ce mot de passe sert **à la fois** au conteneur (pour préparer la base) **et**
   au poste, dans l'écran **🌐 GDS** de Pilot (pour les synchronisations
   directes).
@@ -168,13 +172,18 @@ curl http://127.0.0.1:8080/api/gds/health
 Attendu : une réponse JSON courte du type
 `{"version":…,"migration_version":…,"users":…,"projects":…,"git_repos":…}`.
 
-Vérification de la base (le détail des variantes est dans
-`gds-server/README.md` §3) :
+Vérification de la base (le détail est dans `gds-server/README.md` §3) :
 
 ```powershell
-docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
-  psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds -c "select 1"
+docker exec pilot-gds sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "select 1"'
 ```
+
+La base vit **dans le conteneur** : cette commande lit `POSTGRES_PASSWORD`
+**dans** le conteneur (rien à recopier, aucun secret dans l'historique du
+terminal) et vise l'adresse **interne** `127.0.0.1`. Une commande passant par le
+port publié du poste (`host.docker.internal`) peut aboutir sur une **autre** base
+si un PostgreSQL natif occupe déjà `5432` (symptôme : mot de passe refusé alors
+qu'il est juste — voir §5.1).
 
 Attendu : une ligne `1`.
 

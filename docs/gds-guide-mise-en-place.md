@@ -118,6 +118,8 @@ Toutes les commandes se lancent **depuis `gds-server/`**, dans **PowerShell**.
 
 - [ ] **Vous faites :** ouvrez `.env`, remplissez **une** ligne :
       `POSTGRES_PASSWORD=<votre mot de passe long et unique>` (sans guillemets).
+      **Convention :** les textes entre chevrons `<…>` sont des **espaces à
+      remplacer** ; remplacez-les par votre valeur, **chevrons compris**.
 - **Résultat attendu :** aucune autre valeur n'est nécessaire pour un premier
   démarrage sur le poste (toutes ont un défaut sûr).
 - **Point de contrôle :** `POSTGRES_PASSWORD` est non vide.
@@ -166,17 +168,19 @@ Toutes les commandes se lancent **depuis `gds-server/`**, dans **PowerShell**.
   ```powershell
   # 1) l'interface d'administration répond
   curl http://127.0.0.1:8080/api/gds/health
-  # 2) la base répond (client embarqué dans l'image, rien à installer)
-  docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
-    psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds -c "select 1"
+  # 2) la base répond — commande visant la base DU CONTENEUR : le mot de passe
+  #    est lu DANS le conteneur (rien à recopier, aucun secret dans l'historique
+  #    du terminal) et l'adresse visée est INTERNE (la base vit dans le conteneur)
+  docker exec pilot-gds sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "select 1"'
   ```
 
 - **Résultat attendu :** un JSON court du type
   `{"version":…,"migration_version":…,"users":…,"projects":…,"git_repos":…}`,
   puis une ligne `1`.
 - **Point de contrôle :** le JSON contient `"migration_version"` et la base
-  répond `1`. (Si le port `5432` est déjà pris par un PostgreSQL natif, voir
-  `docs/gds-server-setup.md` §5.1 : décaler `GDS_HOST_DB_PORT`.)
+  répond `1`. La commande ci-dessus vise la base **dans le conteneur** : elle
+  n'est pas trompée par un autre PostgreSQL qui occuperait déjà `5432` sur le
+  poste (piège et parade : `docs/gds-server-setup.md` §5.1).
 
 ### 1.6 — Obtenir le premier compte administrateur
 
@@ -230,9 +234,9 @@ Toutes les commandes se lancent **depuis `gds-server/`**, dans **PowerShell**.
      administrateur n'existe alors) :
 
      ```powershell
-     docker exec -e PGPASSWORD="<POSTGRES_PASSWORD>" pilot-gds `
-       psql -h host.docker.internal -p 5432 -U pilot -d pilot_gds `
-       -c "INSERT INTO users (email, role, status) VALUES ('X@exemple.com','standard','active')"
+     # « $$…$$ » = littéral PostgreSQL (chaîne), pour éviter les guillemets
+     # simples dans la commande imbriquée.
+     docker exec pilot-gds sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "INSERT INTO users (email, role, status) VALUES (\$\$X@exemple.com\$\$,\$\$standard\$\$,\$\$active\$\$)"'
      ```
 
      puis mettez `GDS_ADMIN_EMAIL=X@exemple.com` et relancez → l'échec est

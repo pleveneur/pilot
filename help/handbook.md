@@ -266,6 +266,16 @@ d'un hébergement externe type GitHub.
   appelez **une seule fois** la route d'initialisation `POST /api/gds/setup`
   (elle répond ensuite `409`). Un mot de passe d'administration n'est **jamais**
   généré et **jamais** journalisé : c'est vous qui le choisissez.
+- **Vérifier la base** : la commande de contrôle vise la base **dans le
+  conteneur** — `docker exec pilot-gds sh -c 'PGPASSWORD="$POSTGRES_PASSWORD"
+  psql -h 127.0.0.1 -p 5432 -U pilot -d pilot_gds -c "select 1"'` : le mot de
+  passe est lu **dans** le conteneur (rien à recopier, aucun secret dans
+  l'historique du terminal) et l'adresse est **interne**. Une commande passant
+  par le port publié du poste échoue (« mot de passe incorrect ») si un autre
+  PostgreSQL occupe déjà `5432` : elle aboutit alors sur la **mauvaise** base
+  (piège et parade : `docs/gds-server-setup.md` §5.1). **Convention** : les
+  textes entre chevrons `<…>` sont des **espaces à remplacer**, **chevrons
+  compris** (les chevrons ne font pas partie de la valeur).
 - **Activé projet par projet** : le GDS n'est jamais activé globalement.
   Chaque projet choisit explicitement son serveur via un fichier de
   configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
