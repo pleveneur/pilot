@@ -642,7 +642,7 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
   GDS** → **Ajouter un serveur** : **Nom du serveur** (obligatoire, court —
   ex. *« GDS maison »*), **Description** (facultatif), **Hôte** `127.0.0.1`,
   **Port** `5432` (ou `55432` après la correction du piège du port),
-  **Utilisateur PostgreSQL** `pilot`, **Mot de passe dédié** = la valeur de la
+  **Utilisateur PostgreSQL** `pilot` (le compte technique de la base — **jamais** votre adresse e-mail de compte GDS), **Mot de passe dédié** = la valeur de la
   ligne `POSTGRES_PASSWORD` du fichier `.env`, **Mot de passe admin GDS** =
   celui du compte administrateur → **Tester la connexion** → **Ajouter le
   serveur**.
