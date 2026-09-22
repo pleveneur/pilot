@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-21 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
+<!-- PILOT-HELP generated=2026-09-22 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -249,6 +249,11 @@ d'un hébergement externe type GitHub.
   Docker** (dossier `gds-server/` du dépôt Pilot) qui réunit la base
   PostgreSQL, l'accès SSH aux dépôts git et le service HTTP. Un seul service à
   démarrer : inutile d'installer PostgreSQL ou un serveur SSH sur le poste.
+- **Mise en place guidée** : `docs/gds-guide-mise-en-place.md` déroule le
+  parcours complet en langage simple — **partie 1 serveur** (installer le
+  conteneur, créer le premier administrateur, ouvrir l'accès réseau) puis
+  **partie 2 utilisateur** (obtenir un compte, se connecter, rattacher un
+  projet). Le détail technique d'installation reste `docs/gds-server-setup.md`.
 - **Activé projet par projet** : le GDS n'est jamais activé globalement.
   Chaque projet choisit explicitement son serveur via un fichier de
   configuration **dans le projet** (`.pilot/gds.json`). Aucun serveur par défaut,
@@ -336,8 +341,22 @@ d'un hébergement externe type GitHub.
   ou, si un clonage local existe déjà, **l'ouvrir normalement puis le
   synchroniser** automatiquement. Si le GDS n'est pas (encore) connecté pour le
   projet courant, un message clair vous oriente vers l'onglet 🌐 GDS.
+- **Obtenir un compte** : un compte ne se crée **pas tout seul** —
+  l'**administrateur** le crée dans l'écran « 🖥️ GDS Serveur — administration »
+  (bloc **Comptes** : e-mail, rôle `standard`/`dev`/`admin`, mot de passe initial),
+  puis **attribue le projet** au développeur (bloc **Dépôts / projets**) s'il doit
+  publier du code. Un développeur ne publie que les projets **qui lui sont
+  attribués**.
+- **Qui fait quoi** : Pilot s'occupe du **suivi partagé** et des opérations liées
+  au serveur (création du dépôt et push initial lors de « Ajouter ce projet au
+  GDS », synchronisation à l'ouverture d'un projet connecté). **Publier votre
+  code reste votre geste** : vos commits ne partent pas tout seuls — poussez votre
+  branche vers le raccourci `gds` (le bouton **Synchroniser** ne fait que
+  rapatrier). Seul un **administrateur** peut redémarrer / arrêter le **service**
+  du serveur (la base, elle, continue de tourner).
 - **Documentation technique** : installation du serveur en conteneur dans
-  `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot.
+  `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot ; parcours
+  guidé complet (serveur puis utilisateur) dans `docs/gds-guide-mise-en-place.md`.
 
 ---
 
