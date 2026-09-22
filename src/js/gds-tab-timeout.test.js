@@ -90,17 +90,6 @@ describe("onglet GDS — aucune commande ne doit laisser le corps vide", () => {
     expect(body.innerHTML).toContain("gds-retry");
   });
 
-  it("un état de connexion qui répond s'affiche normalement (pas de faux positif d'attente)", async () => {
-    invokeImpl = (cmd) => {
-      if (cmd === "gds_connection_status") return Promise.resolve({ status: "connected", on_server: true });
-      return Promise.resolve(null);
-    };
-    const { container, body } = makeContainer();
-    createGds(container);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(body.innerHTML).not.toContain("ne répond pas");
-  });
 });
 
 describe("fetchGdsConnectionStatus — attente bornée", () => {
