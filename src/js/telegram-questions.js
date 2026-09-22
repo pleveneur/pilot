@@ -69,6 +69,19 @@ export function formatQuestionReminder(descriptor = {}) {
   return `⏳ Toujours en attente de votre réponse :\n${formatQuestionForTelegram(descriptor)}`;
 }
 
+/**
+ * Retour « déjà répondu » : signal envoyé sur Telegram quand un message TARDIF
+ * ressemble à une réponse à une question déjà répondue (première réponse gagne).
+ * Sans ce signal, le message tomberait comme une discussion libre et le
+ * propriétaire croirait avoir répondu. Fonction PURE.
+ * @param {{title?: string}} [descriptor]
+ * @returns {string}
+ */
+export function formatAlreadyAnswered(descriptor = {}) {
+  const title = String(descriptor.title || "Question").trim() || "Question";
+  return `✅ « ${title} » : cette question a déjà été répondue. Votre message n'a pas été pris en compte.`;
+}
+
 // ── Interprétation d'un texte libre répondant à une CONFIRMATION ───────────
 // Une confirmation est une PORTE : « non » ne doit JAMAIS valoir « oui ». Le
 // texte reçu est donc classé AVANT toute décision :
@@ -189,9 +202,10 @@ export function createTelegramQuestionBridge(deps = {}) {
 
   // Question active : { question, descriptor, resolve, resolved, reminderSent }.
   // Après résolution on CONSERVE l'entrée (`resolved: true`) pour qu'une réponse
-  // tardive ne soit pas ré-interprétée contre une question suivante : elle est
-  // alors REFUSÉE par `feed` et devient un message libre de la conversation (le
-  // comportement observé de l'étape 2, lot 1).
+  // tardive ne soit pas ré-interprétée contre une question suivante : si elle
+  // ressemble à une réponse, elle est CONSOMMÉE et l'expéditeur reçoit un signal
+  // « déjà répondu » (`formatAlreadyAnswered`) ; un texte libre, lui, reste un
+  // message normal de la conversation.
   let active = null;
   let reminder = null;
 
@@ -323,9 +337,23 @@ export function createTelegramQuestionBridge(deps = {}) {
    *   comme tentative de réponse non tranchée).
    */
   function feed(text) {
-    if (!active || active.resolved) return false;
+    if (!active) return false;
     const parsed = parseTelegramAnswer(text, active.descriptor);
     if (parsed.kind === "empty") return false;
+    if (active.resolved) {
+      // Question DÉJÀ répondue (dans l'application ou sur Telegram) : un message
+      // tardif qui ressemble à une RÉPONSE (numéro d'option, accord / refus
+      // clair) est SIGNALÉ « déjà répondu » et consommé, au lieu de tomber comme
+      // une discussion libre — sinon le propriétaire croirait avoir répondu. Un
+      // texte libre reste un message normal (le canal de discussion est
+      // préservé). Décision fonctionnelle : on signale, on ne réinvente jamais
+      // une seconde question.
+      if (parsed.kind === "option" || parsed.kind === "decision") {
+        fire(formatAlreadyAnswered(active.descriptor));
+        return true;
+      }
+      return false;
+    }
     if (parsed.kind === "undecided") {
       // Aucune décision (porte de confirmation) : on repose la question pour
       // que le propriétaire puisse répondre « 1 » / « 2 » ou reformuler.

@@ -156,27 +156,45 @@ describe("createTelegramQuestionBridge — envoi et réponse", () => {
     expect(bridge.current().resolved).toBe(false);
   });
 
-  it("PREMIÈRE RÉPONSE GAGNE : après une réponse dans l'application, Telegram est ignoré", () => {
+  it("PREMIÈRE RÉPONSE GAGNE : après une réponse dans l'application, un message tardif est signalé « déjà répondu »", () => {
+    const send = vi.fn();
     const resolve = vi.fn();
-    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
     const question = { id: "q" };
     bridge.ask(question, { title: "Approche ?", options: ["A", "B"] }, resolve);
 
     // L'utilisateur répond dans l'application → la question est résolue.
     bridge.settle(question);
 
-    expect(bridge.feed("1")).toBe(false);
+    // Un message tardif qui RESSEMBLE à une réponse est consommé et signalé
+    // « déjà répondu » (il ne tombe pas comme une discussion libre).
+    expect(bridge.feed("1")).toBe(true);
     expect(resolve).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(2); // question + « déjà répondu »
+    expect(send.mock.calls.at(-1)[0]).toContain("déjà été répondue");
   });
 
-  it("PREMIÈRE RÉPONSE GAGNE : après une réponse Telegram, une seconde est ignorée", () => {
+  it("PREMIÈRE RÉPONSE GAGNE : après une réponse Telegram, une seconde est signalée « déjà répondu »", () => {
+    const send = vi.fn();
     const resolve = vi.fn();
-    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
     bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, resolve);
 
     expect(bridge.feed("1")).toBe(true);
-    expect(bridge.feed("2")).toBe(false); // pas de double réponse
+    expect(bridge.feed("2")).toBe(true); // pas de double réponse : signal « déjà répondu »
     expect(resolve).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.at(-1)[0]).toContain("déjà été répondue");
+  });
+
+  it("un texte tardif sans forme de réponse reste un message libre (non consommé)", () => {
+    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Quel nom ?", options: [] }, () => {});
+    bridge.settle(question);
+
+    // « merci ! » sur une question de saisie libre ne peut pas être distingué d'une
+    // réponse : il n'est PAS signalé « déjà répondu » et reste un message normal.
+    expect(bridge.feed("merci !")).toBe(false);
   });
 
   it("n'envoie AUCUN rappel quand la question est résolue avant l'échéance", () => {
@@ -272,9 +290,10 @@ describe("answerFromApp — course « première réponse gagne »", () => {
     // L'application répond : le marquage « résolue » précède l'envoi (asynchrone).
     const applied = bridge.answerFromApp(question, () => pending);
 
-    // Le message Telegram arrive PENDANT l'envoi : il n'est PAS une réponse.
-    // (Il sera déposé comme message libre dans la conversation.)
-    expect(bridge.feed("1")).toBe(false);
+    // Le message Telegram arrive PENDANT l'envoi : la question est DÉJÀ réservée
+    // par l'application → il n'est pas une réponse, il est signalé « déjà
+    // répondu » et consommé (jamais déposé comme discussion libre).
+    expect(bridge.feed("1")).toBe(true);
     expect(resolve).not.toHaveBeenCalled();
 
     release("envoyé");
@@ -348,7 +367,7 @@ describe("answerFromApp — course « première réponse gagne »", () => {
 
     await expect(bridge.answerFromApp(question, apply)).resolves.toEqual({ applied: true, value: "ok" });
     expect(apply).toHaveBeenCalledTimes(1);
-    expect(bridge.feed("1")).toBe(false); // déjà répondue dans l'application
+    expect(bridge.feed("1")).toBe(true); // déjà répondue dans l'application : signalée
   });
 
   it("si l'envoi applicatif ÉCHOUE, la question est ROUVERTE (Telegram reste utilisable)", async () => {
@@ -389,7 +408,7 @@ describe("answerFromApp — course « première réponse gagne »", () => {
 });
 
 describe("answerTelegramQuestionFromApp (passerelle partagée)", () => {
-  it("marque résolue AVANT l'envoi : une réponse Telegram concurrente n'est pas consommée", async () => {
+  it("marque résolue AVANT l'envoi : une réponse Telegram concurrente n'atteint pas le résolveur", async () => {
     const resolve = vi.fn();
     const question = { id: "shared-race" };
     try {
@@ -400,7 +419,8 @@ describe("answerTelegramQuestionFromApp (passerelle partagée)", () => {
       });
       const applied = answerTelegramQuestionFromApp(question, () => pending);
 
-      expect(consumeTelegramQuestionAnswer("1")).toBe(false);
+      // Consommée et signalée « déjà répondu » : jamais une seconde réponse.
+      expect(consumeTelegramQuestionAnswer("1")).toBe(true);
       release("ok");
       await applied;
       expect(resolve).not.toHaveBeenCalled();
@@ -476,15 +496,18 @@ describe("parseTelegramAnswer — confirmation : oui / non / ambigu (jamais de �
 describe("createTelegramQuestionBridge — confirmation par texte libre", () => {
   const confirm = { kind: "confirm", title: "Confirmer ?", options: ["Oui", "Non"] };
 
-  it("« non » produit un refus (resolve reçoit confirmed:false)", () => {
+  it("« non » produit un refus (resolve reçoit confirmed:false), « oui » tardif est signalé", () => {
+    const send = vi.fn();
     const resolve = vi.fn();
-    const bridge = createTelegramQuestionBridge({ send: () => {}, timers: fakeTimers(), ...silence });
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
     bridge.ask({ id: "q" }, confirm, resolve);
 
     expect(bridge.feed("non")).toBe(true);
     expect(resolve).toHaveBeenCalledWith({ kind: "decision", confirmed: false, value: "non" });
     expect(bridge.current().resolved).toBe(true);
-    expect(bridge.feed("oui")).toBe(false); // plus de double réponse
+    // Plus de double réponse : le tardif est consommé et signalé « déjà répondu ».
+    expect(bridge.feed("oui")).toBe(true);
+    expect(send.mock.calls.at(-1)[0]).toContain("déjà été répondue");
   });
 
   it("« oui » produit une confirmation", () => {
