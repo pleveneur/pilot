@@ -71,6 +71,26 @@
 > défaut, retrait serveur proposé en option) ; l'écran d'administration propose
 > un **sélecteur** de serveur mémorisé au lieu d'un pré-remplissage silencieux.
 >
+> **Fiche « compte GDS » (lot 1 de la refonte « mon compte remplace le compte
+> technique », implémenté)** — la fiche serveur de « ⚙️ GDS — paramétrage »
+> décrit désormais **votre compte GDS** : `host`, `http_port` (8080),
+> `gds_email`, `gds_role`, `gds_password` et `identity` sont ajoutés à
+> `ServerCredentials` (**`#[serde(default)]`** : toute fiche antérieure reste
+> lisible et utilisable, **aucun secret effacé**, aucun doublon) ; `host` et
+> `key_user` sont mémorisés explicitement, la clé `user@host` restant ambiguë
+> pour une adresse e-mail (repli legacy sur le parsing de la clé). Le test
+> s'appuie sur le **compte utilisateur** — `POST /api/gds/users/login` via la
+> commande `gds_identity_login` (`gds_admin::perform_identity_login`) : **tout
+> rôle est accepté** (contrairement à `open_admin_session`), le **rôle reconnu
+> est affiché en langage simple** et **ni le mot de passe ni le jeton ne
+> remontent à l'UI**. `gds_add_saved_server` / `gds_update_saved_server`
+> prennent l'identité (ajout = clé sur l'e-mail ; modification = clé inchangée,
+> mot de passe vide conservé, changement d'adresse = renommage de clé) et
+> `gds_test_saved_server` reste le test PostgreSQL des fiches héritées. «
+> Appliquer » est **neutralisé** sur une fiche d'identité sans compte technique
+> (le rattachement d'un projet au compte GDS arrive avec un lot ultérieur) et
+> **inchangé** sur les fiches héritées.
+>
 > **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
 > project_members, git_repos, audit_gds), `gds_db.rs` (pool, provision

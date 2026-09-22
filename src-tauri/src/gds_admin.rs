@@ -556,6 +556,126 @@ pub(crate) fn perform_admin_test(
     })
 }
 
+/// Connexion d'un **compte utilisateur GDS** (fiche « identité utilisateur ») :
+/// `GET /api/gds/health` (joignabilité) puis `POST /api/gds/users/login`.
+///
+/// Contraste avec `perform_admin_test` : **aucune** exigence de rôle — un
+/// développeur ou un compte standard identifie parfaitement un serveur, et
+/// l'écran d'administration garde sa propre garde. Aucun jeton ni mot de passe
+/// ne sort d'ici : seul le rôle reconnu remonte (pour l'afficher sur la fiche).
+pub(crate) fn perform_identity_login(
+    host: &str,
+    http_port: &str,
+    email: &str,
+    password: &str,
+    user_key: &str,
+) -> Value {
+    let base = match admin_base_url(host, http_port) {
+        Ok(b) => b,
+        Err(e) => return json!({ "ok": false, "reachable": false, "error": e }),
+    };
+    let email = email.trim();
+    if email.is_empty() {
+        return json!({ "ok": false, "reachable": false, "error": "E-mail GDS requis" });
+    }
+    let client = match http_client() {
+        Ok(c) => c,
+        Err(e) => return json!({ "ok": false, "reachable": false, "error": e }),
+    };
+    // 1. Joignabilité : route PUBLIQUE (aucun identifiant en jeu).
+    let health = match send_get(&client, &format!("{}/api/gds/health", base), None) {
+        Ok(r) => r,
+        Err(e) => {
+            return json!({
+                "ok": false,
+                "reachable": false,
+                "error": format!("Serveur GDS injoignable ({})", e),
+            })
+        }
+    };
+    if !health.ok() {
+        return json!({
+            "ok": false,
+            "reachable": true,
+            "base_url": base,
+            "error": health.error(),
+        });
+    }
+    // 2. Identité : mot de passe saisi, sinon celui mémorisé sous la clé donnée
+    // (`user_key` = partie utilisateur de la fiche, qui n'est pas toujours
+    // l'adresse pour une fiche héritée du compte technique).
+    let pw = if !password.is_empty() {
+        password.to_string()
+    } else {
+        gds::stored_gds_password(host, user_key)
+            .or_else(|| gds::stored_gds_password(host, email))
+            .unwrap_or_default()
+    };
+    if pw.is_empty() {
+        return json!({
+            "ok": false,
+            "reachable": true,
+            "base_url": base,
+            "error": "Mot de passe GDS requis",
+        });
+    }
+    let login = match send_post_json(
+        &client,
+        &format!("{}/api/gds/users/login", base),
+        None,
+        &json!({ "email": email, "password": pw }),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            return json!({
+                "ok": false,
+                "reachable": false,
+                "error": format!("Connexion au serveur GDS impossible ({})", e),
+            })
+        }
+    };
+    if !login.ok() {
+        let error = if login.status == 401 {
+            "Adresse ou mot de passe refusé : vérifiez que ce compte GDS existe bien sur ce serveur."
+                .to_string()
+        } else {
+            login.error()
+        };
+        return json!({
+            "ok": false,
+            "reachable": true,
+            "base_url": base,
+            "error": error,
+        });
+    }
+    let login = login.json();
+    json!({
+        "ok": true,
+        "reachable": true,
+        "base_url": base,
+        "email": login.get("email").cloned().unwrap_or(json!(email)),
+        "role": login.get("role").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Commande Tauri : teste la connexion d'un **compte GDS** (fiche « identité
+/// utilisateur »). Ne renvoie jamais le mot de passe ni le jeton ; le rôle
+/// reconnu sert à l'afficher en langage simple (« administrateur »,
+/// « développeur », « standard »).
+#[tauri::command]
+pub async fn gds_identity_login(
+    host: String,
+    http_port: String,
+    email: String,
+    password: String,
+    user_key: String,
+) -> Result<Value, String> {
+    blocking_admin(move || {
+        perform_identity_login(&host, &http_port, &email, &password, &user_key)
+    })
+    .await
+}
+
 /// Commande Tauri : serveurs mémorisés pour l'écran d'administration (hôte, port
 /// HTTP, email — **jamais** de mot de passe). Pré-remplit le bloc « Connexion
 /// serveur » et évite de tout ressaisir.
@@ -1373,6 +1493,97 @@ mod tests {
         );
         assert!(admin_error_message(500, "").contains("500"));
         assert!(admin_error_message(418, "").contains("418"));
+    }
+
+    #[test]
+    fn perform_identity_login_accepts_any_role_and_never_exposes_a_secret() {
+        // Lot 1 : le test de la fiche « compte GDS » accepte un rôle NON admin
+        // (contrairement à l'écran d'administration) et ne renvoie ni mot de
+        // passe ni jeton.
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_fake_server(
+            vec![
+                ("/api/gds/health", 200, "{\"version\":\"1.2.3\"}".to_string()),
+                (
+                    "/api/gds/users/login",
+                    200,
+                    json!({"ok": true, "email": "dev@x", "role": "dev", "token": "tok-dev"})
+                        .to_string(),
+                ),
+            ],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        let v = perform_identity_login(&host, &port, "dev@x", "pw-secret", "dev@x");
+        assert_eq!(v["ok"], json!(true), "connexion attendue OK: {}", v);
+        assert_eq!(v["role"], json!("dev"));
+        assert_eq!(v["email"], json!("dev@x"));
+        assert_eq!(v["reachable"], json!(true));
+        let text = v.to_string();
+        assert!(!text.contains("pw-secret"), "mot de passe exposé: {}", text);
+        assert!(!text.contains("tok-dev"), "jeton exposé: {}", text);
+        // Aucune route d'administration n'est appelée : le rôle importe peu.
+        let log = reqs.lock().unwrap().join("\n");
+        assert!(!log.contains("/api/gds/admin"), "journal: {}", log);
+    }
+
+    #[test]
+    fn perform_identity_login_wrong_password_reports_clean_message() {
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_fake_server(
+            vec![
+                ("/api/gds/health", 200, "{\"version\":\"1\"}".to_string()),
+                (
+                    "/api/gds/users/login",
+                    401,
+                    "{\"error\":\"Identifiants invalides\"}".to_string(),
+                ),
+            ],
+            reqs,
+        );
+        let (host, port) = host_port(&base);
+        let v = perform_identity_login(&host, &port, "dev@x", "mauvais", "dev@x");
+        assert_eq!(v["ok"], json!(false));
+        assert_eq!(v["reachable"], json!(true));
+        assert_eq!(
+            v["error"],
+            json!(
+                "Adresse ou mot de passe refusé : vérifiez que ce compte GDS existe bien sur ce serveur."
+            )
+        );
+        assert!(!v.to_string().contains("mauvais"));
+    }
+
+    #[test]
+    fn perform_identity_login_uses_the_password_memorized_on_the_fiche() {
+        // Parcours réel du bouton « Tester » d'une fiche mémorisée : le champ
+        // mot de passe est vide, le secret vient du fichier de la fiche.
+        let _guard = gds::TestGdsSecretsGuard::new();
+        let reqs = Arc::new(Mutex::new(Vec::new()));
+        let base = spawn_fake_server(
+            vec![
+                ("/api/gds/health", 200, "{\"version\":\"1\"}".to_string()),
+                (
+                    "/api/gds/users/login",
+                    200,
+                    json!({"ok": true, "email": "dev@x", "role": "admin", "token": "t"})
+                        .to_string(),
+                ),
+            ],
+            reqs.clone(),
+        );
+        let (host, port) = host_port(&base);
+        gds::save_gds_identity(&host, "pilot", &port, "dev@x", "memo-pw", "").unwrap();
+        // `user_key` = clé de la fiche (« pilot », fiche héritée complétée) : le
+        // mot de passe mémorisé est retrouvé même si l'e-mail diffère.
+        let v = perform_identity_login(&host, &port, "dev@x", "", "pilot");
+        assert_eq!(v["ok"], json!(true), "résultat: {}", v);
+        assert_eq!(v["role"], json!("admin"));
+        assert!(reqs.lock().unwrap().join("\n").contains("memo-pw"));
+        // Sans mot de passe saisi NI mémorisé : message clair, aucun appel réseau.
+        let none = perform_identity_login(&host, &port, "autre@x", "", "autre@x");
+        assert_eq!(none["ok"], json!(false));
+        assert!(none["error"].as_str().unwrap().contains("Mot de passe GDS requis"));
     }
 
     #[test]

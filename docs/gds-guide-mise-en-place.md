@@ -203,11 +203,11 @@ geste par geste** (votre cas probable) :
    renseignez votre **e-mail** (celui du compte administrateur) et votre **nom
    git**, puis **Enregistrer l'identité**. *(Détail : 2.3.)*
 2. **Dans Pilot** → **« ⚙️ GDS — paramétrage » → Serveurs GDS** → **Ajouter un
-   serveur** : Hôte `127.0.0.1`, **Port** `5432` (ou `55432` si vous avez
-   corrigé le piège du port), « Utilisateur PostgreSQL » `pilot`, « Mot de passe
-   dédié » = la valeur de la ligne `POSTGRES_PASSWORD` du fichier `.env`,
-   « Mot de passe admin GDS » = celui du compte administrateur → **Tester la
-   connexion** → **Ajouter le serveur**. *(Détail : 2.5.)*
+   serveur** : **Nom du serveur** (ex. *« GDS maison »*), **Description**
+   (facultative), **Adresse** `127.0.0.1`, **Port du service** `8080`,
+   **E-mail GDS** = votre compte administrateur, **Mot de passe GDS** = celui de
+   ce compte → **Tester la connexion** → **Ajouter le serveur**. *(Détail :
+   2.5.)*
 3. **Dans Pilot** → ouvrez (ou créez) un **projet** → onglet **« 🌐 GDS »** :
    **Connecter un serveur GDS** (choisissez le serveur mémorisé),
    **Enregistrer la configuration**, **Port SSH du serveur** = `2222`,
@@ -647,29 +647,43 @@ serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
 
 - **Dans Pilot, vous faites :** onglet **« ⚙️ GDS — paramétrage » → Serveurs
   GDS** → **Ajouter un serveur** : **Nom du serveur** (obligatoire, court —
-  ex. *« GDS maison »*), **Description** (facultatif), **Hôte** `127.0.0.1`,
-  **Port** `5432` (ou `55432` après la correction du piège du port),
-  **Utilisateur PostgreSQL** `pilot` (le compte technique de la base — **jamais** votre adresse e-mail de compte GDS), **Mot de passe dédié** = la valeur de la
-  ligne `POSTGRES_PASSWORD` du fichier `.env`, **Mot de passe admin GDS** =
-  celui du compte administrateur → **Tester la connexion** → **Ajouter le
-  serveur**.
-- **Vous voyez :** le serveur apparaît dans la liste (« 1 serveur mémorisé »),
-  avec son **nom** (l'ancienne identification `pilot@127.0.0.1:5432` reste
-  affichée en second) et son **état** : **« Joignable (JJ/MM/AAAA HH:MM) »**
-  après un test réussi, **« Injoignable (…) »** après un échec,
-  **« Jamais testé »** avant tout test. La connexion PostgreSQL a été testée
-  **avant** l'enregistrement.
-- **Une fiche ajoutée avant cette version** (sans nom) reste **utilisable** :
-  elle s'affiche sous son ancienne identification `utilisateur@adresse:port`.
-  Cliquez **Modifier** pour lui donner un nom.
+  ex. *« GDS maison »*), **Description** (facultatif), **Adresse du serveur**
+  `127.0.0.1`, **Port du service** `8080` (le port **web** du GDS, **pas** celui
+  de la base), **E-mail GDS** = **votre** compte sur ce serveur (celui créé en
+  **1.6.b** ou **2.2**), **Mot de passe GDS** = celui de ce compte → **Tester la
+  connexion** → **Ajouter le serveur**.
+- **Ce qui a changé (à ne pas confondre avec le guide précédent)** : cette fiche
+  décrit désormais **votre compte GDS** (e-mail + mot de passe), et non plus le
+  compte technique de la base. Le test se fait sur le **service** (port 8080) et
+  **accepte tous les rôles** : administrateur, développeur ou standard.
+- **Vous voyez :** le serveur apparaît dans la liste, avec son **nom**, son
+  **identité** (`votre-adresse@… — 127.0.0.1:8080`), le **rôle reconnu**
+  (**administrateur**, **développeur** ou **standard (lecture seule)**) et son
+  **état** : **« Joignable (JJ/MM/AAAA HH:MM) »** après un test réussi,
+  **« Injoignable (…) »** après un échec, **« Jamais testé »** avant tout test.
+  Le mot de passe n'est **jamais réaffiché** ; il est mémorisé hors projet
+  (après un test réussi) et peut être changé en **Modifier** (champ vide =
+  conservé).
+- **Une fiche ajoutée avant cette version** (compte technique de la base, sans
+  nom) reste **utilisable** : elle s'affiche sous son ancienne identification
+  `utilisateur@adresse:port`. Cliquez **Modifier** pour lui donner un nom et y
+  ajouter **votre e-mail GDS** : elle est **complétée**, pas remplacée —
+  **aucun doublon** n'est créé et les identifiants déjà mémorisés sont
+  **conservés**.
 - **Appliquer un serveur** : le bouton **« Appliquer »** d'une fiche remplit la
   configuration GDS du **projet choisi** dans le sélecteur (et non plus
   forcément le projet ouvert). Il pré-remplit hôte, port, utilisateur et
   identité, mais **conserve** le **port SSH** et la **racine des dépôts** déjà
-  configurés dans ce projet — vous n'avez pas à les ressaisir.
-- **Si ce n'est pas ça :** le test refuse → « Hôte » et « Port » de la **base**
-  (pas de l'interface web), mot de passe dédié = `POSTGRES_PASSWORD` ; si le
-  message est `password authentication failed`, revoyez le **piège du port**.
+  configurés dans ce projet — vous n'avez pas à les ressaisir. Sur une fiche
+  **« compte GDS »** neuve, ce bouton est **neutralisé** (l'explication
+  s'affiche au survol) tant que le rattachement d'un projet à votre compte GDS
+  n'est pas livré : le rattachement se fait pour l'instant par la
+  configuration du projet (**2.6.a**), qui demande encore le compte technique
+  de la base.
+- **Si ce n'est pas ça :** le test refuse → « Adresse » et « Port » du
+  **service** (8080, pas 5432), **E-mail GDS** = un compte **existant** sur ce
+  serveur (créez-le dans l'administration), mot de passe exact. Un compte
+  **non encore validé** est refusé : faites-le valider par un administrateur.
 
 ### 2.6 — Rattacher un projet au serveur
 

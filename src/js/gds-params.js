@@ -32,7 +32,7 @@ export const PARAMS_SECTIONS = [
     id: "servers",
     icon: "server",
     title: "Serveurs GDS",
-    desc: "Serveurs mémorisés sur ce poste (hôte et identifiant, jamais les mots de passe) : ajouter, modifier, supprimer, tester la connexion, et appliquer un serveur à un projet.",
+    desc: "Serveurs connus de ce poste : votre compte GDS (e-mail + mot de passe, jamais réaffiché), le rôle reconnu, et l'état du dernier test. Ajouter, modifier, supprimer, tester la connexion, appliquer un serveur à un projet.",
     todo: "L5.2",
   },
   {
@@ -76,19 +76,22 @@ function esc(s) {
 // L5.2 — « Serveurs GDS » : rendus purs (jamais de secret) et câblage
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** État initial du formulaire d'ajout/édition d'un serveur (pure). */
+/** État initial du formulaire d'ajout/édition d'une fiche serveur (pure). */
 export function initialServerForm() {
   return {
     mode: "add", // "add" | "edit"
+    // Clé de la fiche en cours d'édition (`user` = partie utilisateur de la
+    // clé, pas forcément l'adresse : une fiche héritée reste keyée sur son
+    // compte technique).
     oldHost: "",
     oldUser: "",
     name: "",
     description: "",
     host: "",
-    port: "5432",
-    user: "",
-    dbPassword: "",
-    adminPassword: "",
+    port: "8080", // port de l'API HTTP du service GDS
+    email: "", // votre compte GDS sur ce serveur
+    password: "", // secret : jamais réaffiché
+    role: "", // rôle reconnu au dernier test (admin / dev / standard)
   };
 }
 
@@ -117,6 +120,29 @@ export function serverLabel(s) {
   const user = String(sv.user || "").trim();
   const port = String(sv.port || "").trim() || "5432";
   return `${user}@${host}:${port}`;
+}
+
+/**
+ * Identification d'une fiche serveur : l'adresse GDS et le port de l'API quand
+ * la fiche porte un compte utilisateur, sinon l'ancienne identification
+ * `user@host:port` (fiche héritée du compte technique). Pure — testable.
+ */
+export function serverIdentityLabel(s) {
+  const sv = s || {};
+  const email = String(sv.gds_email || "").trim();
+  if (!email) return serverLabel(sv);
+  const host = String(sv.host || "").trim();
+  const port = String(sv.http_port || "").trim() || "8080";
+  return `${email} — ${host}:${port}`;
+}
+
+/** Vocabulaire du socle traduit en langage simple. Pure — testable. */
+export function gdsRoleLabel(role) {
+  const r = String(role || "").trim().toLowerCase();
+  if (r === "admin") return "administrateur";
+  if (r === "dev" || r === "developer") return "développeur";
+  if (r === "standard") return "standard (lecture seule)";
+  return r;
 }
 
 /**
@@ -155,20 +181,22 @@ export function serverStateBadge(s) {
 }
 
 /**
- * Valide le formulaire de serveur (pure, testable). Renvoie un message d'erreur
- * ou "" si valide. En mode « ajout », le mot de passe est requis pour tester la
- * connexion ; en mode « édition », un mot de passe vide CONSERVE l'existant.
+ * Valide le formulaire de fiche serveur (pure, testable). Renvoie un message
+ * d'erreur ou "" si valide. La fiche porte le COMPTE GDS (e-mail + mot de
+ * passe) : le mot de passe est requis à l'ajout, un mot de passe vide en
+ * édition CONSERVE celui déjà mémorisé.
  */
 export function validateServerForm(f) {
   const form = { ...initialServerForm(), ...(f || {}) };
   if (!String(form.name || "").trim()) return "Le nom du serveur est requis (court, ex. « GDS maison »).";
-  if (!String(form.host || "").trim()) return "L'hôte du serveur est requis.";
-  if (!String(form.user || "").trim()) return "L'utilisateur PostgreSQL est requis.";
-  if (String(form.user || "").includes("@")) {
-    return "Utilisateur PostgreSQL : indiquez le compte de la base (en général « pilot »), pas votre adresse e-mail. Le compte GDS se renseigne plus bas, dans le mot de passe admin.";
-  }
-  if (form.mode === "add" && !String(form.dbPassword || "").trim()) {
-    return "Le mot de passe PostgreSQL est requis pour tester la connexion.";
+  if (!String(form.host || "").trim()) return "L'adresse du serveur est requise.";
+  const port = String(form.port || "").trim();
+  if (port && !/^\d+$/.test(port)) return "Le port du serveur doit être un nombre (ex. 8080).";
+  const email = String(form.email || "").trim();
+  if (!email) return "L'e-mail GDS est requis : c'est votre compte sur ce serveur.";
+  if (!email.includes("@")) return "L'e-mail GDS n'est pas une adresse valide (ex. dev@exemple.com).";
+  if (form.mode === "add" && !String(form.password || "").trim()) {
+    return "Le mot de passe GDS est requis pour tester la connexion.";
   }
   return "";
 }
@@ -200,7 +228,7 @@ export function renderServersListHtml(state = {}) {
   }
   const servers = Array.isArray(s.servers) ? s.servers : [];
   if (!servers.length) {
-    return `<div class="gds-admin-status idle">Aucun serveur mémorisé sur ce poste. Ajoutez-en un ci-dessous — la connexion PostgreSQL est testée avant l'enregistrement.</div>`;
+    return `<div class="gds-admin-status idle">Aucun serveur mémorisé sur ce poste. Ajoutez-en un ci-dessous : votre compte GDS est testé avant l'enregistrement.</div>`;
   }
   const pend = s.pendingDelete;
   const canApply = s.canApply != null ? !!s.canApply : !!s.hasProject;
@@ -209,18 +237,32 @@ export function renderServersListHtml(state = {}) {
       const host = String(sv.host || "").trim();
       const user = String(sv.user || "").trim();
       const port = String(sv.port || "").trim() || "5432";
+      const httpPort = String(sv.http_port || "").trim();
+      const email = String(sv.gds_email || "").trim();
+      const role = String(sv.gds_role || "").trim();
+      const identity = !!sv.identity || !!email;
       const isPend = !!pend && pend.host === host && pend.user === user;
       const badge = serverStateBadge(sv);
       const desc = String(sv.description || "").trim();
-      return `<div class="gds-params-srv-row" data-host="${esc(host)}" data-port="${esc(port)}" data-user="${esc(user)}">
+      const roleText = role ? `Rôle : ${gdsRoleLabel(role)}` : "";
+      // Une fiche « compte GDS » ne porte plus le compte technique de la base :
+      // l'appliquer à un projet ne peut pas fonctionner tant que le client
+      // « compte GDS » n'existe pas (lot suivant) → bouton neutralisé, message
+      // clair, jamais d'identifiants incomplets écrits dans le projet.
+      const applyDisabled = !canApply
+        ? { disabled: " disabled", title: "Aucun projet connu" }
+        : identity && sv.has_db_password !== true
+          ? { disabled: " disabled", title: "Le rattachement d'un projet à votre compte GDS arrive avec le lot suivant." }
+          : { disabled: "", title: "" };
+      return `<div class="gds-params-srv-row" data-host="${esc(host)}" data-port="${esc(port)}" data-user="${esc(user)}" data-http-port="${esc(httpPort)}" data-email="${esc(email)}" data-identity="${identity ? "1" : "0"}" data-has-db-password="${sv.has_db_password === true ? "1" : "0"}">
         <div class="gds-params-srv-main">
           <div class="gds-params-srv-title">${esc(serverTitle(sv))} <span class="gds-badge gds-badge-${badge.kind}">${esc(badge.text)}</span></div>
           ${desc ? `<div class="gds-params-srv-desc">${esc(desc)}</div>` : ""}
-          <div class="gds-params-srv-sub">${esc(serverLabel(sv))} — identifiants conservés hors projet</div>
+          <div class="gds-params-srv-sub">${esc(serverIdentityLabel(sv))}${roleText ? ` — ${esc(roleText)}` : ""}${identity ? "" : " — fiche à compléter : renseignez votre compte GDS pour la tester"}</div>
         </div>
         <div class="gds-params-srv-actions">
           <button class="gds-admin-btn" data-srv-action="test">Tester</button>
-          <button class="gds-admin-btn" data-srv-action="apply"${canApply ? "" : ` disabled title="Aucun projet connu"`}>Appliquer</button>
+          <button class="gds-admin-btn" data-srv-action="apply"${applyDisabled.disabled}${applyDisabled.title ? ` title="${esc(applyDisabled.title)}"` : ""}>Appliquer</button>
           <button class="gds-admin-btn" data-srv-action="edit">Modifier</button>
           ${
             isPend
@@ -243,7 +285,8 @@ export function renderServersListHtml(state = {}) {
 export function renderServerFormHtml(form = initialServerForm()) {
   const f = { ...initialServerForm(), ...(form || {}) };
   const editing = f.mode === "edit";
-  const keepPw = editing ? "laisser vide pour conserver" : "mot de passe PostgreSQL";
+  const keepPw = editing ? "laisser vide pour conserver" : "mot de passe GDS";
+  const role = String(f.role || "").trim();
   return `
         <div class="gds-admin-form">
           <label class="gds-admin-field"><span>Nom du serveur</span>
@@ -252,21 +295,19 @@ export function renderServerFormHtml(form = initialServerForm()) {
           <label class="gds-admin-field"><span>Description (facultatif)</span>
             <input id="gds-params-srv-desc" type="text" autocomplete="off" placeholder="À quoi sert ce serveur" value="${esc(f.description)}">
           </label>
-          <label class="gds-admin-field"><span>Hôte</span>
+          <label class="gds-admin-field"><span>Adresse du serveur</span>
             <input id="gds-params-srv-host" type="text" autocomplete="off" placeholder="192.168.1.50" value="${esc(f.host)}">
           </label>
-          <label class="gds-admin-field gds-admin-field-narrow"><span>Port</span>
-            <input id="gds-params-srv-port" type="text" inputmode="numeric" placeholder="5432" value="${esc(f.port)}">
+          <label class="gds-admin-field gds-admin-field-narrow"><span>Port du service</span>
+            <input id="gds-params-srv-port" type="text" inputmode="numeric" placeholder="8080" value="${esc(f.port)}">
           </label>
-          <label class="gds-admin-field"><span>Utilisateur PostgreSQL (compte de la base, ex. pilot)</span>
-            <input id="gds-params-srv-user" type="text" autocomplete="off" placeholder="pilot" value="${esc(f.user)}">
+          <label class="gds-admin-field"><span>E-mail GDS (votre compte sur ce serveur)</span>
+            <input id="gds-params-srv-email" type="text" autocomplete="off" placeholder="dev@exemple.com" value="${esc(f.email)}">
           </label>
-          <label class="gds-admin-field"><span>Mot de passe dédié</span>
-            <input id="gds-params-srv-dbpw" type="password" autocomplete="new-password" placeholder="${esc(keepPw)}">
+          <label class="gds-admin-field"><span>Mot de passe GDS</span>
+            <input id="gds-params-srv-gdspw" type="password" autocomplete="new-password" placeholder="${esc(keepPw)}">
           </label>
-          <label class="gds-admin-field"><span>Mot de passe admin GDS (optionnel)</span>
-            <input id="gds-params-srv-adminpw" type="password" autocomplete="new-password" placeholder="${esc(keepPw)}">
-          </label>
+          <div class="gds-params-srv-role" id="gds-params-srv-role">${role ? `Rôle reconnu : <strong>${esc(gdsRoleLabel(role))}</strong>` : "Le rôle (administrateur, développeur, standard) est affiché ici après un test réussi."}</div>
         </div>`;
 }
 
@@ -310,12 +351,12 @@ export function renderServersSectionHtml(state = {}) {
         </div>
         <div class="gds-admin-section-desc">${esc(PARAMS_SECTIONS[0].desc)}</div>
         <div id="gds-params-srv-list" class="gds-params-srv-list">${renderServersListHtml(s)}</div>
-        <div class="gds-admin-section-desc" style="margin-top:10px"><strong>${editing ? "Modifier un serveur" : "Ajouter un serveur"}</strong> — la connexion PostgreSQL est testée AVANT d'enregistrer les identifiants.</div>
+        <div class="gds-admin-section-desc" style="margin-top:10px"><strong>${editing ? "Modifier un serveur" : "Ajouter un serveur"}</strong> — votre compte GDS (e-mail + mot de passe) est testé AVANT d'enregistrer la fiche.</div>
         ${renderServerFormHtml(s.form)}
         ${renderServerActionsHtml(s.form)}
         ${projectNote}
         <div id="gds-params-srv-status" class="gds-admin-status-area">${renderParamsStatusHtml(s.status)}</div>
-        <div class="gds-admin-hint">Les mots de passe ne sont jamais renvoyés à l'interface ; ils sont mémorisés hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600) après un test réussi, et peuvent être modifiés/supprimés depuis cet écran.</div>
+        <div class="gds-admin-hint">Les mots de passe ne sont jamais renvoyés à l'interface ; ils sont mémorisés hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600) après un test réussi, et peuvent être modifiés/supprimés depuis cet écran. La fiche identifie votre <strong>compte GDS</strong> : le serveur reconnaît votre rôle (administrateur, développeur, standard) à la connexion.</div>
       </section>`;
 }
 
@@ -699,17 +740,15 @@ export function createGdsParams(container) {
   function captureForm() {
     const host = q("#gds-params-srv-host");
     if (!host) return;
-    const dbpw = q("#gds-params-srv-dbpw").value;
-    const adminpw = q("#gds-params-srv-adminpw").value;
+    const gdspw = q("#gds-params-srv-gdspw").value;
     state.form = {
       ...state.form,
       name: q("#gds-params-srv-name").value,
       description: q("#gds-params-srv-desc").value,
       host: host.value,
       port: q("#gds-params-srv-port").value,
-      user: q("#gds-params-srv-user").value,
-      dbPassword: dbpw || state.form.dbPassword,
-      adminPassword: adminpw || state.form.adminPassword,
+      email: q("#gds-params-srv-email").value,
+      password: gdspw || state.form.password,
     };
   }
 
@@ -743,7 +782,12 @@ export function createGdsParams(container) {
     // « Mes clés » : la liste des serveurs DÉCLARÉS est la source de la cible
     // (elle arrive après le premier rendu). Cible disparue → premier serveur,
     // ou "" (aucun serveur → chemin historique par le pool du projet).
-    keysState.servers = Array.isArray(state.servers) ? state.servers : [];
+    // Une fiche « compte GDS » n'a plus le compte technique de la base :
+    // l'enregistrement de la clé par la base ne peut pas aboutir, elle n'est
+    // donc pas proposée ici.
+    keysState.servers = (Array.isArray(state.servers) ? state.servers : []).filter(
+      (s) => !s.identity || s.has_db_password === true,
+    );
     const keySel = q("#gds-params-key-target");
     if (keySel) keysState.target = keySel.value;
     keysState.target = normalizeKeysTarget(keysState.target, keysState.servers);
@@ -798,6 +842,14 @@ export function createGdsParams(container) {
       .catch(() => {});
   }
 
+  /** Clé de la fiche en cours de saisie : l'adresse à l'ajout, la clé existante
+   * en édition (une fiche héritée du compte technique garde sa clé). */
+  function formUserKey() {
+    return state.form.mode === "edit" && state.form.oldUser.trim()
+      ? state.form.oldUser.trim()
+      : state.form.email.trim();
+  }
+
   async function testForm() {
     captureForm();
     const err = validateServerForm(state.form);
@@ -806,20 +858,35 @@ export function createGdsParams(container) {
       draw();
       return;
     }
-    state.status = { kind: "loading", text: "Test de la connexion PostgreSQL…" };
+    state.status = { kind: "loading", text: "Test de votre compte GDS…" };
     draw();
     try {
-      await invoke("gds_test_saved_server", {
+      const res = await invoke("gds_identity_login", {
         host: state.form.host.trim(),
-        port: state.form.port.trim(),
-        user: state.form.user.trim(),
-        dbPassword: state.form.dbPassword,
+        httpPort: state.form.port.trim(),
+        email: state.form.email.trim(),
+        password: state.form.password,
+        userKey: formUserKey(),
       });
-      state.status = { kind: "ok", text: "✅ Connexion PostgreSQL réussie." };
+      if (!res || res.ok !== true) {
+        state.status = { kind: "error", text: friendlyGdsError((res && res.error) || "Connexion refusée") };
+        draw();
+        return;
+      }
+      state.form.role = String(res.role || "");
+      state.status = { kind: "ok", text: loginSuccessText(res) };
     } catch (e) {
       state.status = { kind: "error", text: friendlyGdsError(e) };
     }
     draw();
+  }
+
+  /** Message de réussite du test : rôle en langage simple. Pure — testable. */
+  function loginSuccessText(res) {
+    const role = gdsRoleLabel((res && res.role) || "");
+    const who = String((res && res.email) || "").trim();
+    const id = who ? ` (${who})` : "";
+    return role ? `✅ Connexion réussie : compte GDS${id} reconnu, rôle : ${role}.` : `✅ Connexion réussie : compte GDS${id} reconnu.`;
   }
 
   async function saveForm() {
@@ -834,31 +901,21 @@ export function createGdsParams(container) {
     state.status = { kind: "loading", text: editing ? "Enregistrement des modifications…" : "Ajout du serveur…" };
     draw();
     try {
-      if (editing) {
-        await invoke("gds_update_saved_server", {
-          oldHost: state.form.oldHost.trim(),
-          oldUser: state.form.oldUser.trim(),
-          host: state.form.host.trim(),
-          port: state.form.port.trim(),
-          user: state.form.user.trim(),
-          dbPassword: state.form.dbPassword,
-          adminPassword: state.form.adminPassword,
-          name: state.form.name.trim(),
-          description: state.form.description.trim(),
-        });
-      } else {
-        await invoke("gds_add_saved_server", {
-          host: state.form.host.trim(),
-          port: state.form.port.trim(),
-          user: state.form.user.trim(),
-          dbPassword: state.form.dbPassword,
-          adminPassword: state.form.adminPassword,
-          name: state.form.name.trim(),
-          description: state.form.description.trim(),
-        });
-      }
+      const res = await invoke(editing ? "gds_update_saved_server" : "gds_add_saved_server", {
+        ...(editing ? { oldHost: state.form.oldHost.trim(), oldUser: state.form.oldUser.trim() } : {}),
+        host: state.form.host.trim(),
+        httpPort: state.form.port.trim(),
+        email: state.form.email.trim(),
+        password: state.form.password,
+        name: state.form.name.trim(),
+        description: state.form.description.trim(),
+      });
       state.form = initialServerForm();
-      state.status = { kind: "ok", text: editing ? "✅ Serveur modifié (connexion testée)." : "✅ Serveur ajouté (connexion testée)." };
+      const role = gdsRoleLabel((res && res.role) || "");
+      state.status = {
+        kind: "ok",
+        text: `${editing ? "✅ Serveur modifié" : "✅ Serveur ajouté"} (compte GDS testé${role ? `, rôle : ${role}` : ""}).`,
+      };
       await refreshServers();
     } catch (e) {
       state.status = { kind: "error", text: friendlyGdsError(e) };
@@ -872,11 +929,28 @@ export function createGdsParams(container) {
     const host = row.dataset.host || "";
     const port = row.dataset.port || "5432";
     const user = row.dataset.user || "";
+    const httpPort = row.dataset.httpPort || "";
+    const email = row.dataset.email || "";
+    const isIdentity = row.dataset.identity === "1";
     const action = btn.dataset.srvAction;
 
     if (action === "edit") {
       state.pendingDelete = null;
-      state.form = { mode: "edit", oldHost: host, oldUser: user, name: String(cur.name || ""), description: String(cur.description || ""), host, port, user, dbPassword: "", adminPassword: "" };
+      // La fiche est relue dans la LISTE (jamais dans une variable hors
+      // portée) : nom, description et identité déjà mémorisés sont repris.
+      const cur = state.servers.find((s) => String(s.host || "").trim() === host && String(s.user || "").trim() === user) || {};
+      state.form = {
+        mode: "edit",
+        oldHost: host,
+        oldUser: user,
+        name: String(cur.name || ""),
+        description: String(cur.description || ""),
+        host,
+        port: String(cur.http_port || "") || "8080",
+        email: String(cur.gds_email || ""),
+        password: "",
+        role: String(cur.gds_role || ""),
+      };
       state.status = { kind: "ok", text: "Modifiez les champs puis enregistrez (mot de passe vide = conservé)." };
       draw();
       return;
@@ -898,7 +972,8 @@ export function createGdsParams(container) {
       draw();
       try {
         await invoke("gds_delete_saved_server", { host, user });
-        state.status = { kind: "ok", text: `✅ Serveur ${user}@${host} supprimé (identifiants oubliés).` };
+        const label = email || `${user}@${host}`;
+        state.status = { kind: "ok", text: `✅ Serveur ${label} supprimé (identifiants oubliés).` };
         await refreshServers();
       } catch (e) {
         state.status = { kind: "error", text: friendlyGdsError(e) };
@@ -907,13 +982,35 @@ export function createGdsParams(container) {
       return;
     }
     if (action === "test") {
-      state.status = { kind: "loading", text: `Test de ${user}@${host}…` };
-      draw();
-      try {
-        await invoke("gds_test_saved_server", { host, port, user, dbPassword: "" });
-        state.status = { kind: "ok", text: `✅ Connexion réussie (${user}@${host}).` };
-      } catch (e) {
-        state.status = { kind: "error", text: friendlyGdsError(e) };
+      if (isIdentity) {
+        // Fiche « compte GDS » : la connexion passe par le compte UTILISATEUR
+        // (le mot de passe reste mémorisé côté Rust, jamais réaffiché).
+        state.status = { kind: "loading", text: `Test du compte ${email}…` };
+        draw();
+        try {
+          const res = await invoke("gds_identity_login", {
+            host,
+            httpPort,
+            email,
+            password: "",
+            userKey: user,
+          });
+          state.status = res && res.ok === true
+            ? { kind: "ok", text: loginSuccessText(res) }
+            : { kind: "error", text: friendlyGdsError((res && res.error) || "Connexion refusée") };
+        } catch (e) {
+          state.status = { kind: "error", text: friendlyGdsError(e) };
+        }
+      } else {
+        // Fiche héritée (compte technique) : test PostgreSQL inchangé.
+        state.status = { kind: "loading", text: `Test de ${user}@${host}…` };
+        draw();
+        try {
+          await invoke("gds_test_saved_server", { host, port, user, dbPassword: "" });
+          state.status = { kind: "ok", text: `✅ Connexion réussie (${user}@${host}).` };
+        } catch (e) {
+          state.status = { kind: "error", text: friendlyGdsError(e) };
+        }
       }
       // Lot 5 : le test met à jour la date et l'état de la fiche — on relit la
       // liste pour afficher l'état réel (le mot de passe n'est jamais repris).

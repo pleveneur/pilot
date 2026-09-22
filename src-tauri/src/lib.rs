@@ -3066,6 +3066,10 @@ pub fn run() {
             gds_admin::gds_admin_saved_servers,
             gds_admin::gds_admin_test_connection,
             gds_admin::gds_admin_connect,
+            // ── GDS (lot 1 « mon compte GDS ») : la fiche serveur porte le
+            // compte utilisateur (e-mail + mot de passe → jeton du service).
+            // Aucune exigence de rôle : un développeur identifie son serveur.
+            gds_admin::gds_identity_login,
             // ── GDS (refonte, L4.3) : gestion des comptes du serveur ──
             // Liste, création, rôle, statut, mot de passe — mêmes routes
             // d'administration HTTP ; le garde-fou « dernier administrateur »

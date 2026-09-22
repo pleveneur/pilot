@@ -11,6 +11,8 @@ import {
   initialServersState,
   serverLabel,
   serverTitle,
+  serverIdentityLabel,
+  gdsRoleLabel,
   formatServerTestDate,
   serverStateBadge,
   validateServerForm,
@@ -111,13 +113,13 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(serverLabel(null)).toBe("@:5432");
   });
 
-  it("validateServerForm exige nom + hôte + utilisateur, et le mot de passe en AJOUT seulement", () => {
-    expect(validateServerForm({ mode: "add", name: "N", host: "", user: "pilot", dbPassword: "x" })).toMatch(/hôte/i);
-    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "", dbPassword: "x" })).toMatch(/utilisateur/i);
-    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "" })).toMatch(/mot de passe/i);
-    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "x" })).toBe("");
+  it("validateServerForm exige nom + adresse + e-mail GDS, et le mot de passe en AJOUT seulement", () => {
+    expect(validateServerForm({ mode: "add", name: "N", host: "", email: "a@b", password: "x" })).toMatch(/adresse/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "", password: "x" })).toMatch(/e-mail GDS/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "" })).toMatch(/mot de passe/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "x" })).toBe("");
     // En édition, un mot de passe vide est autorisé (il est conservé).
-    expect(validateServerForm({ mode: "edit", name: "N", host: "h", user: "u", dbPassword: "" })).toBe("");
+    expect(validateServerForm({ mode: "edit", name: "N", host: "h", email: "a@b", password: "" })).toBe("");
   });
 
   it("serverTitle : nom si renseigné, sinon user@host:port (fiches sans nom)", () => {
@@ -127,23 +129,49 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
   });
 
   it("validateServerForm exige le nom (obligatoire à la saisie)", () => {
-    expect(validateServerForm({ mode: "add", name: "", host: "h", user: "u", dbPassword: "x" })).toMatch(/nom/i);
-    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "x" })).toBe("");
+    expect(validateServerForm({ mode: "add", name: "", host: "h", email: "a@b", password: "x" })).toMatch(/nom/i);
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "x" })).toBe("");
   });
 
-  it("validateServerForm refuse une adresse e-mail comme utilisateur PostgreSQL", () => {
-    // Piège réel : l'e-mail du compte GDS saisi à la place du compte de la base.
+  it("validateServerForm : e-mail GDS plausible et port numérique (refus clairs)", () => {
+    // Le rôle de l'e-mail est désormais celui de l'IDENTITÉ : une adresse sans
+    // « @ » n'en est pas une (le compte technique de la base n'est plus demandé).
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "patrick", password: "x" })).toMatch(/adresse valide/i);
+    // Port vide (repli 8080 côté interface) ou numérique : acceptés.
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "x", port: "" })).toBe("");
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "x", port: "8080" })).toBe("");
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", email: "a@b", password: "x", port: "80a" })).toMatch(/nombre/i);
+  });
+
+  it("serverIdentityLabel : adresse GDS du compte utilisateur, ancienne forme pour les fiches héritées", () => {
     expect(
-      validateServerForm({ mode: "add", name: "N", host: "h", user: "patrick.leveneur@gmail.com", dbPassword: "x" })
-    ).toMatch(/compte de la base/i);
-    // Le compte technique de la base reste accepté.
-    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "pilot", dbPassword: "x" })).toBe("");
+      serverIdentityLabel({ host: "10.0.0.1", http_port: "8080", gds_email: "dev@exemple.com", user: "dev@exemple.com" })
+    ).toBe("dev@exemple.com — 10.0.0.1:8080");
+    // Port HTTP absent : repli 8080 (valeur par défaut du service).
+    expect(serverIdentityLabel({ host: "h", gds_email: "a@b" })).toBe("a@b — h:8080");
+    // Fiche héritée (compte technique) : affichage inchangé.
+    expect(serverIdentityLabel({ host: "10.0.0.1", port: "5433", user: "pilot" })).toBe("pilot@10.0.0.1:5433");
   });
 
-  it("renderServerFormHtml nomme le compte de la base dans le libellé utilisateur", () => {
+  it("gdsRoleLabel : vocabulaire du socle traduit en langage simple", () => {
+    expect(gdsRoleLabel("admin")).toBe("administrateur");
+    expect(gdsRoleLabel("dev")).toBe("développeur");
+    expect(gdsRoleLabel("standard")).toBe("standard (lecture seule)");
+    expect(gdsRoleLabel("")).toBe("");
+  });
+
+  it("renderServerFormHtml demande le compte GDS (e-mail + mot de passe), plus le compte de la base", () => {
     const html = renderServerFormHtml();
-    expect(html).toMatch(/compte de la base/i);
-    expect(html).toMatch(/pilot/);
+    expect(html).toMatch(/E-mail GDS/i);
+    expect(html).toContain('id="gds-params-srv-email"');
+    expect(html).toContain('id="gds-params-srv-gdspw"');
+    expect(html).not.toContain('id="gds-params-srv-user"');
+    expect(html).not.toContain('id="gds-params-srv-dbpw"');
+  });
+
+  it("renderServerFormHtml affiche le rôle reconnu après un test", () => {
+    expect(renderServerFormHtml({ mode: "edit", role: "dev" })).toMatch(/Rôle reconnu : <strong>développeur<\/strong>/);
+    expect(renderServerFormHtml({ role: "" })).toMatch(/affiché ici après un test/);
   });
 
   it("renderServersListHtml affiche le nom, la description et l'identité en second", () => {
@@ -161,7 +189,7 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
   });
 
   it("renderServerFormHtml rend les champs nom et description, sans secret", () => {
-    const html = renderServerFormHtml({ mode: "edit", name: "N", description: "D", host: "h", user: "u", dbPassword: "SECRET" });
+    const html = renderServerFormHtml({ mode: "edit", name: "N", description: "D", host: "h", email: "a@b", password: "SECRET" });
     expect(html).toContain('id="gds-params-srv-name"');
     expect(html).toContain('id="gds-params-srv-desc"');
     expect(html).toContain('value="N"');
@@ -205,12 +233,41 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
   });
 
   it("renderServerFormHtml ne réinjecte JAMAIS un mot de passe (champs toujours vides)", () => {
-    const html = renderServerFormHtml({ mode: "edit", host: "h", port: "5432", user: "u", dbPassword: "SECRET", adminPassword: "ADMIN" });
+    const html = renderServerFormHtml({ mode: "edit", host: "h", port: "8080", email: "a@b", password: "SECRET" });
     expect(html).toContain('id="gds-params-srv-host"');
-    expect(html).toContain('id="gds-params-srv-dbpw"');
+    expect(html).toContain('id="gds-params-srv-gdspw"');
     expect(html).not.toContain("SECRET");
-    expect(html).not.toContain("ADMIN");
     expect(html).toMatch(/type="password"[^>]*placeholder="laisser vide pour conserver"/);
+  });
+
+  it("renderServersListHtml : fiche « compte GDS » — identité, rôle et « Appliquer » neutralisé sans compte technique", () => {
+    const html = renderServersListHtml({
+      loading: false,
+      hasProject: true,
+      servers: [
+        {
+          host: "10.0.0.1",
+          port: "5432",
+          user: "dev@exemple.com",
+          name: "GDS maison",
+          identity: true,
+          http_port: "8080",
+          gds_email: "dev@exemple.com",
+          gds_role: "dev",
+          has_db_password: false,
+          gds_password: "SECRET",
+        },
+      ],
+    });
+    expect(html).toContain("dev@exemple.com — 10.0.0.1:8080");
+    expect(html).toContain("Rôle : développeur");
+    expect(html).toMatch(/data-srv-action="apply" disabled/);
+    expect(html).toContain('data-identity="1"');
+    expect(html).not.toContain("SECRET");
+    // Fiche héritée : comportement inchangé (Appliquer actif).
+    const legacy = renderServersListHtml({ loading: false, hasProject: true, servers: [{ host: "h", port: "5432", user: "pilot", has_db_password: true }] });
+    expect(legacy).toMatch(/data-srv-action="apply">Appliquer/);
+    expect(legacy).toContain('data-identity="0"');
   });
 
   it("renderServerActionsHtml : « Annuler » uniquement en édition", () => {

@@ -72,6 +72,36 @@ pub(crate) struct ServerCredentials {
     /// injoignable, `None` jamais testé. Sert à afficher l'état sur la fiche.
     #[serde(default)]
     pub reachable: Option<bool>,
+
+    // ── Fiche « identité utilisateur » (lot 1 : le compte GDS remplace le
+    // compte technique). Tous ces champs sont FACULTATIFS à la lecture : une
+    // fiche écrite avant ce lot (compte technique) se relit sans eux, sans
+    // qu'aucun secret ne soit perdu ni effacé.
+    /// Hôte de la fiche, mémorisé EXPLICITEMENT : la clé `user@host` ne peut
+    /// plus être redécoupée fiablement quand l'utilisateur est une adresse
+    /// e-mail (qui contient un `@`). Vide = fiche héritée → repli sur la clé.
+    #[serde(default)]
+    pub host: String,
+    /// Partie « utilisateur » de la clé de la map `servers`, mémorisée elle
+    /// aussi pour la même raison (l'UI doit retrouver la fiche pour la
+    /// modifier/supprimer). Vide = fiche héritée → repli sur la clé.
+    #[serde(default)]
+    pub key_user: String,
+    /// Port de l'API HTTP du service GDS (le compte utilisateur parle au
+    /// service, jamais à la base). Chaîne vide = jamais renseigné.
+    #[serde(default)]
+    pub http_port: String,
+    /// E-mail du compte GDS de l'utilisateur sur ce serveur. Non vide = fiche
+    /// au format « identité utilisateur ».
+    #[serde(default)]
+    pub gds_email: String,
+    /// Rôle renvoyé par le serveur à la connexion (`admin` / `dev` /
+    /// `standard`). Affiché sur la fiche, jamais deviné.
+    #[serde(default)]
+    pub gds_role: String,
+    /// Mot de passe du compte GDS — **SECRET**, jamais renvoyé à l'UI.
+    #[serde(default)]
+    pub gds_password: Option<String>,
 }
 
 /// Défaut `validated = true` : les serveurs déjà enregistrés (Évolution 1)
@@ -189,11 +219,11 @@ static TEST_GDS_SECRETS_COUNTER: std::sync::atomic::AtomicUsize =
 /// jamais au vrai `~/.pilot/gds_secrets.json`.
 #[cfg(test)]
 #[derive(Default)]
-struct TestGdsSecretsGuard;
+pub(crate) struct TestGdsSecretsGuard;
 
 #[cfg(test)]
 impl TestGdsSecretsGuard {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let n = TEST_GDS_SECRETS_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
             "pilot-gds-secrets-test-{}-{}",
@@ -289,7 +319,12 @@ pub(crate) fn get_saved_server(
 }
 
 /// Liste les serveurs mémorisés SANS les mots de passe (pour l'UI) :
-/// `[{ host, port, user }]`. Fail-open : erreur → liste vide.
+/// `[{ host, port, user, ... }]`. Fail-open : erreur → liste vide.
+///
+/// `host` et `user` sont relus depuis la FICHE quand elle les mémorise (fiches
+/// au format « identité utilisateur », dont la clé contient un `@` d'e-mail) et
+/// retombent sur la clé `user@host` pour les fiches écrites avant ce lot :
+/// aucune fiche héritée n'est perdue ni transformée.
 pub(crate) fn list_saved_servers() -> Vec<Value> {
     let secrets = match read_gds_secrets() {
         Ok(s) => s,
@@ -303,10 +338,13 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
         // effectif réussi (marqué validé à l'enregistrement).
         .filter(|(_, c)| c.validated)
         .map(|(key, c)| {
-            let (user, host) = match key.split_once('@') {
+            let (key_user, key_host) = match key.split_once('@') {
                 Some((u, h)) => (u.to_string(), h.to_string()),
                 None => (key.clone(), String::new()),
             };
+            let user = if c.key_user.is_empty() { key_user } else { c.key_user.clone() };
+            let host = if c.host.is_empty() { key_host } else { c.host.clone() };
+            let identity = !c.gds_email.trim().is_empty();
             json!({
                 "host": host,
                 "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
@@ -316,6 +354,17 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "description": c.description,
                 "last_test_at": c.last_test_at,
                 "reachable": c.reachable,
+                // Fiche « identité utilisateur » (lot 1) : l'adresse GDS, le
+                // port de l'API HTTP et le rôle reconnu. Jamais de mot de passe.
+                "identity": identity,
+                "http_port": c.http_port,
+                "gds_email": c.gds_email,
+                "gds_role": c.gds_role,
+                // Booléen (pas un secret) : la fiche porte-t-elle encore le
+                // compte technique de la base ? Seules ces fiches peuvent être
+                // appliquées à un projet tant que le client « compte GDS »
+                // n'existe pas (lot suivant).
+                "has_db_password": !c.db_password.as_deref().unwrap_or("").is_empty(),
             })
         })
         .collect()
@@ -529,6 +578,10 @@ pub(crate) fn save_server_credentials(
         .servers
         .entry(server_key(host, user))
         .or_default();
+    // Mémorise la fiche pour que l'UI la retrouve sans redécouper la clé
+    // (`user@host` serait ambigu avec une adresse e-mail).
+    entry.host = host.trim().to_string();
+    entry.key_user = user.trim().to_string();
     if port.trim().is_empty() {
         entry.db_port = "5432".to_string();
     } else {
@@ -584,6 +637,58 @@ pub(crate) fn record_server_test(host: &str, user: &str, reachable: bool) -> Res
     entry.reachable = Some(reachable);
     write_gds_secrets(&secrets)
 }
+
+// ── Fiche « identité utilisateur » (lot 1) ──
+//
+// Le poste ne se connecte plus à la base pour identifier un serveur : la fiche
+// porte le COMPTE GDS de l'utilisateur (e-mail + mot de passe → jeton porteur
+// du rôle, délivré par le service). Les fiches écrites avant ce lot gardent
+// leurs secrets techniques : rien n'est effacé, l'identité s'ajoute dessus.
+
+/// Mot de passe GDS mémorisé pour une fiche (`user` = partie utilisateur de la
+/// clé de la fiche, pas forcément l'e-mail : une fiche héritée reste keyée sur
+/// son compte technique). Jamais renvoyé à l'UI.
+pub(crate) fn stored_gds_password(host: &str, user: &str) -> Option<String> {
+    let secrets = read_gds_secrets().ok()?;
+    secrets
+        .servers
+        .get(&server_key(host, user))
+        .and_then(|c| c.gds_password.clone())
+        .filter(|p| !p.trim().is_empty())
+}
+
+/// Mémorise l'IDENTITÉ GDS (e-mail, rôle reconnu, port HTTP) sur une fiche
+/// existante, sans jamais toucher au compte technique ni à l'ancien mot de
+/// passe GDS si le nouveau est vide. Crée la fiche si elle n'existe pas encore
+/// (ajout). Le mot de passe GDS est un SECRET : il n'est jamais renvoyé.
+pub(crate) fn save_gds_identity(
+    host: &str,
+    user: &str,
+    http_port: &str,
+    email: &str,
+    password: &str,
+    role: &str,
+) -> Result<(), String> {
+    let mut secrets = read_gds_secrets()?;
+    let entry = secrets.servers.entry(server_key(host, user)).or_default();
+    entry.host = host.trim().to_string();
+    entry.key_user = user.trim().to_string();
+    entry.http_port = http_port.trim().to_string();
+    entry.gds_email = email.trim().to_string();
+    entry.gds_role = role.trim().to_string();
+    if !password.trim().is_empty() {
+        entry.gds_password = Some(password.trim().to_string());
+    }
+    // Comme pour le compte technique : la fiche n'est écrite qu'après une
+    // connexion réussie, elle est donc proposée dans la liste.
+    entry.validated = true;
+    write_gds_secrets(&secrets)
+}
+
+// ── Fiche « identité utilisateur » (lot 1) ──
+//
+// Note : le retrait d'une fiche passe par `delete_saved_server` (clé
+// `user@host`), inchangé.
 
 /// Commande Tauri : liste les serveurs GDS mémorisés (hôte/port/utilisateur
 /// uniquement — jamais les mots de passe). Pour l'UI section 1 (Évolution 1).
@@ -750,65 +855,90 @@ pub async fn gds_test_saved_server(
     Ok(json!({ "ok": true }))
 }
 
-/// Commande Tauri : AJOUTE (ou complète) un serveur mémorisé APRÈS un test de
-/// connexion réussi. Réutilise `save_server_credentials` (qui marque `validated`),
-/// donc un serveur n'est proposé / applicable que s'il a réellement répondu.
+/// Commande Tauri : AJOUTE une fiche « identité utilisateur » APRÈS une
+/// connexion réussie du compte GDS (e-mail + mot de passe → jeton du service).
+/// La fiche est clée sur l'adresse GDS ; le rôle reconnu est mémorisé. Aucune
+/// connexion à la base : c'est le compte utilisateur qui identifie le serveur.
 #[tauri::command]
 pub async fn gds_add_saved_server(
     host: String,
-    port: String,
-    user: String,
-    db_password: String,
-    admin_password: String,
+    http_port: String,
+    email: String,
+    password: String,
     name: String,
     description: String,
 ) -> Result<Value, String> {
-    test_saved_server_connection(&host, &port, &user, &db_password).await?;
-    save_server_credentials(&host, &port, &user, &db_password, &admin_password)?;
-    set_server_label(&host, &user, &name, &description)?;
-    let _ = record_server_test(&host, &user, true);
+    if host.trim().is_empty() || email.trim().is_empty() {
+        return Err("Adresse du serveur et e-mail GDS sont requis".to_string());
+    }
+    let res = crate::gds_admin::perform_identity_login(&host, &http_port, &email, &password, &email);
+    let role = identity_login_role(&res)?;
+    save_gds_identity(&host, &email, &http_port, &email, &password, &role)?;
+    set_server_label(&host, &email, &name, &description)?;
+    let _ = record_server_test(&host, &email, true);
     Ok(json!({
         "ok": true,
         "host": host.trim(),
-        "port": if port.trim().is_empty() { "5432" } else { port.trim() },
-        "user": user.trim(),
+        "http_port": http_port.trim(),
+        "email": email.trim(),
+        "role": role,
         "name": name.trim(),
     }))
 }
 
-/// Commande Tauri : MODIFIE un serveur mémorisé (hôte/port/utilisateur et/ou
-/// mots de passe). Un changement d'hôte ou d'utilisateur renomme la clé ; les
-/// mots de passe laissés vides CONSERVENT la valeur mémorisée. Un test de
-/// connexion est refait avec les identifiants effectifs avant enregistrement.
+/// Rôle renvoyé par la connexion, ou l'erreur LISIBLE du refus (jamais un
+/// secret). Pure — partagée par l'ajout et la modification d'une fiche.
+fn identity_login_role(res: &Value) -> Result<String, String> {
+    if res.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(res
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string())
+    } else {
+        Err(res
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Connexion au compte GDS refusée")
+            .to_string())
+    }
+}
+
+/// Commande Tauri : MODIFIE une fiche « identité utilisateur ». La CLÉ de la
+/// fiche ne change pas quand seule l'identité est complétée : une fiche écrite
+/// avant ce lot (compte technique) garde donc ses secrets. Le mot de passe
+/// laissé vide CONSERVE celui déjà mémorisé ; un changement d'adresse renomme
+/// la clé (l'ancienne entrée est retirée, comme avant).
 #[tauri::command]
 pub async fn gds_update_saved_server(
     old_host: String,
     old_user: String,
     host: String,
-    port: String,
-    user: String,
-    db_password: String,
-    admin_password: String,
+    http_port: String,
+    email: String,
+    password: String,
     name: String,
     description: String,
 ) -> Result<Value, String> {
-    if host.trim().is_empty() || user.trim().is_empty() {
-        return Err("Hôte et utilisateur PostgreSQL sont requis".to_string());
+    if host.trim().is_empty() || email.trim().is_empty() {
+        return Err("Adresse du serveur et e-mail GDS sont requis".to_string());
     }
-    let port_eff = if port.trim().is_empty() { "5432" } else { port.trim() };
-    // Identifiants effectifs : fournis, sinon repris sous l'ANCIENNE clé.
-    let mut db_eff = db_password.trim().to_string();
-    let mut admin_eff = admin_password.trim().to_string();
-    // Nom/description effectifs : fournis, sinon repris sous l'ancienne clé
-    // (une fiche renommée sans toucher au libellé doit garder son nom).
+    let key_user = if old_user.trim().is_empty() {
+        email.trim().to_string()
+    } else {
+        old_user.trim().to_string()
+    };
+    // Valeurs effectives : fournies, sinon reprises sous l'ancienne clé (mot de
+    // passe GDS, nom, description) — un champ laissé vide ne doit rien effacer.
+    let mut password_eff = password.trim().to_string();
     let mut name_eff = name.trim().to_string();
     let mut description_eff = description.trim().to_string();
-    if let Some(old) = get_saved_server(&old_host, port_eff, &old_user).ok().flatten() {
-        if db_eff.is_empty() {
-            db_eff = old.db_password.unwrap_or_default();
-        }
-        if admin_eff.is_empty() {
-            admin_eff = old.admin_password.unwrap_or_default();
+    let previous = read_gds_secrets()
+        .ok()
+        .and_then(|s| s.servers.get(&server_key(&old_host, &key_user)).cloned());
+    if let Some(old) = previous {
+        if password_eff.is_empty() {
+            password_eff = old.gds_password.unwrap_or_default();
         }
         if name_eff.is_empty() {
             name_eff = old.name;
@@ -817,23 +947,31 @@ pub async fn gds_update_saved_server(
             description_eff = old.description;
         }
     }
-    test_saved_server_connection(&host, port_eff, &user, &db_eff).await?;
-    // Renommage : retirer l'ancienne clé si l'hôte/utilisateur a changé.
-    let old_key = server_key(&old_host, &old_user);
-    let new_key = server_key(&host, &user);
-    if old_key != new_key {
+    let res =
+        crate::gds_admin::perform_identity_login(&host, &http_port, &email, &password_eff, &key_user);
+    let role = identity_login_role(&res)?;
+    if server_key(&old_host, &key_user) != server_key(&host, &key_user) {
         let mut secrets = read_gds_secrets()?;
-        secrets.servers.remove(&old_key);
+        secrets.servers.remove(&server_key(&old_host, &key_user));
         write_gds_secrets(&secrets)?;
     }
-    save_server_credentials(&host, port_eff, &user, &db_eff, &admin_eff)?;
-    set_server_label(&host, &user, &name_eff, &description_eff)?;
-    let _ = record_server_test(&host, &user, true);
+    save_gds_identity(
+        &host,
+        &key_user,
+        &http_port,
+        &email,
+        &password_eff,
+        &role,
+    )?;
+    set_server_label(&host, &key_user, &name_eff, &description_eff)?;
+    let _ = record_server_test(&host, &key_user, true);
     Ok(json!({
         "ok": true,
         "host": host.trim(),
-        "port": port_eff,
-        "user": user.trim(),
+        "http_port": http_port.trim(),
+        "email": email.trim(),
+        "user": key_user,
+        "role": role,
         "name": name_eff,
     }))
 }
@@ -2942,6 +3080,66 @@ mod tests {
         assert_eq!(entry["description"], "");
         assert_eq!(entry["last_test_at"], "");
         assert!(entry["reachable"].is_null());
+        // Lot 1 : une fiche héritée est vue comme non-« compte GDS » et garde
+        // son compte technique (donc « Appliquer » reste possible).
+        assert_eq!(entry["identity"], false);
+        assert_eq!(entry["has_db_password"], true);
+        assert_eq!(entry["gds_email"], "");
+    }
+
+    #[test]
+    fn identity_fiche_is_listed_with_email_role_and_never_its_password() {
+        // Lot 1 : la fiche porte le COMPTE GDS (e-mail + mot de passe) ; la
+        // liste expose l'e-mail, le port HTTP, le rôle et l'absence de compte
+        // technique — jamais un mot de passe.
+        let _guard = TestGdsSecretsGuard::new();
+        let host = "10.9.7.1";
+        let email = "dev@exemple.com";
+        save_gds_identity(host, email, "8080", email, "secret-gds", "dev").unwrap();
+        let list = list_saved_servers();
+        let entry = list.iter().find(|v| v["host"] == host).unwrap();
+        assert_eq!(entry["user"], email, "la clé de la fiche reste retrouvable");
+        assert_eq!(entry["gds_email"], email);
+        assert_eq!(entry["http_port"], "8080");
+        assert_eq!(entry["gds_role"], "dev");
+        assert_eq!(entry["identity"], true);
+        assert_eq!(entry["has_db_password"], false);
+        let serialized = serde_json::to_string(&list).unwrap();
+        assert!(!serialized.contains("secret-gds"));
+        // Le mot de passe mémorisé se relit par la clé de la fiche.
+        assert_eq!(stored_gds_password(host, email).as_deref(), Some("secret-gds"));
+        // Un mot de passe vide en modification CONSERVE le mémorisé.
+        save_gds_identity(host, email, "8080", email, "", "admin").unwrap();
+        assert_eq!(stored_gds_password(host, email).as_deref(), Some("secret-gds"));
+        assert_eq!(
+            list_saved_servers()
+                .iter()
+                .find(|v| v["host"] == host)
+                .unwrap()["gds_role"],
+            "admin"
+        );
+    }
+
+    #[test]
+    fn completing_a_legacy_fiche_with_an_identity_never_erases_its_secrets() {
+        // Lot 1 : la fiche héritée (compte technique) est COMPLÉTÉE, sans
+        // changement de clé et sans perte des mots de passe déjà mémorisés.
+        let _guard = TestGdsSecretsGuard::new();
+        let host = "10.9.8.1";
+        save_server_credentials(host, "5432", "pilot", "dbpw", "adminpw").unwrap();
+        save_gds_identity(host, "pilot", "8080", "dev@exemple.com", "gds-pw", "admin").unwrap();
+        let saved = get_saved_server(host, "5432", "pilot").unwrap().unwrap();
+        assert_eq!(saved.db_password.as_deref(), Some("dbpw"));
+        assert_eq!(saved.admin_password.as_deref(), Some("adminpw"));
+        assert_eq!(saved.gds_password.as_deref(), Some("gds-pw"));
+        let entry = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == host)
+            .unwrap();
+        assert_eq!(entry["user"], "pilot", "la clé de la fiche ne change pas");
+        assert_eq!(entry["identity"], true);
+        assert_eq!(entry["has_db_password"], true);
+        assert_eq!(entry["gds_email"], "dev@exemple.com");
     }
 
     #[test]

@@ -354,12 +354,20 @@ d'un hébergement externe type GitHub.
     **Espace utilisé + journal des connexions**, et **Contrôle du service**
     (redémarrer le service GDS ou le conteneur) ;
   - **« ⚙️ GDS — paramétrage »** : **Serveurs GDS** mémorisés portant un **nom**
-    (obligatoire) et une **description** (facultative) ; l'ancienne
-    identification `utilisateur@adresse:port` reste affichée en second. Chaque
-    fiche indique son **état** (**joignable / injoignable / jamais testé**, avec
-    la **date du dernier test**). Actions : ajouter, modifier, supprimer,
-    tester, et **appliquer à un projet choisi dans une liste** (et non plus
-    seulement au projet ouvert) ; **Mon identité**
+    (obligatoire) et une **description** (facultative). Une fiche décrit votre
+    **compte GDS** sur ce serveur : **adresse**, **port du service** (8080 par
+    défaut), **e-mail GDS** et **mot de passe GDS**. Le **mot de passe n'est
+    jamais réaffiché** ; il est mémorisé hors projet, après un test réussi, et
+    l'**appartenance est prouvée par un test** (les rôles non administrateurs
+    sont acceptés). Chaque fiche indique son **état** (**joignable /
+    injoignable / jamais testé**, avec la **date du dernier test**) et le
+    **rôle reconnu** (administrateur, développeur, standard). Actions :
+    ajouter, modifier, supprimer, tester, et **appliquer à un projet choisi dans
+    une liste** (et non plus seulement au projet ouvert). Une fiche écrite avant
+    cette version (compte technique de la base, affichée
+    `utilisateur@adresse:port`) **reste lisible et utilisable** : renseignez
+    simplement votre **e-mail GDS** pour la compléter, sans rien perdre, et il
+    n'y a **pas de doublon** à créer. Autres blocs : **Mon identité**
     (email + nom git), **Mes clés** (clef SSH publique du poste : afficher,
     copier, enregistrer sur un serveur) et **Mes projets GDS** (état,
     synchroniser, ajouter, ouvrir, **détacher**).
@@ -370,7 +378,11 @@ d'un hébergement externe type GitHub.
   entrées en base. Le détachement peut viser un projet **choisi dans la liste**,
   même s'il n'est pas le projet ouvert. **Appliquer un serveur** mémorisé
   pré-remplit l'hôte, le port, l'utilisateur et l'identité, mais **conserve** le
-  port SSH et la racine des dépôts déjà configurés dans le projet visé.
+  port SSH et la racine des dépôts déjà configurés dans le projet visé. Une
+  fiche **« compte GDS »** neuve ne porte pas le compte technique de la base :
+  son bouton **Appliquer** est neutralisé (avec l'explication affichée) le temps
+  que le rattachement d'un projet à votre **compte GDS** arrive ; les fiches
+  écrites avant cette version **gardent** leur bouton actif, comme avant.
 - **Synchronisation — sans verrou** : une fois connecté, **Synchroniser**
   rapatrie le projet depuis le remote `gds` (clone si absent, sinon fetch/pull).
   Il n'y a **plus de verrou de projet** ni de mode urgent : deux postes peuvent
