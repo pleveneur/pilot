@@ -103,6 +103,10 @@ export function initialServersState() {
     form: initialServerForm(),
     pendingDelete: null, // { host, user }
     hasProject: false,
+    // Choix du projet cible pour « Appliquer » : projets connus du poste.
+    projectChoices: [], // [{ path, label }]
+    applyProject: "",
+    canApply: null, // null = repli sur hasProject (compatibilité)
   };
 }
 
@@ -171,6 +175,7 @@ export function renderServersListHtml(state = {}) {
     return `<div class="gds-admin-status idle">Aucun serveur mémorisé sur ce poste. Ajoutez-en un ci-dessous — la connexion PostgreSQL est testée avant l'enregistrement.</div>`;
   }
   const pend = s.pendingDelete;
+  const canApply = s.canApply != null ? !!s.canApply : !!s.hasProject;
   return servers
     .map((sv) => {
       const host = String(sv.host || "").trim();
@@ -186,7 +191,7 @@ export function renderServersListHtml(state = {}) {
         </div>
         <div class="gds-params-srv-actions">
           <button class="gds-admin-btn" data-srv-action="test">Tester</button>
-          <button class="gds-admin-btn" data-srv-action="apply"${s.hasProject ? "" : ` disabled title="Aucun projet ouvert"`}>Appliquer</button>
+          <button class="gds-admin-btn" data-srv-action="apply"${canApply ? "" : ` disabled title="Aucun projet connu"`}>Appliquer</button>
           <button class="gds-admin-btn" data-srv-action="edit">Modifier</button>
           ${
             isPend
@@ -259,9 +264,15 @@ export function renderServersSectionHtml(state = {}) {
     ? `<span class="gds-admin-todo">Chargement…</span>`
     : `<span class="gds-admin-badge ok">${count} serveur${count > 1 ? "s" : ""} mémorisé${count > 1 ? "s" : ""}</span>`;
   const editing = s.form && s.form.mode === "edit";
-  const projectNote = s.hasProject
-    ? `<div class="gds-admin-hint">« Appliquer » pré-remplit la configuration GDS du <b>projet actif ouvert</b> (hôte, port, utilisateur et identité globale).</div>`
-    : `<div class="gds-admin-hint">Ouvrez un projet pour pouvoir « appliquer » un serveur à celui-ci.</div>`;
+  const choices = Array.isArray(s.projectChoices) ? s.projectChoices : [];
+  const canApply = s.canApply != null ? !!s.canApply : !!s.hasProject;
+  const projectNote = canApply
+    ? `<div class="gds-admin-hint">Projet cible de « Appliquer » :
+         <select id="gds-params-apply-project" class="gds-admin-select">
+           ${choices.map((c) => `<option value="${esc(c.path)}"${c.path === s.applyProject ? " selected" : ""}>${esc(c.label)}</option>`).join("")}
+         </select>
+         <span class="gds-admin-muted">(hôte, port, utilisateur et identité pré-remplis ; le port SSH et la racine des dépôts du projet sont conservés)</span></div>`
+    : `<div class="gds-admin-hint">Aucun projet connu sur ce poste : ouvrez un projet pour pouvoir lui appliquer un serveur.</div>`;
   return `
       <section class="gds-admin-section" data-section-id="servers">
         <div class="gds-admin-section-head">
@@ -604,10 +615,20 @@ export function createGdsParams(container) {
   function draw() {
     if (disposed) return;
     state.hasProject = !!activeProject();
+    // Choix du projet cible de « Appliquer » : projets connus + projet actif.
+    const choices = state.projectChoices.slice();
+    const active = activeProject();
+    if (active && !choices.some((c) => c.path === active)) {
+      choices.unshift({ path: active, label: `${projectBasename(active)} (projet ouvert)` });
+    }
+    state.canApply = choices.length > 0;
+    if (!state.applyProject || !choices.some((c) => c.path === state.applyProject)) {
+      state.applyProject = active || (choices[0] ? choices[0].path : "");
+    }
     captureIdentity();
     container.innerHTML = renderParamsShellHtml({
       sectionHtml: {
-        servers: renderServersSectionHtml(state),
+        servers: renderServersSectionHtml({ ...state, projectChoices: choices }),
         identity: renderIdentitySectionHtml(identityState),
         keys: renderKeysSectionHtml({ ...keysState, email: identityState.email }),
         projects: renderProjectsSectionHtml(projectsState),
@@ -636,6 +657,24 @@ export function createGdsParams(container) {
     state.form = initialServerForm();
     state.pendingDelete = null;
     draw();
+  }
+
+  /**
+   * Charge la liste des projets connus du poste pour le sélecteur « Appliquer ».
+   * Fail-open : sans liste, seuls le projet actif (s'il y en a un) est proposé.
+   */
+  function loadApplyProjects() {
+    Promise.resolve()
+      .then(() => invoke("get_recent_projects"))
+      .then((paths) => {
+        if (disposed) return;
+        state.projectChoices = (Array.isArray(paths) ? paths : [])
+          .map((p) => String(p || ""))
+          .filter(Boolean)
+          .map((path) => ({ path, label: projectBasename(path) }));
+        draw();
+      })
+      .catch(() => {});
   }
 
   async function testForm() {
@@ -759,17 +798,22 @@ export function createGdsParams(container) {
       return;
     }
     if (action === "apply") {
-      const project = activeProject();
+      // Lot 2 : la cible est le projet CHOISI (repli sur le projet ouvert).
+      const sel = q("#gds-params-apply-project");
+      const project = (sel && sel.value) || state.applyProject || activeProject();
       if (!project) {
-        state.status = { kind: "error", text: "Ouvrez un projet pour lui appliquer un serveur." };
+        state.status = { kind: "error", text: "Aucun projet connu : ouvrez un projet pour lui appliquer un serveur." };
         draw();
         return;
       }
-      state.status = { kind: "loading", text: `Application à « ${project} »…` };
+      state.status = { kind: "loading", text: `Application à « ${projectBasename(project)} »…` };
       draw();
       try {
         await invoke("gds_apply_server", { project, host, port, user, email: identityState.email.trim() });
-        state.status = { kind: "ok", text: `✅ Serveur appliqué au projet actif (hôte, port, utilisateur, identité pré-remplis).` };
+        state.status = {
+          kind: "ok",
+          text: `✅ Serveur appliqué à « ${projectBasename(project)} » (hôte, port, utilisateur, identité pré-remplis ; port SSH et racine des dépôts du projet conservés).`,
+        };
       } catch (e) {
         state.status = { kind: "error", text: friendlyGdsError(e) };
       }
@@ -778,6 +822,12 @@ export function createGdsParams(container) {
   }
 
   function bind() {
+    const applySel = q("#gds-params-apply-project");
+    if (applySel) {
+      applySel.addEventListener("change", () => {
+        state.applyProject = applySel.value || "";
+      });
+    }
     const test = q("#gds-params-srv-test");
     if (test) test.addEventListener("click", () => testForm());
     const save = q("#gds-params-srv-save");
@@ -1052,6 +1102,8 @@ export function createGdsParams(container) {
   loadKeys();
   // L5.5 (mes projets GDS) : liste + état, fail-open.
   refreshProjects();
+  // Lot 2 : projets connus du poste, pour le sélecteur « Appliquer ».
+  loadApplyProjects();
 
   // Aucune ressource système à libérer ; on renvoie néanmoins le contrat commun
   // des écrans (wrapper + unlisten) pour l'homogénéité de tabs.js.

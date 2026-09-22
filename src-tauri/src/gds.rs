@@ -591,10 +591,20 @@ pub fn gds_apply_server(
         saved.admin_password.as_deref().unwrap_or(""),
     )?;
     // Pré-remplir la config projet (jamais de mot de passe ici).
-    let local_dir = read_gds_config(&project)
-        .ok()
-        .and_then(|c| c.gds_local_dir)
+    // CONSERVER les informations de serveur DISTANT déjà présentes : la fiche
+    // mémorisée ne porte ni le port SSH ni la racine des dépôts côté serveur ;
+    // les écraser avec des valeurs par défaut casserait le rattachement à un
+    // serveur distant existant (défaut réel corrigé).
+    let existing = read_gds_config(&project).ok();
+    let local_dir = existing
+        .as_ref()
+        .and_then(|c| c.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
+    let ssh_port = existing
+        .as_ref()
+        .map(|c| if c.ssh_port == 0 { 22 } else { c.ssh_port })
+        .unwrap_or(22);
+    let gds_server_repos = existing.as_ref().and_then(|c| c.gds_server_repos.clone());
     let cfg = GdsConfig {
         enabled: true,
         db_host: host.trim().to_string(),
@@ -608,9 +618,9 @@ pub fn gds_apply_server(
             if port.trim().is_empty() { "5432" } else { port.trim() }
         ),
         gds_local_dir: Some(local_dir.clone()),
-        ssh_port: 22,
-        gds_server_repos: None,
-        ssh_host: format!("{}:22", host.trim()),
+        ssh_port,
+        gds_server_repos,
+        ssh_host: format!("{}:{}", host.trim(), ssh_port),
     };
     write_gds_config(&project, &cfg)?;
     Ok(json!({
@@ -2796,5 +2806,48 @@ mod tests {
             .unwrap();
         assert_eq!(entry["name"], "");
         assert_eq!(entry["description"], "");
+    }
+
+    #[test]
+    fn apply_server_preserves_existing_ssh_and_repos() {
+        // Lot 2 (défaut réel corrigé) : appliquer une fiche mémorisée ne doit
+        // PLUS écraser le port SSH ni la racine des dépôts côté serveur du
+        // projet ; le nom d'hôte SSH suit le nouveau serveur.
+        let _guard = TestGdsSecretsGuard::new();
+        let dir = std::env::temp_dir().join(format!("pilot-gds-apply-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".pilot")).unwrap();
+        let project = dir.to_string_lossy().to_string();
+        let mut cfg = GdsConfig {
+            enabled: true,
+            db_host: "10.9.2.1".to_string(),
+            db_port: "5432".to_string(),
+            db_user: "old".to_string(),
+            identity_email: "a@b".to_string(),
+            server_url: String::new(),
+            gds_local_dir: Some("/tmp/clones".to_string()),
+            ssh_port: 2222,
+            gds_server_repos: Some("/home/git/repos".to_string()),
+            ssh_host: "10.9.2.1:2222".to_string(),
+        };
+        cfg.normalize();
+        write_gds_config(&project, &cfg).unwrap();
+        save_server_credentials("10.9.3.1", "5432", "srv", "pw", "adm").unwrap();
+        set_server_label("10.9.3.1", "srv", "Nouveau", "").unwrap();
+        gds_apply_server(
+            project.clone(),
+            "10.9.3.1".to_string(),
+            "5432".to_string(),
+            "srv".to_string(),
+            "me@exemple.com".to_string(),
+        )
+        .unwrap();
+        let after = read_gds_config(&project).unwrap();
+        assert_eq!(after.db_host, "10.9.3.1");
+        assert_eq!(after.ssh_port, 2222, "port SSH conservé");
+        assert_eq!(after.gds_server_repos.as_deref(), Some("/home/git/repos"));
+        assert_eq!(after.ssh_host, "10.9.3.1:2222");
+        assert_eq!(after.gds_local_dir.as_deref(), Some("/tmp/clones"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

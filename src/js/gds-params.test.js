@@ -208,6 +208,41 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(shell).toContain("À venir — L5.3");
   });
 
+  it("renderServersSectionHtml : sélecteur du projet cible (lot 2), repli sur hasProject", () => {
+    // Sans `canApply` explicite : repli rétrocompatible sur `hasProject`.
+    const withProject = renderServersSectionHtml({ loading: false, servers: [], hasProject: true });
+    expect(withProject).toContain('id="gds-params-apply-project"');
+    const noProject = renderServersSectionHtml({ loading: false, servers: [], hasProject: false });
+    expect(noProject).not.toContain('id="gds-params-apply-project"');
+    expect(noProject).toMatch(/Aucun projet connu/);
+    // `canApply` explicite prioritaire + options rendues et sélection conservée.
+    const html = renderServersSectionHtml({
+      loading: false,
+      servers: [],
+      hasProject: false,
+      canApply: true,
+      projectChoices: [
+        { path: "/p/a", label: "a" },
+        { path: "/p/b", label: "b" },
+      ],
+      applyProject: "/p/b",
+    });
+    expect(html).toContain('value="/p/a"');
+    expect(html).toContain('value="/p/b" selected');
+  });
+
+  it("renderServersListHtml : « Appliquer » activé selon canApply (repli hasProject)", () => {
+    const srv = [{ host: "h", port: "5432", user: "u", name: "N" }];
+    expect(renderServersListHtml({ loading: false, servers: srv, hasProject: true })).toMatch(
+      /data-srv-action="apply">Appliquer/
+    );
+    expect(renderServersListHtml({ loading: false, servers: srv, hasProject: false })).toMatch(/data-srv-action="apply" disabled/);
+    // `canApply: true` rend le bouton actif même sans projet ouvert (projet choisi).
+    expect(renderServersListHtml({ loading: false, servers: srv, hasProject: false, canApply: true })).toMatch(
+      /data-srv-action="apply">Appliquer/
+    );
+  });
+
   it("renderParamsStatusHtml distingue ok / loading / error", () => {
     expect(renderParamsStatusHtml(null)).toBe("");
     expect(renderParamsStatusHtml({ kind: "ok", text: "bien" })).toContain("gds-admin-status ok");
