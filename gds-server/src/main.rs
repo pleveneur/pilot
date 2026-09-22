@@ -1259,6 +1259,17 @@ mod tests {
     static HTTP_TEST_DB_SEQ: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 
+    /// Verrou des tests qui **forcent** `PILOT_GIT_USER_HOME`.
+    ///
+    /// Cette variable d'environnement est **globale au processus** alors que
+    /// `cargo test` exécute les tests en parallèle : deux tests qui la posent
+    /// chacun vers leur bac à sable écrivent `authorized_keys` dans le dossier
+    /// de l'autre (et l'un lit alors un chemin absent). Les deux tests qui la
+    /// touchent prennent donc ce verrou pour la durée du test. Verrou
+    /// **asynchrone** : il est tenu à travers les `.await` du scénario, ce qu'un
+    /// `std::sync::Mutex` interdit.
+    static GIT_HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Base jetable du test HTTP : `DROP DATABASE` garanti au `Drop` (thread
     /// dédié, un `Drop` ne pouvant pas `.await`), sur le modèle de
     /// `GdsTestDbGuard` du socle. Indispensable pour que deux tests HTTP
@@ -1688,7 +1699,10 @@ mod tests {
 
         // Racine de dépôts ET home `git` DÉDIÉS et jetables : la purge ne touche
         // que ce dossier, et `authorized_keys` n'est jamais écrit dans le vrai
-        // `~git` de la machine de test (cf. `forced_git_user_home`).
+        // `~git` de la machine de test (cf. `forced_git_user_home`). Le verrou
+        // sérialise ce test avec les autres tests qui forcent la même variable
+        // (elle est globale au processus).
+        let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
         let sandbox = std::env::temp_dir().join(format!("pilot-l45-sandbox-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&sandbox);
         std::fs::create_dir_all(&sandbox).expect("bac à sable");
@@ -2162,7 +2176,10 @@ mod tests {
             .expect("migrations sur la base jetable");
 
         // Bac à sable jetable : racine de dépôts ET home `git` dédiés, pour ne
-        // jamais écrire dans le vrai `~git` de la machine de test.
+        // jamais écrire dans le vrai `~git` de la machine de test. Le verrou
+        // sérialise ce test avec les autres tests qui forcent la même variable
+        // (elle est globale au processus).
+        let _env_lock = GIT_HOME_ENV_LOCK.lock().await;
         let sandbox = std::env::temp_dir().join(format!("pilot-l2-sandbox-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&sandbox);
         let repos_root = sandbox.join("repos");
@@ -2415,6 +2432,9 @@ mod tests {
         assert_eq!(res.status(), StatusCode::FORBIDDEN, "clef sans identité");
 
         // 9) Les deux actions sont journalisées et visibles pour l'admin.
+        //    Une entrée par **appel** (comme les deux créations de projet),
+        //    refus compris : l'enregistrement initial, le second (idempotent)
+        //    et le refus de la session sans identité (étape 8).
         let res = app
             .clone()
             .oneshot(authed_get(
@@ -2423,10 +2443,16 @@ mod tests {
             ))
             .await
             .unwrap();
+        let journal = json_body(res).await;
         assert_eq!(
-            audit_actions(&json_body(res).await),
-            vec!["ssh_key_register".to_string()],
-            "enregistrement de clef non journalisé"
+            journal["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["ok"].as_bool().unwrap())
+                .collect::<Vec<bool>>(),
+            vec![false, true, true],
+            "une entrée par appel : refus de la session sans identité (ok=false) puis les deux enregistrements (ok=true)"
         );
         let res = app
             .clone()
