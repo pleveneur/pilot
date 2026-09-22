@@ -164,6 +164,9 @@ export function validateServerForm(f) {
   if (!String(form.name || "").trim()) return "Le nom du serveur est requis (court, ex. « GDS maison »).";
   if (!String(form.host || "").trim()) return "L'hôte du serveur est requis.";
   if (!String(form.user || "").trim()) return "L'utilisateur PostgreSQL est requis.";
+  if (String(form.user || "").includes("@")) {
+    return "Utilisateur PostgreSQL : indiquez le compte de la base (en général « pilot »), pas votre adresse e-mail. Le compte GDS se renseigne plus bas, dans le mot de passe admin.";
+  }
   if (form.mode === "add" && !String(form.dbPassword || "").trim()) {
     return "Le mot de passe PostgreSQL est requis pour tester la connexion.";
   }
@@ -255,7 +258,7 @@ export function renderServerFormHtml(form = initialServerForm()) {
           <label class="gds-admin-field gds-admin-field-narrow"><span>Port</span>
             <input id="gds-params-srv-port" type="text" inputmode="numeric" placeholder="5432" value="${esc(f.port)}">
           </label>
-          <label class="gds-admin-field"><span>Utilisateur PostgreSQL</span>
+          <label class="gds-admin-field"><span>Utilisateur PostgreSQL (compte de la base, ex. pilot)</span>
             <input id="gds-params-srv-user" type="text" autocomplete="off" placeholder="pilot" value="${esc(f.user)}">
           </label>
           <label class="gds-admin-field"><span>Mot de passe dédié</span>

@@ -125,6 +125,21 @@ describe("gds-params — section Serveurs GDS (L5.2)", () => {
     expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "u", dbPassword: "x" })).toBe("");
   });
 
+  it("validateServerForm refuse une adresse e-mail comme utilisateur PostgreSQL", () => {
+    // Piège réel : l'e-mail du compte GDS saisi à la place du compte de la base.
+    expect(
+      validateServerForm({ mode: "add", name: "N", host: "h", user: "patrick.leveneur@gmail.com", dbPassword: "x" })
+    ).toMatch(/compte de la base/i);
+    // Le compte technique de la base reste accepté.
+    expect(validateServerForm({ mode: "add", name: "N", host: "h", user: "pilot", dbPassword: "x" })).toBe("");
+  });
+
+  it("renderServerFormHtml nomme le compte de la base dans le libellé utilisateur", () => {
+    const html = renderServerFormHtml();
+    expect(html).toMatch(/compte de la base/i);
+    expect(html).toMatch(/pilot/);
+  });
+
   it("renderServersListHtml affiche le nom, la description et l'identité en second", () => {
     const html = renderServersListHtml({
       loading: false,
