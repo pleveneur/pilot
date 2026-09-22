@@ -1375,6 +1375,7 @@ export function createGdsAdmin(container) {
     if (c) c.addEventListener("click", () => runConnectionTest(true));
     const srvSel = q("#gds-admin-server-select");
     if (srvSel) srvSel.addEventListener("change", () => onServerSelectChange(srvSel));
+    const refresh = q("#gds-admin-acc-refresh");
     if (refresh) refresh.addEventListener("click", () => loadAccounts());
     const create = q("#gds-admin-acc-create");
     if (create) create.addEventListener("click", () => createAccount());
