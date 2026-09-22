@@ -199,26 +199,155 @@ where
 /// courts. Le message d'erreur n'inclut jamais l'URL (`without_url`) afin de ne
 /// pas exposer le jeton.
 fn http_send(url: &str, chat_id: &str, text: &str) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(TOTAL_TIMEOUT)
-        .build()
-        .map_err(|e| format!("client http: {}", e.without_url()))?;
     let body = serde_json::json!({
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": true,
     });
+    http_post_json(url, &body).map(|_| ())
+}
+
+/// POST JSON générique vers l'API Telegram (sendMessage, editMessageText,
+/// answerCallbackQuery…). Délais courts, `without_url` pour ne jamais exposer le
+/// jeton dans un message d'erreur.
+fn http_post_json(url: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .build()
+        .map_err(|e| format!("client http: {}", e.without_url()))?;
     let resp = client
         .post(url)
-        .json(&body)
+        .json(body)
         .send()
         .map_err(|e| format!("réseau: {}", e.without_url()))?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("API Telegram: HTTP {}", resp.status().as_u16()))
+    if !resp.status().is_success() {
+        return Err(format!("API Telegram: HTTP {}", resp.status().as_u16()));
     }
+    resp.json::<serde_json::Value>()
+        .map_err(|e| format!("réponse illisible: {}", e))
+}
+
+// ── ÉTAPE 2 (lot 2) : QUESTIONS À BOUTONS NATIFS ────────────────────────────
+//
+// Les options d'une question sont envoyées sous forme de BOUTONS télégrammes
+// (clavier « inline ») : le propriétaire répond d'un appui, sans recopier un
+// numéro. L'identifiant du message est renvoyé pour pouvoir le MODIFIER ensuite
+// (retrait des boutons + « déjà répondu », lot 4).
+
+/// Un bouton de question : libellé visible + charge utile de rappel (`data`),
+/// renvoyée telle quelle par Telegram quand le bouton est pressé. L'API borne
+/// cette charge utile à 64 OCTETS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TelegramButton {
+    pub text: String,
+    pub data: String,
+}
+
+/// Longueur maximale (en OCTETS) de la charge utile d'un bouton (limite API).
+pub const MAX_CALLBACK_BYTES: usize = 64;
+
+/// Résultat d'un envoi qui renvoie l'identifiant du message créé.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TelegramSendOutcome {
+    /// Rien tenté : passerelle inerte ou texte vide.
+    Inert(&'static str),
+    /// Message accepté ; `Some(id)` permet de le modifier plus tard.
+    Sent(Option<i64>),
+    /// Échec (jeton retiré, jamais remonté).
+    Failed(String),
+}
+
+/// Construit le clavier « inline » : UN bouton par ligne (plus lisible sur
+/// mobile). Les boutons sans libellé ou dont la charge utile dépasse 64 OCTETS
+/// sont ÉCARTÉS (défense en profondeur ; l'appelant les borne déjà).
+/// Fonction PURE.
+pub fn inline_keyboard_json(buttons: &[TelegramButton]) -> Vec<serde_json::Value> {
+    buttons
+        .iter()
+        .filter(|b| !b.text.trim().is_empty() && b.data.len() <= MAX_CALLBACK_BYTES)
+        .map(|b| serde_json::json!([{ "text": b.text.trim(), "callback_data": b.data }]))
+        .collect()
+}
+
+/// Cœur sans I/O de l'envoi d'une question À BOUTONS (transport INJECTÉ, comme
+/// `dispatch` : les tests n'atteignent jamais le réseau). Sans bouton
+/// exploitable, la question part en texte simple (sans clavier).
+pub fn dispatch_buttons<P>(
+    cfg: &TelegramConfig,
+    text: &str,
+    buttons: &[TelegramButton],
+    post: P,
+) -> TelegramSendOutcome
+where
+    P: FnOnce(&str, &serde_json::Value) -> Result<serde_json::Value, String>,
+{
+    if let Some(reason) = cfg.inert_reason() {
+        return TelegramSendOutcome::Inert(reason);
+    }
+    let cleaned = clean_text(text);
+    if cleaned.is_empty() {
+        return TelegramSendOutcome::Inert("message vide");
+    }
+    let keyboard = inline_keyboard_json(buttons);
+    let mut body = serde_json::json!({
+        "chat_id": cfg.chat_id.trim(),
+        "text": cleaned,
+        "disable_web_page_preview": true,
+    });
+    if !keyboard.is_empty() {
+        body["reply_markup"] = serde_json::json!({ "inline_keyboard": keyboard });
+    }
+    match post(&cfg.api_url(), &body) {
+        Ok(resp) => TelegramSendOutcome::Sent(
+            resp.pointer("/result/message_id").and_then(|v| v.as_i64()),
+        ),
+        Err(e) => TelegramSendOutcome::Failed(redact_token(&e, &cfg.token)),
+    }
+}
+
+/// Bouton reçu de l'interface (désérialisé par Tauri).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TelegramButtonArg {
+    pub text: String,
+    pub data: String,
+}
+
+/// Commande Tauri : publie une question AVEC boutons natifs et renvoie
+/// l'identifiant du message (pour l'éditer ensuite). Ne renvoie JAMAIS d'erreur :
+/// `status` vaut `sent` (message posé, `messageId` fourni quand l'API le rend),
+/// `inert` (passerelle non configurée) ou `failed` (échec silencieux, journalisé
+/// sans le jeton). Le repli éventuel (avis texte simple) est décidé par
+/// l'appelant.
+#[tauri::command]
+pub fn telegram_send_buttons(
+    app: AppHandle,
+    text: String,
+    buttons: Vec<TelegramButtonArg>,
+) -> Result<serde_json::Value, String> {
+    let Some(cfg) = read_gateway_config(&app) else {
+        return Ok(serde_json::json!({ "status": "inert" }));
+    };
+    let buttons: Vec<TelegramButton> = buttons
+        .into_iter()
+        .map(|b| TelegramButton {
+            text: b.text,
+            data: b.data,
+        })
+        .collect();
+    Ok(match dispatch_buttons(&cfg, &text, &buttons, http_post_json) {
+        TelegramSendOutcome::Sent(Some(id)) => {
+            serde_json::json!({ "status": "sent", "messageId": id })
+        }
+        // Message posé mais identifiant illisible : on ne fait PAS de repli (il
+        // n'y aurait qu'un doublon) ; l'édition plus tard sera simplement omise.
+        TelegramSendOutcome::Sent(None) => serde_json::json!({ "status": "sent" }),
+        TelegramSendOutcome::Inert(_) => serde_json::json!({ "status": "inert" }),
+        TelegramSendOutcome::Failed(e) => {
+            eprintln!("[telegram] question à boutons refusée (ignorée) : {}", e);
+            serde_json::json!({ "status": "failed" })
+        }
+    })
 }
 
 /// Consigne le résultat sans jamais écrire le jeton. Volontairement discret :
@@ -978,5 +1107,104 @@ mod tests {
         assert!(p.messages.is_empty());
         assert_eq!(p.next_offset, 9);
         assert_eq!(p.inert, Some("passerelle désactivée"));
+    }
+
+    // ── Étape 2 (lot 2) : questions à boutons natifs ──
+
+    fn bouton(text: &str, data: &str) -> TelegramButton {
+        TelegramButton {
+            text: text.to_string(),
+            data: data.to_string(),
+        }
+    }
+
+    #[test]
+    fn inline_keyboard_puts_one_button_per_row() {
+        let rows = inline_keyboard_json(&[bouton("A", "q1:0"), bouton("B", "q1:1")]);
+        assert_eq!(rows.len(), 2, "un bouton par ligne");
+        assert_eq!(rows[0][0]["text"], "A");
+        assert_eq!(rows[0][0]["callback_data"], "q1:0");
+        assert_eq!(rows[1][0]["callback_data"], "q1:1");
+    }
+
+    #[test]
+    fn inline_keyboard_drops_empty_labels_and_oversized_payloads() {
+        let gros = "x".repeat(MAX_CALLBACK_BYTES + 1);
+        let rows = inline_keyboard_json(&[
+            bouton("   ", "q1:0"),
+            bouton("ok", &gros),
+            bouton("valide", "q1:1"),
+        ]);
+        assert_eq!(rows.len(), 1, "seul le bouton exploitable est retenu");
+        assert_eq!(rows[0][0]["callback_data"], "q1:1");
+        // Borne : 64 OCTETS acceptés, 65 rejetés.
+        let limite = "y".repeat(MAX_CALLBACK_BYTES);
+        assert_eq!(inline_keyboard_json(&[bouton("ok", &limite)]).len(), 1);
+    }
+
+    #[test]
+    fn dispatch_buttons_sends_markup_and_returns_message_id() {
+        let cfg = ready();
+        let posted = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
+        let sink = posted.clone();
+        let outcome = dispatch_buttons(
+            &cfg,
+            "❓ Approche ?",
+            &[bouton("A", "q1:0"), bouton("B", "q1:1")],
+            move |url, body| {
+                sink.lock().unwrap().push((url.to_string(), body.clone()));
+                Ok(serde_json::json!({ "ok": true, "result": { "message_id": 321 } }))
+            },
+        );
+        assert_eq!(outcome, TelegramSendOutcome::Sent(Some(321)));
+        let calls = posted.lock().unwrap();
+        assert!(calls[0].0.ends_with("/bot123456:ABC-DEF/sendMessage"));
+        assert_eq!(calls[0].1["chat_id"], "4242");
+        assert_eq!(calls[0].1["reply_markup"]["inline_keyboard"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dispatch_buttons_without_usable_buttons_omits_markup() {
+        let cfg = ready();
+        let outcome = dispatch_buttons(&cfg, "❓ Quel nom ?", &[], |_, body| {
+            assert!(body.get("reply_markup").is_none(), "aucun clavier vide envoyé");
+            Ok(serde_json::json!({ "ok": true, "result": { "message_id": 7 } }))
+        });
+        assert_eq!(outcome, TelegramSendOutcome::Sent(Some(7)));
+    }
+
+    #[test]
+    fn dispatch_buttons_inert_never_touches_network() {
+        let cfg = TelegramConfig {
+            enabled: false,
+            ..ready()
+        };
+        assert_eq!(
+            dispatch_buttons(&cfg, "❓ Q ?", &[bouton("A", "q1:0")], |_, _| panic!(
+                "aucun accès réseau attendu"
+            )),
+            TelegramSendOutcome::Inert("passerelle désactivée")
+        );
+        assert_eq!(
+            dispatch_buttons(&ready(), "   ", &[bouton("A", "q1:0")], |_, _| panic!(
+                "aucun accès réseau attendu"
+            )),
+            TelegramSendOutcome::Inert("message vide")
+        );
+    }
+
+    #[test]
+    fn dispatch_buttons_failure_never_leaks_token() {
+        let cfg = ready();
+        let outcome = dispatch_buttons(&cfg, "❓ Q ?", &[bouton("A", "q1:0")], |url, _| {
+            Err(format!("réseau: {url}"))
+        });
+        match outcome {
+            TelegramSendOutcome::Failed(msg) => {
+                assert!(!msg.contains("123456:ABC-DEF"), "jeton divulgué : {msg}");
+                assert!(msg.contains("***"));
+            }
+            other => panic!("attendu Failed, obtenu {other:?}"),
+        }
     }
 }

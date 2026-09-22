@@ -14,6 +14,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   formatQuestionForTelegram,
   formatQuestionReminder,
+  buildQuestionButtons,
+  MAX_CALLBACK_BYTES,
   parseTelegramAnswer,
   createTelegramQuestionBridge,
   consumeTelegramQuestionAnswer,
@@ -273,6 +275,106 @@ describe("createTelegramQuestionBridge — envoi et réponse", () => {
     expect(bridge.current()).toBeNull();
     expect(bridge.feed("1")).toBe(false);
     expect(resolve).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildQuestionButtons — boutons natifs (étape 2, lot 2)", () => {
+  it("un bouton par option, charge utile « q<génération>:<index> »", () => {
+    expect(buildQuestionButtons({ options: ["A", "B"] }, 3)).toEqual([
+      { text: "A", data: "q3:0" },
+      { text: "B", data: "q3:1" },
+    ]);
+  });
+
+  it("sans option (saisie libre) : aucun bouton", () => {
+    expect(buildQuestionButtons({ options: [] }, 1)).toEqual([]);
+    expect(buildQuestionButtons({}, 1)).toEqual([]);
+  });
+
+  it("la charge utile reste sous 64 octets", () => {
+    const buttons = buildQuestionButtons({ options: ["x".repeat(300)] }, 123456);
+    expect(buttons[0].data.length).toBeLessThanOrEqual(MAX_CALLBACK_BYTES);
+  });
+
+  it("un libellé vide reçoit un texte de repli", () => {
+    expect(buildQuestionButtons({ options: ["", "   "] }, 1)[0].text).toBe("Option 1");
+  });
+});
+
+describe("createTelegramQuestionBridge — boutons natifs (étape 2, lot 2)", () => {
+  it("envoie la question à boutons et retient l'identifiant du message", async () => {
+    const send = vi.fn();
+    const sendButtons = vi.fn(async () => ({ sent: true, messageId: 77 }));
+    const bridge = createTelegramQuestionBridge({ send, sendButtons, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, () => {});
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendButtons).toHaveBeenCalledTimes(1);
+    expect(sendButtons.mock.calls[0][0]).toContain("Approche ?");
+    expect(sendButtons.mock.calls[0][1]).toEqual([
+      { text: "A", data: "q1:0" },
+      { text: "B", data: "q1:1" },
+    ]);
+    expect(send).not.toHaveBeenCalled(); // pas d'avis texte en plus
+    expect(bridge.current().messageId).toBe(77);
+  });
+
+  it("replie sur l'avis texte si les boutons n'ont pas pu être posés", async () => {
+    const send = vi.fn();
+    const sendButtons = vi.fn(async () => ({ sent: false }));
+    const bridge = createTelegramQuestionBridge({ send, sendButtons, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, () => {});
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("Approche ?");
+    expect(bridge.current().messageId).toBeNull();
+  });
+
+  it("replie sur l'avis texte si l'envoi à boutons échoue", async () => {
+    const send = vi.fn();
+    const sendButtons = vi.fn(async () => {
+      throw new Error("réseau");
+    });
+    const warns = [];
+    const bridge = createTelegramQuestionBridge({
+      send,
+      sendButtons,
+      timers: fakeTimers(),
+      warn: (...a) => warns.push(a.join(" ")),
+    });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A"] }, () => {});
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(warns.join("\n")).toContain("boutons ignoré");
+  });
+
+  it("une question de saisie libre reste un avis texte (pas de boutons)", () => {
+    const send = vi.fn();
+    const sendButtons = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, sendButtons, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Quel nom ?", options: [] }, () => {});
+
+    expect(sendButtons).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ne replie PAS si la question a été répondue avant la fin de l'envoi", async () => {
+    const send = vi.fn();
+    let release;
+    const pending = new Promise((r) => {
+      release = r;
+    });
+    const sendButtons = vi.fn(() => pending);
+    const bridge = createTelegramQuestionBridge({ send, sendButtons, timers: fakeTimers(), ...silence });
+    const question = { id: "q" };
+    bridge.ask(question, { title: "Approche ?", options: ["A"] }, () => {});
+    bridge.settle(question); // répondue entre-temps
+    release({ sent: false });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

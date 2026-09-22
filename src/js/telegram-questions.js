@@ -82,6 +82,33 @@ export function formatAlreadyAnswered(descriptor = {}) {
   return `✅ « ${title} » : cette question a déjà été répondue. Votre message n'a pas été pris en compte.`;
 }
 
+/** Préfixe des charges utiles de bouton (« q<génération>:<index> »). */
+export const TELEGRAM_CALLBACK_PREFIX = "q";
+
+/** Charge utile maximale d'un bouton (limite de l'API Telegram, en OCTETS). */
+export const MAX_CALLBACK_BYTES = 64;
+
+/**
+ * Construit les boutons natifs d'une question à choix : un bouton par option,
+ * avec une charge utile `q<génération>:<index>`. La GÉNÉRATION (incrémentée à
+ * chaque question) rend la pression d'un ancien message inopérante quand la
+ * question a été remplacée depuis. Les boutons dont la charge utile dépasse
+ * 64 OCTETS sont écartés. Fonction PURE.
+ * @param {{options?: string[]}} [descriptor]
+ * @param {number} [generation]
+ * @returns {{text: string, data: string}[]}
+ */
+export function buildQuestionButtons(descriptor = {}, generation = 0) {
+  const options = Array.isArray(descriptor.options) ? descriptor.options : [];
+  const prefix = `${TELEGRAM_CALLBACK_PREFIX}${generation}:`;
+  return options
+    .map((opt, index) => ({
+      text: String(opt ?? "").trim().slice(0, 64) || `Option ${index + 1}`,
+      data: `${prefix}${index}`,
+    }))
+    .filter((b) => b.data.length <= MAX_CALLBACK_BYTES);
+}
+
 // ── Interprétation d'un texte libre répondant à une CONFIRMATION ───────────
 // Une confirmation est une PORTE : « non » ne doit JAMAIS valoir « oui ». Le
 // texte reçu est donc classé AVANT toute décision :
@@ -188,6 +215,7 @@ export function parseTelegramAnswer(text, descriptor = {}) {
  */
 export function createTelegramQuestionBridge(deps = {}) {
   const send = deps.send || (() => {});
+  const sendButtons = typeof deps.sendButtons === "function" ? deps.sendButtons : null;
   const reminderMs = Number.isFinite(deps.reminderMs)
     ? deps.reminderMs
     : TELEGRAM_QUESTION_REMINDER_MS;
@@ -208,6 +236,10 @@ export function createTelegramQuestionBridge(deps = {}) {
   // message normal de la conversation.
   let active = null;
   let reminder = null;
+  // Génération de question : incrémentée à chaque `ask`. Elle est incluse dans
+  // la charge utile des boutons, si bien qu'une pression sur le bouton d'un
+  // ANCIEN message (question remplacée) est reconnue comme périmée.
+  let callbackGeneration = 0;
 
   function clearReminder() {
     if (reminder !== null) {
@@ -244,6 +276,7 @@ export function createTelegramQuestionBridge(deps = {}) {
   /** Publie une nouvelle question : envoi immédiat + unique rappel planifié. */
   function ask(question, descriptor, resolve) {
     clearReminder();
+    const generation = ++callbackGeneration;
     active = {
       question,
       descriptor: descriptor || {},
@@ -258,16 +291,41 @@ export function createTelegramQuestionBridge(deps = {}) {
       applying: false,
       answered: false,
       reminderSent: false,
+      // Identité du message Telegram à boutons (pour l'éditer une fois répondu).
+      generation,
+      messageId: null,
     };
-    fire(formatQuestionForTelegram(active.descriptor));
+    const text = formatQuestionForTelegram(active.descriptor);
+    const buttons = buildQuestionButtons(active.descriptor, generation);
+    if (sendButtons && buttons.length) {
+      const entry = active;
+      Promise.resolve()
+        .then(() => sendButtons(text, buttons))
+        .then((res) => {
+          if (active !== entry) return;
+          if (res && res.sent) {
+            if (typeof res.messageId === "number") entry.messageId = res.messageId;
+            return;
+          }
+          // Boutons non posés (passerelle inerte / échec) : repli sur l'avis
+          // texte simple, si la question n'a pas été répondue entre-temps.
+          if (!entry.resolved) fire(text);
+        })
+        .catch((e) => {
+          warn("[telegram-questions] envoi à boutons ignoré :", e);
+          if (active === entry && !entry.resolved) fire(text);
+        });
+    } else {
+      fire(text);
+    }
     armReminder();
   }
 
   /**
    * Marque la question comme résolue dans l'application (première réponse
-   * gagne). Sans argument, résout la question active. Une réponse Telegram
-   * arrivant ensuite n'est plus acceptée comme réponse (`feed` renvoie faux) :
-   * elle est déposée comme message libre dans la conversation de l'Assistant.
+   * gagne). Sans argument, résout la question active. Un message Telegram
+   * arrivant ensuite et RESSEMBLANT à une réponse est signalé « déjà répondu »
+   * (consommé) ; un texte libre reste un message normal de la conversation.
    */
   function settle(question) {
     if (active && (question === undefined || active.question === question)) {
@@ -389,9 +447,22 @@ function defaultSend(text) {
   return invoke("telegram_notify", { text });
 }
 
+/**
+ * Envoi réel d'une question à BOUTONS natifs. La commande Rust ne renvoie jamais
+ * d'erreur : `{ status: "sent", messageId }` quand le message est posé, sinon
+ * `inert` / `failed` (l'appelant replie alors sur l'avis texte simple).
+ */
+async function defaultSendButtons(text, buttons) {
+  const res = await invoke("telegram_send_buttons", { text, buttons });
+  return res && res.status === "sent"
+    ? { sent: true, messageId: res.messageId ?? null }
+    : { sent: false };
+}
+
 /** Passerelle partagée par l'application (un seul état de question active). */
 export const telegramQuestionBridge = createTelegramQuestionBridge({
   send: defaultSend,
+  sendButtons: defaultSendButtons,
 });
 
 /** Publie la question active (appelé par l'onglet Assistant). */
