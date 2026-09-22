@@ -383,10 +383,23 @@ d'un hébergement externe type GitHub.
   reconstruction (le service n'est pas interrompu). Le script **ne supprime
   jamais** les volumes, **refuse** tout argument destructeur et ne recharge rien
   si la sauvegarde échoue. Le recharger reste **votre** décision.
+- **Transmettre le serveur à un tiers** : on transmet **l'image** (extraite dans
+  un fichier, rechargée sur l'autre machine) avec le fichier de composition, le
+  modèle de variables et la notice de licence — le tiers obtient ainsi **son**
+  serveur, **vide**. Ne partent **jamais** : le fichier `.env` (vos mots de
+  passe), les **volumes** (base : comptes, projets, dépôts git, journal d'audit)
+  et vos **sauvegardes** — ils contiennent **vos** comptes et **vos** projets.
+  Le destinataire choisit **ses** mots de passe et règle lui-même les ports que
+  son poste de travail doit joindre. Deux limites à annoncer : l'image publiée
+  ne vaut que pour **une architecture** (`linux/amd64`), et les ports de la
+  base et des dépôts doivent être **joignables depuis le poste de travail** —
+  sur un serveur Linux distant, c'est Pilot qui prépare la base **à distance**
+  et y enregistre sa clef, il n'administre **jamais** la machine.
 - **Documentation technique** : installation du serveur en conteneur dans
   `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot (dont
   **§9 : modifier le serveur — ce qui change pour le conteneur**, preuves
-  fichier par fichier) ; **parcours de retest complet** (serveur puis usage à
+  fichier par fichier, et **§10 : transmettre le serveur à un tiers — image
+  seule**) ; **parcours de retest complet** (serveur puis usage à
   plusieurs) dans `docs/gds-guide-mise-en-place.md`.
 
 ---

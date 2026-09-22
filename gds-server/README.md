@@ -355,3 +355,17 @@ LAN, réseau privé Tailscale).
 
 Pour un poste qui ne doit être joignable que par lui-même, mettre
 `GDS_BIND_ADDR=127.0.0.1` dans `.env`.
+
+---
+
+## 7. Licence et remise du serveur à un tiers
+
+- **Notice de licence** : Pilot est publié sous licence **MIT** ; l'avis de
+  copyright (`LICENSE`, à la racine du dépôt) est **embarqué dans l'image**
+  (`/usr/share/doc/pilot-gds/LICENSE`), donc présent dans toute copie de
+  l'image — c'est ce que la licence exige.
+- **Remettre le serveur à quelqu'un d'autre** : l'image **seule**, sans jamais
+  joindre `.env`, volumes ni sauvegardes ; ce que le destinataire configure
+  lui-même, les limites à annoncer (une seule architecture) et le cas du
+  **serveur Linux distant** — [`docs/gds-server-setup.md`](../docs/gds-server-setup.md)
+  **§10**.

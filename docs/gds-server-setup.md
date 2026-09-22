@@ -537,6 +537,12 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
   reconstruire l'image de test).
 - **Protocole de test de l'ancien document** : **non repris** — il portait sur un
   serveur préparé à la main et sur des routes de verrou qui n'existent plus.
+- **Transmission à un tiers (fait)** : §10 — transmettre **l'image seule**
+  (extraction/rechargement d'un fichier), ne jamais joindre `.env`, volumes ni
+  sauvegardes, ce que le destinataire configure lui-même, les limites à annoncer
+  (une seule architecture, ports joignables depuis le poste de travail) et le cas
+  du **serveur Linux distant** (côté machine, et côté poste qui prépare la base
+  à distance).
 - **Rechargement sûr et répétable (L7.9, fait)** : `npm run gds:reload` (script
   `scripts/gds-reload.js`, Node, multiplateforme) enchaîne prérequis, sauvegarde
   datée, reconstruction de l'image, recréation du conteneur **sans toucher aux
@@ -685,3 +691,132 @@ docker compose up -d      # puis remettre la même valeur dans .env et dans Pilo
 
 > Le parcours de retest complet (cases à cocher, du poste vierge à l'usage à
 > plusieurs) est dans `docs/gds-guide-mise-en-place.md`.
+
+---
+
+## 10. Transmettre le serveur à un tiers (image seule)
+
+> Objet : permettre à quelqu'un d'autre de faire tourner **le même serveur**,
+> sans lui donner **vos** données. Réponse courte : on transmet **l'image**, et
+> rien d'autre ; tout ce qui contient une donnée ou un secret reste chez vous
+> (§10.2). Le destinataire se configure lui-même (§10.3).
+
+### 10.1 Ce qui se transmet — et comment
+
+**Ce qui part** : l'**image** `pilot-gds:local` — le binaire `gds-server`,
+PostgreSQL 16, sshd, git, le superviseur, le script d'entrée, **et la notice de
+licence MIT du projet** (`/usr/share/doc/pilot-gds/LICENSE`). Elle ne contient
+**aucune** donnée : ni compte, ni projet, ni dépôt, ni mot de passe.
+
+L'image est **locale** et aucun registre n'est renseigné (cf. l'avertissement de
+`gds-server/docker-compose.yml`) : on l'extrait dans un fichier, on copie ce
+fichier, on le recharge sur la machine du destinataire.
+
+```bash
+docker save pilot-gds:local -o pilot-gds-image.tar
+# copiez `pilot-gds-image.tar` par le moyen habituel (support amovible,
+# transfert de fichiers…), puis SUR LA MACHINE DU DESTINATAIRE :
+docker load -i pilot-gds-image.tar
+docker image ls pilot-gds     # l'image doit apparaître (étiquette « local »)
+```
+
+**Ce qui part avec l'image** (sans quoi rien ne démarre) : le **fichier de
+composition** `gds-server/docker-compose.yml`, son **modèle de variables**
+`gds-server/.env.example` (aucun secret dedans) et la **notice de licence**
+`LICENSE` — trois fichiers du dépôt. **Jamais le `.env` réel** (§10.2).
+
+**Autre voie, à la seule décision du propriétaire** : l'enchaînement
+`.github/workflows/gds-server-image.yml` sait publier la même image sur le
+registre GHCR, mais il ne se déclenche que **manuellement** (« Run workflow ») ;
+rien ne se publie tout seul.
+
+### 10.2 Ce qu'il ne faut JAMAIS joindre — et pourquoi
+
+| À ne pas transmettre | Ce qu'il contient |
+|---|---|
+| `gds-server/.env` | **vos** mots de passe (`POSTGRES_PASSWORD`, mot de passe administrateur) : le destinataire hériterait de vos comptes et pourrait joindre votre base |
+| VOLUME `pilot-gds_pgdata` | la base : **vos comptes**, vos projets attribués, vos clefs publiques, votre journal d'audit |
+| VOLUME `pilot-gds_repos` | les **dépôts git de vos projets** : tout l'historique de votre travail |
+| VOLUMES `pilot-gds_ssh-host-keys`, `pilot-gds_supervisor` | l'empreinte sshd de votre serveur et ses journaux |
+| Sauvegardes (§9.4 : `G:\sauvegarde-gds`, ou par défaut `gds-server/backups/<horodatage>` avec `npm run gds:reload`) | une copie **complète** des trois premiers |
+| Vos secrets de poste : `~/.pilot/gds_secrets.json` et la clef privée `~/.ssh/id_ed25519` | vos accès, réutilisables tels quels sur votre serveur comme sur vos projets |
+
+Règle simple : **l'image se fabrique depuis la recette** (`docker build`, ce que
+fait `npm run gds:image`), **jamais depuis le conteneur en marche** — une image
+« photographiée » depuis un conteneur qui a vécu n'est plus la recette publiée.
+Reprendre des **données** chez le destinataire est un autre sujet : cela passe
+par l'export/import de la base, jamais par l'image.
+
+### 10.3 Ce que le destinataire fait lui-même, dans cet ordre
+
+1. **Déposer l'image** (§10.1), et à côté `gds-server/docker-compose.yml`,
+   `gds-server/.env.example` et `LICENSE`.
+2. **Créer son `.env`** : `POSTGRES_PASSWORD` (le sien) ; `GDS_ADMIN_EMAIL` +
+   `GDS_ADMIN_PASSWORD` s'il veut que le service crée son compte administrateur —
+   le formulaire de première initialisation (§2.4) fait la même chose sans rien
+   écrire sur disque.
+3. **Rendre joignables les ports du poste qui va s'en servir** : la base
+   (`5432`) et les dépôts (`2222`) doivent être joignables **depuis le poste qui
+   travaillera avec ce serveur** — c'est ainsi que Pilot prépare la base et
+   enregistre sa clef (§10.5). Régler `GDS_DB_BIND_ADDR` / `GDS_SSH_BIND_ADDR`
+   (`.env.example`, profil du §2bis) sur une adresse joignable du poste de
+   travail (réseau privé Tailscale ou LAN) — **jamais** une adresse publique
+   (§4).
+4. **Démarrer** : `docker compose up -d` (l'image est déjà là : rien à
+   reconstruire), puis `docker compose ps` et
+   `curl http://127.0.0.1:8080/api/gds/health`.
+5. **Se connecter depuis Pilot** : créer le compte administrateur (§2.4), puis
+   activer ses projets (partie 2 de `docs/gds-guide-mise-en-place.md`).
+
+### 10.4 Les limites à annoncer
+
+- **Une seule architecture** : l'image publiée par l'enchaînement du dépôt est
+  construite pour **`linux/amd64`** (une seule plateforme produite, cf. le
+  commentaire du fichier). Sous Docker Desktop (Windows, macOS), elle tourne dans
+  la machine Linux du poste ; sur une machine **ARM**, elle ne démarre pas — il
+  faut alors **reconstruire l'image sur cette machine** depuis la recette
+  (`docker compose up -d --build`).
+- **Les ports de la base et des dépôts doivent être joignables depuis le poste
+  de travail** (§10.3, point 3) : sans eux, Pilot ne peut ni préparer la base, ni
+  pousser ou tirer un dépôt.
+- **Pas de mise à jour automatique** : l'image est locale — une nouvelle version
+  se transmet comme une **nouvelle image** (§10.1) puis `docker compose up -d`,
+  jamais `docker compose pull`.
+- **Aucune donnée n'est reprise** : le destinataire part d'une base vide ; ses
+  dépôts se créent à l'ajout de ses projets (§3.6).
+
+### 10.5 Serveur Linux distant : côté machine, et côté poste de travail
+
+Cas visé : le serveur tourne sur une **autre machine** que celle où Pilot est
+installé (Linux, serveur toujours allumé).
+
+**Côté machine, une seule fois :**
+
+- Docker (+ Compose) installé et la machine **allumée en continu** ;
+- l'**image** déposée (§10.1), ou reconstruite sur la machine si son
+  architecture diffère (§10.4) ;
+- un `.env` avec **ses** mots de passe ;
+- les **ports rendus joignables depuis le poste de travail** : base (`5432`) et
+  dépôts (`2222`) au minimum ; l'interface d'administration (`8080`) seulement
+  si elle doit être consultée à distance (§3.4) ;
+- **rien d'autre à préparer à la main** : le script d'entrée du conteneur crée la
+  base, le compte système `git`, la racine des dépôts et les clefs d'hôte, puis
+  le service se maintient seul.
+
+**Côté poste de travail (Pilot) :** c'est **Pilot** qui prépare la base **à
+distance**, par une connexion PostgreSQL directe (hôte, port, utilisateur et
+mot de passe saisis dans l'onglet **🌐 GDS**) : création de la base `pilot_gds`
+et de son rôle, migrations, compte administrateur, projets et clefs publiques —
+tout est écrit **dans la base du serveur**. L'application **ne se connecte
+jamais en SSH** à la machine distante pour l'administrer : elle n'exécute
+aucune commande dessus et ne crée rien sur son disque. Ce qui manque encore dans
+la base est appliqué **par le conteneur lui-même** — dépôts bare et
+`authorized_keys` — avec un passage toutes les **30 secondes** (cf. §3.6).
+
+**Points de contrôle :**
+
+- sur la machine : `curl http://127.0.0.1:8080/api/gds/health` répond ;
+- dans Pilot : le bouton **Tester** de l'onglet **🌐 GDS** confirme la connexion,
+  et le badge du projet passe à **● Connecté** ;
+- `git ls-remote` en SSH sur un dépôt attribué **ne demande pas de mot de passe**
+  (partie 1, étape 2.4 de `docs/gds-guide-mise-en-place.md`).
