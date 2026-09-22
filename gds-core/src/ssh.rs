@@ -104,6 +104,47 @@ pub fn parse_authorized_key(line: &str) -> Option<(String, String, String)> {
     Some((key_type.to_string(), key.to_string(), comment.to_string()))
 }
 
+/// Types de clefs publiques acceptés (liste blanche ferme — mêmes valeurs que
+/// le poste dev, `src-tauri/src/gds_ssh.rs`).
+const ALLOWED_KEY_TYPES: &[&str] = &[
+    "ssh-ed25519",
+    "ssh-rsa",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "ssh-dss",
+];
+
+/// Sépare une ligne de clef publique `type base64 [commentaire]` en
+/// `(type, base64)` après validation stricte : type dans la liste blanche,
+/// base64 sans espace ni retour-chariot (anti-injection de ligne dans
+/// `authorized_keys`). Pure — testable.
+///
+/// Sert au chemin d'enregistrement de clef côté **service** ; le poste possède
+/// son équivalent (`src-tauri::gds_ssh::split_public_key`) : les deux crates ne
+/// peuvent pas se dépendre, la validation est donc répétée à l'identique.
+pub fn split_public_key(public_key: &str) -> Result<(String, String), String> {
+    let parts: Vec<&str> = public_key.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err("Clef publique invalide (format `type base64 [comment]` attendu)".to_string());
+    }
+    let key_type = parts[0].trim();
+    if !ALLOWED_KEY_TYPES.contains(&key_type) {
+        return Err("Type de clef non supporté".to_string());
+    }
+    let key = parts[1].trim();
+    if key.is_empty() {
+        return Err("Clef publique vide".to_string());
+    }
+    if key.chars().any(|c| c.is_whitespace() || c == '\n' || c == '\r') {
+        return Err("Clef publique invalide (caractères interdits)".to_string());
+    }
+    if !key.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c)) {
+        return Err("Clef publique invalide (format base64 attendu)".to_string());
+    }
+    Ok((key_type.to_string(), key.to_string()))
+}
+
 /// Fusionne des lignes authorized_keys en dédupliquant par clef (base64).
 /// Préserve les lignes existantes (commentaires inclus) et n'ajoute que les
 /// nouvelles clefs absentes. Idempotent. Pure — testable.
@@ -957,6 +998,33 @@ mod tests {
         assert!(fp1.starts_with("SHA256:"));
         // Clef invalide → empreinte vide.
         assert_eq!(public_key_fingerprint("bogus"), "");
+    }
+
+    /// Validation stricte de la clef publique (chemin d'enregistrement du lot 2) :
+    /// type hors liste blanche, base64 absent ou contenant un caractère
+    /// d'injection de ligne → refus. **Idempotence** : la même clef, quelle que
+    /// soit sa casse d'espaces ou son commentaire, produit la MÊME ligne
+    /// `authorized_keys` — c'est ce qui rend un second enregistrement inoffensif
+    /// (colonne `ssh_keys.public_key` UNIQUE, `ON CONFLICT DO NOTHING`).
+    #[test]
+    fn split_public_key_validates_and_is_idempotent() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey==";
+        let (kt, k) = split_public_key(key).unwrap();
+        let line1 = format_authorized_key(&kt, &k, "dev@kalico");
+        // Même clef, espaces en trop + commentaire du poste : ligne identique.
+        let again = split_public_key("  ssh-ed25519   AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey==   poste@ici  ")
+            .unwrap();
+        let line2 = format_authorized_key(&again.0, &again.1, "dev@kalico");
+        assert_eq!(line1, line2);
+        // Refus : type non supporté, clef absente, caractère hors base64.
+        assert!(split_public_key("ssh-unknown AAAAB3NzaC1yc2E=").is_err());
+        assert!(split_public_key("ssh-ed25519").is_err());
+        assert!(split_public_key("ssh-ed25519 AAAAB3NzaC1yc2E=;rm -rf /").is_err());
+        assert!(split_public_key("ssh-ed25519 AAAAB3NzaC1yc2E=$(id)").is_err());
+        // Un commentaire après retour à la ligne est simplement IGNORÉ (seul le
+        // 2e champ est conservé) : aucune injection de ligne possible.
+        let (kt3, k3) = split_public_key("ssh-ed25519 AAAAB3NzaC1yc2E=\ndevil").unwrap();
+        assert_eq!(format_authorized_key(&kt3, &k3, "dev@kalico"), "ssh-ed25519 AAAAB3NzaC1yc2E= dev@kalico");
     }
 
     #[test]

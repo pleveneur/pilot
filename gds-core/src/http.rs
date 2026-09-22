@@ -173,6 +173,19 @@ pub fn gds_routes<S: GdsCtx>() -> Router<Arc<S>> {
             "/api/gds/tickets/{id}/status",
             post(gds_ticket_status_web::<S>),
         )
+        // ── Lot 2 « compte utilisateur » : opérations projet côté SERVICE ──
+        // Le poste n'avait jusqu'ici aucune route serveur pour créer un dépôt
+        // (il écrivait directement en base) : ces trois routes le remplacent.
+        // Chemins **distincts** de `POST /api/gds/projects` (réservé au poste,
+        // cf. `shared_routes_merge_with_same_path_other_method`) et **sans
+        // paramètre de chemin** (`{id}` n'est pas la syntaxe d'axum 0.7 utilisée
+        // ici — un `{...}` n'est pas un segment capturé).
+        .route("/api/gds/projects/create", post(gds_project_create::<S>))
+        .route(
+            "/api/gds/projects/repo-exists",
+            post(gds_project_repo_exists::<S>),
+        )
+        .route("/api/gds/ssh-keys", post(gds_ssh_key_register::<S>))
 }
 
 /// Assemble le routeur HTTP du **service autonome** `gds-server`.
@@ -717,6 +730,12 @@ fn already_initialized() -> Response {
 
 fn err_response(e: String) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response()
+}
+
+/// Réponse **400** d'une entrée invalide (nom de projet, clef publique) — le
+/// message vient de la validation elle-même, il ne contient aucun secret.
+fn bad_request(e: String) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response()
 }
 
 // ── Authentification (token opaque) ──
@@ -2012,6 +2031,249 @@ async fn gds_ticket_status_web<S: GdsCtx>(
         }
         Err(e) => err_response(e),
     }
+}
+
+// ── Lot 2 « compte utilisateur » : opérations projet côté service ──
+//
+// Jusqu'ici le poste créait le projet, son dépôt bare et ses clefs SSH en
+// écrivant **directement dans la base** du service (accès PostgreSQL + dossier
+// des dépôts partagés). Ces trois routes les remplacent : le poste appelle le
+// service avec son **jeton de session**, l'identité est donc **prouvée** et non
+// plus déclarative (plus d'email fourni par l'appelant, plus de mot de passe de
+// base sur le poste). Les gardes sont celles qui existent déjà : rôle porté par
+// le jeton (`roles::can_write`) pour l'écriture, aucune restriction au-delà de
+// l'authentification pour la lecture.
+
+/// Corps de `POST /api/gds/projects/create`.
+#[derive(Deserialize)]
+struct ProjectCreateBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+/// `POST /api/gds/projects/create` — crée le projet **et son dépôt bare** dans la
+/// racine de dépôts du service.
+///
+/// * Garde de rôle : `write_allowed` (aucun mécanisme d'autorisation nouveau) —
+///   le rôle `standard` est refusé en 403 (« ajouter un projet » est une
+///   écriture ; la session historique du poste, rôle vide, garde ses droits).
+/// * Identité : le rattachement d'office de l'auteur administrateur
+///   (`git::register_project` → `enroll_admin_creator`) utilise l'email du
+///   **compte porté par le jeton**, relu en base depuis `user_id`.
+/// * Le nom est validé (`validate_project_name` : pas de `..`, pas de chemin
+///   absolu, pas de nom vide) et le dépôt est `<repos_root>/<nom>.git`.
+/// * **Idempotent** : un second appel réutilise projet et dépôt, et répond
+///   `bare_created: false`.
+///
+/// Réponses : `200 { ok, project_id, name, repo_name, bare_path, bare_created }`,
+/// `400` nom invalide, `403` rôle insuffisant, `500` base injoignable ou serveur
+/// sans racine de dépôts (le poste garde sa propre route locale).
+async fn gds_project_create<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<ProjectCreateBody>,
+) -> Response {
+    if let Some(resp) = tracking_write_allowed(&*ctx, &authed, "projects:create") {
+        return resp;
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let name = match crate::git::validate_project_name(&body.name) {
+        Ok(n) => n,
+        Err(e) => return bad_request(e),
+    };
+    let root = match ctx.repos_root() {
+        Some(r) => r,
+        None => {
+            return err_response(
+                "Serveur sans racine de dépôts : création impossible par cette route".to_string(),
+            )
+        }
+    };
+    // Session historique du poste (`user_id == 0`) : aucune identité GDS — le
+    // projet est créé sans rattachement d'auteur, comme avant.
+    let email = if authed.user_id == 0 {
+        String::new()
+    } else {
+        match gds_db::get_user_by_id(&pool, authed.user_id).await {
+            Ok(Some(u)) => u.email,
+            Ok(None) => String::new(),
+            Err(e) => return err_response(e),
+        }
+    };
+    match crate::git::create_project_in_root(
+        &pool,
+        &root.to_string_lossy(),
+        &name,
+        &email,
+        &body.description,
+    )
+    .await
+    {
+        Ok(mut value) => {
+            ctx.audit()
+                .record(&authed.ip, &authed.key, "project_create", &name, true);
+            value["ok"] = json!(true);
+            Json(value).into_response()
+        }
+        Err(e) => err_response(e),
+    }
+}
+
+/// Corps de `POST /api/gds/projects/repo-exists`.
+#[derive(Deserialize)]
+struct RepoExistsBody {
+    name: String,
+}
+
+/// `POST /api/gds/projects/repo-exists` — **lecture, tout compte authentifié**
+/// (y compris `standard`) : le poste vérifie avant de publier si le service
+/// possède déjà le projet et son dépôt.
+///
+/// `exists` n'est vrai que si le dépôt est **à la fois** annoncé en base
+/// (`git_repos`) et **présent sur le disque** : un dépôt connu en base mais pas
+/// encore matérialisé n'est pas encore joignable par SSH (la matérialisation est
+/// faite au démarrage puis par le job de maintenance — `ensure_project_bares`).
+///
+/// Réponse : `{ name, exists, in_db, on_disk, path }` — aucun secret, aucun
+/// contenu de dépôt.
+async fn gds_project_repo_exists<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<RepoExistsBody>,
+) -> Response {
+    if let Some(resp) = tracking_allowed(&*ctx, &authed) {
+        return resp;
+    }
+    let name = match crate::git::validate_project_name(&body.name) {
+        Ok(n) => n,
+        Err(e) => return bad_request(e),
+    };
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let repos = match gds_db::list_git_repos(&pool).await {
+        Ok(v) => v,
+        Err(e) => return err_response(e),
+    };
+    let entry = repos.iter().find(|r| r["name"].as_str() == Some(name.as_str()));
+    let stored = entry
+        .and_then(|r| r["path_on_server"].as_str())
+        .unwrap_or("")
+        .to_string();
+    let in_db = entry.is_some();
+    let path = match ctx.repos_root() {
+        Some(root) => match crate::git::resolve_repo_path(&root.to_string_lossy(), &name, &stored) {
+            Ok(p) => p,
+            Err(e) => return bad_request(e),
+        },
+        // Poste : la racine des dépôts du service n'est pas connue ici, le
+        // chemin enregistré en base reste la seule information utilisable.
+        None => std::path::PathBuf::from(&stored),
+    };
+    let on_disk = path.exists();
+    Json(json!({
+        "name": name,
+        "exists": in_db && on_disk,
+        "in_db": in_db,
+        "on_disk": on_disk,
+        "path": path.to_string_lossy(),
+    }))
+    .into_response()
+}
+
+/// Corps de `POST /api/gds/ssh-keys`.
+#[derive(Deserialize)]
+struct SshKeyRegisterBody {
+    public_key: String,
+}
+
+/// `POST /api/gds/ssh-keys` — enregistre la clef publique du poste pour le
+/// **compte porté par le jeton de session**.
+///
+/// * **Aucun email dans le corps** : la clef est rattachée à
+///   `AuthedClient::user_id`, l'identité est prouvée par la session. Sans
+///   identité (session historique du poste, `user_id == 0`) la route refuse
+///   (403) : une clef sans propriétaire n'a aucun sens.
+/// * Tout rôle **avec identité** est accepté, `standard` compris : la matrice
+///   range « récupérer sa copie » dans les droits de tout compte actif (la clef
+///   ouvre le dépôt, pas les données de suivi).
+/// * Validation **stricte** (`ssh::split_public_key` : liste blanche de types +
+///   base64 sans espace) : anti-injection de ligne dans `authorized_keys`.
+/// * **Idempotent** : une clef déjà enregistrée n'est jamais dupliquée
+///   (`ssh_keys.public_key` UNIQUE) ; l'appel répété répond `created: false`.
+/// * `authorized_keys` est régénéré dans la foulée depuis la base (source de
+///   vérité). Un échec d'écriture n'annule **pas** l'enregistrement : le job de
+///   maintenance du service réessaie toutes les 30 s.
+///
+/// Réponses : `200 { ok, id, created, fingerprint, authorized_keys_rewritten }`,
+/// `400` clef invalide, `403` session sans identité, `500` base injoignable.
+async fn gds_ssh_key_register<S: GdsCtx>(
+    State(ctx): State<Arc<S>>,
+    Extension(authed): Extension<AuthedClient>,
+    Json(body): Json<SshKeyRegisterBody>,
+) -> Response {
+    if authed.user_id == 0 {
+        ctx.audit()
+            .record(&authed.ip, &authed.key, "ssh_key_register", "sans-identite", false);
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "Compte GDS requis pour enregistrer une clef" })),
+        )
+            .into_response();
+    }
+    let (key_type, key) = match crate::ssh::split_public_key(&body.public_key) {
+        Ok(v) => v,
+        Err(e) => return bad_request(e),
+    };
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(e) => return err_response(e),
+    };
+    let email = match gds_db::get_user_by_id(&pool, authed.user_id).await {
+        Ok(Some(u)) => u.email,
+        Ok(None) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "Compte introuvable" })),
+            )
+                .into_response()
+        }
+        Err(e) => return err_response(e),
+    };
+    // Commentaire = email du compte : la ligne est ainsi identique à celle du
+    // poste (`src-tauri::gds_ssh`), et `stored_key_lines` la relit telle quelle.
+    let full = crate::ssh::format_authorized_key(&key_type, &key, &email);
+    let existing = match gds_db::get_ssh_key_by_key(&pool, &full).await {
+        Ok(v) => v,
+        Err(e) => return err_response(e),
+    };
+    let created = existing.is_none();
+    let id = match existing {
+        Some(id) => id,
+        None => match gds_db::create_ssh_key(&pool, authed.user_id, &full).await {
+            Ok(id) => id,
+            Err(e) => return err_response(e),
+        },
+    };
+    let rewritten = crate::ssh::regenerate_authorized_keys(&pool)
+        .await
+        .map(|sync| sync.rewritten)
+        .unwrap_or(false);
+    ctx.audit()
+        .record(&authed.ip, &authed.key, "ssh_key_register", &email, true);
+    Json(json!({
+        "ok": true,
+        "id": id,
+        "created": created,
+        "fingerprint": crate::ssh::public_key_fingerprint(&full),
+        "authorized_keys_rewritten": rewritten,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

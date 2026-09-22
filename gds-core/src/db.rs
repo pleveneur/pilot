@@ -409,6 +409,29 @@ pub async fn get_user_by_email(pool: &PgPool, email: &str) -> Result<Option<User
     }))
 }
 
+/// Retourne un utilisateur par identifiant (None si absent).
+///
+/// Lot 2 « compte utilisateur » : les routes du service partent de
+/// `AuthedClient::user_id` (identité **prouvée** par le jeton) et non d'un email
+/// fourni par l'appelant ; l'email du compte est relu ici.
+pub async fn get_user_by_id(pool: &PgPool, id: i64) -> Result<Option<UserRow>, String> {
+    let row = sqlx::query(
+        "SELECT id, email, name, password_hash, role, status FROM users WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Lecture user: {}", e))?;
+    Ok(row.map(|r| UserRow {
+        id: r.get::<i64, _>("id"),
+        email: r.get::<String, _>("email"),
+        name: r.get::<String, _>("name"),
+        password_hash: r.get::<String, _>("password_hash"),
+        role: r.get::<String, _>("role"),
+        status: r.get::<String, _>("status"),
+    }))
+}
+
 /// Nombre de comptes de rôle `admin` présents en base (L2.4).
 ///
 /// Sert de **verrou d'initialisation** : le compte administrateur n'est créé

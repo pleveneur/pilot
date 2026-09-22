@@ -457,6 +457,7 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use serde_json::json;
 
     /// Contexte minimal sans base : `pool()` échoue toujours, mais le routeur
     /// (et donc la couche d'authentification) est bien monté. Ce contexte ne
@@ -534,6 +535,145 @@ mod tests {
                 .unwrap();
             assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "route {}", uri);
         }
+    }
+
+    /// Lot 2 « compte utilisateur » — les trois routes d'opérations projet du
+    /// service : **sans jeton → 401**, **rôle insuffisant → 403**, **rôle
+    /// attendu → handler atteint** (500 « pas de base », jamais 404 : une route
+    /// absente serait un montage oublié) et **entrée invalide → 400 sans toucher
+    /// à la base** (la validation précède la résolution du pool).
+    ///
+    /// Ne touche à aucune base : le pool du contexte échoue toujours.
+    #[tokio::test]
+    async fn project_operation_routes_check_auth_role_and_input() {
+        let ctx = null_ctx();
+        let admin = ctx.auth.create_session_as("admin", Duration::from_secs(60));
+        let dev = ctx.auth.create_session_as("dev", Duration::from_secs(60));
+        let standard = ctx.auth.create_session_as("standard", Duration::from_secs(60));
+        // Identité de compte (`users.id`) : nécessaire pour enregistrer une clef.
+        let dev_identified = ctx
+            .auth
+            .create_session_for(7, "dev", Duration::from_secs(60));
+        let app = server_router(ctx);
+
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey==";
+        let routes = [
+            ("/api/gds/projects/create", json!({"name": "projet-l2"})),
+            ("/api/gds/projects/repo-exists", json!({"name": "projet-l2"})),
+            ("/api/gds/ssh-keys", json!({"public_key": key})),
+        ];
+
+        // 1) Aucun jeton : refus de la couche d'authentification, sur les trois.
+        for (uri, body) in &routes {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(*uri)
+                        .header("content-type", "application/json")
+                        .extension(ConnectInfo(test_addr()))
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "sans jeton : {}", uri);
+        }
+
+        // 2) Rôle `standard` : la création de projet est une écriture → 403.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/create",
+                &standard,
+                json!({"name": "projet-l2"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "standard ne crée pas de projet");
+
+        // 3) Rôle attendu (`admin`, puis `dev`) : le handler est bien atteint
+        //    (le pool du contexte de test échoue → 500, pas 403 ni 404).
+        for token in [&admin, &dev] {
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "POST",
+                    "/api/gds/projects/create",
+                    token,
+                    json!({"name": "projet-l2"}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "create: rôle attendu");
+        }
+
+        // 4) Lecture : `standard` y a droit (500 « pas de base », pas 403).
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/repo-exists",
+                &standard,
+                json!({"name": "projet-l2"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "repo-exists: lecture");
+
+        // 5) Nom invalide (traversée de chemin) : 400 AVANT la base.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/repo-exists",
+                &standard,
+                json!({"name": "../secret"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "nom de projet refusé");
+
+        // 6) Clef SSH : session SANS identité → 403 (une clef sans
+        //    propriétaire n'a pas de sens)…
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                &admin,
+                json!({"public_key": key}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "clef sans identité");
+
+        // 7) … clef invalide → 400…
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                &dev_identified,
+                json!({"public_key": "ssh-ed25519"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "clef invalide");
+
+        // 8) … et clef valide pour un compte identifié → handler atteint (500).
+        let res = app
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/ssh-keys",
+                &dev_identified,
+                json!({"public_key": key}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "clef valide");
     }
 
     /// Corps JSON d'une réponse (petit, borné).

@@ -90,6 +90,40 @@ async fn enroll_admin_creator(pool: &PgPool, project_id: i64, email: &str) {
     }
 }
 
+/// Enregistre le projet et son dépôt en **base** (idempotent) et rend le résumé
+/// JSON commun aux deux modes de création serveur/poste. Partie partagée par
+/// `add_project` (poste : `<gds_local_dir>/repos/<projet>.git`) et
+/// `create_project_in_root` (service : `<repos_root>/<projet>.git`).
+async fn register_project(
+    pool: &PgPool,
+    name: &str,
+    path_on_server: &str,
+    email: &str,
+    description: &str,
+) -> Result<Value, String> {
+    let repo_name = repo_name_for(name)?;
+    // Idempotent : si le projet existe déjà en base (ex: tentative précédente
+    // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
+    // sur la contrainte UNIQUE `projects.name`.
+    let project_id = match db::get_project_by_name(pool, name).await? {
+        Some(id) => id,
+        None => {
+            db::create_project(pool, name, &repo_name, "", path_on_server, "active", description)
+                .await?
+        }
+    };
+    // git_repos.project_id est UNIQUE → idempotent aussi.
+    if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
+        db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
+    }
+    // Refonte GDS L3.4 : l'appartenance à un projet est un **droit**, plus une
+    // inscription automatique. Seul un **administrateur** est rattaché d'office
+    // au projet qu'il crée ; un développeur non admin doit être attribué
+    // explicitement (`db::assign_project`) pour obtenir des droits dessus.
+    enroll_admin_creator(pool, project_id, email).await;
+    Ok(json!({ "project_id": project_id, "name": name, "repo_name": repo_name, "bare_path": path_on_server }))
+}
+
 /// Crée le repo bare + enregistre le projet et le repo en base. `git_init_bare`
 /// est bloquant → exécuté dans `spawn_blocking`. Retourne un résumé JSON.
 pub async fn add_project(
@@ -100,32 +134,38 @@ pub async fn add_project(
     description: &str,
 ) -> Result<Value, String> {
     let name = validate_project_name(name)?;
-    let repo_name = repo_name_for(&name)?;
     // Création du dépôt bare : code PARTAGÉ avec la matérialisation côté
     // conteneur (L2.6, `ensure_project_bares`) — une seule implémentation.
     let bare = repo_bare_path(gds_local_dir, &name);
     ensure_bare(bare.clone()).await?;
+    register_project(pool, &name, &bare.to_string_lossy(), email, description).await
+}
 
-    let path_on_server = bare.to_string_lossy().to_string();
-    // Idempotent : si le projet existe déjà en base (ex: tentative précédente
-    // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
-    // sur la contrainte UNIQUE `projects.name`.
-    let project_id = match db::get_project_by_name(pool, &name).await? {
-        Some(id) => id,
-        None => {
-            db::create_project(pool, &name, &repo_name, "", &path_on_server, "active", description).await?
-        }
-    };
-    // git_repos.project_id est UNIQUE → idempotent aussi.
-    if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
-        db::create_git_repo(pool, project_id, &path_on_server, &path_on_server).await?;
-    }
-    // Refonte GDS L3.4 : l'appartenance à un projet est un **droit**, plus une
-    // inscription automatique. Seul un **administrateur** est rattaché d'office
-    // au projet qu'il crée ; un développeur non admin doit être attribué
-    // explicitement (`db::assign_project`) pour obtenir des droits dessus.
-    enroll_admin_creator(pool, project_id, email).await;
-    Ok(json!({ "project_id": project_id, "name": name, "bare_path": path_on_server }))
+/// Lot 2 « compte utilisateur » — création du projet **et de son dépôt bare par
+/// le service lui-même**, dans la racine de dépôts du conteneur
+/// (`ServerCtx::repos_root`, `/srv/git/repos`) : le dépôt est
+/// `<bare_root>/<projet>.git`, soit **exactement** le chemin que la
+/// matérialisation de démarrage (`ensure_project_bares`) et la reprise de
+/// propriété (`ensure_bares_for`) attendent. `add_project` ne peut pas servir
+/// ici : il ajoute un sous-dossier `repos/` (racine locale du poste).
+///
+/// La signature de `add_project` reste inchangée (le poste l'appelle). Le nom est
+/// validé (`validate_project_name`, anti `..`/chemin absolu) et l'opération est
+/// **idempotente** : un second appel réutilise projet et dépôt existants et
+/// retourne `bare_created: false`.
+pub async fn create_project_in_root(
+    pool: &PgPool,
+    bare_root: &str,
+    name: &str,
+    email: &str,
+    description: &str,
+) -> Result<Value, String> {
+    let name = validate_project_name(name)?;
+    let bare = bare_path_in_root(bare_root, &name)?;
+    let created = ensure_bare(bare.clone()).await?;
+    let mut value = register_project(pool, &name, &bare.to_string_lossy(), email, description).await?;
+    value["bare_created"] = json!(created);
+    Ok(value)
 }
 
 /// Reprend un dépôt tout juste créé au nom du **propriétaire de son dossier

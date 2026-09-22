@@ -108,6 +108,10 @@ pub fn admin_actions() -> Vec<String> {
         "project_remove",
         "project_remove_purge",
         "ssh_key_revoke",
+        // Lot 2 « compte utilisateur » : une clef de poste enregistrée par le
+        // compte connecté ouvre un accès SSH au dépôt — l'administrateur doit
+        // la voir apparaître dans le journal.
+        "ssh_key_register",
         // Cycle de vie du service (L2.10) : redémarrage / arrêt du service GDS.
         "service_restart",
         "service_stop",
@@ -337,6 +341,7 @@ mod tests {
             "user_create",
             "project_remove_purge",
             "ssh_key_revoke",
+            "ssh_key_register",
             "admin_denied",
         ] {
             assert!(a.iter().any(|x| x == expected), "{} manquant", expected);
