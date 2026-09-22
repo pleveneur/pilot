@@ -254,8 +254,11 @@ d'un hébergement externe type GitHub.
   l'usage **à plusieurs** (partie 0 ce qu'il faut avoir sous la main, partie 1
   serveur, partie 2 usage, partie 3 à plusieurs, partie 4 modifier le serveur,
   partie 5 tout refaire à la main, partie 6 gestes dangereux). Chaque étape dit
-  **ce que vous faites**, le **résultat attendu** et le **point de contrôle**
-  qui le prouve, commandes exactes comprises. Le détail technique
+  **où l'on agit** (fichier `.env`, terminal, ou application Pilot) puis
+  **ce que vous faites**, **ce que vous voyez** (le **point de contrôle**, messages
+  cités mot pour mot) et **quoi faire si ce n'est pas ça** — commandes exactes
+  comprises, sans valeur à compléter entre chevrons. Le **piège du port de base
+  `5432` déjà occupé** ouvre le document. Le détail technique
   d'installation reste `docs/gds-server-setup.md`.
 - **Premier compte administrateur** : au tout premier démarrage, **aucun**
   administrateur n'existe. Soit vous renseignez **les deux** variables

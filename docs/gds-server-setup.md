@@ -414,11 +414,13 @@ Et, depuis l'autre appareil : les trois commandes du §3.5 répondent.
 ### 5.1 Le port de base `5432` est souvent déjà occupé sur le poste
 
 C'est le piège le plus fréquent : un **PostgreSQL natif** (installé sur le
-poste, ou la base locale que Pilot provisionne) écoute déjà sur
-`127.0.0.1:5432`. Windows route alors `127.0.0.1:5432` vers ce service natif au
+poste par un autre logiciel : outil de développement, ancienne installation,
+serveur d'une autre application) écoute déjà sur `127.0.0.1:5432`. Windows
+route alors `127.0.0.1:5432` vers ce service natif au
 lieu du conteneur, et le poste parle à la **mauvaise** base — le symptôme
 typique est `password authentication failed for user "pilot"` alors que le mot
-de passe est **juste**.
+de passe est **juste**. (Pilot lui-même ne provisionne **aucune** base
+PostgreSQL locale : le piège vient d'un PostgreSQL déjà présent sur le poste.)
 
 Détecter, puis décaler **seulement le port publié** (le port interne du
 conteneur ne change pas) :
@@ -427,6 +429,12 @@ conteneur ne change pas) :
 netstat -ano | findstr :5432      # Windows
 ss -ltnp | grep :5432             # Linux / macOS
 ```
+
+Version la plus parlante sous Windows (elle **nomme** le programme qui tient le
+port) : la commande `Get-NetTCPConnection -LocalPort 5432 -State Listen`
+montrée — avec la marche à suivre côté **Pilot** (redéclarer le serveur dans les
+deux écrans GDS) — dans l'**encadré en tête** de
+`docs/gds-guide-mise-en-place.md`.
 
 ```dotenv
 GDS_HOST_DB_PORT=55432            # dans .env, puis :
