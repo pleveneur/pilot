@@ -103,10 +103,21 @@ COPY gds-server/entrypoint.sh /usr/local/bin/gds-entrypoint
 COPY gds-server/sshd_config /etc/gds/sshd_config
 COPY gds-server/supervisord.conf /etc/gds/supervisord.conf
 
+# ── Notice de licence (MIT) — obligatoire dans TOUTE redistribution ────────
+# Le projet est publié sous licence MIT : l'avis de copyright doit accompagner
+# toute copie, image comprise. Copiée SEULE, depuis le contexte de construction
+# (racine du dépôt) et non depuis l'étage builder : la notice n'a rien à voir
+# avec la compilation. `/.dockerignore` ne l'exclut pas (verrouillé par
+# `src/js/gds-image-license.test.js`). Emplacement d'usage : chaque distribution
+# Linux y place les documents d'un logiciel (consultable sans rien installer).
+COPY LICENSE /usr/share/doc/pilot-gds/LICENSE
+
 RUN chmod 0755 /usr/local/bin/gds-server /usr/local/bin/gds-entrypoint \
  && mkdir -p /etc/ssh/host_keys /srv/git/repos /run/sshd /var/log/supervisor \
  && test -s /usr/local/bin/gds-server \
  && test -x /usr/local/bin/gds-entrypoint \
+ && test -s /usr/share/doc/pilot-gds/LICENSE \
+ && grep -q "MIT License" /usr/share/doc/pilot-gds/LICENSE \
  && supervisord --version >/dev/null \
  && printf '%s\n' \
       "verification de la recette : postgres=$(command -v postgres)" \
