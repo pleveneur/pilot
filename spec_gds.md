@@ -57,6 +57,20 @@
 > n'écrase jamais un projet déjà lié) ; R5 pleine largeur + multi-colonnes
 > (`gds-cols`).
 >
+> **Liste de serveurs GDS (5 lots, implémenté)** — la fiche serveur porte
+> désormais un **nom** (obligatoire, court) et une **description** (facultative) :
+> `name` / `description` / `last_test_at` / `reachable` sont ajoutés à
+> `ServerCredentials` (`~/.pilot/gds_secrets.json`, **`#[serde(default)]`** : une
+> fiche héritée sans nom reste lisible et s'affiche avec son ancienne
+> identification `user@host:port`) ; `gds_add_saved_server` / `
+> gds_update_saved_server` les acceptent, `gds_test_saved_server` **mémorise**
+> la date et la joignabilité, `list_saved_servers` les remonte (jamais de mot de
+> passe). « Appliquer » **conserve** le port SSH et la racine des dépôts déjà
+> configurés dans le projet visé et permet de **choisir le projet cible dans une
+> liste** ; « Détacher » est **explicite** (travail conservé côté serveur par
+> défaut, retrait serveur proposé en option) ; l'écran d'administration propose
+> un **sélecteur** de serveur mémorisé au lieu d'un pré-remplissage silencieux.
+>
 > **Implémenté (Phase A, bloc serveur + UI desktop)** : dépendances PostgreSQL (sqlx +
 > tokio-postgres), migration `migrations/0001_init.sql` (users, projects,
 > project_members, git_repos, audit_gds), `gds_db.rs` (pool, provision
@@ -289,11 +303,15 @@ Le serveur est livré comme **un seul conteneur** (dossier `gds-server/` :
 - **Écrans transverses** (ouverts SANS projet, contrairement à l'onglet
   « 🌐 GDS » qui est par projet) :
   - « 🖥️ GDS Serveur — administration » (`src/js/gds-admin.js`) : connexion
-    serveur, comptes, dépôts/projets, espace utilisé + journal, contrôle du
+    serveur (**sélecteur** des serveurs d'administration mémorisés, ou saisie
+    manuelle), comptes, dépôts/projets, espace utilisé + journal, contrôle du
     service ;
-  - « ⚙️ GDS — paramétrage » (`src/js/gds-params.js`) : serveurs mémorisés,
-    identité, clés SSH, « Mes projets GDS » (état, synchroniser, ajouter,
-    ouvrir, retirer).
+  - « ⚙️ GDS — paramétrage » (`src/js/gds-params.js`) : serveurs mémorisés
+    (**nom** obligatoire + **description** optionnelle, état **joignable /
+    injoignable / jamais testé** avec date du dernier test, application à un
+    **projet choisi**), identité, clés SSH, « Mes projets GDS » (état,
+    synchroniser, ajouter, ouvrir, **détacher** — travail conservé côté serveur
+    par défaut).
 
 ---
 

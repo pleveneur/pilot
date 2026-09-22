@@ -554,7 +554,11 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
   barre d'outils (l'onglet **« 🖥️ GDS Serveur — administration »** s'ouvre, même
   sans projet). Bloc **« Connexion serveur »**, remplissez **Adresse du
   serveur** = `127.0.0.1`, **Port HTTP** = `8080`, **Email administrateur** et
-  **Mot de passe administrateur**, puis **Tester la connexion**.
+  **Mot de passe administrateur**, puis **Tester la connexion**. Si vous avez
+  déjà enregistré ce serveur d'administration, choisissez-le dans le
+  **sélecteur « Serveur mémorisé »** (option *— saisie manuelle —* pour
+  repartir de zéro) : les trois champs non sensibles se remplissent, le mot de
+  passe reste **à ressaisir** (il n'est jamais réaffiché).
 - **Vous voyez :** la version du serveur et son état s'affichent : **Connecté**,
   avec la version, les migrations, le nombre de comptes, de projets et de dépôts.
 - **Si ce n'est pas ça :** un mot de passe faux est **refusé** (message
@@ -606,13 +610,27 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
 ### 2.5 — Mémoriser le serveur dans Pilot
 
 - **Dans Pilot, vous faites :** onglet **« ⚙️ GDS — paramétrage » → Serveurs
-  GDS** → **Ajouter un serveur** : **Hôte** `127.0.0.1`, **Port** `5432` (ou
-  `55432` après la correction du piège du port), **Utilisateur PostgreSQL**
-  `pilot`, **Mot de passe dédié** = la valeur de la ligne `POSTGRES_PASSWORD` du
-  fichier `.env`, **Mot de passe admin GDS** = celui du compte administrateur →
-  **Tester la connexion** → **Ajouter le serveur**.
-- **Vous voyez :** le serveur apparaît dans la liste (« 1 serveur mémorisé ») et
-  la connexion PostgreSQL a été testée **avant** l'enregistrement.
+  GDS** → **Ajouter un serveur** : **Nom du serveur** (obligatoire, court —
+  ex. *« GDS maison »*), **Description** (facultatif), **Hôte** `127.0.0.1`,
+  **Port** `5432` (ou `55432` après la correction du piège du port),
+  **Utilisateur PostgreSQL** `pilot`, **Mot de passe dédié** = la valeur de la
+  ligne `POSTGRES_PASSWORD` du fichier `.env`, **Mot de passe admin GDS** =
+  celui du compte administrateur → **Tester la connexion** → **Ajouter le
+  serveur**.
+- **Vous voyez :** le serveur apparaît dans la liste (« 1 serveur mémorisé »),
+  avec son **nom** (l'ancienne identification `pilot@127.0.0.1:5432` reste
+  affichée en second) et son **état** : **« Joignable (JJ/MM/AAAA HH:MM) »**
+  après un test réussi, **« Injoignable (…) »** après un échec,
+  **« Jamais testé »** avant tout test. La connexion PostgreSQL a été testée
+  **avant** l'enregistrement.
+- **Une fiche ajoutée avant cette version** (sans nom) reste **utilisable** :
+  elle s'affiche sous son ancienne identification `utilisateur@adresse:port`.
+  Cliquez **Modifier** pour lui donner un nom.
+- **Appliquer un serveur** : le bouton **« Appliquer »** d'une fiche remplit la
+  configuration GDS du **projet choisi** dans le sélecteur (et non plus
+  forcément le projet ouvert). Il pré-remplit hôte, port, utilisateur et
+  identité, mais **conserve** le **port SSH** et la **racine des dépôts** déjà
+  configurés dans ce projet — vous n'avez pas à les ressaisir.
 - **Si ce n'est pas ça :** le test refuse → « Hôte » et « Port » de la **base**
   (pas de l'interface web), mot de passe dédié = `POSTGRES_PASSWORD` ; si le
   message est `password authentication failed`, revoyez le **piège du port**.
@@ -742,11 +760,21 @@ Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du pann
 
 ### 2.12 — Retirer un projet du GDS
 
-- **Dans Pilot, vous faites :** onglet **« 🌐 GDS »** → **« Retirer du GDS »**
-  (confirmation). Ne cochez la **purge** côté serveur que si vous le voulez
-  vraiment.
-- **Vous voyez :** le projet redevient **100 % local** ; avec la purge, les
-  données serveur du projet sont retirées.
+Deux chemins équivalents ; le travail reste **côté serveur** par défaut dans les
+deux cas.
+
+- **Dans Pilot, vous faites (projet ouvert) :** onglet **« 🌐 GDS »** →
+  **« Retirer du GDS »** (confirmation). Ne cochez la **purge** côté serveur que
+  si vous le voulez vraiment.
+- **Dans Pilot, vous faites (depuis la liste) :** onglet **« ⚙️ GDS —
+  paramétrage » → Mes projets GDS** → **« Détacher »** sur la ligne du projet
+  voulu (il peut différer du projet ouvert) → **« Confirmer le détachement »**.
+  La case **« Retirer aussi le travail côté serveur (dépôt bare et entrées en
+  base) »** est **décochée par défaut** : décochée, **le travail reste sur le
+  serveur** ; cochée, elle équivaut à la purge.
+- **Vous voyez :** le projet redevient **100 % local** ; le message de
+  confirmation indique laquelle des deux issues a été appliquée
+  (« le travail est conservé côté serveur » ou « retiré du serveur »).
 - **Pour vérifier, dans le terminal :**
 
   ```powershell

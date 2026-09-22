@@ -347,16 +347,30 @@ d'un hébergement externe type GitHub.
     dossier local) et, **hors connexion**, le **retrait du GDS**.
 - **Deux écrans transverses** (ouverts **sans projet**) — boutons dédiés de la
   barre d'outils :
-  - **« 🖥️ GDS Serveur — administration »** : connexion au serveur, **Comptes**
-    (créer, changer le rôle, activer/désactiver, réinitialiser un mot de passe),
-    **Dépôts / projets** (membres, retrait avec purge), **Espace utilisé +
-    journal des connexions**, et **Contrôle du service** (redémarrer le service
-    GDS ou le conteneur) ;
-  - **« ⚙️ GDS — paramétrage »** : **Serveurs GDS** mémorisés (ajouter,
-    modifier, supprimer, tester, appliquer à un projet), **Mon identité**
+  - **« 🖥️ GDS Serveur — administration »** : connexion au serveur (**sélecteur
+    explicite** des serveurs d'administration mémorisés, ou saisie manuelle),
+    **Comptes** (créer, changer le rôle, activer/désactiver, réinitialiser un
+    mot de passe), **Dépôts / projets** (membres, retrait avec purge),
+    **Espace utilisé + journal des connexions**, et **Contrôle du service**
+    (redémarrer le service GDS ou le conteneur) ;
+  - **« ⚙️ GDS — paramétrage »** : **Serveurs GDS** mémorisés portant un **nom**
+    (obligatoire) et une **description** (facultative) ; l'ancienne
+    identification `utilisateur@adresse:port` reste affichée en second. Chaque
+    fiche indique son **état** (**joignable / injoignable / jamais testé**, avec
+    la **date du dernier test**). Actions : ajouter, modifier, supprimer,
+    tester, et **appliquer à un projet choisi dans une liste** (et non plus
+    seulement au projet ouvert) ; **Mon identité**
     (email + nom git), **Mes clés** (clef SSH publique du poste : afficher,
     copier, enregistrer sur un serveur) et **Mes projets GDS** (état,
-    synchroniser, ajouter, ouvrir, retirer).
+    synchroniser, ajouter, ouvrir, **détacher**).
+- **Détacher un projet du GDS** : depuis **Mes projets GDS**, le bouton
+  **« Détacher »** demande confirmation puis propose **explicitement** deux
+  issues — **par défaut le travail est conservé côté serveur** ; cocher la case
+  **« Retirer aussi le travail côté serveur »** supprime en plus le dépôt et les
+  entrées en base. Le détachement peut viser un projet **choisi dans la liste**,
+  même s'il n'est pas le projet ouvert. **Appliquer un serveur** mémorisé
+  pré-remplit l'hôte, le port, l'utilisateur et l'identité, mais **conserve** le
+  port SSH et la racine des dépôts déjà configurés dans le projet visé.
 - **Synchronisation — sans verrou** : une fois connecté, **Synchroniser**
   rapatrie le projet depuis le remote `gds` (clone si absent, sinon fetch/pull).
   Il n'y a **plus de verrou de projet** ni de mode urgent : deux postes peuvent
