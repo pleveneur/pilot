@@ -537,6 +537,12 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
   reconstruire l'image de test).
 - **Protocole de test de l'ancien document** : **non repris** — il portait sur un
   serveur préparé à la main et sur des routes de verrou qui n'existent plus.
+- **Rechargement sûr et répétable (L7.9, fait)** : `npm run gds:reload` (script
+  `scripts/gds-reload.js`, Node, multiplateforme) enchaîne prérequis, sauvegarde
+  datée, reconstruction de l'image, recréation du conteneur **sans toucher aux
+  volumes**, attente de la santé et compte rendu ; `npm run gds:image` ne fait
+  que la reconstruction. Détail et équivalent manuel : §9.5. Test léger sans
+  Docker : `scripts/gds-reload.test.js`.
 
 ---
 
@@ -611,7 +617,39 @@ Attendu : les trois `.tgz` existent et ne sont pas vides ; après `start`,
 `docker cp pilot-gds:/tmp/pilot_gds.sql .` — mais elle **ne sauvegarde pas** les
 dépôts git.)
 
-### 9.5 La séquence d'interruption minimale
+### 9.5 La commande automatique (recommandée) — et son équivalent manuel
+
+Depuis la **racine du projet** — un **script Node** : aucun shell Unix requis,
+Windows / macOS / Linux identiques :
+
+```bash
+npm run gds:reload     # rechargement complet : sauvegarde → image → conteneur → santé
+npm run gds:image      # reconstruction de l'IMAGE SEULE (le service n'est pas interrompu)
+```
+
+`npm run gds:reload` enchaîne, dans cet **ordre exact** :
+
+| # | Étape automatique | Équivalent à la main |
+|---|---|---|
+| 0 | contrôle des **prérequis** : `docker`, `docker compose`, `docker-compose.yml`, `.env` | `docker --version` / `docker compose version` |
+| 1 | **SAUVEGARDE datée** des trois volumes d'état, après un arrêt propre | §9.4 — les trois `.tgz` dans un dossier daté |
+| 2 | **reconstruction** de l'image locale | `cd gds-server` puis `docker compose build` |
+| 3 | **recréation** du conteneur, **volumes conservés** | `docker compose up -d` |
+| 4 | **attente** de `/api/gds/health` (240 s au plus) | `curl http://127.0.0.1:8080/api/gds/health` |
+| 5 | **compte rendu** : étapes, dossier de sauvegarde, service joignable ? | — |
+
+Options : `--backup-dir <chemin>` (défaut `gds-server/backups/<horodatage>`),
+`--timeout <secondes>`, `--help`, `--image-only`.
+
+**Ce que la commande ne fait JAMAIS** : supprimer un volume, `down -v`,
+`volume rm`, `prune`. Tout argument de ce genre est **refusé**, avec
+l'explication du risque. **Si la sauvegarde échoue, la chaîne s'ARRÊTE** : rien
+n'est reconstruit ni recréé, les volumes restent intacts. Aucun secret n'est lu
+ni affiché (la seule vérification est la **présence** de `gds-server/.env`).
+Un test léger (`scripts/gds-reload.test.js`, sans Docker réel) vérifie
+l'enchaînement des étapes et la construction des commandes.
+
+### 9.6 La séquence d'interruption minimale
 
 ```powershell
 docker compose build      # reconstruire PENDANT que le service tourne
@@ -623,7 +661,10 @@ curl http://127.0.0.1:8080/api/gds/health
 Un changement de **`.env`** ne demande que la deuxième ligne. Si l'interruption
 n'est pas un souci, une seule commande suffit : `docker compose up -d --build`.
 
-### 9.6 Gestes dangereux et réparation
+### 9.7 Gestes dangereux et réparation
+
+> Aucun des gestes ❌ ci-dessous n'existe dans `npm run gds:reload` (9.5) : le
+> script les refuse, y compris s'ils lui sont passés en argument.
 
 | ⚠️ Geste | Effet | Réversible ? |
 |---|---|---|

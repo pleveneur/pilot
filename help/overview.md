@@ -382,6 +382,12 @@ d'un hébergement externe type GitHub.
   (idempotentes) et un administrateur existant n'est **jamais écrasé**. Seul
   `docker compose down -v` **détruit les volumes**. Sauvegarde préalable :
   arrêter le service puis copier les volumes (`docs/gds-server-setup.md` §9).
+  **Version automatique** (depuis la racine du projet) : **`npm run gds:reload`**
+  enchaîne sauvegarde datée → reconstruction de l'image → recréation du
+  conteneur → attente du service, et **`npm run gds:image`** ne fait que la
+  reconstruction (le service n'est pas interrompu). Le script **ne supprime
+  jamais** les volumes, **refuse** tout argument destructeur et ne recharge rien
+  si la sauvegarde échoue. Le recharger reste **votre** décision.
 - **Documentation technique** : installation du serveur en conteneur dans
   `gds-server/README.md` et `docs/gds-server-setup.md` du dépôt Pilot (dont
   **§9 : modifier le serveur — ce qui change pour le conteneur**, preuves

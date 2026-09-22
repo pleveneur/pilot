@@ -217,6 +217,18 @@ un changement de **`.env`** ou de `docker-compose.yml` exige seulement une
 **jamais écrasé**. Preuves fichier par fichier, sauvegarde préalable et gestes
 dangereux : [`docs/gds-server-setup.md`](../docs/gds-server-setup.md) **§9**.
 
+**Version automatique (recommandée)** — depuis la **racine du projet** :
+
+```bash
+npm run gds:reload     # sauvegarde datée → reconstruction → recréation → santé
+npm run gds:image      # reconstruction de l'image SEULE (service non interrompu)
+```
+
+Le script (`scripts/gds-reload.js`) sauvegarde **avant** de toucher à quoi que
+ce soit, **conserve** les volumes, s'arrête si la sauvegarde échoue et refuse
+tout argument destructeur (`-v`, `down -v`, `volume rm`, `prune`). Équivalent
+manuel, étape par étape : `docs/gds-server-setup.md` §9.5.
+
 ---
 
 ## 4bis. Arrêter et redémarrer le SERVICE depuis Pilot (L2.10)

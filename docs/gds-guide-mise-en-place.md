@@ -645,6 +645,40 @@ curl http://127.0.0.1:8080/api/gds/health
 - Une seule ligne de commande suffit si l'interruption n'est pas un souci :
   `docker compose up -d --build`.
 
+## 4.6 — La commande automatique (et l'équivalent manuel, geste par geste)
+
+> Un **script Node** de la racine du projet fait les 4.4 et 4.5 **dans le bon
+> ordre**, sur Windows, macOS et Linux. C'est la même chose que les commandes
+> ci-dessus — rien de plus : vous pouvez tout refaire à la main (colonne de
+> droite), le script n'invente aucune étape.
+
+**Vous faites** (depuis la racine du projet : `G:\IA_PL\pilot`) :
+
+```bash
+npm run gds:reload     # rechargement complet
+npm run gds:image      # reconstruction de l'image SEULE (le service continue de tourner)
+```
+
+| # | Ce que le script fait | L'équivalent à la main |
+|---|---|---|
+| 0 | vérifie que `docker`, `docker compose`, `docker-compose.yml` et `.env` sont là ; sinon il s'arrête | `docker --version` puis `docker compose version` ; regarder `gds-server/` |
+| 1 | **sauvegarde datée** des trois volumes (base, dépôts, clefs d'hôte) dans `gds-server/backups/<horodatage>/`, après un arrêt propre | **4.4** (les trois `.tgz`) |
+| 2 | **reconstruit l'image** locale | `cd gds-server` puis `docker compose build` |
+| 3 | **recrée le conteneur**, **volumes conservés** | `docker compose up -d` |
+| 4 | attend que le service **réponde** (240 s au plus) | `curl http://127.0.0.1:8080/api/gds/health` |
+| 5 | affiche le compte rendu : étapes, dossier de sauvegarde, service répond ? | — |
+
+- **Résultat attendu :** le service répond de nouveau, et le dossier de sauvegarde
+  contient `pgdata.tgz`, `repos.tgz` et `ssh-host-keys.tgz` non vides.
+- **Point de contrôle :** le compte rendu affiche `Service … : RÉPOND` ; les
+  comptes, projets et dépôts sont **toujours là** (les volumes n'ont pas bougé).
+- **Options :** `--backup-dir <chemin>` (défaut `gds-server/backups/<horodatage>`),
+  `--timeout <secondes>`, `--help`, `--image-only`.
+- **Garde-fous :** le script **refuse** tout argument qui supprimerait des
+  volumes (`-v`, `--volumes`, `down -v`, `volume rm`, `prune`, `rm -rf`) et
+  **s'arrête sans rien reconstruire** si la sauvegarde échoue. Aucun secret n'est
+  lu ni affiché (il vérifie seulement que `.env` **existe**).
+
 ---
 
 # PARTIE 5 — TOUT REFAIRE À LA MAIN (ce que le conteneur fait tout seul)
@@ -704,6 +738,10 @@ docker compose up -d          # puis remettre la même valeur dans .env et dans 
 > La connexion locale au sein du conteneur passe par la **socket** (ouverte en
 > `trust`), donc ces commandes fonctionnent **sans** saisir le mot de passe.
 
+> **Aucun** des gestes ❌ ci-dessus n'est exécuté par `npm run gds:reload`
+> (4.6) : le script refuse les arguments de ce genre (`-v`, `--volumes`,
+> `down -v`, `volume rm`, `prune`) et ne supprime jamais de volume.
+
 **Retirer / arrêter sans rien perdre :**
 
 ```powershell
@@ -736,6 +774,10 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
   journalisés » sont appliqués **côté serveur** (tests unitaires du socle).
 - La **séquence de conteneur** de la partie 4 : chaque affirmation est adossée
   au fichier qui la porte (tableau 4.2).
+- La **commande de rechargement** (4.6) : son enchaînement d'étapes et les
+  commandes qu'elle construit sont vérifiés **sans Docker réel** par
+  `scripts/gds-reload.test.js` (`npm test`) — y compris le **refus** de tout
+  argument destructeur et l'absence de `down -v` dans la chaîne.
 
 ## ⚠️ Reste à vérifier en conditions réelles (par vous)
 
@@ -745,6 +787,11 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
   été écrit à partir du code et des documents du projet, **sans** démarrer le
   conteneur, **sans** lancer Pilot. Le parcours « depuis zéro, sur un poste
   vierge » **reste à dérouler par vous**, case à case.
+- **`npm run gds:reload` n'a pas été exécuté contre un serveur réel** (ni la
+  reconstruction d'image, ni la sauvegarde, ni la recréation) : le script est
+  livré **testé sans Docker**. La **première** exécution réelle sera la **vôtre** :
+  les durées affichées dans le compte rendu sont celles du poste, pas une mesure
+  du rédacteur.
 - **La partie utilisateur n'a pas de test automatique** : les tests portent sur
   les morceaux testables des écrans et sur le serveur, **pas** sur un parcours
   « écran → serveur → dépôt git » piloté depuis l'interface.

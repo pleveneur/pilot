@@ -348,13 +348,21 @@ Quand l'utilisateur demande la publication :
    un `sed`). Après le bump, VÉRIFIER : `grep 'version = "X.Y.Z"' Cargo.lock` ne doit
    retourner qu'une seule occurrence, celle de `pilot`, et lancer `cargo test
    --manifest-path src-tauri/Cargo.toml --lib` avant de committer.
-2. **Committer** le bump + le `release-notes/vX.Y.Z.md` : `git commit -m "chore: bump version to X.Y.Z"`.
-3. **Pousser** `main` puis **créer et pousser le tag** `vX.Y.Z` :
+2. **Reconstruire l'image du serveur GDS** (l'image est **locale**, jamais
+   téléchargée d'un registre ; la version de serveur doit correspondre au code
+   publié) : `npm run gds:image` — **reconstruction seule**, le conteneur du
+   propriétaire n'est **pas** touché. Le **rechargement** de son conteneur
+   (sauvegarde datée → reconstruction → recréation → attente du service) est sa
+   **décision**, jamais automatique : `npm run gds:reload` (détail et équivalent
+   manuel : `docs/gds-server-setup.md` §9.5 ; guide :
+   `docs/gds-guide-mise-en-place.md` §4.6).
+3. **Committer** le bump + le `release-notes/vX.Y.Z.md` : `git commit -m "chore: bump version to X.Y.Z"`.
+4. **Pousser** `main` puis **créer et pousser le tag** `vX.Y.Z` :
    ```bash
    git push origin main
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
-4. Le workflow `.github/workflows/release.yml` build les 4 plateformes, signe les
+5. Le workflow `.github/workflows/release.yml` build les 4 plateformes, signe les
    artefacts et génère `latest.json` automatiquement. Les utilisateurs installés
    reçoivent la mise à jour au prochain démarrage de Pilot.
 
