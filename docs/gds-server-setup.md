@@ -10,8 +10,10 @@
 > (`plan_gds.md`, LOT 2), **complété par L7.3**. C'est **le** document
 > d'installation retenu : il remplace `docs/gds-linux-setup.md` (préparation
 > manuelle d'un serveur Linux), supprimé car devenu inutile avec le conteneur
-> tout-en-un. Voir aussi `spec_gds.md` (spécification fonctionnelle) et
-> `gds-server/README.md` (référence rapide du dossier serveur).
+> tout-en-un. Voir aussi `spec_gds.md` (spécification fonctionnelle),
+> `gds-server/README.md` (référence rapide du dossier serveur) et
+> `docs/gds-guide-mise-en-place.md` (**parcours guidé** serveur → utilisateur,
+> en langage simple).
 >
 > ⚠️ **Ce document ne s'exécute pas tout seul — les manipulations du poste
 > sont À LA CHARGE DU PROPRIÉTAIRE.** Les commandes `docker …` (construction,
@@ -495,6 +497,13 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
 
 ## 8. Document retenu et suites
 
+- **Parcours guidé (fait)** : `docs/gds-guide-mise-en-place.md` propose le
+  parcours complet en langage simple — **partie 1 serveur** (le fil des étapes,
+  avec renvoi au présent document pour les commandes) puis **partie 2 côté
+  utilisateur** (obtenir un compte, identité, clef SSH, rattacher un projet,
+  rôles, concurrence, gestes à faire soi-même). Ce document-ci **reste la
+  référence technique d'installation** ; le guide n'en recopie pas les
+  commandes.
 - **Consolidation documentaire (L7.3, faite)** : ce document est **le** mode
   d'emploi d'installation du serveur GDS. `docs/gds-linux-setup.md` a été
   **supprimé** : il décrivait la préparation manuelle d'un serveur Linux
