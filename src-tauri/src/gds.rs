@@ -2077,7 +2077,17 @@ async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bo
             stored
         }
         // Délai dépassé (migration bloquée) ou connexion impossible.
-        Some(Err(_)) | None => false,
+        Some(Err(_)) => false,
+        None => {
+            // Trace de cette classe de panne (borne atteinte : base muette ou
+            // verrou de migration occupé) — ne doit plus être silencieuse.
+            eprintln!(
+                "[gds] vérification de connexion bornée pour « {} » ({} s) : base muette ou verrou de migration occupé",
+                name,
+                GDS_RESTORE_TIMEOUT.as_secs()
+            );
+            false
+        }
     };
     if let Ok(mut lock) = gds_pool_cache().lock() {
         lock.insert(name, (now, ok));
