@@ -233,6 +233,72 @@ describe("createTelegramInbound — réponses aux questions (étape 2, lot 1)", 
   });
 });
 
+describe("createTelegramInbound — appuis de bouton (étape 2, lot 3)", () => {
+  it("un appui est consommé (jamais déposé) et le curseur avance", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 9, text: "", callbackData: "q1:0" }],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeCallback = vi.fn(() => true);
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeCallback, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(consumeCallback).toHaveBeenCalledWith("q1:0");
+    expect(deliver).not.toHaveBeenCalled();
+    expect(calls).toContainEqual(["telegram_inbound_commit", { offset: 10 }]);
+  });
+
+  it("un appui n'est JAMAIS déposé, même non consommé (ce n'est pas un message)", async () => {
+    const { invokeFn, calls } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 11, text: "", callbackData: "q9:9" }],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeCallback = vi.fn(() => false);
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeCallback, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(calls).toContainEqual(["telegram_inbound_commit", { offset: 12 }]);
+  });
+
+  it("un appui en erreur reste silencieux et n'interrompt pas la passe", async () => {
+    const { invokeFn } = recordingInvoke({
+      status: "ok",
+      messages: [
+        { updateId: 13, text: "", callbackData: "q1:0" },
+        { updateId: 14, text: "bonjour" },
+      ],
+    });
+    const deliver = vi.fn(async () => "delivered");
+    const consumeCallback = vi.fn(() => {
+      throw new Error("interpréteur cassé");
+    });
+    const inbound = createTelegramInbound({ invokeFn, deliver, consumeCallback, ...silence });
+
+    expect(await inbound.pollOnce()).toBe(2);
+    expect(deliver).toHaveBeenCalledWith("[Message Telegram de l'utilisateur] bonjour");
+  });
+
+  it("un message texte ne passe JAMAIS par le chemin des appuis", async () => {
+    const { invokeFn } = recordingInvoke({
+      status: "ok",
+      messages: [{ updateId: 15, text: "bonjour" }],
+    });
+    const consumeCallback = vi.fn(() => true);
+    const inbound = createTelegramInbound({
+      invokeFn,
+      deliver: vi.fn(async () => "delivered"),
+      consumeCallback,
+      ...silence,
+    });
+
+    expect(await inbound.pollOnce()).toBe(1);
+    expect(consumeCallback).not.toHaveBeenCalled();
+  });
+});
+
 describe("createTelegramInbound — interrogation périodique", () => {
   afterEach(() => {
     vi.useRealTimers();

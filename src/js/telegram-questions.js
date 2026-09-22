@@ -78,8 +78,10 @@ export function formatQuestionReminder(descriptor = {}) {
  * @returns {string}
  */
 export function formatAlreadyAnswered(descriptor = {}) {
-  const title = String(descriptor.title || "Question").trim() || "Question";
-  return `✅ « ${title} » : cette question a déjà été répondue. Votre message n'a pas été pris en compte.`;
+  const title = String(descriptor.title || "").trim();
+  return title
+    ? `✅ « ${title} » : cette question a déjà été répondue. Votre message n'a pas été pris en compte.`
+    : "✅ Cette question a déjà été répondue. Votre réponse n'a pas été prise en compte.";
 }
 
 /** Préfixe des charges utiles de bouton (« q<génération>:<index> »). */
@@ -107,6 +109,21 @@ export function buildQuestionButtons(descriptor = {}, generation = 0) {
       data: `${prefix}${index}`,
     }))
     .filter((b) => b.data.length <= MAX_CALLBACK_BYTES);
+}
+
+/**
+ * Décompose la charge utile d'un bouton (`q<génération>:<index>`). Renvoie
+ * `null` pour une charge inconnue. Fonction PURE.
+ * @param {string} data
+ * @returns {{generation: number, index: number}|null}
+ */
+export function parseCallbackData(data) {
+  const m = /^q(\d+):(\d+)$/.exec(String(data ?? "").trim());
+  if (!m) return null;
+  const generation = Number.parseInt(m[1], 10);
+  const index = Number.parseInt(m[2], 10);
+  if (!Number.isSafeInteger(generation) || !Number.isSafeInteger(index)) return null;
+  return { generation, index };
 }
 
 // ── Interprétation d'un texte libre répondant à une CONFIRMATION ───────────
@@ -439,7 +456,37 @@ export function createTelegramQuestionBridge(deps = {}) {
     active = null;
   }
 
-  return { ask, settle, reopen, answerFromApp, feed, clear, current: () => active };
+  /**
+   * Tente d'appliquer un APPUI DE BOUTON comme réponse à la question active.
+   * MÊME chemin qu'une réponse textuelle (« 1 » → option 0) : mêmes garanties
+   * (première réponse gagne, signal « déjà répondu » si la question est close).
+   * Un bouton d'une question REMPLACÉE (génération différente) ou d'une charge
+   * inconnue est consommé sans rien appliquer : un appui n'est jamais déposé
+   * comme message de discussion.
+   * @returns {boolean} toujours vrai (l'appui est toujours consommé).
+   */
+  function pressCallback(data) {
+    const pressed = parseCallbackData(data);
+    if (!pressed) return true; // charge inconnue : ignorée
+    if (!active || pressed.generation !== active.generation) {
+      fire(formatAlreadyAnswered());
+      return true;
+    }
+    const options = Array.isArray(active.descriptor.options) ? active.descriptor.options : [];
+    if (pressed.index < 0 || pressed.index >= options.length) return true;
+    return feed(String(pressed.index + 1));
+  }
+
+  return {
+    ask,
+    settle,
+    reopen,
+    answerFromApp,
+    feed,
+    pressCallback,
+    clear,
+    current: () => active,
+  };
 }
 
 /** Envoi réel : passerelle d'envoi EXISTANTE (inerte si non configurée). */
@@ -500,4 +547,14 @@ export function clearTelegramQuestion() {
  */
 export function consumeTelegramQuestionAnswer(text) {
   return telegramQuestionBridge.feed(text);
+}
+
+/**
+ * Consomme un APPUI DE BOUTON Telegram (charge utile `q<génération>:<index>`)
+ * comme réponse à la question en cours.
+ * @param {string} data
+ * @returns {boolean} vrai si l'appui a été consommé (à ne PAS déposer).
+ */
+export function consumeTelegramQuestionCallback(data) {
+  return telegramQuestionBridge.pressCallback(data);
 }

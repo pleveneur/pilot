@@ -15,6 +15,7 @@ import {
   formatQuestionForTelegram,
   formatQuestionReminder,
   buildQuestionButtons,
+  parseCallbackData,
   MAX_CALLBACK_BYTES,
   parseTelegramAnswer,
   createTelegramQuestionBridge,
@@ -298,6 +299,93 @@ describe("buildQuestionButtons — boutons natifs (étape 2, lot 2)", () => {
 
   it("un libellé vide reçoit un texte de repli", () => {
     expect(buildQuestionButtons({ options: ["", "   "] }, 1)[0].text).toBe("Option 1");
+  });
+});
+
+describe("parseCallbackData — appui de bouton (étape 2, lot 3)", () => {
+  it("décompose « q<génération>:<index> »", () => {
+    expect(parseCallbackData("q7:2")).toEqual({ generation: 7, index: 2 });
+    expect(parseCallbackData("  q1:0  ")).toEqual({ generation: 1, index: 0 });
+  });
+
+  it("rejette une charge inconnue", () => {
+    expect(parseCallbackData("")).toBeNull();
+    expect(parseCallbackData("q1")).toBeNull();
+    expect(parseCallbackData("q1:2:3")).toBeNull();
+    expect(parseCallbackData("x1:0")).toBeNull();
+    expect(parseCallbackData(null)).toBeNull();
+  });
+});
+
+describe("pressCallback — appui de bouton (étape 2, lot 3)", () => {
+  it("applique l'option par le MÊME chemin qu'un texte", () => {
+    const send = vi.fn();
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, resolve);
+    const gen = bridge.current().generation;
+
+    expect(bridge.pressCallback(`q${gen}:1`)).toBe(true);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(resolve.mock.calls[0][0]).toEqual({ kind: "option", index: 1, value: "B" });
+    expect(bridge.current().resolved).toBe(true);
+  });
+
+  it("un second appui après réponse est consommé et signalé « déjà répondu »", () => {
+    const send = vi.fn();
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, resolve);
+    const gen = bridge.current().generation;
+    bridge.pressCallback(`q${gen}:0`);
+    send.mockClear();
+
+    expect(bridge.pressCallback(`q${gen}:1`)).toBe(true);
+    expect(resolve).toHaveBeenCalledTimes(1); // jamais deux réponses
+    expect(send.mock.calls.at(-1)[0]).toContain("déjà été répondue");
+  });
+
+  it("un appui d'une ANCIENNE question (génération périmée) n'est pas appliqué", () => {
+    const send = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q1" }, { title: "Première ?", options: ["A", "B"] }, vi.fn());
+    const resolve2 = vi.fn();
+    bridge.ask({ id: "q2" }, { title: "Seconde ?", options: ["A", "B"] }, resolve2);
+
+    expect(bridge.pressCallback("q1:1")).toBe(true); // bouton de la 1re question
+    expect(resolve2).not.toHaveBeenCalled();
+    expect(bridge.current().resolved).toBe(false);
+    expect(send.mock.calls.at(-1)[0]).toContain("déjà été répondue");
+  });
+
+  it("un index hors plage n'est pas appliqué", () => {
+    const resolve = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send: vi.fn(), timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, resolve);
+    const gen = bridge.current().generation;
+
+    expect(bridge.pressCallback(`q${gen}:9`)).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(bridge.current().resolved).toBe(false);
+  });
+
+  it("sans question active : consommé, jamais déposé, signal discret", () => {
+    const send = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+
+    expect(bridge.pressCallback("q1:0")).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("déjà été répondue");
+  });
+
+  it("une charge inconnue est consommée sans effet", () => {
+    const send = vi.fn();
+    const bridge = createTelegramQuestionBridge({ send, timers: fakeTimers(), ...silence });
+    bridge.ask({ id: "q" }, { title: "Approche ?", options: ["A", "B"] }, vi.fn());
+    send.mockClear(); // ignore l'avis de question envoyé par `ask`
+
+    expect(bridge.pressCallback("nawak")).toBe(true);
+    expect(send).not.toHaveBeenCalled();
   });
 });
 

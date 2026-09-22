@@ -33,7 +33,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { injectExternalMessageToSuperAgent } from "./super-agent.js";
-import { consumeTelegramQuestionAnswer } from "./telegram-questions.js";
+import { consumeTelegramQuestionAnswer, consumeTelegramQuestionCallback } from "./telegram-questions.js";
 
 /** Intervalle d'interrogation (court : l'utilisateur attend une réaction). */
 export const TELEGRAM_INBOUND_INTERVAL_MS = 4000;
@@ -60,6 +60,10 @@ export function formatTelegramInboundText(text) {
  *   tente d'appliquer le message comme RÉPONSE à une question en cours de
  *   l'Assistant (étape 2, lot 1). Renvoie vrai si le message a été consommé
  *   (il n'est alors PAS déposé dans la conversation).
+ * @param {(data: string) => boolean} [deps.consumeCallback]
+ *   tente d'appliquer un APPUI DE BOUTON Telegram (`q<génération>:<index>`) à
+ *   la question en cours (étape 2, lot 3), même chemin de réponse que le texte.
+ *   Un appui n'est JAMAIS déposé dans la conversation.
  * @param {number} [deps.intervalMs]
  * @param {{setInterval: Function, clearInterval: Function}} [deps.timers]
  * @param {(...args: unknown[]) => void} [deps.warn] - journalisation silencieuse.
@@ -69,6 +73,7 @@ export function createTelegramInbound(deps = {}) {
   const invokeFn = deps.invokeFn || ((cmd, args) => invoke(cmd, args));
   const deliver = deps.deliver || ((text) => injectExternalMessageToSuperAgent(text));
   const consumeAnswer = deps.consumeAnswer || consumeTelegramQuestionAnswer;
+  const consumeCallback = deps.consumeCallback || consumeTelegramQuestionCallback;
   const intervalMs = deps.intervalMs || TELEGRAM_INBOUND_INTERVAL_MS;
   // Minuteurs par défaut : de petites flèches rappellent les fonctions natives
   // via l'objet global. Un raccourci d'objet (`{ setInterval, clearInterval }`)
@@ -118,7 +123,23 @@ export function createTelegramInbound(deps = {}) {
       let failed = false;
       for (const message of messages) {
         const text = (message && message.text) || "";
+        const callbackData = (message && message.callbackData) || "";
         const updateId = message && typeof message.updateId === "number" ? message.updateId : null;
+        // Étape 2, lot 3 : appui sur un bouton d'une question. Il emprunte le
+        // MÊME chemin de réponse que le texte (première réponse gagne, appui
+        // d'une question déjà répondue signalé puis ignoré) et n'est JAMAIS
+        // déposé dans la conversation. L'accusé de réception (qui défait la
+        // barre de progression du client) est fait côté Rust, à la réception.
+        if (callbackData) {
+          try {
+            consumeCallback(callbackData);
+          } catch (e) {
+            warn("[telegram-inbound] appui de bouton ignoré :", e);
+          }
+          delivered += 1;
+          await commit(updateId === null ? null : updateId + 1, updateId);
+          continue;
+        }
         if (!text.trim()) {
           // Rien à remettre : on valide tout de même le curseur pour ne pas
           // relire indéfiniment ce message.

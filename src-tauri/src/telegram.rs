@@ -313,6 +313,24 @@ pub struct TelegramButtonArg {
     pub data: String,
 }
 
+/// Accuse réception d'un appui de bouton (`answerCallbackQuery`) : défait la
+/// barre de progression du client. Best-effort, silencieux, jeton jamais
+/// journalisé (le message d'erreur est nettoyé par `http_post_json` + `redact`).
+fn answer_callback(cfg: &TelegramConfig, callback_id: &str) {
+    let url = format!(
+        "{}/bot{}/answerCallbackQuery",
+        TELEGRAM_API_BASE,
+        cfg.token.trim()
+    );
+    let body = serde_json::json!({ "callback_query_id": callback_id });
+    if let Err(e) = http_post_json(&url, &body) {
+        eprintln!(
+            "[telegram] accusé de réception d'appui ignoré : {}",
+            redact_token(&e, &cfg.token)
+        );
+    }
+}
+
 /// Commande Tauri : publie une question AVEC boutons natifs et renvoie
 /// l'identifiant du message (pour l'éditer ensuite). Ne renvoie JAMAIS d'erreur :
 /// `status` vaut `sent` (message posé, `messageId` fourni quand l'API le rend),
@@ -414,11 +432,17 @@ pub fn telegram_notify(app: AppHandle, text: String) {
 //   - une inertie STRICTEMENT identique à l'envoi (mêmes champs, mêmes règles) :
 //     passerelle décochée ou champ vide → aucun accès réseau, aucune erreur.
 
-/// Un message entrant RETENU (venant du propriétaire uniquement).
+/// Un message entrant RETENU (venant du propriétaire uniquement) : soit un
+/// texte, soit l'appui sur un bouton d'une question (`callback_query`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboundMessage {
     pub update_id: i64,
+    /// Texte du message (vide pour un appui de bouton).
     pub text: String,
+    /// Charge utile du bouton pressé (`callback_query.data`), vide sinon.
+    pub callback_data: String,
+    /// Identifiant à accuser réception (`callback_query.id`), vide sinon.
+    pub callback_id: String,
 }
 
 /// Résultat d'une passe de réception.
@@ -471,10 +495,45 @@ pub fn collect_inbound(
             if update_id + 1 > next_offset {
                 next_offset = update_id + 1;
             }
-            let Some(message) = update.get("message").or_else(|| update.get("edited_message"))
-            else {
+            let message = update
+                .get("message")
+                .or_else(|| update.get("edited_message"));
+            if message.is_none() {
+                // Appui sur un bouton (étape 2, lot 3) : l'identité est filtrée
+                // EXACTEMENT comme pour un message — seule la discussion du
+                // propriétaire est retenue (`callback_query.message.chat.id`).
+                if let Some(query) = update.get("callback_query") {
+                    let chat_id = query
+                        .get("message")
+                        .and_then(|m| m.get("chat"))
+                        .and_then(|c| c.get("id"))
+                        .and_then(chat_id_string);
+                    if chat_id.as_deref() == Some(owner) {
+                        let data = query
+                            .get("data")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.trim().to_string())
+                            .unwrap_or_default();
+                        let callback_id = query
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        // Charge utile vide : rien à interpréter (le curseur
+                        // avance quand même).
+                        if !data.is_empty() {
+                            messages.push(InboundMessage {
+                                update_id,
+                                text: String::new(),
+                                callback_data: data,
+                                callback_id,
+                            });
+                        }
+                    }
+                }
                 continue;
-            };
+            }
+            let message = message.unwrap();
             let chat_id = message
                 .get("chat")
                 .and_then(|c| c.get("id"))
@@ -492,7 +551,12 @@ pub fn collect_inbound(
             if text.is_empty() {
                 continue;
             }
-            messages.push(InboundMessage { update_id, text });
+            messages.push(InboundMessage {
+                update_id,
+                text,
+                callback_data: String::new(),
+                callback_id: String::new(),
+            });
         }
     }
     InboundPoll {
@@ -665,13 +729,23 @@ pub fn telegram_poll_inbound(app: AppHandle) -> Result<serde_json::Value, String
                     "messages": [],
                 }));
             }
+            // Accusé de réception des appuis de boutons (défait la barre de
+            // progression du client Telegram) : best-effort et silencieux.
+            for m in poll.messages.iter().filter(|m| !m.callback_id.is_empty()) {
+                answer_callback(&cfg, &m.callback_id);
+            }
             Ok(serde_json::json!({
                 "status": "ok",
                 "nextOffset": poll.next_offset,
                 "messages": poll
                     .messages
                     .iter()
-                    .map(|m| serde_json::json!({ "updateId": m.update_id, "text": m.text }))
+                    .map(|m| serde_json::json!({
+                        "updateId": m.update_id,
+                        "text": m.text,
+                        "callbackData": m.callback_data,
+                        "callbackId": m.callback_id,
+                    }))
                     .collect::<Vec<_>>(),
             }))
         }
@@ -1062,6 +1136,74 @@ mod tests {
         assert!(poll.messages.is_empty(), "aucun message d'inconnu remonté");
         assert_eq!(poll.next_offset, 22, "le curseur avance sans rien remettre");
         assert_eq!(poll.inert, None);
+    }
+
+    // ── Étape 2 (lot 3) : appuis de bouton (mêmes règles d'identité) ──
+
+    #[test]
+    fn inbound_keeps_owner_callback_press() {
+        let cfg = ready();
+        let poll = collect_inbound(
+            &cfg,
+            0,
+            &serde_json::json!({
+                "ok": true,
+                "result": [{
+                    "update_id": 30,
+                    "callback_query": {
+                        "id": "cb-1",
+                        "data": "q1:0",
+                        "message": { "chat": { "id": 4242 }, "message_id": 9 },
+                    },
+                }],
+            }),
+        );
+        assert_eq!(poll.messages.len(), 1);
+        assert_eq!(poll.messages[0].callback_data, "q1:0");
+        assert_eq!(poll.messages[0].callback_id, "cb-1");
+        assert_eq!(poll.messages[0].text, "", "un appui n'est pas un texte");
+        assert_eq!(poll.next_offset, 31);
+    }
+
+    #[test]
+    fn inbound_stranger_callback_press_is_ignored() {
+        // Même filtre d'identité que pour les messages : seule la discussion du
+        // propriétaire est retenue. Un inconnu ne peut donc pas répondre.
+        let cfg = ready(); // propriétaire = 4242
+        let response = updates_json(serde_json::json!([
+            { "update_id": 40, "callback_query": {
+                "id": "cb-9", "data": "q1:0", "message": { "chat": { "id": 9999 } } } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert!(poll.messages.is_empty(), "appui d'un inconnu non remonté");
+        assert_eq!(poll.next_offset, 41, "le curseur avance sans rien remettre");
+    }
+
+    #[test]
+    fn inbound_skips_callback_with_empty_payload() {
+        let cfg = ready();
+        let response = updates_json(serde_json::json!([
+            { "update_id": 50, "callback_query": {
+                "id": "cb-2", "message": { "chat": { "id": 4242 } } } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert!(poll.messages.is_empty(), "rien à interpréter");
+        assert_eq!(poll.next_offset, 51);
+    }
+
+    #[test]
+    fn inbound_keeps_message_and_callback_in_order() {
+        let cfg = ready();
+        let response = updates_json(serde_json::json!([
+            { "update_id": 60, "message": { "chat": { "id": 4242 }, "text": "bonjour" } },
+            { "update_id": 61, "callback_query": {
+                "id": "cb-3", "data": "q1:1", "message": { "chat": { "id": 4242 } } } },
+        ]));
+        let poll = collect_inbound(&cfg, 0, &response);
+        assert_eq!(poll.messages.len(), 2);
+        assert_eq!(poll.messages[0].text, "bonjour");
+        assert_eq!(poll.messages[1].callback_data, "q1:1");
+        assert_eq!(poll.next_offset, 62);
     }
 
     // ── Curseur d'écoute : le jeton du bot a changé ──
