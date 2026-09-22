@@ -23,6 +23,62 @@
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
 
+/** Durée maximale d'attente de l'état de connexion GDS (ms). */
+export const GDS_CONNECTION_TIMEOUT_MS = 4000;
+
+/** Surface d'attente peinte AVANT toute commande : jamais d'écran vide. */
+const GDS_LOADING_HTML =
+  `<div class="gds-empty">⏳ Vérification de la connexion…</div>`;
+
+/** Message actionnable quand la vérification de connexion dépasse la borne. */
+const GDS_TIMEOUT_HTML =
+  `<div class="gds-panel">` +
+  `<div class="gds-empty">⚠️ La base GDS ne répond pas (aucune réponse en ${Math.round(GDS_CONNECTION_TIMEOUT_MS / 1000)} s).</div>` +
+  `<div class="gds-panel-desc">Vérifiez que le serveur GDS est démarré et que le port de la base est le bon, puis réessayez.</div>` +
+  `<button id="gds-retry" class="web-btn"><i data-lucide="rotate-cw" class="icon-sm"></i> Réessayer</button>` +
+  `</div>`;
+
+/**
+ * Interroge `gds_connection_status` avec une BORNE de temps : une commande qui
+ * ne se règle jamais (base injoignable, migration bloquée sur un verrou
+ * PostgreSQL) ne doit jamais laisser l'onglet sans réponse. Fail-open : un rejet
+ * ou un délai dépassé renvoie un état `error` exploitable par l'appelant.
+ * @returns {Promise<{status: string, on_server: boolean, timedOut: boolean, error?: string}>}
+ */
+export async function fetchGdsConnectionStatus(
+  invokeFn,
+  project,
+  timeoutMs = GDS_CONNECTION_TIMEOUT_MS
+) {
+  let timer = null;
+  const expired = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ __timeout: true }), timeoutMs);
+  });
+  try {
+    const conn = await Promise.race([
+      Promise.resolve(invokeFn("gds_connection_status", { project })).then((c) => c || {}),
+      expired,
+    ]);
+    if (conn.__timeout) {
+      return { status: "error", on_server: false, timedOut: true };
+    }
+    return { ...conn, timedOut: false };
+  } catch (e) {
+    console.error("[gds] gds_connection_status a échoué :", e);
+    return { status: "error", on_server: false, timedOut: false, error: String(e) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+// Rendre la panne visible : une promesse non rattrapée (commande Tauri sans
+// réponse, exception de rendu) ne doit plus être totalement silencieuse.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("unhandledrejection", (e) => {
+    console.error("[gds] erreur asynchrone non rattrapée :", (e && (e.reason || e.detail)) || e);
+  });
+}
+
 /** Chemin du projet actif (l'onglet GDS est PAR PROJET). */
 function currentProjectPath() {
   return window._pilotProjectPath || null;
@@ -716,13 +772,26 @@ export function createGds(container) {
       return;
     }
 
+    // Surface d'attente peinte IMMÉDIATEMENT : quelle que soit la panne (commande
+    // qui ne répond jamais, erreur avalée), l'utilisateur voit une surface et
+    // jamais un écran vide.
+    bodyEl.innerHTML = GDS_LOADING_HTML;
+
     // Identité globale (email + nom git) — R2.
     let identity = { email: "", git_name: "" };
     try { identity = await invoke("gds_identity_prefs") || identity; } catch (_) {}
 
-    // État de connexion (status + présence sur serveur) — R3.
-    let conn = { status: "not_configured", on_server: false };
-    try { conn = await invoke("gds_connection_status", { project }) || conn; } catch (_) {}
+    // État de connexion (status + présence sur serveur) — R3, borné dans le
+    // temps (~4 s) : au-delà, message actionnable + bouton « Réessayer ».
+    const conn = await fetchGdsConnectionStatus(invoke, project);
+    if (conn.timedOut) {
+      setStateBadge("error", false);
+      bodyEl.innerHTML = GDS_TIMEOUT_HTML;
+      const retry = bodyEl.querySelector("#gds-retry");
+      if (retry) retry.addEventListener("click", () => refresh());
+      refreshIcons(container);
+      return;
+    }
     const status = conn.status || "not_configured";
     const onServer = !!(conn.on_server);
 
@@ -734,6 +803,7 @@ export function createGds(container) {
 
     const provisioned = !!(cfg && cfg.enabled);
 
+    bodyEl.innerHTML = "";
     setStateBadge(status, onServer);
 
     if (pendingNotice) {
