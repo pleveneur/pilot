@@ -389,7 +389,39 @@ export function initialKeysState() {
     keyPath: "",
     generated: false,
     status: null,
+    // Serveur GDS cible de l'enregistrement (liste des serveurs DÉCLARÉS, section
+    // « Serveurs GDS ») : cet écran s'ouvre hors projet, le serveur est donc
+    // choisi explicitement. `target` = clé d'une entrée (`keysServerKey`).
+    servers: [],
+    target: "",
   };
+}
+
+/** Clé d'un serveur cible du sélecteur « Mes clés » (`user@host:port`). Pure. */
+export function keysServerKey(s) {
+  const sv = s || {};
+  const port = String(sv.port || "").trim() || "5432";
+  return `${String(sv.user || "").trim()}@${String(sv.host || "").trim()}:${port}`;
+}
+
+/**
+ * Cible retenue pour le sélecteur : la cible courante si elle existe encore
+ * (la liste peut arriver APRÈS le premier rendu), sinon le premier serveur,
+ * sinon "" (aucun serveur déclaré). Pure — testable.
+ */
+export function normalizeKeysTarget(target, servers) {
+  const keys = (Array.isArray(servers) ? servers : []).map(keysServerKey);
+  const t = String(target == null ? "" : target);
+  return keys.includes(t) ? t : keys[0] || "";
+}
+
+/**
+ * Explication affichée quand AUCUN serveur GDS n'est déclaré sur ce poste
+ * (pure) : réutilise le message de la correction précédente, qui décrit le
+ * chemin encore disponible (la clé part à l'activation du GDS sur un projet).
+ */
+export function keysNoServerHint() {
+  return keysRegisterErrorMessage("GDS non provisionné");
 }
 
 /**
@@ -420,6 +452,30 @@ export function keysRegisterErrorMessage(e) {
 }
 
 /**
+ * Sélecteur « Serveur GDS cible » de la section « Mes clés » (pure, testable).
+ * Alimenté par la liste des serveurs DÉCLARÉS (`gds_list_saved_servers`) : aucun
+ * mot de passe n'entre ici. Aucun serveur → explication, et le bouton garde son
+ * comportement historique (enregistrement via le pool du projet).
+ * @param {Array} servers serveurs mémorisés `{ host, port, user, name }`
+ * @param {string} target clé (`keysServerKey`) de la cible sélectionnée
+ */
+export function renderKeysTargetHtml(servers = [], target = "") {
+  const list = Array.isArray(servers) ? servers : [];
+  if (!list.length) {
+    return `<div class="gds-admin-hint">${esc(keysNoServerHint())}</div>`;
+  }
+  return `<div class="gds-admin-hint">Serveur GDS cible :
+         <select id="gds-params-key-target" class="gds-admin-select">
+           ${list
+             .map((sv) => {
+               const k = keysServerKey(sv);
+               return `<option value="${esc(k)}"${k === target ? " selected" : ""}>${esc(serverTitle(sv))} — ${esc(serverLabel(sv))}</option>`;
+             })
+             .join("")}
+         </select></div>`;
+}
+
+/**
  * Rend la section « Mes clés » (pure, testable). Remplace le squelette
  * « À venir — L5.4 ». Clé PUBLIQUE uniquement — jamais la clé privée.
  * `email` (identité globale) : passée à l'affichage par le câblage, sans être
@@ -444,6 +500,7 @@ export function renderKeysSectionHtml(state = {}) {
           <button class="gds-admin-btn" id="gds-params-key-copy"><i data-lucide="copy" class="icon-sm"></i> Copier la clé publique</button>
           <button class="gds-admin-btn primary" id="gds-params-key-register"${email ? "" : ` disabled title="Définissez d'abord votre identité"`}><i data-lucide="upload" class="icon-sm"></i> Enregistrer ma clé sur le serveur GDS</button>
         </div>
+        ${renderKeysTargetHtml(s.servers, s.target)}
         <div class="gds-admin-hint">Enregistrement sur le serveur GDS, pour l'identité <strong>${esc(email || "—")}</strong>. La clé privée ne quitte jamais le poste.</div>`;
   }
   return `
@@ -683,6 +740,13 @@ export function createGdsParams(container) {
       state.applyProject = active || (choices[0] ? choices[0].path : "");
     }
     captureIdentity();
+    // « Mes clés » : la liste des serveurs DÉCLARÉS est la source de la cible
+    // (elle arrive après le premier rendu). Cible disparue → premier serveur,
+    // ou "" (aucun serveur → chemin historique par le pool du projet).
+    keysState.servers = Array.isArray(state.servers) ? state.servers : [];
+    const keySel = q("#gds-params-key-target");
+    if (keySel) keysState.target = keySel.value;
+    keysState.target = normalizeKeysTarget(keysState.target, keysState.servers);
     container.innerHTML = renderParamsShellHtml({
       sectionHtml: {
         servers: renderServersSectionHtml({ ...state, projectChoices: choices }),
@@ -999,11 +1063,36 @@ export function createGdsParams(container) {
       draw();
       return;
     }
-    keysState.status = { kind: "loading", text: "Enregistrement de la clé sur le serveur GDS…" };
+    // Serveur DÉCLARÉ choisi → nouvelle commande (pool reconstruit depuis les
+    // identifiants mémorisés du serveur, sans projet). Aucun serveur déclaré →
+    // comportement historique, inchangé (pool du projet ouvert).
+    const target = String(keysState.target || "");
+    const sv = (keysState.servers || []).find((s) => keysServerKey(s) === target) || null;
+    const label = sv ? serverTitle(sv) : "";
+    keysState.status = {
+      kind: "loading",
+      text: sv ? `Enregistrement de la clé sur « ${label} »…` : "Enregistrement de la clé sur le serveur GDS…",
+    };
     draw();
     try {
-      await invoke("gds_register_ssh_key", { email, publicKey: keysState.publicKey });
-      keysState.status = { kind: "ok", text: "✅ Clé publique enregistrée sur le serveur GDS." };
+      if (sv) {
+        const res = await invoke("gds_register_poste_key_on_server", {
+          host: String(sv.host || "").trim(),
+          port: String(sv.port || "").trim() || "5432",
+          user: String(sv.user || "").trim(),
+          email,
+        });
+        keysState.status = {
+          kind: "ok",
+          text:
+            res && res.manual
+              ? `✅ Clé publique enregistrée sur « ${label} » (serveur distant : elle est reprise par le serveur à son prochain rafraîchissement).`
+              : `✅ Clé publique enregistrée sur « ${label} ».`,
+        };
+      } else {
+        await invoke("gds_register_ssh_key", { email, publicKey: keysState.publicKey });
+        keysState.status = { kind: "ok", text: "✅ Clé publique enregistrée sur le serveur GDS." };
+      }
     } catch (e) {
       keysState.status = { kind: "error", text: keysRegisterErrorMessage(e) };
     }

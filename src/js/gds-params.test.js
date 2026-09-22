@@ -25,6 +25,10 @@ import {
   renderKeysSectionHtml,
   keysRegisterHint,
   keysRegisterErrorMessage,
+  keysServerKey,
+  normalizeKeysTarget,
+  keysNoServerHint,
+  renderKeysTargetHtml,
   initialProjectsState,
   projectBasename,
   projectStatusBadge,
@@ -361,6 +365,9 @@ describe("gds-params — section Mes clés (L5.4)", () => {
     expect(s.keyPath).toBe("");
     expect(s.generated).toBe(false);
     expect(s.status).toBeNull();
+    // Aucun serveur cible tant que la liste des serveurs déclarés n'est pas lue.
+    expect(s.servers).toEqual([]);
+    expect(s.target).toBe("");
   });
 
   it("renderKeysSectionHtml affiche l'état de chargement", () => {
@@ -434,6 +441,54 @@ describe("gds-params — section Mes clés (L5.4)", () => {
     const shell = renderParamsShellHtml({ sectionHtml: { keys: section } });
     expect(shell).not.toContain("À venir — L5.4");
     expect(shell).toContain("À venir — L5.5");
+  });
+});
+
+describe("gds-params — Mes clés : serveur cible déclaré (clef hors projet)", () => {
+  const srv = { host: "192.0.2.10", port: "5433", user: "pilot", name: "GDS maison" };
+
+  it("keysServerKey identifie un serveur par user@host:port (port par défaut 5432)", () => {
+    expect(keysServerKey(srv)).toBe("pilot@192.0.2.10:5433");
+    expect(keysServerKey({ host: "h", user: "pilot" })).toBe("pilot@h:5432");
+    expect(keysServerKey(null)).toBe("@:5432");
+  });
+
+  it("normalizeKeysTarget garde la cible valide, sinon prend la première", () => {
+    expect(normalizeKeysTarget("pilot@192.0.2.10:5433", [srv])).toBe("pilot@192.0.2.10:5433");
+    expect(normalizeKeysTarget("pilot@disparu:5432", [srv])).toBe("pilot@192.0.2.10:5433");
+    expect(normalizeKeysTarget("", [])).toBe("");
+  });
+
+  it("renderKeysTargetHtml propose le sélecteur des serveurs déclarés", () => {
+    const html = renderKeysTargetHtml([srv, { host: "autre", user: "dev", port: "5432" }], "pilot@192.0.2.10:5433");
+    expect(html).toContain('id="gds-params-key-target"');
+    expect(html).toContain('value="pilot@192.0.2.10:5433" selected');
+    expect(html).toContain("GDS maison");
+  });
+
+  it("renderKeysTargetHtml explique l'absence de serveur déclaré (message de la correction précédente)", () => {
+    const html = renderKeysTargetHtml([], "");
+    expect(html).not.toContain("gds-params-key-target");
+    expect(html).toContain(keysNoServerHint().replace(/'/g, "&#39;"));
+    expect(html).toContain("activerez le GDS sur votre projet");
+  });
+
+  it("renderKeysSectionHtml porte le sélecteur sans altérer les identifiants DOM existants", () => {
+    const withServer = renderKeysSectionHtml({
+      loading: false,
+      publicKey: "ssh-ed25519 AAA",
+      email: "dev@exemple.com",
+      servers: [srv],
+      target: "pilot@192.0.2.10:5433",
+    });
+    expect(withServer).toContain('id="gds-params-key-target"');
+    expect(withServer).toContain('id="gds-params-key-copy"');
+    expect(withServer).toContain('id="gds-params-key-register"');
+    // Sans serveur déclaré : explication, aucun sélecteur, bouton inchangé.
+    const noServer = renderKeysSectionHtml({ loading: false, publicKey: "ssh-ed25519 AAA", email: "dev@exemple.com" });
+    expect(noServer).not.toContain("gds-params-key-target");
+    expect(noServer).toContain('id="gds-params-key-register"');
+    expect(noServer).toContain("activerez le GDS sur votre projet");
   });
 });
 

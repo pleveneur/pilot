@@ -3044,6 +3044,10 @@ pub fn run() {
             // ── GDS Phase A3 : clefs SSH serveur (spec_gds.md §4) ──
             gds_ssh::gds_ssh_key,
             gds_ssh::gds_register_ssh_key,
+            // ── GDS : clef du poste sur un serveur DÉCLARÉ, hors projet ──
+            // Écran transverse « ⚙️ GDS — paramétrage » → « Mes clés » : pool
+            // reconstruit depuis les identifiants mémorisés du serveur.
+            gds_ssh::gds_register_poste_key_on_server,
             // ── GDS Évolution 2 : retirer un projet du GDS ──
             gds::gds_remove_project,
             // ── GDS Évolution 3 : bandeau connecté fiable ──

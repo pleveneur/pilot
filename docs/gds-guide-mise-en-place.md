@@ -629,12 +629,16 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
 
 - **Dans Pilot, vous faites :** **Activer GDS** sur votre projet (**2.6**) : la clé
 de votre poste est enregistrée **automatiquement**, sans autre geste. Seul cas où
-vous cliquez ici : un **serveur distant** exige que la clé soit déposée à la main
-→ **« ⚙️ GDS — paramétrage » → Mes clés** → **Enregistrer ma clé sur le serveur
-GDS**.
+vous cliquez ici : **sans projet ouvert**, ou pour viser un **serveur distant**
+→ **« ⚙️ GDS — paramétrage » → Mes clés** → choisissez le serveur dans
+**Serveur GDS cible** → **Enregistrer ma clé sur le serveur GDS**. La clé est
+écrite **directement sur le serveur choisi**, projet ouvert ou non (il faut que le
+serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
 - **Vous voyez :** la clé arrive sur le serveur sans redémarrage — le serveur
   reprend la liste **toutes les 30 secondes**.
-- **Si ce n'est pas ça :** après 30 secondes, une commande `git ls-remote` en SSH
+- **Si ce n'est pas ça :** « Aucun compte GDS avec l'adresse … » → l'e-mail de
+  **Mon identité** n'est pas un compte **de ce serveur** (faites-le créer par
+  l'administrateur, **2.2**). Après 30 secondes, une commande `git ls-remote` en SSH
   qui demande un mot de passe ou répond `Permission denied (publickey)` → la
   clef n'est pas arrivée : activez le GDS sur le projet (**2.6**) ou refaites
   l'enregistrement, puis attendez 30 s.
@@ -1183,6 +1187,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 | plusieurs lignes sur le port `5432` (dont `postgres`) | **piège du port** : détection et correction **en tête de ce document** |
 | `Failed to parse the request body as JSON` | la commande `curl.exe` de 1.6.a est passée sans fichier — refaire avec `Set-Content` + `--data-binary` |
 | `Permission denied (publickey)` en SSH | clef du poste non transmise — le GDS activé sur le projet l'enregistre automatiquement (2.4) —, ou pas encore reprise (attendre 30 s) |
+| « Aucun compte GDS avec l'adresse … » (Mes clés) | cette adresse n'est pas un compte **du serveur choisi** : faites-la créer dans « 🖥️ GDS Serveur — administration » → Comptes (2.2) |
 | `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) |
 | le `push` initial échoue juste après l'ajout | fenêtre < 30 s : **relancer « Ajouter ce projet au GDS »** (2.6.e) |
 | `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` (2.6.c) |
