@@ -11,7 +11,8 @@
 //       mcp_list_servers      → liste des serveurs configurés
 //       mcp_save_servers      → remplace la liste des serveurs
 //       mcp_set_enabled       → active/désactive le POC MCP (flag global Pilot)
-//       mcp_test_connection   → lance le serveur stdio et vérifie la handshake
+//       mcp_test_connection   → vérifie la handshake : serveur local (stdio)
+//                               ou serveur distant (POST HTTP `initialize`)
 //
 // Format mcp.json :
 // {
@@ -32,7 +33,10 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
+
+/// Délai d'attente du test d'un serveur MCP distant (POST `initialize`).
+const REMOTE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -116,6 +120,26 @@ pub fn validate_mcp_server(server: &McpServer) -> Option<String> {
         ));
     }
     None
+}
+
+/// Message d'erreur d'un transport MCP non reconnu (ni `stdio`, ni `http`/
+/// `https`), ou `None` s'il est reconnu. Une valeur vide est traitée comme le
+/// transport local par défaut (`stdio`), cohérent avec `transport_kind()` qui
+/// range toute valeur vide parmi les serveurs locaux. Fonction pure, testable.
+pub fn unknown_transport_message(transport: &str) -> Option<String> {
+    let t = transport.trim();
+    if t.is_empty()
+        || t.eq_ignore_ascii_case("stdio")
+        || t.eq_ignore_ascii_case("http")
+        || t.eq_ignore_ascii_case("https")
+    {
+        None
+    } else {
+        Some(format!(
+            "Transport MCP inconnu : « {} » (attendu « stdio » ou « http »)",
+            t
+        ))
+    }
 }
 
 /// Config MCP racine (miroir du mcp.json).
@@ -339,23 +363,166 @@ pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
     Ok(mcp_state_json(enabled, confirm, &servers))
 }
 
-/// Teste la connexion à un serveur MCP stdio : lance la commande et vérifie la
-/// handshake MCP (`initialize` → réponse) avec un timeout. Retourne
-/// `{ ok, server, error }` où `ok` indique le succès de la handshake.
-#[tauri::command]
-pub fn mcp_test_connection(_app: AppHandle, server: McpServer) -> Result<serde_json::Value, String> {
-    let timeout = std::time::Duration::from_secs(8);
-    let label = if server.name.is_empty() {
-        server.id.clone()
-    } else {
-        server.name.clone()
-    };
+// ── Test de connexion (local stdio et distant HTTP) ──
 
+/// Résout la clé éventuelle du serveur depuis le coffre (chaîne E2). La valeur
+/// ne sort jamais d'ici : elle ne sert qu'à remplir l'en-tête d'authentification
+/// du test distant, n'est JAMAIS renvoyée à l'UI ni journalisée. `None` si le
+/// serveur n'a pas de référence, si le coffre est verrouillé ou si la référence
+/// est absente — le test continue alors sans authentification.
+fn resolve_server_secret(server: &McpServer, vault_key: Option<&[u8]>) -> Option<String> {
+    let reference = server.secret_ref.as_deref()?.trim();
+    if reference.is_empty() {
+        return None;
+    }
+    let path = crate::vault::vault_file_path().ok()?;
+    crate::vault::resolve_secret_at(&path, vault_key, vault_ref_id(reference)).ok()
+}
+
+/// Corps JSON-RPC `initialize` de la handshake de test (commun aux deux
+/// transports). Fonction pure, testable.
+pub fn initialize_body() -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "pilot-mcp-test", "version": "0.1.0" }
+        }
+    })
+}
+
+/// Construit la requête HTTP POST du test d'un serveur distant. Fonction PURE
+/// (aucune I/O) : `secret` est posé en EN-TÊTE `Authorization: Bearer`, jamais
+/// dans l'URL (une URL fuit facilement dans les traces du client HTTP).
+pub fn build_remote_test_request(
+    url: &str,
+    secret: Option<&str>,
+) -> Result<reqwest::blocking::Request, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("Adresse (url) du serveur distant vide".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(REMOTE_TEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Client HTTP indisponible : {}", e))?;
+    let mut builder = client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .json(&initialize_body());
+    if let Some(secret) = secret.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.header("authorization", format!("Bearer {}", secret));
+    }
+    builder
+        .build()
+        .map_err(|e| format!("Adresse de serveur distant invalide : {}", e))
+}
+
+/// Lit la réponse d'un serveur MCP distant : soit un objet JSON direct (corps
+/// entier, éventuellement multi-lignes), soit la première ligne `data:` d'un
+/// flux d'événements (`text/event-stream`). Fonction pure, testable.
+pub fn parse_remote_test_response(body: &str) -> Option<Value> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // 1) Objet JSON direct.
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return Some(v);
+    }
+    // 2) Flux SSE : première ligne `data:` porteuse d'un JSON.
+    for line in trimmed.lines() {
+        let Some(payload) = line.trim().strip_prefix("data:") else {
+            continue;
+        };
+        if let Ok(v) = serde_json::from_str::<Value>(payload.trim()) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Compose le résultat du test distant (`{ ok, server, protocolVersion, error }`).
+/// Toute erreur est MASQUÉE (`redact_mcp_message`) : la clé ne peut pas fuir
+/// dans un message renvoyé à l'UI. Fonction pure, testable.
+pub fn remote_test_result(
+    label: &str,
+    response: Option<&Value>,
+    detail: &str,
+    secret: Option<&str>,
+) -> Value {
+    let secret = secret.unwrap_or("");
+    match response {
+        Some(v) if v.get("result").is_some() => serde_json::json!({
+            "ok": true,
+            "server": label,
+            "protocolVersion": v["result"]["protocolVersion"].as_str().unwrap_or(""),
+            "error": ""
+        }),
+        Some(v) if v.get("error").is_some() => {
+            let err = v["error"]["message"].as_str().unwrap_or("handshake error");
+            serde_json::json!({
+                "ok": false,
+                "server": label,
+                "protocolVersion": "",
+                "error": redact_mcp_message(err, secret)
+            })
+        }
+        _ => serde_json::json!({
+            "ok": false,
+            "server": label,
+            "protocolVersion": "",
+            "error": redact_mcp_message(detail, secret)
+        }),
+    }
+}
+
+/// Test distant (bloquant — appelé depuis `spawn_blocking`) : POST `initialize`,
+/// lecture JSON directe ou première ligne `data:` d'un flux SSE.
+fn test_remote_connection(
+    server: &McpServer,
+    label: &str,
+    secret: Option<&str>,
+) -> Result<Value, String> {
+    let request = match build_remote_test_request(&server.url, secret) {
+        Ok(r) => r,
+        Err(e) => return Ok(remote_test_result(label, None, &e, secret)),
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(REMOTE_TEST_TIMEOUT)
+        .build()
+        .map_err(|e| format!("Client HTTP indisponible : {}", e))?;
+    match client.execute(request) {
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            let parsed = parse_remote_test_response(&body);
+            let detail = if status.is_success() {
+                "réponse illisible : aucun objet JSON-RPC exploitable".to_string()
+            } else {
+                format!("le serveur a répondu avec le statut HTTP {}", status.as_u16())
+            };
+            Ok(remote_test_result(label, parsed.as_ref(), &detail, secret))
+        }
+        Err(e) => {
+            // Le message peut citer l'URL mais jamais l'en-tête : masquage
+            // appliqué par `remote_test_result` en défense en profondeur.
+            let detail = format!("connexion impossible : {}", e);
+            Ok(remote_test_result(label, None, &detail, secret))
+        }
+    }
+}
+
+/// Test local stdio : lance la commande et vérifie la handshake MCP
+/// (`initialize` → réponse) avec un timeout. Déroulement inchangé depuis le POC.
+fn test_stdio_connection(server: McpServer, label: String) -> Result<Value, String> {
+    let timeout = std::time::Duration::from_secs(8);
     if server.command.trim().is_empty() {
         return Err("Commande du serveur vide".to_string());
-    }
-    if !server.transport.trim().eq_ignore_ascii_case("stdio") {
-        return Err("POC : seul le transport stdio est supporté".to_string());
     }
 
     let mut cmd = Command::new(server.command.trim());
@@ -467,6 +634,44 @@ pub fn mcp_test_connection(_app: AppHandle, server: McpServer) -> Result<serde_j
                 format!("aucune réponse handshake MCP (initialize) en 8s — serveur: {}", collected_stderr)
             };
             Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": detail }))
+        }
+    }
+}
+
+/// Teste la connexion à un serveur MCP : distant (`http`/`https`) → POST
+/// `initialize` en HTTP ; local (`stdio`) → handshake du processus. Un transport
+/// réellement inconnu est refusé avec un message clair. Retourne
+/// `{ ok, server, protocolVersion, error }` (la clé n'y apparaît jamais).
+#[tauri::command]
+pub async fn mcp_test_connection(
+    state: State<'_, crate::AppState>,
+    server: McpServer,
+) -> Result<Value, String> {
+    let label = if server.name.is_empty() {
+        server.id.clone()
+    } else {
+        server.name.clone()
+    };
+
+    match server.transport_kind() {
+        TransportKind::Http => {
+            // Clé résolue côté Rust (coffre) : jamais renvoyée à l'UI.
+            let vault_key = state.vault_key.lock().unwrap().clone();
+            let secret = resolve_server_secret(&server, vault_key.as_deref());
+            tokio::task::spawn_blocking(move || {
+                test_remote_connection(&server, &label, secret.as_deref())
+            })
+            .await
+            .map_err(|e| format!("Test de connexion interrompu : {}", e))?
+        }
+        TransportKind::Stdio => {
+            // Transport réellement inconnu (ni stdio ni http) : refus explicite.
+            if let Some(err) = unknown_transport_message(&server.transport) {
+                return Err(err);
+            }
+            tokio::task::spawn_blocking(move || test_stdio_connection(server, label))
+                .await
+                .map_err(|e| format!("Test de connexion interrompu : {}", e))?
         }
     }
 }
@@ -810,5 +1015,264 @@ mod tests {
         assert!(diag.contains("sans clé"), "diagnostic: {}", diag);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── E4 : test de connexion distant (construction de requête, lecture de
+    //    réponse JSON/SSE, échec propre sans fuite de clé) ──
+
+    #[test]
+    fn remote_test_request_targets_url_with_initialize_body() {
+        let req = build_remote_test_request("  https://exemple.invalid/mcp  ", None).unwrap();
+        assert_eq!(req.method(), reqwest::Method::POST);
+        assert_eq!(req.url().as_str(), "https://exemple.invalid/mcp");
+        assert!(req.headers().get("content-type").is_some());
+        let body = req.body().and_then(|b| b.as_bytes()).expect("corps de requête");
+        let parsed: Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        assert_eq!(parsed["id"], 1);
+        assert_eq!(parsed["method"], "initialize");
+        assert_eq!(parsed["params"]["protocolVersion"], "2024-11-05");
+        assert_eq!(parsed["params"]["clientInfo"]["name"], "pilot-mcp-test");
+        // Une adresse vide est refusée par un message en français.
+        let err = build_remote_test_request("   ", None).unwrap_err();
+        assert!(err.contains("Adresse"), "message: {}", err);
+    }
+
+    #[test]
+    fn remote_test_request_puts_the_key_in_a_header_never_in_the_url() {
+        let req =
+            build_remote_test_request("https://exemple.invalid/mcp", Some(FICTIONAL_KEY)).unwrap();
+        // La clé n'est JAMAIS dans l'adresse.
+        assert_eq!(req.url().as_str(), "https://exemple.invalid/mcp");
+        assert!(!req.url().as_str().contains(FICTIONAL_KEY));
+        // …elle est bien dans l'en-tête d'authentification.
+        let auth = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert_eq!(auth, format!("Bearer {}", FICTIONAL_KEY));
+        // Clé absente ou blanche → aucun en-tête.
+        for secret in [None, Some(""), Some("   ")] {
+            let req = build_remote_test_request("https://exemple.invalid/mcp", secret).unwrap();
+            assert!(
+                req.headers().get("authorization").is_none(),
+                "aucun en-tête d'authentification attendu pour {:?}",
+                secret
+            );
+        }
+    }
+
+    #[test]
+    fn remote_response_reads_direct_json_and_sse_data_line() {
+        // JSON direct sur une ligne.
+        let direct = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}"#;
+        assert_eq!(
+            parse_remote_test_response(direct).unwrap()["result"]["protocolVersion"],
+            "2024-11-05"
+        );
+        // JSON direct multi-lignes (corps complet).
+        let pretty = "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"result\": { \"protocolVersion\": \"2024-11-05\" }\n}";
+        assert!(parse_remote_test_response(pretty).is_some());
+        // Flux d'événements : première ligne `data:` porteuse du JSON.
+        let sse = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\"}}\n\n";
+        assert_eq!(
+            parse_remote_test_response(sse).unwrap()["result"]["protocolVersion"],
+            "2024-11-05"
+        );
+        // Corps illisible → None (l'appelant en fait un message d'échec).
+        assert!(parse_remote_test_response("ceci n'est pas du JSON").is_none());
+        assert!(parse_remote_test_response("data: pas-du-json").is_none());
+        assert!(parse_remote_test_response("").is_none());
+    }
+
+    #[test]
+    fn remote_failure_message_is_clean_and_never_leaks_the_key() {
+        // Connexion impossible : le détail CITERAIT la clé → elle est masquée.
+        let detail = format!("connexion impossible : refus avec la clé {}", FICTIONAL_KEY);
+        let res = remote_test_result("Distant", None, &detail, Some(FICTIONAL_KEY));
+        assert_eq!(res["ok"], false);
+        let err = res["error"].as_str().unwrap();
+        assert!(err.contains("connexion impossible"), "message: {}", err);
+        assert!(!err.contains(FICTIONAL_KEY), "message: {}", err);
+
+        // Réponse illisible (aucun objet JSON-RPC) → échec propre, sans clé.
+        let res = remote_test_result(
+            "Distant",
+            None,
+            "réponse illisible : aucun objet JSON-RPC exploitable",
+            Some(FICTIONAL_KEY),
+        );
+        assert_eq!(res["ok"], false);
+        assert!(!res["error"].as_str().unwrap().contains(FICTIONAL_KEY));
+
+        // Erreur JSON-RPC renvoyée par le serveur → masquée aussi.
+        let err_obj = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32000, "message": format!("clé {} refusée", FICTIONAL_KEY) }
+        });
+        let res = remote_test_result("Distant", Some(&err_obj), "", Some(FICTIONAL_KEY));
+        assert_eq!(res["ok"], false);
+        assert!(!res["error"].as_str().unwrap().contains(FICTIONAL_KEY));
+
+        // Succès : le protocole est remonté, aucune clé dans le résultat.
+        let ok_obj = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "protocolVersion": "2024-11-05" }
+        });
+        let res = remote_test_result("Distant", Some(&ok_obj), "", Some(FICTIONAL_KEY));
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["protocolVersion"], "2024-11-05");
+        assert_eq!(res["error"], "");
+        assert!(!res.to_string().contains(FICTIONAL_KEY));
+    }
+
+    #[test]
+    fn unknown_transport_is_refused_with_a_clear_message() {
+        assert!(unknown_transport_message("stdio").is_none());
+        assert!(unknown_transport_message("STDIO").is_none());
+        assert!(unknown_transport_message("http").is_none());
+        assert!(unknown_transport_message("https").is_none());
+        // Transport vide → transport local par défaut (même famille que stdio).
+        assert!(unknown_transport_message("").is_none());
+        assert!(unknown_transport_message("   ").is_none());
+        let msg = unknown_transport_message("carrier-pigeon").expect("un refus attendu");
+        assert!(msg.contains("carrier-pigeon"), "message: {}", msg);
+        assert!(msg.contains("stdio") && msg.contains("http"), "message: {}", msg);
+    }
+
+    // ── E4 : bout en bout HORS LIGNE du test distant ──
+
+    /// Sert UNE requête HTTP minimale sur `listener` et renvoie la requête brute
+    /// reçue (en-têtes + corps). `content_type` choisit JSON direct ou flux
+    /// d'événements (`data:` sur une ligne). Aucun serveur externe, aucune clé
+    /// réelle : la boucle locale suffit à vérifier l'envoi et la lecture.
+    fn serve_once(
+        listener: std::net::TcpListener,
+        content_type: &'static str,
+        json: &'static str,
+    ) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Receiver<String>) {
+        use std::io::{Read, Write};
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("connexion du client test");
+            let mut raw: Vec<u8> = Vec::new();
+            let mut buf = [0u8; 512];
+            loop {
+                let n = sock.read(&mut buf).expect("lecture de la requête");
+                if n == 0 {
+                    break;
+                }
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).into_owned();
+                if let Some(pos) = text.find("\r\n\r\n") {
+                    let len = text[..pos]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    if raw.len() >= pos + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&raw).into_owned();
+            let response = if content_type == "text/event-stream" {
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {}\r\nconnection: close\r\n\r\nevent: message\ndata: {}\n\n",
+                    content_type, json
+                )
+            } else {
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    content_type,
+                    json.len(),
+                    json
+                )
+            };
+            let _ = sock.write_all(response.as_bytes());
+            let _ = sock.flush();
+            let _ = tx.send(request);
+        });
+        (handle, rx)
+    }
+
+    #[test]
+    fn remote_test_connection_works_end_to_end_without_leaking_the_key() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("écoute locale");
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let ok_json =
+            r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}"#;
+        let server = McpServer {
+            id: "distant".to_string(),
+            name: "Distant".to_string(),
+            transport: "http".to_string(),
+            enabled: true,
+            url: format!("{}/mcp", base),
+            ..Default::default()
+        };
+
+        // 1) Réponse JSON directe, avec une clé FICTIVE → succès.
+        let (json_thread, sent) =
+            serve_once(listener.try_clone().unwrap(), "application/json", ok_json);
+        let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
+        assert_eq!(res["ok"], true, "résultat: {}", res);
+        assert_eq!(res["protocolVersion"], "2024-11-05");
+        assert!(!res.to_string().contains(FICTIONAL_KEY));
+
+        let request = sent
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("requête reçue par le serveur local");
+        let head = request.split("\r\n\r\n").next().unwrap_or_default();
+        let request_line = head.lines().next().unwrap_or_default();
+        // La clé ne fuit NI dans la ligne de requête (l'URL)…
+        assert!(!request_line.contains(FICTIONAL_KEY), "requête: {}", request_line);
+        assert!(request_line.starts_with("POST /mcp "), "requête: {}", request_line);
+        // …ni dans le corps ; elle voyage uniquement en en-tête.
+        assert!(
+            head.contains(&format!("Bearer {}", FICTIONAL_KEY)),
+            "en-tête d'authentification attendu: {}",
+            head
+        );
+        assert!(
+            !request.split("\r\n\r\n").nth(1).unwrap_or_default().contains(FICTIONAL_KEY),
+            "le corps ne doit pas contenir la clé"
+        );
+        assert!(request.contains("\"method\":\"initialize\""), "requête: {}", request);
+        json_thread.join().expect("serveur local JSON terminé");
+
+        // 2) Même test avec une réponse en FLUX D'ÉVÉNEMENTS, SANS clé → succès.
+        let (sse_thread, sent) =
+            serve_once(listener.try_clone().unwrap(), "text/event-stream", ok_json);
+        let res = test_remote_connection(&server, "Distant", None).unwrap();
+        assert_eq!(res["ok"], true, "résultat: {}", res);
+        assert_eq!(res["protocolVersion"], "2024-11-05");
+        let request = sent
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("requête reçue par le serveur local");
+        // Sans clé, aucun en-tête d'authentification n'est envoyé.
+        assert!(
+            !request.to_ascii_lowercase().contains("authorization:"),
+            "aucun en-tête d'authentification attendu: {}",
+            request
+        );
+
+        // 3) Serveur injoignable → échec propre, message masqué, aucune panique.
+        sse_thread.join().expect("serveur local SSE terminé");
+        let dead_url = format!("http://127.0.0.1:{}/mcp", listener.local_addr().unwrap().port());
+        // Le listener est fermé : la connexion échoue immédiatement.
+        drop(listener);
+        let dead = McpServer {
+            url: dead_url,
+            ..server.clone()
+        };
+        let res = test_remote_connection(&dead, "Distant", Some(FICTIONAL_KEY)).unwrap();
+        assert_eq!(res["ok"], false, "résultat: {}", res);
+        assert!(!res["error"].as_str().unwrap_or("").contains(FICTIONAL_KEY));
     }
 }
