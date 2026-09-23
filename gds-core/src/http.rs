@@ -2325,7 +2325,10 @@ mod tests {
             .find("async fn gds_project_create<S: GdsCtx>(")
             .expect("route `gds_project_create` absente");
         let body = &src[start..];
-        let end = body.find("\n}\n").unwrap_or(body.len());
+        // `}` en colonne 0 = fin de la fonction, robuste CRLF/LF : `find("\n}\n")`
+        // ne matche jamais un fichier en CRLF et ferait courir `body` jusqu'à la
+        // fin du fichier (contrôle complaisant).
+        let end = body.find("\n}").unwrap_or(body.len());
         let body = &body[..end];
         assert!(
             body.contains("gds_db::ensure_can_add_project("),
