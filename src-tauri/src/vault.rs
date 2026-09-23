@@ -16,7 +16,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::Argon2;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::AppState;
@@ -63,6 +63,13 @@ fn vault_path() -> Result<PathBuf, String> {
     let dir = PathBuf::from(home).join(".pilot");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Erreur création dossier .pilot: {}", e))?;
     Ok(dir.join("vault.json"))
+}
+
+/// Chemin du fichier de coffre de l'utilisateur (`~/.pilot/vault.json`).
+/// Exposé en lecture seule pour la chaîne du secret MCP (E2) : les appelants
+/// lisent le coffre déverrouillé, ils ne le modifient jamais.
+pub fn vault_file_path() -> Result<PathBuf, String> {
+    vault_path()
 }
 
 /// Dérive une clé AES-256 (32 octets) depuis le mot de passe maître + un sel.
@@ -115,7 +122,7 @@ fn get_key(state: &State<AppState>) -> Result<Vec<u8>, String> {
 }
 
 /// Lit et déchiffre les entrées avec une clé déjà dérivée.
-fn read_entries_with_key(path: &PathBuf, key: &[u8]) -> Result<Vec<VaultEntry>, String> {
+fn read_entries_with_key(path: &Path, key: &[u8]) -> Result<Vec<VaultEntry>, String> {
     let content =
         std::fs::read_to_string(path).map_err(|e| format!("Erreur lecture coffre: {}", e))?;
     let file: VaultFile =
@@ -134,8 +141,48 @@ fn read_entries_with_key(path: &PathBuf, key: &[u8]) -> Result<Vec<VaultEntry>, 
         .map_err(|e| format!("Erreur données: {}", e))
 }
 
+/// Résout le mot de passe d'une entrée du coffre à partir du CHEMIN du fichier
+/// et de la clé dérivée déjà en mémoire (`None` = coffre verrouillé).
+///
+/// Aucune I/O hors du chemin fourni (donc testable sans toucher au coffre réel
+/// de l'utilisateur). Les messages d'erreur ne contiennent JAMAIS la valeur du
+/// secret : coffre verrouillé, référence inconnue ou déchiffrement impossible.
+pub fn resolve_secret_at(
+    vault_file: &Path,
+    key: Option<&[u8]>,
+    reference: &str,
+) -> Result<String, String> {
+    let key = key.ok_or_else(|| "Le coffre est verrouillé".to_string())?;
+    let entries = read_entries_with_key(vault_file, key)?;
+    entries
+        .into_iter()
+        .find(|e| e.id == reference)
+        .map(|e| e.password)
+        .ok_or_else(|| format!("Référence « {} » absente du coffre", reference))
+}
+
+/// Écrit un coffre CHIFFRÉ de test (entrées fictives, mot de passe fictif) au
+/// chemin donné et retourne la clé dérivée. Réservé aux tests : l'application
+/// ne l'appelle jamais, le coffre réel de l'utilisateur n'est jamais touché.
+#[cfg(test)]
+pub fn write_test_vault(path: &Path, master_password: &str, entries: &[VaultEntry]) -> Vec<u8> {
+    let salt = [42u8; 16];
+    let key = derive_key(master_password, &salt).expect("dérivation de test");
+    let plaintext = serde_json::to_vec(entries).expect("sérialisation de test");
+    let (ct, nonce) = encrypt(&plaintext, &key).expect("chiffrement de test");
+    let file = VaultFile {
+        version: 1,
+        salt: B64.encode(salt),
+        nonce: B64.encode(nonce),
+        ciphertext: B64.encode(ct),
+    };
+    std::fs::write(path, serde_json::to_string(&file).expect("json de test"))
+        .expect("écriture de test");
+    key.to_vec()
+}
+
 /// Ré-chiffre et écrit les entrées (conserve le sel existant).
-fn write_entries(path: &PathBuf, key: &[u8], entries: &[VaultEntry]) -> Result<(), String> {
+fn write_entries(path: &Path, key: &[u8], entries: &[VaultEntry]) -> Result<(), String> {
     let key32: [u8; 32] = key
         .try_into()
         .map_err(|_| "Clé invalide (taille)".to_string())?;
@@ -381,5 +428,43 @@ mod tests {
         assert_eq!(back.id, "abc");
         assert_eq!(back.scope, "project");
         assert_eq!(back.project_path.as_deref(), Some("/proj"));
+    }
+
+    // E2 : résolution d'un secret par référence, avec un coffre FICTIF écrit
+    // dans un dossier temporaire (le coffre réel n'est jamais touché).
+    #[test]
+    fn resolve_secret_at_reads_entry_and_never_leaks_on_failure() {
+        let dir = std::env::temp_dir().join(format!("pilot_vault_e2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.json");
+        let entries = vec![VaultEntry {
+            id: "entree-fictive".into(),
+            description: "clé de test".into(),
+            login: String::new(),
+            password: "cle-fictive-987".into(),
+            scope: "global".into(),
+            project_path: None,
+            created_at: 0,
+            updated_at: 0,
+        }];
+        let key = write_test_vault(&path, "mot-de-passe-fictif", &entries);
+
+        // Référence connue → valeur résolue.
+        assert_eq!(
+            resolve_secret_at(&path, Some(&key), "entree-fictive").unwrap(),
+            "cle-fictive-987"
+        );
+
+        // Référence inconnue → erreur SANS la valeur du secret.
+        let err = resolve_secret_at(&path, Some(&key), "introuvable").unwrap_err();
+        assert!(err.contains("introuvable"));
+        assert!(!err.contains("cle-fictive-987"));
+
+        // Coffre verrouillé → erreur SANS la valeur du secret.
+        let err = resolve_secret_at(&path, None, "entree-fictive").unwrap_err();
+        assert!(err.contains("verrouillé"));
+        assert!(!err.contains("cle-fictive-987"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

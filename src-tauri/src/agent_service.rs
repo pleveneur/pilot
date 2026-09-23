@@ -1997,6 +1997,34 @@ impl AgentService {
         extensions
     }
 
+    /// Chaîne du secret (E2) : complète les variables d'environnement MCP d'une
+    /// session avec la clé du serveur de la session (`PILOT_MCP_SECRET`), lue dans
+    /// le coffre chiffré (`~/.pilot/vault.json`). Ne bloque jamais — coffre
+    /// verrouillé ou référence inconnue → session lancée sans ce serveur — et ne
+    /// journalise JAMAIS la clé : le diagnostic est masqué (`redact_token`,
+    /// réutilisé via `mcp_config`).
+    fn attach_mcp_secret_env(
+        app: &AppHandle,
+        vars: &mut Vec<(String, String)>,
+        target: Option<&str>,
+    ) {
+        let Some(dir) = app.path().app_data_dir().ok() else {
+            return;
+        };
+        let Ok(vault_file) = crate::vault::vault_file_path() else {
+            return;
+        };
+        let vault_key = app.state::<AppState>().vault_key.lock().unwrap().clone();
+        let diag = crate::mcp_config::attach_mcp_secret(
+            vars,
+            &dir.join("mcp.json"),
+            vault_key.as_deref(),
+            &vault_file,
+            target,
+        );
+        eprintln!("[mcp-secret] {}", diag);
+    }
+
     /// Lance un nouveau processus pi --mode rpc pour un agent d'assistant.
     /// Canal rpc-event-agents (comme les agents multi-rôles), extensions
     /// assistant LECTURE SEULE (comme le super-agent), SANS porte pré-écriture
@@ -2046,6 +2074,7 @@ impl AgentService {
                         vars.push(("PILOT_MCP_SERVER".to_string(), srv.trim().to_string()));
                     }
                 }
+                Self::attach_mcp_secret_env(app, &mut vars, mcp_server.as_deref());
                 vars
             })
         } else {
@@ -2198,15 +2227,18 @@ impl AgentService {
             Some(SuperAgentExtStatus { ext_supported, extensions_built: extensions.len(), probe_failed: probe.probe_failed });
         // Assistant piloté MCP (brique A) : expose le chemin du mcp.json au process
         // pi de l'assistant via PILOT_MCP_CONFIG (uniquement si l'extension MCP est
-        // bien chargée). L'extension lit cette env au démarrage.
+        // bien chargée). L'extension lit cette env au démarrage. E2 : la clé du
+        // serveur de la session (premier activé, faute de cible) est ajoutée à part.
         let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
             && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
         {
             app.path().app_data_dir().ok().map(|d| {
-                vec![(
+                let mut vars = vec![(
                     "PILOT_MCP_CONFIG".to_string(),
                     d.join("mcp.json").to_string_lossy().into_owned(),
-                )]
+                )];
+                Self::attach_mcp_secret_env(app, &mut vars, None);
+                vars
             })
         } else {
             None
@@ -2313,6 +2345,7 @@ impl AgentService {
                         vars.push(("PILOT_MCP_SERVER".to_string(), srv.trim().to_string()));
                     }
                 }
+                Self::attach_mcp_secret_env(app, &mut vars, mcp_server.as_deref());
                 vars
             })
         } else {
@@ -2449,14 +2482,17 @@ impl AgentService {
         // POC MCP : on expose le chemin du mcp.json au process pi via la variable
         // d'environnement PILOT_MCP_CONFIG (uniquement si l'extension MCP est bien
         // chargée). L'extension lit cette env au démarrage, jamais via AppConfig.
+        // E2 : la clé du serveur de la session (premier activé) est ajoutée à part.
         let mcp_env_vars: Option<Vec<(String, String)>> = if mcp_enabled
             && extensions.iter().any(|e| e.contains("pilot-mcp-client.ts"))
         {
             app.path().app_data_dir().ok().map(|d| {
-                vec![(
+                let mut vars = vec![(
                     "PILOT_MCP_CONFIG".to_string(),
                     d.join("mcp.json").to_string_lossy().into_owned(),
-                )]
+                )];
+                Self::attach_mcp_secret_env(app, &mut vars, None);
+                vars
             })
         } else {
             None

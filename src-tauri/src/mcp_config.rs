@@ -30,6 +30,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Manager};
 
@@ -162,6 +163,104 @@ fn first_enabled_stdio(cfg: &McpConfig) -> Option<&McpServer> {
         .find(|s| s.enabled && s.transport.trim().eq_ignore_ascii_case("stdio"))
 }
 
+/// Lit un `mcp.json` depuis un chemin explicite (sans `AppHandle`). Fichier
+/// absent ou illisible → config vide (fail-open). Testable isolément.
+pub fn read_mcp_config_at(path: &Path) -> McpConfig {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Sélectionne le serveur MCP que la session va utiliser : le serveur cible
+/// (`target`, posé via `PILOT_MCP_SERVER`) s'il est activé, sinon le premier
+/// serveur activé (repli). Fonction pure.
+pub fn select_session_server<'a>(
+    cfg: &'a McpConfig,
+    target: Option<&str>,
+) -> Option<&'a McpServer> {
+    let target = target.map(str::trim).filter(|t| !t.is_empty());
+    if let Some(t) = target {
+        if let Some(s) = cfg.servers.iter().find(|s| s.id == t && s.enabled) {
+            return Some(s);
+        }
+    }
+    cfg.servers.iter().find(|s| s.enabled)
+}
+
+/// Normalise une référence de coffre : accepte `"<id>"` ou `"vault:<id>"`.
+pub fn vault_ref_id(reference: &str) -> &str {
+    let r = reference.trim();
+    r.strip_prefix("vault:").map(str::trim).unwrap_or(r)
+}
+
+/// Retire toute occurrence d'une clé d'un message. Réutilise l'utilitaire
+/// existant `telegram::redact_token` (ne pas réinventer le masquage) : un
+/// message de diagnostic MCP ne doit jamais contenir le secret.
+pub fn redact_mcp_message(message: &str, secret: &str) -> String {
+    crate::telegram::redact_token(message, secret)
+}
+
+/// Chaîne du secret (E2) : complète `vars` avec `PILOT_MCP_SECRET` si le
+/// serveur de la session (cible sinon premier activé) possède une référence
+/// résoluble dans le coffre, et retourne une ligne de diagnostic DÉJÀ MASQUÉE.
+///
+/// Ne bloque jamais et ne journalise jamais la clé :
+///   - aucun serveur activé / serveur sans référence → aucune variable ;
+///   - clé résolue → `PILOT_MCP_SECRET` posée, diagnostic sans la valeur ;
+///   - coffre verrouillé ou référence inconnue → aucune variable, message clair
+///     sans secret (la session démarre quand même, sans ce serveur).
+pub fn attach_mcp_secret(
+    vars: &mut Vec<(String, String)>,
+    config_path: &Path,
+    vault_key: Option<&[u8]>,
+    vault_file: &Path,
+    target: Option<&str>,
+) -> String {
+    let cfg = read_mcp_config_at(config_path);
+    let Some(server) = select_session_server(&cfg, target) else {
+        return redact_mcp_message("MCP: aucun serveur activé — aucune clé transmise", "");
+    };
+    let label = if server.name.trim().is_empty() {
+        server.id.as_str()
+    } else {
+        server.name.trim()
+    };
+    let Some(reference) = server
+        .secret_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    else {
+        return redact_mcp_message(
+            &format!("MCP: serveur « {} » sans clé (aucune référence)", label),
+            "",
+        );
+    };
+    let id = vault_ref_id(reference);
+    match crate::vault::resolve_secret_at(vault_file, vault_key, id) {
+        Ok(secret) => {
+            vars.push(("PILOT_MCP_SECRET".to_string(), secret.clone()));
+            // Le diagnostic ne doit jamais contenir la valeur : masquage appliqué
+            // même si le message ne cite que l'identifiant de la référence.
+            redact_mcp_message(
+                &format!(
+                    "MCP: clé du serveur « {} » résolue et transmise (réf. {})",
+                    label, id
+                ),
+                &secret,
+            )
+        }
+        Err(reason) => redact_mcp_message(
+            &format!(
+                "MCP: clé du serveur « {} » indisponible ({}) — session démarrée sans ce serveur",
+                label, reason
+            ),
+            "",
+        ),
+    }
+}
+
 // ── Commandes Tauri ──
 
 /// Liste les serveurs MCP configurés.
@@ -214,13 +313,11 @@ pub fn mcp_set_agent_confirm(app: AppHandle, enabled: bool) -> Result<bool, Stri
 /// (défaut ON) et `servers` liste les serveurs configurés (avec leurs ids) pour
 /// que l'assistant choisisse un serveur cible (mcp_server) et sache s'il doit
 /// demander une confirmation avant qu'un agent l'utilise.
-#[tauri::command]
-pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<crate::AppState>();
-    let enabled = state.config.lock().unwrap().mcp_enabled;
-    let confirm = state.config.lock().unwrap().mcp_agent_confirm;
-    let servers = read_mcp_config(&app).map(|c| c.servers).unwrap_or_default();
-    Ok(serde_json::json!({
+///
+/// Ne contient JAMAIS la valeur d'une clé : seuls id, name, enabled et
+/// transport sont exposés.
+pub fn mcp_state_json(enabled: bool, confirm: bool, servers: &[McpServer]) -> Value {
+    serde_json::json!({
         "enabled": enabled,
         "confirm": confirm,
         "servers": servers.iter().map(|s| serde_json::json!({
@@ -229,7 +326,17 @@ pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
             "enabled": s.enabled,
             "transport": s.transport,
         })).collect::<Vec<_>>(),
-    }))
+    })
+}
+
+/// État MCP exposé à l'assistant (brique C) : voir `mcp_state_json`.
+#[tauri::command]
+pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<crate::AppState>();
+    let enabled = state.config.lock().unwrap().mcp_enabled;
+    let confirm = state.config.lock().unwrap().mcp_agent_confirm;
+    let servers = read_mcp_config(&app).map(|c| c.servers).unwrap_or_default();
+    Ok(mcp_state_json(enabled, confirm, &servers))
 }
 
 /// Teste la connexion à un serveur MCP stdio : lance la commande et vérifie la
@@ -541,5 +648,167 @@ mod tests {
         let parsed: Value = serde_json::from_str(&raw).unwrap();
         assert!(parsed.get("mcp_enabled").is_none());
         assert!(parsed.get("servers").is_some());
+    }
+
+    // ── E2 : chaîne du secret (sécurité) ──
+
+    /// Valeur FICTIVE d'une clé et serveur distant fictif qui la référence.
+    const FICTIONAL_KEY: &str = "cle-fictive-42-xyz";
+
+    fn fictional_remote_server() -> McpServer {
+        McpServer {
+            id: "distant".to_string(),
+            name: "Distant".to_string(),
+            transport: "http".to_string(),
+            enabled: true,
+            url: "https://exemple.invalid/mcp".to_string(),
+            secret_ref: Some("vault:entree-fictive".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn redaction_hides_a_key_in_a_diagnostic_message() {
+        let msg = format!(
+            "échec d'authentification : la clé {} a été refusée par le serveur",
+            FICTIONAL_KEY
+        );
+        let redacted = redact_mcp_message(&msg, FICTIONAL_KEY);
+        assert!(!redacted.contains(FICTIONAL_KEY), "message: {}", redacted);
+        assert!(redacted.contains("***"));
+        // Sans secret à masquer, le message est rendu inchangé.
+        assert_eq!(redact_mcp_message("rien à masquer", ""), "rien à masquer");
+    }
+
+    #[test]
+    fn listings_never_expose_the_key_value() {
+        let server = fictional_remote_server();
+        // `mcp_list_servers` renvoie la RÉFÉRENCE, jamais la valeur.
+        let listed = serde_json::to_string(&vec![server.clone()]).unwrap();
+        assert!(listed.contains("entree-fictive"), "la référence doit rester visible");
+        assert!(!listed.contains(FICTIONAL_KEY));
+        // `mcp_get_state` n'expose que id/name/enabled/transport.
+        let state = mcp_state_json(true, true, std::slice::from_ref(&server)).to_string();
+        assert!(!state.contains(FICTIONAL_KEY));
+        assert!(!state.contains("entree-fictive"));
+    }
+
+    #[test]
+    fn vault_ref_id_accepts_plain_and_prefixed_references() {
+        assert_eq!(vault_ref_id("entree"), "entree");
+        assert_eq!(vault_ref_id("vault:entree"), "entree");
+        assert_eq!(vault_ref_id("  vault:entree  "), "entree");
+    }
+
+    #[test]
+    fn session_server_target_wins_then_first_enabled() {
+        let cfg = McpConfig {
+            servers: vec![
+                McpServer {
+                    id: "off".to_string(),
+                    enabled: false,
+                    ..Default::default()
+                },
+                fictional_remote_server(),
+            ],
+        };
+        // Cible valide → elle gagne.
+        assert_eq!(select_session_server(&cfg, Some("distant")).unwrap().id, "distant");
+        // Cible absente/désactivée → repli sur le premier serveur activé.
+        assert_eq!(select_session_server(&cfg, Some("inconnu")).unwrap().id, "distant");
+        assert_eq!(select_session_server(&cfg, None).unwrap().id, "distant");
+        // Aucun serveur activé → aucun.
+        let empty = McpConfig {
+            servers: vec![McpServer {
+                id: "off".to_string(),
+                enabled: false,
+                ..Default::default()
+            }],
+        };
+        assert!(select_session_server(&empty, None).is_none());
+    }
+
+    #[test]
+    fn secret_chain_injects_only_the_key_and_stays_silent_on_failure() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_e2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault_file = dir.join("vault.json");
+        let config_file = dir.join("mcp.json");
+        let cfg = McpConfig {
+            servers: vec![fictional_remote_server()],
+        };
+        std::fs::write(&config_file, serde_json::to_string(&cfg).unwrap()).unwrap();
+
+        // Coffre DÉVERROUILLÉ contenant une entrée FICTIVE (dossier temporaire).
+        let entries = vec![crate::vault::VaultEntry {
+            id: "entree-fictive".to_string(),
+            description: "clé de test".to_string(),
+            login: String::new(),
+            password: FICTIONAL_KEY.to_string(),
+            scope: "global".to_string(),
+            project_path: None,
+            created_at: 0,
+            updated_at: 0,
+        }];
+        let key = crate::vault::write_test_vault(&vault_file, "mot-de-passe-fictif", &entries);
+
+        // 1) Clé résolue → posée en variable, JAMAIS dans le diagnostic.
+        let mut vars = vec![(
+            "PILOT_MCP_CONFIG".to_string(),
+            config_file.to_string_lossy().into_owned(),
+        )];
+        let diag = attach_mcp_secret(&mut vars, &config_file, Some(&key), &vault_file, None);
+        assert_eq!(
+            vars.iter().find(|(k, _)| k == "PILOT_MCP_SECRET").map(|(_, v)| v.as_str()),
+            Some(FICTIONAL_KEY)
+        );
+        assert!(!diag.contains(FICTIONAL_KEY), "diagnostic: {}", diag);
+
+        // 2) Référence ABSENTE du coffre → aucune clé, session quand même lancée.
+        let missing = McpServer {
+            id: "absent".to_string(),
+            name: "Absent".to_string(),
+            transport: "http".to_string(),
+            enabled: true,
+            url: "https://exemple.invalid/mcp".to_string(),
+            secret_ref: Some("vault:introuvable".to_string()),
+            ..Default::default()
+        };
+        let config_missing = dir.join("mcp-absent.json");
+        std::fs::write(
+            &config_missing,
+            serde_json::to_string(&McpConfig { servers: vec![missing] }).unwrap(),
+        )
+        .unwrap();
+        let mut vars = Vec::new();
+        let diag = attach_mcp_secret(&mut vars, &config_missing, Some(&key), &vault_file, None);
+        assert!(vars.is_empty(), "aucune clé ne doit être transmise");
+        assert!(!diag.contains(FICTIONAL_KEY));
+        assert!(diag.contains("indisponible"), "diagnostic: {}", diag);
+
+        // 3) Coffre VERROUILLÉ → idem, aucune clé, aucun blocage.
+        let mut vars = Vec::new();
+        let diag = attach_mcp_secret(&mut vars, &config_file, None, &vault_file, None);
+        assert!(vars.is_empty());
+        assert!(!diag.contains(FICTIONAL_KEY));
+        assert!(diag.contains("verrouillé"), "diagnostic: {}", diag);
+
+        // 4) Serveur sans référence → aucune clé, message neutre.
+        let plain = McpConfig {
+            servers: vec![McpServer {
+                id: "local".to_string(),
+                enabled: true,
+                command: "node".to_string(),
+                ..Default::default()
+            }],
+        };
+        let config_plain = dir.join("mcp-plain.json");
+        std::fs::write(&config_plain, serde_json::to_string(&plain).unwrap()).unwrap();
+        let mut vars = Vec::new();
+        let diag = attach_mcp_secret(&mut vars, &config_plain, None, &vault_file, None);
+        assert!(vars.is_empty());
+        assert!(diag.contains("sans clé"), "diagnostic: {}", diag);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
