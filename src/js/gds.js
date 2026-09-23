@@ -158,21 +158,31 @@ export function createGds(container) {
   // serveur GDS). Jamais de secret.
   let pendingNotice = "";
 
+  // Bascule d'édition des valeurs techniques d'un projet DÉJÀ rattaché : le
+  // formulaire d'activation est rouvert pré-rempli (sans lui, un projet mal
+  // configuré n'a plus aucun chemin de correction). Remis à false au retour ou
+  // au changement de projet.
+  let editRegistered = false;
+
   // ── Badge d'état global (Connecté / En attente / À configurer) ──
   function setStateBadge(status, onServer) {
     if (status === "connected") {
       badgeEl.textContent = "● Connecté";
       badgeEl.className = "gds-badge gds-badge-ok";
     } else if (status === "error") {
-      badgeEl.textContent = "● En attente";
+      // Même vocabulaire que le panneau (deux faits distincts) : l'inscription
+      // sur le serveur d'un côté, la liaison de ce poste de l'autre.
+      badgeEl.textContent = onServer
+        ? "● Enregistré sur le serveur — liaison à vérifier"
+        : "● Liaison à vérifier";
       badgeEl.className = "gds-badge gds-badge-warn";
     } else {
       badgeEl.textContent = "○ À configurer";
       badgeEl.className = "gds-badge gds-badge-off";
     }
     badgeEl.title = onServer
-      ? "Ce projet est déjà enregistré sur le serveur GDS."
-      : "État de la connexion GDS de ce projet.";
+      ? "Projet enregistré sur le serveur GDS — la liaison de ce poste au dépôt reste à vérifier."
+      : "La liaison de ce poste vers la base et le dépôt GDS reste à vérifier.";
   }
 
   // NB (refonte GDS, L5.3) : le bloc « Identité » a été DÉPLACÉ vers l'onglet
@@ -226,12 +236,11 @@ export function createGds(container) {
     const missingPw = provisioned && (!hasDbPw || !hasAdminPw);
 
     panel.innerHTML = `
-      <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> Connecter un serveur GDS</div>
+      <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> ${provisioned ? "Corriger la configuration du serveur GDS" : "Connecter un serveur GDS"}</div>
       <div class="gds-panel-desc">
-        Active le GDS pour ce projet : crée la base <code>pilot_gds</code> + les
-        tables + votre compte admin, et prépare le dossier de repos centralisé
-        (<code>.pilot/gds.json</code>). Les mots de passe restent hors projet.
-        L'email admin est votre <strong>identité globale</strong> (onglet « ⚙️ GDS — paramétrage » → Mon identité) — aucun champ à resaisir.
+        ${provisioned
+          ? `Ce projet est <strong>déjà activé</strong> : modifiez ici les valeurs techniques (port SSH, racine des dépôts serveur, dossier local de clonage), puis cliquez sur <strong>« Enregistrer la configuration »</strong>. « Activer GDS » reste disponible et sans risque (l'activation est répétable).`
+          : `Active le GDS pour ce projet : crée la base <code>pilot_gds</code> + les tables + votre compte admin, et prépare le dossier de repos centralisé (<code>.pilot/gds.json</code>). Les mots de passe restent hors projet. L'email admin est votre <strong>identité globale</strong> (onglet « ⚙️ GDS — paramétrage » → Mon identité) — aucun champ à resaisir.`}
       </div>
       ${!emailOk ? `<div class="gds-warn">⚠️ Définissez d'abord votre <strong>email d'identité</strong> dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité.</div>` : ""}
       <div class="gds-panel-desc" style="margin-top:8px"><strong>Réutiliser un serveur déjà mémorisé</strong> (mots de passe jamais affichés) :</div>
@@ -307,6 +316,7 @@ export function createGds(container) {
         <button id="gds-save-cfg-btn" class="web-btn"><i data-lucide="save" class="icon-sm"></i> Enregistrer la configuration</button>
         <button id="gds-activate-btn" class="web-btn"><i data-lucide="rocket" class="icon-sm"></i> Activer GDS</button>
         ${provisioned ? `<button id="gds-save-secrets-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Enregistrer les mots de passe</button>` : ""}
+        ${provisioned ? `<button id="gds-edit-back-btn" class="web-btn"><i data-lucide="arrow-left" class="icon-sm"></i> Retour</button>` : ""}
       </div>
     `;
     bodyEl.appendChild(panel);
@@ -430,6 +440,15 @@ export function createGds(container) {
     });
     serverApply.addEventListener("click", applySelectedServer);
     loadSavedServers(serverSelect);
+
+    // « Retour » (mode correction) : referme le formulaire, revient à l'écran minimal.
+    const backBtn = panel.querySelector("#gds-edit-back-btn");
+    if (backBtn) {
+      backBtn.addEventListener("click", async () => {
+        editRegistered = false;
+        await refresh();
+      });
+    }
 
     const btn = panel.querySelector("#gds-activate-btn");
     const err = panel.querySelector("#gds-provision-err");
@@ -611,6 +630,12 @@ export function createGds(container) {
         </div>
         <div class="gds-actions">
           <button id="gds-verify-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Vérifier la liaison</button>
+          <button id="gds-edit-cfg-btn" class="web-btn"><i data-lucide="wrench" class="icon-sm"></i> Corriger la configuration</button>
+        </div>
+        <div class="gds-panel-desc" style="margin-top:8px">
+          La liaison ne fonctionne pas ? Cliquez sur <strong>« Corriger la configuration »</strong>
+          pour ajuster le <strong>port SSH</strong>, la <strong>racine des dépôts du serveur</strong>
+          et le <strong>dossier local de clonage</strong>, puis enregistrez.
         </div>
       </div>
       <div class="gds-panel">${renderRemoveHtml("gds-registered-remove")}</div>
@@ -629,8 +654,17 @@ export function createGds(container) {
       pendingNotice = conn.status === "connected"
         ? "✅ Liaison vérifiée : ce poste joint la base et le dépôt de ce projet."
         : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
-          "Rien n'a été effacé sur ce poste : vérifiez le dossier des dépôts du serveur, " +
+          "Rien n'a été effacé sur ce poste : cliquez sur « Corriger la configuration » pour " +
+          "vérifier le port SSH, la racine des dépôts du serveur et le dossier de clonage, " +
           "puis réessayez (ou retirez et réajoutez le projet).";
+      await refresh();
+    });
+
+    // « Corriger la configuration » : rouvre le formulaire d'activation
+    // pré-rempli avec les valeurs actuelles (seul chemin d'édition des valeurs
+    // techniques d'un projet déjà rattaché).
+    wrap.querySelector("#gds-edit-cfg-btn").addEventListener("click", async () => {
+      editRegistered = true;
       await refresh();
     });
 
@@ -853,10 +887,16 @@ export function createGds(container) {
 
     if (status === "connected") {
       renderConnected(cfg, identity);
+    } else if (provisioned && editRegistered) {
+      // Correction des valeurs techniques d'un projet DÉJÀ rattaché : le
+      // formulaire d'activation est rouvert pré-rempli (aucun champ permanent
+      // sur l'écran normal), et « Retour » ramène à l'écran minimal.
+      renderConnect(cfg, secrets, identity, true);
     } else if (provisioned) {
       // Projet DÉJÀ rattaché à un serveur : écran minimal, sans aucun champ
       // technique (constat 1). Le formulaire complet est réservé à l'ACTIVATION
-      // d'un projet qui n'est pas encore rattaché.
+      // d'un projet qui n'est pas encore rattaché — ou au bouton « Corriger la
+      // configuration ».
       renderRegistered(cfg, onServer, await savedServerLabel(cfg));
       if (!onServer) renderAdd(identity);
     } else {
@@ -872,6 +912,7 @@ export function createGds(container) {
     const cur = currentProjectPath();
     if (cur !== lastProjectPath) {
       lastProjectPath = cur;
+      editRegistered = false;
       refresh();
     }
   }
