@@ -1876,6 +1876,41 @@ pub async fn ensure_project_publisher(
     Ok(project_id)
 }
 
+/// Message de refus **actionnable** d'un ajout/publication de projet (L3.7).
+///
+/// Dit *qui* est concerné (compte, rôle) et *quoi faire* (attribution du
+/// compte au projet par un administrateur), jamais un simple « interdit ».
+/// Fonction **pure** (aucune base) : testable sans PostgreSQL. `exists`
+/// distingue la publication d'un projet déjà enregistré de la création d'un
+/// projet neuf (où l'attribution n'existe pas encore).
+fn add_project_denied_message(
+    role: &str,
+    email: &str,
+    project: &str,
+    exists: bool,
+    is_member: bool,
+) -> String {
+    if exists {
+        format!(
+            "Publication du projet « {} » refusée : elle est réservée à l'administrateur ou à \
+             un développeur attribué à ce projet. Demandez à un administrateur d'attribuer le \
+             compte « {} » (rôle {}) à ce projet (attribution actuelle : {}), puis relancez \
+             l'opération.",
+            project,
+            email,
+            role,
+            if is_member { "oui" } else { "non" }
+        )
+    } else {
+        format!(
+            "Ajout du projet « {} » refusé : il est réservé à l'administrateur ou à un \
+             développeur. Demandez à un administrateur de modifier le rôle du compte « {} » \
+             (rôle {}), puis relancez l'opération.",
+            project, email, role
+        )
+    }
+}
+
 /// Garde d'**ajout d'un projet** GDS côté poste (refonte GDS, **L3.5**).
 ///
 /// L'ajout d'un projet au serveur et sa publication initiale sont réservés à un
@@ -1888,35 +1923,56 @@ pub async fn ensure_project_publisher(
 /// la garde laisse passer — aucun comportement existant n'est cassé, exactement
 /// comme la lecture restreinte des projets en L3.4. Un compte `standard` connu,
 /// lui, est refusé.
+///
+/// Un refus **laisse une trace** (L3.7) : même table et même canal que la
+/// publication forcée (`audit_gds`, action `project.add.denied`), avec
+/// l'identité concernée, le projet visé et le motif (rôle, attribution).
+/// `source` est la provenance journalisée (`"desktop"` côté poste,
+/// `"server"` côté serveur).
+///
+/// Le message de refus est **actionnable** (L3.7), cf.
+/// [`add_project_denied_message`].
 pub async fn ensure_can_add_project(
     pool: &PgPool,
     project_name: &str,
     email: &str,
+    source: &str,
 ) -> Result<(), String> {
     use crate::roles;
     let Some(user) = get_user_by_email(pool, email).await? else {
         return Ok(());
     };
     let existing = get_project_by_name(pool, project_name).await?;
-    let (allowed, message) = match existing {
-        Some(project_id) => {
-            let is_member = is_project_member(pool, project_id, user.id).await?;
-            (
-                roles::can_publish_project(&user.role, is_member),
-                "Publication d'un projet existant réservée à l'administrateur ou à un \
-                 développeur attribué au projet",
-            )
-        }
-        None => (
-            roles::can_add_project(&user.role),
-            "Ajout d'un projet réservé à l'administrateur ou à un développeur",
-        ),
+    let is_member = match existing {
+        Some(project_id) => is_project_member(pool, project_id, user.id).await?,
+        None => false,
+    };
+    let allowed = match existing {
+        Some(_) => roles::can_publish_project(&user.role, is_member),
+        None => roles::can_add_project(&user.role),
     };
     if allowed {
-        Ok(())
-    } else {
-        Err(message.to_string())
+        return Ok(());
     }
+    audit_gds(
+        pool,
+        source,
+        email,
+        "project.add.denied",
+        &format!(
+            "project={} role={} member={}",
+            project_name, user.role, is_member
+        ),
+        false,
+    )
+    .await?;
+    Err(add_project_denied_message(
+        &user.role,
+        email,
+        project_name,
+        existing.is_some(),
+        is_member,
+    ))
 }
 
 #[cfg(test)]
@@ -3015,41 +3071,115 @@ mod tests {
         assert_eq!(denied, 1, "le refus du dev non attribué doit être audité");
 
         // 5) Ajout d'un projet NEUF : admin et dev autorisés, standard refusé.
-        assert!(ensure_can_add_project(&pool, "neuf-admin", "admin@gds.test")
+        assert!(ensure_can_add_project(&pool, "neuf-admin", "admin@gds.test", "desktop")
             .await
             .is_ok());
-        assert!(ensure_can_add_project(&pool, "neuf-dev", "dev@gds.test")
+        assert!(ensure_can_add_project(&pool, "neuf-dev", "dev@gds.test", "desktop")
             .await
             .is_ok());
-        assert!(
-            ensure_can_add_project(&pool, "neuf-std", "std@gds.test")
-                .await
-                .is_err(),
-            "le rôle standard ne peut pas ajouter de projet"
-        );
+        let err_std = ensure_can_add_project(&pool, "neuf-std", "std@gds.test", "desktop")
+            .await
+            .expect_err("le rôle standard ne peut pas ajouter de projet");
+        assert_actionable_denial(&err_std, "neuf-std", "std@gds.test");
 
-        // 6) Projet EXISTANT : dev non attribué refusé, dev attribué/admin OK.
-        assert!(
-            ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test")
-                .await
-                .is_err(),
-            "un dev non attribué ne republie pas un projet existant"
-        );
-        assert!(ensure_can_add_project(&pool, "proj-l35", "dev@gds.test")
+        // 6) Projet EXISTANT : dev non attribué refusé (message actionnable +
+        //    trace d'audit), dev attribué/admin OK.
+        let err = ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "desktop")
+            .await
+            .expect_err("un dev non attribué ne republie pas un projet existant");
+        assert_actionable_denial(&err, "proj-l35", "dev2@gds.test");
+        // L3.7 : le refus de droits laisse une trace `project.add.denied`
+        // (identité + projet + motif), comme `tracking.force.denied`.
+        let denied: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_gds \
+             WHERE action = 'project.add.denied' AND ok = false AND subject = $1 \
+             AND detail LIKE '%project=proj-l35%'",
+        )
+        .bind("dev2@gds.test")
+        .fetch_one(&pool)
+        .await
+        .expect("lecture audit");
+        assert_eq!(denied, 1, "le refus doit être audité (project.add.denied)");
+        assert!(ensure_can_add_project(&pool, "proj-l35", "dev@gds.test", "desktop")
             .await
             .is_ok());
-        assert!(ensure_can_add_project(&pool, "proj-l35", "admin@gds.test")
+        assert!(ensure_can_add_project(&pool, "proj-l35", "admin@gds.test", "desktop")
             .await
             .is_ok());
 
         // 7) Compatibilité : un email sans compte GDS n'est pas bloqué.
         assert!(
-            ensure_can_add_project(&pool, "neuf-legacy", "pas-de-compte@gds.test")
+            ensure_can_add_project(&pool, "neuf-legacy", "pas-de-compte@gds.test", "desktop")
                 .await
                 .is_ok(),
             "installation historique : identité non rattachée à un compte"
         );
 
         pool.close().await;
+    }
+
+    /// L3.7 — un refus de droits doit être **actionnable** : qui est concerné
+    /// (projet, compte) et quoi faire (un administrateur), jamais un simple
+    /// « interdit ».
+    fn assert_actionable_denial(message: &str, project: &str, email: &str) {
+        for needle in [project, email, "administrateur"] {
+            assert!(
+                message.contains(needle),
+                "message de refus non actionnable ({} absent): {}",
+                needle,
+                message
+            );
+        }
+    }
+
+    /// L3.7 — message de refus actionnable, sans base (couvre aussi le projet
+    /// neuf et les deux motifs : attribution absente / rôle insuffisant).
+    #[test]
+    fn add_project_denied_message_is_actionable() {
+        let existing = add_project_denied_message("dev", "dev@gds.test", "Kodali", true, false);
+        assert_actionable_denial(&existing, "Kodali", "dev@gds.test");
+        assert!(
+            existing.contains("dev")
+                && existing.contains("attribu")
+                && existing.contains("attribution actuelle : non"),
+            "le geste à faire (attribution) et le motif (rôle) doivent être visibles: {}",
+            existing
+        );
+        let new_proj = add_project_denied_message("standard", "std@gds.test", "Neuf", false, false);
+        assert_actionable_denial(&new_proj, "Neuf", "std@gds.test");
+        assert!(
+            new_proj.contains("standard") && new_proj.contains("rôle"),
+            "le rôle concerné doit être visible: {}",
+            new_proj
+        );
+    }
+
+    /// L3.7 — le refus de droits doit rester **journalisé** : contrôle
+    /// structurel (exécutable sans PostgreSQL, comme en CI), complément de
+    /// l'assertion fonctionnelle sur `audit_gds` du test d'intégration.
+    #[test]
+    fn add_project_guard_is_audited() {
+        let src = include_str!("db.rs");
+        let start = src
+            .find("pub async fn ensure_can_add_project")
+            .expect("garde `ensure_can_add_project` absente");
+        let body = &src[start..];
+        let end = body.find("\n}\n").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            body.contains("audit_gds("),
+            "le refus de droits n'est plus journalisé (aucun appel audit_gds)"
+        );
+        assert!(
+            body.contains("\"project.add.denied\""),
+            "le refus de droits doit journaliser l'action `project.add.denied`"
+        );
+        for needle in ["project=", "role=", "member="] {
+            assert!(
+                body.contains(needle),
+                "le détail d'audit doit porter le motif ({} absent)",
+                needle
+            );
+        }
     }
 }

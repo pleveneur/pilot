@@ -1278,7 +1278,7 @@ async fn add_project_with(
     // l'identité dans le jeton (aucun e-mail déclaratif) et applique la même
     // règle (`write_allowed`) — le poste ne la réimplémente pas.
     if let ServerSide::Legacy(pool) = &side {
-        gds_db::ensure_can_add_project(pool, &name, email).await?;
+        gds_db::ensure_can_add_project(pool, &name, email, "desktop").await?;
     }
     // Phase A3 : s'assurer que la clef du poste est enregistrée pour que le
     // remote `ssh://git@<host>:<port>/<projet>.git` soit utilisable.
