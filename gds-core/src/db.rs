@@ -3107,6 +3107,27 @@ mod tests {
             .await
             .is_ok());
 
+        // 6 bis) VOIE SERVICE (`source = "server"`) : la route
+        //    `POST /api/gds/projects/create` appelle CETTE garde — mêmes
+        //    verdicts que la voie héritée (cohérence des deux voies) : le dev
+        //    non attribué est REFUSÉ, le dev attribué et l'admin PASSENT.
+        let err_service = ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "server")
+            .await
+            .expect_err("service : un dev non attribué ne republie pas un projet existant");
+        assert_actionable_denial(&err_service, "proj-l35", "dev2@gds.test");
+        assert!(
+            ensure_can_add_project(&pool, "proj-l35", "dev@gds.test", "server")
+                .await
+                .is_ok(),
+            "service : un dev attribué publie toujours"
+        );
+        assert!(
+            ensure_can_add_project(&pool, "proj-l35", "admin@gds.test", "server")
+                .await
+                .is_ok(),
+            "service : un administrateur publie toujours"
+        );
+
         // 7) Compatibilité : un email sans compte GDS n'est pas bloqué.
         assert!(
             ensure_can_add_project(&pool, "neuf-legacy", "pas-de-compte@gds.test", "desktop")
@@ -3181,5 +3202,34 @@ mod tests {
                 needle
             );
         }
+    }
+
+    /// Correctif « garde symétrique » — la garde d'ajout/publication doit
+    /// appliquer la règle de **publication** (`can_publish_project` :
+    /// administrateur, ou développeur **attribué**) dès que le projet existe
+    /// déjà, et non un droit d'écriture générique ; un projet **neuf** garde la
+    /// règle d'ajout (`can_add_project`). Contrôle structurel exécutable sans
+    /// PostgreSQL — donc présent en CI, là où le test fonctionnel
+    /// `publication_guards_apply_role_matrix` est sauté sans
+    /// `PILOT_GDS_TEST_URL`.
+    #[test]
+    fn add_project_guard_uses_the_publish_rule_for_existing_projects() {
+        let src = include_str!("db.rs");
+        let start = src
+            .find("pub async fn ensure_can_add_project")
+            .expect("garde `ensure_can_add_project` absente");
+        let body = &src[start..];
+        let end = body.find("\n}\n").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            body.contains("roles::can_publish_project("),
+            "un projet EXISTANT doit passer par la règle de publication \
+             (administrateur ou développeur attribué) : sans elle, un \
+             développeur non attribué republie un projet existant"
+        );
+        assert!(
+            body.contains("roles::can_add_project("),
+            "un projet NEUF doit garder la règle d'ajout (administrateur ou développeur)"
+        );
     }
 }

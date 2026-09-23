@@ -2058,6 +2058,13 @@ struct ProjectCreateBody {
 /// * Garde de rôle : `write_allowed` (aucun mécanisme d'autorisation nouveau) —
 ///   le rôle `standard` est refusé en 403 (« ajouter un projet » est une
 ///   écriture ; la session historique du poste, rôle vide, garde ses droits).
+/// * Garde de **publication** (correctif « garde symétrique ») : pour un projet
+///   **déjà enregistré**, l'appel passe par `gds_db::ensure_can_add_project`
+///   (`source = "server"`) — exactement la règle de la voie héritée du poste
+///   (`roles::can_publish_project` : administrateur, ou développeur attribué au
+///   projet). Sans cet appel, un `dev` **non attribué** republiait un projet
+///   existant par le service alors que le poste le refuse. Un projet neuf suit
+///   la règle d'ajout (`can_add_project`), comme sur le poste.
 /// * Identité : le rattachement d'office de l'auteur administrateur
 ///   (`git::register_project` → `enroll_admin_creator`) utilise l'email du
 ///   **compte porté par le jeton**, relu en base depuis `user_id`.
@@ -2104,6 +2111,13 @@ async fn gds_project_create<S: GdsCtx>(
             Err(e) => return err_response(e),
         }
     };
+    // Garde de publication : MÊME exigence que la voie héritée du poste
+    // (`src-tauri`), sur le projet **existant** comme sur le projet neuf.
+    // Identité : le compte porté par le jeton (email relu ci-dessus), jamais un
+    // email déclaratif. Refus AVANT toute action (dépôt bare, base).
+    if let Err(e) = gds_db::ensure_can_add_project(&pool, &name, &email, "server").await {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": e }))).into_response();
+    }
     match crate::git::create_project_in_root(
         &pool,
         &root.to_string_lossy(),
@@ -2294,6 +2308,35 @@ mod tests {
             .route("/api/gds/projects", post(|| async { "ok" }))
             .route("/api/gds/sync", post(|| async { "ok" }));
         let _merged = shared.merge(desktop_side);
+    }
+
+    /// Correctif « garde symétrique » (L3.5) — la route service
+    /// `POST /api/gds/projects/create` doit appliquer la **même** garde de
+    /// publication que la voie héritée du poste (`ensure_can_add_project`) :
+    /// sans elle, un `dev` **non attribué** publie un projet **existant** par
+    /// le service alors que le poste le refuse (asymétrie de droits).
+    /// Contrôle structurel exécutable sans PostgreSQL (donc présent en CI),
+    /// complété par le test fonctionnel `publication_guards_apply_role_matrix`
+    /// (`db.rs`) qui porte les verdicts de la règle, source `"server"` incluse.
+    #[test]
+    fn service_project_create_applies_the_publish_guard() {
+        let src = include_str!("http.rs");
+        let start = src
+            .find("async fn gds_project_create<S: GdsCtx>(")
+            .expect("route `gds_project_create` absente");
+        let body = &src[start..];
+        let end = body.find("\n}\n").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            body.contains("gds_db::ensure_can_add_project("),
+            "la route service ne passe plus par la garde de publication \
+             (`gds_db::ensure_can_add_project`) : un développeur NON attribué \
+             peut republier un projet existant par le service"
+        );
+        assert!(
+            body.contains("\"server\""),
+            "la garde doit journaliser la provenance `server`"
+        );
     }
 
     // ── L4.5 : journal d'audit — parsing des paramètres ──
