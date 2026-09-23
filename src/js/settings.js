@@ -10,7 +10,7 @@ import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
-import { MCP_TRANSPORT, parseArgs, formatArgs, validateServer, newServerId, testResult } from "./mcp-utils.js";
+import { MCP_TRANSPORT_STDIO, formatArgs, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
 
 let currentConfig = null;
@@ -452,8 +452,13 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   const btnMcpReload = document.getElementById("btn-mcp-reload");
   const mcpEditor = document.getElementById("mcp-editor");
   const mcpFName = document.getElementById("mcp-f-name");
+  const mcpFTransport = document.getElementById("mcp-f-transport");
+  const mcpFLocalFields = document.getElementById("mcp-fields-local");
+  const mcpFRemoteFields = document.getElementById("mcp-fields-remote");
   const mcpFCommand = document.getElementById("mcp-f-command");
   const mcpFArgs = document.getElementById("mcp-f-args");
+  const mcpFUrl = document.getElementById("mcp-f-url");
+  const mcpFSecretRef = document.getElementById("mcp-f-secret-ref");
   const mcpFEnabled = document.getElementById("mcp-f-enabled");
   const mcpFStatus = document.getElementById("mcp-f-status");
   const btnMcpSave = document.getElementById("btn-mcp-save");
@@ -482,6 +487,14 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     renderMcpServers();
   }
 
+  // Affiche les champs utiles au type choisi : local → commande/arguments ;
+  // distant → adresse/référence de clé. Le type est le seul aiguillage.
+  function applyMcpTransportVisibility() {
+    const remote = !!(mcpFTransport && mcpFTransport.value === "http");
+    if (mcpFLocalFields) mcpFLocalFields.style.display = remote ? "none" : "";
+    if (mcpFRemoteFields) mcpFRemoteFields.style.display = remote ? "" : "none";
+  }
+
   function renderMcpServers() {
     if (!mcpServersList) return;
     mcpServersList.innerHTML = "";
@@ -502,7 +515,14 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       title.textContent = s.name || s.id || "(sans nom)";
       const meta = document.createElement("div");
       meta.className = "mcp-server-meta";
-      meta.textContent = (s.transport || "stdio") + " · " + ((s.command || "") + " " + formatArgs(s.args || [])).trim() || "—";
+      // Serveur distant : « distant » + adresse ; pour un serveur local : « stdio »
+      // + commande. La référence de coffre peut être affichée, JAMAIS la clé.
+      const remote = isRemoteTransport(s.transport);
+      if (remote) {
+        meta.textContent = "distant · " + (s.url || "—") + (s.secret_ref ? " · clé : " + s.secret_ref : "");
+      } else {
+        meta.textContent = ((s.transport || "stdio") + " · " + ((s.command || "") + " " + formatArgs(s.args || [])).trim()) || "—";
+      }
       info.appendChild(title);
       info.appendChild(meta);
       const actions = document.createElement("div");
@@ -528,10 +548,14 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
 
   function openMcpEditor(s) {
     mcpEditingId = s ? s.id : null;
+    if (mcpFTransport) mcpFTransport.value = (s && isRemoteTransport(s.transport)) ? "http" : MCP_TRANSPORT_STDIO;
     mcpFName.value = s ? (s.name || "") : "";
     mcpFCommand.value = s ? (s.command || "") : "";
     mcpFArgs.value = s ? formatArgs(s.args || []) : "";
+    if (mcpFUrl) mcpFUrl.value = s ? (s.url || "") : "";
+    if (mcpFSecretRef) mcpFSecretRef.value = s ? (s.secret_ref || "") : "";
     mcpFEnabled.checked = s ? !!s.enabled : true;
+    applyMcpTransportVisibility();
     mcpFStatus.textContent = "";
     mcpFStatus.style.color = "var(--text-muted)";
     if (mcpEditor) {
@@ -541,20 +565,20 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   }
 
   async function saveMcpServer() {
-    const name = mcpFName.value.trim();
-    const command = mcpFCommand.value.trim();
-    const err = validateServer({ name, command });
-    if (err) { mcpFStatus.textContent = "⚠ " + err; mcpFStatus.style.color = "var(--danger,#f87171)"; return; }
-    const prev = mcpEditingId ? mcpServers.find((x) => x.id === mcpEditingId) : null;
-    const id = mcpEditingId || (prev ? prev.id : newServerId(mcpServers));
-    const server = {
-      id,
-      name,
-      transport: MCP_TRANSPORT,
+    const transport = mcpFTransport ? mcpFTransport.value : MCP_TRANSPORT_STDIO;
+    const form = {
+      name: mcpFName.value,
+      transport,
+      command: mcpFCommand.value,
+      argsText: mcpFArgs.value,
+      url: mcpFUrl ? mcpFUrl.value : "",
+      secretRef: mcpFSecretRef ? mcpFSecretRef.value : "",
       enabled: mcpFEnabled.checked,
-      command,
-      args: parseArgs(mcpFArgs.value),
     };
+    const err = validateServer(form);
+    if (err) { mcpFStatus.textContent = "⚠ " + err; mcpFStatus.style.color = "var(--danger,#f87171)"; return; }
+    const id = mcpEditingId || newServerId(mcpServers);
+    const server = buildServer(id, form);
     mcpFStatus.textContent = "Enregistrement…";
     mcpFStatus.style.color = "var(--text-muted)";
     try {
@@ -613,6 +637,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (mcpEditor) mcpEditor.style.display = "none";
   });
   btnMcpSave?.addEventListener("click", saveMcpServer);
+  mcpFTransport?.addEventListener("change", applyMcpTransportVisibility);
   // Toggle global → persisté immédiatement (flag consommateur Pilot, distinct de
   // la liste des serveurs). Revert visuel si le backend échoue.
   chkMcpEnabled?.addEventListener("change", async () => {

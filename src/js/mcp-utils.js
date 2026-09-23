@@ -4,8 +4,24 @@
 // settings.js pour l'onglet « Serveurs MCP ». Elles sont isolées ici pour être
 // testées sans mock (vitest).
 
-/** Transport MCP supporté par le POC (unique — pas de http/sse). */
-export const MCP_TRANSPORT = "stdio";
+/** Transports MCP supportés : local (commande) et distant (adresse réseau). */
+export const MCP_TRANSPORT_STDIO = "stdio";
+export const MCP_TRANSPORT_HTTP = "http";
+
+/** Transport par défaut d'un nouveau serveur : local (stdio), comme avant. */
+export const MCP_TRANSPORT = MCP_TRANSPORT_STDIO;
+
+/**
+ * Vrai si le transport désigne un serveur distant (`http`/`https`). Toute
+ * autre valeur (y compris vide ou inconnue) est traitée comme locale, comme
+ * coté Rust (`McpServer::transport_kind`). Fonction pure.
+ * @param {string} transport
+ * @returns {boolean}
+ */
+export function isRemoteTransport(transport) {
+  const t = String(transport || "").trim().toLowerCase();
+  return t === MCP_TRANSPORT_HTTP || t === "https";
+}
 
 /**
  * Découpe une chaîne d'arguments en tableau, en préservant les groupes entre
@@ -44,14 +60,19 @@ export function formatArgs(args) {
 }
 
 /**
- * Valide un serveur MCP avant sauvegarde. Retourne une chaîne d'erreur, ou
+ * Valide un serveur MCP avant sauvegarde, PAR TYPE : un serveur distant exige
+ * une adresse, un serveur local une commande. Retourne une chaîne d'erreur, ou
  * null si le serveur est valide.
- * @param {{name?: string, command?: string}} server
+ * @param {{name?: string, transport?: string, command?: string, url?: string}} server
  * @returns {string|null}
  */
 export function validateServer(server) {
   const s = server || {};
   if (!String(s.name || "").trim()) return "Le nom du serveur est requis.";
+  if (isRemoteTransport(s.transport)) {
+    if (!String(s.url || "").trim()) return "L'adresse du serveur distant est requise.";
+    return null;
+  }
   if (!String(s.command || "").trim()) return "La commande du serveur est requise.";
   return null;
 }
@@ -82,20 +103,31 @@ export function testResult(payload) {
 }
 
 /**
- * Construit l'objet serveur MCP (format {id,name,transport,enabled,command,args})
- * à partir du formulaire. Le transport est toujours "stdio" (POC).
+ * Construit l'objet serveur MCP (format
+ * {id,name,transport,enabled,command,args,url,secret_ref}) à partir du
+ * formulaire. Le transport est `stdio` (local) par défaut : un formulaire sans
+ * type reste donc rétrocompatible avec la configuration existante.
+ * La référence de clé (`secret_ref`) n'est jamais la clé elle-même, seulement
+ * l'entrée du coffre ; elle n'est conservée que pour un serveur distant.
  * @param {string} id
- * @param {{name: string, command: string, argsText: string, enabled: boolean}[]|any} form
- * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[]}}
+ * @param {{name?: string, transport?: string, command?: string, argsText?: string, url?: string, secretRef?: string, enabled?: boolean}|any} form
+ * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[],url:string,secret_ref:string|null}}
  */
 export function buildServer(id, form) {
+  const f = form || {};
+  const transport = String(f.transport || MCP_TRANSPORT).trim().toLowerCase() || MCP_TRANSPORT;
+  const remote = isRemoteTransport(transport);
   return {
     id,
-    name: String((form && form.name) || "").trim(),
-    transport: MCP_TRANSPORT,
+    name: String(f.name || "").trim(),
+    transport,
     // Le serveur est activé par défaut sauf désactivation explicite.
-    enabled: (form && form.enabled === undefined) ? true : !!(form && form.enabled),
-    command: String((form && form.command) || "").trim(),
-    args: parseArgs((form && form.argsText) || ""),
+    enabled: f.enabled === undefined ? true : !!f.enabled,
+    // Serveur local : commande + arguments ; serveur distant : vides.
+    command: remote ? "" : String(f.command || "").trim(),
+    args: remote ? [] : parseArgs(f.argsText || ""),
+    // Serveur distant : adresse + référence de coffre (jamais la clé).
+    url: remote ? String(f.url || "").trim() : "",
+    secret_ref: remote ? String(f.secretRef || "").trim() || null : null,
   };
 }

@@ -2,6 +2,9 @@
 import { describe, it, expect } from "vitest";
 import {
   MCP_TRANSPORT,
+  MCP_TRANSPORT_STDIO,
+  MCP_TRANSPORT_HTTP,
+  isRemoteTransport,
   parseArgs,
   formatArgs,
   validateServer,
@@ -10,9 +13,20 @@ import {
   buildServer,
 } from "./mcp-utils.js";
 
-describe("MCP_TRANSPORT", () => {
-  it("transport fixé à stdio (POC — pas de http/sse)", () => {
+describe("transports MCP", () => {
+  it("le transport par défaut reste le local (stdio)", () => {
     expect(MCP_TRANSPORT).toBe("stdio");
+    expect(MCP_TRANSPORT_STDIO).toBe("stdio");
+    expect(MCP_TRANSPORT_HTTP).toBe("http");
+  });
+
+  it("isRemoteTransport distingue distant et local (valeur inconnue → local)", () => {
+    expect(isRemoteTransport("http")).toBe(true);
+    expect(isRemoteTransport("https")).toBe(true);
+    expect(isRemoteTransport(" HTTP ")).toBe(true);
+    expect(isRemoteTransport("stdio")).toBe(false);
+    expect(isRemoteTransport("")).toBe(false);
+    expect(isRemoteTransport(undefined)).toBe(false);
   });
 });
 
@@ -80,6 +94,17 @@ describe("validateServer", () => {
     expect(validateServer({ name: "Test", command: "node", args: [] })).toBeNull();
   });
 
+  it("exige une adresse pour un serveur distant", () => {
+    expect(validateServer({ name: "srv", transport: "http", url: "" })).toMatch(/adresse/i);
+    expect(validateServer({ name: "srv", transport: "https", url: "  " })).toMatch(/adresse/i);
+    expect(validateServer({ name: "srv", transport: "http", url: "https://exemple.invalid/mcp" })).toBeNull();
+  });
+
+  it("n'exige pas de commande pour un serveur distant (et l'inverse)", () => {
+    expect(validateServer({ name: "srv", transport: "http", url: "https://exemple.invalid/mcp", command: "" })).toBeNull();
+    expect(validateServer({ name: "srv", transport: "stdio", command: "" })).toMatch(/commande/i);
+  });
+
   it("retourne null sur objet absent (serveur vide → erreur name)", () => {
     expect(validateServer(null)).toBeTruthy();
   });
@@ -114,7 +139,7 @@ describe("testResult", () => {
 });
 
 describe("buildServer", () => {
-  it("construit un serveur stdio avec transport fixé", () => {
+  it("construit un serveur local (stdio) avec transport local par défaut", () => {
     const s = buildServer("mcp-1", { name: "Test", command: "node", argsText: "a b", enabled: true });
     expect(s).toEqual({
       id: "mcp-1",
@@ -123,16 +148,46 @@ describe("buildServer", () => {
       enabled: true,
       command: "node",
       args: ["a", "b"],
+      url: "",
+      secret_ref: null,
     });
   });
 
+  it("construit un serveur distant : type, adresse et référence de clé, jamais de commande", () => {
+    const s = buildServer("mcp-2", {
+      name: "Distant",
+      transport: "http",
+      url: " https://exemple.invalid/mcp ",
+      secretRef: " vault:mon-entree ",
+      command: "node",
+      argsText: "--x",
+    });
+    expect(s).toEqual({
+      id: "mcp-2",
+      name: "Distant",
+      transport: "http",
+      enabled: true,
+      command: "",
+      args: [],
+      url: "https://exemple.invalid/mcp",
+      secret_ref: "vault:mon-entree",
+    });
+  });
+
+  it("ne conserve la référence de clé que pour un serveur distant", () => {
+    const local = buildServer("mcp-3", { name: "L", transport: "stdio", command: "node", secretRef: "vault:x" });
+    expect(local.secret_ref).toBeNull();
+    const remoteSansCle = buildServer("mcp-4", { name: "R", transport: "http", url: "https://exemple.invalid/mcp", secretRef: "  " });
+    expect(remoteSansCle.secret_ref).toBeNull();
+  });
+
   it("active par défaut quand le flag est absent", () => {
-    const s = buildServer("mcp-2", { name: "X", command: "x" });
+    const s = buildServer("mcp-5", { name: "X", command: "x" });
     expect(s.enabled).toBe(true);
   });
 
   it("tronque les champs au contenu non vide", () => {
-    const s = buildServer("mcp-3", { name: "  N  ", command: "  c  ", argsText: " " });
+    const s = buildServer("mcp-6", { name: "  N  ", command: "  c  ", argsText: " " });
     expect(s.name).toBe("N");
     expect(s.command).toBe("c");
     expect(s.args).toEqual([]);

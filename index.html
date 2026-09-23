@@ -939,7 +939,7 @@
           <div class="settings-panel" data-settings-panel="mcp" role="tabpanel">
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="plug" class="icon-sm"></i> Serveurs MCP (Pilot consommateur)</h3>
-            <p class="muted">L'agent peut se connecter à des serveurs MCP externes via une extension embarquée (transport <code>stdio</code> uniquement — pas de http/sse). Les outils sont exposés sous le préfixe <code>mcp_&lt;serveur&gt;_&lt;outil&gt;</code>.</p>
+            <p class="muted">L'agent peut se connecter à des serveurs MCP externes via une extension embarquée : serveur <strong>local</strong> (<code>stdio</code>, un programme de cet ordinateur) ou <strong>distant</strong> (<code>http</code>/<code>https</code>, une adresse réseau et une clé). Les outils sont exposés sous le préfixe <code>mcp_&lt;serveur&gt;_&lt;outil&gt;</code>.</p>
             <div class="setting-row setting-row-checkbox">
               <input type="checkbox" id="setting-mcp-enabled" />
               <label for="setting-mcp-enabled" title="Active globalement la connexion au premier serveur MCP activé de la liste (au prochain démarrage de la session agent).">Activer le client MCP (connexion aux serveurs ci-dessous)</label>
@@ -950,7 +950,7 @@
             </div>
             <hr class="settings-sep" />
             <div class="setting-row">
-              <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). Le serveur actif au démarrage d'une session agent est le premier serveur « stdio » activé de la liste.</small>
+              <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). Le serveur connecté au démarrage d'une session agent est le premier serveur activé de la liste (local ou distant).</small>
             </div>
             <div class="providers-toolbar">
               <button type="button" id="btn-mcp-add" class="pc-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter un serveur</button>
@@ -965,16 +965,34 @@
                 <input type="text" id="mcp-f-name" placeholder="Mon serveur"/>
               </div>
               <div class="field-row">
-                <label for="mcp-f-command" title="Exécutable à lancer (ex: node, python).">Commande :</label>
-                <input type="text" id="mcp-f-command" placeholder="node"/>
+                <label for="mcp-f-transport" title="Type de serveur : local (un programme installé sur cet ordinateur) ou distant (un service joignable par le réseau).">Type :</label>
+                <select id="mcp-f-transport">
+                  <option value="stdio">Local (commande)</option>
+                  <option value="http">Distant (adresse)</option>
+                </select>
               </div>
-              <div class="field-row">
-                <label for="mcp-f-args" title="Arguments séparés par des espaces. Les arguments contenant des espaces doivent être entre guillemets.">Arguments :</label>
-                <input type="text" id="mcp-f-args" placeholder="scripts/mcp-test-server.js"/>
+              <div id="mcp-fields-local">
+                <div class="field-row">
+                  <label for="mcp-f-command" title="Exécutable à lancer (ex: node, python).">Commande :</label>
+                  <input type="text" id="mcp-f-command" placeholder="node"/>
+                </div>
+                <div class="field-row">
+                  <label for="mcp-f-args" title="Arguments séparés par des espaces. Les arguments contenant des espaces doivent être entre guillemets.">Arguments :</label>
+                  <input type="text" id="mcp-f-args" placeholder="scripts/mcp-test-server.js"/>
+                </div>
               </div>
-              <div class="field-row">
-                <label>Transport :</label>
-                <span class="muted">stdio (unique transport supporté par le POC)</span>
+              <div id="mcp-fields-remote" style="display:none;">
+                <div class="field-row">
+                  <label for="mcp-f-url" title="Adresse du serveur distant (ex: https://exemple.invalid/mcp).">Adresse :</label>
+                  <input type="text" id="mcp-f-url" placeholder="https://exemple.invalid/mcp"/>
+                </div>
+                <div class="field-row">
+                  <label for="mcp-f-secret-ref" title="Référence d'une entrée du coffre fort (onglet 🔐), jamais la clé elle-même. Ex: vault:mon-entree">Clé (référence de coffre) :</label>
+                  <input type="text" id="mcp-f-secret-ref" placeholder="vault:mon-entree"/>
+                </div>
+                <div class="field-row">
+                  <small class="muted">Seule la <strong>référence</strong> de l'entrée du coffre est enregistrée ; la valeur de la clé n'est <strong>jamais affichée</strong>. Le coffre doit être déverrouillé au lancement de l'agent pour qu'elle soit lue.</small>
+                </div>
               </div>
               <div class="field-row">
                 <label for="mcp-f-enabled">Activé :</label>
