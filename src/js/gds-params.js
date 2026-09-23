@@ -600,7 +600,11 @@ export function initialProjectsState() {
  */
 export function projectStatusBadge(status, provisioned, onServer) {
   if (status === "connected") return { kind: "ok", text: "Connecté" };
-  if (onServer) return { kind: "warn", text: "Sur le serveur — non connecté" };
+  // Deux faits DISTINCTS, jamais opposés : « enregistré sur le serveur » (ce
+  // projet est inscrit côté serveur) et « liaison de ce poste à vérifier »
+  // (accès base + dépôt pas encore utilisables). L'ancien « Sur le serveur —
+  // non connecté » se lisait comme « pas enregistré » : contradiction.
+  if (onServer) return { kind: "warn", text: "Enregistré sur le serveur — liaison à vérifier" };
   if (status === "error") return { kind: "warn", text: "Connexion en attente" };
   if (provisioned) return { kind: "warn", text: "Provisionné — non ajouté" };
   return { kind: "off", text: "Non configuré" };

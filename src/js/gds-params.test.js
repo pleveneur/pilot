@@ -568,7 +568,13 @@ describe("gds-params — section Mes projets GDS (L5.5)", () => {
 
   it("projectStatusBadge distingue connecté / sur le serveur / provisionné / non configuré", () => {
     expect(projectStatusBadge("connected", true, true)).toEqual({ kind: "ok", text: "Connecté" });
-    expect(projectStatusBadge("error", true, true).kind).toBe("warn");
+    // Enregistré sur le serveur SANS liaison utilisable : les deux faits sont
+    // séparés — plus de « non connecté » qui se lit comme « pas enregistré ».
+    const onServer = projectStatusBadge("error", true, true);
+    expect(onServer.kind).toBe("warn");
+    expect(onServer.text).toContain("Enregistré sur le serveur");
+    expect(onServer.text).toContain("liaison à vérifier");
+    expect(onServer.text).not.toContain("non connecté");
     expect(projectStatusBadge("not_configured", false, false)).toEqual({ kind: "off", text: "Non configuré" });
     expect(projectStatusBadge("not_configured", true, false).text).toMatch(/Provisionné/);
   });

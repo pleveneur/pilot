@@ -1304,12 +1304,19 @@ class Sidebar {
         item.className = "open-project-item" + (isActive ? " active" : "");
         item.title = p;
         // Indicateur de connexion GDS (Évolution 3) : affiché après le nom selon
-        // l'état honnête rendu par gds_connection_status — « - (GDS ✓) » si
-        // connecté, « - (GDS ✕) » si erreur, rien si non configuré. Fail-open.
+        // l'état honnête rendu par gds_connection_status. Deux libellés
+        // EXPLICITES, jamais un signe muet : « - (GDS — liaison établie) » quand
+        // tout est vert, « - (GDS — liaison à vérifier) » sinon (le projet peut
+        // très bien être enregistré sur le serveur sans que la liaison de ce
+        // poste au dépôt soit utilisable). Rien si le projet n'est pas branché
+        // sur un GDS. Fail-open.
         const gdsState = await isProjectGds(p);
         let gdsSuffix = "";
-        if (gdsState === "connected") gdsSuffix = " - (GDS ✓)";
-        else if (gdsState === "error") gdsSuffix = " - (GDS ✕)";
+        if (gdsState === "connected") gdsSuffix = " - (GDS — liaison établie)";
+        else if (gdsState === "error") {
+          gdsSuffix = " - (GDS — liaison à vérifier)";
+          item.title = `${p} — projet enregistré sur le serveur, liaison de ce poste à vérifier`;
+        }
         item.innerHTML =
           `<span class="open-project-name">${this._esc(name)}${this._esc(gdsSuffix)}</span>` +
           `<span class="open-project-close" title="Fermer ce projet">✕</span>`;

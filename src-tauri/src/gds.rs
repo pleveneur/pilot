@@ -1155,6 +1155,18 @@ pub(crate) async fn optional_pool(
 /// Ordre robuste : init local + identité + premier commit → bare serveur →
 /// remote add + push. En cas d'échec intermédiaire, le bare serveur créé est
 /// retiré proprement (pas d'état « à moitié attaché »).
+/// Annulation COMPLÈTE d'un ajout raté sur un serveur LOCAL (voie héritée) :
+/// retire le dépôt bare créé par cet essai ET les lignes de suivi du projet GDS.
+/// Sans la seconde partie, le projet reste inscrit en base (`projects` +
+/// `git_repos`) alors que son dépôt n'existe plus : Pilot l'annonce « enregistré
+/// sur le serveur » alors qu'il est inutilisable (état contradictoire observé).
+/// Best-effort (jamais bloquant) et jamais destructif pour un projet de suivi :
+/// `delete_project_by_name` ne cible que les projets GDS (`path IS NULL`).
+async fn rollback_local_add(pool: &PgPool, local_dir: &str, name: &str) {
+    let _ = gds_git::remove_bare(local_dir, name);
+    let _ = gds_db::delete_project_by_name(pool, name).await;
+}
+
 pub(crate) async fn add_project_to_gds(
     pool: Option<&PgPool>,
     project: &str,
@@ -1272,21 +1284,27 @@ async fn add_project_with(
     .map_err(|e| e.to_string());
 
     // État partiel évité (serveur LOCAL uniquement) : un échec (remote add /
-    // push) laisse le bare local déjà créé → le retirer proprement pour ne pas
-    // rester « à moitié attaché ». Serveur DISTANT : rien n'a été créé sur le
-    // poste, on ne supprime RIEN (le dépôt serveur est sous responsabilité
-    // manuelle) et on renvoie un message orientant vers la préparation serveur.
+    // push) laisse le bare local déjà créé → le retirer proprement ET annuler
+    // l'inscription du projet en base (`rollback_local_add`), pour ne pas rester
+    // « à moitié attaché » (projet annoncé sur le serveur sans dépôt). Serveur
+    // DISTANT : rien n'a été créé sur le poste, on ne supprime RIEN (le dépôt
+    // serveur est sous responsabilité manuelle) et on renvoie un message
+    // orientant vers la préparation serveur.
     match remote_result {
         Err(join_err) => {
-            if is_local && matches!(side, ServerSide::Legacy(_)) {
-                let _ = gds_git::remove_bare(&local_dir, &name);
+            if is_local {
+                if let ServerSide::Legacy(pool) = &side {
+                    rollback_local_add(pool, &local_dir, &name).await;
+                }
             }
             return Err(join_err);
         }
         Ok(Err(inner_err)) => {
-            if is_local && matches!(side, ServerSide::Legacy(_)) {
-                let _ = gds_git::remove_bare(&local_dir, &name);
-                return Err(inner_err);
+            if is_local {
+                if let ServerSide::Legacy(pool) = &side {
+                    rollback_local_add(pool, &local_dir, &name).await;
+                    return Err(inner_err);
+                }
             }
             // Voie service : rien n'est retiré — le dépôt du serveur n'est pas
             // sous la responsabilité du poste. Relancer l'ajout est sans risque

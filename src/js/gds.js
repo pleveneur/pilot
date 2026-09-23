@@ -7,13 +7,16 @@
 //    simple) — R2.
 //  - Étape « Connecter un serveur GDS » (réutiliser un serveur mémorisé OU
 //    nouveau serveur) avec bouton « Activer GDS » — R1/R4.
-//  - Bloc « ▶ Avancé » replié par défaut (SSH, listes serveurs/projets, purge,
-//    Phase B/C), SANS aucun champ email — tout pré-rempli.
-//  - État connecté compact (statut, synchroniser, retirer du GDS avec
-//    confirmation).
-//  - Masquages conditionnels : rien de provisionné → SSH/PhaseB/PhaseC/listes
-//    masqués ; déjà sur le serveur → bouton d'ajout masqué ; connecté →
-//    provision + ajout masqués — R3.
+//  - Projet DÉJÀ rattaché à un serveur (config `.pilot/gds.json` présente) :
+//    écran MINIMAL — le serveur choisi (nom de la fiche mémorisée), l'état de
+//    la liaison (deux faits distincts : « enregistré sur le serveur » / « liaison
+//    de ce poste à vérifier »), « Vérifier la liaison », « Ajouter le projet au
+//    GDS » si nécessaire, et « Retirer du GDS ». Aucun champ technique (hôte de
+//    base, port SSH, racine des dépôts, dossier de clonage) : ces valeurs
+//    restent dans `.pilot/gds.json`, lues par le backend au moment d'agir.
+//  - Masquages conditionnels : projet non rattaché → formulaire d'activation ;
+//    déjà sur le serveur → bouton d'ajout masqué ; connecté → état compact
+//    (synchro + retrait) — R3.
 //  - R5 : pleine largeur + disposition multi-colonnes.
 //
 // Règle secrets : les mots de passe ne remontent JAMAIS à l'UI (booleans
@@ -106,6 +109,29 @@ function friendlyGdsError(e) {
     return "⚠️ Le dossier ne contenait pas encore de dépôt Git valide pendant l'attache. Réessayez après l'initialisation automatique.";
   }
   return msg;
+}
+
+/**
+ * Libellé lisible du serveur d'un projet : le **nom de la fiche mémorisée**
+ * quand elle correspond (même hôte + même utilisateur), sinon `utilisateur@hôte`.
+ * Ne remonte JAMAIS de secret (la liste des fiches n'en contient aucun).
+ * @returns {Promise<string>}
+ */
+async function savedServerLabel(cfg) {
+  const host = String((cfg && cfg.db_host) || "").trim();
+  const user = String((cfg && cfg.db_user) || "").trim();
+  const fallback = user && host ? `${user}@${host}` : host || "—";
+  try {
+    const fiches = await invoke("gds_list_saved_servers");
+    const f = (fiches || []).find(
+      (s) =>
+        String(s.host || "").trim().toLowerCase() === host.toLowerCase() &&
+        String(s.user || "").trim().toLowerCase() === user.toLowerCase()
+    );
+    return f && f.name ? String(f.name) : fallback;
+  } catch (_) {
+    return fallback;
+  }
 }
 
 /** Crée l'onglet GDS dans `container`. */
@@ -559,6 +585,58 @@ export function createGds(container) {
     refreshIcons(container);
   }
 
+  // ── Projet DÉJÀ rattaché à un serveur, liaison non vérifiée (constat 1) ──
+  // Écran minimal : le serveur choisi, les DEUX faits distincts (inscription sur
+  // le serveur / liaison de ce poste), la vérification, et le retrait. AUCUNE
+  // ressaisie technique et AUCUNE écriture de configuration : les valeurs
+  // (hôte de base, port, port SSH, racine des dépôts, dossier de clonage)
+  // restent dans `.pilot/gds.json` et sont lues par le backend au moment d'agir.
+  function renderRegistered(cfg, onServer, serverName) {
+    const wrap = document.createElement("div");
+    wrap.className = "gds-cols";
+    wrap.innerHTML = `
+      <div class="gds-panel">
+        <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> Serveur GDS de ce projet</div>
+        <div class="gds-panel-desc">Serveur choisi : <strong>${esc(serverName)}</strong>.</div>
+        <div class="gds-panel-desc" style="margin-top:8px">
+          ${onServer
+            ? `<span class="gds-badge gds-badge-ok">✅ Enregistré sur le serveur</span>`
+            : `<span class="gds-badge gds-badge-warn">Pas encore enregistré sur le serveur</span>`}
+          <span class="gds-badge gds-badge-warn">⚠️ Liaison de ce poste : à vérifier</span>
+        </div>
+        <div class="gds-panel-desc" style="margin-top:6px">
+          Ce sont <strong>deux choses différentes</strong> : l'inscription du projet
+          sur le serveur d'un côté, la liaison de <em>ce poste</em> vers le dépôt
+          (accès à la base, dépôt du projet) de l'autre.
+        </div>
+        <div class="gds-actions">
+          <button id="gds-verify-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Vérifier la liaison</button>
+        </div>
+      </div>
+      <div class="gds-panel">${renderRemoveHtml("gds-registered-remove")}</div>
+    `;
+    bodyEl.appendChild(wrap);
+    refreshIcons(container);
+
+    const btn = wrap.querySelector("#gds-verify-btn");
+    btn.addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) return;
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Vérification…';
+      refreshIcons(container);
+      const conn = await fetchGdsConnectionStatus(invoke, project);
+      pendingNotice = conn.status === "connected"
+        ? "✅ Liaison vérifiée : ce poste joint la base et le dépôt de ce projet."
+        : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
+          "Rien n'a été effacé sur ce poste : vérifiez le dossier des dépôts du serveur, " +
+          "puis réessayez (ou retirez et réajoutez le projet).";
+      await refresh();
+    });
+
+    wireRemove(wrap, "gds-registered-remove");
+  }
+
   // ── État connecté compact (statut, synchro, retirer) ──
   // R5 : multi-colonnes (plusieurs blocs côte à côte pour le confort).
   function renderConnected(cfg, identity) {
@@ -715,69 +793,6 @@ export function createGds(container) {
     });
   }
 
-  // ── Bloc « Avancé » replié par défaut ──
-  function renderAdvanced(cfg, provisioned, connected, onServer) {
-    const panel = document.createElement("div");
-    panel.className = "gds-panel gds-panel-advanced";
-    const host = (cfg && cfg.db_host) || "";
-    const port = (cfg && cfg.db_port) || "";
-    const user = (cfg && cfg.db_user) || "";
-    panel.innerHTML = `
-      <button id="gds-adv-toggle" class="gds-adv-title"><i data-lucide="chevron-down" class="icon-sm"></i> ▶ Avancé</button>
-      <div id="gds-adv-body" style="display:none">
-        ${provisioned ? `
-        <div class="gds-panel-desc" style="margin-bottom:6px"><strong>Config projet</strong> (gérées automatiquement) :</div>
-        <div class="gds-grid3">
-          <div><label class="gds-label">Hôte</label><input class="gds-input" value="${esc(host)}" readonly></div>
-          <div><label class="gds-label">Port</label><input class="gds-input" value="${esc(port)}" readonly></div>
-          <div><label class="gds-label">Utilisateur</label><input class="gds-input" value="${esc(user)}" readonly></div>
-        </div>
-        <div class="gds-grid3">
-          <div><label class="gds-label">Port SSH</label><input class="gds-input" value="${esc(String((cfg && cfg.ssh_port) || 22))}" readonly></div>
-          <div><label class="gds-label">Racine des dépôts serveur</label><input class="gds-input" value="${esc((cfg && cfg.gds_server_repos) || "—")}" readonly></div>
-          <div><label class="gds-label">Dossier local</label><input class="gds-input" value="${esc((cfg && cfg.gds_local_dir) || "—")}" readonly></div>
-        </div>
-        ` : ""}
-        ${provisioned ? `
-        <div class="gds-note-box" style="margin-top:12px"><em>La liste des projets &amp; dépôts du serveur est visible dans l'onglet « ⚙️ GDS — paramétrage » → Mes projets GDS et dans l'onglet « GDS — administration ».</em></div>
-        ` : ""}
-        ${provisioned && !connected ? renderRemoveHtml("gds-adv-remove") : ""}
-      </div>
-    `;
-    bodyEl.appendChild(panel);
-    refreshIcons(container);
-
-    const toggle = panel.querySelector("#gds-adv-toggle");
-    const advBody = panel.querySelector("#gds-adv-body");
-    toggle.addEventListener("click", () => {
-      const hidden = advBody.style.display === "none";
-      advBody.style.display = hidden ? "block" : "none";
-      toggle.querySelector("i").setAttribute("data-lucide", hidden ? "chevron-up" : "chevron-down");
-      refreshIcons(container);
-    });
-
-    // NB : le bloc « Serveurs GDS mémorisés » (liste en lecture seule) a été
-    // RETIRÉ de cet onglet PAR PROJET (refonte GDS, L5.2) : la gestion complète
-    // (ajouter/modifier/supprimer/tester/appliquer) vit désormais dans l'onglet
-    // transverse « ⚙️ GDS — paramétrage ». Le sélecteur « Réutiliser un serveur
-    // déjà mémorisé » ci-dessus reste (action propre au projet).
-
-    // NB (refonte GDS, L5.4) : le bloc « Clefs SSH » a été RETIRÉ de cet onglet
-    // PAR PROJET : l'affichage/copie/enregistrement de la clé PUBLIQUE du poste
-    // vit désormais dans l'onglet transverse « ⚙️ GDS — paramétrage » → Mes clés.
-    // Le cas « clé ajoutée manuellement » n'a plus lieu d'être : le serveur
-    // applique lui-même `authorized_keys` depuis la base.
-
-    // NB (refonte GDS, L5.6) : les listes « Projets & dépôts du serveur »
-    // (données SERVEUR, identiques quel que soit le projet) ont été RETIRÉES de
-    // cet onglet PAR PROJET : cette vue transverse vit dans l'onglet « GDS —
-    // administration » (projets & dépôts) et dans « Mes projets GDS ».
-
-    if (provisioned && !connected) {
-      wireRemove(panel, "gds-adv-remove");
-    }
-  }
-
   // ── Rendu complet (écran-état-machine) ──
   async function refresh() {
     const project = currentProjectPath();
@@ -838,17 +853,16 @@ export function createGds(container) {
 
     if (status === "connected") {
       renderConnected(cfg, identity);
+    } else if (provisioned) {
+      // Projet DÉJÀ rattaché à un serveur : écran minimal, sans aucun champ
+      // technique (constat 1). Le formulaire complet est réservé à l'ACTIVATION
+      // d'un projet qui n'est pas encore rattaché.
+      renderRegistered(cfg, onServer, await savedServerLabel(cfg));
+      if (!onServer) renderAdd(identity);
     } else {
       renderConnect(cfg, secrets, identity, provisioned);
-      if (provisioned && !onServer) {
-        renderAdd(identity);
-      }
-      if (!provisioned && onServer) {
-        renderAlreadyAdded();
-      }
+      if (onServer) renderAlreadyAdded();
     }
-
-    renderAdvanced(cfg, provisioned, status === "connected", onServer);
     refreshIcons(container);
   }
 
