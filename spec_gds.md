@@ -57,9 +57,9 @@
 > **MINIMAL** — nom du **serveur choisi** (fiche mémorisée correspondante, sinon
 > `utilisateur@hôte`), **deux faits distincts** (« ✅ Enregistré sur le
 > serveur » / « ⚠️ Liaison de ce poste : à vérifier »), boutons **« Vérifier la
-> liaison »** et **« Corriger la configuration »** (seul chemin d'édition des
-> valeurs techniques : rouvre le formulaire d'activation pré-rempli, avec
-> « Retour »), ajout si nécessaire, retrait — **aucun champ technique** (hôte de
+> « Vérifier la liaison », **« (Re)créer le raccourci vers le dépôt »** et
+> **« Changer de serveur »** (seul chemin d'édition des valeurs techniques :
+> rouvre le formulaire d'activation pré-rempli, avec « Retour »), ajout si nécessaire, retrait — **aucun champ technique** (hôte de
 > base, port SSH, racine des dépôts, dossier de clonage) sur l'écran normal et
 > **aucune écriture de configuration** hors de ce mode correction (valeurs lues
 > de `.pilot/gds.json` par le backend) ; le formulaire complet est réservé à
@@ -257,8 +257,9 @@ stable.
   désormais deux arguments optionnels `db_password` / `admin_password`
   (`Option<String>`). Un mot de passe non vide est écrit **hors projet** dans
   `~/.pilot/gds_secrets.json` (0600) — **jamais** dans `.pilot/gds.json` ni dans
-  un log ; un champ vide **préserve** le secret existant. L'UI expose un bouton
-  « Enregistrer les mots de passe » : plus besoin de refaire « Activer GDS »
+  un log ; un champ vide **préserve** le secret existant. Plus de bouton dédié :
+  **« Enregistrer la configuration »** recopie le mot de passe porté par la
+  **fiche du serveur** — plus besoin de refaire « Activer GDS »
   (la base n'est jamais recréée). Les mots de passe ne **remontent jamais** à
   l'UI (seulement des booléens `gds_secrets_status`).
 - **Aucun serveur GDS par défaut** et **aucune config GDS globale** de Pilot

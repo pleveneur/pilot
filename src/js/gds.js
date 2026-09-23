@@ -407,9 +407,10 @@ export function createGds(container) {
         // techniques du serveur + dossier local) et recopie les mots de passe
         // hors projet ; `gds_provision` PRÉSERVE ces valeurs (idempotent).
         const fiche = await applyFiche();
-        // E-mail admin = celui du COMPTE GDS de la fiche (voie « compte GDS » :
-        // le serveur prépare sa base) ; repli sur l'identité globale du poste
-        // pour une fiche héritée (compte technique de la base).
+        // E-mail admin : le sélecteur ne porte que hôte / port / utilisateur
+        // (`dataset.email` n'est jamais renseigné par `loadSavedServers`), donc
+        // c'est l'identité GLOBALE du poste qui est utilisée. Le repli ci-dessous
+        // restera juste le jour où la fiche portera un e-mail propre.
         const adminEmail = (fiche.email || email).trim();
         if (!adminEmail) {
           throw new Error("Renseignez votre e-mail GDS dans la fiche du serveur (onglet « ⚙️ GDS — paramétrage » → Serveurs GDS).");

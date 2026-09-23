@@ -2491,17 +2491,29 @@ async fn pool_is_connected(state: State<'_, AppState>, project: &str, has_pw: bo
     ok
 }
 
-/// Vrai si le dépôt bare d'un projet existe côté serveur GDS. Serveur LOCAL :
-/// test du système de fichiers (`<gds_local_dir>/repos/<nom>.git`), comportement
-/// historique INCHANGÉ. Serveur DISTANT : la base PostgreSQL `git_repos` fait
-/// foi — on ne suppose rien du disque distant et on n'y accède jamais depuis le
-/// poste. Fail-open : erreur DB ou pool absent → false. Aucun secret révélé.
+/// Vrai si le dépôt bare d'un projet existe côté serveur GDS.
+///
+/// - Serveur LOCAL **natif** (racine des dépôts absente ou chemin du poste) :
+///   test du système de fichiers (`<gds_local_dir>/repos/<nom>.git`),
+///   comportement historique INCHANGÉ.
+/// - Sinon (serveur DISTANT, mais aussi serveur **en CONTENEUR sur la même
+///   machine**, reconnu à sa racine POSIX absolue `/srv/git/repos`) : la base
+///   PostgreSQL `git_repos` fait foi — le disque du POSTE n'est JAMAIS consulté.
+///   Sinon un simple dossier homonyme sous `gds_local_dir` ferait conclure
+///   « Connecté » alors que rien n'a été poussé vers le serveur (constat de
+///   terrain : conteneur vu comme local, `db_host = 127.0.0.1`).
+///
+/// Fail-open : erreur DB ou pool absent → false (jamais « Connecté » sur une
+/// simple supposition). Aucun secret révélé.
 pub(crate) async fn server_bare_exists(
     pool: Option<&PgPool>,
     cfg: &GdsConfig,
     name: &str,
 ) -> bool {
-    if is_local_gds_server(cfg) {
+    // Racine des dépôts POSIX absolue = dépôts CÔTÉ SERVEUR (conteneur/service),
+    // même si l'hôte est localhost : même règle que `gds_remote_url`.
+    let server_side_root = server_repo_path(cfg, name).is_some_and(|p| p.starts_with('/'));
+    if is_local_gds_server(cfg) && !server_side_root {
         let local_dir = cfg
             .gds_local_dir
             .clone()
@@ -2573,8 +2585,10 @@ pub async fn gds_connection_status(
     // Pool joignable : réutilise le pool AppState et un cache court (fail-open).
     let pool_ok = pool_is_connected(state.clone(), &project, has_pw).await;
     // Dépôt bare valide côté serveur GDS : test du système de fichiers pour un
-    // serveur LOCAL (historique inchangé), sinon la base PostgreSQL `git_repos`
-    // fait foi (serveur DISTANT — on ne suppose rien du disque distant).
+    // serveur LOCAL **natif** (historique inchangé), sinon la base PostgreSQL
+    // `git_repos` fait foi — serveur DISTANT, mais aussi serveur **en conteneur
+    // sur la même machine** (racine POSIX absolue) : on ne conclut JAMAIS de
+    // l'existence d'un dossier sur ce poste pour un dépôt qui vit sur le serveur.
     let name = project_name(&project);
     let project_owned = project.clone();
     let bare_ok = {
@@ -2989,6 +3003,59 @@ mod tests {
         assert_eq!(connection_status_from_flags(true, true, false, true, true, true), "error");
         assert_eq!(connection_status_from_flags(true, true, true, false, true, true), "error");
         assert_eq!(connection_status_from_flags(true, true, true, true, true, false), "error");
+    }
+
+    /// R1 (relecture indépendante) : l'existence du dépôt ne doit JAMAIS se
+    /// conclure depuis le disque du POSTE quand la racine des dépôts est un
+    /// chemin POSIX absolu (serveur **en conteneur** sur la même machine, vu
+    /// comme « local ») — un dossier homonyme sous `gds_local_dir` faisait
+    /// annoncer « Connecté » alors que rien n'avait été poussé. Le serveur local
+    /// **natif** garde, lui, EXACTEMENT le comportement historique (disque).
+    #[tokio::test]
+    async fn bare_exists_local_disk_only_for_native_local_server() {
+        let base = std::env::temp_dir().join(format!("pilot-gds-test-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let name = "proj";
+        // Le dossier homonyme existe sur CE poste (c'est lui qui trompait).
+        std::fs::create_dir_all(base.join("repos").join(format!("{}.git", name))).unwrap();
+        let local_cfg = GdsConfig {
+            enabled: true,
+            server_url: String::new(),
+            identity_email: "dev@kalico".to_string(),
+            gds_local_dir: Some(base.to_string_lossy().to_string()),
+            ssh_port: 0,
+            gds_server_repos: None,
+            ssh_host: "127.0.0.1:22".to_string(),
+            db_host: "127.0.0.1".to_string(),
+            db_port: "5432".to_string(),
+            db_user: "postgres".to_string(),
+        };
+        // 1) LOCAL NATIF (racine Windows / absente) : disque du poste, inchangé.
+        assert!(is_local_gds_server(&local_cfg));
+        assert!(server_bare_exists(None, &local_cfg, name).await);
+
+        // 2) Même machine, racine POSIX ABSOLUE (conteneur) : le disque du poste
+        //    ne compte plus — sans pool, réponse honnête « non vérifié ».
+        let mut container = local_cfg.clone();
+        container.gds_server_repos = Some("/srv/git/repos".to_string());
+        assert!(is_local_gds_server(&container));
+        assert!(!server_bare_exists(None, &container, name).await);
+
+        // 3) DISTANT (POSIX comme Windows) : jamais le disque de ce poste.
+        let distant = GdsConfig {
+            db_host: "10.0.0.42".to_string(),
+            ssh_host: "10.0.0.42:22".to_string(),
+            ..container.clone()
+        };
+        assert!(!is_local_gds_server(&distant));
+        assert!(!server_bare_exists(None, &distant, name).await);
+        let distant_win = GdsConfig {
+            gds_server_repos: Some("C:\\GDS\\repos".to_string()),
+            ..distant.clone()
+        };
+        assert!(!server_bare_exists(None, &distant_win, name).await);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

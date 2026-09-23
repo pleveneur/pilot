@@ -768,8 +768,11 @@ local de clonage**, cliquez sur **« Enregistrer la configuration »**, puis
         serveur) **si le projet n'était pas déjà enregistré** : un projet déjà
         inscrit n'est **jamais** supprimé par une relance ratée (ni ses tickets
         ni ses tâches). Pour un projet **déjà rattaché** dont la liaison échoue,
-        utilisez **« Corriger la configuration »** dans l'onglet **« 🌐 GDS »**
-        (**2.6**) : vous n'avez pas à le retirer et le réactiver.
+        cliquez **« (Re)créer le raccourci vers le dépôt »** dans l'onglet
+        **« 🌐 GDS »** (**2.6.e**), puis **« Vérifier la liaison »** — et
+        **« Changer de serveur »** seulement si le serveur choisi (ou ses valeurs
+        techniques : port SSH, racine des dépôts) est en cause : vous n'avez
+        **pas** à le retirer et le réajouter.
 
 ### 2.7 — Récupérer un projet qui n'existe pas encore chez soi 🅰
 

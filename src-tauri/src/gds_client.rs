@@ -67,8 +67,9 @@ pub(crate) async fn sync_project(pool: Option<&PgPool>, project: &str) -> Result
     // est un repo Git (c). On NE touche jamais au projet de travail de l'utilisateur
     // (ex: testsnake2 sans `.git`) autrement que via gds_add_project (qui n'agit
     // que si c'est un repo Git). (b) Le remote `gds` est ajouté s'il est absent.
-    // Serveur LOCAL : test du disque (historique inchangé). Serveur DISTANT : la
-    // base `git_repos` fait foi (jamais d'accès au disque distant). Voie SERVICE
+    // Serveur LOCAL **natif** : test du disque (historique inchangé). Serveur
+    // DISTANT ou EN CONTENEUR sur la même machine (racine POSIX absolue) : la
+    // base `git_repos` fait foi (jamais d'accès au disque du poste). Voie SERVICE
     // (lot 3) : c'est LE SERVICE qui répond, seul maître de sa racine de dépôts
     // (une panne remonte au lieu de conclure « absent » à tort).
     let bare_on_server = match &side {
