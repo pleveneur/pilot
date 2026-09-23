@@ -92,6 +92,11 @@ export function initialServerForm() {
     email: "", // votre compte GDS sur ce serveur
     password: "", // secret : jamais réaffiché
     role: "", // rôle reconnu au dernier test (admin / dev / standard)
+    // Valeurs TECHNIQUES du serveur (jamais des secrets) : elles vivent dans la
+    // fiche, et non plus sur l'écran d'un projet — l'écran du projet les recopie
+    // depuis la fiche choisie.
+    sshPort: "", // port SSH des dépôts (vide = jamais renseigné → 22 du projet)
+    serverRepos: "", // racine des dépôts git CÔTÉ SERVEUR (ex. /srv/git/repos)
   };
 }
 
@@ -192,6 +197,12 @@ export function validateServerForm(f) {
   if (!String(form.host || "").trim()) return "L'adresse du serveur est requise.";
   const port = String(form.port || "").trim();
   if (port && !/^\d+$/.test(port)) return "Le port du serveur doit être un nombre (ex. 8080).";
+  const sshPort = String(form.sshPort || "").trim();
+  if (sshPort && !/^\d+$/.test(sshPort)) return "Le port SSH doit être un nombre (ex. 22).";
+  const repos = String(form.serverRepos || "").trim();
+  // Chemin POSIX ABSOLU attendu : c'est lui qui rend l'URL du dépôt utilisable
+  // quand le serveur est un conteneur (son home git n'est pas la racine).
+  if (repos && !repos.startsWith("/")) return "La racine des dépôts doit être un chemin absolu commençant par « / » (ex. /srv/git/repos).";
   const email = String(form.email || "").trim();
   if (!email) return "L'e-mail GDS est requis : c'est votre compte sur ce serveur.";
   if (!email.includes("@")) return "L'e-mail GDS n'est pas une adresse valide (ex. dev@exemple.com).";
@@ -304,6 +315,12 @@ export function renderServerFormHtml(form = initialServerForm()) {
           </label>
           <label class="gds-admin-field"><span>E-mail GDS (votre compte sur ce serveur)</span>
             <input id="gds-params-srv-email" type="text" autocomplete="off" placeholder="dev@exemple.com" value="${esc(f.email)}">
+          </label>
+          <label class="gds-admin-field gds-admin-field-narrow"><span>Port SSH des dépôts</span>
+            <input id="gds-params-srv-sshport" type="text" inputmode="numeric" placeholder="22" value="${esc(f.sshPort)}">
+          </label>
+          <label class="gds-admin-field"><span>Racine des dépôts sur le serveur (facultatif)</span>
+            <input id="gds-params-srv-repos" type="text" autocomplete="off" placeholder="/srv/git/repos" value="${esc(f.serverRepos)}">
           </label>
           <label class="gds-admin-field"><span>Mot de passe GDS</span>
             <input id="gds-params-srv-gdspw" type="password" autocomplete="new-password" placeholder="${esc(keepPw)}">
@@ -756,6 +773,8 @@ export function createGdsParams(container) {
       port: q("#gds-params-srv-port").value,
       email: q("#gds-params-srv-email").value,
       password: gdspw || state.form.password,
+      sshPort: q("#gds-params-srv-sshport").value,
+      serverRepos: q("#gds-params-srv-repos").value,
     };
   }
 
@@ -916,6 +935,8 @@ export function createGdsParams(container) {
         password: state.form.password,
         name: state.form.name.trim(),
         description: state.form.description.trim(),
+        sshPort: state.form.sshPort.trim(),
+        serverRepos: state.form.serverRepos.trim(),
       });
       state.form = initialServerForm();
       const role = gdsRoleLabel((res && res.role) || "");
@@ -957,6 +978,8 @@ export function createGdsParams(container) {
         email: String(cur.gds_email || ""),
         password: "",
         role: String(cur.gds_role || ""),
+        sshPort: String(cur.ssh_port || ""),
+        serverRepos: String(cur.gds_server_repos || ""),
       };
       state.status = { kind: "ok", text: "Modifiez les champs puis enregistrez (mot de passe vide = conservé)." };
       draw();

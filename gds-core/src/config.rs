@@ -302,9 +302,11 @@ pub fn project_name(project: &str) -> String {
 }
 
 /// URL du remote git GDS d'un projet.
-/// - Serveur **local** (historique) : `ssh://git@<host>:<port>/<nom>.git`.
-/// - Serveur **distant** : `ssh://git@<host>:<port><gds_server_repos>/<nom>.git`
-///   (chemin **absolu**), repli sur la forme locale si la racine est absente.
+/// - Racine serveur renseignée en chemin **POSIX absolu** :
+///   `ssh://git@<host>:<port><gds_server_repos>/<nom>.git` (chemin absolu).
+/// - Sinon, serveur **local** (historique) : `ssh://git@<host>:<port>/<nom>.git`.
+/// - Sinon, serveur **distant** : chemin absolu sous la racine, repli sur la
+///   forme locale si la racine est absente.
 /// Hôte SSH dédié (renseigné à la provision) ; repli sur server_url si absent
 /// (configs anciennes). Évite d'embarquer le port PostgreSQL 5432 dans l'URL SSH.
 pub fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
@@ -323,17 +325,27 @@ pub fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
     // Serveur DISTANT : chemin ABSOLU sous la racine des repos serveur
     // (`gds_server_repos`) — la sémantique `ssh://` de git est absolue (vérifié :
     // git passe `git-upload-pack '/chemin'`). Aucun repli local n'est tenté.
-    if !is_local_gds_server(cfg) {
-        if let Some(path) = server_repo_path(cfg, project_name) {
+    // Racine des dépôts renseignée : elle fait AUTORITÉ, quel que soit le
+    // serveur.
+    //
+    // Un serveur « local » peut être un CONTENEUR sur la même machine
+    // (`db_host` = 127.0.0.1) : le home de son user `git` n'est alors PAS la
+    // racine des dépôts, et la forme courte `ssh://git@host:port/<nom>.git` ne
+    // désigne aucun dépôt → liaison impossible à établir alors que le projet
+    // est bien inscrit sur le serveur (constat de terrain). On honore donc la
+    // racine dès qu'elle est un chemin POSIX ABSOLU (cas conteneur / service
+    // GDS, dont la racine vit sous `/`). Une racine Windows (`C:\GDS\repos`)
+    // reste sur la forme historique : un ancien serveur local natif garde
+    // exactement son URL (son home git EST la racine).
+    if let Some(path) = server_repo_path(cfg, project_name) {
+        if path.starts_with('/') {
+            return format!("ssh://git@{}{}", host, path);
+        }
+        if !is_local_gds_server(cfg) {
             // Chemin ABSOLU obligatoire : la sémantique `ssh://` de git est
             // absolue (vérifié : `git-upload-pack '/chemin'`). On préfixe donc
             // par `/` si la racine fournie est relative.
-            let abs = if path.starts_with('/') {
-                path
-            } else {
-                format!("/{}", path)
-            };
-            return format!("ssh://git@{}{}", host, abs);
+            return format!("ssh://git@{}/{}", host, path);
         }
     }
     format!("ssh://git@{}/{}.git", host, project_name)
@@ -618,14 +630,14 @@ mod tests {
 
     #[test]
     fn core_exposes_project_remote_url_rules_unchanged() {
-        // Serveur LOCAL : URL historique, racine serveur ignorée.
+        // Serveur LOCAL à racine Windows (natif historique) : URL historique.
         let local = GdsConfig {
             enabled: true,
             server_url: String::new(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
             ssh_port: 0,
-            gds_server_repos: Some("/home/git/repos".to_string()),
+            gds_server_repos: Some("C:\\GDS\\repos".to_string()),
             ssh_host: "127.0.0.1:22".to_string(),
             db_host: "127.0.0.1".to_string(),
             db_port: "5432".to_string(),
@@ -633,6 +645,21 @@ mod tests {
         };
         assert!(is_local_gds_server(&local));
         assert_eq!(gds_remote_url(&local, "proj"), "ssh://git@127.0.0.1:22/proj.git");
+
+        // Serveur vu comme local mais racine POSIX ABSOLUE (SERVEUR EN
+        // CONTENEUR sur la même machine) : la racine fait autorité, sinon l'URL
+        // ne désigne aucun dépôt sur le serveur.
+        let container = GdsConfig {
+            gds_server_repos: Some("/srv/git/repos".to_string()),
+            ssh_port: 2222,
+            ssh_host: "127.0.0.1:2222".to_string(),
+            ..local.clone()
+        };
+        assert!(is_local_gds_server(&container));
+        assert_eq!(
+            gds_remote_url(&container, "proj"),
+            "ssh://git@127.0.0.1:2222/srv/git/repos/proj.git"
+        );
 
         // Serveur DISTANT : chemin absolu sous la racine serveur, port SSH dédié.
         let distant = GdsConfig {

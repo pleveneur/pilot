@@ -206,13 +206,15 @@ geste par geste** (votre cas probable) :
    serveur** : **Nom du serveur** (ex. *« GDS maison »*), **Description**
    (facultative), **Adresse** `127.0.0.1`, **Port du service** `8080`,
    **E-mail GDS** = votre compte administrateur, **Mot de passe GDS** = celui de
-   ce compte → **Tester la connexion** → **Ajouter le serveur**. *(Détail :
-   2.5.)*
+   ce compte, **Port SSH des dépôts** = `2222` (le port SSH du serveur, pas
+   celui de la base) et **Racine des dépôts sur le serveur** =
+   `/srv/git/repos` → **Tester la connexion** → **Ajouter le serveur**.
+   *(Détail : 2.5.)*
 3. **Dans Pilot** → ouvrez (ou créez) un **projet** → onglet **« 🌐 GDS »** :
-   **Connecter un serveur GDS** (choisissez le serveur mémorisé),
-   **Enregistrer la configuration**, **Port SSH du serveur** = `2222`,
-   **Racine des dépôts serveur** = `/srv/git/repos`, puis **Activer GDS** et
-   **Ajouter ce projet au GDS**. *(Détail : 2.6.)*
+   **Connecter un serveur GDS** (choisissez le serveur mémorisé — ses valeurs
+   techniques viennent de sa fiche), réglez le **Dossier local de clonage**,
+   puis **Enregistrer la configuration**, **Activer GDS** et **Ajouter ce
+   projet au GDS**. *(Détail : 2.6.)*
 
 Vous êtes seul sur le GDS ? Sautez l'étape **2.2** (création d'un compte
 développeur) : elle ne sert qu'à faire travailler quelqu'un d'autre.
@@ -650,8 +652,12 @@ serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
   ex. *« GDS maison »*), **Description** (facultatif), **Adresse du serveur**
   `127.0.0.1`, **Port du service** `8080` (le port **web** du GDS, **pas** celui
   de la base), **E-mail GDS** = **votre** compte sur ce serveur (celui créé en
-  **1.6.b** ou **2.2**), **Mot de passe GDS** = celui de ce compte → **Tester la
-  connexion** → **Ajouter le serveur**.
+  **1.6.b** ou **2.2**), **Mot de passe GDS** = celui de ce compte,
+  **Port SSH des dépôts** = `2222` (le port SSH du serveur, **pas** celui de la
+  base) et **Racine des dépôts sur le serveur** = `/srv/git/repos` (chemin
+  absolu ; laissez vide si votre serveur range les dépôts dans le dossier
+  personnel du compte `git`) → **Tester la connexion** → **Ajouter le
+  serveur**.
 - **Ce qui a changé (à ne pas confondre avec le guide précédent)** : cette fiche
   décrit désormais **votre compte GDS** (e-mail + mot de passe), et non plus le
   compte technique de la base. Le test se fait sur le **service** (port 8080) et
@@ -673,8 +679,9 @@ serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
 - **Appliquer un serveur** : le bouton **« Appliquer »** d'une fiche remplit la
   configuration GDS du **projet choisi** dans le sélecteur (et non plus
   forcément le projet ouvert). Il pré-remplit l'hôte, le port et l'identité,
-  mais **conserve** le **port SSH** et la **racine des dépôts** déjà
-  configurés dans ce projet — vous n'avez pas à les ressaisir. Sur une fiche
+  mais applique désormais **le port SSH et la racine des dépôts de la fiche** —
+  et **conserve** ce que le projet avait déjà si la fiche ne les porte pas —
+  vous n'avez pas à les ressaisir. Sur une fiche
   **« compte GDS »**, le bouton est **actif** : le serveur prépare **sa** base
   (plus aucun compte technique de la base à saisir) ; les fiches héritées
   gardent leur bouton actif, comme avant.
@@ -705,36 +712,42 @@ liaison »**. Plus **aucun champ technique** (hôte de base, port SSH, racine de
 dépôts, dossier de clonage) ne vous est demandé : ces valeurs viennent de la
 fiche du serveur (**2.5**) et de la configuration du projet, et ne sont
 **jamais** modifiées ni perdues par cet écran. Si la liaison ne fonctionne pas,
-le bouton **« Corriger la configuration »** rouvre le formulaire **pré-rempli**
-avec les valeurs actuelles : ajustez le **port SSH**, la **racine des dépôts du
-serveur** ou le **dossier local de clonage**, cliquez sur **« Enregistrer la
-configuration »**, puis **« Retour »** pour revenir à l'écran minimal.
+le bouton **« (Re)créer le raccourci vers le dépôt »** refait le raccourci `gds`
+du dépôt local vers le dépôt du serveur — **sans rien supprimer** (aucun retrait
+ni réajout du projet), et le bouton **« Changer de serveur »** rouvre le
+formulaire **pré-rempli** : choisissez un autre serveur, ajustez le **dossier
+local de clonage**, cliquez sur **« Enregistrer la configuration »**, puis
+**« Retour »** pour revenir à l'écran minimal.
 
 - [ ] **2.6.a Connecter un serveur** : choisissez votre serveur mémorisé
-      (sélecteur **« Serveur mémorisé »**, bouton **« Réutiliser ce serveur »**)
-      et laissez **Hôte PostgreSQL** = l'adresse de votre serveur
-      (`127.0.0.1`) : c'est le seul champ utile sur ce chemin.
-      **Vous voyez** les champs remplis, **aucun mot de passe PostgreSQL
-      demandé** et les blocs suivants (2.6.b → 2.6.e) accessibles : votre
-      **compte GDS** (mémorisé en **2.5**) porte l'identité, et c'est le
-      **serveur** qui prépare **sa** base (les champs **Utilisateur dédié**,
-      **Mot de passe dédié** et **Mot de passe admin** ne concernent plus que
-      les fiches héritées — laissez-les vides).
+      (sélecteur **« Serveur mémorisé »**, bouton **« Appliquer ce serveur »**),
+      puis réglez la **Dossier local de clonage** si besoin.
+      **Vous voyez** le serveur choisi, **aucun mot de passe PostgreSQL
+      demandé**, **aucun champ technique du serveur** (adresse, port du service,
+      port SSH, racine des dépôts : ils viennent de la fiche de **2.5**) et les
+      blocs suivants (2.6.b → 2.6.e) accessibles : votre **compte GDS**
+      (mémorisé en **2.5**) porte l'identité, et c'est le **serveur** qui prépare
+      **sa** base.
       **Si ce n'est pas ça :** le serveur mémorisé n'apparaît pas dans le
-      sélecteur → mémorisez-le d'abord (**2.5**).
-- [ ] **2.6.b Enregistrer la configuration** : mémorise **sans rien créer**.
+      sélecteur → mémorisez-le d'abord (**2.5**) ; son port SSH ou sa racine des
+      dépôts manquent → complétez-le dans **« ⚙️ GDS — paramétrage » →
+      Serveurs GDS** (bouton **Modifier**).
+- [ ] **2.6.b Enregistrer la configuration** : mémorise **sans rien créer**
+      (serveur choisi, dossier local de clonage, et recopie des valeurs
+      techniques de la fiche dans le projet).
       **Vous voyez :** le bouton confirme, et **rien** n'apparaît encore côté
-      serveur. **Si ce n'est pas ça :** un message de configuration manquante →
-      complétez les champs de 2.6.a puis recommencez.
-- [ ] **2.6.c Renseigner** **Port SSH du serveur** = `2222`, **Racine des
-      dépôts serveur** = `/srv/git/repos` et, si besoin, le **Dossier local de
-      clonage**. **Vous voyez :** au clic suivant,
-      « Racine des dépôts serveur non renseignée » ne doit **plus** apparaître.
+      serveur. **Si ce n'est pas ça :** un message « choisissez d'abord un
+      serveur » → reprenez 2.6.a.
+- [ ] **2.6.c Vérifier les valeurs techniques du serveur** (port SSH, racine des
+      dépôts) : elles se règlent **dans la fiche du serveur** (**2.5**, bouton
+      **Modifier**), **pas** sur l'écran du projet. **Vous voyez :** après
+      **Enregistrer la configuration**, « Racine des dépôts serveur non
+      renseignée » ne doit **plus** apparaître.
 - [ ] **2.6.d Activer GDS** : met le projet en relation avec le serveur (vérifie
       ou crée ce qui manque). **Vous voyez :** le badge passe à l'état attendu.
-      **Si ce n'est pas ça :** un mot de passe manquant plus tard se règle par
-      **« Enregistrer les mots de passe »** — **sans** refaire l'activation et
-      **sans** recréer la base.
+      **Si ce n'est pas ça :** un mot de passe manquant plus tard se règle en
+      cliquant **« Enregistrer la configuration »** (le mot de passe de la fiche
+      est recopié) — **sans** refaire l'activation et **sans** recréer la base.
 - [ ] **2.6.e Ajouter ce projet au GDS** : crée le dépôt bare sur le serveur,
       ajoute le raccourci `gds` (sans toucher à un `origin` existant, p. ex.
       GitHub) et **pousse la branche courante**.
@@ -1231,7 +1244,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 | « Aucun compte GDS avec l'adresse … » (Mes clés) | cette adresse n'est pas un compte **du serveur choisi** : faites-la créer dans « 🖥️ GDS Serveur — administration » → Comptes (2.2) |
 | `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) |
 | le `push` initial échoue juste après l'ajout | fenêtre < 30 s : **relancer « Ajouter ce projet au GDS »** (2.6.e) |
-| `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` (2.6.c) |
+| `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` dans la **fiche du serveur** (« ⚙️ GDS — paramétrage » → Serveurs GDS → Modifier), puis « Enregistrer la configuration » dans l'onglet GDS du projet (2.5, 2.6.c) |
 | l'URL Tailscale affiche le mauvais service | le port 443 sert déjà Pilot : utiliser `--https=8443` |
 | « connection timed out » depuis l'autre appareil | appareil hors tailnet, ou ports restés sur `GDS_BIND_ADDR` |
 | détection de conflit / verrou | le verrou n'existe **plus** : « dernier qui écrit gagne », conflits **journalisés** |

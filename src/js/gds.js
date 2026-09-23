@@ -231,107 +231,57 @@ export function createGds(container) {
   function renderConnect(cfg, secrets, identity, provisioned) {
     const panel = document.createElement("div");
     panel.className = "gds-panel gds-panel-main";
-    const host = (cfg && cfg.db_host) || "";
-    const port = (cfg && cfg.db_port) || "5432";
-    const user = (cfg && cfg.db_user) || "";
-    const hasDbPw = !!(secrets && secrets.db_password);
-    const hasAdminPw = !!(secrets && secrets.admin_password);
-    const emailOk = !!(identity.email);
-    // Nouveaux champs (serveur GDS distant) : port SSH, racine des dépôts
-    // CÔTÉ SERVEUR et dossier local de clonage (éditable).
-    const sshPort = (cfg && cfg.ssh_port) || 22;
-    const serverRepos = (cfg && cfg.gds_server_repos) || "";
     const localDir = (cfg && cfg.gds_local_dir) || "";
-    const missingPw = provisioned && (!hasDbPw || !hasAdminPw);
+    const emailOk = !!(identity.email);
+    // Mot de passe manquant (projet déjà provisionné) : l'écran ne ressaisit plus
+    // ces secrets — ils sont recopiés depuis la FICHE du serveur par « Enregistrer
+    // la configuration ». On signale seulement où intervenir.
+    const missingPwNotice =
+      provisioned && !(secrets && (secrets.db_password || secrets.admin_password))
+        ? `<div class="gds-warn">⚠️ Mot de passe serveur non mémorisé pour ce projet : cliquez « Enregistrer la configuration » (il est recopié depuis la fiche du serveur) — pour le corriger, utilisez l'onglet « ⚙️ GDS — paramétrage » → Serveurs GDS.</div>`
+        : "";
 
     panel.innerHTML = `
       <div class="gds-panel-title"><i data-lucide="server" class="icon-sm"></i> ${provisioned ? "Corriger la configuration du serveur GDS" : "Connecter un serveur GDS"}</div>
       <div class="gds-panel-desc">
         ${provisioned
-          ? `Ce projet est <strong>déjà activé</strong> : modifiez ici les valeurs techniques (port SSH, racine des dépôts serveur, dossier local de clonage), puis cliquez sur <strong>« Enregistrer la configuration »</strong>. « Activer GDS » reste disponible et sans risque (l'activation est répétable).`
+          ? `Ce projet est <strong>déjà activé</strong> : choisissez un autre serveur dans la liste, ajustez le dossier local de clonage, puis cliquez sur <strong>« Enregistrer la configuration »</strong>. Les valeurs techniques du serveur (adresse, port du service, port SSH, racine des dépôts) viennent de sa fiche — onglet « ⚙️ GDS — paramétrage » → Serveurs GDS. « Activer GDS » reste disponible et sans risque (l'activation est répétable).`
           : `Active le GDS pour ce projet : crée la base <code>pilot_gds</code> + les tables + votre compte admin, et prépare le dossier de repos centralisé (<code>.pilot/gds.json</code>). Les mots de passe restent hors projet. L'email admin est votre <strong>identité globale</strong> (onglet « ⚙️ GDS — paramétrage » → Mon identité) — aucun champ à resaisir.`}
       </div>
       ${!emailOk ? `<div class="gds-warn">⚠️ Définissez d'abord votre <strong>email d'identité</strong> dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité.</div>` : ""}
-      <div class="gds-panel-desc" style="margin-top:8px"><strong>Réutiliser un serveur déjà mémorisé</strong> (mots de passe jamais affichés) :</div>
+      <div class="gds-panel-desc" style="margin-top:8px"><strong>Serveur GDS de ce projet</strong> : choisissez-le dans la liste. La fiche porte les valeurs techniques du serveur (adresse, port du service, port SSH, racine des dépôts) ; pour ajouter ou corriger une fiche, utilisez l'onglet « ⚙️ GDS — paramétrage » → Serveurs GDS.</div>
       <div class="gds-grid2">
         <div>
           <label class="gds-label">Serveur mémorisé</label>
           <select id="gds-server-select" class="gds-input"></select>
         </div>
         <div class="gds-actions" style="align-self:flex-end; margin-top:0">
-          <button id="gds-server-apply" class="web-btn"><i data-lucide="rotate-ccw" class="icon-sm"></i> Réutiliser ce serveur</button>
-        </div>
-      </div>
-      <div class="gds-panel-desc" style="margin-top:8px"><strong>Ou nouveau serveur</strong> (ou compléter) :</div>
-      <div class="gds-grid2">
-        <div>
-          <label class="gds-label">Hôte PostgreSQL</label>
-          <input id="gds-db-host" class="gds-input" value="${esc(host)}" placeholder="192.168.1.10" autocomplete="off">
-        </div>
-        <div>
-          <label class="gds-label">Port</label>
-          <input id="gds-db-port" class="gds-input" value="${esc(port)}" placeholder="5432" autocomplete="off">
-        </div>
-      </div>
-      <div class="gds-grid2">
-        <div>
-          <label class="gds-label">Utilisateur dédié</label>
-          <input id="gds-db-user" class="gds-input" value="${esc(user)}" placeholder="pilot" autocomplete="off">
-        </div>
-        <div>
-          <label class="gds-label">Mot de passe dédié ${hasDbPw ? "<em style='color:#aaa'>(enregistré)</em>" : ""}</label>
-          <div class="gds-pw">
-            <input id="gds-db-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
-            <button type="button" class="gds-eye" data-target="gds-db-password" title="Afficher/masquer"><i data-lucide="eye" class="icon-sm"></i></button>
-          </div>
-        </div>
-      </div>
-      <div class="gds-grid2">
-        <div>
-          <label class="gds-label">Mot de passe admin ${hasAdminPw ? "<em style='color:#aaa'>(enregistré)</em>" : ""}</label>
-          <div class="gds-pw">
-            <input id="gds-admin-password" type="password" class="gds-input" placeholder="••••••••" autocomplete="new-password">
-            <button type="button" class="gds-eye" data-target="gds-admin-password" title="Afficher/masquer"><i data-lucide="eye" class="icon-sm"></i></button>
-          </div>
-        </div>
-        <div class="gds-note-box">
-          <em>L'email admin est votre identité globale (onglet « ⚙️ GDS — paramétrage » → Mon identité).</em>
+          <button id="gds-server-apply" class="web-btn"><i data-lucide="rotate-ccw" class="icon-sm"></i> Appliquer ce serveur</button>
         </div>
       </div>
       <div id="gds-provision-err" class="gds-error"></div>
       <div id="gds-provision-ok" class="gds-ok"></div>
-      <div class="gds-panel-desc" style="margin-top:10px"><strong>Connexion SSH &amp; dépôts</strong> — à renseigner pour un serveur <em>distant</em> :</div>
-      <div class="gds-grid2">
-        <div>
-          <label class="gds-label">Port SSH du serveur</label>
-          <input id="gds-ssh-port" class="gds-input" value="${esc(String(sshPort))}" placeholder="22" autocomplete="off">
-        </div>
-        <div>
-          <label class="gds-label">Racine des dépôts serveur</label>
-          <input id="gds-server-repos" class="gds-input" value="${esc(serverRepos)}" placeholder="/home/git/repos" autocomplete="off">
-        </div>
-      </div>
       <div class="gds-grid2">
         <div>
           <label class="gds-label">Dossier local de clonage</label>
           <input id="gds-local-dir" class="gds-input" value="${esc(localDir)}" placeholder="(défaut : ~/Pilot/GDS)" autocomplete="off">
         </div>
         <div class="gds-note-box">
-          <em>Serveur <strong>distant</strong> : indiquez la racine des dépôts (ex. <code>/home/git/repos</code>) et le port SSH. La clé du poste s'enregistre depuis l'onglet « ⚙️ GDS — paramétrage » → Mes clés.</em>
+          <em>Ce dossier est <strong>local à ce poste</strong> (où le dépôt sera cloné). Les valeurs du serveur viennent de sa fiche.</em>
         </div>
       </div>
-      ${missingPw ? `<div class="gds-warn">⚠️ Mot de passe manquant (projet déjà provisionné) : ressaisissez-le puis cliquez « Enregistrer les mots de passe » — <strong>aucune nouvelle activation n'est nécessaire</strong>.</div>` : ""}
+      ${missingPwNotice}
       <div class="gds-actions">
         <button id="gds-save-cfg-btn" class="web-btn"><i data-lucide="save" class="icon-sm"></i> Enregistrer la configuration</button>
         <button id="gds-activate-btn" class="web-btn"><i data-lucide="rocket" class="icon-sm"></i> Activer GDS</button>
-        ${provisioned ? `<button id="gds-save-secrets-btn" class="web-btn"><i data-lucide="key-round" class="icon-sm"></i> Enregistrer les mots de passe</button>` : ""}
         ${provisioned ? `<button id="gds-edit-back-btn" class="web-btn"><i data-lucide="arrow-left" class="icon-sm"></i> Retour</button>` : ""}
       </div>
     `;
     bodyEl.appendChild(panel);
     refreshIcons(container);
 
-    // Toggle afficher/masquer des mots de passe.
+    // Toggle afficher/masquer des mots de passe (inerte depuis que l'écran du
+    // projet n'affiche plus de champ mot de passe : conservé pour les autres écrans).
     panel.querySelectorAll(".gds-eye").forEach((eye) => {
       eye.addEventListener("click", () => {
         const input = panel.querySelector("#" + eye.dataset.target);
@@ -347,39 +297,50 @@ export function createGds(container) {
     const serverApply = panel.querySelector("#gds-server-apply");
     const email = (identity.email || "").trim();
 
-    // Construit la config à persister depuis le formulaire (snake_case : les
-    // champs de `GdsConfig` sont sérialisés tels quels). Ne contient JAMAIS de
-    // mot de passe (ceux-ci vivent hors projet, ~/.pilot/gds_secrets.json 0600).
-    function readConfig() {
-      const sshRaw = parseInt(panel.querySelector("#gds-ssh-port").value.trim(), 10);
+    // ── Serveur choisi / dossier local ──
+    // L'écran ne demande PLUS aucune valeur technique du serveur : `gds_apply_server`
+    // recopie de la FICHE l'hôte, le port, l'utilisateur, l'e-mail, le port SSH
+    // et la racine des dépôts. Le poste n'apporte que son dossier local de clonage.
+    function selectedFiche() {
+      const opt = serverSelect && serverSelect.options[serverSelect.selectedIndex];
+      if (!opt || !opt.dataset.host) return null;
       return {
-        enabled: true,
-        identity_email: email,
-        db_host: panel.querySelector("#gds-db-host").value.trim(),
-        db_port: panel.querySelector("#gds-db-port").value.trim(),
-        db_user: panel.querySelector("#gds-db-user").value.trim(),
-        ssh_port: Number.isFinite(sshRaw) && sshRaw > 0 ? sshRaw : 22,
-        gds_server_repos: panel.querySelector("#gds-server-repos").value.trim() || null,
-        gds_local_dir: panel.querySelector("#gds-local-dir").value.trim() || null,
+        host: opt.dataset.host,
+        port: opt.dataset.port,
+        user: opt.dataset.user,
+        email: String(opt.dataset.email || "").trim(),
+        label: opt.textContent,
       };
     }
 
-    // Persiste la config projet (`.pilot/gds.json`) SANS re-provisionner.
-    // `withPasswords` écrit EN PLUS les mots de passe dans les secrets (hors
-    // projet) — chemin de ressaisie seule (T5), jamais un affichage.
-    async function persists(withPasswords) {
+    /**
+     * Applique au projet la fiche serveur choisie (config `.pilot/gds.json` +
+     * mots de passe recopiés hors projet par le backend) puis enregistre le
+     * dossier local de clonage. Renvoie la fiche effectivement appliquée.
+     */
+    async function applyFiche() {
       const project = currentProjectPath();
       if (!project) throw new Error("Aucun projet ouvert.");
-      if (!email) throw new Error("Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).");
-      const args = { project, cfg: readConfig() };
-      if (withPasswords) {
-        args.dbPassword = panel.querySelector("#gds-db-password").value;
-        args.adminPassword = panel.querySelector("#gds-admin-password").value;
+      const f = selectedFiche();
+      if (!f) {
+        throw new Error(
+          "Choisissez d'abord un serveur dans la liste — pour en ajouter ou en corriger un, " +
+            "utilisez l'onglet « ⚙️ GDS — paramétrage » → Serveurs GDS."
+        );
       }
-      await invoke("gds_save_config", args);
+      await invoke("gds_apply_server", {
+        project, host: f.host, port: f.port, user: f.user, email: f.email || email,
+      });
+      const localDir = panel.querySelector("#gds-local-dir").value.trim();
+      const cfg = await invoke("gds_get_config", { project });
+      if (cfg && cfg.enabled) {
+        cfg.gds_local_dir = localDir || null;
+        await invoke("gds_save_config", { project, cfg });
+      }
+      return f;
     }
 
-    // « Enregistrer la configuration » (port SSH, racine des dépôts, dossier local).
+    // « Enregistrer la configuration » (serveur choisi + dossier local).
     const saveCfgBtn = panel.querySelector("#gds-save-cfg-btn");
     saveCfgBtn.addEventListener("click", async () => {
       const errEl = panel.querySelector("#gds-provision-err");
@@ -387,8 +348,8 @@ export function createGds(container) {
       errEl.textContent = ""; okEl.textContent = "";
       saveCfgBtn.disabled = true;
       try {
-        await persists(false);
-        okEl.textContent = "✅ Configuration enregistrée (port SSH, racine des dépôts, dossier local).";
+        const f = await applyFiche();
+        okEl.textContent = `✅ Configuration enregistrée (serveur « ${f.label} », dossier local).`;
         notifyGdsChanged();
       } catch (e) {
         errEl.textContent = friendlyGdsError(e);
@@ -397,59 +358,28 @@ export function createGds(container) {
       }
     });
 
-    // « Enregistrer les mots de passe » : ressaisie SEULE, sans re-provision.
-    const saveSecBtn = panel.querySelector("#gds-save-secrets-btn");
-    if (saveSecBtn) {
-      saveSecBtn.addEventListener("click", async () => {
-        const errEl = panel.querySelector("#gds-provision-err");
-        const okEl = panel.querySelector("#gds-provision-ok");
-        errEl.textContent = ""; okEl.textContent = "";
-        const dbPw = panel.querySelector("#gds-db-password").value;
-        const adminPw = panel.querySelector("#gds-admin-password").value;
-        if (!dbPw && !adminPw) {
-          errEl.textContent = "Saisissez au moins un mot de passe à enregistrer.";
-          return;
-        }
-        saveSecBtn.disabled = true;
-        try {
-          await persists(true);
-          okEl.textContent = "✅ Mot(s) de passe enregistré(s) hors projet — aucune nouvelle activation effectuée.";
-        } catch (e) {
-          errEl.textContent = friendlyGdsError(e);
-        } finally {
-          saveSecBtn.disabled = false;
-        }
-      });
-    }
-
-    // Applique le serveur mémorisé au projet (pré-remplit le formulaire).
-    async function applySelectedServer() {
-      const project = currentProjectPath();
-      if (!project) return;
-      const opt = serverSelect.options[serverSelect.selectedIndex];
-      if (!opt || !opt.dataset.host) return;
+    // « Appliquer ce serveur » : même écriture, sans changer de serveur ensuite.
+    serverApply.addEventListener("click", async () => {
       const errEl = panel.querySelector("#gds-provision-err");
       const okEl = panel.querySelector("#gds-provision-ok");
-      if (errEl) errEl.textContent = "";
-      if (okEl) okEl.textContent = "";
+      errEl.textContent = ""; okEl.textContent = "";
       try {
-        const res = await invoke("gds_apply_server", {
-          project, host: opt.dataset.host, port: opt.dataset.port,
-          user: opt.dataset.user, email,
-        });
-        panel.querySelector("#gds-db-host").value = res.db_host || opt.dataset.host;
-        panel.querySelector("#gds-db-port").value = res.db_port || opt.dataset.port;
-        panel.querySelector("#gds-db-user").value = res.db_user || opt.dataset.user;
-        if (okEl) okEl.textContent = `✅ Serveur « ${opt.textContent} » sélectionné — cliquez « Activer GDS ».`;
+        const f = await applyFiche();
+        okEl.textContent = `✅ Serveur « ${f.label} » appliqué — cliquez « Activer GDS ».`;
+        notifyGdsChanged();
       } catch (e) {
         if (errEl) errEl.textContent = String(e);
       }
-    }
-    serverSelect.addEventListener("change", () => {
-      if (serverSelect.selectedIndex > 0) applySelectedServer();
     });
-    serverApply.addEventListener("click", applySelectedServer);
-    loadSavedServers(serverSelect);
+    loadSavedServers(serverSelect).then(() => {
+      // Présélection : la fiche du serveur déjà configuré pour ce projet.
+      const want = String((cfg && cfg.db_host) || "").trim().toLowerCase();
+      if (!want) return;
+      const i = Array.from(serverSelect.options).findIndex(
+        (o) => String(o.dataset.host || "").trim().toLowerCase() === want
+      );
+      if (i >= 0) serverSelect.selectedIndex = i;
+    });
 
     // « Retour » (mode correction) : referme le formulaire, revient à l'écran minimal.
     const backBtn = panel.querySelector("#gds-edit-back-btn");
@@ -467,57 +397,31 @@ export function createGds(container) {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
       if (!email) { err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité)."; return; }
-      const dbHost = panel.querySelector("#gds-db-host").value.trim();
-      const dbPort = panel.querySelector("#gds-db-port").value.trim();
-      const dbUser = panel.querySelector("#gds-db-user").value.trim();
-      const dbPassword = panel.querySelector("#gds-db-password").value;
-      const adminPassword = panel.querySelector("#gds-admin-password").value;
-      if (!dbHost) {
-        err.textContent = "Hôte PostgreSQL requis.";
-        return;
-      }
-      // Voie « compte GDS » : si une fiche serveur mémorisée porte une identité
-      // de compte GDS pour cet hôte, la base est préparée par le SERVEUR (son
-      // amorçage). Aucun mot de passe PostgreSQL — ni compte technique — n'est
-      // alors demandé au poste. Détection locale uniquement pour l'ergonomie :
-      // le backend reste seul juge (il n'utilise pas ces champs sur cette voie).
-      let serviceFiche = null;
-      try {
-        const fiches = await invoke("gds_list_saved_servers");
-        const h = dbHost.toLowerCase();
-        serviceFiche = (fiches || []).find(
-          (s) => s.identity && s.http_port && s.gds_email &&
-            String(s.gds_email).trim().toLowerCase() === email.trim().toLowerCase() &&
-            String(s.host || "").trim().toLowerCase() === h
-        ) || null;
-      } catch { /* fail-open : gardes historiques ci-dessous */ }
-      if (!serviceFiche) {
-        if (!dbUser) {
-          err.textContent = "Hôte et utilisateur PostgreSQL sont requis.";
-          return;
-        }
-        if (!dbPassword && !hasDbPw) {
-          err.textContent = "Le mot de passe dédié est requis (ou déjà enregistré).";
-          return;
-        }
-        if (!adminPassword && !hasAdminPw) {
-          err.textContent = "Un mot de passe admin est requis (ou déjà enregistré).";
-          return;
-        }
-      }
       err.textContent = "";
       ok.textContent = "";
       btn.disabled = true;
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Activation…';
       refreshIcons(container);
       try {
-        // Persiste d'abord port SSH / racine des dépôts / dossier local (champs
-        // non portés par `gds_provision`), puis provisionne. `gds_provision`
-        // PRÉSERVE ces valeurs (re-provision idempotent).
-        await persists(false);
+        // `applyFiche` écrit la config depuis la FICHE choisie (valeurs
+        // techniques du serveur + dossier local) et recopie les mots de passe
+        // hors projet ; `gds_provision` PRÉSERVE ces valeurs (idempotent).
+        const fiche = await applyFiche();
+        // E-mail admin = celui du COMPTE GDS de la fiche (voie « compte GDS » :
+        // le serveur prépare sa base) ; repli sur l'identité globale du poste
+        // pour une fiche héritée (compte technique de la base).
+        const adminEmail = (fiche.email || email).trim();
+        if (!adminEmail) {
+          throw new Error("Renseignez votre e-mail GDS dans la fiche du serveur (onglet « ⚙️ GDS — paramétrage » → Serveurs GDS).");
+        }
         const res = await invoke("gds_provision", {
-          project, dbHost, dbPort, dbUser, dbPassword,
-          adminEmail: email, adminPassword,
+          project,
+          dbHost: fiche.host,
+          dbPort: fiche.port,
+          dbUser: fiche.user,
+          dbPassword: "",
+          adminEmail,
+          adminPassword: "",
         });
         if (res && res.manual_setup) {
           // Serveur DISTANT : la clé du poste s'enregistre depuis l'onglet
@@ -622,7 +526,7 @@ export function createGds(container) {
   // ressaisie technique et AUCUNE écriture de configuration : les valeurs
   // (hôte de base, port, port SSH, racine des dépôts, dossier de clonage)
   // restent dans `.pilot/gds.json` et sont lues par le backend au moment d'agir.
-  function renderRegistered(cfg, onServer, serverName) {
+  function renderRegistered(cfg, identity, onServer, serverName) {
     const wrap = document.createElement("div");
     wrap.className = "gds-cols";
     wrap.innerHTML = `
@@ -640,14 +544,20 @@ export function createGds(container) {
           sur le serveur d'un côté, la liaison de <em>ce poste</em> vers le dépôt
           (accès à la base, dépôt du projet) de l'autre.
         </div>
+        <div id="gds-relink-err" class="gds-error"></div>
+        <div id="gds-relink-ok" class="gds-ok"></div>
         <div class="gds-actions">
           <button id="gds-verify-btn" class="web-btn"><i data-lucide="refresh-cw" class="icon-sm"></i> Vérifier la liaison</button>
-          <button id="gds-edit-cfg-btn" class="web-btn"><i data-lucide="wrench" class="icon-sm"></i> Corriger la configuration</button>
+          <button id="gds-relink-btn" class="web-btn"><i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt</button>
+          <button id="gds-edit-cfg-btn" class="web-btn"><i data-lucide="wrench" class="icon-sm"></i> Changer de serveur</button>
         </div>
         <div class="gds-panel-desc" style="margin-top:8px">
-          La liaison ne fonctionne pas ? Cliquez sur <strong>« Corriger la configuration »</strong>
-          pour ajuster le <strong>port SSH</strong>, la <strong>racine des dépôts du serveur</strong>
-          et le <strong>dossier local de clonage</strong>, puis enregistrez.
+          La liaison ne fonctionne pas ? Essayez <strong>« (Re)créer le raccourci vers le dépôt »</strong>
+          (aucune suppression, aucune perte : le raccourci <code>gds</code> du dépôt local est
+          simplement refait vers le dépôt du serveur), puis <strong>« Vérifier la liaison »</strong>.
+          Pour changer de serveur (ou corriger la fiche : adresse, port du service, port SSH,
+          racine des dépôts), utilisez <strong>« Changer de serveur »</strong> — les valeurs
+          techniques viennent de la fiche du serveur (onglet « ⚙️ GDS — paramétrage » → Serveurs GDS).
         </div>
       </div>
       <div class="gds-panel">${renderRemoveHtml("gds-registered-remove")}</div>
@@ -667,10 +577,48 @@ export function createGds(container) {
       pendingNotice = conn.status === "connected"
         ? "✅ Liaison vérifiée : ce poste joint la base et le dépôt de ce projet."
         : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
-          "Rien n'a été effacé sur ce poste : cliquez sur « Corriger la configuration » pour " +
-          "vérifier le port SSH, la racine des dépôts du serveur et le dossier de clonage, " +
-          "puis réessayez (ou retirez et réajoutez le projet).";
+          "Rien n'a été effacé sur ce poste : cliquez sur « (Re)créer le raccourci vers le dépôt » " +
+          "(il est refait vers le dépôt du serveur), puis « Vérifier la liaison » à nouveau. " +
+          "Aucune suppression ni réajout du projet n'est nécessaire.";
       await refresh();
+    });
+
+    // « (Re)créer le raccourci vers le dépôt » : rejoue l'association du dépôt
+    // local au dépôt du serveur (même geste que « Ajouter ce projet au GDS »).
+    // Idempotent : le raccourci `gds` est retiré puis recréé, `origin` est
+    // TOUJOURS préservé, et un projet déjà connu du serveur n'est jamais
+    // défait (aucune perte de données).
+    const relink = wrap.querySelector("#gds-relink-btn");
+    relink.addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) return;
+      const errEl = wrap.querySelector("#gds-relink-err");
+      const okEl = wrap.querySelector("#gds-relink-ok");
+      const email = String((identity && identity.email) || "").trim();
+      errEl.textContent = "";
+      okEl.textContent = "";
+      if (!email) {
+        errEl.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
+        return;
+      }
+      relink.disabled = true;
+      relink.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Raccourci…';
+      refreshIcons(container);
+      try {
+        await invoke("gds_add_project", {
+          project,
+          email,
+          gitName: String((identity && identity.git_name) || "").trim() || null,
+        });
+        notifyGdsChanged();
+        okEl.textContent = "✅ Raccourci recréé vers le dépôt du serveur — cliquez « Vérifier la liaison ».";
+      } catch (e) {
+        errEl.textContent = friendlyGdsError(e);
+      } finally {
+        relink.disabled = false;
+        relink.innerHTML = '<i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt';
+        refreshIcons(container);
+      }
     });
 
     // « Corriger la configuration » : rouvre le formulaire d'activation
@@ -911,7 +859,7 @@ export function createGds(container) {
       // technique (constat 1). Le formulaire complet est réservé à l'ACTIVATION
       // d'un projet qui n'est pas encore rattaché — ou au bouton « Corriger la
       // configuration ».
-      renderRegistered(cfg, onServer, await savedServerLabel(cfg));
+      renderRegistered(cfg, identity, onServer, await savedServerLabel(cfg));
       if (!onServer) renderAdd(identity);
     } else {
       renderConnect(cfg, secrets, identity, provisioned);

@@ -83,6 +83,27 @@
 > « Liaison à vérifier » (et non plus « Connexion en attente »), comme l'en-tête
 > de l'onglet, le panneau du projet et la liste des projets.
 >
+> **Correction (retour d'usage, implémentée)** — (c) **l'écran GDS d'un projet
+> ne crée plus de serveur** : il ne propose que **choisir un serveur mémorisé**,
+> **vérifier la liaison**, **activer / retirer le projet** (plus aucun champ
+> hôte / port / utilisateur / mot de passe / port SSH / racine des dépôts). Les
+> **valeurs techniques du serveur** (port SSH des dépôts, racine des dépôts
+> côté serveur) rejoignent la **fiche serveur**
+> (`ServerCredentials.ssh_port` / `gds_server_repos`, `gds_add_saved_server` /
+> `gds_update_saved_server`, exposées par `list_saved_servers`) : elles sont
+> saisies **une fois** dans l'onglet « ⚙️ GDS — paramétrage » → Serveurs GDS, puis
+> **recopiées** dans le projet par `gds_apply_server` (qui les **conserve** si la
+> fiche ne les porte pas — fiches héritées). Le **dossier local de clonage**
+> reste sur l'écran du projet (c'est le seul réglage propre au poste) ; (d)
+> **débloquer un projet déjà inscrit dont la liaison manque** : bouton
+> « **(Re)créer le raccourci vers le dépôt** » (rejoue `gds_add_project`,
+> idempotent — `origin` préservé, jamais de retrait/réajout) et messages non
+> destructifs ; (e) **URL du dépôt d'un serveur en conteneur** :
+> `gds_remote_url` honore la racine des dépôts dès qu'elle est un **chemin POSIX
+> absolu** (le home du user `git` d'un conteneur n'est pas la racine), alors
+> qu'une racine **Windows** (`C:\GDS\repos`, serveur natif historique) garde la
+> forme courte inchangée.
+>
 > **Liste de serveurs GDS (5 lots, implémenté)** — la fiche serveur porte
 > désormais un **nom** (obligatoire, court) et une **description** (facultative) :
 > `name` / `description` / `last_test_at` / `reachable` sont ajoutés à

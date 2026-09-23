@@ -325,17 +325,19 @@ d'un hébergement externe type GitHub.
   **badge d'état** : « ● Connecté » / « ● En attente » / « ○ À configurer ».
   Selon l'état, seuls les blocs utiles sont affichés :
   - **À configurer / En attente** : l'étape **« Connecter un serveur GDS »** —
-    réutiliser un **serveur mémorisé** (sélecteur, mots de passe jamais
-    affichés) : votre **compte GDS** porte l'identité, et c'est le **serveur**
-    qui prépare **sa** base (les champs de **compte technique** — utilisateur
-    dédié, mot de passe dédié, mot de passe admin — ne concernent plus que les
-    fiches héritées). Deux boutons :
-    **« Enregistrer la configuration »** (mémorise les champs **sans rien
+    choisir un **serveur mémorisé** (sélecteur, mots de passe jamais affichés) :
+    votre **compte GDS** porte l'identité, et c'est le **serveur** qui prépare
+    **sa** base (les champs de **compte technique** — utilisateur dédié, mot de
+    passe dédié, mot de passe admin — ne concernent plus que les fiches
+    héritées). Deux boutons :
+    **« Enregistrer la configuration »** (mémorise le serveur choisi **sans rien
     créer**) et **« Activer GDS »** (le serveur garantit sa base, puis active le
-    GDS pour le projet). Un bouton **« Enregistrer les mots de passe »** permet
-    de (re)saisir un mot de passe de fiche héritée **sans refaire
-    l'activation**. Juste en dessous, le **Port SSH du serveur**, la **Racine
-    des dépôts serveur** et le **Dossier local de clonage** sont réglables ;
+    GDS pour le projet). Le seul réglage demandé ici est le **Dossier local de
+    clonage** (propre à ce poste). **Aucune valeur technique du serveur**
+    (adresse, port du service, port SSH, racine des dépôts) n'est saisie sur
+    l'écran du projet : elle vient de la **fiche du serveur** (onglet
+    « ⚙️ GDS — paramétrage » → Serveurs GDS), et **aucune création de serveur
+    n'est proposée ici** ;
   - **Ajouter ce projet au GDS** : une fois activé (si le projet n'est pas déjà
     sur le serveur), crée un dépôt git bare sur le serveur, ajoute le remote
     `gds` (sans toucher à un éventuel `origin`) et pousse la branche courante.
@@ -351,12 +353,13 @@ d'un hébergement externe type GitHub.
     le **serveur choisi** (nom de sa fiche), puis **deux informations
     distinctes** : « **✅ Enregistré sur le serveur** » (l'inscription côté
     serveur) et « **⚠️ Liaison de ce poste : à vérifier** » (accès à la base et
-    au dépôt du projet). Bouton « **Vérifier la liaison** », bouton
-    « **Corriger la configuration** » (rouvre le formulaire pré-rempli pour
-    corriger le port SSH, la racine des dépôts serveur ou le dossier local de
-    clonage, puis « **Retour** »), ajout du projet si nécessaire et **Retirer du
-    GDS**. **Aucun champ technique** (hôte de base, port SSH, racine des dépôts,
-    dossier de clonage) n'est redemandé sur l'écran normal : ces valeurs sont
+    au dépôt du projet). Boutons : « **Vérifier la liaison** »,
+    « **(Re)créer le raccourci vers le dépôt** » (refait le raccourci `gds` du
+    dépôt local vers le dépôt du serveur, **sans rien supprimer** — aucun
+    retrait ni réajout du projet) et « **Changer de serveur** » (rouvre le
+    formulaire pré-rempli, puis « **Retour** »), ajout du projet si nécessaire
+    et **Retirer du GDS**. **Aucun champ technique** (hôte de base, port SSH,
+    racine des dépôts, dossier de clonage) n'est redemandé sur l'écran normal : ces valeurs sont
     conservées et relues automatiquement. La liste des projets GDS affiche de
     son côté « **Enregistré sur le serveur — liaison à vérifier** », et le nom du
     projet, dans le volet des fichiers, « **- (GDS — liaison établie)** » ou
@@ -389,7 +392,11 @@ d'un hébergement externe type GitHub.
     cette version (compte technique de la base, affichée
     `utilisateur@adresse:port`) **reste lisible et utilisable** : renseignez
     simplement votre **e-mail GDS** pour la compléter, sans rien perdre, et il
-    n'y a **pas de doublon** à créer. Autres blocs : **Mon identité**
+    n'y a **pas de doublon** à créer. Chaque fiche porte aussi les **valeurs
+    techniques du serveur** — **port SSH des dépôts** et **racine des dépôts
+    sur le serveur** (`/srv/git/repos` par exemple) — saisies **une seule fois
+    ici** et recopiées dans chaque projet qui applique la fiche. Autres blocs :
+    **Mon identité**
     (email + nom git), **Mes clés** (clef SSH publique du poste : afficher,
     copier, enregistrer sur un serveur) et **Mes projets GDS** (état,
     synchroniser, ajouter, ouvrir, **détacher**).
@@ -399,8 +406,9 @@ d'un hébergement externe type GitHub.
   **« Retirer aussi le travail côté serveur »** supprime en plus le dépôt et les
   entrées en base. Le détachement peut viser un projet **choisi dans la liste**,
   même s'il n'est pas le projet ouvert. **Appliquer un serveur** mémorisé
-  pré-remplit l'hôte, le port, l'utilisateur et l'identité, mais **conserve** le
-  port SSH et la racine des dépôts déjà configurés dans le projet visé. Une
+  pré-remplit l'hôte, le port, l'utilisateur, l'identité, **le port SSH et la
+  racine des dépôts** depuis la fiche (et **conserve** ce que le projet avait
+  déjà si la fiche ne les porte pas). Une
   fiche **« compte GDS »** ne porte pas le compte technique de la base : c'est
   le **serveur** qui prépare **sa** base, et son bouton **Appliquer** est
   **actif** ; les fiches écrites avant cette version **gardent** leur bouton

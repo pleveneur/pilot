@@ -73,6 +73,17 @@ pub(crate) struct ServerCredentials {
     /// injoignable, `None` jamais testé. Sert à afficher l'état sur la fiche.
     #[serde(default)]
     pub reachable: Option<bool>,
+    /// Port SSH du serveur (celui des dépôts git) — valeur TECHNIQUE du
+    /// serveur, saisie UNE fois dans la fiche et recopiée dans chaque projet
+    /// qui l'applique. Chaîne vide = jamais renseigné → repli sur le port du
+    /// projet (22 par défaut). `#[serde(default)]` : toute fiche antérieure
+    /// reste lisible, rien n'est effacé.
+    #[serde(default)]
+    pub ssh_port: String,
+    /// Racine des dépôts git CÔTÉ SERVEUR (ex. `/srv/git/repos`) — même logique
+    /// que `ssh_port`. Chaîne vide = jamais renseignée.
+    #[serde(default)]
+    pub gds_server_repos: String,
 
     // ── Fiche « identité utilisateur » (lot 1 : le compte GDS remplace le
     // compte technique). Tous ces champs sont FACULTATIFS à la lecture : une
@@ -355,6 +366,11 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 "description": c.description,
                 "last_test_at": c.last_test_at,
                 "reachable": c.reachable,
+                // Valeurs TECHNIQUES du serveur (port SSH, racine des dépôts) :
+                // jamais des secrets, recopiées dans le projet qui applique la
+                // fiche — l'écran du projet ne les redemande donc plus.
+                "ssh_port": c.ssh_port,
+                "gds_server_repos": c.gds_server_repos,
                 // Fiche « identité utilisateur » (lot 1) : l'adresse GDS, le
                 // port de l'API HTTP et le rôle reconnu. Jamais de mot de passe.
                 "identity": identity,
@@ -602,6 +618,35 @@ pub(crate) fn save_server_credentials(
     write_gds_secrets(&secrets)
 }
 
+/// Fixe les valeurs TECHNIQUES d'une fiche serveur déjà mémorisée (clé
+/// `user@host`) : port SSH et racine des dépôts. Une valeur VIDE conserve
+/// celle déjà mémorisée (même règle que le nom et la description) ; sans
+/// entrée existante : no-op silencieux. Aucun secret ici.
+pub(crate) fn set_server_technical(
+    host: &str,
+    user: &str,
+    ssh_port: &str,
+    gds_server_repos: &str,
+) -> Result<(), String> {
+    let ssh = ssh_port.trim();
+    let repos = gds_server_repos.trim();
+    if ssh.is_empty() && repos.is_empty() {
+        return Ok(());
+    }
+    let mut secrets = read_gds_secrets()?;
+    let key = server_key(host, user);
+    let Some(entry) = secrets.servers.get_mut(&key) else {
+        return Ok(());
+    };
+    if !ssh.is_empty() {
+        entry.ssh_port = ssh.to_string();
+    }
+    if !repos.is_empty() {
+        entry.gds_server_repos = repos.to_string();
+    }
+    write_gds_secrets(&secrets)
+}
+
 /// Fixe le NOM et la DESCRIPTION d'une fiche serveur déjà mémorisée (clé
 /// `user@host`). Ne touche PAS aux mots de passe. Sans entrée existante :
 /// no-op silencieux (l'ajout passe par `save_server_credentials`).
@@ -728,19 +773,31 @@ pub fn gds_apply_server(
     )?;
     // Pré-remplir la config projet (jamais de mot de passe ici).
     // CONSERVER les informations de serveur DISTANT déjà présentes : la fiche
-    // mémorisée ne porte ni le port SSH ni la racine des dépôts côté serveur ;
-    // les écraser avec des valeurs par défaut casserait le rattachement à un
-    // serveur distant existant (défaut réel corrigé).
+    // ne porte pas forcément de port SSH ni de racine des dépôts (fiche
+    // héritée) ; les écraser avec des valeurs par défaut casserait le
+    // rattachement à un serveur existant. Quand la fiche les porte, elles font
+    // AUTORITÉ (ce sont les valeurs techniques du serveur choisi : l'écran du
+    // projet ne les demande plus).
     let existing = read_gds_config(&project).ok();
     let local_dir = existing
         .as_ref()
         .and_then(|c| c.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
-    let ssh_port = existing
+    let existing_ssh_port = existing
         .as_ref()
         .map(|c| if c.ssh_port == 0 { 22 } else { c.ssh_port })
         .unwrap_or(22);
-    let gds_server_repos = existing.as_ref().and_then(|c| c.gds_server_repos.clone());
+    let existing_repos = existing.as_ref().and_then(|c| c.gds_server_repos.clone());
+    let ssh_port = saved
+        .ssh_port
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|p| *p > 0)
+        .unwrap_or(existing_ssh_port);
+    let gds_server_repos = Some(saved.gds_server_repos.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or(existing_repos);
     let cfg = GdsConfig {
         enabled: true,
         db_host: host.trim().to_string(),
@@ -869,6 +926,8 @@ pub async fn gds_add_saved_server(
     password: String,
     name: String,
     description: String,
+    ssh_port: String,
+    server_repos: String,
 ) -> Result<Value, String> {
     if host.trim().is_empty() || email.trim().is_empty() {
         return Err("Adresse du serveur et e-mail GDS sont requis".to_string());
@@ -877,6 +936,9 @@ pub async fn gds_add_saved_server(
     let role = identity_login_role(&res)?;
     save_gds_identity(&host, &email, &http_port, &email, &password, &role)?;
     set_server_label(&host, &email, &name, &description)?;
+    // Valeurs TECHNIQUES du serveur : elles vivent ici (et non plus sur l'écran
+    // du projet, qui les recopie depuis la fiche choisie).
+    set_server_technical(&host, &email, &ssh_port, &server_repos)?;
     let _ = record_server_test(&host, &email, true);
     Ok(json!({
         "ok": true,
@@ -921,6 +983,8 @@ pub async fn gds_update_saved_server(
     password: String,
     name: String,
     description: String,
+    ssh_port: String,
+    server_repos: String,
 ) -> Result<Value, String> {
     if host.trim().is_empty() || email.trim().is_empty() {
         return Err("Adresse du serveur et e-mail GDS sont requis".to_string());
@@ -935,6 +999,9 @@ pub async fn gds_update_saved_server(
     let mut password_eff = password.trim().to_string();
     let mut name_eff = name.trim().to_string();
     let mut description_eff = description.trim().to_string();
+    // Valeurs techniques : conservées si laissées vides (même règle).
+    let mut ssh_eff = ssh_port.trim().to_string();
+    let mut repos_eff = server_repos.trim().to_string();
     let previous = read_gds_secrets()
         .ok()
         .and_then(|s| s.servers.get(&server_key(&old_host, &key_user)).cloned());
@@ -947,6 +1014,12 @@ pub async fn gds_update_saved_server(
         }
         if description_eff.is_empty() {
             description_eff = old.description;
+        }
+        if ssh_eff.is_empty() {
+            ssh_eff = old.ssh_port;
+        }
+        if repos_eff.is_empty() {
+            repos_eff = old.gds_server_repos;
         }
     }
     let res =
@@ -966,6 +1039,7 @@ pub async fn gds_update_saved_server(
         &role,
     )?;
     set_server_label(&host, &key_user, &name_eff, &description_eff)?;
+    set_server_technical(&host, &key_user, &ssh_eff, &repos_eff)?;
     let _ = record_server_test(&host, &key_user, true);
     Ok(json!({
         "ok": true,
@@ -2755,15 +2829,16 @@ mod tests {
 
     #[test]
     fn local_server_keeps_historical_remote_url() {
-        // Serveur LOCAL : URL STRICTEMENT inchangée (pas de préfixe de repos),
-        // même si une racine serveur est renseignée par erreur.
+        // Serveur LOCAL dont la racine de repos est un chemin WINDOWS (serveur
+        // natif historique) : URL STRICTEMENT inchangée (pas de préfixe de
+        // repos) — le home du user `git` EST la racine.
         let cfg = GdsConfig {
             enabled: true,
             server_url: String::new(),
             identity_email: "dev@kalico".to_string(),
             gds_local_dir: None,
             ssh_port: 0,
-            gds_server_repos: Some("/home/git/repos".to_string()),
+            gds_server_repos: Some("C:\\GDS\\repos".to_string()),
             ssh_host: "127.0.0.1:22".to_string(),
             db_host: "127.0.0.1".to_string(),
             db_port: "5432".to_string(),
@@ -2774,8 +2849,21 @@ mod tests {
             gds_remote_url(&cfg, "proj"),
             "ssh://git@127.0.0.1:22/proj.git"
         );
-        // Racine serveur jamais utilisée en local.
         assert!(server_repo_path(&cfg, "proj").is_some());
+
+        // Racine POSIX ABSOLUE sur un serveur vu comme « local » (cas d'un
+        // SERVEUR EN CONTENEUR sur la même machine) : elle fait autorité, sinon
+        // l'URL ne désigne aucun dépôt sur le serveur (liaison impossible alors
+        // que le projet y est inscrit).
+        let mut container = cfg.clone();
+        container.gds_server_repos = Some("/srv/git/repos".to_string());
+        container.ssh_port = 2222;
+        container.ssh_host = "127.0.0.1:2222".to_string();
+        assert!(is_local_gds_server(&container));
+        assert_eq!(
+            gds_remote_url(&container, "proj"),
+            "ssh://git@127.0.0.1:2222/srv/git/repos/proj.git"
+        );
     }
 
     #[test]
