@@ -459,7 +459,18 @@ pub fn remote_test_result(
             "error": ""
         }),
         Some(v) if v.get("error").is_some() => {
-            let err = v["error"]["message"].as_str().unwrap_or("handshake error");
+            // `error` peut être un objet JSON-RPC (`{code, message}`) ou une
+            // simple chaîne (`{"error":"not_found","message":"..."}`) : on
+            // accepte les deux, et à défaut d'un texte exploitable on replie sur
+            // `detail` (statut HTTP) plutôt qu'un texte figé qui masquerait la
+            // cause réelle.
+            let err = v["error"]["message"]
+                .as_str()
+                .or_else(|| v["message"].as_str())
+                .or_else(|| v["error"].as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(detail);
             serde_json::json!({
                 "ok": false,
                 "server": label,
@@ -1115,6 +1126,70 @@ mod tests {
         assert_eq!(res["protocolVersion"], "2024-11-05");
         assert_eq!(res["error"], "");
         assert!(!res.to_string().contains(FICTIONAL_KEY));
+    }
+
+    /// Le serveur peut renvoyer `error` sous forme de simple chaîne (au lieu
+    /// d'un objet JSON-RPC) : le message utile doit remonter, pas un texte figé.
+    #[test]
+    fn remote_string_error_surfaces_a_useful_message() {
+        let resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": "authentification refusée par le serveur"
+        });
+        let res = remote_test_result(
+            "Distant",
+            Some(&resp),
+            "le serveur a répondu avec le statut HTTP 401",
+            None,
+        );
+        assert_eq!(res["ok"], false);
+        let err = res["error"].as_str().unwrap();
+        assert!(
+            err.contains("authentification refusée"),
+            "message utile attendu, obtenu : {}",
+            err
+        );
+        assert_ne!(err, "handshake error", "texte figé : {}", err);
+
+        // Même forme, avec le message utile dans le champ frère `message`.
+        let resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": "not_found",
+            "message": "aucun serveur MCP à cette adresse"
+        });
+        let res = remote_test_result("Distant", Some(&resp), "", None);
+        assert!(
+            res["error"].as_str().unwrap().contains("aucun serveur MCP"),
+            "message : {}",
+            res["error"]
+        );
+    }
+
+    /// Sans message exploitable dans `error`, on replie sur `detail` (le statut
+    /// HTTP) au lieu d'un texte figé qui masquerait la cause réelle.
+    #[test]
+    fn remote_error_without_message_falls_back_to_the_http_status() {
+        let resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": -32000 }
+        });
+        let res = remote_test_result(
+            "Distant",
+            Some(&resp),
+            "le serveur a répondu avec le statut HTTP 403",
+            None,
+        );
+        assert_eq!(res["ok"], false);
+        let err = res["error"].as_str().unwrap();
+        assert!(
+            err.contains("statut HTTP 403"),
+            "statut attendu, obtenu : {}",
+            err
+        );
+        assert_ne!(err, "handshake error", "texte figé : {}", err);
     }
 
     #[test]
