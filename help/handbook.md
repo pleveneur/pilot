@@ -348,9 +348,11 @@ d'un hébergement externe type GitHub.
     le **serveur choisi** (nom de sa fiche), puis **deux informations
     distinctes** : « **✅ Enregistré sur le serveur** » (l'inscription côté
     serveur) et « **⚠️ Liaison de ce poste : à vérifier** » (accès à la base et
-    au dépôt du projet — pour un serveur **en conteneur** sur la même machine,
-    l'existence du dépôt est demandée **au serveur**, jamais déduite d'un
-    dossier de ce poste : l'état affiché reste donc honnête). Boutons : « **Vérifier la liaison** »,
+    au dépôt du projet — hors serveur local natif de ce poste (dont la racine
+    des dépôts est un chemin de ce poste), l'existence du dépôt est demandée
+    **au serveur** et **jamais** déduite d'un dossier de ce poste : si le
+    serveur ne répond pas, l'état reste **« à vérifier »**, jamais « Connecté »).
+    Boutons : « **Vérifier la liaison** »,
     « **(Re)créer le raccourci vers le dépôt** » (refait le raccourci `gds` du
     dépôt local vers le dépôt du serveur, **sans rien supprimer** — aucun
     retrait ni réajout du projet) et « **Changer de serveur** » (rouvre le
