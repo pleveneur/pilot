@@ -1850,7 +1850,12 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   l'utilisateur** (`ask_confirm`) avant de lancer un agent sur un serveur MCP.
   Si désactivé, il choisit et lance seul.
 - L'agent standard du projet garde son comportement historique (1er serveur
-  stdio activé au démarrage). Les serveurs restent en transport `stdio` seul.
+  activé au démarrage, local ou distant).
+- **Serveur distant** : dans **Paramètres → Serveurs MCP**, choisissez le type
+  *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et une
+  **référence de clé** de votre coffre (la clé elle-même n'est jamais
+  enregistrée dans la configuration ni affichée). Le bouton **Tester la
+  connexion** interroge le serveur distant pour vérifier l'adresse et la clé.
 
 ---
 
