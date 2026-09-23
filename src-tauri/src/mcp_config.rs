@@ -46,7 +46,8 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Un serveur MCP configurable. Le transport reste une chaîne : `"stdio"` par
-/// défaut (mode local, seul transport effectivement consommé par le POC).
+/// défaut (mode local, un programme de cet ordinateur) ou `"http"`/`"https"`
+/// (mode distant, une adresse réseau).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct McpServer {
@@ -179,12 +180,6 @@ pub fn write_mcp_config(app: &AppHandle, cfg: &McpConfig) -> Result<(), String> 
     }
     let raw = serde_json::to_string_pretty(cfg).map_err(|e| format!("Sérialisation mcp.json: {}", e))?;
     std::fs::write(&path, raw).map_err(|e| format!("Écriture mcp.json: {}", e))
-}
-
-fn first_enabled_stdio(cfg: &McpConfig) -> Option<&McpServer> {
-    cfg.servers
-        .iter()
-        .find(|s| s.enabled && s.transport.trim().eq_ignore_ascii_case("stdio"))
 }
 
 /// Lit un `mcp.json` depuis un chemin explicite (sans `AppHandle`). Fichier
@@ -726,34 +721,6 @@ mod tests {
         // Sans AppHandle, on teste juste la structure par défaut.
         let cfg = McpConfig::default();
         assert!(cfg.servers.is_empty());
-    }
-
-    #[test]
-    fn first_enabled_stdio_ignores_unknown_and_disabled_transports() {
-        let cfg = McpConfig {
-            servers: vec![
-                // Désactivé → ignoré
-                McpServer {
-                    id: "off".to_string(),
-                    transport: "stdio".to_string(),
-                    enabled: false,
-                    command: "x".to_string(),
-                    ..Default::default()
-                },
-                // Transport réellement inconnu → ignoré (traité comme local,
-                // mais pas `stdio` au sens strict de first_enabled_stdio)
-                McpServer {
-                    id: "unknown".to_string(),
-                    transport: "carrier-pigeon".to_string(),
-                    enabled: true,
-                    command: "y".to_string(),
-                    ..Default::default()
-                },
-                sample_server(),
-            ],
-        };
-        let picked = first_enabled_stdio(&cfg).expect("un serveur stdio enabled");
-        assert_eq!(picked.id, "test");
     }
 
     #[test]
