@@ -3207,6 +3207,73 @@ mod tests {
         }
     }
 
+    /// Correctif « rattachement du créateur » (bout en bout, PostgreSQL) : un
+    /// **développeur** qui crée un projet NEUF est rattaché d'office à ce projet
+    /// (donc **membre**) et peut le publier ensuite. La garde reste mordante :
+    /// un **autre** développeur, non rattaché, est toujours REFUSÉ.
+    /// Saute proprement sans `PILOT_GDS_TEST_URL` (aucune base réelle visée).
+    #[tokio::test]
+    async fn dev_creator_is_enrolled_and_can_publish_his_project() {
+        let (pool, _guard) = match fresh_migrated_test_db().await {
+            Some(v) => v,
+            None => return,
+        };
+        create_user(&pool, "dev-createur@gds.test", "", "", "dev", "active")
+            .await
+            .expect("dev créateur");
+        create_user(&pool, "dev-autre@gds.test", "", "", "dev", "active")
+            .await
+            .expect("dev tiers");
+
+        // Création par la voie du service (projet + dépôt bare dans un dossier
+        // temporaire jetable) avec l'identité du développeur.
+        let dir = std::env::temp_dir().join(format!("pilot-gds-enroll-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let summary = crate::git::create_project_in_root(
+            &pool,
+            &root,
+            "proj-enroll",
+            "dev-createur@gds.test",
+            "",
+        )
+        .await
+        .expect("création du projet par le développeur");
+        let project_id = summary["project_id"].as_i64().expect("project_id");
+
+        // 1) Le développeur créateur est MEMBRE de son propre projet.
+        let creator = get_user_by_email(&pool, "dev-createur@gds.test")
+            .await
+            .unwrap()
+            .expect("dev créateur existant");
+        assert!(
+            is_project_member(&pool, project_id, creator.id)
+                .await
+                .unwrap(),
+            "un développeur qui crée un projet doit être membre de ce projet"
+        );
+
+        // 2) …et peut donc PUBLIER (garde de publication réelle).
+        assert!(
+            ensure_project_publisher(&pool, "proj-enroll", "dev-createur@gds.test", "server")
+                .await
+                .is_ok(),
+            "le développeur créateur doit pouvoir publier son projet"
+        );
+
+        // 3) La GARDE tient toujours : un autre développeur, non rattaché, ne
+        //    publie pas le projet d'un autre.
+        assert!(
+            ensure_project_publisher(&pool, "proj-enroll", "dev-autre@gds.test", "server")
+                .await
+                .is_err(),
+            "un développeur non rattaché ne doit PAS publier le projet d'un autre"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Correctif « garde symétrique » — la garde d'ajout/publication doit
     /// appliquer la règle de **publication** (`can_publish_project` :
     /// administrateur, ou développeur **attribué**) dès que le projet existe

@@ -2065,8 +2065,9 @@ struct ProjectCreateBody {
 ///   projet). Sans cet appel, un `dev` **non attribué** republiait un projet
 ///   existant par le service alors que le poste le refuse. Un projet neuf suit
 ///   la règle d'ajout (`can_add_project`), comme sur le poste.
-/// * Identité : le rattachement d'office de l'auteur administrateur
-///   (`git::register_project` → `enroll_admin_creator`) utilise l'email du
+/// * Identité : le rattachement d'office du créateur
+///   (`git::register_project` → `enroll_creator`, projet neuf : tout rôle
+///   autorisé à ajouter un projet) utilise l'email du
 ///   **compte porté par le jeton**, relu en base depuis `user_id`.
 /// * Le nom est validé (`validate_project_name` : pas de `..`, pas de chemin
 ///   absolu, pas de nom vide) et le dépôt est `<repos_root>/<nom>.git`.

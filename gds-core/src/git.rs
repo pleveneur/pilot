@@ -74,19 +74,34 @@ pub fn remove_bare(gds_local_dir: &str, project_name: &str) -> Result<(), String
     Ok(())
 }
 
-/// Refonte GDS **L3.4** — l'appartenance à un projet est un **droit** : plus
-/// d'inscription automatique pour un développeur non administrateur.
+/// Refonte GDS **L3.4** — l'appartenance à un projet est un **droit** : aucune
+/// inscription automatique pour un compte qui n'y est pas autorisé.
 ///
-/// À la création d'un projet, seul un **administrateur** est rattaché d'office
-/// (responsable de ses projets) ; l'email d'un créateur `dev`/`standard` n'est
-/// **pas** inscrit. Un développeur doit être attribué explicitement
-/// (`db::assign_project`, opération d'administration) pour obtenir des droits
-/// d'écriture sur le projet.
-async fn enroll_admin_creator(pool: &PgPool, project_id: i64, email: &str) {
+/// À la création d'un projet **neuf**, son créateur est rattaché d'office : sans
+/// ce rattachement, un **développeur** n'est pas membre de son propre projet et
+/// se bloque lui-même à l'opération suivante (la garde de publication exige
+/// d'être attribué au projet, cf. `db::ensure_project_publisher`). Un créateur
+/// **administrateur** reste rattaché même quand le projet existe déjà
+/// (responsable de ses projets) ; un rôle non autorisé à ajouter un projet
+/// (`standard`, `root`) n'est jamais rattaché.
+async fn enroll_creator(pool: &PgPool, project_id: i64, email: &str, created: bool) {
     if let Ok(Some(user)) = db::get_user_by_email(pool, email).await {
-        if user.role == "admin" {
+        if should_enroll_creator(created, &user.role) {
             let _ = db::assign_project(pool, project_id, user.id, "dev").await;
         }
+    }
+}
+
+/// Décision **pure** du rattachement d'office du créateur (testable sans base).
+/// Projet **neuf** : rattachement si le rôle autorise l'ajout d'un projet — le
+/// développeur qui crée un projet devient donc membre de ce projet. Projet
+/// **déjà enregistré** : seul un administrateur est rattaché (la garde reste
+/// inchangée pour tout autre compte).
+fn should_enroll_creator(created: bool, role: &str) -> bool {
+    if created {
+        crate::roles::can_add_project(role)
+    } else {
+        role == "admin"
     }
 }
 
@@ -105,11 +120,14 @@ async fn register_project(
     // Idempotent : si le projet existe déjà en base (ex: tentative précédente
     // ayant échoué plus tard sur le remote), on le réutilise au lieu d'échouer
     // sur la contrainte UNIQUE `projects.name`.
-    let project_id = match db::get_project_by_name(pool, name).await? {
-        Some(id) => id,
+    let (project_id, created) = match db::get_project_by_name(pool, name).await? {
+        Some(id) => (id, false),
         None => {
-            db::create_project(pool, name, &repo_name, "", path_on_server, "active", description)
-                .await?
+            let id = db::create_project(
+                pool, name, &repo_name, "", path_on_server, "active", description,
+            )
+            .await?;
+            (id, true)
         }
     };
     // git_repos.project_id est UNIQUE → idempotent aussi.
@@ -117,10 +135,10 @@ async fn register_project(
         db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
     }
     // Refonte GDS L3.4 : l'appartenance à un projet est un **droit**, plus une
-    // inscription automatique. Seul un **administrateur** est rattaché d'office
-    // au projet qu'il crée ; un développeur non admin doit être attribué
-    // explicitement (`db::assign_project`) pour obtenir des droits dessus.
-    enroll_admin_creator(pool, project_id, email).await;
+    // inscription automatique. Le créateur d'un projet **neuf** est rattaché
+    // d'office (sinon un développeur se bloque sur son propre projet) ; sur un
+    // projet déjà enregistré, seul un administrateur est rattaché.
+    enroll_creator(pool, project_id, email, created).await;
     Ok(json!({ "project_id": project_id, "name": name, "repo_name": repo_name, "bare_path": path_on_server }))
 }
 
@@ -378,10 +396,10 @@ pub async fn add_project_remote(
 ) -> Result<Value, String> {
     let name = validate_project_name(name)?;
     let repo_name = repo_name_for(&name)?;
-    let project_id = match db::get_project_by_name(pool, &name).await? {
-        Some(id) => id,
+    let (project_id, created) = match db::get_project_by_name(pool, &name).await? {
+        Some(id) => (id, false),
         None => {
-            db::create_project(
+            let id = db::create_project(
                 pool,
                 &name,
                 &repo_name,
@@ -390,15 +408,16 @@ pub async fn add_project_remote(
                 "active",
                 description,
             )
-            .await?
+            .await?;
+            (id, true)
         }
     };
     if db::get_git_repo_by_project(pool, project_id).await?.is_none() {
         db::create_git_repo(pool, project_id, path_on_server, path_on_server).await?;
     }
-    // Refonte GDS L3.4 : même règle qu'en local — seule une création par un
-    // administrateur rattache son auteur d'office au projet.
-    enroll_admin_creator(pool, project_id, email).await;
+    // Refonte GDS L3.4 : même règle qu'en local — le créateur d'un projet NEUF
+    // est rattaché d'office, un administrateur l'est aussi sur un projet connu.
+    enroll_creator(pool, project_id, email, created).await;
     Ok(json!({
         "project_id": project_id,
         "name": name,
@@ -432,6 +451,69 @@ mod tests {
         assert!(repo_name_for("../evil").is_err());
         assert!(repo_name_for("a/b").is_err());
         assert!(repo_name_for("").is_err());
+    }
+
+    /// Correctif « rattachement du créateur » : un développeur qui crée un
+    /// projet **neuf** est rattaché d'office à ce projet (donc **membre**) et la
+    /// garde de publication l'accepte ensuite (`can_publish_project("dev", true)`).
+    /// La garde reste entière partout ailleurs : un développeur **non** rattaché
+    /// ne publie pas le projet d'un autre, et un projet **déjà enregistré** ne
+    /// rattache que son administrateur.
+    #[test]
+    fn creator_of_a_new_project_is_enrolled_and_the_publish_guard_holds() {
+        // 1) Le cas corrigé : développeur créateur → rattaché → publication OK.
+        assert!(
+            should_enroll_creator(true, "dev"),
+            "un développeur qui crée un projet doit être rattaché à son projet"
+        );
+        assert!(
+            crate::roles::can_publish_project("dev", true),
+            "un développeur rattaché doit pouvoir publier son projet"
+        );
+        // 2) La garde tient : développeur NON rattaché → publication refusée.
+        assert!(
+            !crate::roles::can_publish_project("dev", false),
+            "un développeur non rattaché ne doit PAS publier le projet d'un autre"
+        );
+        // 3) Projet EXISTANT : comportement d'origine préservé (admin seul).
+        assert!(should_enroll_creator(false, "admin"));
+        assert!(!should_enroll_creator(false, "dev"));
+        // 4) Rôle sans droit d'ajout : jamais rattaché, même créateur.
+        assert!(!should_enroll_creator(true, "standard"));
+        assert!(!should_enroll_creator(true, "root"));
+    }
+
+    /// Contrôle **structurel** du branchement (exécutable sans PostgreSQL, donc
+    /// présent en CI) : `register_project` doit déterminer si le projet est
+    /// **neuf** avant sa création et transmettre ce fait à `enroll_creator`.
+    /// Sans ce branchement, la décision testée ci-dessus n'est jamais appliquée
+    /// et le développeur redevient non-membre de son propre projet.
+    /// Extraction **CRLF-safe** (`find("\n}")`, jamais `"\n}\n"`) : les fins de
+    /// ligne du dépôt sont Windows ; un motif LF-seul ferait courir le corps
+    /// jusqu'à la fin du fichier et rendrait le contrôle complaisant.
+    #[test]
+    fn register_project_enrolls_creator_only_for_new_projects() {
+        let src = include_str!("git.rs");
+        let start = src
+            .find("async fn register_project(")
+            .expect("`register_project` absente");
+        let body = &src[start..];
+        let end = body.find("\n}").unwrap_or(body.len());
+        let body = &body[..end];
+        assert!(
+            body.contains("(id, true)") && body.contains("(id, false)"),
+            "`register_project` doit distinguer projet NEUF / projet EXISTANT"
+        );
+        assert!(
+            body.contains("enroll_creator(pool, project_id, email, created)"),
+            "`register_project` doit transmettre le fait « projet neuf » à \
+             `enroll_creator` : sans ce branchement, un développeur créateur \
+             reste non-membre de son propre projet"
+        );
+        assert!(
+            !body.contains("user.role == \"admin\""),
+            "le rattachement ne doit plus être codé en dur sur le rôle admin"
+        );
     }
 
     #[test]
