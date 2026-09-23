@@ -220,6 +220,14 @@ class Sidebar {
     // SUPPRIMÉ (T6) : l'indicateur d'activité est désormais l'UNIQUE cercle en
     // haut à droite (agent-activity.js). Le poll 2s de get_agent_supervision est
     // géré par ce module.
+
+    // Une action GDS sur un projet (activation, retrait, configuration,
+    // vérification de liaison) change le suffixe affiché dans la barre « Projets
+    // en cours » : on la redessine à la demande. Aucun état n'est mémorisé, le
+    // suffixe reste recalculé depuis `gds_connection_status`.
+    document.addEventListener("pilot-gds-changed", () => {
+      this._renderOpenProjectsBar();
+    });
   }
 
   async init() {

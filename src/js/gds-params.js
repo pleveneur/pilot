@@ -605,7 +605,9 @@ export function projectStatusBadge(status, provisioned, onServer) {
   // (accès base + dépôt pas encore utilisables). L'ancien « Sur le serveur —
   // non connecté » se lisait comme « pas enregistré » : contradiction.
   if (onServer) return { kind: "warn", text: "Enregistré sur le serveur — liaison à vérifier" };
-  if (status === "error") return { kind: "warn", text: "Connexion en attente" };
+  // Même mot que l'en-tête de l'onglet, le panneau du projet, la liste des
+  // projets et les messages : un seul vocabulaire pour un seul fait.
+  if (status === "error") return { kind: "warn", text: "Liaison à vérifier" };
   if (provisioned) return { kind: "warn", text: "Provisionné — non ajouté" };
   return { kind: "off", text: "Non configuré" };
 }

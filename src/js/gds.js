@@ -87,6 +87,15 @@ function currentProjectPath() {
   return window._pilotProjectPath || null;
 }
 
+/**
+ * Signale qu'un état GDS d'un projet a changé : la barre « Projets en cours »
+ * (suffixe GDS du nom) se redessine sans attendre une bascule de projet.
+ * Événement seul — aucun état mémorisé (le suffixe est recalculé à l'affichage).
+ */
+function notifyGdsChanged() {
+  document.dispatchEvent(new CustomEvent("pilot-gds-changed"));
+}
+
 /** Échappe le HTML pour injection sûre dans innerHTML. */
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -380,6 +389,7 @@ export function createGds(container) {
       try {
         await persists(false);
         okEl.textContent = "✅ Configuration enregistrée (port SSH, racine des dépôts, dossier local).";
+        notifyGdsChanged();
       } catch (e) {
         errEl.textContent = friendlyGdsError(e);
       } finally {
@@ -517,6 +527,7 @@ export function createGds(container) {
             "✅ Base provisionnée. Enregistrez la clé du poste sur le serveur " +
             "depuis l'onglet « ⚙️ GDS — paramétrage » → Mes clés.";
         }
+        notifyGdsChanged();
         await refresh();
         const okEl = bodyEl.querySelector("#gds-provision-ok");
         if (okEl && !(res && res.manual_setup)) {
@@ -574,6 +585,7 @@ export function createGds(container) {
         });
         await refresh();
         const okEl = bodyEl.querySelector("#gds-add-ok");
+        notifyGdsChanged();
         if (okEl) {
           okEl.textContent = res && res.initialized
             ? "✅ Projet ajouté au GDS (dossier initialisé en dépôt Git + identité réglée localement)."
@@ -651,6 +663,7 @@ export function createGds(container) {
       btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Vérification…';
       refreshIcons(container);
       const conn = await fetchGdsConnectionStatus(invoke, project);
+      notifyGdsChanged();
       pendingNotice = conn.status === "connected"
         ? "✅ Liaison vérifiée : ce poste joint la base et le dépôt de ce projet."
         : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
@@ -816,6 +829,7 @@ export function createGds(container) {
           ? "✅ Projet retiré du GDS (purge serveur effectuée)."
           : "✅ Projet retiré du GDS (sans purge serveur).";
         confirmBox.style.display = "none";
+        notifyGdsChanged();
         await refresh();
       } catch (e) {
         removeErr.textContent = String(e);

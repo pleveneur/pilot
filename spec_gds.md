@@ -73,6 +73,16 @@
 > n'écrase jamais un projet déjà lié) ; R5 pleine largeur + multi-colonnes
 > (`gds-cols`).
 >
+> **Correction (retour d'usage, implémentée)** — (a) **la liste des projets se
+> redessine après toute action GDS** : l'onglet projet émet `pilot-gds-changed`
+> (`gds.js`) à chaque action réussie (activation, enregistrement de
+> configuration, ajout, retrait, vérification de liaison) et la barre « Projets
+> en cours » l'écoute (`sidebar.js`) pour recalculer son suffixe — un projet
+> retiré du GDS ne peut plus rester affiché « liaison à vérifier » ; (b)
+> **vocabulaire unifié** : le badge de liste d'un projet en échec de liaison dit
+> « Liaison à vérifier » (et non plus « Connexion en attente »), comme l'en-tête
+> de l'onglet, le panneau du projet et la liste des projets.
+>
 > **Liste de serveurs GDS (5 lots, implémenté)** — la fiche serveur porte
 > désormais un **nom** (obligatoire, court) et une **description** (facultative) :
 > `name` / `description` / `last_test_at` / `reachable` sont ajoutés à

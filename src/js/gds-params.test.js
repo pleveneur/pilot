@@ -575,6 +575,10 @@ describe("gds-params — section Mes projets GDS (L5.5)", () => {
     expect(onServer.text).toContain("Enregistré sur le serveur");
     expect(onServer.text).toContain("liaison à vérifier");
     expect(onServer.text).not.toContain("non connecté");
+    // Un projet ABSENT du serveur en échec de liaison dit la même chose que
+    // l'onglet du projet et la barre des projets : « Liaison à vérifier »
+    // (plus de « Connexion en attente », vocabulaire orphelin).
+    expect(projectStatusBadge("error", true, false)).toEqual({ kind: "warn", text: "Liaison à vérifier" });
     expect(projectStatusBadge("not_configured", false, false)).toEqual({ kind: "off", text: "Non configuré" });
     expect(projectStatusBadge("not_configured", true, false).text).toMatch(/Provisionné/);
   });
