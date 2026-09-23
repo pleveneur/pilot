@@ -409,7 +409,7 @@ un paramètre de chemin serait un piège de syntaxe).
 
 | Route | Méthode | Garde de rôle | Corps → Réponse |
 |---|---|---|---|
-| `/api/gds/projects/create` | POST | écriture (`roles::can_write`) — `standard` **403** | `{name, description?}` → `{ok, project_id, name, repo_name, bare_path, bare_created}` |
+| `/api/gds/projects/create` | POST | écriture (`roles::can_write`) — `standard` **403** — **puis** garde de publication `gds_db::ensure_can_add_project(…, "server")` (projet **déjà enregistré** → attribution au projet exigée) : refus **403 avant toute action** | `{name, description?}` → `{ok, project_id, name, repo_name, bare_path, bare_created}` |
 | `/api/gds/projects/repo-exists` | POST | lecture (tout jeton authentifié) | `{name}` → `{name, exists, in_db, on_disk, path}` |
 | `/api/gds/ssh-keys` | POST | compte **avec identité** (tout rôle) ; `user_id == 0` → **403** | `{public_key}` → `{ok, id, created, fingerprint, authorized_keys_rewritten}` |
 
@@ -473,6 +473,13 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   - `dev` : publier / forcer un projet **attribué** (`can_publish_project`,
     `can_force_publish` avec `project_members`) ;
   - `standard` : **lecture seule** (écriture refusée, `can_write`) ;
+  - **garde de publication identique sur les DEUX voies** : le geste
+    « (re)créer le raccourci vers le dépôt » (`gds_add_project`) sur un projet
+    **déjà enregistré** exige l'**attribution au projet** — appliqué par
+    `gds_db::ensure_can_add_project` côté poste (provenance `"desktop"`) **et**
+    côté service (`POST /api/gds/projects/create`, provenance `"server"`),
+    refus **403 avant toute action** ; un projet **neuf** suit la règle d'ajout
+    (`can_add_project`) ;
   - **session historique** du poste (rôle vide = `Legacy`) : droits d'écriture
     conservés (compatibilité des installations existantes) ; rôle hors
     vocabulaire = `Unknown`, **toujours refusé**. **Gestion des comptes
