@@ -37,8 +37,8 @@
 > `purge_server=true`, jamais par défaut), section config de l'onglet GDS ;
 > (3) **Bandeau connecté fiable** — commande `gds_connection_status(project)`
 > (`connected` | `error` | `not_configured`, reconnexion effective + dépôt bare
-> valide + remote `gds`), sidebar « - (GDS ✓) » / « - (GDS ✕) » via
-> `gds_status.js` (fail-open, `gds_enabled` respecté) ;
+> valide + remote `gds`), sidebar « - (GDS — liaison établie) » / « - (GDS —
+> liaison à vérifier) » via `gds_status.js` (fail-open, `gds_enabled` respecté) ;
 > (4) **Redessin UX (écran-état-machine, R1–R5)** — onglet GDS réécrit : badge
 > d'état « Connecté / En attente / À configurer » (`gds_connection_status`),
 > **Identité GLOBALE** (email + nom git) saisie une seule fois, pré-remplie
@@ -48,9 +48,18 @@
 > serveur mémorisé OU nouveau) → « Activer GDS » (`gds_provision`, email admin =
 > identité globale) ; badge « ✅ Déjà ajouté » + bouton d'ajout masqué quand
 > `on_server` (`gds_connection_status → on_server`) ; état connecté compact
-> (synchro, retirer avec confirmation) ; bloc « ▶ Avancé »
-> replié (SSH, purge, config en lecture seule) masqué tant que rien de
-> provisionné ; les listes serveur « projets & dépôts » ont été retirées de
+> (synchro, retirer avec confirmation) ; **projet DÉJÀ rattaché à un serveur**
+> (config `.pilot/gds.json` présente) mais liaison non vérifiée : écran
+> **MINIMAL** — nom du **serveur choisi** (fiche mémorisée correspondante, sinon
+> `utilisateur@hôte`), **deux faits distincts** (« ✅ Enregistré sur le
+> serveur » / « ⚠️ Liaison de ce poste : à vérifier »), bouton **« Vérifier la
+> liaison »**, ajout si nécessaire, retrait — **aucun champ technique** (hôte de
+> base, port SSH, racine des dépôts, dossier de clonage) et **aucune écriture de
+> configuration** depuis cet écran (valeurs lues de `.pilot/gds.json` par le
+> backend) ; le formulaire complet est réservé à l'ACTIVATION ; badge de liste
+> « Enregistré sur le serveur — liaison à vérifier » (`gds-params.js`, constat 2)
+> ; **bloc « ▶ Avancé » supprimé** (il ne répétait que les mêmes valeurs en
+> lecture seule) ; les listes serveur « projets & dépôts » ont été retirées de
 > l'onglet par projet (refonte L5.6) et vivent dans l'onglet « GDS —
 > administration » et dans « ⚙️ GDS — paramétrage » → Mes projets GDS ; **auto-provisionnement background** à l'ouverture du projet
 > (`gds_auto_provision` → `auto_provision_pool`, fail-open, jamais bloquant,
@@ -634,7 +643,7 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
 | `add_project_to_gds` | `gds_git::add_project` (bare + DB) | `gds_git::add_project_remote` (DB seulement, chemin POSIX enregistré) |
 | URL du remote | `ssh://git@hôte:22/<nom>.git` (**inchangée**) | `ssh://git@hôte:<ssh_port>/<gds_server_repos>/<nom>.git` (**chemin absolu**) |
 | Existence du bare (`gds_connection_status`, sync) | test **fichier** (`gds_git::bare_repo_exists`) | requête **PostgreSQL** (`gds_db::project_has_git_repo`, fail-open `false`) |
-| Rollback en cas d'échec push | `remove_bare` (nettoyage local) | **aucune suppression** (dépôt sous responsabilité manuelle) |
+| Rollback en cas d'échec push | `rollback_local_add` : bare **+ lignes de suivi** (`projects` / `git_repos`, `gds_db::delete_project_by_name`) | **aucune suppression** (dépôt sous responsabilité manuelle) |
 | `gds_remove_project(purge_server=true)` | retire le bare local + la base | retire **uniquement** les lignes en base |
 
 - **Sémantique d'URL vérifiée** (git 2.5x, `GIT_SSH_VARIANT=ssh`) :

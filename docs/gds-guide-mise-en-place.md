@@ -694,6 +694,16 @@ Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du pann
 **Vues**). L'en-tête affiche un badge : **« ○ À configurer »**,
 **« ● En attente »** ou **« ● Connecté »** ; seuls les blocs utiles s'affichent.
 
+Un projet **déjà rattaché à un serveur** (configuration enregistrée) affiche un
+écran **minimal** : le **serveur choisi** (le nom de sa fiche), puis **deux
+informations distinctes** — **« ✅ Enregistré sur le serveur »** (l'inscription
+côté serveur) et **« ⚠️ Liaison de ce poste : à vérifier »** (l'accès à la base
+et au dépôt du projet depuis ce poste) — avec le bouton **« Vérifier la
+liaison »**. Plus **aucun champ technique** (hôte de base, port SSH, racine des
+dépôts, dossier de clonage) ne vous est demandé : ces valeurs viennent de la
+fiche du serveur (**2.5**) et de la configuration du projet, et ne sont
+**jamais** modifiées ni perdues par cet écran.
+
 - [ ] **2.6.a Connecter un serveur** : choisissez votre serveur mémorisé
       (sélecteur **« Serveur mémorisé »**, bouton **« Réutiliser ce serveur »**)
       et laissez **Hôte PostgreSQL** = l'adresse de votre serveur
@@ -734,7 +744,9 @@ Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du pann
         montre le raccourci `gds`.
       - **Si ce n'est pas ça :** le `push` initial échoue dans la fenêtre des
         30 s → **relancez simplement « Ajouter ce projet au GDS »** (l'opération
-        est idempotente, elle ne casse rien).
+        est idempotente, elle ne casse rien). Un ajout qui échoue sur un serveur
+        **local** est **entièrement annulé** (dépôt **et** inscription côté
+        serveur) : vous n'avez jamais un projet « à moitié rattaché ».
 
 ### 2.7 — Récupérer un projet qui n'existe pas encore chez soi 🅰
 

@@ -8285,11 +8285,6 @@ body.pilot-loading *::after {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-.gds-grid3 {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 10px;
-}
 .gds-pw {
   display: flex;
   align-items: center;
@@ -8457,22 +8452,6 @@ body.pilot-loading *::after {
 }
 .gds-cols .gds-panel {
   min-width: 0;
-}
-.gds-adv-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  color: var(--text-primary, #e6e8ee);
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-  padding: 0;
-}
-.gds-adv-title i {
-  transition: transform 0.15s ease;
 }
 
 /* ================================================================

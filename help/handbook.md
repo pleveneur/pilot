@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-22 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
+<!-- PILOT-HELP generated=2026-09-23 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -342,9 +342,17 @@ d'un hébergement externe type GitHub.
     en attente / hors-ligne, avec le nombre de conflits), bouton
     **Synchroniser**, et **Retirer du GDS** (avec confirmation ; purge serveur
     uniquement si cochée) ;
-  - **Bloc « ▶ Avancé »** (replié par défaut) : configuration du projet en
-    **lecture seule** (hôte, port, utilisateur, port SSH, racine serveur,
-    dossier local) et, **hors connexion**, le **retrait du GDS**.
+  - **Projet déjà rattaché à un serveur, liaison à vérifier** : écran minimal —
+    le **serveur choisi** (nom de sa fiche), puis **deux informations
+    distinctes** : « **✅ Enregistré sur le serveur** » (l'inscription côté
+    serveur) et « **⚠️ Liaison de ce poste : à vérifier** » (accès à la base et
+    au dépôt du projet). Bouton « **Vérifier la liaison** », ajout du projet si
+    nécessaire et **Retirer du GDS**. **Aucun champ technique** (hôte de base,
+    port SSH, racine des dépôts, dossier de clonage) n'est redemandé : ces
+    valeurs sont conservées et relues automatiquement. La liste des projets GDS
+    affiche de son côté « **Enregistré sur le serveur — liaison à vérifier** »,
+    et le nom du projet, dans le volet des fichiers, « **- (GDS — liaison
+    établie)** » ou « **- (GDS — liaison à vérifier)** ».
 - **Deux écrans transverses** (ouverts **sans projet**) — **icônes du haut de la
   barre latérale gauche**, voisines de Brouillon, Paramètres, Coffre, Remarque et
   Aide : la **petite tour** 🖥️ ouvre l'administration (infobulle *« GDS Serveur —
