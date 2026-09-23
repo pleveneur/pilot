@@ -40,18 +40,23 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// Un serveur MCP configurable (transport stdio uniquement pour le POC).
+/// Un serveur MCP configurable. Le transport reste une chaîne : `"stdio"` par
+/// défaut (mode local, seul transport effectivement consommé par le POC).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct McpServer {
     pub id: String,
     pub name: String,
-    /// "stdio" (seul transport supporté par le POC).
+    /// `"stdio"` par défaut (local) ; `"http"` / `"https"` désigne un serveur distant.
     pub transport: String,
     pub enabled: bool,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Adresse du serveur distant (vide pour un serveur local).
+    pub url: String,
+    /// Référence vers une entrée du coffre — JAMAIS la clé elle-même.
+    pub secret_ref: Option<String>,
 }
 
 impl Default for McpServer {
@@ -63,8 +68,53 @@ impl Default for McpServer {
             enabled: false,
             command: String::new(),
             args: Vec::new(),
+            url: String::new(),
+            secret_ref: None,
         }
     }
+}
+
+/// Famille d'un transport MCP : locale (`Stdio`) ou distante (`Http`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Stdio,
+    Http,
+}
+
+impl McpServer {
+    /// Range le serveur dans sa famille d'après `transport`, casse et espaces
+    /// ignorés. Toute valeur inconnue est traitée comme locale (`Stdio`), ce qui
+    /// préserve le comportement du POC.
+    pub fn transport_kind(&self) -> TransportKind {
+        match self.transport.trim().to_ascii_lowercase().as_str() {
+            "http" | "https" => TransportKind::Http,
+            _ => TransportKind::Stdio,
+        }
+    }
+
+    /// Vrai pour un serveur distant (famille `Http`).
+    pub fn is_remote(&self) -> bool {
+        self.transport_kind() == TransportKind::Http
+    }
+}
+
+/// Valide un serveur avant enregistrement. Retourne un message d'erreur en
+/// français, ou `None` si le serveur est valide. Un serveur distant (famille
+/// `Http`) doit avoir une adresse non vide ; un serveur local garde les règles
+/// actuelles (aucune exigence supplémentaire ici).
+pub fn validate_mcp_server(server: &McpServer) -> Option<String> {
+    if server.is_remote() && server.url.trim().is_empty() {
+        let label = if server.name.trim().is_empty() {
+            server.id.as_str()
+        } else {
+            server.name.trim()
+        };
+        return Some(format!(
+            "Serveur « {} » : l'adresse (url) est requise pour un serveur distant.",
+            label
+        ));
+    }
+    None
 }
 
 /// Config MCP racine (miroir du mcp.json).
@@ -120,9 +170,15 @@ pub fn mcp_list_servers(app: AppHandle) -> Result<Vec<McpServer>, String> {
     read_mcp_config(&app).map(|c| c.servers)
 }
 
-/// Remplace la liste des serveurs MCP (round-trip).
+/// Remplace la liste des serveurs MCP (round-trip). Refuse un serveur distant
+/// sans adresse (message clair, en français) avant toute écriture.
 #[tauri::command]
 pub fn mcp_save_servers(app: AppHandle, servers: Vec<McpServer>) -> Result<(), String> {
+    for server in &servers {
+        if let Some(err) = validate_mcp_server(server) {
+            return Err(err);
+        }
+    }
     write_mcp_config(&app, &McpConfig { servers })
 }
 
@@ -322,6 +378,7 @@ mod tests {
             enabled: true,
             command: "node".to_string(),
             args: vec!["scripts/mcp-test-server.js".to_string()],
+            ..Default::default()
         }
     }
 
@@ -360,10 +417,10 @@ mod tests {
     }
 
     #[test]
-    fn first_enabled_stdio_selects_only_enabled_stdio() {
+    fn first_enabled_stdio_ignores_unknown_and_disabled_transports() {
         let cfg = McpConfig {
             servers: vec![
-                // Disabled stdio → ignoré
+                // Désactivé → ignoré
                 McpServer {
                     id: "off".to_string(),
                     transport: "stdio".to_string(),
@@ -371,10 +428,11 @@ mod tests {
                     command: "x".to_string(),
                     ..Default::default()
                 },
-                // Non-stdio → ignoré (POC)
+                // Transport réellement inconnu → ignoré (traité comme local,
+                // mais pas `stdio` au sens strict de first_enabled_stdio)
                 McpServer {
-                    id: "http".to_string(),
-                    transport: "http".to_string(),
+                    id: "unknown".to_string(),
+                    transport: "carrier-pigeon".to_string(),
                     enabled: true,
                     command: "y".to_string(),
                     ..Default::default()
@@ -384,6 +442,93 @@ mod tests {
         };
         let picked = first_enabled_stdio(&cfg).expect("un serveur stdio enabled");
         assert_eq!(picked.id, "test");
+    }
+
+    #[test]
+    fn legacy_stdio_config_reads_back_without_loss() {
+        // mcp.json d'origine (six champs, mode local) : doit se relire à l'identique.
+        let raw = r#"{
+            "servers": [
+                {
+                    "id": "test",
+                    "name": "Test MCP Server",
+                    "transport": "stdio",
+                    "enabled": true,
+                    "command": "node",
+                    "args": ["scripts/mcp-test-server.js"]
+                }
+            ]
+        }"#;
+        let cfg: McpConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(cfg.servers.len(), 1);
+        let s = &cfg.servers[0];
+        assert_eq!(
+            s,
+            &McpServer {
+                id: "test".to_string(),
+                name: "Test MCP Server".to_string(),
+                transport: "stdio".to_string(),
+                enabled: true,
+                command: "node".to_string(),
+                args: vec!["scripts/mcp-test-server.js".to_string()],
+                url: String::new(),
+                secret_ref: None,
+            }
+        );
+        // Les deux nouveaux champs sont vides sans être exigés par le fichier.
+        assert_eq!(s.url, String::new());
+        assert!(s.secret_ref.is_none());
+        // Le transport local reste "stdio".
+        assert_eq!(s.transport, "stdio");
+        assert_eq!(s.transport_kind(), TransportKind::Stdio);
+    }
+
+    #[test]
+    fn transport_kind_is_case_insensitive_and_defaults_to_local() {
+        let kind = |transport: &str| McpServer {
+            transport: transport.to_string(),
+            ..Default::default()
+        }
+        .transport_kind();
+        assert_eq!(kind("stdio"), TransportKind::Stdio);
+        assert_eq!(kind("STDIO"), TransportKind::Stdio);
+        assert_eq!(kind("http"), TransportKind::Http);
+        assert_eq!(kind("HTTP"), TransportKind::Http);
+        assert_eq!(kind("Https"), TransportKind::Http);
+        assert_eq!(kind("  https  "), TransportKind::Http);
+        // Valeur inconnue ou vide → famille locale (comportement actuel conservé).
+        assert_eq!(kind("carrier-pigeon"), TransportKind::Stdio);
+        assert_eq!(kind(""), TransportKind::Stdio);
+    }
+
+    #[test]
+    fn remote_server_requires_url_and_is_preserved() {
+        // Distant sans adresse → refus, message en français.
+        let mut remote = McpServer {
+            id: "distant".to_string(),
+            name: "Distant".to_string(),
+            transport: "http".to_string(),
+            ..Default::default()
+        };
+        let err = validate_mcp_server(&remote).expect("un refus attendu sans adresse");
+        assert!(err.contains("adresse"), "message: {}", err);
+
+        // Distant avec adresse → accepté et conservé au round-trip.
+        remote.url = "https://mcp.example.com/mcp".to_string();
+        remote.secret_ref = Some("vault:mon-entree".to_string());
+        assert_eq!(validate_mcp_server(&remote), None);
+        assert_eq!(remote.transport_kind(), TransportKind::Http);
+        let cfg = McpConfig {
+            servers: vec![remote.clone()],
+        };
+        let raw = serde_json::to_string(&cfg).unwrap();
+        let parsed: McpConfig = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed.servers[0].url, "https://mcp.example.com/mcp");
+        assert_eq!(parsed.servers[0].secret_ref.as_deref(), Some("vault:mon-entree"));
+        assert_eq!(parsed.servers[0].transport_kind(), TransportKind::Http);
+
+        // Un serveur local reste valide sans adresse.
+        assert_eq!(validate_mcp_server(&sample_server()), None);
     }
 
     #[test]
