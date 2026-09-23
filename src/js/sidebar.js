@@ -15,7 +15,7 @@ import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
 import { switchToSuperAgent } from "./super-agent.js";
-import { isProjectGds } from "./gds-status.js";
+import { projectGdsInfo } from "./gds-status.js";
 import { toastError, toastSuccess, toastInfo } from "./toast.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
@@ -1306,16 +1306,19 @@ class Sidebar {
         // Indicateur de connexion GDS (Évolution 3) : affiché après le nom selon
         // l'état honnête rendu par gds_connection_status. Deux libellés
         // EXPLICITES, jamais un signe muet : « - (GDS — liaison établie) » quand
-        // tout est vert, « - (GDS — liaison à vérifier) » sinon (le projet peut
-        // très bien être enregistré sur le serveur sans que la liaison de ce
-        // poste au dépôt soit utilisable). Rien si le projet n'est pas branché
-        // sur un GDS. Fail-open.
-        const gdsState = await isProjectGds(p);
+        // tout est vert, « - (GDS — liaison à vérifier) » sinon. L'infobulle ne
+        // peut affirmer l'inscription sur le serveur que quand `on_server` est
+        // vrai (`error` couvre aussi un projet ABSENT du serveur). Rien si le
+        // projet n'est pas branché sur un GDS. Fail-open.
+        const gdsInfo = await projectGdsInfo(p);
+        const gdsState = gdsInfo.status;
         let gdsSuffix = "";
         if (gdsState === "connected") gdsSuffix = " - (GDS — liaison établie)";
         else if (gdsState === "error") {
           gdsSuffix = " - (GDS — liaison à vérifier)";
-          item.title = `${p} — projet enregistré sur le serveur, liaison de ce poste à vérifier`;
+          item.title = gdsInfo.onServer
+            ? `${p} — projet enregistré sur le serveur, liaison de ce poste à vérifier`
+            : `${p} — projet non enregistré sur le serveur, liaison de ce poste à vérifier`;
         }
         item.innerHTML =
           `<span class="open-project-name">${this._esc(name)}${this._esc(gdsSuffix)}</span>` +

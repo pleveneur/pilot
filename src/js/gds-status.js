@@ -50,3 +50,23 @@ export async function isProjectGds(projectPath) {
     return "not_configured"; // fail-open : jamais bloquant
   }
 }
+
+/**
+ * État GDS complet d'un projet, pour les libellés qui doivent distinguer les
+ * DEUX faits : l'inscription du projet **sur le serveur** (`onServer`) et la
+ * **liaison de ce poste** (`status`). `gds_connection_status` renvoie `error`
+ * aussi bien pour un projet inscrit que pour un projet absent du serveur :
+ * `status` seul ne permet donc pas d'affirmer l'inscription. Fail-open :
+ * erreur d'appel → `not_configured` + `onServer: false`. Aucun secret.
+ * @param {string} projectPath - chemin du projet.
+ * @returns {Promise<{status: string, onServer: boolean}>}
+ */
+export async function projectGdsInfo(projectPath) {
+  if (!projectPath) return { status: "not_configured", onServer: false };
+  try {
+    const res = await invoke("gds_connection_status", { project: projectPath });
+    return { status: mapGdsStatus(res), onServer: !!(res && res.on_server) };
+  } catch (_) {
+    return { status: "not_configured", onServer: false }; // fail-open
+  }
+}

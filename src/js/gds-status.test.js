@@ -1,6 +1,11 @@
 // Tests unitaires — gds-status.js (Évolution 3 : bandeau connecté fiable)
-import { describe, it, expect } from "vitest";
-import { isGdsConnected, mapGdsStatus } from "./gds-status.js";
+import { describe, it, expect, vi } from "vitest";
+import { isGdsConnected, mapGdsStatus, projectGdsInfo } from "./gds-status.js";
+
+let invokeImpl = () => Promise.resolve(null);
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args) => invokeImpl(...args),
+}));
 
 describe("isGdsConnected (contrat string de isProjectGds, évol 3)", () => {
   it("ne badge que 'connected'", () => {
@@ -34,5 +39,27 @@ describe("mapGdsStatus", () => {
     expect(mapGdsStatus(undefined)).toBe("not_configured");
     expect(mapGdsStatus({})).toBe("not_configured");
     expect(mapGdsStatus({ status: "bogus" })).toBe("not_configured"); // fail-open
+  });
+});
+
+describe("projectGdsInfo (deux faits : inscription sur le serveur / liaison du poste)", () => {
+  it("remonte `status` ET `on_server` (un `error` peut venir d'un projet absent)", async () => {
+    invokeImpl = () => Promise.resolve({ status: "error", on_server: true });
+    await expect(projectGdsInfo("G:/p")).resolves.toEqual({ status: "error", onServer: true });
+    invokeImpl = () => Promise.resolve({ status: "error", on_server: false });
+    await expect(projectGdsInfo("G:/p")).resolves.toEqual({ status: "error", onServer: false });
+  });
+  it("fail-open : rejet → not_configured + onServer false", async () => {
+    invokeImpl = () => Promise.reject(new Error("boom"));
+    await expect(projectGdsInfo("G:/p")).resolves.toEqual({
+      status: "not_configured",
+      onServer: false,
+    });
+  });
+  it("chemin vide : aucun appel, valeurs par défaut", async () => {
+    await expect(projectGdsInfo("")).resolves.toEqual({
+      status: "not_configured",
+      onServer: false,
+    });
   });
 });
