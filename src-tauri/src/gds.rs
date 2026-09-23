@@ -1155,11 +1155,15 @@ pub(crate) async fn optional_pool(
 /// Ordre robuste : init local + identité + premier commit → bare serveur →
 /// remote add + push. En cas d'échec intermédiaire, le bare serveur créé est
 /// retiré proprement (pas d'état « à moitié attaché »).
-/// Annulation COMPLÈTE d'un ajout raté sur un serveur LOCAL (voie héritée) :
-/// retire le dépôt bare créé par cet essai ET les lignes de suivi du projet GDS.
-/// Sans la seconde partie, le projet reste inscrit en base (`projects` +
-/// `git_repos`) alors que son dépôt n'existe plus : Pilot l'annonce « enregistré
-/// sur le serveur » alors qu'il est inutilisable (état contradictoire observé).
+/// Annulation d'un ajout raté sur un serveur LOCAL (voie héritée), limitée à
+/// ce que cet essai a RÉELLEMENT créé : retire le dépôt bare créé par cet essai
+/// ET les lignes de suivi du projet GDS. Sans la seconde partie, le projet
+/// reste inscrit en base (`projects` + `git_repos`) alors que son dépôt n'existe
+/// plus : Pilot l'annonce « enregistré sur le serveur » alors qu'il est
+/// inutilisable (état contradictoire observé).
+/// APPELÉE UNIQUEMENT quand le projet n'était PAS déjà inscrit avant l'essai
+/// (voir `pre_existing` dans `add_project_with`) : un projet déjà inscrit — et
+/// ses tickets/tâches en cascade — n'est jamais supprimé par une relance ratée.
 /// Best-effort (jamais bloquant) et jamais destructif pour un projet de suivi :
 /// `delete_project_by_name` ne cible que les projets GDS (`path IS NULL`).
 async fn rollback_local_add(pool: &PgPool, local_dir: &str, name: &str) {
@@ -1243,6 +1247,21 @@ async fn add_project_with(
         let _ = memorize_git_name(n);
     }
 
+    // Prudence DONNÉES (reprise après relecture) : mémoriser si le projet était
+    // DÉJÀ inscrit en base AVANT cet essai. Un administrateur (ou un dev
+    // attribué) qui relance « Ajouter » sur un projet existant ne doit jamais
+    // voir son inscription, ses tickets ni ses tâches supprimés par une
+    // annulation. En cas de doute (erreur de lecture de la base), on suppose le
+    // projet préexistant → aucune suppression (voie prudente).
+    let pre_existing = match &side {
+        ServerSide::Legacy(pool) => gds_db::get_project_by_name(pool, &name)
+            .await
+            .map(|v| v.is_some())
+            .unwrap_or(true),
+        // Voie service : aucune suppression locale de toute façon.
+        ServerSide::Service(_) => true,
+    };
+
     // Bare serveur + enregistrement en base (idempotent). Serveur LOCAL : bare
     // créé sur le poste (`<gds_local_dir>/repos/<nom>.git`), comportement
     // INCHANGÉ. Serveur DISTANT : AUCUN bare local ; on enregistre seulement le
@@ -1283,16 +1302,18 @@ async fn add_project_with(
     .await
     .map_err(|e| e.to_string());
 
-    // État partiel évité (serveur LOCAL uniquement) : un échec (remote add /
-    // push) laisse le bare local déjà créé → le retirer proprement ET annuler
-    // l'inscription du projet en base (`rollback_local_add`), pour ne pas rester
-    // « à moitié attaché » (projet annoncé sur le serveur sans dépôt). Serveur
-    // DISTANT : rien n'a été créé sur le poste, on ne supprime RIEN (le dépôt
-    // serveur est sous responsabilité manuelle) et on renvoie un message
+    // État partiel évité (serveur LOCAL uniquement, projet réellement nouveau) :
+    // un échec (remote add / push) laisse le bare local déjà créé → le retirer
+    // proprement ET annuler l'inscription du projet en base (`rollback_local_add`),
+    // pour ne pas rester « à moitié attaché » (projet annoncé sur le serveur sans
+    // dépôt). Un projet DÉJÀ inscrit n'est JAMAIS annulé : on renvoie l'erreur
+    // telle quelle, sans supprimer son inscription ni ses données en cascade.
+    // Serveur DISTANT : rien n'a été créé sur le poste, on ne supprime RIEN (le
+    // dépôt serveur est sous responsabilité manuelle) et on renvoie un message
     // orientant vers la préparation serveur.
     match remote_result {
         Err(join_err) => {
-            if is_local {
+            if is_local && !pre_existing {
                 if let ServerSide::Legacy(pool) = &side {
                     rollback_local_add(pool, &local_dir, &name).await;
                 }
@@ -1302,7 +1323,9 @@ async fn add_project_with(
         Ok(Err(inner_err)) => {
             if is_local {
                 if let ServerSide::Legacy(pool) = &side {
-                    rollback_local_add(pool, &local_dir, &name).await;
+                    if !pre_existing {
+                        rollback_local_add(pool, &local_dir, &name).await;
+                    }
                     return Err(inner_err);
                 }
             }
