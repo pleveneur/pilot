@@ -224,7 +224,10 @@ export function createGds(container) {
         if (onLoaded) onLoaded([]);
       }
     }
-    run();
+    // Renvoie la promesse : l'appelant peut enchaîner `.then(...)` (présélection
+    // du serveur du projet). Sans ce `return`, `.then` s'appliquait à `undefined`
+    // et interrompait le branchement des boutons suivants (Activer GDS, Retour).
+    return run();
   }
 
   // ── Étape : Connecter un serveur GDS (server mémorisé OU nouveau) ──
