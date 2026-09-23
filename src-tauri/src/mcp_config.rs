@@ -760,6 +760,27 @@ mod tests {
         // Le transport local reste "stdio".
         assert_eq!(s.transport, "stdio");
         assert_eq!(s.transport_kind(), TransportKind::Stdio);
+
+        // E8 : ce fichier d'origine est ACCEPTÉ par la validation…
+        assert_eq!(validate_mcp_server(s), None);
+        // …et se RÉENREGISTRE sans perte (round-trip complet) : les six champs
+        // d'origine gardent leurs valeurs, les deux champs nouveaux restent vides.
+        let resaved = serde_json::to_string(&cfg).unwrap();
+        let reread: McpConfig = serde_json::from_str(&resaved).unwrap();
+        assert_eq!(reread.servers.len(), 1);
+        assert_eq!(reread.servers[0], *s, "le serveur relu doit être identique après réenregistrement");
+        let stored: Value = serde_json::from_str(&resaved).unwrap();
+        let obj = stored["servers"][0]
+            .as_object()
+            .expect("objet serveur réenregistré");
+        assert_eq!(obj["id"], "test");
+        assert_eq!(obj["name"], "Test MCP Server");
+        assert_eq!(obj["transport"], "stdio");
+        assert_eq!(obj["enabled"], true);
+        assert_eq!(obj["command"], "node");
+        assert_eq!(obj["args"][0], "scripts/mcp-test-server.js");
+        assert_eq!(reread.servers[0].url, String::new());
+        assert!(reread.servers[0].secret_ref.is_none());
     }
 
     #[test]
@@ -1116,10 +1137,9 @@ mod tests {
     /// reçue (en-têtes + corps). `content_type` choisit JSON direct ou flux
     /// d'événements (`data:` sur une ligne). Aucun serveur externe, aucune clé
     /// réelle : la boucle locale suffit à vérifier l'envoi et la lecture.
-    fn serve_once(
+    fn serve_once_raw(
         listener: std::net::TcpListener,
-        content_type: &'static str,
-        json: &'static str,
+        response: String,
     ) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Receiver<String>) {
         use std::io::{Read, Write};
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1149,24 +1169,44 @@ mod tests {
                 }
             }
             let request = String::from_utf8_lossy(&raw).into_owned();
-            let response = if content_type == "text/event-stream" {
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: {}\r\nconnection: close\r\n\r\nevent: message\ndata: {}\n\n",
-                    content_type, json
-                )
-            } else {
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    content_type,
-                    json.len(),
-                    json
-                )
-            };
             let _ = sock.write_all(response.as_bytes());
             let _ = sock.flush();
             let _ = tx.send(request);
         });
         (handle, rx)
+    }
+
+    /// Sert UNE requête en `200 OK` (JSON direct ou flux d'événements).
+    fn serve_once(
+        listener: std::net::TcpListener,
+        content_type: &'static str,
+        json: &'static str,
+    ) -> (std::thread::JoinHandle<()>, std::sync::mpsc::Receiver<String>) {
+        let response = if content_type == "text/event-stream" {
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {}\r\nconnection: close\r\n\r\nevent: message\ndata: {}\n\n",
+                content_type, json
+            )
+        } else {
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                content_type,
+                json.len(),
+                json
+            )
+        };
+        serve_once_raw(listener, response)
+    }
+
+    /// Réponse HTTP brute avec un statut arbitraire (preuve des échecs).
+    fn http_response(status_line: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            status_line,
+            content_type,
+            body.len(),
+            body
+        )
     }
 
     #[test]
@@ -1241,5 +1281,195 @@ mod tests {
         let res = test_remote_connection(&dead, "Distant", Some(FICTIONAL_KEY)).unwrap();
         assert_eq!(res["ok"], false, "résultat: {}", res);
         assert!(!res["error"].as_str().unwrap_or("").contains(FICTIONAL_KEY));
+    }
+
+    // ── E8 : garde-fou final — aucun secret dans les sorties observables ──
+
+    /// Parcourt récursivement un `Value` et collecte TOUTES les chaînes qu'il
+    /// contient (clés JSON comprises) : support de la preuve de non-fuite.
+    fn collect_json_strings(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::String(s) => out.push(s.clone()),
+            Value::Array(items) => items.iter().for_each(|v| collect_json_strings(v, out)),
+            Value::Object(map) => map.iter().for_each(|(k, v)| {
+                out.push(k.clone());
+                collect_json_strings(v, out);
+            }),
+            _ => {}
+        }
+    }
+
+    /// Échoue si la valeur de la clé (FICTIVE) apparaît dans N'IMPORTE quelle
+    /// chaîne de N'IMPORTE quelle sortie observable du backend MCP :
+    /// `mcp_list_servers`, `mcp_get_state`, les quatre formes du résultat de
+    /// `mcp_test_connection` distant, et les diagnostics d'`attach_mcp_secret`.
+    #[test]
+    fn all_json_outputs_of_mcp_commands_are_free_of_the_key_value() {
+        let server = fictional_remote_server();
+
+        // 1) `mcp_list_servers` : liste des serveurs sérialisée.
+        let listed = serde_json::to_value(vec![server.clone()]).unwrap();
+        // 2) `mcp_get_state` : `mcp_state_json`.
+        let state = mcp_state_json(true, true, std::slice::from_ref(&server));
+        // 3) `mcp_test_connection` (distant) : succès, erreur JSON-RPC du serveur,
+        //    échec HTTP et connexion impossible. Chaque détail CITE la clé : elle
+        //    doit ressortir masquée, voire absente, jamais en clair.
+        let ok_obj = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": { "protocolVersion": "2024-11-05" }
+        });
+        let err_obj = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "error": { "code": -32000, "message": format!("clé {} refusée", FICTIONAL_KEY) }
+        });
+        let mut outputs: Vec<Value> = vec![
+            listed,
+            state,
+            remote_test_result("Distant", Some(&ok_obj), "", Some(FICTIONAL_KEY)),
+            remote_test_result("Distant", Some(&err_obj), "", Some(FICTIONAL_KEY)),
+            remote_test_result(
+                "Distant",
+                None,
+                &format!("le serveur a répondu avec le statut HTTP 500 (clé {})", FICTIONAL_KEY),
+                Some(FICTIONAL_KEY),
+            ),
+            remote_test_result(
+                "Distant",
+                None,
+                &format!("connexion impossible : refus de la clé {}", FICTIONAL_KEY),
+                Some(FICTIONAL_KEY),
+            ),
+        ];
+
+        // 4) Diagnostics d'`attach_mcp_secret` : clé résolue, coffre verrouillé,
+        //    serveur local sans référence. Le diagnostic de succès mentionne la
+        //    valeur via le coffre : il doit rester muet sur elle.
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_e8_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault_file = dir.join("vault.json");
+        let config_file = dir.join("mcp.json");
+        std::fs::write(
+            &config_file,
+            serde_json::to_string(&McpConfig {
+                servers: vec![server.clone()],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let key = crate::vault::write_test_vault(
+            &vault_file,
+            "mot-de-passe-fictif",
+            &[crate::vault::VaultEntry {
+                id: "entree-fictive".to_string(),
+                description: "clé de test".to_string(),
+                login: String::new(),
+                password: FICTIONAL_KEY.to_string(),
+                scope: "global".to_string(),
+                project_path: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
+        );
+        let mut vars_ok = Vec::new();
+        let diag_ok = attach_mcp_secret(&mut vars_ok, &config_file, Some(&key), &vault_file, None);
+        let mut vars_locked = Vec::new();
+        let diag_locked =
+            attach_mcp_secret(&mut vars_locked, &config_file, None, &vault_file, None);
+        let config_plain = dir.join("mcp-plain.json");
+        std::fs::write(
+            &config_plain,
+            r#"{"servers":[{"id":"local","enabled":true,"command":"node"}]}"#,
+        )
+        .unwrap();
+        let mut vars_plain = Vec::new();
+        let diag_plain =
+            attach_mcp_secret(&mut vars_plain, &config_plain, None, &vault_file, None);
+        for diag in [&diag_ok, &diag_locked, &diag_plain] {
+            outputs.push(Value::String(diag.clone()));
+        }
+
+        // La clé est bien résolue et transmise (sinon la preuve porterait sur du vide)…
+        assert_eq!(
+            vars_ok
+                .iter()
+                .find(|(k, _)| k == "PILOT_MCP_SECRET")
+                .map(|(_, v)| v.as_str()),
+            Some(FICTIONAL_KEY)
+        );
+        // …mais elle n'apparaît dans AUCUNE chaîne d'AUCUNE sortie observée.
+        for output in &outputs {
+            let mut strings = Vec::new();
+            collect_json_strings(output, &mut strings);
+            assert!(!strings.is_empty(), "sortie vide, preuve sans objet : {}", output);
+            for s in &strings {
+                assert!(
+                    !s.contains(FICTIONAL_KEY),
+                    "secret exposé dans « {} » (sortie: {})",
+                    s,
+                    output
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Échecs de bout en bout d'un serveur distant : statut HTTP 500 (JSON-RPC
+    /// en erreur ou corps non JSON) et erreur JSON-RPC en `200 OK` citant la clé.
+    /// Aucun de ces résultats ne doit laisser fuiter la valeur.
+    #[test]
+    fn remote_http_failures_never_leak_the_key_end_to_end() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("écoute locale");
+        let url = format!(
+            "http://127.0.0.1:{}/mcp",
+            listener.local_addr().unwrap().port()
+        );
+        let server = McpServer {
+            id: "distant".to_string(),
+            name: "Distant".to_string(),
+            transport: "http".to_string(),
+            enabled: true,
+            url,
+            ..Default::default()
+        };
+        let error_body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":-32000,"message":"clé {} refusée"}}}}"#,
+            FICTIONAL_KEY
+        );
+
+        // 1) HTTP 500 + erreur JSON-RPC citant la clé → masquée.
+        let (handle, _rx) = serve_once_raw(
+            listener.try_clone().unwrap(),
+            http_response("500 Internal Server Error", "application/json", &error_body),
+        );
+        let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
+        handle.join().expect("serveur local terminé");
+        assert_eq!(res["ok"], false, "résultat: {}", res);
+        assert!(!res.to_string().contains(FICTIONAL_KEY), "résultat: {}", res);
+
+        // 2) HTTP 200 + erreur JSON-RPC citant la clé → masquée.
+        let (handle, _rx) = serve_once_raw(
+            listener.try_clone().unwrap(),
+            http_response("200 OK", "application/json", &error_body),
+        );
+        let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
+        handle.join().expect("serveur local terminé");
+        assert_eq!(res["ok"], false, "résultat: {}", res);
+        assert!(!res.to_string().contains(FICTIONAL_KEY), "résultat: {}", res);
+
+        // 3) HTTP 500 + corps NON JSON citant la clé → masquée (statut seul remonté).
+        let (handle, _rx) = serve_once_raw(
+            listener.try_clone().unwrap(),
+            http_response(
+                "500 Internal Server Error",
+                "text/plain",
+                &format!("clé {} refusée", FICTIONAL_KEY),
+            ),
+        );
+        let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
+        handle.join().expect("serveur local terminé");
+        assert_eq!(res["ok"], false, "résultat: {}", res);
+        assert!(!res.to_string().contains(FICTIONAL_KEY), "résultat: {}", res);
+        assert_eq!(res["error"], "le serveur a répondu avec le statut HTTP 500");
     }
 }
