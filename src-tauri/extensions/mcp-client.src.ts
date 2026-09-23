@@ -12,11 +12,14 @@
 //      Pilot le renseigne à la création du process pi, PAS via AppConfig),
 //   2. choisit le serveur : `process.env.PILOT_MCP_SERVER` (id d'un serveur
 //      cible, posé à la demande par l'assistant via run_agents / mcp_server)
-//      s'il correspond à un serveur `enabled` `stdio` — sinon retombe sur le
-//      PREMIER serveur `enabled` `stdio` (rétrocompat du POC),
-//   3. se connecte en `stdio`, découvre tools/list et enregistre chaque outil
-//      sous `mcp_<serverId>_<name>` via pi.registerTool (exécution qui
-//      redéclenche un callTool sur le serveur).
+//      s'il correspond à un serveur `enabled` — sinon retombe sur le PREMIER
+//      serveur `enabled` (mêmes règles que `select_session_server` côté Rust),
+//   3. choisit le transport selon le type du serveur : local (`stdio` =
+//      programme) ou distant (`http`/`https` = adresse réseau, clé d'accès
+//      présentée en EN-TÊTE `Authorization` via PILOT_MCP_SECRET — E2),
+//   4. découvre tools/list et enregistre chaque outil sous
+//      `mcp_<serverId>_<name>` via pi.registerTool (exécution qui redéclenche un
+//      callTool sur le serveur).
 //
 // Fail-open : toute erreur (config absente, serveur indisponible, tools/list en
 // échec) est interceptée — pi ne doit jamais planter à cause d'une extension MCP.
@@ -30,8 +33,10 @@ import { Type } from "typebox";
 // Le SDK MCP est bundlé (external uniquement pour pi-coding-agent et typebox).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
-// Timeout de connexion au serveur stdio (ms). Garde-fou : un serveur absent ou
+// Timeout de connexion au serveur MCP (ms). Garde-fou : un serveur absent ou
 // bloquant ne doit pas geler le démarrage de la session pi (fail-open).
 const CONNECT_TIMEOUT_MS = 8000;
 // Timeout d'un appel outil (callTool) une fois connecté.
@@ -45,6 +50,7 @@ interface McpServerConfig {
   enabled?: boolean;
   command?: string;
   args?: string[];
+  url?: string;
 }
 
 interface McpConfig {
@@ -67,30 +73,57 @@ export default async function (api: ExtensionAPI): Promise<void> {
   }
 
   const servers = config.servers ?? [];
-  // Serveur cible (brique B) : si PILOT_MCP_SERVER désigne un serveur enabled
-  // stdio de la config, on le prend ; sinon fail-back sur le 1er enabled stdio.
+  // Serveur cible (brique B) : si PILOT_MCP_SERVER désigne un serveur enabled de
+  // la config, on le prend ; sinon fail-back sur le 1er enabled. Mêmes règles
+  // que `select_session_server` côté Rust : la clé transmise par Pilot (E2) est
+  // celle du serveur que l'extension retient ici.
   const targetId = (process.env.PILOT_MCP_SERVER || "").trim();
+  const enabledServers = servers.filter((s) => s.enabled !== false);
   const server =
     (targetId
-      ? servers.find(
-          (s) =>
-            (s.id ?? "") === targetId &&
-            s.enabled !== false &&
-            s.transport === "stdio"
-        )
-      : undefined) ??
-    servers.find((s) => s.enabled !== false && s.transport === "stdio");
-  if (!server || !server.command) {
-    return; // Aucun serveur stdio enabled (ni cible valide) — fail-open.
+      ? enabledServers.find((s) => (s.id ?? "") === targetId)
+      : undefined) ?? enabledServers[0];
+  if (!server) {
+    return; // Aucun serveur enabled (ni cible valide) — fail-open.
   }
 
   const serverId = server.id ?? server.name ?? "mcp";
 
-  // ── 2. Connexion stdio (avec garde-fou de timeout) ──
-  const transport = new StdioClientTransport({
-    command: server.command,
-    args: server.args ?? [],
-  });
+  // ── 2. Choix du transport selon le type du serveur (E3) ──
+  // `http` / `https` = serveur distant joignable par le réseau ; toute autre
+  // valeur reste un serveur local (programme), comportement du POC inchangé.
+  const transportName = (server.transport ?? "").trim().toLowerCase();
+  const isRemote = transportName === "http" || transportName === "https";
+  // Clé d'accès du serveur distant (posée par Pilot, E2). Elle est présentée
+  // dans un EN-TÊTE d'authentification : JAMAIS dans l'adresse, jamais
+  // journalisée, jamais renvoyée au modèle (cf. redactSecret).
+  const secret = (process.env.PILOT_MCP_SECRET || "").trim();
+
+  let transport: Transport;
+  try {
+    if (isRemote) {
+      const url = (server.url ?? "").trim();
+      if (!url) {
+        return; // Serveur distant sans adresse — fail-open.
+      }
+      transport = new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: secret
+          ? { headers: { Authorization: `Bearer ${secret}` } }
+          : undefined,
+      });
+    } else {
+      if (!server.command) {
+        return; // Serveur local sans commande — fail-open.
+      }
+      transport = new StdioClientTransport({
+        command: server.command,
+        args: server.args ?? [],
+      });
+    }
+  } catch {
+    return; // Adresse illisible — fail-open.
+  }
+
   const client = new Client({ name: "pilot-mcp", version: "0.1.0" });
 
   let discovered: Array<{ name: string; description?: string; inputSchema?: unknown }> = [];
@@ -129,7 +162,7 @@ export default async function (api: ExtensionAPI): Promise<void> {
         parameters: Type.Record(Type.String(), Type.Unknown()),
         executionMode: "sequential",
         async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-          return runTool(client, toolName, params as Record<string, unknown>);
+          return runTool(client, toolName, params as Record<string, unknown>, secret);
         },
       } as never);
     } catch {
@@ -137,7 +170,7 @@ export default async function (api: ExtensionAPI): Promise<void> {
     }
   }
 
-  // ── Nettoyage à la fin de session (fermeture du process serveur stdio) ──
+  // ── Nettoyage à la fin de session (fermeture du serveur local ou distant) ──
   api.on("session_shutdown", async () => {
     await safeClose(transport, client);
   });
@@ -148,7 +181,8 @@ export default async function (api: ExtensionAPI): Promise<void> {
 async function runTool(
   client: Client,
   toolName: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  secret: string
 ): Promise<{ content: { type: "text"; text: string }[] }> {
   if (!client) {
     return errorText("Client MCP non connecté.");
@@ -161,8 +195,18 @@ async function runTool(
     );
     return formatMcpResult(res);
   } catch (err) {
-    return errorText(`MCP ${toolName} échec: ${String(err)}`);
+    // Masquage avant tout retour à l'agent : une erreur ne doit jamais
+    // transporter la clé d'accès.
+    return errorText(redactSecret(`MCP ${toolName} échec: ${String(err)}`, secret));
   }
+}
+
+/// Retire toute occurrence de la clé d'un texte (erreur renvoyée à l'agent).
+function redactSecret(text: string, secret: string): string {
+  if (!secret) {
+    return text;
+  }
+  return text.split(secret).join("[clé masquée]");
 }
 
 function errorText(msg: string): { content: { type: "text"; text: string }[] } {
@@ -224,7 +268,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 async function safeClose(
-  transport: StdioClientTransport,
+  transport: Transport,
   client: Client | null
 ): Promise<void> {
   try {
