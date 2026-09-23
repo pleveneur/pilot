@@ -692,7 +692,9 @@ serveur soit mémorisé, **2.5** ; si la liste est vide, l'écran vous le dit).
 
 Tout se passe dans l'onglet **« 🌐 GDS »** du projet (bouton **GDS** du panneau
 **Vues**). L'en-tête affiche un badge : **« ○ À configurer »**,
-**« ● En attente »** ou **« ● Connecté »** ; seuls les blocs utiles s'affichent.
+**« ● Enregistré sur le serveur — liaison à vérifier »** (projet inscrit côté
+serveur), **« ● Liaison à vérifier »** (projet pas encore inscrit) ou
+**« ● Connecté »** ; seuls les blocs utiles s'affichent.
 
 Un projet **déjà rattaché à un serveur** (configuration enregistrée) affiche un
 écran **minimal** : le **serveur choisi** (le nom de sa fiche), puis **deux
@@ -702,7 +704,11 @@ et au dépôt du projet depuis ce poste) — avec le bouton **« Vérifier la
 liaison »**. Plus **aucun champ technique** (hôte de base, port SSH, racine des
 dépôts, dossier de clonage) ne vous est demandé : ces valeurs viennent de la
 fiche du serveur (**2.5**) et de la configuration du projet, et ne sont
-**jamais** modifiées ni perdues par cet écran.
+**jamais** modifiées ni perdues par cet écran. Si la liaison ne fonctionne pas,
+le bouton **« Corriger la configuration »** rouvre le formulaire **pré-rempli**
+avec les valeurs actuelles : ajustez le **port SSH**, la **racine des dépôts du
+serveur** ou le **dossier local de clonage**, cliquez sur **« Enregistrer la
+configuration »**, puis **« Retour »** pour revenir à l'écran minimal.
 
 - [ ] **2.6.a Connecter un serveur** : choisissez votre serveur mémorisé
       (sélecteur **« Serveur mémorisé »**, bouton **« Réutiliser ce serveur »**)
@@ -746,7 +752,11 @@ fiche du serveur (**2.5**) et de la configuration du projet, et ne sont
         30 s → **relancez simplement « Ajouter ce projet au GDS »** (l'opération
         est idempotente, elle ne casse rien). Un ajout qui échoue sur un serveur
         **local** est **entièrement annulé** (dépôt **et** inscription côté
-        serveur) : vous n'avez jamais un projet « à moitié rattaché ».
+        serveur) **si le projet n'était pas déjà enregistré** : un projet déjà
+        inscrit n'est **jamais** supprimé par une relance ratée (ni ses tickets
+        ni ses tâches). Pour un projet **déjà rattaché** dont la liaison échoue,
+        utilisez **« Corriger la configuration »** dans l'onglet **« 🌐 GDS »**
+        (**2.6**) : vous n'avez pas à le retirer et le réactiver.
 
 ### 2.7 — Récupérer un projet qui n'existe pas encore chez soi 🅰
 

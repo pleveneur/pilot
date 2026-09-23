@@ -351,13 +351,17 @@ d'un hébergement externe type GitHub.
     le **serveur choisi** (nom de sa fiche), puis **deux informations
     distinctes** : « **✅ Enregistré sur le serveur** » (l'inscription côté
     serveur) et « **⚠️ Liaison de ce poste : à vérifier** » (accès à la base et
-    au dépôt du projet). Bouton « **Vérifier la liaison** », ajout du projet si
-    nécessaire et **Retirer du GDS**. **Aucun champ technique** (hôte de base,
-    port SSH, racine des dépôts, dossier de clonage) n'est redemandé : ces
-    valeurs sont conservées et relues automatiquement. La liste des projets GDS
-    affiche de son côté « **Enregistré sur le serveur — liaison à vérifier** »,
-    et le nom du projet, dans le volet des fichiers, « **- (GDS — liaison
-    établie)** » ou « **- (GDS — liaison à vérifier)** ».
+    au dépôt du projet). Bouton « **Vérifier la liaison** », bouton
+    « **Corriger la configuration** » (rouvre le formulaire pré-rempli pour
+    corriger le port SSH, la racine des dépôts serveur ou le dossier local de
+    clonage, puis « **Retour** »), ajout du projet si nécessaire et **Retirer du
+    GDS**. **Aucun champ technique** (hôte de base, port SSH, racine des dépôts,
+    dossier de clonage) n'est redemandé sur l'écran normal : ces valeurs sont
+    conservées et relues automatiquement. La liste des projets GDS affiche de
+    son côté « **Enregistré sur le serveur — liaison à vérifier** », et le nom du
+    projet, dans le volet des fichiers, « **- (GDS — liaison établie)** » ou
+    « **- (GDS — liaison à vérifier)** » (infobulle : inscription serveur et
+    liaison du poste distinguées).
 - **Deux écrans transverses** (ouverts **sans projet**) — **icônes du haut de la
   barre latérale gauche**, voisines de Brouillon, Paramètres, Coffre, Remarque et
   Aide : la **petite tour** 🖥️ ouvre l'administration (infobulle *« GDS Serveur —
