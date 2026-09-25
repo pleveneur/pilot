@@ -8,6 +8,7 @@ import {
   ADMIN_SECTIONS,
   AUDIT_PAGE_SIZE,
   DEFAULT_HTTP_PORT,
+  applyProjectsLoad,
   buildAccountCreateArgs,
   buildAccountListArgs,
   buildAccountPasswordArgs,
@@ -800,6 +801,35 @@ describe("L4.7 — projets sans membre (repérage + attribution groupée)", () =
     expect(html).toContain('data-prj-action="assign-missing-cancel"');
     expect(html).toContain("idempotente");
     expect(formatBulkAssignConfirmation(0, "dev@x", "dev")).toContain("0 projet(s)");
+  });
+
+  it("affiche le compte FRAIS du serveur après une attribution, jamais une réponse antérieure", () => {
+    const state = {
+      ...initialProjectsState(),
+      projects: [{ id: 1, name: "alpha", member_count: 0 }],
+      loadSeq: 2, // la demande courante porte le numéro 2
+    };
+    // Réponse d'une demande ANTÉRIEURE (numéro 1) : ignorée → badge inchangé.
+    const stale = applyProjectsLoad(
+      state,
+      1,
+      { ok: true, projects: [{ id: 1, name: "alpha", member_count: 0 }] },
+      { ok: true, git_repos: [] }
+    );
+    expect(stale).toBe(state);
+    expect(renderProjectsTableHtml(stale)).toContain("aucun membre");
+    // Réponse de la demande courante (numéro 2), fraîche du serveur : le badge suit.
+    const fresh = applyProjectsLoad(
+      state,
+      2,
+      { ok: true, projects: [{ id: 1, name: "alpha", member_count: 2 }] },
+      { ok: true, git_repos: [] }
+    );
+    expect(fresh).not.toBe(state);
+    expect(renderProjectsTableHtml(fresh)).toContain("2 membre(s)");
+    expect(renderProjectsTableHtml(fresh)).not.toContain("aucun membre");
+    // L'état initial ne porte aucune demande en cours.
+    expect(initialProjectsState().loadSeq).toBe(0);
   });
 });
 

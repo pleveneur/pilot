@@ -576,6 +576,7 @@ export function initialProjectsState() {
     bulkConfirm: null, // { email, role } : confirmation ouverte avant attribution groupée
     removing: null, // { project_id, name, purge } : panneau de confirmation ouvert
     busy: "", // id du projet en cours d'opération
+    loadSeq: 0, // numéro de la DERNIÈRE demande de liste (anti-réponse périmée)
   };
 }
 
@@ -587,6 +588,29 @@ export function buildProjectListArgs(conn) {
 /** Charge utile : lister les dépôts git. Pure. */
 export function buildGitReposArgs(conn) {
   return buildAccountsConnArgs(conn);
+}
+
+/**
+ * Applique à l'état « projets » la réponse du serveur (pure).
+ *
+ * `seq` est le numéro de la demande qui a produit cette réponse ; il doit être
+ * le **dernier émis** (`state.loadSeq`). Une réponse plus ancienne est
+ * **ignorée** (état renvoyé inchangé) : un rafraîchissement postérieur à une
+ * attribution n'est donc jamais écrasé par une liste antérieure, et le badge
+ * « membres » lit toujours la donnée **fraîche** du serveur (jamais un
+ * compteur conservé en mémoire).
+ */
+export function applyProjectsLoad(state, seq, projectsRes, reposRes) {
+  if (!state || seq !== state.loadSeq) return state;
+  const next = { ...state, loading: false };
+  if (projectsRes && projectsRes.ok) {
+    next.projects = Array.isArray(projectsRes.projects) ? projectsRes.projects : [];
+  } else {
+    next.error = (projectsRes && projectsRes.error) || "Chargement des projets impossible.";
+  }
+  next.repos =
+    reposRes && reposRes.ok && Array.isArray(reposRes.git_repos) ? reposRes.git_repos : [];
+  return next;
 }
 
 /** Charge utile : lister les membres attribués à un projet. Pure. */
@@ -1538,19 +1562,16 @@ export function createGdsAdmin(container) {
       projects.error = "";
       projects.notice = "";
     }
+    const seq = ++projects.loadSeq;
     draw();
     const [pr, rr] = await Promise.all([
       invokeAccounts("gds_admin_projects", buildProjectListArgs(adminConn)),
       invokeAccounts("gds_admin_git_repos", buildGitReposArgs(adminConn)),
     ]);
     if (disposed) return;
-    projects.loading = false;
-    if (pr && pr.ok) {
-      projects.projects = Array.isArray(pr.projects) ? pr.projects : [];
-    } else {
-      projects.error = (pr && pr.error) || "Chargement des projets impossible.";
-    }
-    projects.repos = rr && rr.ok && Array.isArray(rr.git_repos) ? rr.git_repos : [];
+    const next = applyProjectsLoad(projects, seq, pr, rr);
+    if (next === projects) return; // réponse d'une demande antérieure : ignorée
+    Object.assign(projects, next);
     draw();
   }
 
