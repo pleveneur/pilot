@@ -646,6 +646,45 @@ mod tests {
     }
 
     #[test]
+    fn git_op_result_keeps_the_auth_failure_message_unchanged() {
+        // Contrôle : un échec d'AUTHENTIFICATION garde exactement son message
+        // (aucune traduction, aucun bandeau de correction côté interface).
+        let err = git_op_result(
+            "git push",
+            "remote gds",
+            "",
+            "fatal: Authentication failed for 'git@gds.example:repos/pilot.git'\n",
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("Authentication failed"),
+            "message d'authentification attendu, obtenu: {}",
+            err
+        );
+        assert!(!err.to_lowercase().contains("dubious"), "obtenu: {}", err);
+    }
+
+    #[test]
+    fn git_error_detail_keeps_the_real_dubious_ownership_refusal() {
+        // Cas RÉEL signalé par le propriétaire : Git refuse la confiance du
+        // dossier des dépôts. Ce texte doit arriver INTACT côté interface (où il
+        // est traduit en phrase simple) — jamais avalé par le filtre des
+        // avertissements de connexion.
+        let stderr = "fatal: detected dubious ownership in repository at 'C:\\GDS\\repos\\Kodali.git'\n\
+To add an exception for this directory, call:\n\
+\n\
+\tgit config --global --add safe.directory C:/GDS/repos/Kodali.git\n";
+        let d = git_error_detail(stderr, "");
+        assert!(
+            d.contains("detected dubious ownership"),
+            "refus réel attendu, obtenu: {}",
+            d
+        );
+        assert!(d.contains("Kodali.git"), "le dossier concerné doit rester lisible, obtenu: {}", d);
+    }
+
+    #[test]
     fn git_fetch_missing_branch_reports_git_reason() {
         // Bout en bout, cas réel « projet jamais publié » : dépôt distant SANS la
         // branche demandée → le message doit porter la raison réelle de Git.

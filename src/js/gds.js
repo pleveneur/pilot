@@ -144,6 +144,44 @@ export function friendlyGdsError(e) {
 }
 
 /**
+ * Affiche l'échec d'un geste GDS. Si c'est le refus de confiance Git du dossier
+ * des dépôts, un bandeau court propose un bouton qui déclenche la correction
+ * automatique (`gds_service_trust` — autorisation Windows si nécessaire) puis
+ * relance le geste ; sinon, le message habituel est affiché (inchangé).
+ * @param {HTMLElement} errEl emplacement d'erreur de la page (`.gds-error`)
+ * @param {*} e message d'échec brut
+ * @param {Function} [retry] geste à relancer après la correction
+ */
+export function showGdsError(errEl, e, retry) {
+  if (!errEl) return;
+  if (!isTrustRefusal(e)) {
+    errEl.textContent = friendlyGdsError(e);
+    return;
+  }
+  const project = currentProjectPath();
+  errEl.innerHTML =
+    `${esc(TRUST_REFUSAL_MESSAGE)} ` +
+    `<button id="gds-trust-fix" class="web-btn" type="button">` +
+    `<i data-lucide="shield-check" class="icon-sm"></i> Autoriser ce projet automatiquement</button>`;
+  refreshIcons(errEl);
+  const fix = errEl.querySelector("#gds-trust-fix");
+  if (!fix) return;
+  fix.addEventListener("click", async () => {
+    fix.disabled = true;
+    fix.textContent = "Autorisation en cours… si Windows demande une confirmation, acceptez-la.";
+    try {
+      await invoke("gds_service_trust", { project });
+    } catch (err) {
+      // Refus ou échec de l'autorisation : on relance quand même le geste, qui
+      // redira l'état réel (aucun mensonge à l'écran).
+      console.error("[gds] correction de la confiance Git échouée :", err);
+    }
+    fix.disabled = false;
+    if (typeof retry === "function") retry();
+  });
+}
+
+/**
  * Libellé lisible du serveur d'un projet : le **nom de la fiche mémorisée**
  * quand elle correspond (même hôte + même utilisateur), sinon `utilisateur@hôte`.
  * Ne remonte JAMAIS de secret (la liste des fiches n'en contient aucun).
@@ -528,7 +566,7 @@ export function createGds(container) {
             : "✅ Projet ajouté au GDS.";
         }
       } catch (e) {
-        err.textContent = friendlyGdsError(e);
+        showGdsError(err, e, () => btn.click());
       } finally {
         btn.disabled = false;
         btn.innerHTML = '<i data-lucide="plus" class="icon-sm"></i> Ajouter le projet au GDS';
@@ -647,7 +685,7 @@ export function createGds(container) {
         notifyGdsChanged();
         okEl.textContent = "✅ Raccourci recréé vers le dépôt du serveur — cliquez « Vérifier la liaison ».";
       } catch (e) {
-        errEl.textContent = friendlyGdsError(e);
+        showGdsError(errEl, e, () => relink.click());
       } finally {
         relink.disabled = false;
         relink.innerHTML = '<i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt';
@@ -814,7 +852,7 @@ export function createGds(container) {
         ok.textContent = "✅ Premier envoi effectué — vérification de la liaison…";
         await refresh();
       } catch (e) {
-        err.textContent = friendlyGdsError(e);
+        showGdsError(err, e, () => btn.click());
       } finally {
         btn.disabled = false;
         btn.innerHTML = '<i data-lucide="upload" class="icon-sm"></i> Publier ce projet sur le GDS';
