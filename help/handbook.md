@@ -428,6 +428,18 @@ d'un hébergement externe type GitHub.
   travailler en même temps, la concurrence est assumée en « **dernier qui écrit
   gagne** » et les conflits détectés du suivi sont **journalisés** (jamais
   silencieux).
+- **Autorisation du serveur local — automatique** : sur un serveur GDS
+  **installé sur ce poste**, Pilot **autorise lui-même** le dossier des dépôts
+  à être servi — une fois à la mise en place, et de nouveau avant la création
+  d'un dépôt. **Rien à taper** : plus de commande à refaire à chaque nouveau
+  projet, et l'autorisation reste **limitée au dossier des dépôts** (jamais une
+  autorisation générale de l'ordinateur). Si un geste (ajouter le projet,
+  publier, recréer le raccourci) tombe sur ce refus, l'écran affiche
+  **« Le serveur local n'a pas encore autorisé ce projet. Pilot peut corriger
+  cela tout seul, en un clic. »** et un bouton **« Autoriser ce projet
+  automatiquement »** : il corrige, puis **reprend le geste tout seul**. Une
+  **invitation Windows** peut apparaître — **acceptez-la**, c'est la seule chose
+  à faire.
 - **Ajouter un projet depuis le GDS** : dans le menu **Projet**, les entrées
   « Ajouter ou créer un projet » et « Ajouter un projet depuis le GDS »
   permettent de rajouter une source. Cette dernière ouvre la **liste des dépôts

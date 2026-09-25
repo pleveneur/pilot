@@ -1246,7 +1246,7 @@ docker compose down       # supprime le conteneur — volumes CONSERVÉS
 | `Failed to parse the request body as JSON` | la commande `curl.exe` de 1.6.a est passée sans fichier — refaire avec `Set-Content` + `--data-binary` |
 | `Permission denied (publickey)` en SSH | clef du poste non transmise — le GDS activé sur le projet l'enregistre automatiquement (2.4) —, ou pas encore reprise (attendre 30 s) |
 | « Aucun compte GDS avec l'adresse … » (Mes clés) | cette adresse n'est pas un compte **du serveur choisi** : faites-la créer dans « 🖥️ GDS Serveur — administration » → Comptes (2.2) |
-| `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) |
+| `push` refusé : « detected dubious ownership » | `docker compose restart gds` (le démarrage reprend les dépôts au profit de `git`) — sur un **serveur local natif de ce poste** (Windows, hors conteneur), **aucune commande** : Pilot autorise le dossier des dépôts **lui-même** et propose au besoin le bouton « Autoriser ce projet automatiquement » |
 | le `push` initial échoue juste après l'ajout | fenêtre < 30 s : **relancer « Ajouter ce projet au GDS »** (2.6.e) |
 | `Racine des dépôts serveur non renseignée` | renseigner `/srv/git/repos` dans la **fiche du serveur** (« ⚙️ GDS — paramétrage » → Serveurs GDS → Modifier), puis « Enregistrer la configuration » dans l'onglet GDS du projet (2.5, 2.6.c) |
 | l'URL Tailscale affiche le mauvais service | le port 443 sert déjà Pilot : utiliser `--https=8443` |

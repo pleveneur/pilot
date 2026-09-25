@@ -721,6 +721,35 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
   continue de synchroniser `authorized_keys` **du poste** et n'est donc
   pertinent que pour un serveur local (mention dans l'UI et la procédure).
 
+### 4.2 Confiance Git du compte de service — étroite et automatique
+
+- **Pourquoi** : sur un **serveur local Windows**, le poste crée les dépôts
+  bare sous `<gds_local_dir>/repos`, mais c'est le **compte de service `git`**
+  qui les sert en SSH. Git refuse de servir un dépôt dont le propriétaire
+  diffère (« detected dubious ownership ») tant que ce dossier n'est pas
+  déclaré en confiance (`safe.directory`). L'ancienne parade était la commande
+  administrateur suggérée par Git, à **retaper à chaque nouveau projet**.
+- **Ce que Pilot fait** : `gds_core::git::ensure_service_trust` écrit la
+  **seule** entrée **étroite** `<racine>/*` (`narrow_safe_directory` : racine
+  normalisée en `/`, sans séparateur final, **jamais `*` seul** ; racine vide ⇒
+  aucune écriture) dans le `.gitconfig` du compte `git`. Idempotent (une seule
+  lecture ; rien n'est réécrit si l'entrée étroite est déjà la seule) et
+  **jamais bloquant** (un échec est journalisé, l'appelant poursuit). Une
+  entrée **trop large** héritée (`*` seul) est **retirée**
+  (`--fixed-value --unset-all`) : la confiance reste strictement **sous la
+  racine des dépôts**.
+- **Quand** : au **provisionnement local** (après création de la racine des
+  dépôts) et de nouveau **juste avant la création du dépôt bare** d'un projet
+  (`gds_add_project`) — plus aucune commande à refaire par projet.
+- **Hors Windows** : aucun effet — la confiance est assurée par le `chown` des
+  dépôts (`adopt_parent_owner` / `repair_repos_ownership`).
+- **Réparation en un clic** : si un geste (ajouter le projet, publier,
+  (re)créer le raccourci) échoue sur ce refus, l'UI n'affiche pas l'erreur Git
+  mais une phrase simple et un bouton qui appelle **`gds_service_trust`** :
+  si l'écriture est refusée, une **seule** invitation système Windows est
+  déclenchée (rien à taper), puis le fichier est **relu** pour prouver le
+  résultat, et le geste est **relancé**. Aucun autre réglage n'est touché.
+
 ---
 
 ## 5. Synchronisation poste & concurrence
