@@ -33,9 +33,12 @@ pub fn git_clone(url: &str, dest: &str) -> Result<(), String> {
     let (_, stderr, ok) =
         crate::run_captured_full("git", &["clone", url, dest], Duration::from_secs(60));
     if !ok {
-        let detail = stderr.trim();
+        let detail = git_error_detail(&stderr, "");
         if detail.is_empty() {
-            return Err(format!("git clone a échoué: {}", url));
+            return Err(format!(
+                "git clone a échoué: {} — code de retour non nul, aucune erreur explicite de Git",
+                url
+            ));
         }
         return Err(format!("git clone a échoué: {} — {}", url, detail));
     }
@@ -51,9 +54,12 @@ pub fn git_remote_add(cwd: &str, name: &str, url: &str) -> Result<(), String> {
     let (_, stderr, ok) =
         crate::run_captured_full("git", &["-C", cwd, "remote", "add", name, url], Duration::from_secs(5));
     if !ok {
-        let detail = stderr.trim();
+        let detail = git_error_detail(&stderr, "");
         if detail.is_empty() {
-            return Err(format!("git remote add a échoué: {}", name));
+            return Err(format!(
+                "git remote add a échoué: {} — code de retour non nul, aucune erreur explicite de Git",
+                name
+            ));
         }
         return Err(format!("git remote add a échoué: {} — {}", name, detail));
     }
@@ -67,17 +73,68 @@ pub fn git_remote_remove(cwd: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Vrai si une ligne de la sortie de Git est un simple AVERTISSEMENT :
+/// bannière de connexion, avertissement de sécurité (« post-quantum »,
+/// « store now, decrypt later »), etc. Ces lignes disent rarement POURQUOI
+/// l'opération a échoué et ne doivent pas occuper la place de l'erreur réelle.
+fn is_git_warning_line(line: &str) -> bool {
+    let l = line.trim_start();
+    let lower = l.to_ascii_lowercase();
+    l.starts_with("**")
+        || lower.starts_with("warning:")
+        || lower.starts_with("warning ")
+        || lower.starts_with("post-quantum")
+        || lower.contains("may be vulnerable")
+        || lower.contains("store now, decrypt later")
+}
+
+/// Vrai si une ligne annonce franchement l'échec (elle passe avant le reste).
+fn looks_like_git_error(line: &str) -> bool {
+    let lower = line.trim_start().to_ascii_lowercase();
+    lower.starts_with("fatal")
+        || lower.starts_with("error")
+        || lower.starts_with("remote: error")
+        || lower.contains("! [rejected]")
+        || lower.contains("rejected")
+        || lower.contains("failed")
+        || lower.contains("denied")
+        || lower.contains("refused")
+        || lower.contains("permission denied")
+        || lower.contains("could not")
+        || lower.contains("cannot")
+        || lower.contains("not found")
+        || lower.contains("does not appear to be")
+}
+
 /// Raison donnée par Git pour un message utilisateur : la sortie d'ERREUR
-/// (là où Git écrit ses explications) prime sur la sortie standard, limitée à
-/// deux lignes utiles pour ne pas noyer le propriétaire sous la technique.
+/// (là où Git écrit ses explications) prime sur la sortie standard. On écarte
+/// d'abord les simples AVERTISSEMENTS pour privilégier une vraie ligne d'échec
+/// (« fatal », « error », « rejected », message du dépôt distant), y compris
+/// quand elle arrive APRÈS plusieurs avertissements. Limitée à deux lignes
+/// utiles pour ne pas noyer le propriétaire sous la technique.
 fn git_error_detail(stderr: &str, stdout: &str) -> String {
     let text = if stderr.trim().is_empty() { stdout } else { stderr };
-    text.lines()
+    let lines: Vec<&str> = text
+        .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .collect();
+    let useful = || lines.iter().copied().filter(|l| !is_git_warning_line(l));
+    // 1) Les lignes qui annoncent franchement l'échec, en premier.
+    let mut picked: Vec<&str> = useful()
+        .filter(|l| looks_like_git_error(l))
         .take(2)
-        .collect::<Vec<_>>()
-        .join(" — ")
+        .collect();
+    // 2) Compléter (si place) avec les autres lignes utiles, dans l'ordre.
+    for l in useful() {
+        if picked.len() >= 2 {
+            break;
+        }
+        if !picked.contains(&l) {
+            picked.push(l);
+        }
+    }
+    picked.join(" — ")
 }
 
 /// Juge une opération Git sur son CODE DE RETOUR (`ok`), jamais sur le fait que
@@ -96,7 +153,12 @@ fn git_op_result(
     }
     let detail = git_error_detail(stderr, stdout);
     if detail.is_empty() {
-        return Err(format!("{} a échoué ({})", what, context));
+        // Échec SANS erreur franche (ou sans sortie) : le dire honnêtement plutôt
+        // que de faire passer un simple avertissement pour la cause.
+        return Err(format!(
+            "{} a échoué ({}) — code de retour non nul, aucune erreur explicite de Git",
+            what, context
+        ));
     }
     Err(format!("{} a échoué ({}): {}", what, context, detail))
 }
@@ -535,6 +597,52 @@ mod tests {
         // stderr vide → repli sur stdout (certaines erreurs y sont écrites).
         assert_eq!(git_error_detail("", "boom\n"), "boom");
         assert_eq!(git_error_detail("", ""), "");
+    }
+
+    /// Cas RÉEL signalé par le propriétaire : le client SSH imprime deux lignes
+    /// d'avertissement (bannière post-quantum) AVANT la vraie erreur de Git.
+    const REAL_WARNING_STDERR: &str = "** WARNING: connection is not using a post-quantum key exchange algorithm.\n\
+** This session may be vulnerable to \"store now, decrypt later\" attacks.\n";
+
+    #[test]
+    fn git_error_detail_skips_connection_warnings_for_the_real_error() {
+        let stderr = format!(
+            "{}fatal: Authentication failed for 'git@gds.example:repos/pilot.git'\n",
+            REAL_WARNING_STDERR
+        );
+        let d = git_error_detail(&stderr, "");
+        assert!(d.contains("Authentication failed"), "vraie erreur attendue, obtenu: {}", d);
+        assert!(!d.to_lowercase().contains("warning"), "avertissement écarté, obtenu: {}", d);
+        assert!(!d.to_lowercase().contains("vulnerable"), "bannière écartée, obtenue: {}", d);
+    }
+
+    #[test]
+    fn git_op_result_shows_the_error_not_the_warnings() {
+        let stderr = format!(
+            "{}fatal: Authentication failed for 'git@gds.example:repos/pilot.git'\n",
+            REAL_WARNING_STDERR
+        );
+        let err = git_op_result("git push", "remote gds", "", &stderr, false).unwrap_err();
+        assert!(
+            err.starts_with("git push a échoué (remote gds)"),
+            "entête attendue, obtenu: {}",
+            err
+        );
+        assert!(err.contains("Authentication failed"), "vraie erreur attendue, obtenu: {}", err);
+        assert!(!err.contains("WARNING"), "avertissement écarté, obtenu: {}", err);
+        assert!(!err.contains("vulnerable"), "bannière écartée, obtenue: {}", err);
+    }
+
+    #[test]
+    fn git_op_result_with_only_warnings_is_honest_and_silent() {
+        // Que des avertissements : on ne fait PAS passer le bruit pour la cause,
+        // on l'annonce honnêtement (code de retour non nul, aucune erreur claire).
+        assert_eq!(git_error_detail(REAL_WARNING_STDERR, ""), "");
+        let err = git_op_result("git push", "remote gds", "", REAL_WARNING_STDERR, false).unwrap_err();
+        assert!(!err.contains("WARNING"), "obtenu: {}", err);
+        assert!(!err.contains("vulnerable"), "obtenu: {}", err);
+        assert!(err.contains("code de retour non nul"), "obtenu: {}", err);
+        assert!(err.contains("aucune erreur explicite"), "obtenu: {}", err);
     }
 
     #[test]
