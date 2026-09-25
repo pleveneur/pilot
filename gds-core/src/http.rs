@@ -2380,4 +2380,34 @@ mod tests {
             assert!(actions.iter().any(|x| x == a), "action absente du journal: {}", a);
         }
     }
+
+    /// Règle de droits de l'attribution groupée (« projets sans membre ») :
+    /// l'écran réutilise `POST /api/gds/admin/projects/assign`, un appel par
+    /// projet sans membre. La route doit donc RESTER montée dans `admin_routes`
+    /// (derrière `require_admin`) : sinon un compte NON administrateur pourrait
+    /// s'attribuer les projets orphelins. Contrôle structurel exécutable sans
+    /// PostgreSQL, donc présent en CI.
+    #[test]
+    fn bulk_member_assign_stays_behind_the_admin_guard() {
+        let src = include_str!("http.rs");
+        let start = src
+            .find("pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {")
+            .expect("fonction `admin_routes` absente");
+        let body = &src[start..];
+        let end = body.find("\n}").unwrap_or(body.len());
+        let routes = &body[..end];
+        assert!(
+            routes.contains("/api/gds/admin/projects/assign"),
+            "la route d'attribution de projet a quitté `admin_routes` : un compte \
+             non administrateur ne serait plus refusé"
+        );
+        let mount = src
+            .find("admin_routes::<S>()")
+            .expect("montage de `admin_routes` absent");
+        let mount_end = (mount + 400).min(src.len());
+        assert!(
+            src[mount..mount_end].contains("require_admin"),
+            "le routeur d'administration n'est plus protégé par `require_admin`"
+        );
+    }
 }

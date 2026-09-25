@@ -812,10 +812,16 @@ pub async fn is_project_member(
     Ok(row.is_some())
 }
 
-/// Liste les projets (id, name, repo_name, repo_url, path_on_server, status).
+/// Liste les projets (id, name, repo_name, repo_url, path_on_server, status,
+/// description) **et `member_count`** : le nombre de membres attribués, calculé par
+/// sous-requête. L'écran d'administration s'en sert pour repérer d'un regard les
+/// projets sans aucune personne attribuée (refonte GDS). Champ **additif** : les
+/// consommateurs existants ignorent simplement la clé.
 pub async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
-        "SELECT id, name, repo_name, repo_url, path_on_server, status, description FROM projects ORDER BY name",
+        "SELECT p.id, p.name, p.repo_name, p.repo_url, p.path_on_server, p.status, p.description, \
+                (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) AS member_count \
+           FROM projects p ORDER BY p.name",
     )
     .fetch_all(pool)
     .await
@@ -831,6 +837,7 @@ pub async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, Stri
                 "path_on_server": r.get::<String, _>("path_on_server"),
                 "status": r.get::<String, _>("status"),
                 "description": r.get::<String, _>("description"),
+                "member_count": r.get::<i64, _>("member_count"),
             })
         })
         .collect())
