@@ -525,8 +525,11 @@ fn test_remote_connection(
 
 /// Test local stdio : lance la commande et vérifie la handshake MCP
 /// (`initialize` → réponse) avec un timeout. Déroulement inchangé depuis le POC.
-fn test_stdio_connection(server: McpServer, label: String) -> Result<Value, String> {
-    let timeout = std::time::Duration::from_secs(8);
+fn test_stdio_connection(
+    server: McpServer,
+    label: String,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
     if server.command.trim().is_empty() {
         return Err("Commande du serveur vide".to_string());
     }
@@ -569,10 +572,15 @@ fn test_stdio_connection(server: McpServer, label: String) -> Result<Value, Stri
     let _ = stdin.flush();
 
     // Lire les lignes stdout jusqu'à une réponse contenant le résultat.
-    let mut reader = BufReader::new(stdout);
-    let start = std::time::Instant::now();
-    let mut raw_response: Option<Value> = None;
-    // Draine stderr dans un thread pour éviter un blocage sur pipe plein.
+    // La lecture est faite DANS un fil séparé : un serveur muet (lecture
+    // bloquante) ne peut donc plus figer l'attente. Le fil principal borne
+    // l'attente par `recv_timeout` ; à l'expiration il tue le processus, ce qui
+    // ferme le pipe stdout et débloque le fil de lecture.
+    let reader = BufReader::new(stdout);
+    // Draine stderr dans un thread pour éviter un blocage sur pipe plein, et
+    // récupère le texte par canal borné : un petit-fils survivant au `kill()`
+    // garderait le pipe ouvert, donc un `join()` nu pourrait encore figer.
+    let (etx, erx) = std::sync::mpsc::channel::<String>();
     let stderr = child.stderr.take();
     let err_thread = std::thread::spawn(move || {
         let mut s = String::new();
@@ -580,43 +588,53 @@ fn test_stdio_connection(server: McpServer, label: String) -> Result<Value, Stri
             use std::io::Read;
             let _ = e.read_to_string(&mut s);
         }
-        s
+        let _ = etx.send(s);
     });
 
-    loop {
-        if start.elapsed() > timeout {
-            break;
-        }
+    let (tx, rx) = std::sync::mpsc::channel::<Value>();
+    let read_thread = std::thread::spawn(move || {
+        let mut reader = reader;
         let mut buf = String::new();
-        match reader.read_line(&mut buf) {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = buf.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    // Une réponse à notre id=1, ou notification sans id → candidat.
-                    if v.get("id").and_then(|i| i.as_i64()) == Some(1)
-                        || (v.get("method").is_none() && v.get("id").is_some())
-                    {
-                        if v.get("result").is_some() || v.get("error").is_some() {
-                            raw_response = Some(v);
-                            break;
+        loop {
+            buf.clear();
+            match reader.read_line(&mut buf) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = buf.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        // Une réponse à notre id=1, ou notification sans id → candidat.
+                        if v.get("id").and_then(|i| i.as_i64()) == Some(1)
+                            || (v.get("method").is_none() && v.get("id").is_some())
+                        {
+                            if v.get("result").is_some() || v.get("error").is_some() {
+                                let _ = tx.send(v);
+                                return;
+                            }
                         }
                     }
                 }
+                Err(_) => break,
             }
-            Err(_) => break,
         }
-    }
+    });
+
+    let raw_response: Option<Value> = rx.recv_timeout(timeout).ok();
 
     let mut child = child;
     let _ = child.kill();
     let _ = child.wait();
-    let mut collected_stderr = err_thread
-        .join()
-        .unwrap_or_else(|_| String::new());
+    // Ne PAS joindre le fil de lecture : si un petit-fils survivait (ex.
+    // `npx` → `node`) il garderait le pipe stdout ouvert et l'attente serait de
+    // nouveau bloquante. Le fil se termine seul dès que le pipe se ferme.
+    // ponytail: fil détaché, tuer l'arbre (taskkill /T) si des orphelins gênent.
+    drop(read_thread);
+    drop(err_thread);
+    let mut collected_stderr = erx
+        .recv_timeout(std::time::Duration::from_millis(1000))
+        .unwrap_or_default();
     if !collected_stderr.trim().is_empty() {
         collected_stderr = collected_stderr.trim().to_string();
     }
@@ -634,10 +652,11 @@ fn test_stdio_connection(server: McpServer, label: String) -> Result<Value, Stri
         }
         _ => {
             // Timeout ou aucune réponse JSON valide.
+            let secs = timeout.as_secs_f32();
             let detail = if collected_stderr.is_empty() {
-                "timeout : aucune réponse handshake MCP (initialize) en 8s".to_string()
+                format!("timeout : aucune réponse handshake MCP (initialize) en {}s", secs)
             } else {
-                format!("aucune réponse handshake MCP (initialize) en 8s — serveur: {}", collected_stderr)
+                format!("aucune réponse handshake MCP (initialize) en {}s — serveur: {}", secs, collected_stderr)
             };
             Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": detail }))
         }
@@ -675,7 +694,9 @@ pub async fn mcp_test_connection(
             if let Some(err) = unknown_transport_message(&server.transport) {
                 return Err(err);
             }
-            tokio::task::spawn_blocking(move || test_stdio_connection(server, label))
+            tokio::task::spawn_blocking(move || {
+                test_stdio_connection(server, label, std::time::Duration::from_secs(8))
+            })
                 .await
                 .map_err(|e| format!("Test de connexion interrompu : {}", e))?
         }
@@ -698,6 +719,91 @@ mod tests {
             args: vec!["scripts/mcp-test-server.js".to_string()],
             ..Default::default()
         }
+    }
+
+    #[cfg(windows)]
+    fn mute_command() -> (String, Vec<String>) {
+        // Serveur muet à PROCESSUS UNIQUE (pas de petit-fils) : `powershell`
+        // dort sans rien répondre, `kill()` le termine et ferme le pipe.
+        (
+            "powershell".to_string(),
+            vec![
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Start-Sleep -Seconds 30".to_string(),
+            ],
+        )
+    }
+
+    #[cfg(not(windows))]
+    fn mute_command() -> (String, Vec<String>) {
+        (
+            "sh".to_string(),
+            vec!["-c".to_string(), "sleep 30".to_string()],
+        )
+    }
+
+    /// Serveur « muet » : démarre mais ne répond jamais. Le test doit rendre la
+    /// main sur le délai court (jamais rester figé) et arrêter le processus.
+    #[test]
+    fn stdio_mute_server_times_out_within_bound() {
+        let (command, args) = mute_command();
+        let server = McpServer {
+            id: "mute".to_string(),
+            name: "Mute".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            command,
+            args,
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        let out = test_stdio_connection(
+            server,
+            "Mute".to_string(),
+            std::time::Duration::from_millis(500),
+        )
+        .expect("le test doit aboutir, jamais bloquer");
+        assert_eq!(out["ok"], serde_json::json!(false));
+        assert!(out["error"].as_str().unwrap().contains("aucune réponse"));
+        // Laisse une large marge au démarrage du processus.
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// Serveur qui répond : `node` imprime une réponse JSON valide puis sort.
+    /// Pas de shell → pas de complications de guillemets.
+    fn reply_command() -> (String, Vec<String>) {
+        (
+            "node".to_string(),
+            vec![
+                "-e".to_string(),
+                "process.stdout.write(JSON.stringify({jsonrpc:\"2.0\",id:1,result:{protocolVersion:\"2024-11-05\"}})+\"\\n\")"
+                    .to_string(),
+            ],
+        )
+    }
+
+    /// Un serveur qui répond normalement réussit comme avant.
+    #[test]
+    fn stdio_responding_server_succeeds() {
+        let (command, args) = reply_command();
+        let server = McpServer {
+            id: "reply".to_string(),
+            name: "Reply".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            command,
+            args,
+            ..Default::default()
+        };
+        let out = test_stdio_connection(
+            server,
+            "Reply".to_string(),
+            std::time::Duration::from_secs(8),
+        )
+        .expect("le test doit aboutir");
+        assert_eq!(out["ok"], serde_json::json!(true));
+        assert_eq!(out["protocolVersion"], serde_json::json!("2024-11-05"));
     }
 
     #[test]
