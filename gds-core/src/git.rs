@@ -483,6 +483,41 @@ mod tests {
         assert!(!should_enroll_creator(true, "root"));
     }
 
+    /// Cas **héritage** (projets créés AVANT le rattachement du créateur) : la
+    /// base ne conserve **aucun** auteur/propriétaire de projet (`projects` n'a
+    /// pas cette colonne) — le seul lien est `project_members`. Un projet déjà
+    /// enregistré auquel son créateur développeur n'est rattaché nulle part ne
+    /// le rattache donc PAS tout seul : c'est **volontaire**, un développeur ne
+    /// s'auto-attribue jamais un droit (sinon n'importe quel développeur
+    /// publierait le projet d'un autre). La seule réparation est l'**attribution
+    /// explicite par un administrateur** ; une fois attribué, le développeur
+    /// publie.
+    ///
+    /// Contrôle **pur** (sans PostgreSQL, donc présent en CI) des deux règles
+    /// partagées par la voie poste et la voie service.
+    #[test]
+    fn legacy_project_creator_is_not_self_enrolled_and_admin_attribution_repairs() {
+        // 1) Projet DÉJÀ enregistré : aucun rattachement automatique du créateur
+        //    (aucune réparation implicite ; le créateur d'origine n'étant pas
+        //    enregistré, il est indistinguable d'un tiers).
+        assert!(
+            !should_enroll_creator(false, "dev"),
+            "un projet existant ne rattache jamais un développeur d'office"
+        );
+        // 2) Conséquence : sans ligne d'appartenance, `dev` (créateur comme
+        //    tiers) est refusé — la garde reste mordante.
+        assert!(
+            !crate::roles::can_publish_project("dev", false),
+            "un développeur sans appartenance ne publie jamais le projet"
+        );
+        // 3) La réparation est l'attribution par un administrateur : une fois
+        //    membre, le développeur publie (la garde reste « dev ⇒ membre »).
+        assert!(
+            crate::roles::can_publish_project("dev", true),
+            "après attribution par un administrateur, le développeur publie"
+        );
+    }
+
     /// Contrôle **structurel** du branchement (exécutable sans PostgreSQL, donc
     /// présent en CI) : `register_project` doit déterminer si le projet est
     /// **neuf** avant sa création et transmettre ce fait à `enroll_creator`.
