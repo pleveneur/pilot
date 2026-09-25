@@ -15,9 +15,11 @@
 
 use crate::db;
 use crate::git_cmd::git_init_bare;
+use crate::proc::run_captured_full;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Dossier des repos serveur (`<gds_local_dir>/repos`).
 pub fn repos_dir(gds_local_dir: &str) -> PathBuf {
@@ -239,6 +241,162 @@ async fn ensure_bare(bare: PathBuf) -> Result<bool, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// ── Confiance Git du compte de service (`safe.directory`) ──
+
+/// Entrée de confiance `safe.directory` déclarée dans un contenu de config git
+/// (pure — testable). Ne lit que la section `[safe]` : aucun autre réglage n'est
+/// interprété. Les guillemets git sont retirés, les échappements `\x` résolus.
+pub fn parse_safe_directories(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_safe = false;
+    for raw in content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('[') {
+            let name = rest.split(']').next().unwrap_or("").trim().to_ascii_lowercase();
+            in_safe = name == "safe";
+            continue;
+        }
+        if !in_safe {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("directory") {
+            out.push(unquote_git_config_value(value.trim()));
+        }
+    }
+    out
+}
+
+/// Retire les guillemets git d'une valeur (`"…"`) et résout `\"` / `\\`. Pure.
+fn unquote_git_config_value(value: &str) -> String {
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        let mut out = String::new();
+        let mut chars = value[1..value.len() - 1].chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    } else {
+        value.to_string()
+    }
+}
+
+/// Rapport de préparation de la confiance Git du compte de service.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServiceTrustReport {
+    /// Chemin du fichier de configuration visé (`<home git>/.gitconfig`).
+    pub config_path: String,
+    /// Entrée **étroite** attendue (`<racine>/*`).
+    pub wanted: String,
+    /// `true` si cet appel a écrit dans le fichier (ajout ou nettoyage).
+    pub modified: bool,
+    /// `true` si une entrée trop large (`*` seul) a été trouvée.
+    pub broad_found: bool,
+    /// Entrées `safe.directory` présentes **après** l'appel (relues).
+    pub final_values: Vec<String>,
+    /// Échec éventuel. Jamais bloquant : l'appelant poursuit.
+    pub error: Option<String>,
+}
+
+/// Prépare une fois pour toutes la confiance **étroite** du compte de service
+/// `git` sur la racine des dépôts (`safe.directory = <racine>/*`), pour que git
+/// serve les dépôts créés par le poste sans refus « detected dubious ownership ».
+///
+/// **Windows uniquement** : sur Unix, la confiance est déjà assurée par le
+/// changement de propriétaire des dépôts (`adopt_parent_owner`,
+/// `repair_repos_ownership`) — rien n'est écrit, comportement inchangé.
+///
+/// Idempotent : le fichier est **lu une fois** ; rien n'est réécrit si l'entrée
+/// étroite est déjà la seule. Une entrée trop large (`*` seul) est retirée. Seul
+/// le réglage `safe.directory` est touché : aucun autre réglage, aucun dépôt,
+/// aucun propriétaire. Jamais bloquant : un échec est remonté dans `error` et ne
+/// fait jamais échouer l'appelant.
+pub fn ensure_service_trust(repos_root: &str) -> ServiceTrustReport {
+    const SAFE_KEY: &str = "safe.directory";
+    let wanted = crate::ssh::narrow_safe_directory(repos_root);
+    let mut report = ServiceTrustReport {
+        wanted: wanted.clone(),
+        ..Default::default()
+    };
+    if wanted.is_empty() {
+        report.error = Some("racine des dépôts vide : aucune confiance posée".to_string());
+        return report;
+    }
+    // Sur Unix, la confiance est assurée par le `chown` des dépôts : ne rien écrire.
+    if !cfg!(windows) {
+        return report;
+    }
+    let config_path = crate::ssh::git_config_path();
+    report.config_path = config_path.clone();
+
+    // Une seule lecture du fichier : décide s'il y a lieu d'écrire.
+    let existing =
+        parse_safe_directories(&std::fs::read_to_string(&config_path).unwrap_or_default());
+    report.broad_found = existing.iter().any(|v| v == "*");
+    if existing.len() == 1 && existing[0] == wanted {
+        report.final_values = existing;
+        return report; // déjà la seule entrée : aucune réécriture.
+    }
+
+    // Retirer l'entrée trop large (`*` seul). `--fixed-value` = correspondance
+    // littérale (le motif n'est pas une expression régulière).
+    if report.broad_found {
+        let (_, stderr, ok) = run_captured_full(
+            "git",
+            &[
+                "config",
+                "--file",
+                &config_path,
+                "--fixed-value",
+                "--unset-all",
+                SAFE_KEY,
+                "*",
+            ],
+            Duration::from_secs(10),
+        );
+        if !ok {
+            report.error = Some(format!(
+                "retrait de l'entrée large refusé : {}",
+                stderr.trim()
+            ));
+            return report;
+        }
+    }
+
+    // Poser l'entrée étroite si elle est absente.
+    if !existing.iter().any(|v| v == &wanted) {
+        let (_, stderr, ok) = run_captured_full(
+            "git",
+            &["config", "--file", &config_path, "--add", SAFE_KEY, &wanted],
+            Duration::from_secs(10),
+        );
+        if !ok {
+            report.error = Some(format!(
+                "écriture de l'entrée étroite refusée : {}",
+                stderr.trim()
+            ));
+            return report;
+        }
+    }
+
+    report.modified = true;
+    // Relecture : l'entrée finale est constatée, jamais supposée.
+    report.final_values =
+        parse_safe_directories(&std::fs::read_to_string(&config_path).unwrap_or_default());
+    report
 }
 
 // ── Conteneur (L2.6) : racine des dépôts et matérialisation depuis la base ──
@@ -670,5 +828,83 @@ mod tests {
         assert!(remove_bare(&gds, "../outside").is_err());
         assert!(evil.exists(), "le dossier externe ne doit JAMAIS être supprimé");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Lit les entrées `safe.directory` d'un fichier **avec Git** (et non avec
+    /// notre propre analyseur) : c'est la preuve indépendante attendue.
+    fn git_safe_directories(config_path: &str) -> Vec<String> {
+        crate::proc::run_captured(
+            "git",
+            &[
+                "config",
+                "--file",
+                config_path,
+                "--get-all",
+                "safe.directory",
+            ],
+            Duration::from_secs(10),
+        )
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+    }
+
+    #[test]
+    fn parse_safe_directories_reads_only_the_safe_section() {
+        let content = "[user]\n\tname = alice\n[safe]\n\tdirectory = *\n\tdirectory = \"C:/GDS/repos/*\"\n[core]\n\tdirectory = /nope\n";
+        assert_eq!(
+            parse_safe_directories(content),
+            vec!["*".to_string(), "C:/GDS/repos/*".to_string()]
+        );
+        assert!(parse_safe_directories("").is_empty());
+        assert!(parse_safe_directories("[user]\n\tdirectory = x\n").is_empty());
+    }
+
+    /// Confiance du compte de service : l'entrée large `*` est remplacée par
+    /// l'entrée **étroite** sous la racine, l'opération est idempotente, et la
+    /// relecture **avec Git** le prouve. Windows uniquement (sur Unix, la
+    /// fonction ne fait rien : c'est le `chown` qui assure la confiance).
+    #[test]
+    fn ensure_service_trust_is_narrow_idempotent_and_drops_the_wide_entry() {
+        if !cfg!(windows) {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("pilot-trust-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dossier de test");
+        // Le home du compte `git` est redirigé par le hook de test existant :
+        // aucun fichier réel de la machine n'est touché.
+        std::env::set_var("PILOT_GIT_USER_HOME", &dir);
+        let config = dir.join(".gitconfig");
+        std::fs::write(&config, "[safe]\n\tdirectory = *\n").expect("config initiale");
+        let config_str = config.to_string_lossy().to_string();
+
+        // 1) Entrée large présente → corrigée en entrée ÉTROITE sous la racine.
+        let report = ensure_service_trust("C:\\GDS\\repos");
+        assert!(report.error.is_none(), "erreur inattendue : {:?}", report.error);
+        assert!(report.broad_found, "l'entrée large `*` doit être constatée");
+        assert!(report.modified, "le fichier doit avoir été corrigé");
+        assert_eq!(report.wanted, "C:/GDS/repos/*");
+        assert_eq!(
+            git_safe_directories(&config_str),
+            vec!["C:/GDS/repos/*".to_string()],
+            "après passage : entrée étroite seule, l'entrée large a disparu"
+        );
+
+        // 2) Idempotent : second passage → aucune écriture, fichier inchangé.
+        let before = std::fs::read_to_string(&config).unwrap();
+        let again = ensure_service_trust("C:\\GDS\\repos");
+        assert!(again.error.is_none());
+        assert!(!again.modified, "rien à réécrire : {:?}", again);
+        assert_eq!(again.final_values, vec!["C:/GDS/repos/*".to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            before,
+            "fichier inchangé au second passage"
+        );
+
+        std::env::remove_var("PILOT_GIT_USER_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

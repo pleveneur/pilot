@@ -1245,6 +1245,90 @@ async fn rollback_local_add(pool: &PgPool, local_dir: &str, name: &str) {
     let _ = gds_db::delete_project_by_name(pool, name).await;
 }
 
+// ── Confiance Git du compte de service (`safe.directory`) ──
+
+/// Repose la confiance **étroite** du compte de service `git` sur la racine des
+/// dépôts du projet. Best-effort : un échec est journalisé mais ne bloque JAMAIS
+/// l'appelant (l'ajout du projet reste possible, le message Git restant clair).
+fn ensure_local_service_trust(local_dir: &str) {
+    let repos_root = gds_git::repos_dir(local_dir).to_string_lossy().to_string();
+    let report = gds_git::ensure_service_trust(&repos_root);
+    if let Some(err) = report.error {
+        eprintln!(
+            "[gds] confiance Git du compte `git` non posée ({}): {}",
+            report.config_path, err
+        );
+    }
+}
+
+/// Repli **Windows** : repose l'entrée étroite avec les droits administrateur,
+/// après une **seule** invitation système (rien à taper). Les valeurs sont
+/// passées par variables d'environnement du processus PowerShell : aucun
+/// échappement de chemin à gérer. `--replace-all` laisse la **seule** entrée
+/// étroite (l'entrée trop large disparaît) et ne touche à aucun autre réglage.
+#[cfg(windows)]
+fn escalate_service_trust(config_path: &str, wanted: &str) -> Result<(), String> {
+    let script = concat!(
+        "$a = @('config','--file',$env:PILOT_TRUST_FILE,'--replace-all','safe.directory',$env:PILOT_TRUST_VALUE); ",
+        "Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath git -ArgumentList $a"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .env("PILOT_TRUST_FILE", config_path)
+        .env("PILOT_TRUST_VALUE", wanted)
+        .output()
+        .map_err(|e| format!("élévation impossible : {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "élévation refusée ou échouée : {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Hors Windows, la confiance est assurée par le `chown` des dépôts : aucune
+/// élévation n'existe (et n'est jamais atteinte).
+#[cfg(not(windows))]
+fn escalate_service_trust(_config_path: &str, _wanted: &str) -> Result<(), String> {
+    Err("élévation disponible uniquement sous Windows".to_string())
+}
+
+/// Un clic : (re)pose la confiance **étroite** du compte de service `git` sur
+/// la racine des dépôts de ce projet. Si l'écriture est refusée, une invitation
+/// système Windows est déclenchée (aucune commande à taper), puis le fichier est
+/// **relu** pour prouver le résultat. N'écrit QUE cette confiance : aucune
+/// suppression, aucune reprise de propriétaire, aucun autre réglage.
+#[tauri::command]
+pub async fn gds_service_trust(project: String) -> Result<Value, String> {
+    let cfg = read_gds_config(&project)?;
+    if !cfg.enabled {
+        return Err("GDS non activé pour ce projet".to_string());
+    }
+    let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
+    let repos_root = gds_git::repos_dir(&local_dir).to_string_lossy().to_string();
+    let mut report = gds_git::ensure_service_trust(&repos_root);
+    let mut escalated = false;
+    if report.error.is_some() {
+        // Écriture refusée → invitation système, puis RELECTURE (preuve).
+        escalate_service_trust(&report.config_path, &report.wanted)?;
+        escalated = true;
+        report = gds_git::ensure_service_trust(&repos_root);
+    }
+    if let Some(err) = &report.error {
+        return Err(format!("Confiance Git non posée : {}", err));
+    }
+    Ok(json!({
+        "ok": true,
+        "config_path": report.config_path,
+        "directory": report.wanted,
+        "modified": report.modified,
+        "broad_found": report.broad_found,
+        "escalated": escalated,
+        "entries": report.final_values,
+    }))
+}
+
 pub(crate) async fn add_project_to_gds(
     pool: Option<&PgPool>,
     project: &str,
@@ -1289,6 +1373,14 @@ async fn add_project_with(
     let is_local = is_local_gds_server(cfg);
     let local_dir = cfg.gds_local_dir.clone().unwrap_or_else(default_gds_local_dir);
     let repo_url = gds_remote_url(cfg, &name);
+
+    // Garde-fou Windows : la confiance étroite du compte `git` sur le dossier des
+    // dépôts doit être en place AVANT la création du bare, sinon le push initial
+    // est refusé (« detected dubious ownership »). Une seule lecture de fichier
+    // en coût ; best-effort, jamais bloquant.
+    if is_local {
+        ensure_local_service_trust(&local_dir);
+    }
 
     // ── Identité git automatique (avant init/commit) ──
     // user.email (local ou global) manquant → réglé en LOCAL = email du compte
@@ -1569,6 +1661,9 @@ pub async fn gds_provision(
         let repos = gds_git::repos_dir(&local_dir);
         std::fs::create_dir_all(&repos).map_err(|e| format!("Création dossier repos: {}", e))?;
         repos_dir_str = repos.to_string_lossy().to_string();
+        // Confiance étroite du compte de service `git` sur les dépôts créés par
+        // ce poste (Windows ; sans effet sur Unix) — posée une fois pour toutes.
+        ensure_local_service_trust(&local_dir);
     } else {
         let key = gds_ssh::ensure_poste_key_remote(&pool, &admin_email).await?;
         ssh_public_key = key["public_key"].as_str().unwrap_or("").to_string();

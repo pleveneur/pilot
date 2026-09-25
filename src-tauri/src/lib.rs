@@ -3048,6 +3048,7 @@ pub fn run() {
             vault::vault_delete,
             // ── GDS (Gestionnaire de Sources, spec_gds.md) : Phase A serveur ──
             gds::gds_provision,
+            gds::gds_service_trust,
             gds::gds_restore_pool,
             gds::gds_secrets_status,
             gds::gds_validate_user,

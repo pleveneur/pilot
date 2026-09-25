@@ -343,6 +343,39 @@ pub fn authorized_keys_path() -> String {
     authorized_keys_path_in(&git_user_home())
 }
 
+/// Nom du fichier de configuration git global du compte de service (`git`).
+pub const GIT_CONFIG_FILE: &str = ".gitconfig";
+
+/// Chemin du fichier de configuration git global sous un home donné
+/// (`<home>/.gitconfig`). Pure — testable, un séparateur final est toléré.
+pub fn git_config_path_in(home: &str) -> String {
+    format!(
+        "{}/{}",
+        home.trim_end_matches(|c| c == '/' || c == '\\'),
+        GIT_CONFIG_FILE
+    )
+}
+
+/// Chemin du fichier de configuration git global du compte `git` de CETTE
+/// machine : celui que lit `git` en ssh quand sshd le fait tourner sous `git`.
+pub fn git_config_path() -> String {
+    git_config_path_in(&git_user_home())
+}
+
+/// Entrée de confiance Git **étroite** pour une racine de dépôts : la racine en
+/// séparateurs `/`, sans séparateur final, suivie de `/*`. Git autorise alors
+/// tous les dépôts **sous** cette racine — et jamais un `*` global. Une racine
+/// vide ne produit aucune confiance (chaîne vide) : on n'écrit jamais `*` seul.
+pub fn narrow_safe_directory(repos_root: &str) -> String {
+    let root = repos_root.trim().replace('\\', "/");
+    let root = root.trim_end_matches('/');
+    if root.is_empty() {
+        String::new()
+    } else {
+        format!("{}/*", root)
+    }
+}
+
 /// Droits POSIX (bits `rwx`) d'un chemin, `None` sur Windows ou si le chemin
 /// n'existe pas. Sert de **constat** vérifiable (jamais de décision).
 /// Reprend les dépôts d'une racine dont le propriétaire diffère de celui de la
@@ -1109,6 +1142,44 @@ mod tests {
             authorized_keys_path_in("C:\\Users\\git"),
             "C:\\Users\\git/.ssh/authorized_keys"
         );
+    }
+
+    #[test]
+    fn git_config_paths_are_pure() {
+        assert_eq!(git_config_path_in("/home/git"), "/home/git/.gitconfig");
+        assert_eq!(git_config_path_in("/var/lib/git/"), "/var/lib/git/.gitconfig");
+        // Windows : le home reste tel quel, un seul séparateur avant le fichier.
+        assert_eq!(
+            git_config_path_in("C:\\GDS\\repos"),
+            "C:\\GDS\\repos/.gitconfig"
+        );
+        assert_eq!(
+            git_config_path_in("C:\\GDS\\repos\\"),
+            "C:\\GDS\\repos/.gitconfig"
+        );
+    }
+
+    #[test]
+    fn narrow_safe_directory_stays_under_the_root_and_never_globals() {
+        // Normalisation Windows + séparateurs mixtes + séparateur final.
+        assert_eq!(narrow_safe_directory("C:\\GDS\\repos"), "C:/GDS/repos/*");
+        assert_eq!(narrow_safe_directory("C:/GDS/repos"), "C:/GDS/repos/*");
+        assert_eq!(narrow_safe_directory("C:\\GDS\\repos\\"), "C:/GDS/repos/*");
+        assert_eq!(
+            narrow_safe_directory("C:/GDS/mixte\\repos/"),
+            "C:/GDS/mixte/repos/*"
+        );
+        assert_eq!(narrow_safe_directory("  /srv/git/repos  "), "/srv/git/repos/*");
+        assert_eq!(narrow_safe_directory("/srv/git/repos/"), "/srv/git/repos/*");
+        // Jamais un `*` seul : la confiance reste strictement sous la racine.
+        for root in ["C:\\GDS\\repos", "/srv/git/repos", "C:\\GDS\\repos\\"] {
+            let entry = narrow_safe_directory(root);
+            assert_ne!(entry, "*", "confiance globale interdite");
+            assert!(entry.ends_with("/*"), "entrée trop large : {}", entry);
+        }
+        // Racine vide : aucune confiance (on ne devine pas).
+        assert_eq!(narrow_safe_directory(""), "");
+        assert_eq!(narrow_safe_directory("   "), "");
     }
 
     #[test]
