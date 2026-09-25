@@ -1544,6 +1544,11 @@ export function createGdsAdmin(container) {
       btn.addEventListener("click", () => {
         activeTab = btn.getAttribute("data-gds-tab") || activeTab;
         draw();
+        // `draw()` reconstruit tout l'écran (innerHTML) : sans ce rappel, le
+        // focus clavier retomberait sur le document et la barre d'onglets
+        // deviendrait inutilisable au clavier dès le premier changement.
+        const next = container.querySelector(`[data-gds-tab="${activeTab}"]`);
+        if (next) next.focus();
       });
     }
     const t = q("#gds-admin-test");

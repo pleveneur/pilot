@@ -1,6 +1,9 @@
 // Tests unitaires — gds-admin.js (lot L4.1 : squelette de l'onglet transverse).
 // Couvre les aides de rendu PURES (réutilisées par l'écran de paramétrage L5.1).
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ACCOUNT_ROLES,
   ACCOUNT_STATUSES,
@@ -178,6 +181,25 @@ describe("renderAdminShellHtml (pure, réutilisable L5.1)", () => {
       activeTab: "n_existe_pas",
     });
     expect(fallback).not.toMatch(/data-tab-panel="connection"[^>]*hidden/);
+  });
+
+  it("rend le focus au sous-onglet actif après un changement de groupe (clavier)", () => {
+    // `draw()` reconstruit tout l'écran : sans rappel explicite du focus, la
+    // barre d'onglets devient inutilisable au clavier après un changement.
+    // Garde-fou de source (pas de DOM dans l'environnement de test).
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "gds-admin.js"),
+      "utf8"
+    );
+    const start = src.indexOf('for (const btn of container.querySelectorAll("[data-gds-tab]"))');
+    expect(start, "écouteurs de sous-onglets absents").toBeGreaterThan(-1);
+    // Fenêtre bornée : les écouteurs d'onglets s'arrêtent à l'écouteur suivant.
+    const end = src.indexOf('const t = q("#gds-admin-test")', start);
+    const body = src.slice(start, end);
+    const draw = body.indexOf("draw();");
+    const focus = body.indexOf("next.focus()");
+    expect(draw, "appel `draw()` absent de l'écouteur d'onglet").toBeGreaterThan(-1);
+    expect(focus, "rappel `next.focus()` absent après `draw()`").toBeGreaterThan(draw);
   });
 
   it("tolère une liste de sections vide / absente", () => {
