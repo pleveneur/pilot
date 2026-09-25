@@ -12,6 +12,7 @@ import {
   isTrustRefusal,
   showGdsError,
   TRUST_REFUSAL_MESSAGE,
+  TRUST_REPAIR_FAILED_MESSAGE,
 } from "./gds.js";
 
 let invokeImpl = () => Promise.resolve(null);
@@ -95,6 +96,18 @@ describe("refus de confiance Git — bandeau + bouton de correction", () => {
     expect(calls[0][0]).toBe("gds_service_trust");
     expect(calls[0][1]).toEqual({ project: "G:/projet-test" });
     expect(retried, "le geste doit être relancé après la correction").toBe(1);
+  });
+
+  it("si la réparation ÉCHOUE, l'écran le DIT et ne rejoue pas le geste", async () => {
+    invokeImpl = () => Promise.reject(new Error("élévation refusée"));
+    let retried = 0;
+    const errEl = new FakeEl();
+    showGdsError(errEl, REAL_DUBIOUS, () => { retried++; });
+    const fix = errEl.querySelector("#gds-trust-fix");
+    await fix.click();
+    expect(retried, "le geste ne doit PAS être rejoué après un échec").toBe(0);
+    expect(errEl.textContent).toContain(TRUST_REPAIR_FAILED_MESSAGE);
+    expect(errEl.textContent).not.toContain("n'a pas encore autorisé");
   });
 
   it("un échec d'authentification n'affiche AUCUN bouton de correction", () => {

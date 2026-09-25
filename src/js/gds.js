@@ -112,6 +112,12 @@ function esc(s) {
 export const TRUST_REFUSAL_MESSAGE =
   "🔒 Le serveur local n'a pas encore autorisé ce projet. Pilot peut corriger cela tout seul, en un clic.";
 
+/** Phrase simple quand la réparation automatique de la confiance a ÉCHOUÉ. */
+export const TRUST_REPAIR_FAILED_MESSAGE =
+  "⚠️ L'autorisation automatique n'a pas pu être posée : le réglage n'a pas été modifié. " +
+  "Autorisez Pilot à modifier les réglages du poste (acceptez l'invitation Windows), puis réessayez — " +
+  "ou demandez à un administrateur de ce poste de faire ce réglage.";
+
 /**
  * Vrai si l'échec est le refus de confiance Git du dossier des dépôts
  * (`fatal: detected dubious ownership in repository at '…'`).
@@ -172,9 +178,13 @@ export function showGdsError(errEl, e, retry) {
     try {
       await invoke("gds_service_trust", { project });
     } catch (err) {
-      // Refus ou échec de l'autorisation : on relance quand même le geste, qui
-      // redira l'état réel (aucun mensonge à l'écran).
+      // La réparation a ÉCHOUÉ : l'écran le DIT (aucun mensonge) et le geste
+      // n'est PAS relancé (le relancer réafficherait « pas encore autorisé »).
       console.error("[gds] correction de la confiance Git échouée :", err);
+      fix.disabled = false;
+      errEl.textContent =
+        TRUST_REPAIR_FAILED_MESSAGE + " " + String((err && err.message) || err);
+      return;
     }
     fix.disabled = false;
     if (typeof retry === "function") retry();
