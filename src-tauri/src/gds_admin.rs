@@ -886,36 +886,6 @@ fn valid_project_id(project_id: i64) -> Result<i64, String> {
     Ok(project_id)
 }
 
-/// Charge utile d'attribution d'un compte à un projet (par email, comme la
-/// route L3.4). Le rôle dans le projet doit appartenir au vocabulaire du socle.
-/// Pure : aucun appel réseau, aucune donnée sensible (jamais de mot de passe).
-pub(crate) fn project_assign_payload(
-    project_id: i64,
-    email: &str,
-    role: &str,
-) -> Result<Value, String> {
-    let project_id = valid_project_id(project_id)?;
-    let email = email.trim();
-    if email.is_empty() {
-        return Err("Email du développeur requis".to_string());
-    }
-    let role = role.trim();
-    if !gds_db::is_known_role(role) {
-        return Err(format!("Rôle inconnu : {}", role));
-    }
-    Ok(json!({ "project_id": project_id, "email": email, "role": role }))
-}
-
-/// Charge utile de retrait d'un compte d'un projet. Pure.
-pub(crate) fn project_unassign_payload(project_id: i64, email: &str) -> Result<Value, String> {
-    let project_id = valid_project_id(project_id)?;
-    let email = email.trim();
-    if email.is_empty() {
-        return Err("Email du développeur requis".to_string());
-    }
-    Ok(json!({ "project_id": project_id, "email": email }))
-}
-
 /// Charge utile de retrait d'un projet du serveur. `purge` est **explicite** :
 /// l'absence du drapeau vaut « ne rien détruire sur le disque ». Pure.
 pub(crate) fn project_remove_payload(project_id: i64, purge: bool) -> Result<Value, String> {
@@ -927,11 +897,16 @@ pub(crate) fn project_remove_payload(project_id: i64, purge: bool) -> Result<Val
 // L4.4 — Dépôts / projets : commandes Tauri
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Toute la lecture (projets, dépôts, membres) et l'écriture (attribution,
-// retrait, retrait purgé) passent par les routes HTTP du serveur : l'écran
-// n'ouvre jamais de connexion PostgreSQL sur la base du projet actif. Le
-// retrait purgé est destructif et n'est déclenché qu'après une confirmation
-// explicite côté écran ; le serveur relit toujours la cible depuis sa base.
+// Toute la lecture (projets, dépôts) et l'écriture (retrait purgé) passent par
+// les routes HTTP du serveur : l'écran n'ouvre jamais de connexion PostgreSQL
+// sur la base du projet actif. Le retrait purgé est destructif et n'est
+// déclenché qu'après une confirmation explicite côté écran ; le serveur relit
+// toujours la cible depuis sa base.
+//
+// Décision 2026-09 : les commandes d'**attribution** d'un compte à un projet
+// (lister les membres, attribuer, retirer) ont été supprimées avec leurs routes
+// serveur — un compte du serveur accède à tous les projets, l'attribution au
+// projet n'étant plus une condition d'accès.
 
 /// Commande Tauri (L4.4) : liste des projets du serveur (`GET /api/gds/projects`).
 #[tauri::command]
@@ -961,90 +936,6 @@ pub async fn gds_admin_git_repos(
     blocking_admin(move || {
         admin_action(&host, &http_port, &email, &password, |client, base, token| {
             send_get(client, &format!("{}/api/gds/git-repos", base), Some(token))
-        })
-    })
-    .await
-}
-
-/// Commande Tauri (L4.4) : membres attribués à un projet
-/// (`GET /api/gds/admin/projects/members?project_id=N`).
-#[tauri::command]
-pub async fn gds_admin_project_members(
-    host: String,
-    http_port: String,
-    email: String,
-    password: String,
-    project_id: i64,
-) -> Result<Value, String> {
-    blocking_admin(move || {
-        if let Err(e) = valid_project_id(project_id) {
-            return json!({ "ok": false, "error": e });
-        }
-        admin_action(&host, &http_port, &email, &password, |client, base, token| {
-            send_get(
-                client,
-                &format!("{}/api/gds/admin/projects/members?project_id={}", base, project_id),
-                Some(token),
-            )
-        })
-    })
-    .await
-}
-
-/// Commande Tauri (L4.4) : attribue un compte (email) à un projet
-/// (`POST /api/gds/admin/projects/assign`). C'est ce qui donne à un
-/// développeur non administrateur le droit de voir le projet.
-#[tauri::command]
-pub async fn gds_admin_project_assign(
-    host: String,
-    http_port: String,
-    email: String,
-    password: String,
-    project_id: i64,
-    target_email: String,
-    target_role: String,
-) -> Result<Value, String> {
-    blocking_admin(move || {
-        let payload = match project_assign_payload(project_id, &target_email, &target_role) {
-            Ok(p) => p,
-            Err(e) => return json!({ "ok": false, "error": e }),
-        };
-        admin_action(&host, &http_port, &email, &password, |client, base, token| {
-            send_post_json(
-                client,
-                &format!("{}/api/gds/admin/projects/assign", base),
-                Some(token),
-                &payload,
-            )
-        })
-    })
-    .await
-}
-
-/// Commande Tauri (L4.4) : retire l'attribution d'un compte à un projet
-/// (`POST /api/gds/admin/projects/unassign`). Le développeur perd aussitôt le
-/// droit de voir le projet.
-#[tauri::command]
-pub async fn gds_admin_project_unassign(
-    host: String,
-    http_port: String,
-    email: String,
-    password: String,
-    project_id: i64,
-    target_email: String,
-) -> Result<Value, String> {
-    blocking_admin(move || {
-        let payload = match project_unassign_payload(project_id, &target_email) {
-            Ok(p) => p,
-            Err(e) => return json!({ "ok": false, "error": e }),
-        };
-        admin_action(&host, &http_port, &email, &password, |client, base, token| {
-            send_post_json(
-                client,
-                &format!("{}/api/gds/admin/projects/unassign", base),
-                Some(token),
-                &payload,
-            )
         })
     })
     .await
@@ -1934,34 +1825,7 @@ mod tests {
     // ── L4.4 : charges utiles pures ──
 
     #[test]
-    fn project_payload_validation_covers_assign_unassign_remove() {
-        // Attribution : identifiant strictement positif, email requis, rôle du socle.
-        let ok = project_assign_payload(3, " dev@x ", "dev").unwrap();
-        assert_eq!(ok["project_id"], json!(3));
-        assert_eq!(ok["email"], json!("dev@x"));
-        assert_eq!(ok["role"], json!("dev"));
-        assert_eq!(project_assign_payload(1, "a@b", "standard").unwrap()["role"], json!("standard"));
-        assert_eq!(project_assign_payload(1, "a@b", "admin").unwrap()["role"], json!("admin"));
-        assert_eq!(project_assign_payload(0, "a@b", "dev").unwrap_err(), "Projet invalide");
-        assert_eq!(project_assign_payload(-1, "a@b", "dev").unwrap_err(), "Projet invalide");
-        assert_eq!(
-            project_assign_payload(1, "  ", "dev").unwrap_err(),
-            "Email du développeur requis"
-        );
-        assert!(project_assign_payload(1, "a@b", "boss")
-            .unwrap_err()
-            .contains("boss"));
-
-        // Retrait d'attribution : email requis, identifiant valide.
-        let un = project_unassign_payload(5, " a@b ").unwrap();
-        assert_eq!(un["project_id"], json!(5));
-        assert_eq!(un["email"], json!("a@b"));
-        assert_eq!(project_unassign_payload(0, "a@b").unwrap_err(), "Projet invalide");
-        assert_eq!(
-            project_unassign_payload(1, "").unwrap_err(),
-            "Email du développeur requis"
-        );
-
+    fn project_payload_validation_covers_remove() {
         // Retrait d'un projet : `purge` est un drapeau explicite.
         assert_eq!(project_remove_payload(7, true).unwrap()["purge"], json!(true));
         assert_eq!(project_remove_payload(7, false).unwrap()["purge"], json!(false));
@@ -2005,38 +1869,6 @@ mod tests {
         assert!(log.contains("\"purge\":true"), "{}", log);
     }
 
-    #[test]
-    fn project_members_action_uses_the_query_parameter() {
-        let reqs = Arc::new(Mutex::new(Vec::new()));
-        let base = spawn_scripted_server(
-            vec![
-                (200, login_body("tok-M")),
-                (200, probe_body()),
-                (
-                    200,
-                    json!({"members": [{"user_id": 9, "email": "dev@x", "role": "dev"}]})
-                        .to_string(),
-                ),
-            ],
-            reqs.clone(),
-        );
-        let (host, port) = host_port(&base);
-        let v = admin_action(&host, &port, "admin@x", "pw", |client, b, token| {
-            send_get(
-                client,
-                &format!("{}/api/gds/admin/projects/members?project_id={}", b, 12),
-                Some(token),
-            )
-        });
-        assert_eq!(v["ok"], json!(true), "{}", v);
-        assert_eq!(v["members"][0]["email"], json!("dev@x"));
-        let log = reqs.lock().unwrap().join("\n");
-        assert!(
-            log.contains("GET /api/gds/admin/projects/members?project_id=12"),
-            "{}",
-            log
-        );
-    }
     // ── L4.5 : espace utilisé, journal d'audit, clefs SSH ──
 
     #[test]

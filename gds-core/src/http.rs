@@ -271,19 +271,10 @@ pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {
         )
         // ── L3.3 : validation d'un compte (ex-limite V1) réservée à l'admin ──
         .route("/api/gds/users/validate", post(gds_validate::<S>))
-        // ── L3.4 : attribution des projets aux développeurs ──
-        .route(
-            "/api/gds/admin/projects/members",
-            get(gds_admin_project_members::<S>),
-        )
-        .route(
-            "/api/gds/admin/projects/assign",
-            post(gds_admin_project_assign::<S>),
-        )
-        .route(
-            "/api/gds/admin/projects/unassign",
-            post(gds_admin_project_unassign::<S>),
-        )
+        // Décision 2026-09 : les routes d'attribution de projet
+        // (`/projects/members`, `/projects/assign`, `/projects/unassign`) ont
+        // été supprimées — un compte du serveur accède à tous ses projets,
+        // l'attribution n'est plus une condition d'accès.
         // ── L4.4 : retrait d'un projet du serveur, avec option de purge ──
         .route(
             "/api/gds/admin/projects/remove",
@@ -967,148 +958,6 @@ async fn gds_validate<S: GdsCtx>(
 }
 
 // ── L3.4 : attribution des projets (routes d'administration) ──
-
-#[derive(Deserialize)]
-struct ProjectMembersQuery {
-    project_id: i64,
-}
-
-/// `GET /api/gds/admin/projects/members?project_id=N` — **réservée au rôle
-/// `admin`**. Liste les membres (développeurs attribués) d'un projet.
-async fn gds_admin_project_members<S: GdsCtx>(
-    State(ctx): State<Arc<S>>,
-    Extension(authed): Extension<AuthedClient>,
-    Query(q): Query<ProjectMembersQuery>,
-) -> Response {
-    let pool = match ctx.pool() {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    match gds_db::list_project_members(&pool, q.project_id).await {
-        Ok(members) => {
-            ctx.audit().record(
-                &authed.ip,
-                &authed.key,
-                "project_members_list",
-                &q.project_id.to_string(),
-                true,
-            );
-            Json(json!({ "members": members })).into_response()
-        }
-        Err(e) => err_response(e),
-    }
-}
-
-#[derive(Deserialize)]
-struct ProjectAssignBody {
-    project_id: i64,
-    email: String,
-    #[serde(default)]
-    role: String,
-}
-
-/// `POST /api/gds/admin/projects/assign` — **réservée au rôle `admin`**.
-///
-/// Attribue un compte (par email) à un projet : c'est l'unique voie d'accès
-/// d'un développeur non administrateur (refonte GDS **L3.4**, l'inscription
-/// automatique a été supprimée). `role` dans le projet vaut `dev` par défaut.
-async fn gds_admin_project_assign<S: GdsCtx>(
-    State(ctx): State<Arc<S>>,
-    Extension(authed): Extension<AuthedClient>,
-    Json(body): Json<ProjectAssignBody>,
-) -> Response {
-    let pool = match ctx.pool() {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    let email = body.email.trim().to_string();
-    let user = match gds_db::get_user_by_email(&pool, &email).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Compte inconnu" })),
-            )
-                .into_response()
-        }
-        Err(e) => return err_response(e),
-    };
-    let role = if body.role.trim().is_empty() {
-        "dev"
-    } else {
-        body.role.trim()
-    };
-    match gds_db::assign_project(&pool, body.project_id, user.id, role).await {
-        Ok(created) => {
-            ctx.audit().record(
-                &authed.ip,
-                &authed.key,
-                "project_assign",
-                &format!("{}:{}", body.project_id, email),
-                true,
-            );
-            Json(json!({
-                "ok": true,
-                "created": created,
-                "project_id": body.project_id,
-                "email": email,
-                "role": role,
-            }))
-            .into_response()
-        }
-        Err(e) => err_response(e),
-    }
-}
-
-#[derive(Deserialize)]
-struct ProjectUnassignBody {
-    project_id: i64,
-    email: String,
-}
-
-/// `POST /api/gds/admin/projects/unassign` — **réservée au rôle `admin`**.
-/// Retire l'attribution d'un compte à un projet (refonte GDS **L3.4**).
-async fn gds_admin_project_unassign<S: GdsCtx>(
-    State(ctx): State<Arc<S>>,
-    Extension(authed): Extension<AuthedClient>,
-    Json(body): Json<ProjectUnassignBody>,
-) -> Response {
-    let pool = match ctx.pool() {
-        Ok(p) => p,
-        Err(e) => return err_response(e),
-    };
-    let email = body.email.trim().to_string();
-    let user = match gds_db::get_user_by_email(&pool, &email).await {
-        Ok(Some(u)) => u,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "Compte inconnu" })),
-            )
-                .into_response()
-        }
-        Err(e) => return err_response(e),
-    };
-    match gds_db::unassign_project(&pool, body.project_id, user.id).await {
-        Ok(removed) => {
-            ctx.audit().record(
-                &authed.ip,
-                &authed.key,
-                "project_unassign",
-                &format!("{}:{}", body.project_id, email),
-                true,
-            );
-            Json(json!({
-                "ok": true,
-                "removed": removed,
-                "project_id": body.project_id,
-                "email": email,
-            }))
-            .into_response()
-        }
-        Err(e) => err_response(e),
-    }
-}
 
 #[derive(Deserialize)]
 struct ProjectRemoveBody {
@@ -2365,8 +2214,6 @@ mod tests {
             "user_role",
             "user_status",
             "user_password",
-            "project_assign",
-            "project_unassign",
             "project_remove",
             "project_remove_purge",
             "ssh_key_revoke",
@@ -2377,14 +2224,13 @@ mod tests {
         }
     }
 
-    /// Règle de droits de l'attribution groupée (« projets sans membre ») :
-    /// l'écran réutilise `POST /api/gds/admin/projects/assign`, un appel par
-    /// projet sans membre. La route doit donc RESTER montée dans `admin_routes`
-    /// (derrière `require_admin`) : sinon un compte NON administrateur pourrait
-    /// s'attribuer les projets orphelins. Contrôle structurel exécutable sans
-    /// PostgreSQL, donc présent en CI.
+    /// Décision 2026-09 — les routes d'**attribution** ont été supprimées : un
+    /// compte du serveur accède à tous ses projets, l'attribution n'étant plus
+    /// une condition d'accès. Ce contrôle empêche leur réintroduction et rappelle
+    /// que l'administration (gestion des comptes) reste, elle, protégée.
+    /// Contrôle structurel exécutable sans PostgreSQL, donc présent en CI.
     #[test]
-    fn bulk_member_assign_stays_behind_the_admin_guard() {
+    fn project_assignment_routes_are_gone() {
         let src = include_str!("http.rs");
         let start = src
             .find("pub fn admin_routes<S: GdsCtx>() -> Router<Arc<S>> {")
@@ -2392,10 +2238,21 @@ mod tests {
         let body = &src[start..];
         let end = body.find("\n}").unwrap_or(body.len());
         let routes = &body[..end];
+        for gone in [
+            "/api/gds/admin/projects/assign",
+            "/api/gds/admin/projects/unassign",
+            "/api/gds/admin/projects/members",
+        ] {
+            assert!(
+                !routes.contains(gone),
+                "la route d'attribution `{}` est réapparue : l'attribution au \
+                 projet n'est plus une condition d'accès (décision 2026-09)",
+                gone
+            );
+        }
         assert!(
-            routes.contains("/api/gds/admin/projects/assign"),
-            "la route d'attribution de projet a quitté `admin_routes` : un compte \
-             non administrateur ne serait plus refusé"
+            routes.contains("/api/gds/admin/users"),
+            "le routeur d'administration doit garder la gestion des comptes"
         );
         let mount = src
             .find("admin_routes::<S>()")

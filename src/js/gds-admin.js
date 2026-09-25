@@ -598,7 +598,7 @@ export function renderAccountsSectionHtml(state = {}) {
 
 /** Description affichée de la section « Dépôts / projets ». */
 export const PROJECTS_DESC =
-  "Projets enregistrés sur le serveur, dépôt bare associé et développeurs qui y sont attribués. Un développeur non administrateur ne voit QUE les projets qui lui sont attribués : l'attribution est la seule voie d'accès. Le retrait d'un projet est confirmé explicitement ; la purge du dépôt bare ne se fait que si vous la cochez.";
+  "Projets enregistrés sur le serveur et dépôt bare associé. Tout compte du serveur (administrateur ou développeur) voit et utilise TOUS les projets : aucun rattachement par projet n'est nécessaire. Le retrait d'un projet est confirmé explicitement ; la purge du dépôt bare ne se fait que si vous la cochez.";
 
 /** État initial de la section « Dépôts / projets » (pure). */
 export function initialProjectsState() {
@@ -608,13 +608,7 @@ export function initialProjectsState() {
     loading: false,
     error: "",
     notice: "",
-    selected: null, // id du projet déplié (membres)
-    members: null, // membres du projet déplié (null = pas chargés)
-    membersLoading: false,
-    memberForm: { email: "", role: "dev" },
-    bulkForm: { email: "", role: "dev" }, // saisie du bloc « projets sans membre »
-    onlyOrphans: false, // filtre : n'afficher que les projets sans membre
-    bulkConfirm: null, // { email, role } : confirmation ouverte avant attribution groupée
+    selected: null, // id du projet déplié
     removing: null, // { project_id, name, purge } : panneau de confirmation ouvert
     busy: "", // id du projet en cours d'opération
     loadSeq: 0, // numéro de la DERNIÈRE demande de liste (anti-réponse périmée)
@@ -637,9 +631,7 @@ export function buildGitReposArgs(conn) {
  * `seq` est le numéro de la demande qui a produit cette réponse ; il doit être
  * le **dernier émis** (`state.loadSeq`). Une réponse plus ancienne est
  * **ignorée** (état renvoyé inchangé) : un rafraîchissement postérieur à une
- * attribution n'est donc jamais écrasé par une liste antérieure, et le badge
- * « membres » lit toujours la donnée **fraîche** du serveur (jamais un
- * compteur conservé en mémoire).
+ * opération n'est donc jamais écrasé par une liste antérieure.
  */
 export function applyProjectsLoad(state, seq, projectsRes, reposRes) {
   if (!state || seq !== state.loadSeq) return state;
@@ -652,30 +644,6 @@ export function applyProjectsLoad(state, seq, projectsRes, reposRes) {
   next.repos =
     reposRes && reposRes.ok && Array.isArray(reposRes.git_repos) ? reposRes.git_repos : [];
   return next;
-}
-
-/** Charge utile : lister les membres attribués à un projet. Pure. */
-export function buildProjectMembersArgs(conn, projectId) {
-  return { ...buildAccountsConnArgs(conn), projectId: Number(projectId) };
-}
-
-/** Charge utile : attribuer un compte (email) à un projet. Pure. */
-export function buildProjectAssignArgs(conn, projectId, email, role) {
-  return {
-    ...buildAccountsConnArgs(conn),
-    projectId: Number(projectId),
-    targetEmail: String(email || ""),
-    targetRole: String(role || ""),
-  };
-}
-
-/** Charge utile : retirer un compte d'un projet. Pure. */
-export function buildProjectUnassignArgs(conn, projectId, email) {
-  return {
-    ...buildAccountsConnArgs(conn),
-    projectId: Number(projectId),
-    targetEmail: String(email || ""),
-  };
 }
 
 /**
@@ -722,28 +690,6 @@ export function findRepoForProject(repos, projectId) {
   return null;
 }
 
-/**
- * Projets **sans aucun membre attribué** (`member_count` absent ou à 0). Pure.
- * Sert à la fois au repère visuel « aucun membre », au filtre et à l'action
- * groupée d'attribution.
- */
-export function projectsWithoutMember(projects) {
-  return (projects || []).filter((p) => Number((p && p.member_count) || 0) <= 0);
-}
-
-/**
- * Texte de confirmation de l'attribution groupée (pure, testable). Dit
- * explicitement le compte cible, le rôle projet et le nombre de projets
- * touchés (uniquement ceux qui n'ont AUCUN membre attribué).
- */
-export function formatBulkAssignConfirmation(count, email, role) {
-  return (
-    `Attribuer « ${email} » (rôle projet : ${role}) à ${count} projet(s) qui n'ont ` +
-    "AUCUN membre attribué. Les projets ayant déjà au moins un membre ne sont pas " +
-    "touchés. L'opération est idempotente : relancée, elle annonce 0 projet traité."
-  );
-}
-
 /** Rend la zone d'état de la section projets (pure, sans secret). */
 export function renderProjectsStatusHtml(state = {}) {
   const s = { ...initialProjectsState(), ...state };
@@ -763,30 +709,18 @@ export function renderProjectsTableHtml(state = {}) {
   if (s.projects.length === 0) {
     return `<div class="gds-admin-section-placeholder">Aucun projet enregistré sur ce serveur.</div>`;
   }
-  const visible = s.onlyOrphans ? projectsWithoutMember(s.projects) : s.projects;
-  if (visible.length === 0) {
-    return `<div class="gds-admin-section-placeholder">Aucun projet sans membre : tous les projets ont au moins un compte attribué.</div>`;
-  }
-  const rows = visible
+  const rows = s.projects
     .map((p) => {
       const id = Number(p && p.id);
       const repo = findRepoForProject(s.repos, id);
       const busy = String(s.busy) === String(id);
       const dis = busy ? " disabled" : "";
-      const open = String(s.selected) === String(id);
       const bare = repo && repo.bare_path ? repo.bare_path : "—";
-      const members = Number((p && p.member_count) || 0);
-      const membersCell =
-        members > 0
-          ? `<span class="gds-admin-badge">${members} membre(s)</span>`
-          : `<span class="gds-admin-badge warn">aucun membre</span>`;
       return `
       <tr data-project-id="${esc(id)}">
         <td class="gds-admin-cell-email">${esc((p && p.name) || "—")}</td>
-        <td>${membersCell}</td>
         <td class="gds-admin-cell-path" title="${esc(bare)}">${esc(bare)}</td>
         <td class="gds-admin-cell-actions">
-          <button class="gds-admin-btn small" data-prj-action="members" data-id="${esc(id)}"${dis}><i data-lucide="users" class="icon-sm"></i> ${open ? "Masquer" : "Membres"}</button>
           <button class="gds-admin-btn small danger" data-prj-action="remove" data-id="${esc(id)}"${dis}><i data-lucide="trash-2" class="icon-sm"></i> Retirer</button>
         </td>
       </tr>`;
@@ -795,59 +729,10 @@ export function renderProjectsTableHtml(state = {}) {
   return `
       <table class="gds-admin-table">
         <thead>
-          <tr><th>Projet</th><th>Membres</th><th>Dépôt bare</th><th>Actions</th></tr>
+          <tr><th>Projet</th><th>Dépôt bare</th><th>Actions</th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>`;
-}
-
-/** Rend la liste des membres du projet déplié (pure). */
-export function renderProjectMembersHtml(state = {}) {
-  const s = { ...initialProjectsState(), ...state };
-  if (s.selected == null) return "";
-  const project = (s.projects || []).find((p) => String(p && p.id) === String(s.selected));
-  const name = project ? project.name : `#${s.selected}`;
-  const roleOptions = ACCOUNT_ROLES.map(
-    (r) =>
-      `<option value="${esc(r.value)}"${r.value === s.memberForm.role ? " selected" : ""}>${esc(r.label)}</option>`
-  ).join("");
-  let body;
-  if (s.membersLoading) {
-    body = `<div class="gds-admin-status loading">Chargement des membres…</div>`;
-  } else if (s.members == null) {
-    body = `<div class="gds-admin-status idle">Membres non chargés.</div>`;
-  } else if (s.members.length === 0) {
-    body = `<div class="gds-admin-section-placeholder">Aucun membre attribué : seuls les administrateurs voient ce projet.</div>`;
-  } else {
-    const rows = s.members
-      .map(
-        (m) => `
-        <tr>
-          <td class="gds-admin-cell-email">${esc((m && m.email) || "—")}</td>
-          <td>${esc((m && m.name) || "—")}</td>
-          <td><span class="gds-admin-badge">${esc((m && m.role) || "dev")}</span></td>
-          <td class="gds-admin-cell-actions"><button class="gds-admin-btn small danger" data-mem-action="unassign" data-id="${esc(s.selected)}" data-email="${esc((m && m.email) || "")}"><i data-lucide="user-minus" class="icon-sm"></i> Retirer</button></td>
-        </tr>`
-      )
-      .join("");
-    body = `<table class="gds-admin-table"><thead><tr><th>Adresse</th><th>Nom</th><th>Rôle projet</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
-  }
-  return `
-      <div class="gds-admin-members">
-        <div class="gds-admin-reset-title">Développeurs attribués au projet <b>${esc(name)}</b></div>
-        <div class="gds-admin-form gds-admin-form-create">
-          <label class="gds-admin-field"><span>Adresse (email)</span>
-            <input id="gds-admin-prj-member-email" type="text" autocomplete="off" placeholder="prenom.nom@exemple.com" value="${esc(s.memberForm.email)}">
-          </label>
-          <label class="gds-admin-field"><span>Rôle projet</span>
-            <select id="gds-admin-prj-member-role">${roleOptions}</select>
-          </label>
-        </div>
-        <div class="gds-admin-actions">
-          <button class="gds-admin-btn primary small" data-mem-action="assign" data-id="${esc(s.selected)}"><i data-lucide="user-plus" class="icon-sm"></i> Attribuer</button>
-        </div>
-        ${body}
-      </div>`;
 }
 
 /**
@@ -873,88 +758,27 @@ export function renderProjectRemoveConfirmHtml(state = {}) {
       </div>`;
 }
 
-/**
- * Rend le bloc d'attribution groupée : attribuer UN compte explicitement saisi
- * à TOUS les projets sans membre. Affiché uniquement s'il reste au moins un
- * projet sans membre (sinon l'action n'aurait aucun effet). Pure.
- */
-export function renderProjectBulkAssignHtml(state = {}) {
-  const s = { ...initialProjectsState(), ...state };
-  if (s.projects == null) return "";
-  const orphans = projectsWithoutMember(s.projects);
-  if (orphans.length === 0) {
-    return `<div class="gds-admin-hint">Aucun projet sans membre : rien à attribuer en bloc.</div>`;
-  }
-  const roleOptions = ACCOUNT_ROLES.map(
-    (r) =>
-      `<option value="${esc(r.value)}"${r.value === s.bulkForm.role ? " selected" : ""}>${esc(r.label)}</option>`
-  ).join("");
-  return `
-      <div class="gds-admin-reset">
-        <div class="gds-admin-reset-title">Attribuer un compte à tous les projets sans membre (${orphans.length})</div>
-        <div class="gds-admin-form gds-admin-form-create">
-          <label class="gds-admin-field"><span>Adresse (email) à attribuer</span>
-            <input id="gds-admin-prj-orphan-email" type="text" autocomplete="off" placeholder="prenom.nom@exemple.com" value="${esc(s.bulkForm.email)}">
-          </label>
-          <label class="gds-admin-field"><span>Rôle projet</span>
-            <select id="gds-admin-prj-orphan-role">${roleOptions}</select>
-          </label>
-        </div>
-        <div class="gds-admin-actions">
-          <button class="gds-admin-btn primary small" data-prj-action="assign-missing"><i data-lucide="user-plus" class="icon-sm"></i> Attribuer à tous les projets sans membre</button>
-        </div>
-      </div>`;
-}
-
-/**
- * Rend le panneau de confirmation de l'attribution groupée (pure). Rien n'est
- * écrit avant le clic de confirmation ; le compte cible et le rôle sont
- * rappelés, jamais devinés.
- */
-export function renderProjectBulkAssignConfirmHtml(state = {}) {
-  const s = { ...initialProjectsState(), ...state };
-  if (!s.bulkConfirm) return "";
-  const count = projectsWithoutMember(s.projects).length;
-  return `
-      <div class="gds-admin-confirm">
-        <div class="gds-admin-reset-title">Confirmation — attribution groupée</div>
-        <div class="gds-admin-section-desc">${esc(formatBulkAssignConfirmation(count, s.bulkConfirm.email, s.bulkConfirm.role))}</div>
-        <div class="gds-admin-actions">
-          <button class="gds-admin-btn primary" data-prj-action="assign-missing-confirm"><i data-lucide="check" class="icon-sm"></i> Confirmer l'attribution groupée</button>
-          <button class="gds-admin-btn" data-prj-action="assign-missing-cancel"><i data-lucide="x" class="icon-sm"></i> Annuler</button>
-        </div>
-      </div>`;
-}
-
 /** Rend la section « Dépôts / projets » complète (pure, testable). */
 export function renderProjectsSectionHtml(state = {}) {
   const base = initialProjectsState();
   const s = {
     ...base,
     ...state,
-    memberForm: { ...base.memberForm, ...((state && state.memberForm) || {}) },
-    bulkForm: { ...base.bulkForm, ...((state && state.bulkForm) || {}) },
     removing: (state && state.removing) || null,
   };
   const count =
     s.projects == null ? "" : ` <span class="gds-admin-muted">(${s.projects.length})</span>`;
-  const orphans = s.projects == null ? 0 : projectsWithoutMember(s.projects).length;
-  const filterLabel = s.onlyOrphans ? "Voir tous" : `Sans membre (${orphans})`;
   return `
       <section class="gds-admin-section" data-section-id="repos">
         <div class="gds-admin-section-head">
           <div class="gds-admin-section-title"><i data-lucide="folder-git-2" class="icon-sm"></i> Dépôts / projets${count}</div>
-          <button class="gds-admin-btn small" data-prj-action="filter-orphans"${s.projects == null ? " disabled" : ""}><i data-lucide="user-x" class="icon-sm"></i> ${esc(filterLabel)}</button>
           <button class="gds-admin-btn small" id="gds-admin-prj-refresh"><i data-lucide="refresh-cw" class="icon-sm"></i> Rafraîchir</button>
         </div>
         <div class="gds-admin-section-desc">${esc(PROJECTS_DESC)}</div>
         <div id="gds-admin-projects-status">${renderProjectsStatusHtml(s)}</div>
         ${renderProjectsTableHtml(s)}
-        ${renderProjectBulkAssignHtml(s)}
-        ${renderProjectBulkAssignConfirmHtml(s)}
-        ${renderProjectMembersHtml(s)}
         ${renderProjectRemoveConfirmHtml(s)}
-        <div class="gds-admin-hint">Attribuer un développeur est la seule façon de lui donner accès au projet. Le retrait d'un projet demande une confirmation explicite ; la purge du dépôt bare (destructive) ne se fait que si vous la cochez, jamais par défaut.</div>
+        <div class="gds-admin-hint">Tout compte du serveur accède à tous les projets : aucun rattachement par projet n'est nécessaire. Le retrait d'un projet demande une confirmation explicite ; la purge du dépôt bare (destructive) ne se fait que si vous la cochez, jamais par défaut.</div>
       </section>`;
 }
 
@@ -1462,22 +1286,6 @@ export function createGdsAdmin(container) {
 
   /** Récupère la saisie du bloc « Dépôts / projets » AVANT tout redessin. */
   function readProjectFields() {
-    const email = q("#gds-admin-prj-member-email");
-    const role = q("#gds-admin-prj-member-role");
-    if (email || role) {
-      projects.memberForm = {
-        email: email ? email.value : projects.memberForm.email,
-        role: role ? role.value : projects.memberForm.role,
-      };
-    }
-    const orphanEmail = q("#gds-admin-prj-orphan-email");
-    const orphanRole = q("#gds-admin-prj-orphan-role");
-    if (orphanEmail || orphanRole) {
-      projects.bulkForm = {
-        email: orphanEmail ? orphanEmail.value : projects.bulkForm.email,
-        role: orphanRole ? orphanRole.value : projects.bulkForm.role,
-      };
-    }
     const purge = q("#gds-admin-prj-purge");
     if (purge && projects.removing) {
       projects.removing = { ...projects.removing, purge: !!purge.checked };
@@ -1569,9 +1377,6 @@ export function createGdsAdmin(container) {
     for (const btn of container.querySelectorAll("[data-prj-action]")) {
       btn.addEventListener("click", () => onProjectAction(btn));
     }
-    for (const btn of container.querySelectorAll("[data-mem-action]")) {
-      btn.addEventListener("click", () => onMemberAction(btn));
-    }
     const purge = q("#gds-admin-prj-purge");
     if (purge) purge.addEventListener("change", () => draw());
     // ── L4.5 : espace + journal + clefs SSH ──
@@ -1631,26 +1436,6 @@ export function createGdsAdmin(container) {
     draw();
   }
 
-  /** Charge les membres du projet déplié. */
-  async function loadMembers(projectId, { silent = false } = {}) {
-    if (!adminConn) return;
-    if (!silent) projects.membersLoading = true;
-    draw();
-    const res = await invokeAccounts(
-      "gds_admin_project_members",
-      buildProjectMembersArgs(adminConn, projectId)
-    );
-    if (disposed) return;
-    projects.membersLoading = false;
-    if (res && res.ok) {
-      projects.members = Array.isArray(res.members) ? res.members : [];
-    } else {
-      projects.members = [];
-      projects.error = (res && res.error) || "Chargement des membres impossible.";
-    }
-    draw();
-  }
-
   /** Exécute une opération sur un projet puis recharge la liste. */
   async function runProjectOp({ id, command, args, success, after }) {
     if (!adminConn) {
@@ -1671,106 +1456,12 @@ export function createGdsAdmin(container) {
       projects.error = (res && res.error) || "Opération refusée par le serveur.";
     }
     await loadProjects({ silent: true });
-    if (projects.selected != null) await loadMembers(projects.selected, { silent: true });
-  }
-
-  /**
-   * Attribue le compte EXPLICITEMENT choisi à TOUS les projets sans membre, et
-   * annonce combien de projets ont été traités. Idempotente : relancée, elle ne
-   * trouve plus de projet sans membre et annonce 0 projet traité. Chaque appel
-   * passe par la route d'administration existante (`/api/gds/admin/projects/assign`),
-   * donc un compte non administrateur est refusé par le serveur.
-   */
-  async function runBulkAssign() {
-    const confirm = projects.bulkConfirm || {};
-    projects.bulkConfirm = null;
-    if (!adminConn) {
-      projects.error = "Connectez-vous d'abord au serveur (bloc « Connexion serveur »).";
-      return draw();
-    }
-    const email = String(confirm.email || "").trim();
-    if (!email) {
-      projects.error = "Adresse (email) du compte à attribuer requise.";
-      return draw();
-    }
-    const role = confirm.role || "dev";
-    const targets = projectsWithoutMember(projects.projects);
-    if (targets.length === 0) {
-      projects.error = "";
-      projects.notice = "0 projet traité : aucun projet sans membre.";
-      return loadProjects({ silent: true });
-    }
-    projects.busy = "__all__";
-    projects.error = "";
-    projects.notice = "";
-    draw();
-    let done = 0;
-    let firstError = "";
-    for (const p of targets) {
-      const res = await invokeAccounts(
-        "gds_admin_project_assign",
-        buildProjectAssignArgs(adminConn, p.id, email, role)
-      );
-      if (disposed) return;
-      if (res && res.ok) done += 1;
-      else if (!firstError) firstError = (res && res.error) || "refusée par le serveur";
-    }
-    projects.busy = "";
-    if (done === 0) {
-      projects.error = `0 projet traité : ${firstError || "opération refusée"}.`;
-    } else {
-      projects.notice =
-        `${done} projet(s) traité(s) — « ${email} » attribué (rôle ${role})` +
-        (firstError ? ` ; échec pour ${targets.length - done}` : "") +
-        ".";
-    }
-    await loadProjects({ silent: true });
   }
 
   /** Traite un clic du bloc « Dépôts / projets ». */
   async function onProjectAction(btn) {
     const action = btn.getAttribute("data-prj-action");
     const id = btn.getAttribute("data-id");
-    if (action === "filter-orphans") {
-      projects.onlyOrphans = !projects.onlyOrphans;
-      return draw();
-    }
-    if (action === "assign-missing") {
-      const emailEl = q("#gds-admin-prj-orphan-email");
-      const roleEl = q("#gds-admin-prj-orphan-role");
-      const email = emailEl ? emailEl.value.trim() : "";
-      const role = roleEl ? roleEl.value : "dev";
-      if (!email) {
-        projects.error = "Adresse (email) du compte à attribuer requise.";
-        return draw();
-      }
-      projects.bulkForm = { email, role };
-      projects.bulkConfirm = { email, role };
-      projects.error = "";
-      projects.notice = "";
-      return draw();
-    }
-    if (action === "assign-missing-cancel") {
-      projects.bulkConfirm = null;
-      return draw();
-    }
-    if (action === "assign-missing-confirm") {
-      return runBulkAssign();
-    }
-    if (action === "members") {
-      if (String(projects.selected) === String(id)) {
-        projects.selected = null;
-        projects.members = null;
-        return draw();
-      }
-      projects.selected = Number(id);
-      projects.members = null;
-      projects.memberForm = { email: "", role: "dev" };
-      projects.error = "";
-      projects.notice = "";
-      draw();
-      return loadMembers(projects.selected);
-    }
     if (action === "remove") {
       const project = (projects.projects || []).find((p) => String(p && p.id) === String(id));
       projects.removing = {
@@ -1798,45 +1489,7 @@ export function createGdsAdmin(container) {
           : `Projet retiré du serveur (dépôt bare conservé sur le disque).`,
         after: () => {
           projects.removing = null;
-          if (String(projects.selected) === String(removing.project_id)) {
-            projects.selected = null;
-            projects.members = null;
-          }
         },
-      });
-    }
-  }
-
-  /** Traite un clic du panneau des membres (attribution / retrait). */
-  async function onMemberAction(btn) {
-    const action = btn.getAttribute("data-mem-action");
-    const id = Number(btn.getAttribute("data-id"));
-    if (action === "assign") {
-      const emailEl = q("#gds-admin-prj-member-email");
-      const roleEl = q("#gds-admin-prj-member-role");
-      const email = emailEl ? emailEl.value.trim() : "";
-      const role = roleEl ? roleEl.value : "dev";
-      if (!email) {
-        projects.error = "Adresse (email) du développeur requise.";
-        return draw();
-      }
-      return runProjectOp({
-        id,
-        command: "gds_admin_project_assign",
-        args: buildProjectAssignArgs(adminConn, id, email, role),
-        success: `« ${email} » attribué au projet.`,
-        after: () => {
-          projects.memberForm = { email: "", role };
-        },
-      });
-    }
-    if (action === "unassign") {
-      const email = btn.getAttribute("data-email") || "";
-      return runProjectOp({
-        id,
-        command: "gds_admin_project_unassign",
-        args: buildProjectUnassignArgs(adminConn, id, email),
-        success: `« ${email} » retiré du projet.`,
       });
     }
   }

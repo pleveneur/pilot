@@ -667,27 +667,14 @@ pub async fn create_git_repo(
     Ok(row.get::<i64, _>("id"))
 }
 
-/// Associe un utilisateur à un projet (project_members).
-///
-/// Délègue à [`assign_project`] : conservée pour la compatibilité du socle
-/// (l'appartenance est désormais un **droit** attribué explicitement, L3.4).
-pub async fn create_project_member(
-    pool: &PgPool,
-    project_id: i64,
-    user_id: i64,
-    role: &str,
-) -> Result<(), String> {
-    assign_project(pool, project_id, user_id, role)
-        .await
-        .map(|_| ())
-}
-
 /// Attribue un utilisateur à un projet (refonte GDS, **L3.4**).
 ///
-/// L'appartenance est un **droit** (§2.7) : ce n'est plus une inscription
-/// automatique mais une décision explicite de l'administrateur. Idempotent :
-/// ré-attribuer un membre déjà rattaché ne fait rien et retourne `false`.
-/// Retourne `true` si l'association vient d'être créée.
+/// **Trace, plus un droit** (décision 2026-09) : l'attribution conserve la liste
+/// des comptes attachés à un projet (dont l'email d'identité du dépôt, lu par
+/// `list_git_repos`) et reste posée à la création d'un projet par son auteur
+/// (`git::enroll_creator`). Elle ne conditionne plus aucun accès : tout compte
+/// du serveur accède à tous ses projets. Idempotent : ré-attribuer un membre
+/// déjà rattaché ne fait rien et retourne `false`.
 pub async fn assign_project(
     pool: &PgPool,
     project_id: i64,
@@ -707,63 +694,12 @@ pub async fn assign_project(
     Ok(res.rows_affected() > 0)
 }
 
-/// Retire l'attribution d'un utilisateur à un projet (refonte GDS, **L3.4**).
-///
-/// Retourne `true` si une association a effectivement été supprimée. Les droits
-/// d'écriture de l'utilisateur sur ce projet tombent immédiatement
-/// (`is_project_member` redevient faux).
-pub async fn unassign_project(
-    pool: &PgPool,
-    project_id: i64,
-    user_id: i64,
-) -> Result<bool, String> {
-    let res = sqlx::query("DELETE FROM project_members WHERE project_id = $1 AND user_id = $2")
-        .bind(project_id)
-        .bind(user_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Retrait attribution projet: {}", e))?;
-    Ok(res.rows_affected() > 0)
-}
-
-/// Liste les membres d'un projet (refonte GDS, **L3.4**) : `user_id`, `email`,
-/// `name`, `role` (rôle **dans le projet**) et `created_at` (ISO).
-pub async fn list_project_members(
-    pool: &PgPool,
-    project_id: i64,
-) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query(
-        "SELECT pm.user_id, u.email, u.name, pm.role, pm.created_at \
-           FROM project_members pm \
-           JOIN users u ON u.id = pm.user_id \
-          WHERE pm.project_id = $1 \
-          ORDER BY pm.created_at, u.email",
-    )
-    .bind(project_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Liste membres projet: {}", e))?;
-    Ok(rows
-        .iter()
-        .map(|r| {
-            let created_at: chrono::DateTime<Utc> = r.get("created_at");
-            serde_json::json!({
-                "user_id": r.get::<i64, _>("user_id"),
-                "email": r.get::<String, _>("email"),
-                "name": r.get::<String, _>("name"),
-                "role": r.get::<String, _>("role"),
-                "created_at": created_at.to_rfc3339(),
-            })
-        })
-        .collect())
-}
-
 /// Indique si un utilisateur est membre d'un projet (project_members).
 ///
 /// **L'appartenance n'est plus une condition d'accès** (décision 2026-09) : un
 /// compte `dev`/`admin` accède à tous les projets du serveur. Ce lecteur reste
-/// disponible pour l'écran d'administration (les données d'attribution sont
-/// conservées) ; aucun droit n'en dépend plus.
+/// le côté lecture de la table `project_members`, alimentée par
+/// `assign_project` (rattachement du créateur) ; aucun droit n'en dépend.
 pub async fn is_project_member(
     pool: &PgPool,
     project_id: i64,
@@ -779,14 +715,13 @@ pub async fn is_project_member(
 }
 
 /// Liste les projets (id, name, repo_name, repo_url, path_on_server, status,
-/// description) **et `member_count`** : le nombre de membres attribués, calculé par
-/// sous-requête. L'écran d'administration s'en sert pour repérer d'un regard les
-/// projets sans aucune personne attribuée (refonte GDS). Champ **additif** : les
-/// consommateurs existants ignorent simplement la clé.
+/// description). Tous les comptes du serveur voient **tous** les projets
+/// (décision 2026-09) : plus de comptage de membres, l'attribution n'étant plus
+/// une condition d'accès.
 pub async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, String> {
     let rows = sqlx::query(
-        "SELECT p.id, p.name, p.repo_name, p.repo_url, p.path_on_server, p.status, p.description, \
-                (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) AS member_count \
+        "SELECT p.id, p.name, p.repo_name, p.repo_url, p.path_on_server, p.status, \
+                p.description \
            FROM projects p ORDER BY p.name",
     )
     .fetch_all(pool)
@@ -803,7 +738,6 @@ pub async fn list_projects(pool: &PgPool) -> Result<Vec<serde_json::Value>, Stri
                 "path_on_server": r.get::<String, _>("path_on_server"),
                 "status": r.get::<String, _>("status"),
                 "description": r.get::<String, _>("description"),
-                "member_count": r.get::<i64, _>("member_count"),
             })
         })
         .collect())

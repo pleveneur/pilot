@@ -3117,14 +3117,12 @@ pub fn run() {
             gds_admin::gds_admin_account_set_status,
             gds_admin::gds_admin_account_set_password,
             // ── GDS (refonte, L4.4) : dépôts / projets du serveur ──
-            // Lecture (projets, dépôts, membres) et écriture (attribution,
-            // retrait, retrait purgé) via les routes HTTP du serveur ; le retrait
-            // purgé est destructif et n'est déclenché qu'après confirmation.
+            // Lecture (projets, dépôts) et écriture (retrait purgé) via les
+            // routes HTTP du serveur ; le retrait purgé est destructif et n'est
+            // déclenché qu'après confirmation. Décision 2026-09 : plus de
+            // commandes d'attribution (l'appartenance n'est plus un droit).
             gds_admin::gds_admin_projects,
             gds_admin::gds_admin_git_repos,
-            gds_admin::gds_admin_project_members,
-            gds_admin::gds_admin_project_assign,
-            gds_admin::gds_admin_project_unassign,
             gds_admin::gds_admin_project_remove,
             // ── GDS (refonte, L4.5) : espace utilisé, journal, clefs SSH ──
             // L'état serveur donne l'espace occupé (dépôts + base) ; le journal

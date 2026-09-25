@@ -8810,16 +8810,6 @@ body.pilot-loading *::after {
   color: var(--text-muted, #6b7280);
   word-break: break-all;
 }
-.gds-admin-members {
-  background: var(--surface-2, #1e2127);
-  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
-  border-radius: 8px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
 .gds-admin-confirm {
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
   border-radius: 8px;

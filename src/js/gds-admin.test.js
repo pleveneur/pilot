@@ -21,11 +21,8 @@ import {
   buildAccountsConnArgs,
   buildAuditArgs,
   buildGitReposArgs,
-  buildProjectAssignArgs,
   buildProjectListArgs,
-  buildProjectMembersArgs,
   buildProjectRemoveArgs,
-  buildProjectUnassignArgs,
   buildServerStatusArgs,
   buildServiceStatusArgs,
   buildSshKeyRevokeArgs,
@@ -34,7 +31,6 @@ import {
   findRepoForProject,
   formatAccountDate,
   formatAuditTime,
-  formatBulkAssignConfirmation,
   formatBytes,
   formatProjectRemoveConfirmation,
   initialAccountsState,
@@ -44,7 +40,6 @@ import {
   initialStorageState,
   nextStatusToggle,
   pickPrefill,
-  projectsWithoutMember,
   adminServerOptionValue,
   renderAdminServerSelectorHtml,
   renderAccountsSectionHtml,
@@ -55,9 +50,6 @@ import {
   renderAuditTableHtml,
   renderConnectionSectionHtml,
   renderConnectionStatusHtml,
-  renderProjectBulkAssignConfirmHtml,
-  renderProjectBulkAssignHtml,
-  renderProjectMembersHtml,
   renderProjectRemoveConfirmHtml,
   renderProjectsSectionHtml,
   renderProjectsStatusHtml,
@@ -650,36 +642,17 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
     expect(s.projects).toBeNull();
     expect(s.repos).toBeNull();
     expect(s.loading).toBe(false);
-    expect(s.selected).toBeNull();
-    expect(s.members).toBeNull();
     expect(s.removing).toBeNull();
-    expect(s.memberForm).toEqual({ email: "", role: "dev" });
+    // Décision 2026-09 : plus aucun état d'attribution (membres, filtres,
+    // attribution groupée) — l'appartenance n'est plus une condition d'accès.
+    expect(s.members).toBeUndefined();
+    expect(s.memberForm).toBeUndefined();
+    expect(s.onlyOrphans).toBeUndefined();
   });
 
   it("construit les charges utiles des commandes projets (mot de passe vide)", () => {
     expect(buildProjectListArgs(conn)).toEqual(buildAccountsConnArgs(conn));
     expect(buildGitReposArgs(conn)).toEqual(buildAccountsConnArgs(conn));
-    expect(buildProjectMembersArgs(conn, 4)).toEqual({
-      host: "h",
-      httpPort: "8080",
-      email: "admin@b",
-      password: "",
-      projectId: 4,
-    });
-    expect(buildProjectAssignArgs(conn, 4, "dev@x", "dev")).toEqual({
-      host: "h",
-      httpPort: "8080",
-      email: "admin@b",
-      password: "",
-      projectId: 4,
-      targetEmail: "dev@x",
-      targetRole: "dev",
-    });
-    expect(buildProjectUnassignArgs(conn, 4, "dev@x")).toMatchObject({
-      projectId: 4,
-      targetEmail: "dev@x",
-      password: "",
-    });
     // `purge` est un drapeau EXPLICITE : absent → faux (aucune destruction).
     expect(buildProjectRemoveArgs(conn, 4, true)).toMatchObject({ projectId: 4, purge: true });
     expect(buildProjectRemoveArgs(conn, 4, false)).toMatchObject({ purge: false });
@@ -718,7 +691,7 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
     expect(renderProjectsStatusHtml({ projects: [{}, {}, {}] })).toContain("3 projet(s)");
   });
 
-  it("rend le tableau des projets (dépôt relié, actions membres/retirer)", () => {
+  it("rend le tableau des projets (dépôt relié, retrait seul : plus d'attribution)", () => {
     expect(renderProjectsTableHtml(initialProjectsState())).toBe("");
     expect(renderProjectsTableHtml({ projects: [] })).toContain("Aucun projet");
     const html = renderProjectsTableHtml({
@@ -727,24 +700,12 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
     });
     expect(html).toContain("alpha");
     expect(html).toContain("/srv/repos/alpha.git");
-    expect(html).toContain('data-prj-action="members"');
     expect(html).toContain('data-prj-action="remove"');
     expect(html).toContain('data-id="5"');
-  });
-
-  it("rend les membres du projet déplié, avec attribution et retrait", () => {
-    expect(renderProjectMembersHtml(initialProjectsState())).toBe("");
-    const html = renderProjectMembersHtml({
-      selected: 5,
-      projects: [{ id: 5, name: "alpha" }],
-      repos: [],
-      members: [{ user_id: 9, email: "dev@x", name: "Dev", role: "dev" }],
-      memberForm: { email: "", role: "dev" },
-    });
-    expect(html).toContain("dev@x");
-    expect(html).toContain('data-mem-action="assign"');
-    expect(html).toContain('data-mem-action="unassign"');
-    expect(html).toContain('id="gds-admin-prj-member-email"');
+    // Aucune trace d'attribution : ni bouton « Membres », ni colonne, ni
+    // repère « aucun membre » (décision 2026-09).
+    expect(html).not.toContain('data-prj-action="members"');
+    expect(html).not.toContain("membre");
   });
 
   it("rend le panneau de confirmation avec purge décochée par défaut", () => {
@@ -786,8 +747,6 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
       repos: [],
       password: "S3CR3T-PW",
       token: "TOKEN-PW",
-      members: [],
-      selected: 1,
     });
     expect(html).not.toContain("S3CR3T-PW");
     expect(html).not.toContain("TOKEN-PW");
@@ -805,87 +764,59 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
   });
 });
 
-describe("L4.7 — projets sans membre (repérage + attribution groupée)", () => {
-  it("liste UNIQUEMENT les projets sans aucun membre attribué", () => {
-    const projects = [
-      { id: 1, name: "alpha", member_count: 0 },
-      { id: 2, name: "beta", member_count: 2 },
-      { id: 3, name: "gamma" }, // member_count absent = aucun membre
-      { id: 4, name: "delta", member_count: 1 },
-    ];
-    expect(projectsWithoutMember(projects).map((p) => p.id)).toEqual([1, 3]);
-    expect(projectsWithoutMember(null)).toEqual([]);
-  });
-
-  it("repère « aucun membre » à l'écran et permet de filtrer", () => {
-    const projects = [
-      { id: 1, name: "alpha", member_count: 0 },
-      { id: 2, name: "beta", member_count: 3 },
-    ];
-    const html = renderProjectsTableHtml({ projects, repos: [] });
-    expect(html).toContain("aucun membre");
-    expect(html).toContain("3 membre(s)");
-    const filtered = renderProjectsTableHtml({ projects, repos: [], onlyOrphans: true });
-    expect(filtered).toContain("alpha");
-    expect(filtered).not.toContain("beta");
-  });
-
-  it("affiche le bloc groupé seulement s'il reste un projet sans membre", () => {
-    expect(
-      renderProjectBulkAssignHtml({ projects: [{ id: 2, name: "beta", member_count: 1 }] })
-    ).toContain("Aucun projet sans membre");
-    const html = renderProjectBulkAssignHtml({
-      projects: [{ id: 1, name: "alpha", member_count: 0 }],
+describe("Décision 2026-09 — accès à tous les projets du serveur", () => {
+  it("la section projets ne porte plus aucun geste d'attribution", () => {
+    const html = renderProjectsSectionHtml({
+      ...initialProjectsState(),
+      projects: [{ id: 1, name: "alpha" }],
+      repos: [],
     });
-    expect(html).toContain('id="gds-admin-prj-orphan-email"');
-    expect(html).toContain('id="gds-admin-prj-orphan-role"');
-    expect(html).toContain('data-prj-action="assign-missing"');
+    for (const needle of [
+      "Attribuer",
+      "projets sans membre",
+      "gds-admin-prj-orphan-email",
+      "gds-admin-prj-member-email",
+      "data-prj-action=\"assign-missing\"",
+      "data-prj-action=\"filter-orphans\"",
+    ]) {
+      expect(html).not.toContain(needle);
+    }
+    // Le retrait de projet, lui, reste offert (avec sa confirmation).
+    expect(html).toContain('data-prj-action="remove"');
+    expect(html).toContain("Tout compte du serveur accède à tous les projets");
   });
 
-  it("exige une confirmation explicite du compte et du rôle choisis", () => {
-    expect(renderProjectBulkAssignConfirmHtml(initialProjectsState())).toBe("");
-    const html = renderProjectBulkAssignConfirmHtml({
-      projects: [
-        { id: 1, name: "alpha", member_count: 0 },
-        { id: 2, name: "beta", member_count: 1 },
-      ],
-      bulkConfirm: { email: "dev@x", role: "dev" },
+  it("liste TOUS les projets, sans dépendre d'un comptage de membres", () => {
+    // Le serveur n'envoie plus `member_count` : tous les projets restent listés.
+    const html = renderProjectsTableHtml({
+      projects: [{ id: 1, name: "alpha" }, { id: 2, name: "beta" }],
+      repos: [],
     });
-    expect(html).toContain("Confirmation");
-    expect(html).toContain("dev@x");
-    expect(html).toContain("1 projet(s)");
-    expect(html).toContain('data-prj-action="assign-missing-confirm"');
-    expect(html).toContain('data-prj-action="assign-missing-cancel"');
-    expect(html).toContain("idempotente");
-    expect(formatBulkAssignConfirmation(0, "dev@x", "dev")).toContain("0 projet(s)");
+    expect(html).toContain("alpha");
+    expect(html).toContain("beta");
   });
 
-  it("affiche le compte FRAIS du serveur après une attribution, jamais une réponse antérieure", () => {
+  it("garde la liste FRAÎCHE : une réponse antérieure est ignorée", () => {
     const state = {
       ...initialProjectsState(),
-      projects: [{ id: 1, name: "alpha", member_count: 0 }],
+      projects: [{ id: 1, name: "alpha" }],
       loadSeq: 2, // la demande courante porte le numéro 2
     };
-    // Réponse d'une demande ANTÉRIEURE (numéro 1) : ignorée → badge inchangé.
     const stale = applyProjectsLoad(
       state,
       1,
-      { ok: true, projects: [{ id: 1, name: "alpha", member_count: 0 }] },
+      { ok: true, projects: [{ id: 1, name: "alpha" }] },
       { ok: true, git_repos: [] }
     );
     expect(stale).toBe(state);
-    expect(renderProjectsTableHtml(stale)).toContain("aucun membre");
-    // Réponse de la demande courante (numéro 2), fraîche du serveur : le badge suit.
     const fresh = applyProjectsLoad(
       state,
       2,
-      { ok: true, projects: [{ id: 1, name: "alpha", member_count: 2 }] },
+      { ok: true, projects: [{ id: 1, name: "alpha" }, { id: 2, name: "beta" }] },
       { ok: true, git_repos: [] }
     );
     expect(fresh).not.toBe(state);
-    expect(renderProjectsTableHtml(fresh)).toContain("2 membre(s)");
-    expect(renderProjectsTableHtml(fresh)).not.toContain("aucun membre");
-    // L'état initial ne porte aucune demande en cours.
+    expect(renderProjectsTableHtml(fresh)).toContain("beta");
     expect(initialProjectsState().loadSeq).toBe(0);
   });
 });

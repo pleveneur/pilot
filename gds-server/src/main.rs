@@ -879,12 +879,13 @@ mod tests {
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
-    /// L3.4 — l'attribution d'un projet est une **écriture d'administration** :
-    /// un jeton `dev` reçoit 403 (un non-admin ne peut pas s'attribuer un
-    /// projet), un jeton `admin` franchit le garde et atteint le handler (pool
-    /// absent → 500). Même règle pour le listing des membres.
+    /// Décision 2026-09 — les routes d'**attribution** ont été supprimées : un
+    /// compte du serveur accède à tous ses projets, l'attribution au projet
+    /// n'étant plus une condition d'accès. Un `dev` reçoit 403 (le garde
+    /// d'administration reste devant la route) et un `admin` reçoit 404 (route
+    /// retirée, plus aucun handler) : ni l'un ni l'autre ne peut réattribuer.
     #[tokio::test]
-    async fn project_assignment_routes_are_admin_only() {
+    async fn project_assignment_routes_are_gone_and_admin_stays_reserved() {
         let body = serde_json::json!({ "project_id": 1, "email": "dev-l34@gds.test" });
         for uri in [
             "/api/gds/admin/projects/assign",
@@ -910,11 +911,30 @@ mod tests {
                 .oneshot(admin_json_request("POST", uri, &admin, body.clone()))
                 .await
                 .unwrap();
-            assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "{}", uri);
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{}", uri);
         }
 
-        // Listing des membres : même garde.
+        // Le listing des membres a disparu de la même façon.
         let members_uri = "/api/gds/admin/projects/members?project_id=1";
+        let ctx = null_ctx();
+        let admin = ctx
+            .auth
+            .create_session_as("admin", std::time::Duration::from_secs(60));
+        let app = server_router(ctx);
+        let res = app
+            .oneshot(admin_json_request(
+                "GET",
+                members_uri,
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // L'administration elle-même reste réservée : un `dev` ne franchit pas
+        // le garde de la gestion des comptes (403), là où l'`admin` atteint le
+        // handler (pool absent → 500).
         let ctx = null_ctx();
         let dev = ctx
             .auth
@@ -923,7 +943,7 @@ mod tests {
         let res = app
             .oneshot(admin_json_request(
                 "GET",
-                members_uri,
+                "/api/gds/admin/users",
                 &dev,
                 serde_json::json!({}),
             ))
@@ -939,7 +959,7 @@ mod tests {
         let res = app
             .oneshot(admin_json_request(
                 "GET",
-                members_uri,
+                "/api/gds/admin/users",
                 &admin,
                 serde_json::json!({}),
             ))
@@ -1809,55 +1829,54 @@ mod tests {
             before
         );
 
-        // 2) Attribution par l'administrateur : la donnée d'administration est
-        //    bien créée (200), sans changer la visibilité.
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "POST",
-                "/api/gds/admin/projects/assign",
-                &admin_token,
-                serde_json::json!({ "project_id": project_id, "email": dev_email, "role": "dev" }),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let res = app
-            .clone()
-            .oneshot(authed_get("/api/gds/projects", &dev_token))
-            .await
-            .unwrap();
-        let after = project_ids(&json_body(res).await);
-        assert!(
-            after.contains(&project_id),
-            "projet invisible après attribution : {:?}",
-            after
-        );
+        // 2) Les routes d'attribution ont été supprimées : ni l'administrateur
+        //    (404 : route retirée) ni le développeur (403 : le garde
+        //    d'administration reste devant) ne peuvent rattacher un compte à un
+        //    projet — l'appartenance n'est plus un geste du serveur.
+        for uri in [
+            "/api/gds/admin/projects/assign",
+            "/api/gds/admin/projects/unassign",
+        ] {
+            let body = serde_json::json!({
+                "project_id": project_id,
+                "email": dev_email,
+                "role": "dev"
+            });
+            let res = app
+                .clone()
+                .oneshot(admin_json_request("POST", uri, &admin_token, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{} (admin)", uri);
+            let res = app
+                .clone()
+                .oneshot(admin_json_request("POST", uri, &dev_token, body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{} (dev)", uri);
+        }
 
-        // 3) Retrait : la donnée est retirée (200), le projet reste visible
-        //    (l'appartenance n'est plus une condition d'accès).
+        // 3) Un `dev` SANS attribution publie le projet EXISTANT : la publication
+        //    ne dépend plus que du rôle du compte (décision 2026-09). La route
+        //    est idempotente sur un projet déjà enregistré (200, dépôt réutilisé).
         let res = app
             .clone()
             .oneshot(admin_json_request(
                 "POST",
-                "/api/gds/admin/projects/unassign",
-                &admin_token,
-                serde_json::json!({ "project_id": project_id, "email": dev_email }),
+                "/api/gds/projects/create",
+                &dev_token,
+                serde_json::json!({ "name": "projet-l45" }),
             ))
             .await
             .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let res = app
-            .clone()
-            .oneshot(authed_get("/api/gds/projects", &dev_token))
-            .await
-            .unwrap();
-        let removed = project_ids(&json_body(res).await);
-        assert!(
-            removed.contains(&project_id),
-            "la visibilité ne dépend plus de l'attribution : {:?}",
-            removed
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "un dev sans attribution doit pouvoir publier le projet existant"
         );
+        let created = json_body(res).await;
+        assert_eq!(created["project_id"], serde_json::json!(project_id));
+        assert_eq!(created["bare_created"], serde_json::json!(false));
 
         // 4) Un jeton non administrateur ne peut PAS retirer un projet (403).
         let res = app
@@ -1943,13 +1962,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let journal = json_body(res).await;
         let actions = audit_actions(&journal);
-        for expected in [
-            "login",
-            "project_assign",
-            "project_unassign",
-            "project_remove",
-            "project_remove_purge",
-        ] {
+        for expected in ["login", "project_create", "project_remove", "project_remove_purge"] {
             assert!(
                 actions.iter().any(|a| a == expected),
                 "action {:?} absente du journal : {:?}",
@@ -2701,17 +2714,20 @@ mod tests {
 
     /// Décision 2026-09 — scénario sur une base réelle jetable (facultatif) :
     /// **avoir un compte sur le serveur suffit**. La liste des projets n'est plus
-    /// restreinte : A comme B voient TOUS les projets du serveur, attribués ou
-    /// non. L'**attribution** reste une donnée d'administration (`assign` /
-    /// `unassign`, réservés à l'admin) mais ne pilote plus la visibilité.
+    /// restreinte : A comme B voient TOUS les projets du serveur. Les routes
+    /// d'**attribution par projet** ont disparu (l'appartenance n'est plus une
+    /// condition d'accès, ni un geste du serveur) et un `dev` **sans aucune
+    /// attribution** publie un projet existant ; un compte `standard` reste, lui,
+    /// en lecture seule. L'administration reste réservée. Les tables existantes
+    /// d'appartenance ne sont pas touchées (aucune migration destructive).
     /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test sort proprement (CI verte).
     #[tokio::test]
-    async fn project_list_is_not_restricted_by_assignment_on_real_db() {
+    async fn any_account_reads_and_any_dev_publishes_on_real_db() {
         let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
             Ok(v) if !v.trim().is_empty() => v,
             _ => {
                 eprintln!(
-                    "project_assignment_restricts_read_and_write_on_real_db: \
+                    "any_account_reads_and_any_dev_publishes_on_real_db: \
                      PILOT_GDS_HTTP_TEST_URL absente — test ignoré"
                 );
                 return;
@@ -2779,6 +2795,16 @@ mod tests {
             gds_core::db::create_user(&pool, "b-l34@gds.test", "Dev B", &hash, "dev", "active")
                 .await
                 .unwrap();
+        let c_id = gds_core::db::create_user(
+            &pool,
+            "c-l34@gds.test",
+            "Standard C",
+            &hash,
+            "standard",
+            "active",
+        )
+        .await
+        .unwrap();
         let project_id = gds_core::db::create_project(
             &pool,
             "projet-l34",
@@ -2807,6 +2833,9 @@ mod tests {
         let token_b = ctx
             .auth
             .create_session_for(b_id, "dev", std::time::Duration::from_secs(60));
+        let token_c = ctx
+            .auth
+            .create_session_for(c_id, "standard", std::time::Duration::from_secs(60));
         let app = server_router(ctx);
 
         // 0) Dès le départ : A comme B voient le projet — un compte serveur
@@ -2831,54 +2860,90 @@ mod tests {
             );
         }
 
-        // 1) B (non admin) ne peut pas s'attribuer le projet : écriture refusée.
+        // 1) Les routes d'attribution ont été supprimées : un compte non
+        //    administrateur est refusé (403, le garde d'administration reste),
+        //    l'administrateur reçoit 404 (route retirée). Personne ne rattache
+        //    plus un compte à un projet.
+        for uri in [
+            "/api/gds/admin/projects/assign",
+            "/api/gds/admin/projects/unassign",
+        ] {
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "POST",
+                    uri,
+                    &token_b,
+                    serde_json::json!({ "project_id": project_id, "email": "b-l34@gds.test" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{} (dev)", uri);
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "POST",
+                    uri,
+                    &admin,
+                    serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{} (admin)", uri);
+        }
+        let members_uri = format!("/api/gds/admin/projects/members?project_id={}", project_id);
+        let res = app
+            .clone()
+            .oneshot(admin_json_request("GET", &members_uri, &token_b, serde_json::json!({})))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "membres (dev)");
+        let res = app
+            .clone()
+            .oneshot(admin_json_request("GET", &members_uri, &admin, serde_json::json!({})))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "membres (admin)");
+
+        // 2) Un `dev` SANS aucune attribution publie le projet EXISTANT : la
+        //    publication ne dépend plus que du rôle du compte (200, idempotent).
         let res = app
             .clone()
             .oneshot(admin_json_request(
                 "POST",
-                "/api/gds/admin/projects/assign",
-                &token_b,
-                serde_json::json!({ "project_id": project_id, "email": "b-l34@gds.test" }),
+                "/api/gds/projects/create",
+                &token_a,
+                serde_json::json!({ "name": "projet-l34" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "un dev sans attribution doit publier sans refus"
+        );
+        let value = json_body(res).await;
+        assert_eq!(value["project_id"], serde_json::json!(project_id));
+        assert_eq!(value["bare_created"], serde_json::json!(false));
+        assert!(value["bare_path"].as_str().unwrap_or("").ends_with("projet-l34.git"));
+
+        // 3) Un compte `standard` reste en lecture seule : publication refusée
+        //    (403), sans qu'aucun dépôt ne soit créé.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "POST",
+                "/api/gds/projects/create",
+                &token_c,
+                serde_json::json!({ "name": "projet-l34-interdit" }),
             ))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
-        // 2) L'admin attribue le projet à A (idempotent).
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "POST",
-                "/api/gds/admin/projects/assign",
-                &admin,
-                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let value = json_body(res).await;
-        assert_eq!(value["created"], serde_json::json!(true));
-        assert!(gds_core::db::is_project_member(&pool, project_id, a_id)
-            .await
-            .unwrap());
-
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "POST",
-                "/api/gds/admin/projects/assign",
-                &admin,
-                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let value = json_body(res).await;
-        assert_eq!(value["created"], serde_json::json!(false));
-
-        // 3) A et B voient le MÊME projet : la visibilité ne dépend plus de
-        //    l'attribution.
-        for token in [&token_a, &token_b] {
+        // 4) A, B et C voient le MÊME projet : la visibilité tient au seul compte
+        //    serveur, jamais à un rattachement (aucun n'a été créé).
+        for token in [&token_a, &token_b, &token_c] {
             let res = app
                 .clone()
                 .oneshot(admin_json_request(
@@ -2889,6 +2954,7 @@ mod tests {
                 ))
                 .await
                 .unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
             let value = json_body(res).await;
             let names: Vec<String> = value["projects"]
                 .as_array()
@@ -2897,57 +2963,50 @@ mod tests {
                 .map(|p| p["name"].as_str().unwrap().to_string())
                 .collect();
             assert_eq!(names, vec!["projet-l34".to_string()]);
+            // La réponse ne porte plus aucun comptage d'appartenance.
+            assert!(value["projects"][0].get("member_count").is_none());
         }
 
-        // 4) Le listing admin des membres expose A.
+        // 5) L'administration reste réservée : un `dev` ne franchit pas le garde
+        //    de la gestion des comptes (403) là où l'admin lit (200).
         let res = app
             .clone()
             .oneshot(admin_json_request(
                 "GET",
-                &format!("/api/gds/admin/projects/members?project_id={}", project_id),
-                &admin,
-                serde_json::json!({}),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let value = json_body(res).await;
-        let members = value["members"].as_array().unwrap();
-        assert_eq!(members.len(), 1);
-        assert_eq!(members[0]["email"], serde_json::json!("a-l34@gds.test"));
-
-        // 5) Retrait de l'attribution : la donnée d'administration est bien
-        //    retirée, mais A continue de voir le projet (l'appartenance n'est
-        //    plus une condition d'accès).
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "POST",
-                "/api/gds/admin/projects/unassign",
-                &admin,
-                serde_json::json!({ "project_id": project_id, "email": "a-l34@gds.test" }),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let value = json_body(res).await;
-        assert_eq!(value["removed"], serde_json::json!(true));
-        assert!(!gds_core::db::is_project_member(&pool, project_id, a_id)
-            .await
-            .unwrap());
-
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "GET",
-                "/api/gds/projects",
+                "/api/gds/admin/users",
                 &token_a,
                 serde_json::json!({}),
             ))
             .await
             .unwrap();
-        let value = json_body(res).await;
-        assert_eq!(value["projects"].as_array().unwrap().len(), 1);
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 6) Journal : la publication d'un `dev` sans attribution y figure
+        //    (`project_create`), et aucune action d'attribution n'existe plus.
+        let res = app
+            .clone()
+            .oneshot(admin_json_request(
+                "GET",
+                "/api/gds/admin/audit?limit=200",
+                &admin,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let actions = audit_actions(&json_body(res).await);
+        assert!(
+            actions.iter().any(|a| a == "project_create"),
+            "la publication doit être journalisée : {:?}",
+            actions
+        );
+        for gone in ["project_assign", "project_unassign"] {
+            assert!(
+                !actions.iter().any(|a| a == gone),
+                "action supprimée encore journalisable : {:?}",
+                gone
+            );
+        }
 
         pool.close().await;
         admin_pool.close().await;

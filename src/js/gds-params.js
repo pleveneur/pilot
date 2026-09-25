@@ -414,7 +414,7 @@ export function renderIdentitySectionHtml(state = {}) {
             <input id="gds-params-id-name" type="text" autocomplete="off" placeholder="Prénom Nom" value="${esc(s.gitName)}">
           </label>
         </div>
-        <div class="gds-admin-hint">Saisie <strong>une seule fois</strong> : cet email identifie votre compte GDS (clé SSH, membre de projets) et pré-remplit l'ajout d'un projet au GDS. Le nom git est réglé <strong>localement</strong> au projet (jamais en global). Stocké hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600).</div>
+        <div class="gds-admin-hint">Saisie <strong>une seule fois</strong> : cet email identifie votre compte GDS (clé SSH, accès à tous les projets du serveur) et pré-remplit l'ajout d'un projet au GDS. Le nom git est réglé <strong>localement</strong> au projet (jamais en global). Stocké hors projet (<code>~/.pilot/gds_secrets.json</code>, 0600).</div>
         <div class="gds-admin-actions">
           <button class="gds-admin-btn primary" id="gds-params-id-save"><i data-lucide="save" class="icon-sm"></i> Enregistrer l'identité</button>
         </div>`;

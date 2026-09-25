@@ -103,8 +103,6 @@ pub fn admin_actions() -> Vec<String> {
         "user_password",
         "user_validate",
         "users_list",
-        "project_assign",
-        "project_unassign",
         "project_remove",
         "project_remove_purge",
         "ssh_key_revoke",

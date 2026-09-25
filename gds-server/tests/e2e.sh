@@ -11,8 +11,9 @@
 #      initialisation est refusée (409 : verrou à usage unique) ;
 #   4. `POST /api/gds/admin/users`      → compte développeur actif ;
 #   5. projet + dépôt écrits EN BASE (aucune route HTTP ne crée un projet : le
-#      poste écrit en direct, décision 11), puis
-#      `POST /api/gds/admin/projects/assign` → développeur rattaché au projet ;
+#      poste écrit en direct, décision 11) ; le développeur est ensuite CONNECTÉ
+#      et lit la liste des projets du serveur (décision 2026-09 : avoir un compte
+#      suffit, aucun rattachement par projet) ;
 #   6. clef SSH de test générée, écrite EN BASE (même décision 11), puis
 #      `POST /api/gds/admin/ssh-keys/refresh` → `authorized_keys` régénéré ;
 #   7. dépôt bare matérialisé (`gds-server --init-ssh`), puis `git push` RÉEL en
@@ -286,24 +287,33 @@ psql_scalar() { # SQL
   psql_admin -t -A -c "$1" | tr -d '\r' | grep -E '^[0-9]+$' | head -n1
 }
 
-# ── 5. Projet + rattachement du développeur ────────────────────────────────
+# ── 5. Projet + accès du développeur ──────────────────────────────────────
 # Aucune route HTTP ne crée un projet : le poste écrit projet et dépôt
-# DIRECTEMENT en base (décision 11). Le script fait de même, puis utilise la
-# route d’administration RÉELLE pour rattacher le développeur au projet.
+# DIRECTEMENT en base (décision 11). Le script fait de même. Décision 2026-09 :
+# le rattachement par projet a été SUPPRIMÉ ; un simple compte serveur accède à
+# tous les projets. On vérifie donc la liste des projets vue par le dev.
 log "écriture du projet et de son dépôt en base (décision 11)"
 PROJECT_ID="$(psql_scalar "INSERT INTO projects (name, repo_name, repo_url, path_on_server, status, description) VALUES ('${PROJECT}', '${PROJECT}.git', '${SSH_URL_BASE}${REPO_ON_SERVER}', '${REPO_ON_SERVER}', 'active', 'banc d essai L7.6') RETURNING id;")"
 psql_admin -c "INSERT INTO git_repos (project_id, path_on_server, bare_path) VALUES (${PROJECT_ID}, '${REPO_ON_SERVER}', '${REPO_ON_SERVER}');" >/dev/null
 ok "projet « ${PROJECT} » (id=${PROJECT_ID}) et son dépôt écrits en base"
 
-log "attribution du projet au développeur (POST /api/gds/admin/projects/assign)"
-BODY_ASSIGN="{\"project_id\":${PROJECT_ID},\"email\":\"${DEV_EMAIL}\"}"
-status="$(http POST /api/gds/admin/projects/assign "${BODY_ASSIGN}")"
-expect_status 200 "${status}" "développeur rattaché au projet"
-[ "$(jf created)" = "true" ] || info "attribution déjà présente (created=$(jf created))"
+log "connexion du développeur (POST /api/gds/users/login)"
+status="$(http POST /api/gds/users/login "{\"email\":\"${DEV_EMAIL}\",\"password\":\"${DEV_PASSWORD}\"}")"
+expect_status 200 "${status}" "développeur connecté"
+DEV_TOKEN="$(jf token)"
+[ -n "${DEV_TOKEN}" ] || die "le serveur n'a pas renvoyé de jeton pour le développeur"
 
-status="$(http GET "/api/gds/admin/projects/members?project_id=${PROJECT_ID}")"
-expect_status 200 "${status}" "membres du projet lus"
-assert_contains "${BODY_FILE}" "${DEV_EMAIL}" "le développeur figure parmi les membres du projet"
+log "le développeur (sans aucun rattachement) voit le projet (GET /api/gds/projects)"
+DEV_SAVED_TOKEN="${TOKEN}"
+TOKEN="${DEV_TOKEN}"
+status="$(http GET /api/gds/projects)"
+TOKEN="${DEV_SAVED_TOKEN}"
+expect_status 200 "${status}" "projets lus par le développeur"
+assert_contains "${BODY_FILE}" "${PROJECT}" "un compte serveur accède à tous les projets du serveur"
+
+log "les routes d'attribution ont disparu (404 pour l'administrateur)"
+status="$(http POST /api/gds/admin/projects/assign "{\"project_id\":${PROJECT_ID},\"email\":\"${DEV_EMAIL}\"}")"
+expect_status 404 "${status}" "route d'attribution supprimée"
 
 # ── 6. Clef SSH du développeur ─────────────────────────────────────────────
 log "enregistrement d’une clef SSH (en base, décision 11)"
@@ -385,7 +395,7 @@ TOTAL="$(jf total)"
 assert_non_empty "total d’entrées d’audit" "${TOTAL}"
 [ "${TOTAL}" -ge 4 ] || die "journal trop pauvre : total=${TOTAL}"
 ok "entrées d’audit après filtre : ${TOTAL}"
-for action in login user_create project_assign; do
+for action in login user_create; do
   assert_contains "${BODY_FILE}" "\"action\":\"${action}\"" "le journal contient l’action « ${action} »"
 done
 
