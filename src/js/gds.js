@@ -108,10 +108,28 @@ function esc(s) {
   }[c]));
 }
 
+/** Phrase simple affichée quand Git refuse la confiance du dossier des dépôts. */
+export const TRUST_REFUSAL_MESSAGE =
+  "🔒 Le serveur local n'a pas encore autorisé ce projet. Pilot peut corriger cela tout seul, en un clic.";
+
+/**
+ * Vrai si l'échec est le refus de confiance Git du dossier des dépôts
+ * (`fatal: detected dubious ownership in repository at '…'`).
+ * @param {*} e message d'échec brut (chaîne ou Error)
+ * @returns {boolean}
+ */
+export function isTrustRefusal(e) {
+  const lower = String(e == null ? "" : (e && e.message) || e).toLowerCase();
+  return lower.includes("dubious ownership") || lower.includes("safe.directory");
+}
+
 /** Traduit les erreurs git résiduelles en message compréhensible. */
-function friendlyGdsError(e) {
+export function friendlyGdsError(e) {
   const msg = String(e == null ? "" : e);
   const lower = msg.toLowerCase();
+  if (isTrustRefusal(msg)) {
+    return TRUST_REFUSAL_MESSAGE;
+  }
   if (lower.includes("identité git") || lower.includes("identity unknown") ||
       lower.includes("user.name") || lower.includes("user.email")) {
     return "⚠️ Identité git incomplète : définissez votre nom git dans l'onglet « ⚙️ GDS — paramétrage » → Mon identité (demandé une seule fois).";
