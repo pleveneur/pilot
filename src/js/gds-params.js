@@ -617,6 +617,12 @@ export function initialProjectsState() {
  */
 export function projectStatusBadge(status, provisioned, onServer) {
   if (status === "connected") return { kind: "ok", text: "Connecté" };
+  // Dépôt du serveur VIDE : le projet est bien inscrit, mais rien n'y a jamais
+  // été publié — la synchronisation ne peut pas fonctionner. Le dire plutôt que
+  // de laisser croire à une liaison saine.
+  if (status === "not_published") {
+    return { kind: "warn", text: "Enregistré sur le serveur — dépôt vide, à publier" };
+  }
   // Deux faits DISTINCTS, jamais opposés : « enregistré sur le serveur » (ce
   // projet est inscrit côté serveur) et « liaison de ce poste à vérifier »
   // (accès base + dépôt pas encore utilisables). L'ancien « Sur le serveur —

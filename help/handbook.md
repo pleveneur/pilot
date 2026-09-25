@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-23 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
+<!-- PILOT-HELP generated=2026-09-25 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -317,7 +317,8 @@ d'un hébergement externe type GitHub.
   aujourd'hui.
 - **Onglet « 🌐 GDS » (par projet)** : le bouton **GDS** du panneau **Vues**
   (sidebar) ouvre un onglet dédié au projet ouvert. Son en-tête affiche un
-  **badge d'état** : « ● Connecté » / « ● En attente » / « ○ À configurer ».
+  **badge d'état** : « ● Connecté » / « ● Enregistré sur le serveur — dépôt
+  vide, à publier » / « ● En attente » / « ○ À configurer ».
   Selon l'état, seuls les blocs utiles sont affichés :
   - **À configurer / En attente** : l'étape **« Connecter un serveur GDS »** —
     choisir un **serveur mémorisé** (sélecteur, mots de passe jamais affichés) :
@@ -364,6 +365,14 @@ d'un hébergement externe type GitHub.
     projet, dans le volet des fichiers, « **- (GDS — liaison établie)** » ou
     « **- (GDS — liaison à vérifier)** » (infobulle : inscription serveur et
     liaison du poste distinguées).
+  - **Dépôt du serveur vide (projet jamais publié)** : le dépôt du projet
+    existe côté serveur mais il est **vide** — la branche n'y a jamais été
+    publiée. L'écran le dit clairement (badge « **● Enregistré sur le serveur —
+    dépôt vide, à publier** ») au lieu d'annoncer « Connecté », et propose
+    **« Publier ce projet sur le GDS »** (premier envoi de la branche). La
+    synchronisation ne peut pas fonctionner avant ce premier envoi. Un dépôt
+    que le serveur ne peut pas donner (service injoignable, chemin de dépôt
+    obsolète) reste « **liaison à vérifier** », **jamais** « Connecté ».
 - **Deux écrans transverses** (ouverts **sans projet**) — **icônes du haut de la
   barre latérale gauche**, voisines de Brouillon, Paramètres, Coffre, Remarque et
   Aide : la **petite tour** 🖥️ ouvre l'administration (infobulle *« GDS Serveur —

@@ -15,8 +15,12 @@ describe("isGdsConnected (contrat string de isProjectGds, évol 3)", () => {
     // Chaînes truthy : un simple `if (await isProjectGds(...))` badgerait tout.
     expect(Boolean("error")).toBe(true);
     expect(Boolean("not_configured")).toBe(true);
+    expect(Boolean("not_published")).toBe(true);
     expect(isGdsConnected("error")).toBe(false);
     expect(isGdsConnected("not_configured")).toBe(false);
+    // Dépôt du serveur VIDE : la synchro ne peut pas fonctionner → jamais
+    // « connecté » (défaut de terrain : « connecté » était annoncé).
+    expect(isGdsConnected("not_published")).toBe(false);
   });
   it("fail-open : statut inconnu/null/undefined → false", () => {
     expect(isGdsConnected(undefined)).toBe(false);
@@ -32,6 +36,11 @@ describe("mapGdsStatus", () => {
   });
   it("retourne error pour un statut error", () => {
     expect(mapGdsStatus({ status: "error" })).toBe("error");
+  });
+  it("retourne not_published pour un dépôt du serveur vide (jamais publié)", () => {
+    // État honnête : le service répond et le dépôt existe, mais la branche n'y
+    // est jamais publiée — l'écran l'annonce au lieu de « connecté ».
+    expect(mapGdsStatus({ status: "not_published" })).toBe("not_published");
   });
   it("retourne not_configured pour config absente et valeurs inattendues", () => {
     expect(mapGdsStatus({ status: "not_configured" })).toBe("not_configured");

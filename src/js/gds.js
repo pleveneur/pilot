@@ -26,8 +26,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
 
-/** Durée maximale d'attente de l'état de connexion GDS (ms). */
-export const GDS_CONNECTION_TIMEOUT_MS = 4000;
+/**
+ * Durée maximale d'attente de l'état de connexion GDS (ms). L'état repose
+ * désormais sur un fait vérifiable (interrogation du dépôt réellement servi),
+ * qui peut coûter un aller-retour réseau : borne portée à 9 s pour ne pas
+ * annoncer « la base ne répond pas » pendant une vérification honnête.
+ */
+export const GDS_CONNECTION_TIMEOUT_MS = 9000;
 
 /** Surface d'attente peinte AVANT toute commande : jamais d'écran vide. */
 const GDS_LOADING_HTML =
@@ -178,6 +183,11 @@ export function createGds(container) {
     if (status === "connected") {
       badgeEl.textContent = "● Connecté";
       badgeEl.className = "gds-badge gds-badge-ok";
+    } else if (status === "not_published") {
+      // Dépôt du serveur VIDE : la branche attendue n'a jamais été publiée.
+      // Jamais « Connecté » : la synchronisation ne peut pas fonctionner.
+      badgeEl.textContent = "● Enregistré sur le serveur — dépôt vide, à publier";
+      badgeEl.className = "gds-badge gds-badge-warn";
     } else if (status === "error") {
       // Même vocabulaire que le panneau (deux faits distincts) : l'inscription
       // sur le serveur d'un côté, la liaison de ce poste de l'autre.
@@ -580,10 +590,12 @@ export function createGds(container) {
       notifyGdsChanged();
       pendingNotice = conn.status === "connected"
         ? "✅ Liaison vérifiée : ce poste joint la base et le dépôt de ce projet."
-        : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
-          "Rien n'a été effacé sur ce poste : cliquez sur « (Re)créer le raccourci vers le dépôt » " +
-          "(il est refait vers le dépôt du serveur), puis « Vérifier la liaison » à nouveau. " +
-          "Aucune suppression ni réajout du projet n'est nécessaire.";
+        : conn.status === "not_published"
+          ? "⚠️ Le dépôt de ce projet existe sur le serveur, mais il est VIDE : aucun travail n'y a encore été publié. Publiez-le une première fois (« Publier ce projet sur le GDS »), puis vérifiez à nouveau."
+          : "⚠️ La liaison n'est pas encore utilisable (accès à la base ou dépôt du projet). " +
+            "Rien n'a été effacé sur ce poste : cliquez sur « (Re)créer le raccourci vers le dépôt » " +
+            "(il est refait vers le dépôt du serveur), puis « Vérifier la liaison » à nouveau. " +
+            "Aucune suppression ni réajout du projet n'est nécessaire.";
       await refresh();
     });
 
@@ -725,6 +737,76 @@ export function createGds(container) {
     refreshSyncStatus();
   }
 
+  // ── Dépôt du serveur VIDE : branche jamais publiée (défaut de terrain) ──
+  // Le projet est inscrit et son dépôt existe, mais la branche n'y est jamais
+  // arrivée : « connecté » serait faux, la synchronisation ne peut pas marcher.
+  // Le premier envoi réutilise EXACTEMENT le geste de « Ajouter ce projet au
+  // GDS » (remote add + push, idempotent, sans rien supprimer).
+  function renderNotPublished(identity, serverName) {
+    const wrap = document.createElement("div");
+    wrap.className = "gds-cols";
+    wrap.innerHTML = `
+      <div class="gds-panel">
+        <div class="gds-panel-title"><i data-lucide="git-branch" class="icon-sm"></i> Projet pas encore publié</div>
+        <div class="gds-panel-desc">
+          <span class="gds-badge gds-badge-warn">Dépôt du serveur vide</span>
+          Le dépôt de ce projet existe bien sur le serveur, mais il est <strong>vide</strong> :
+          la branche de votre travail n'y a jamais été publiée. La synchronisation ne peut
+          donc pas fonctionner pour l'instant.
+        </div>
+        <div class="gds-panel-desc" style="margin-top:6px">
+          Cliquez sur <strong>« Publier ce projet sur le GDS »</strong> pour faire ce premier
+          envoi : la branche est créée sur le serveur, puis la synchronisation devient opérationnelle.
+        </div>
+        <div id="gds-publish-err" class="gds-error"></div>
+        <div id="gds-publish-ok" class="gds-ok"></div>
+        <div class="gds-actions">
+          <button id="gds-publish-btn" class="web-btn"><i data-lucide="upload" class="icon-sm"></i> Publier ce projet sur le GDS</button>
+        </div>
+        <div class="gds-panel-desc" style="margin-top:8px">Serveur : <strong>${esc(serverName)}</strong>.</div>
+      </div>
+      <div class="gds-panel">${renderRemoveHtml("gds-notpublished-remove")}</div>
+    `;
+    bodyEl.appendChild(wrap);
+    refreshIcons(container);
+
+    const err = wrap.querySelector("#gds-publish-err");
+    const ok = wrap.querySelector("#gds-publish-ok");
+    const btn = wrap.querySelector("#gds-publish-btn");
+    btn.addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      const email = String((identity && identity.email) || "").trim();
+      if (!email) {
+        err.textContent =
+          "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
+        return;
+      }
+      err.textContent = ""; ok.textContent = "";
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Publication…';
+      refreshIcons(container);
+      try {
+        await invoke("gds_add_project", {
+          project,
+          email,
+          gitName: String((identity && identity.git_name) || "").trim() || null,
+        });
+        notifyGdsChanged();
+        ok.textContent = "✅ Premier envoi effectué — vérification de la liaison…";
+        await refresh();
+      } catch (e) {
+        err.textContent = friendlyGdsError(e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i data-lucide="upload" class="icon-sm"></i> Publier ce projet sur le GDS';
+        refreshIcons(container);
+      }
+    });
+
+    wireRemove(wrap, "gds-notpublished-remove");
+  }
+
   // ── Bloc HTML de « Retirer du GDS » (avec confirmation) ──
   function renderRemoveHtml(idPrefix) {
     return `
@@ -853,6 +935,10 @@ export function createGds(container) {
 
     if (status === "connected") {
       renderConnected(cfg, identity);
+    } else if (status === "not_published") {
+      // Projet inscrit ET dépôt présent, mais dépôt VIDE : l'écran le dit
+      // clairement et propose le premier envoi (jamais « Connecté »).
+      renderNotPublished(identity, await savedServerLabel(cfg));
     } else if (provisioned && editRegistered) {
       // Correction des valeurs techniques d'un projet DÉJÀ rattaché : le
       // formulaire d'activation est rouvert pré-rempli (aucun champ permanent

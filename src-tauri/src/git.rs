@@ -173,6 +173,29 @@ pub fn git_has_remote(cwd: &str, remote: &str) -> bool {
     out.lines().any(|l| l.trim() == remote)
 }
 
+/// Interroge le dépôt RÉELLEMENT servi par `remote` (le serveur, pas une ligne
+/// en base ni un dossier du poste) sur la présence d'une branche :
+///  - `Some(true)`  : la branche existe côté dépôt distant ;
+///  - `Some(false)` : le dépôt a répondu et ne la contient pas — dépôt vide,
+///    branche jamais publiée (la synchronisation ne peut pas fonctionner) ;
+///  - `None`        : le dépôt n'a pas pu être interrogé (remote injoignable,
+///    authentification refusée, branche locale inconnue) — jamais « connecté »
+///    sur une supposition. `git ls-remote` est borné (tué au délai).
+pub fn git_remote_branch_state(cwd: &str, remote: &str, branch: &str) -> Option<bool> {
+    if branch.trim().is_empty() || branch.trim() == "HEAD" {
+        return None;
+    }
+    let (stdout, _stderr, ok) = crate::run_captured_full(
+        "git",
+        &["-C", cwd, "ls-remote", "--heads", remote, branch],
+        Duration::from_secs(8),
+    );
+    if !ok {
+        return None;
+    }
+    Some(!stdout.trim().is_empty())
+}
+
 /// Initialise un dépôt local (work tree) dans `cwd` (`git init`).
 pub fn git_init(cwd: &str) -> Result<(), String> {
     let out = run_captured("git", &["-C", cwd, "init"], Duration::from_secs(5));

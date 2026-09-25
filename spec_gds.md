@@ -36,14 +36,20 @@
 > bare `gds_git::remove_bare` + `gds_db::delete_project_by_name` uniquement si
 > `purge_server=true`, jamais par défaut), section config de l'onglet GDS ;
 > (3) **Bandeau connecté fiable** — commande `gds_connection_status(project)`
-> (`connected` | `error` | `not_configured`, reconnexion effective + dépôt bare
-> valide + remote `gds`), sidebar « - (GDS — liaison établie) » / « - (GDS —
+> (`connected` | `not_published` | `error` | `not_configured`, reconnexion
+> effective + dépôt bare valide + remote `gds` + **branche attendue réellement
+> présente sur le dépôt servi** — lue par `git ls-remote` sur le remote `gds`,
+> jamais déduite d'une ligne en base ni d'un dossier du poste : un dépôt vide
+> (projet jamais publié) donne `not_published`, un dépôt non interrogeable
+> donne `error`, donc **jamais « connecté » sans preuve**), sidebar « - (GDS —
+> liaison établie) » / « - (GDS —
 > liaison à vérifier) » via `gds_status.js` (fail-open, `gds_enabled` respecté ;
 > l'infobulle distingue l'**inscription sur le serveur** (`on_server`) de la
 > **liaison du poste** : elle n'affirme « enregistré sur le serveur » que si
 > `on_server` est vrai) ;
 > (4) **Redessin UX (écran-état-machine, R1–R5)** — onglet GDS réécrit : badge
-> d'état (« ● Connecté » / « ● Enregistré sur le serveur — liaison à vérifier »
+> d'état (« ● Connecté » / « ● Enregistré sur le serveur — dépôt vide, à publier »
+> / « ● Enregistré sur le serveur — liaison à vérifier »
 > / « ● Liaison à vérifier » / « ○ À configurer », `gds_connection_status`),
 > **Identité GLOBALE** (email + nom git) saisie une seule fois, pré-remplie
 > partout (`gds_identity_prefs` / `gds_save_identity`, `~/.pilot/gds_secrets.json`
@@ -72,6 +78,16 @@
 > (`gds_auto_provision` → `auto_provision_pool`, fail-open, jamais bloquant,
 > n'écrase jamais un projet déjà lié) ; R5 pleine largeur + multi-colonnes
 > (`gds-cols`).
+>
+> **Correction d'honnêteté (retour d'usage, implémentée)** — l'écran n'annonce
+> plus « Connecté » quand la synchronisation est impossible : l'état dépend d'un
+> **fait vérifiable** (service qui répond, dépôt du projet réellement présent
+> **et branche attendue réellement publiée**, lue sur le dépôt servi). Nouvel
+> état **« Enregistré sur le serveur — dépôt vide, à publier »**
+> (`not_published`, écran dédié + bouton **« Publier ce projet sur le GDS »**
+> = premier envoi) ; dépôt non interrogeable ou chemin obsolète → « liaison à
+> vérifier », **jamais** « Connecté ». Aucun comportement de synchronisation
+> modifié : seul l'**affichage** de l'état change.
 >
 > **Correction (retour d'usage, implémentée)** — (a) **la liste des projets se
 > redessine après toute action GDS** : l'onglet projet émet `pilot-gds-changed`

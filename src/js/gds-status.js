@@ -15,18 +15,23 @@ import { invoke } from "@tauri-apps/api/core";
  * normalisé. Pure — testable. Toute valeur inattendue / manquante →
  * `'not_configured'` (fail-open).
  * @param {{status?: string} | null | undefined} v - réponse Tauri.
- * @returns {string} `'connected'` | `'error'` | `'not_configured'`.
+ * @returns {string} `'connected'` | `'not_published'` | `'error'` |
+ *   `'not_configured'`.
  */
 export function mapGdsStatus(v) {
   const s = v && v.status;
-  return s === "connected" || s === "error" ? s : "not_configured";
+  return s === "connected" || s === "not_published" || s === "error"
+    ? s
+    : "not_configured";
 }
 
 /**
  * Décision de badge « connecté » : SEULE la valeur `'connected'` (évol 3)
- * justifie le suffixe GDS. `'error'` et `'not_configured'` sont des chaînes
- * TRUTHY mais ne doivent JAMAIS être traitées comme connectées (piège qui a
- * causé une régression : tous les badges assistant suffixés `- (GDS)`). Pure.
+ * justifie le suffixe GDS. `'error'`, `'not_published'` et `'not_configured'`
+ * sont des chaînes TRUTHY mais ne doivent JAMAIS être traitées comme connectées
+ * (piège qui a causé une régression : tous les badges assistant suffixés `- (GDS)`).
+ * `'not_published'` = dépôt du serveur vide (branche jamais publiée) : la
+ * synchronisation ne peut pas fonctionner, donc jamais « connecté ». Pure.
  * @param {string} status - résultat de `isProjectGds`.
  * @returns {boolean} `true` uniquement si `status === "connected"`.
  */
@@ -35,9 +40,10 @@ export function isGdsConnected(status) {
 }
 
 /**
- * Retourne l'état de connexion GDS d'un projet : `'connected'` | `'error'` |
- * `'not_configured'`. Fail-open : erreur d'appel → `'not_configured'`. Ne
- * révèle jamais de mot de passe (le backend ne remonte que l'état).
+ * Retourne l'état de connexion GDS d'un projet : `'connected'` |
+ * `'not_published'` | `'error'` | `'not_configured'`. Fail-open : erreur d'appel
+ * → `'not_configured'`. Ne révèle jamais de mot de passe (le backend ne remonte
+ * que l'état).
  * @param {string} projectPath - chemin du projet.
  * @returns {Promise<string>}
  */

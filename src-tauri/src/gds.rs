@@ -2355,9 +2355,12 @@ pub async fn gds_remove_project(
 /// testable. `configured` = `.pilot/gds.json` présent, `enabled` = activé par
 /// projet, `has_pw` = mot de passe enregistré dans les secrets, `pool_ok` =
 /// pool joignable (reconnexion effective), `bare_ok` = dépôt bare valide,
-/// `remote_ok` = remote `gds` présent.
+/// `remote_ok` = remote `gds` présent, `branch` = la branche attendue existe
+/// sur le dépôt RÉELLEMENT servi (`Some(true)` oui, `Some(false)` non — dépôt
+/// vide jamais publié, `None` = dépôt non interrogeable).
 ///  - config absente (ou non activée) → `not_configured`
-///  - tout coché → `connected`
+///  - tout coché ET branche publiée → `connected`
+///  - tout coché mais dépôt distant vide → `not_published` (action : publier)
 ///  - sinon → `error`
 pub(crate) fn connection_status_from_flags(
     configured: bool,
@@ -2366,15 +2369,33 @@ pub(crate) fn connection_status_from_flags(
     pool_ok: bool,
     bare_ok: bool,
     remote_ok: bool,
+    branch: Option<bool>,
 ) -> &'static str {
     if !configured || !enabled {
         return "not_configured";
     }
     if has_pw && pool_ok && bare_ok && remote_ok {
-        "connected"
-    } else {
-        "error"
+        return match branch {
+            Some(true) => "connected",
+            // Dépôt du serveur VIDE : le projet n'a jamais été publié. Le dépôt
+            // existe et le service répond, mais la synchronisation ne peut pas
+            // fonctionner — jamais « connecté », et l'écran le dit clairement.
+            Some(false) => "not_published",
+            // Dépôt non interrogeable (réseau, clef, chemin obsolète) : « à
+            // vérifier », jamais une liaison annoncée sur une supposition.
+            None => "error",
+        };
     }
+    "error"
+}
+
+/// État de la branche attendue sur le dépôt RÉELLEMENT servi par le remote
+/// `gds` du poste : on interroge le serveur (`git ls-remote`), on ne déduit
+/// rien d'une ligne en base ni d'un dossier du poste. Bloquant (git réseau) →
+/// à appeler depuis `spawn_blocking`.
+fn remote_branch_state(project: &str) -> Option<bool> {
+    let branch = crate::git::git_current_branch(project);
+    crate::git::git_remote_branch_state(project, "gds", &branch)
 }
 
 /// Délai maximal accordé à la reconnexion GDS (connexion + migrations) quand
@@ -2577,6 +2598,18 @@ pub async fn gds_connection_status(
         })
         .await
         .unwrap_or(false);
+        // Fait vérifiable : la branche attendue est-elle publiée sur le dépôt
+        // RÉELLEMENT servi ? Un dépôt vide (projet jamais publié) ne doit jamais
+        // être annoncé « connecté ». Interrogé seulement quand tout le reste est
+        // vert (aucun appel réseau inutile dans les cas d'erreur).
+        let project_branch = project.clone();
+        let branch_state = if service_ok && bare_ok && remote_ok {
+            tokio::task::spawn_blocking(move || remote_branch_state(&project_branch))
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
         let status = connection_status_from_flags(
             true,
             true,
@@ -2584,6 +2617,7 @@ pub async fn gds_connection_status(
             service_ok,
             bare_ok,
             remote_ok,
+            branch_state,
         );
         return Ok(json!({ "status": status, "on_server": bare_ok }));
     }
@@ -2612,8 +2646,26 @@ pub async fn gds_connection_status(
     let remote_ok = tokio::task::spawn_blocking(move || crate::git::git_has_remote(&project_owned, "gds"))
         .await
         .unwrap_or(false);
-    let status =
-        connection_status_from_flags(true, cfg.enabled, has_pw, pool_ok, bare_ok, remote_ok);
+    // Même fait vérifiable que la voie service : la branche attendue doit
+    // exister sur le dépôt RÉELLEMENT servi (ligne en base ou dossier du poste
+    // ne suffisent pas). Interrogé seulement quand tout le reste est vert.
+    let project_branch = project.clone();
+    let branch_state = if has_pw && pool_ok && bare_ok && remote_ok {
+        tokio::task::spawn_blocking(move || remote_branch_state(&project_branch))
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
+    let status = connection_status_from_flags(
+        true,
+        cfg.enabled,
+        has_pw,
+        pool_ok,
+        bare_ok,
+        remote_ok,
+        branch_state,
+    );
     // Présence du projet sur le serveur GDS (on_server) : R3 — quand déjà
     // ajouté, on ne permet plus de l'ajouter (l'UI masque le bouton). Requiert
     // un pool joignable (sinon fail-open : false). Aucun secret révélé.
@@ -3006,16 +3058,24 @@ mod tests {
     #[test]
     fn connection_status_flags_decision() {
         // Config absente / non activée → not_configured (même si pool/bare ok).
-        assert_eq!(connection_status_from_flags(false, false, true, true, true, true), "not_configured");
-        assert_eq!(connection_status_from_flags(true, false, true, true, true, true), "not_configured");
+        assert_eq!(connection_status_from_flags(false, false, true, true, true, true, Some(true)), "not_configured");
+        assert_eq!(connection_status_from_flags(true, false, true, true, true, true, Some(true)), "not_configured");
         // Tout est bon → connected.
-        assert_eq!(connection_status_from_flags(true, true, true, true, true, true), "connected");
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, true, Some(true)), "connected");
+        // Dépôt distant VIDE (branche jamais publiée) → not_published :
+        // défaut de terrain — « connecté » était annoncé alors que rien n'était
+        // poussé et que la synchronisation ne pouvait pas fonctionner.
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, true, Some(false)), "not_published");
+        // Dépôt non interrogeable → jamais « connecté » sur une supposition.
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, true, None), "error");
         // testsnake2 (dépôt non valide → bare_ok=false) → error.
-        assert_eq!(connection_status_from_flags(true, true, true, true, false, true), "error");
-        // Chaque prérequis manquant → error.
-        assert_eq!(connection_status_from_flags(true, true, false, true, true, true), "error");
-        assert_eq!(connection_status_from_flags(true, true, true, false, true, true), "error");
-        assert_eq!(connection_status_from_flags(true, true, true, true, true, false), "error");
+        assert_eq!(connection_status_from_flags(true, true, true, true, false, true, Some(true)), "error");
+        // Chaque prérequis manquant → error (même si la branche est publiée).
+        assert_eq!(connection_status_from_flags(true, true, false, true, true, true, Some(true)), "error");
+        assert_eq!(connection_status_from_flags(true, true, true, false, true, true, Some(true)), "error");
+        assert_eq!(connection_status_from_flags(true, true, true, true, true, false, Some(true)), "error");
+        // Un prérequis manquant reste « error » et jamais « not_published ».
+        assert_eq!(connection_status_from_flags(true, true, true, false, true, true, Some(false)), "error");
     }
 
     /// R1 + reprise 2 : une information lue sur le POSTE ne fonde JAMAIS
@@ -3050,14 +3110,14 @@ mod tests {
         let bare_ok = server_bare_exists(None, &local_cfg, name).await;
         assert!(!bare_ok, "un dossier homonyme du poste ne vaut pas preuve de liaison");
         assert_eq!(
-            connection_status_from_flags(true, true, true, false, bare_ok, true),
+            connection_status_from_flags(true, true, true, false, bare_ok, true, Some(true)),
             "error"
         );
         // Même base joignable et raccourci `gds` présent : sans preuve CÔTÉ
         // SERVEUR il n'y a jamais « connected » (l'ancienne logique, fondée sur
         // le dossier local, annonçait « connected »).
         assert_eq!(
-            connection_status_from_flags(true, true, true, true, bare_ok, true),
+            connection_status_from_flags(true, true, true, true, bare_ok, true, Some(true)),
             "error"
         );
 
@@ -3227,6 +3287,66 @@ mod tests {
             Duration::from_secs(3),
         );
         assert_eq!(count.trim(), "1", "aucun 2e commit attendu");
+        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&work));
+        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&bare));
+    }
+
+    /// Cas de terrain (défaut confirmé) : le dépôt du serveur existe mais est
+    /// VIDE — la branche n'a jamais été publiée. Les faits du poste (remote
+    /// `gds` présent, base joignable) ne doivent JAMAIS produire « connected » :
+    /// l'état se lit sur le dépôt RÉELLEMENT servi. Ce test ÉCHOUE si
+    /// l'indicateur redevient « connecté » pour un dépôt vide.
+    #[test]
+    fn empty_remote_repo_is_never_announced_connected() {
+        let _iso = crate::git::test_helpers::IsolatedGitConfig::new(
+            "[user]\n name = Pilot Test\n email = pilot-test@example.com\n",
+        );
+        let work = std::env::temp_dir().join(format!("pilot-gds-empty-wrk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&work).unwrap();
+        let work = work.to_string_lossy().to_string();
+        std::fs::write(std::path::Path::new(&work).join("main.rs"), "fn main() {}\n").unwrap();
+
+        let bare = std::env::temp_dir().join(format!("pilot-gds-empty-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        let bare = bare.to_string_lossy().to_string();
+        gds_core::git_cmd::git_init_bare(&bare).unwrap();
+
+        ensure_git_repo_with_initial_commit(&work).unwrap();
+        git_remote_add(&work, "gds", &bare).unwrap();
+        let branch = git_current_branch(&work);
+
+        // Dépôt distant vide : le serveur répond, la branche est absente.
+        assert_eq!(
+            crate::git::git_remote_branch_state(&work, "gds", &branch),
+            Some(false),
+            "dépôt vide : le remote répond et la branche est absente"
+        );
+        assert_eq!(remote_branch_state(&work), Some(false));
+        assert_eq!(
+            connection_status_from_flags(true, true, true, true, true, true, remote_branch_state(&work)),
+            "not_published"
+        );
+
+        // Après publication, la même lecture donne le verdict honnête.
+        git_push(&work, "gds", &branch).unwrap();
+        assert_eq!(remote_branch_state(&work), Some(true));
+        assert_eq!(
+            connection_status_from_flags(true, true, true, true, true, true, remote_branch_state(&work)),
+            "connected"
+        );
+
+        // Chemin de dépôt obsolète (dépôt réellement absent) : non interrogeable
+        // → « à vérifier », jamais « connecté » ni « publié ».
+        let missing = std::env::temp_dir().join(format!("pilot-gds-absent-{}", std::process::id()));
+        let missing = missing.to_string_lossy().to_string();
+        git_remote_add(&work, "gds", &missing).unwrap();
+        assert_eq!(remote_branch_state(&work), None);
+        assert_eq!(
+            connection_status_from_flags(true, true, true, true, true, true, remote_branch_state(&work)),
+            "error"
+        );
+
         let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&work));
         let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&bare));
     }
