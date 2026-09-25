@@ -14,9 +14,6 @@ use std::time::Duration;
 use serde_json::Value;
 use tauri::State;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 use crate::{run_captured, AppState};
 
 // ── Helpers git génériques (GDS, spec_gds.md §4) ──
@@ -70,48 +67,89 @@ pub fn git_remote_remove(cwd: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Raison donnée par Git pour un message utilisateur : la sortie d'ERREUR
+/// (là où Git écrit ses explications) prime sur la sortie standard, limitée à
+/// deux lignes utiles pour ne pas noyer le propriétaire sous la technique.
+fn git_error_detail(stderr: &str, stdout: &str) -> String {
+    let text = if stderr.trim().is_empty() { stdout } else { stderr };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" — ")
+}
+
+/// Juge une opération Git sur son CODE DE RETOUR (`ok`), jamais sur le fait que
+/// la sortie standard soit vide : Git écrit souvent sur stderr, y compris quand
+/// l'opération RÉUSSIT (d'où des échecs annoncés à tort). En cas d'échec réel, le
+/// message porte la raison donnée par Git.
+fn git_op_result(
+    what: &str,
+    context: &str,
+    stdout: &str,
+    stderr: &str,
+    ok: bool,
+) -> Result<(), String> {
+    if ok {
+        return Ok(());
+    }
+    let detail = git_error_detail(stderr, stdout);
+    if detail.is_empty() {
+        return Err(format!("{} a échoué ({})", what, context));
+    }
+    Err(format!("{} a échoué ({}): {}", what, context, detail))
+}
+
 /// Pousse la branche courante (ou HEAD) vers un remote.
 pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
-    let out = run_captured(
+    let (stdout, stderr, ok) = crate::run_captured_full(
         "git",
         &["-C", cwd, "push", "-u", remote, branch],
         Duration::from_secs(60),
     );
-    if out.trim().is_empty() {
-        return Err(format!("git push a échoué (remote {}): {}", remote, out.trim()));
-    }
-    Ok(())
+    git_op_result(
+        "git push",
+        &format!("remote {}", remote),
+        &stdout,
+        &stderr,
+        ok,
+    )
 }
 
 /// Tire les changements depuis un remote (branch courante).
 pub fn git_pull(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
-    let out = run_captured(
+    let (stdout, stderr, ok) = crate::run_captured_full(
         "git",
         &["-C", cwd, "pull", remote, branch],
         Duration::from_secs(60),
     );
-    if out.trim().is_empty() {
-        return Err(format!("git pull a échoué (remote {}): {}", remote, out.trim()));
-    }
-    Ok(())
+    git_op_result(
+        "git pull",
+        &format!("remote {}, branche {}", remote, branch),
+        &stdout,
+        &stderr,
+        ok,
+    )
 }
 
 /// Récupère les changements depuis un remote (sans fusionner). `git fetch`
-/// écrit sa sortie sur stderr → on vérifie le code de sortie, pas stdout.
-/// Timeout généreux (60 s) pour les gros dépôts.
+/// écrit ses erreurs sur stderr (auparavant ignoré → « git fetch a échoué »
+/// sans la vraie raison) : on vérifie le code de sortie ET on remonte la raison
+/// réelle. Timeout généreux (60 s) pour les gros dépôts.
 pub fn git_fetch(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
-    use std::process::{Command, Stdio};
-    let mut cmd = Command::new("git");
-    cmd.args(["-C", cwd, "fetch", remote, branch])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    cmd.creation_flags(crate::CREATE_NO_WINDOW);
-    match cmd.status() {
-        Ok(s) if s.success() => Ok(()),
-        Ok(_) => Err(format!("git fetch a échoué (remote {}): {}", remote, branch)),
-        Err(e) => Err(format!("git fetch a échoué: {}", e)),
-    }
+    let (stdout, stderr, ok) = crate::run_captured_full(
+        "git",
+        &["-C", cwd, "fetch", remote, branch],
+        Duration::from_secs(60),
+    );
+    git_op_result(
+        "git fetch",
+        &format!("remote {}, branche {}", remote, branch),
+        &stdout,
+        &stderr,
+        ok,
+    )
 }
 
 /// Nom de la branche courante d'un dépôt local (vide si détaché / pas de HEAD).
@@ -436,6 +474,65 @@ mod tests {
         // Le bare de test contient bien le commit initial.
         let log = run_captured("git", &["-C", &bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
         assert!(log.contains("initial commit"));
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn git_op_result_judges_success_on_exit_code_not_empty_output() {
+        // Une commande qui RÉUSSIT en écrivant sur la sortie d'erreur (Git le fait
+        // couramment) doit être annoncée comme réussie : la réussite se juge sur
+        // le code de retour, jamais sur la vacuité de la sortie standard.
+        assert!(git_op_result("git push", "remote gds", "", "ok main\n", true).is_ok());
+        assert!(git_op_result("git fetch", "remote gds, branche main", "", "", true).is_ok());
+    }
+
+    #[test]
+    fn git_op_result_failure_carries_the_real_git_reason() {
+        // Échec : la VRAIE raison donnée par Git (sur stderr) doit apparaître.
+        let err = git_op_result(
+            "git fetch",
+            "remote gds, branche main",
+            "",
+            "fatal: couldn't find remote ref main\n",
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("couldn't find remote ref main"),
+            "raison réelle attendue, obtenu: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn git_error_detail_keeps_at_most_two_useful_lines() {
+        let d = git_error_detail("\n fatal: first problem \n hint: second line \n hint: third\n", "");
+        assert_eq!(d, "fatal: first problem — hint: second line");
+        // stderr vide → repli sur stdout (certaines erreurs y sont écrites).
+        assert_eq!(git_error_detail("", "boom\n"), "boom");
+        assert_eq!(git_error_detail("", ""), "");
+    }
+
+    #[test]
+    fn git_fetch_missing_branch_reports_git_reason() {
+        // Bout en bout, cas réel « projet jamais publié » : dépôt distant SANS la
+        // branche demandée → le message doit porter la raison réelle de Git.
+        let _iso = identity_iso();
+        let (wd, work) = temp_work("fetch-reason");
+        std::fs::write(std::path::Path::new(&work).join("a.txt"), "x").unwrap();
+        assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
+        let bare = std::env::temp_dir().join(format!("pilot-git-fetch-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&bare);
+        gds_core::git_cmd::git_init_bare(&bare.to_string_lossy()).unwrap();
+        git_remote_add(&work, "gds", &bare.to_string_lossy()).unwrap();
+        let err = git_fetch(&work, "gds", "main").unwrap_err();
+        assert!(
+            err.contains("couldn't find remote ref") || err.contains("not found"),
+            "raison git attendue dans le message, obtenu: {}",
+            err
+        );
+        assert!(!err.ends_with(": main"), "message sans raison : {}", err);
         let _ = std::fs::remove_dir_all(&bare);
         let _ = std::fs::remove_dir_all(&wd);
     }
