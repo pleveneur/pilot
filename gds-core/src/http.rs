@@ -747,7 +747,8 @@ fn bad_request(e: String) -> Response {
 /// `role` = rôle du compte porté par la session (chaîne vide si la session ne
 /// porte pas de rôle — cas du mode remote du poste), `user_id` = identifiant
 /// `users.id` du compte (`0` si la session ne porte pas d'identité — refonte
-/// GDS **L3.4**, pour la lecture restreinte des projets attribués).
+/// GDS **L3.4** ; sert à prouver l'identité des routes qui en ont besoin,
+/// `projects/create` et les clefs SSH, plus à aucun filtrage d'accès).
 #[derive(Clone)]
 pub struct AuthedClient {
     pub key: String,
@@ -1438,28 +1439,22 @@ async fn admin_service_action<S: GdsCtx>(
 
 // ── Projets & dépôts git ──
 
-/// `GET /api/gds/projects` — liste les projets visibles par l'appelant.
+/// `GET /api/gds/projects` — liste les projets du serveur.
 ///
-/// Lecture **restreinte** (refonte GDS, **L3.4**) : un compte portant un rôle
-/// et une identité (`dev`/`standard`) ne voit que les projets qui lui sont
-/// **attribués** (`project_members`). Un administrateur voit tout ; une session
-/// historique du poste (rôle vide, sans identité GDS) conserve le comportement
-/// antérieur — c'est le propriétaire, il voit tout (aucune régression desk).
+/// Règle décisive (décision 2026-09) : **un compte sur le serveur accède à
+/// TOUS les projets de ce serveur**. La liste n'est donc plus restreinte aux
+/// projets *attribués* (refonte GDS L3.4, retirée) — l'attribution n'est plus
+/// une condition d'accès. Le rôle compte toujours pour les droits d'écriture
+/// (`standard` = lecture seule), mais **pas** pour la visibilité.
 async fn gds_projects<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
-    Extension(authed): Extension<AuthedClient>,
+    Extension(_authed): Extension<AuthedClient>,
 ) -> Response {
     let pool = match ctx.pool() {
         Ok(p) => p,
         Err(e) => return err_response(e),
     };
-    let restricted = !authed.role.is_empty() && authed.role != "admin" && authed.user_id != 0;
-    let list = if restricted {
-        gds_db::list_projects_for_user(&pool, authed.user_id).await
-    } else {
-        gds_db::list_projects(&pool).await
-    };
-    match list {
+    match gds_db::list_projects(&pool).await {
         Ok(list) => Json(json!({ "projects": list })).into_response(),
         Err(e) => err_response(e),
     }
@@ -2061,9 +2056,8 @@ struct ProjectCreateBody {
 /// * Garde de **publication** (correctif « garde symétrique ») : pour un projet
 ///   **déjà enregistré**, l'appel passe par `gds_db::ensure_can_add_project`
 ///   (`source = "server"`) — exactement la règle de la voie héritée du poste
-///   (`roles::can_publish_project` : administrateur, ou développeur attribué au
-///   projet). Sans cet appel, un `dev` **non attribué** republiait un projet
-///   existant par le service alors que le poste le refuse. Un projet neuf suit
+///   (`roles::can_publish_project` : tout compte serveur, administrateur ou
+///   développeur, **attribué ou non** — décision 2026-09). Un projet neuf suit
 ///   la règle d'ajout (`can_add_project`), comme sur le poste.
 /// * Identité : le rattachement d'office du créateur
 ///   (`git::register_project` → `enroll_creator`, projet neuf : tout rôle
@@ -2314,11 +2308,13 @@ mod tests {
     /// Correctif « garde symétrique » (L3.5) — la route service
     /// `POST /api/gds/projects/create` doit appliquer la **même** garde de
     /// publication que la voie héritée du poste (`ensure_can_add_project`) :
-    /// sans elle, un `dev` **non attribué** publie un projet **existant** par
-    /// le service alors que le poste le refuse (asymétrie de droits).
-    /// Contrôle structurel exécutable sans PostgreSQL (donc présent en CI),
-    /// complété par le test fonctionnel `publication_guards_apply_role_matrix`
-    /// (`db.rs`) qui porte les verdicts de la règle, source `"server"` incluse.
+    /// sans elle, un rôle sans droit de publication (ex. `standard`) publie un
+    /// projet **existant** par le service alors que le poste le refuse
+    /// (asymétrie de droits). L'attribution n'entre plus dans la règle
+    /// (décision 2026-09). Contrôle structurel exécutable sans PostgreSQL (donc
+    /// présent en CI), complété par le test fonctionnel
+    /// `publication_guards_apply_role_matrix` (`db.rs`) qui porte les verdicts
+    /// de la règle, source `"server"` incluse.
     #[test]
     fn service_project_create_applies_the_publish_guard() {
         let src = include_str!("http.rs");
@@ -2334,8 +2330,8 @@ mod tests {
         assert!(
             body.contains("gds_db::ensure_can_add_project("),
             "la route service ne passe plus par la garde de publication \
-             (`gds_db::ensure_can_add_project`) : un développeur NON attribué \
-             peut republier un projet existant par le service"
+             (`gds_db::ensure_can_add_project`) : un rôle sans droit \
+             (ex. `standard`) peut republier un projet existant par le service"
         );
         assert!(
             body.contains("\"server\""),

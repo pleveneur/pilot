@@ -905,8 +905,9 @@ pub(crate) fn start_gds_sync_monitor(handle: tauri::AppHandle) {
 // La publication forcée pousse le suivi local vers Postgres, en ÉCRASANT les
 // données distantes (au lieu du « dernier écrit gagne » du pont C1.2). Le verrou
 // de projet n'existe plus (refonte GDS, lot L6) : l'habilitation est portée par
-// le RÔLE — administrateur, ou développeur attribué au projet (`project_members`)
-// (`gds_core::roles::can_force_publish`, règle resserrée en L3.6).
+// le RÔLE — un compte valide du serveur suffit (administrateur ou développeur),
+// attribué au projet ou non (décision 2026-09 : l'attribution n'est plus une
+// condition d'accès) ; `gds_core::roles::can_force_publish`.
 
 /// Lit TOUT le suivi SQLite en mémoire (since 0) + mapping noms clients.
 /// La connexion est fermée avant tout await (rusqlite::Connection n'est pas
@@ -983,9 +984,10 @@ fn projects_with_client_names(
 }
 
 /// Force la poussée du suivi local vers Postgres, en ÉCRASANT les données
-/// distantes. Réservé à l'**administrateur** ou à un **développeur attribué**
-/// au projet — le verrou de projet a été supprimé (refonte GDS, L6) et la
-/// règle de rôle resserrée en **L3.6** (spec 03 cible §8.2). Phase C1.3.
+/// distantes. Réservé à un **compte valide du serveur** (administrateur ou
+/// développeur), attribué au projet ou non : le verrou de projet a été supprimé
+/// (refonte GDS, L6) et l'attribution n'est plus une condition d'accès
+/// (décision 2026-09). Phase C1.3.
 ///
 /// Voie SERVICE (lot 3) : la publication passe par l'API du service avec le
 /// jeton du compte GDS ; la garde de rôle est appliquée par le service (même
@@ -999,14 +1001,14 @@ pub(crate) async fn force_push_tracking(pool: Option<&PgPool>, project: &str) ->
     let name = project_name(project);
     let side = gds::resolve_server_side(&cfg, pool)?;
     if let gds::ServerSide::Service(ident) = &side {
-        let pushed = gds_service::force_push_tracking(ident, &name, local_tracking_dump()?).await?;
+        let pushed = gds_service::force_push_tracking(ident, local_tracking_dump()?).await?;
         return Ok(json!({ "ok": true, "forced": true, "pushed": pushed }));
     }
     // Voie héritée : elle a besoin du pool (compte technique).
     let pool = pool.ok_or("GDS non provisionné")?;
     // L1.8b : la garde de publication vit désormais dans le socle partagé, car
-    // le serveur autonome en a besoin. L3.6 : elle vérifie le RÔLE (admin, ou
-    // dev attribué) et non plus la seule appartenance. Même trace d'audit
+    // le serveur autonome en a besoin. Décision 2026-09 : elle vérifie le RÔLE
+    // (compte serveur valide) et non plus l'appartenance. Même trace d'audit
     // `tracking.force.denied` en cas de refus.
     gds_db::ensure_project_publisher(pool, &name, &cfg.identity_email, "desktop").await?;
     // Lire tout le suivi local (since 0) en mémoire, puis pousser en écrasant.

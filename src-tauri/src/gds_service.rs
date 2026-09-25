@@ -274,16 +274,6 @@ impl ServiceSession {
         Err(format!("Le serveur GDS a refusé l'opération ({})", reply.error()))
     }
 
-    fn get(&self, path: &str) -> Result<Value, String> {
-        let client = http_client()?;
-        let reply = send_get(
-            &client,
-            &format!("{}{}", self.base, path),
-            Some(&self.token()?),
-        )?;
-        self.value(reply)
-    }
-
     fn post(&self, path: &str, body: &Value) -> Result<Value, String> {
         let client = http_client()?;
         let reply = send_post_json(
@@ -428,34 +418,22 @@ pub(crate) fn project_payloads(
 /// (routes `POST /api/gds/tracking/*` de la phase C1.5). Renvoie le nombre de
 /// lignes poussées.
 ///
-/// La garde de publication forcée (administrateur, ou développeur **attribué**
-/// au projet) est vérifiée ici avec la MÊME règle que le serveur
-/// (`gds_core::roles::can_force_publish`) : l'appartenance se lit dans la liste
-/// des projets du compte — un administrateur voit tout, un développeur ne voit
-/// que les projets qui lui sont attribués. La garde est appliquée AVANT toute
-/// écriture, comme sur le chemin historique.
+/// La garde de publication forcée (administrateur ou développeur) est vérifiée
+/// ici avec la MÊME règle que le serveur (`gds_core::roles::can_force_publish`) :
+/// elle ne dépend plus que du **rôle du compte** — l'attribution au projet n'est
+/// plus une condition d'accès (décision 2026-09), donc plus besoin d'interroger
+/// la liste des projets. La garde est appliquée AVANT toute écriture, comme sur
+/// le chemin historique.
 pub(crate) async fn force_push_tracking(
     ident: &ServiceIdentity,
-    project: &str,
     dump: TrackingDump,
 ) -> Result<i64, String> {
     let ident = ident.clone();
-    let name = project.to_string();
     blocking(move || {
         let session = ServiceSession::open(&ident)?;
-        let listed = session.get("/api/gds/projects")?;
-        let is_member = listed
-            .get("projects")
-            .and_then(|p| p.as_array())
-            .map(|list| {
-                list.iter()
-                    .any(|p| p.get("name").and_then(|n| n.as_str()) == Some(name.as_str()))
-            })
-            .unwrap_or(false);
-        if !gds_core::roles::can_force_publish(&session.role, is_member) {
+        if !gds_core::roles::can_force_publish(&session.role) {
             return Err(
-                "Publication forcée réservée à l'administrateur ou à un développeur attribué au projet."
-                    .to_string(),
+                "Publication forcée réservée à l'administrateur ou à un développeur.".to_string(),
             );
         }
         let mut pushed: i64 = 0;
@@ -737,13 +715,10 @@ mod tests {
 
     #[tokio::test]
     async fn force_push_refuses_a_role_without_rights_before_any_write() {
-        let (base, log) = fake_service(vec![
-            (
-                "/api/gds/users/login",
-                "{\"ok\":true,\"role\":\"standard\",\"token\":\"tok-std\"}",
-            ),
-            ("/api/gds/projects", "{\"projects\":[{\"name\":\"p\"}]}"),
-        ]);
+        let (base, log) = fake_service(vec![(
+            "/api/gds/users/login",
+            "{\"ok\":true,\"role\":\"standard\",\"token\":\"tok-std\"}",
+        )]);
         let ident = ident_of(&base, "std@x", "pw");
         let dump = TrackingDump {
             clients: vec![("Client A".to_string(), String::new())],
@@ -751,12 +726,45 @@ mod tests {
             tasks: vec![],
             decisions: vec![],
         };
-        let err = force_push_tracking(&ident, "p", dump)
+        let err = force_push_tracking(&ident, dump)
             .await
             .expect_err("un compte standard ne publie pas");
         assert!(err.contains("administrateur"), "message: {}", err);
         let calls = log.lock().unwrap().join("\n");
         assert!(!calls.contains("/api/gds/tracking"), "écriture tentée: {}", calls);
+    }
+
+    /// Décision 2026-09 : un **développeur** publie le suivi sans dépendre de la
+    /// liste des projets (l'attribution n'est plus une condition d'accès). Le
+    /// faux service ne sert AUCUNE route `/api/gds/projects` : avant la
+    /// correction, la garde lisait cette liste pour en déduire l'appartenance et
+    /// refusait un développeur non attribué.
+    #[tokio::test]
+    async fn force_push_publishes_for_a_dev_without_any_project_listing() {
+        let (base, log) = fake_service(vec![
+            (
+                "/api/gds/users/login",
+                "{\"ok\":true,\"role\":\"dev\",\"token\":\"tok-dev\"}",
+            ),
+            ("/api/gds/tracking/clients", "{\"ok\":true,\"id\":7}"),
+        ]);
+        let ident = ident_of(&base, "dev@x", "pw");
+        let dump = TrackingDump {
+            clients: vec![("Client A".to_string(), String::new())],
+            projects: vec![],
+            tasks: vec![],
+            decisions: vec![],
+        };
+        let pushed = force_push_tracking(&ident, dump)
+            .await
+            .expect("un développeur publie sans attribution");
+        assert_eq!(pushed, 1);
+        let calls = log.lock().unwrap().join("\n");
+        assert!(
+            !calls.contains("/api/gds/projects"),
+            "la garde ne doit plus interroger la liste des projets: {}",
+            calls
+        );
     }
 
     #[tokio::test]
@@ -766,7 +774,6 @@ mod tests {
                 "/api/gds/users/login",
                 "{\"ok\":true,\"role\":\"admin\",\"token\":\"tok-adm\"}",
             ),
-            ("/api/gds/projects", "{\"projects\":[]}"),
             ("/api/gds/tracking/clients", "{\"ok\":true,\"id\":7}"),
             ("/api/gds/tracking/projects", "{\"ok\":true,\"id\":1}"),
             ("/api/gds/tracking/tasks", "{\"ok\":true,\"id\":2}"),
@@ -784,7 +791,7 @@ mod tests {
             tasks: vec![(2, 1, "T".to_string(), "D".to_string(), "open".to_string())],
             decisions: vec![(3, Some(1), Some(2), "R".to_string(), "s".to_string())],
         };
-        let pushed = force_push_tracking(&ident, "p", dump)
+        let pushed = force_push_tracking(&ident, dump)
             .await
             .expect("publication via service");
         assert_eq!(pushed, 4);

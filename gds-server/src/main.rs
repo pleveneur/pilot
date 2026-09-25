@@ -1632,11 +1632,12 @@ mod tests {
     }
 
     /// L4.4 + L4.5 — **scénario HTTP complet sur une base réelle jetable**
-    /// (facultatif) : attribution/retrait d'un projet (visibilité côté
-    /// développeur), retrait avec purge **optionnelle** (le dépôt bare survit
-    /// sans `purge`), journal d'audit (connexions + actions d'administration,
-    /// paginé et filtrable) et révocation d'une clef SSH (supprimée en base et
-    /// `authorized_keys` **régénéré immédiatement**).
+    /// (facultatif) : attribution/retrait d'un projet (données d'administration ;
+    /// la visibilité n'en dépend plus, décision 2026-09), retrait avec purge
+    /// **optionnelle** (le dépôt bare survit sans `purge`), journal d'audit
+    /// (connexions + actions d'administration, paginé et filtrable) et
+    /// révocation d'une clef SSH (supprimée en base et `authorized_keys`
+    /// **régénéré immédiatement**).
     ///
     /// Tout passe par les **routes HTTP** du serveur, jamais par une connexion
     /// directe à la base du projet : c'est le contrat de l'écran d'administration.
@@ -1726,7 +1727,7 @@ mod tests {
 
         // Comptes RÉELS (mot de passe haché) : la connexion emprunte la vraie
         // route, ce qui alimente le journal (`login`) et donne un `user_id` au
-        // jeton — indispensable pour que la liste des projets soit filtrée.
+        // jeton (identité réelle du compte côté serveur).
         let admin_email = "admin-l45@gds.test";
         let admin_pw = "mot-de-passe-admin-l45";
         let dev_email = "dev-l45@gds.test";
@@ -1793,7 +1794,8 @@ mod tests {
             .expect("jeton dev")
             .to_string();
 
-        // 1) Sans attribution, le développeur ne voit PAS le projet.
+        // 1) Le développeur voit le projet SANS attribution : un compte serveur
+        //    accède à TOUS les projets du serveur (décision 2026-09).
         let res = app
             .clone()
             .oneshot(authed_get("/api/gds/projects", &dev_token))
@@ -1802,12 +1804,13 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let before = project_ids(&json_body(res).await);
         assert!(
-            !before.contains(&project_id),
-            "projet visible AVANT attribution : {:?}",
+            before.contains(&project_id),
+            "projet invisible pour un compte serveur (sans attribution) : {:?}",
             before
         );
 
-        // 2) Attribution par l'administrateur → le projet apparaît chez le dev.
+        // 2) Attribution par l'administrateur : la donnée d'administration est
+        //    bien créée (200), sans changer la visibilité.
         let res = app
             .clone()
             .oneshot(admin_json_request(
@@ -1827,11 +1830,12 @@ mod tests {
         let after = project_ids(&json_body(res).await);
         assert!(
             after.contains(&project_id),
-            "projet invisible APRÈS attribution : {:?}",
+            "projet invisible après attribution : {:?}",
             after
         );
 
-        // 3) Retrait → il ne le voit plus.
+        // 3) Retrait : la donnée est retirée (200), le projet reste visible
+        //    (l'appartenance n'est plus une condition d'accès).
         let res = app
             .clone()
             .oneshot(admin_json_request(
@@ -1850,8 +1854,8 @@ mod tests {
             .unwrap();
         let removed = project_ids(&json_body(res).await);
         assert!(
-            !removed.contains(&project_id),
-            "projet encore visible APRÈS retrait : {:?}",
+            removed.contains(&project_id),
+            "la visibilité ne dépend plus de l'attribution : {:?}",
             removed
         );
 
@@ -2695,14 +2699,14 @@ mod tests {
         admin_pool.close().await;
     }
 
-    /// L3.4 — scénario sur une base réelle jetable (facultatif) : l'appartenance
-    /// est un **droit**. Un projet attribué au développeur A n'apparaît pas dans
-    /// la liste de B (lecture restreinte) et B ne peut pas s'attribuer le projet
-    /// (écriture d'administration refusée, 403). L'attribution puis le retrait
-    /// par l'admin pilotent la visibilité de A.
+    /// Décision 2026-09 — scénario sur une base réelle jetable (facultatif) :
+    /// **avoir un compte sur le serveur suffit**. La liste des projets n'est plus
+    /// restreinte : A comme B voient TOUS les projets du serveur, attribués ou
+    /// non. L'**attribution** reste une donnée d'administration (`assign` /
+    /// `unassign`, réservés à l'admin) mais ne pilote plus la visibilité.
     /// Sans `PILOT_GDS_HTTP_TEST_URL`, le test sort proprement (CI verte).
     #[tokio::test]
-    async fn project_assignment_restricts_read_and_write_on_real_db() {
+    async fn project_list_is_not_restricted_by_assignment_on_real_db() {
         let url = match std::env::var("PILOT_GDS_HTTP_TEST_URL") {
             Ok(v) if !v.trim().is_empty() => v,
             _ => {
@@ -2805,7 +2809,8 @@ mod tests {
             .create_session_for(b_id, "dev", std::time::Duration::from_secs(60));
         let app = server_router(ctx);
 
-        // 0) Avant toute attribution : ni A ni B ne voit le projet.
+        // 0) Dès le départ : A comme B voient le projet — un compte serveur
+        //    accède à tous les projets, sans attribution préalable.
         for token in [&token_a, &token_b] {
             let res = app
                 .clone()
@@ -2819,7 +2824,11 @@ mod tests {
                 .unwrap();
             assert_eq!(res.status(), StatusCode::OK);
             let value = json_body(res).await;
-            assert_eq!(value["projects"].as_array().unwrap().len(), 0);
+            assert_eq!(
+                value["projects"].as_array().unwrap().len(),
+                1,
+                "un compte serveur voit tous les projets, attribué ou non"
+            );
         }
 
         // 1) B (non admin) ne peut pas s'attribuer le projet : écriture refusée.
@@ -2867,42 +2876,28 @@ mod tests {
         let value = json_body(res).await;
         assert_eq!(value["created"], serde_json::json!(false));
 
-        // 3) A voit le projet, B non.
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "GET",
-                "/api/gds/projects",
-                &token_a,
-                serde_json::json!({}),
-            ))
-            .await
-            .unwrap();
-        let value = json_body(res).await;
-        let names: Vec<String> = value["projects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p["name"].as_str().unwrap().to_string())
-            .collect();
-        assert_eq!(names, vec!["projet-l34".to_string()]);
-
-        let res = app
-            .clone()
-            .oneshot(admin_json_request(
-                "GET",
-                "/api/gds/projects",
-                &token_b,
-                serde_json::json!({}),
-            ))
-            .await
-            .unwrap();
-        let value = json_body(res).await;
-        assert_eq!(
-            value["projects"].as_array().unwrap().len(),
-            0,
-            "B ne doit rien voir"
-        );
+        // 3) A et B voient le MÊME projet : la visibilité ne dépend plus de
+        //    l'attribution.
+        for token in [&token_a, &token_b] {
+            let res = app
+                .clone()
+                .oneshot(admin_json_request(
+                    "GET",
+                    "/api/gds/projects",
+                    token,
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            let value = json_body(res).await;
+            let names: Vec<String> = value["projects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["name"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(names, vec!["projet-l34".to_string()]);
+        }
 
         // 4) Le listing admin des membres expose A.
         let res = app
@@ -2921,7 +2916,9 @@ mod tests {
         assert_eq!(members.len(), 1);
         assert_eq!(members[0]["email"], serde_json::json!("a-l34@gds.test"));
 
-        // 5) Retrait : A ne voit plus le projet.
+        // 5) Retrait de l'attribution : la donnée d'administration est bien
+        //    retirée, mais A continue de voir le projet (l'appartenance n'est
+        //    plus une condition d'accès).
         let res = app
             .clone()
             .oneshot(admin_json_request(
@@ -2950,7 +2947,7 @@ mod tests {
             .await
             .unwrap();
         let value = json_body(res).await;
-        assert_eq!(value["projects"].as_array().unwrap().len(), 0);
+        assert_eq!(value["projects"].as_array().unwrap().len(), 1);
 
         pool.close().await;
         admin_pool.close().await;

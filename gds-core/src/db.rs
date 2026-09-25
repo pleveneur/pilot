@@ -758,46 +758,12 @@ pub async fn list_project_members(
         .collect())
 }
 
-/// Liste les projets **attribués** à un utilisateur (refonte GDS, **L3.4**).
-///
-/// Même forme que [`list_projects`] (compatibilité du rendu), mais filtrée par
-/// `project_members` : c'est la lecture restreinte d'un développeur non
-/// administrateur (un projet non attribué n'apparaît jamais).
-pub async fn list_projects_for_user(
-    pool: &PgPool,
-    user_id: i64,
-) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query(
-        "SELECT p.id, p.name, p.repo_name, p.repo_url, p.path_on_server, p.status, \
-                p.description \
-           FROM projects p \
-           JOIN project_members pm ON pm.project_id = p.id \
-          WHERE pm.user_id = $1 \
-          ORDER BY p.name",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Liste projets attribués: {}", e))?;
-    Ok(rows
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "id": r.get::<i64, _>("id"),
-                "name": r.get::<String, _>("name"),
-                "repo_name": r.get::<String, _>("repo_name"),
-                "repo_url": r.get::<String, _>("repo_url"),
-                "path_on_server": r.get::<String, _>("path_on_server"),
-                "status": r.get::<String, _>("status"),
-                "description": r.get::<String, _>("description"),
-            })
-        })
-        .collect())
-}
-
 /// Indique si un utilisateur est membre d'un projet (project_members).
-/// Utilisé par la garde de forçage de publication du suivi après la suppression
-/// du verrou projet (refonte GDS, L6).
+///
+/// **L'appartenance n'est plus une condition d'accès** (décision 2026-09) : un
+/// compte `dev`/`admin` accède à tous les projets du serveur. Ce lecteur reste
+/// disponible pour l'écran d'administration (les données d'attribution sont
+/// conservées) ; aucun droit n'en dépend plus.
 pub async fn is_project_member(
     pool: &PgPool,
     project_id: i64,
@@ -1835,11 +1801,11 @@ pub async fn provision_initial_admin(
 /// que `email` a le droit de publier le suivi du projet `project_name` et
 /// retourne l'identifiant interne du projet.
 ///
-/// Règle resserrée (spec cible §8.2) : le verrou de projet ayant été supprimé
-/// (L6), l'appartenance ne suffit plus — il faut être **administrateur**, ou
-/// **développeur attribué** au projet (rôle `dev` ET membre). Un compte
-/// `standard`, inconnu ou non attribué est refusé, avec la **trace d'audit**
-/// `tracking.force.denied` conservée (sujet + rôle + appartenance).
+/// Règle décisive (décision 2026-09) : **avoir un compte sur le serveur suffit**.
+/// Un `admin` ou un `dev` publie **tous** les projets du serveur, qu'il y soit
+/// attribué ou non — l'attribution n'est plus une condition d'accès. Un compte
+/// `standard` ou inconnu est refusé, avec la **trace d'audit**
+/// `tracking.force.denied` conservée (sujet + rôle).
 ///
 /// Extrait de `gds_sync::force_push_tracking` (refonte GDS, L1.8b) vers le
 /// socle : c'est la partie dont le serveur autonome a besoin (données déjà en
@@ -1857,26 +1823,23 @@ pub async fn ensure_project_publisher(
     // Un compte inconnu (email non enregistré) n'est JAMAIS autorisé : la
     // session historique du poste n'emprunte pas ce chemin (le compte est relu
     // en base par email), donc aucun « fail-open » n'est nécessaire ici.
-    let user = get_user_by_email(pool, email).await?;
-    let (role, is_member) = match user {
-        Some(u) => {
-            let member = is_project_member(pool, project_id, u.id).await?;
-            (u.role, member)
-        }
-        None => (crate::roles::Role::Unknown.as_str().to_string(), false),
+    let role = match get_user_by_email(pool, email).await? {
+        Some(u) => u.role,
+        None => crate::roles::Role::Unknown.as_str().to_string(),
     };
-    if !crate::roles::can_force_publish(&role, is_member) {
+    if !crate::roles::can_force_publish(&role) {
         audit_gds(
             pool,
             source,
             email,
             "tracking.force.denied",
-            &format!("role={} member={}", role, is_member),
+            &format!("role={}", role),
             false,
         )
         .await?;
         return Err(
-            "Publication forcée réservée à l'administrateur ou à un développeur attribué au projet"
+            "Publication forcée réservée aux comptes valides du serveur \
+             (administrateur ou développeur)"
                 .to_string(),
         );
     }
@@ -1885,28 +1848,18 @@ pub async fn ensure_project_publisher(
 
 /// Message de refus **actionnable** d'un ajout/publication de projet (L3.7).
 ///
-/// Dit *qui* est concerné (compte, rôle) et *quoi faire* (attribution du
-/// compte au projet par un administrateur), jamais un simple « interdit ».
-/// Fonction **pure** (aucune base) : testable sans PostgreSQL. `exists`
-/// distingue la publication d'un projet déjà enregistré de la création d'un
-/// projet neuf (où l'attribution n'existe pas encore).
-fn add_project_denied_message(
-    role: &str,
-    email: &str,
-    project: &str,
-    exists: bool,
-    is_member: bool,
-) -> String {
+/// Dit *qui* est concerné (compte, rôle) et *quoi faire* (modifier le rôle du
+/// compte par un administrateur), jamais un simple « interdit ». Fonction
+/// **pure** (aucune base) : testable sans PostgreSQL. `exists` distingue la
+/// publication d'un projet déjà enregistré de la création d'un projet neuf.
+fn add_project_denied_message(role: &str, email: &str, project: &str, exists: bool) -> String {
     if exists {
         format!(
-            "Publication du projet « {} » refusée : elle est réservée à l'administrateur ou à \
-             un développeur attribué à ce projet. Demandez à un administrateur d'attribuer le \
-             compte « {} » (rôle {}) à ce projet (attribution actuelle : {}), puis relancez \
-             l'opération.",
-            project,
-            email,
-            role,
-            if is_member { "oui" } else { "non" }
+            "Publication du projet « {} » refusée : elle est réservée aux comptes \
+             valides du serveur (administrateur ou développeur). Demandez à un \
+             administrateur de modifier le rôle du compte « {} » (rôle {}), puis \
+             relancez l'opération.",
+            project, email, role
         )
     } else {
         format!(
@@ -1921,19 +1874,19 @@ fn add_project_denied_message(
 /// Garde d'**ajout d'un projet** GDS côté poste (refonte GDS, **L3.5**).
 ///
 /// L'ajout d'un projet au serveur et sa publication initiale sont réservés à un
-/// administrateur ou à un développeur (matrice §5.2). Pour un projet **déjà
-/// enregistré**, un développeur doit en outre y être **attribué** : on retombe
-/// alors sur la règle de publication ([`crate::roles::can_publish_project`]).
+/// **compte valide** du serveur : administrateur ou développeur (matrice §5.2).
+/// Pour un projet **déjà enregistré**, on retombe sur la règle de publication
+/// ([`crate::roles::can_publish_project`]) : un `dev` republie n'importe quel
+/// projet du serveur, **sans condition d'attribution** (décision 2026-09).
 ///
 /// Compatibilité : si l'email d'identité du poste n'est pas un compte GDS
 /// (installation historique, `identity_email` non rattaché à un utilisateur),
-/// la garde laisse passer — aucun comportement existant n'est cassé, exactement
-/// comme la lecture restreinte des projets en L3.4. Un compte `standard` connu,
-/// lui, est refusé.
+/// la garde laisse passer — aucun comportement existant n'est cassé. Un compte
+/// `standard` connu, lui, est refusé.
 ///
 /// Un refus **laisse une trace** (L3.7) : même table et même canal que la
 /// publication forcée (`audit_gds`, action `project.add.denied`), avec
-/// l'identité concernée, le projet visé et le motif (rôle, attribution).
+/// l'identité concernée, le projet visé et le motif (rôle).
 /// `source` est la provenance journalisée (`"desktop"` côté poste,
 /// `"server"` côté serveur).
 ///
@@ -1950,12 +1903,8 @@ pub async fn ensure_can_add_project(
         return Ok(());
     };
     let existing = get_project_by_name(pool, project_name).await?;
-    let is_member = match existing {
-        Some(project_id) => is_project_member(pool, project_id, user.id).await?,
-        None => false,
-    };
     let allowed = match existing {
-        Some(_) => roles::can_publish_project(&user.role, is_member),
+        Some(_) => roles::can_publish_project(&user.role),
         None => roles::can_add_project(&user.role),
     };
     if allowed {
@@ -1966,10 +1915,7 @@ pub async fn ensure_can_add_project(
         source,
         email,
         "project.add.denied",
-        &format!(
-            "project={} role={} member={}",
-            project_name, user.role, is_member
-        ),
+        &format!("project={} role={}", project_name, user.role),
         false,
     )
     .await?;
@@ -1978,7 +1924,6 @@ pub async fn ensure_can_add_project(
         email,
         project_name,
         existing.is_some(),
-        is_member,
     ))
 }
 
@@ -2978,15 +2923,15 @@ mod tests {
 
     // ── L3.5 / L3.6 — la matrice des droits appliquée aux gardes de publication ──
     //
-    // Base vierge jetable. Vérifie la règle resserrée (spec cible §8.2) :
-    //  - publication FORCÉE du suivi (`ensure_project_publisher`, L3.6) : admin
-    //    autorisé ; `dev` **attribué** autorisé ; `dev` NON attribué REFUSÉ avec
-    //    la trace d'audit `tracking.force.denied` ; `standard` REFUSÉ ; compte
+    // Base vierge jetable. Vérifie la règle décisive (décision 2026-09) :
+    //  - publication FORCÉE du suivi (`ensure_project_publisher`, L3.6) : tout
+    //    compte serveur valide (`admin`, `dev`) publie, **attribué au projet ou
+    //    non** ; `standard` REFUSÉ (trace `tracking.force.denied`) ; compte
     //    inconnu REFUSÉ ;
     //  - ajout / publication initiale (`ensure_can_add_project`, L3.5) : admin et
-    //    `dev` autorisés sur un projet NEUF ; `standard` REFUSÉ ; `dev` non
-    //    attribué REFUSÉ sur un projet EXISTANT ; email sans compte GDS toléré
-    //    (compatibilité des installations historiques).
+    //    `dev` autorisés sur un projet NEUF comme EXISTANT ; `standard` REFUSÉ ;
+    //    email sans compte GDS toléré (compatibilité des installations
+    //    historiques).
     #[tokio::test]
     async fn publication_guards_apply_role_matrix() {
         let (pool, _guard) = match fresh_migrated_test_db().await {
@@ -3025,12 +2970,13 @@ mod tests {
             .await
             .expect("attribution dev");
 
-        // 1) Publication forcée : admin et dev attribué autorisés.
+        // 1) Publication forcée : TOUT compte serveur valide publie — admin,
+        //    dev attribué, et (décision 2026-09) dev NON attribué.
         assert!(
             ensure_project_publisher(&pool, "proj-l35", "admin@gds.test", "server")
                 .await
                 .is_ok(),
-            "un administrateur publie sans attribution"
+            "un administrateur publie"
         );
         assert!(
             ensure_project_publisher(&pool, "proj-l35", "dev@gds.test", "server")
@@ -3039,17 +2985,17 @@ mod tests {
             "un développeur attribué publie"
         );
 
-        // 2) Un SECOND dev, non attribué à ce projet : REFUSÉ.
+        // 2) Un SECOND dev, NON attribué à ce projet : publie quand même.
+        //    C'est le cœur du chantier : avoir un compte sur le serveur suffit
+        //    (avant la décision 2026-09, ce cas était refusé).
         create_user(&pool, "dev2@gds.test", "", "", "dev", "active")
             .await
             .expect("dev2");
-        let err = ensure_project_publisher(&pool, "proj-l35", "dev2@gds.test", "server")
-            .await
-            .expect_err("un dev non attribué doit être refusé");
         assert!(
-            err.contains("administrateur"),
-            "message de refus explicite, obtenu: {}",
-            err
+            ensure_project_publisher(&pool, "proj-l35", "dev2@gds.test", "server")
+                .await
+                .is_ok(),
+            "un dev non attribué publie : le compte serveur suffit"
         );
 
         // 3) Standard et compte inconnu : REFUSÉS.
@@ -3071,11 +3017,11 @@ mod tests {
             "SELECT COUNT(*) FROM audit_gds \
              WHERE action = 'tracking.force.denied' AND ok = false AND subject = $1",
         )
-        .bind("dev2@gds.test")
+        .bind("std@gds.test")
         .fetch_one(&pool)
         .await
         .expect("lecture audit");
-        assert_eq!(denied, 1, "le refus du dev non attribué doit être audité");
+        assert_eq!(denied, 1, "le refus du compte standard doit être audité");
 
         // 5) Ajout d'un projet NEUF : admin et dev autorisés, standard refusé.
         assert!(ensure_can_add_project(&pool, "neuf-admin", "admin@gds.test", "desktop")
@@ -3089,20 +3035,28 @@ mod tests {
             .expect_err("le rôle standard ne peut pas ajouter de projet");
         assert_actionable_denial(&err_std, "neuf-std", "std@gds.test");
 
-        // 6) Projet EXISTANT : dev non attribué refusé (message actionnable +
-        //    trace d'audit), dev attribué/admin OK.
-        let err = ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "desktop")
-            .await
-            .expect_err("un dev non attribué ne republie pas un projet existant");
-        assert_actionable_denial(&err, "proj-l35", "dev2@gds.test");
+        // 6) Projet EXISTANT : tout compte serveur valide republie — un dev
+        //    non attribué PASSE (même règle que la voie forcée).
+        assert!(
+            ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "desktop")
+                .await
+                .is_ok(),
+            "un dev non attribué republie un projet existant"
+        );
         // L3.7 : le refus de droits laisse une trace `project.add.denied`
-        // (identité + projet + motif), comme `tracking.force.denied`.
+        // (identité + projet + motif). On la contrôle sur le refus qui subsiste :
+        // le rôle `standard`.
+        let err_std_existing =
+            ensure_can_add_project(&pool, "proj-l35", "std@gds.test", "desktop")
+                .await
+                .expect_err("le rôle standard ne republie pas un projet existant");
+        assert_actionable_denial(&err_std_existing, "proj-l35", "std@gds.test");
         let denied: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM audit_gds \
              WHERE action = 'project.add.denied' AND ok = false AND subject = $1 \
              AND detail LIKE '%project=proj-l35%'",
         )
-        .bind("dev2@gds.test")
+        .bind("std@gds.test")
         .fetch_one(&pool)
         .await
         .expect("lecture audit");
@@ -3117,11 +3071,17 @@ mod tests {
         // 6 bis) VOIE SERVICE (`source = "server"`) : la route
         //    `POST /api/gds/projects/create` appelle CETTE garde — mêmes
         //    verdicts que la voie héritée (cohérence des deux voies) : le dev
-        //    non attribué est REFUSÉ, le dev attribué et l'admin PASSENT.
-        let err_service = ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "server")
+        //    non attribué PASSE, `standard` est REFUSÉ.
+        assert!(
+            ensure_can_add_project(&pool, "proj-l35", "dev2@gds.test", "server")
+                .await
+                .is_ok(),
+            "service : un dev non attribué publie"
+        );
+        let err_service = ensure_can_add_project(&pool, "proj-l35", "std@gds.test", "server")
             .await
-            .expect_err("service : un dev non attribué ne republie pas un projet existant");
-        assert_actionable_denial(&err_service, "proj-l35", "dev2@gds.test");
+            .expect_err("service : le rôle standard ne publie pas");
+        assert_actionable_denial(&err_service, "proj-l35", "std@gds.test");
         assert!(
             ensure_can_add_project(&pool, "proj-l35", "dev@gds.test", "server")
                 .await
@@ -3161,19 +3121,17 @@ mod tests {
     }
 
     /// L3.7 — message de refus actionnable, sans base (couvre aussi le projet
-    /// neuf et les deux motifs : attribution absente / rôle insuffisant).
+    /// neuf et les deux motifs : publication refusée / rôle insuffisant).
     #[test]
     fn add_project_denied_message_is_actionable() {
-        let existing = add_project_denied_message("dev", "dev@gds.test", "Kodali", true, false);
-        assert_actionable_denial(&existing, "Kodali", "dev@gds.test");
+        let existing = add_project_denied_message("standard", "std@gds.test", "Kodali", true);
+        assert_actionable_denial(&existing, "Kodali", "std@gds.test");
         assert!(
-            existing.contains("dev")
-                && existing.contains("attribu")
-                && existing.contains("attribution actuelle : non"),
-            "le geste à faire (attribution) et le motif (rôle) doivent être visibles: {}",
+            existing.contains("standard") && existing.contains("rôle"),
+            "le geste à faire (rôle par un administrateur) et le motif doivent être visibles: {}",
             existing
         );
-        let new_proj = add_project_denied_message("standard", "std@gds.test", "Neuf", false, false);
+        let new_proj = add_project_denied_message("standard", "std@gds.test", "Neuf", false);
         assert_actionable_denial(&new_proj, "Neuf", "std@gds.test");
         assert!(
             new_proj.contains("standard") && new_proj.contains("rôle"),
@@ -3205,7 +3163,7 @@ mod tests {
             body.contains("\"project.add.denied\""),
             "le refus de droits doit journaliser l'action `project.add.denied`"
         );
-        for needle in ["project=", "role=", "member="] {
+        for needle in ["project=", "role="] {
             assert!(
                 body.contains(needle),
                 "le détail d'audit doit porter le motif ({} absent)",
@@ -3215,9 +3173,10 @@ mod tests {
     }
 
     /// Correctif « rattachement du créateur » (bout en bout, PostgreSQL) : un
-    /// **développeur** qui crée un projet NEUF est rattaché d'office à ce projet
-    /// (donc **membre**) et peut le publier ensuite. La garde reste mordante :
-    /// un **autre** développeur, non rattaché, est toujours REFUSÉ.
+    /// **développeur** qui crée un projet NEUF est rattaché d'office (donnée
+    /// d'attribution), et **tout compte serveur valide** peut publier le projet
+    /// — décision 2026-09 : l'attribution n'est plus une condition d'accès, un
+    /// autre développeur publie donc aussi.
     /// Saute proprement sans `PILOT_GDS_TEST_URL` (aucune base réelle visée).
     #[tokio::test]
     async fn dev_creator_is_enrolled_and_can_publish_his_project() {
@@ -3269,24 +3228,25 @@ mod tests {
             "le développeur créateur doit pouvoir publier son projet"
         );
 
-        // 3) La GARDE tient toujours : un autre développeur, non rattaché, ne
-        //    publie pas le projet d'un autre.
+        // 3) La règle décisive (2026-09) : l'appartenance n'est plus une
+        //    condition — un AUTRE développeur, non rattaché, publie aussi.
         assert!(
             ensure_project_publisher(&pool, "proj-enroll", "dev-autre@gds.test", "server")
                 .await
-                .is_err(),
-            "un développeur non rattaché ne doit PAS publier le projet d'un autre"
+                .is_ok(),
+            "un dev non rattaché publie : avoir un compte sur le serveur suffit"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Correctif « garde symétrique » — la garde d'ajout/publication doit
-    /// appliquer la règle de **publication** (`can_publish_project` :
-    /// administrateur, ou développeur **attribué**) dès que le projet existe
-    /// déjà, et non un droit d'écriture générique ; un projet **neuf** garde la
-    /// règle d'ajout (`can_add_project`). Contrôle structurel exécutable sans
-    /// PostgreSQL — donc présent en CI, là où le test fonctionnel
+    /// appliquer la règle de **publication** (`can_publish_project` : tout compte
+    /// serveur, administrateur ou développeur, **attribué au projet ou non** —
+    /// décision 2026-09) dès que le projet existe déjà, et non un droit
+    /// d'écriture générique ; un projet **neuf** garde la règle d'ajout
+    /// (`can_add_project`). Contrôle structurel exécutable sans PostgreSQL — donc
+    /// présent en CI, là où le test fonctionnel
     /// `publication_guards_apply_role_matrix` est sauté sans
     /// `PILOT_GDS_TEST_URL`.
     #[test]
@@ -3304,8 +3264,7 @@ mod tests {
         assert!(
             body.contains("roles::can_publish_project("),
             "un projet EXISTANT doit passer par la règle de publication \
-             (administrateur ou développeur attribué) : sans elle, un \
-             développeur non attribué republie un projet existant"
+             (tout compte serveur, attribué au projet ou non)"
         );
         assert!(
             body.contains("roles::can_add_project("),

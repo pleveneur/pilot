@@ -100,27 +100,24 @@ pub fn can_add_project(role: &str) -> bool {
 
 /// Publication (pousser/forcer) d'un projet **existant**.
 ///
-/// Autorisé à `admin`, ou à un `dev` **attribué** au projet (`is_member`). Le
-/// rôle `standard` en est exclu (matrice §5.2, publication forcée du suivi) ;
+/// Règle décisive (décision 2026-09) : **avoir un compte sur le serveur suffit**.
+/// Un `admin` ou un `dev` publie **tous** les projets du serveur, qu'il y soit
+/// attribué ou non — l'attribution n'est plus une condition d'accès. Le rôle
+/// `standard` reste **lecture seule** et un rôle hors vocabulaire est refusé ;
 /// la session historique (`Legacy`) est autorisée (compatibilité).
-pub fn can_publish_project(role: &str, is_member: bool) -> bool {
-    match Role::parse(role) {
-        Role::Admin | Role::Legacy => true,
-        Role::Dev => is_member,
-        Role::Standard | Role::Unknown => false,
-    }
+pub fn can_publish_project(role: &str) -> bool {
+    matches!(Role::parse(role), Role::Admin | Role::Dev | Role::Legacy)
 }
 
 /// Publication **forcée** du suivi (`tracking/force`, L3.6).
 ///
-/// Règle resserrée (spec cible §8.2) : le compte doit être `admin`, ou `dev`
-/// **attribué** au projet. Le rôle `standard` est exclu et un compte inconnu
-/// aussi — la session historique du poste n'entre pas par ce chemin (le compte
-/// est relu en base par email), donc aucun « fail-open » n'est nécessaire ici.
-pub fn can_force_publish(role: &str, is_member: bool) -> bool {
+/// Un **compte valide** sur le serveur (`admin` ou `dev`) publie, qu'il soit
+/// attribué au projet ou non (décision 2026-09). Le rôle `standard` est refusé
+/// et la session historique du poste n'entre pas par ce chemin (le compte est
+/// relu en base par email), donc aucun « fail-open » n'est nécessaire ici.
+pub fn can_force_publish(role: &str) -> bool {
     match Role::parse(role) {
-        Role::Admin => true,
-        Role::Dev => is_member,
+        Role::Admin | Role::Dev => true,
         Role::Standard | Role::Legacy | Role::Unknown => false,
     }
 }
@@ -172,27 +169,26 @@ mod tests {
         assert!(!can_add_project("root"));
     }
 
-    /// Publication d'un projet existant : `dev` **attribué** seulement.
+    /// Publication d'un projet existant : tout compte serveur (`admin`/`dev`)
+    /// publie, l'attribution n'est plus une condition ; `standard` = lecture seule.
     #[test]
-    fn publish_project_requires_admin_or_assigned_dev() {
-        assert!(can_publish_project("admin", false), "admin n'a pas besoin d'attribution");
-        assert!(can_publish_project("dev", true), "dev attribué");
-        assert!(!can_publish_project("dev", false), "dev non attribué");
-        assert!(!can_publish_project("standard", true), "standard, même attribué");
-        assert!(!can_publish_project("root", true));
-        assert!(can_publish_project("", false), "session historique : compatibilité");
+    fn publish_project_allows_any_server_account() {
+        assert!(can_publish_project("admin"));
+        assert!(can_publish_project("dev"), "un compte serveur suffit, attribué ou non");
+        assert!(!can_publish_project("standard"), "standard : lecture seule");
+        assert!(!can_publish_project("root"));
+        assert!(can_publish_project(""), "session historique : compatibilité");
     }
 
-    /// Publication forcée du suivi (L3.6, spec §8.2) : admin, ou dev attribué.
+    /// Publication forcée du suivi (L3.6) : admin ou dev, sans condition
+    /// d'attribution ; `standard` et rôle inconnu restent refusés.
     #[test]
-    fn force_publish_requires_admin_or_assigned_dev() {
-        assert!(can_force_publish("admin", false));
-        assert!(can_force_publish("admin", true));
-        assert!(can_force_publish("dev", true));
-        assert!(!can_force_publish("dev", false));
-        assert!(!can_force_publish("standard", true));
-        assert!(!can_force_publish("", true), "pas de fail-open sur ce chemin");
-        assert!(!can_force_publish("root", true));
+    fn force_publish_allows_any_server_account() {
+        assert!(can_force_publish("admin"));
+        assert!(can_force_publish("dev"), "un compte serveur suffit, attribué ou non");
+        assert!(!can_force_publish("standard"), "standard : lecture seule");
+        assert!(!can_force_publish(""), "pas de fail-open sur ce chemin");
+        assert!(!can_force_publish("root"));
     }
 
     /// Normalisation : seules les valeurs exactes du vocabulaire sont reconnues.

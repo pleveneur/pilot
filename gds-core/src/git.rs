@@ -611,27 +611,21 @@ mod tests {
         assert!(repo_name_for("").is_err());
     }
 
-    /// Correctif « rattachement du créateur » : un développeur qui crée un
-    /// projet **neuf** est rattaché d'office à ce projet (donc **membre**) et la
-    /// garde de publication l'accepte ensuite (`can_publish_project("dev", true)`).
-    /// La garde reste entière partout ailleurs : un développeur **non** rattaché
-    /// ne publie pas le projet d'un autre, et un projet **déjà enregistré** ne
-    /// rattache que son administrateur.
+    /// Rattachement du créateur (mécanisme **conservé**) : un développeur qui
+    /// crée un projet **neuf** est rattaché d'office (`should_enroll_creator`).
+    /// Depuis la décision 2026-09, l'attribution n'est plus une condition
+    /// d'accès : tout compte serveur publie tous les projets du serveur.
     #[test]
-    fn creator_of_a_new_project_is_enrolled_and_the_publish_guard_holds() {
-        // 1) Le cas corrigé : développeur créateur → rattaché → publication OK.
+    fn creator_of_a_new_project_is_enrolled_and_any_server_account_publishes() {
+        // 1) Le mécanisme de rattachement est inchangé.
         assert!(
             should_enroll_creator(true, "dev"),
             "un développeur qui crée un projet doit être rattaché à son projet"
         );
+        // 2) La règle décisive a changé : un compte `dev` publie, rattaché ou non.
         assert!(
-            crate::roles::can_publish_project("dev", true),
-            "un développeur rattaché doit pouvoir publier son projet"
-        );
-        // 2) La garde tient : développeur NON rattaché → publication refusée.
-        assert!(
-            !crate::roles::can_publish_project("dev", false),
-            "un développeur non rattaché ne doit PAS publier le projet d'un autre"
+            crate::roles::can_publish_project("dev"),
+            "un compte serveur publie tous les projets du serveur"
         );
         // 3) Projet EXISTANT : comportement d'origine préservé (admin seul).
         assert!(should_enroll_creator(false, "admin"));
@@ -641,38 +635,30 @@ mod tests {
         assert!(!should_enroll_creator(true, "root"));
     }
 
-    /// Cas **héritage** (projets créés AVANT le rattachement du créateur) : la
-    /// base ne conserve **aucun** auteur/propriétaire de projet (`projects` n'a
-    /// pas cette colonne) — le seul lien est `project_members`. Un projet déjà
-    /// enregistré auquel son créateur développeur n'est rattaché nulle part ne
-    /// le rattache donc PAS tout seul : c'est **volontaire**, un développeur ne
-    /// s'auto-attribue jamais un droit (sinon n'importe quel développeur
-    /// publierait le projet d'un autre). La seule réparation est l'**attribution
-    /// explicite par un administrateur** ; une fois attribué, le développeur
-    /// publie.
+    /// Cas **héritage** : `should_enroll_creator` ne rattache jamais
+    /// automatiquement un développeur à un projet **déjà enregistré** (aucune
+    /// auto-attribution). Depuis la décision 2026-09, l'accès n'en dépend plus
+    /// — le développeur publie de toute façon ; l'attribution reste la donnée
+    /// qui documente qui travaille sur quoi.
     ///
-    /// Contrôle **pur** (sans PostgreSQL, donc présent en CI) des deux règles
+    /// Contrôle **pur** (sans PostgreSQL, donc présent en CI) des règles
     /// partagées par la voie poste et la voie service.
     #[test]
-    fn legacy_project_creator_is_not_self_enrolled_and_admin_attribution_repairs() {
-        // 1) Projet DÉJÀ enregistré : aucun rattachement automatique du créateur
-        //    (aucune réparation implicite ; le créateur d'origine n'étant pas
-        //    enregistré, il est indistinguable d'un tiers).
+    fn legacy_project_creator_is_not_self_enrolled_and_access_is_not_restricted() {
+        // 1) Projet DÉJÀ enregistré : aucun rattachement automatique du créateur.
         assert!(
             !should_enroll_creator(false, "dev"),
             "un projet existant ne rattache jamais un développeur d'office"
         );
-        // 2) Conséquence : sans ligne d'appartenance, `dev` (créateur comme
-        //    tiers) est refusé — la garde reste mordante.
+        // 2) L'accès ne dépend plus de l'appartenance : un `dev` publie.
         assert!(
-            !crate::roles::can_publish_project("dev", false),
-            "un développeur sans appartenance ne publie jamais le projet"
+            crate::roles::can_publish_project("dev"),
+            "un compte dev publie, rattaché ou non"
         );
-        // 3) La réparation est l'attribution par un administrateur : une fois
-        //    membre, le développeur publie (la garde reste « dev ⇒ membre »).
+        // 3) La garde reste mordante pour le rôle lecture seule.
         assert!(
-            crate::roles::can_publish_project("dev", true),
-            "après attribution par un administrateur, le développeur publie"
+            !crate::roles::can_publish_project("standard"),
+            "standard : lecture seule, jamais de publication"
         );
     }
 
