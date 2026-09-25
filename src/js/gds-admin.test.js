@@ -6,6 +6,7 @@ import {
   ACCOUNT_STATUSES,
   ACCOUNTS_DESC,
   ADMIN_SECTIONS,
+  ADMIN_TABS,
   AUDIT_PAGE_SIZE,
   DEFAULT_HTTP_PORT,
   applyProjectsLoad,
@@ -143,6 +144,40 @@ describe("renderAdminShellHtml (pure, réutilisable L5.1)", () => {
     for (const s of ADMIN_SECTIONS) {
       expect(html).toContain(`data-section-id="${s.id}"`);
     }
+  });
+
+  it("n'affiche qu'un groupe de réglages à la fois (sous-onglets, sans lib)", () => {
+    expect(ADMIN_TABS.map((t) => t.id)).toEqual(ADMIN_SECTIONS.map((s) => s.id));
+    const html = renderAdminShellHtml({
+      title: "T",
+      subtitle: "S",
+      sections: ADMIN_SECTIONS,
+      tabs: ADMIN_TABS,
+      activeTab: "repos",
+    });
+    // Barre de sous-onglets : un bouton par groupe, cliquable (bouton natif).
+    expect(html).toContain('role="tablist"');
+    for (const t of ADMIN_TABS) {
+      expect(html).toContain(`data-gds-tab="${t.id}"`);
+      expect(html).toContain(t.label);
+    }
+    // Seul le groupe actif est visible ; les autres sont masqués (`hidden`).
+    expect(html).toMatch(/data-tab-panel="repos"[^>]*>\s*<section/);
+    expect(html).not.toMatch(/data-tab-panel="repos"[^>]*hidden/);
+    expect(html).toMatch(/data-tab-panel="accounts"[^>]*hidden/);
+    expect(html).toMatch(/data-tab-panel="service"[^>]*hidden/);
+    // Un onglet actif est repérable (style + accessibilité).
+    expect(html).toMatch(/data-gds-tab="repos"/);
+    expect(html).toMatch(/aria-selected="true" data-gds-tab="repos"/);
+    // Un onglet actif inconnu retombe sur le premier groupe.
+    const fallback = renderAdminShellHtml({
+      title: "T",
+      subtitle: "S",
+      sections: ADMIN_SECTIONS,
+      tabs: ADMIN_TABS,
+      activeTab: "n_existe_pas",
+    });
+    expect(fallback).not.toMatch(/data-tab-panel="connection"[^>]*hidden/);
   });
 
   it("tolère une liste de sections vide / absente", () => {

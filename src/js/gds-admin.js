@@ -71,6 +71,19 @@ export const ADMIN_SECTIONS = [
   },
 ];
 
+/**
+ * Sous-onglets de l'écran d'administration : UN groupe de réglages affiché à
+ * la fois (confort visuel). Chaque onglet reprend une section de
+ * {@link ADMIN_SECTIONS}. Donnée pure, exportée pour les tests.
+ */
+export const ADMIN_TABS = [
+  { id: "connection", label: "Connexion serveur" },
+  { id: "accounts", label: "Comptes" },
+  { id: "repos", label: "Dépôts · Projets" },
+  { id: "storage", label: "Espace + journal" },
+  { id: "service", label: "Service" },
+];
+
 /** Échappe le HTML pour injection sûre dans innerHTML. */
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -101,11 +114,38 @@ export function renderAdminSectionHtml(section) {
  * `sectionHtml` (optionnel) : table `{ [id]: html }` permettant d'afficher une
  * section REMPLIE à la place du squelette « À venir ». Absent → toutes les
  * sections sont des squelettes (comportement L4.1 inchangé).
- * @param {{title:string, subtitle:string, sections:Array, sectionHtml?:Object}} opts
+ *
+ * `tabs` + `activeTab` (optionnels) : affiche UN SEUL groupe de réglages à la
+ * fois derrière une barre de sous-onglets (boutons natifs, accessibles au
+ * clavier). Absents → toutes les sections restent visibles (comportement
+ * L4.1/L5.1 inchangé).
+ * @param {{title:string, subtitle:string, sections:Array, sectionHtml?:Object, tabs?:Array, activeTab?:string}} opts
  */
-export function renderAdminShellHtml({ title, subtitle, sections, sectionHtml = {} }) {
+export function renderAdminShellHtml({
+  title,
+  subtitle,
+  sections,
+  sectionHtml = {},
+  tabs = null,
+  activeTab = "",
+}) {
+  const useTabs = Array.isArray(tabs) && tabs.length > 0;
+  const active = useTabs && tabs.some((t) => t.id === activeTab) ? activeTab : useTabs ? tabs[0].id : "";
+  const bar = useTabs
+    ? `<div class="gds-admin-actions" role="tablist">${tabs
+        .map(
+          (t) =>
+            `<button class="gds-admin-btn small${t.id === active ? " primary" : ""}" role="tab" aria-selected="${t.id === active}" data-gds-tab="${esc(t.id)}">${esc(t.label)}</button>`
+        )
+        .join("")}</div>`
+    : "";
   const body = (sections || [])
-    .map((s) => (sectionHtml && sectionHtml[s.id] != null ? sectionHtml[s.id] : renderAdminSectionHtml(s)))
+    .map((s) => {
+      const html =
+        sectionHtml && sectionHtml[s.id] != null ? sectionHtml[s.id] : renderAdminSectionHtml(s);
+      if (!useTabs) return html;
+      return `<div class="gds-admin-tabpanel" role="tabpanel" data-tab-panel="${esc(s.id)}"${s.id === active ? "" : " hidden"}>${html}</div>`;
+    })
     .join("\n");
   return `
     <div class="gds-admin-scroll">
@@ -113,6 +153,7 @@ export function renderAdminShellHtml({ title, subtitle, sections, sectionHtml = 
         <div class="gds-admin-title">${esc(title)}</div>
         <div class="gds-admin-subtitle">${esc(subtitle)}</div>
       </div>
+      ${bar}
       <div class="gds-admin-body">${body}
       </div>
     </div>`;
@@ -1399,6 +1440,8 @@ export function createGdsAdmin(container) {
   let storage = initialStorageState();
   /** État de la section « Contrôle du service » (L4.6) — jamais de secret. */
   let service = initialServiceState();
+  /** Sous-onglet actif : un seul groupe de réglages visible à la fois. */
+  let activeTab = ADMIN_TABS[0].id;
   /** Identité admin de la dernière connexion réussie (hôte + email bruts) : la
    *  clé des identifiants mémorisés côté poste (repli du mot de passe). */
   let adminConn = null;
@@ -1489,12 +1532,20 @@ export function createGdsAdmin(container) {
         storage: renderStorageSectionHtml(storage),
         service: renderServiceSectionHtml(service),
       },
+      tabs: ADMIN_TABS,
+      activeTab,
     });
     refreshIcons(container);
     bind();
   }
 
   function bind() {
+    for (const btn of container.querySelectorAll("[data-gds-tab]")) {
+      btn.addEventListener("click", () => {
+        activeTab = btn.getAttribute("data-gds-tab") || activeTab;
+        draw();
+      });
+    }
     const t = q("#gds-admin-test");
     const c = q("#gds-admin-connect");
     if (t) t.addEventListener("click", () => runConnectionTest(false));
