@@ -146,7 +146,7 @@ utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
 
 ### GDS (gestionnaire de sources)
 - **Serveur conteneurisé** : `gds-server/` = **un seul service** (PostgreSQL + sshd + service HTTP) ; socle partagé `gds-core/` **sans dépendance Tauri**. Sources Git + **suivi fusionné** dans une base PostgreSQL unique. Activation **par projet** (`.pilot/gds.json`).
-- **Trois rôles** appliqués par le serveur : `admin` (comptes + dépôts), `dev` (publier / forcer le suivi des projets attribués), `standard` (lecture seule).
+- **Trois rôles** appliqués par le serveur : `admin` (comptes + dépôts), `dev` (publier / forcer le suivi — **tous** les projets du serveur, décision 2026-09), `standard` (lecture seule).
 - **Sans verrou** : concurrence « **dernier qui écrit gagne** », conflits **journalisés** (`tracking.conflict`), pas de fusion horodatée.
 - **Deux écrans transverses** (ouverts sans projet, boutons de la barre d'outils) : « 🖥️ GDS Serveur — administration » (connexion, comptes, dépôts, espace/journal, contrôle du service) et « ⚙️ GDS — paramétrage » (serveurs, identité, clés, projets). L'onglet « 🌐 GDS » reste **par projet** (statut suivi fusionné, synchroniser, retirer). Voir [`spec_gds.md`](spec_gds.md), [`spec_assistant_sync.md`](spec_assistant_sync.md).
 

@@ -215,7 +215,7 @@ stable.
 
 | # | Sujet | Décision |
 |---|---|---|
-| 1 | **Migration suivi SQLite → PostgreSQL** | **Option A** : Postgres = source de vérité **quand connecté au GDS** ; SQLite local = vérité **sinon**. Ajout d'un **mode déconnecté** (cf. §7). La **publication forcée** du suivi est réservée à un compte habilité (`admin`, ou `dev` attribué au projet) — cf. §6.3. |
+| 1 | **Migration suivi SQLite → PostgreSQL** | **Option A** : Postgres = source de vérité **quand connecté au GDS** ; SQLite local = vérité **sinon**. Ajout d'un **mode déconnecté** (cf. §7). La **publication forcée** du suivi est réservée à un compte habilité (`admin` ou `dev`) — cf. §6.3. |
 | 2 | **Transport git poste ↔ VPS** | **SSH par clef liée à l'email** du dev. |
 | 3 | **Hébergement** | Démarrer par le **GDS interne sur le poste fixe via Tailscale** (pas de VPS pour l'instant). Le VPS n'est nécessaire que pour le **widget public** plus tard. **Dès le V1**, le code doit permettre de configurer un **serveur PostgreSQL distant via IP publique ou URL http/https** — l'architecture supporte **Postgres local OU distant** dès le départ. |
 | 4 | **Format du widget** | **`<iframe>`** avec isolation complète (marque + sécurité). Le widget est un **petit bot par projet** développé via Pilot, qui répond aux questions de l'utilisateur (manuel + aide d'utilisation du logiciel) et assure le **suivi de ses demandes et bugs**. Les demandes utilisateur doivent être **validées par un dev** avant d'être ajoutées aux évolutions du projet. |
@@ -425,7 +425,7 @@ un paramètre de chemin serait un piège de syntaxe).
 
 | Route | Méthode | Garde de rôle | Corps → Réponse |
 |---|---|---|---|
-| `/api/gds/projects/create` | POST | écriture (`roles::can_write`) — `standard` **403** — **puis** garde de publication `gds_db::ensure_can_add_project(…, "server")` (projet **déjà enregistré** → attribution au projet exigée) : refus **403 avant toute action** | `{name, description?}` → `{ok, project_id, name, repo_name, bare_path, bare_created}` |
+| `/api/gds/projects/create` | POST | écriture (`roles::can_write`) — `standard` **403** — **puis** garde de publication `gds_db::ensure_can_add_project(…, "server")` (décision 2026-09 : **tout compte serveur** publie, aucun rattachement par projet) : refus **403 avant toute action** | `{name, description?}` → `{ok, project_id, name, repo_name, bare_path, bare_created}` |
 | `/api/gds/projects/repo-exists` | POST | lecture (tout jeton authentifié) | `{name}` → `{name, exists, in_db, on_disk, path}` |
 | `/api/gds/ssh-keys` | POST | compte **avec identité** (tout rôle) ; `user_id == 0` → **403** | `{public_key}` → `{ok, id, created, fingerprint, authorized_keys_rewritten}` |
 
@@ -446,7 +446,7 @@ un paramètre de chemin serait un piège de syntaxe).
 ### 2.1 Rôle
 
 **Base unique** qui **fusionne** : gestionnaire de sources (projets, repos,
-membres), suivi interne (clients, projets, tâches, décisions — déjà
+comptes), suivi interne (clients, projets, tâches, décisions — déjà
 modélisés en SQLite par le super-agent), et **demandes clients / tickets**
 (issue #56).
 
@@ -460,7 +460,7 @@ projects(
   client_id FK, status, description,
   created_at, updated_at
 )
-project_members(project_id FK, user_id FK, role, created_at)   -- attribution des droits
+project_members(project_id FK, user_id FK, role, created_at)   -- trace historique (décision 2026-09 : ne conditionne plus l'accès)
 ssh_keys(id, user_id FK, public_key UNIQUE, created_at)        -- clefs SSH liées aux emails
 tickets(
   id, project_id FK, client_id FK,
@@ -478,24 +478,24 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - V1 : **pas de granularité par fichier** (et **plus de verrou** depuis la
   refonte) — la concurrence est en « dernier qui écrit gagne » + journal des
   conflits (§5.1, §6.2).
-- **Lecture** ouverte aux comptes actifs ; l'**écriture** est régie par les
-  rôles et l'attribution (`project_members`).
+- **Lecture** ouverte aux comptes actifs ; l'**écriture** est régie par le
+  **rôle** du compte (décision 2026-09 : plus d'attribution par projet).
 - **Rôles** : `users.role` ∈ {`admin`, `dev`, `standard`} et `users.status` ∈
   {`pending`, `active`, `disabled`}, **contraints en base** (migration
   `0006_roles.sql`). V1 : le premier user provisionné est `admin`. Matrice
   appliquée par `gds-core/src/roles.rs` (module pur, source unique) :
   - `admin` : gérer **comptes** et **dépôts** (`can_manage_accounts`,
     `can_manage_repos`) ;
-  - `dev` : publier / forcer un projet **attribué** (`can_publish_project`,
-    `can_force_publish` avec `project_members`) ;
+  - `dev` : publier / forcer un projet (`can_publish_project`,
+    `can_force_publish` — **rôle seul**) ;
   - `standard` : **lecture seule** (écriture refusée, `can_write`) ;
   - **garde de publication identique sur les DEUX voies** : le geste
-    « (re)créer le raccourci vers le dépôt » (`gds_add_project`) sur un projet
-    **déjà enregistré** exige l'**attribution au projet** — appliqué par
+    « (re)créer le raccourci vers le dépôt » (`gds_add_project`) exige
+    seulement le **rôle** du compte (décision 2026-09 : avoir un compte sur le
+    serveur donne accès à **tous** ses projets) — appliqué par
     `gds_db::ensure_can_add_project` côté poste (provenance `"desktop"`) **et**
     côté service (`POST /api/gds/projects/create`, provenance `"server"`),
-    refus **403 avant toute action** ; un projet **neuf** suit la règle d'ajout
-    (`can_add_project`) ;
+    refus **403 avant toute action** ;
   - **session historique** du poste (rôle vide = `Legacy`) : droits d'écriture
     conservés (compatibilité des installations existantes) ; rôle hors
     vocabulaire = `Unknown`, **toujours refusé**. **Gestion des comptes
@@ -804,12 +804,12 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
   `gds_force_push_suivi` (route `POST /api/gds/tracking/force`) écrase l'état
   Postgres du projet avec l'état local, au lieu du « dernier écrit gagne » du
   pont (§6.2).
-- **Habilitation** : `roles::can_force_publish` — `admin`, ou `dev` **attribué**
-  au projet (`project_members`). `standard` et tout rôle hors vocabulaire sont
-  refusés ; le refus est journalisé (`audit_gds`, action
-  `tracking.force.denied`).
+- **Habilitation** : `roles::can_force_publish` — `admin` ou `dev`
+  (**rôle seul** ; décision 2026-09 : l'appartenance au projet n'est plus
+  vérifiée). `standard` et tout rôle hors vocabulaire sont refusés ; le refus
+  est journalisé (`audit_gds`, action `tracking.force.denied`).
 - **Plus de titulaire de verrou** : la garde ne lit aucun verrou (retiré en L6),
-  elle vérifie le rôle et l'appartenance au projet
+  elle vérifie le rôle
   (`gds_db::ensure_project_publisher`).
 
 ---
@@ -834,8 +834,8 @@ machine distante**. La séparation est pilotée par `is_local_host` (§0.4).
   accumulées (journal local des changements).
 - Au retour du serveur, une **resynchronisation automatique** pousse tout ce qui
   a bougé (git push + pont SQLite→Postgres).
-- Un compte **habilité** (`admin`, ou `dev` attribué au projet) peut forcer la
-  mise à jour serveur (§6.3) — il n'y a plus de titulaire de verrou.
+- Un compte **habilité** (`admin` ou `dev`) peut forcer la mise à jour serveur
+  (§6.3) — il n'y a plus de titulaire de verrou.
 
 ### 7.3 Résumés visuels (arbitrage 1, évolution durable)
 
@@ -1122,9 +1122,9 @@ ou id, `get_*_modified_since`, `delete_*`, `updated_at` = clé de divergence.
   serveur a divergé.
 - **Habilitation** : `force_push_tracking` appelle
   `gds_db::ensure_project_publisher` (socle `gds-core` partagé), qui applique
-  `roles::can_force_publish` — `admin`, ou `dev` **attribué** au projet
-  (`project_members`) ; `standard` et rôle hors vocabulaire refusés. **Aucun
-  verrou n'est lu** (retiré en L6). Refus journalisé dans `audit_gds` (action
+  `roles::can_force_publish` — `admin` ou `dev` (**rôle seul**, décision
+  2026-09) ; `standard` et rôle hors vocabulaire refusés. **Aucun verrou n'est
+  lu** (retiré en L6). Refus journalisé dans `audit_gds` (action
   `tracking.force.denied`).
 - **Poussée écrasante** : lit TOUT le suivi local (since 0) et upsert chaque
   ligne vers Postgres sans tenir compte de `updated_at` distant. Succès

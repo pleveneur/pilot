@@ -137,7 +137,7 @@ Pilot VPS (assistant de groupe) ─► group_assistant.rs (session RPC pi/plh) �
 ### 2.1 Rôle
 
 **Base unique** qui **fusionne** : gestionnaire de sources (projets, repos,
-membres, rôles), suivi interne (clients, projets, tâches, décisions — déjà
+comptes), suivi interne (clients, projets, tâches, décisions — déjà
 modélisés en SQLite par le super-agent), et **demandes clients / tickets**
 (issue #56).
 
@@ -151,7 +151,7 @@ projects(
   client_id FK, status, description,
   created_at, updated_at
 )
-project_members(project_id FK, user_id FK, role, created_at)   -- attribution projet ↔ dev (rôle par projet)
+project_members(project_id FK, user_id FK, role, created_at)   -- trace historique (décision 2026-09 : plus un droit)
 ssh_keys(id, user_id FK, public_key UNIQUE, fingerprint, created_at, last_used_at)
 tickets(
   id, project_id FK, client_id FK,
@@ -172,8 +172,8 @@ session_tracking / audit_gds(ts, ip, subject, action, detail, ok)    -- étendre
   (`tracking.conflict`). Le **mode urgent** disparaît avec le verrou.
 - **Rôles** (migration `0006_roles.sql` : `admin` / `dev` / `standard` +
   statuts) : la **lecture** est ouverte aux comptes actifs, l'**écriture** (dont
-  la publication forcée du suivi) dépend du rôle et de l'**attribution** du
-  projet (`project_members`) — matrice détaillée dans `spec_gds.md` §2.2.
+  la publication forcée du suivi) dépend du **rôle seul** (décision 2026-09 :
+  plus d'attribution par projet) — matrice détaillée dans `spec_gds.md` §2.2.
 
 ### 2.3 Migrations
 
@@ -246,8 +246,8 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
 ### 3.4 Accès par adresse email
 - **Objectif** : chaque dev est identifié par son **email** (identité du repo git
   + utilisateur de la base). La **lecture** est ouverte aux comptes actifs ;
-  l'**écriture** dépend du **rôle** (`admin` / `dev` / `standard`) et de
-  l'**attribution** du projet.
+  l'**écriture** dépend du **rôle** (`admin` / `dev` / `standard`) — avoir un
+  compte sur le serveur donne accès à **tous** ses projets (décision 2026-09).
 - **Inscription** : premier user provisionné à l'auto-provisioning ; les suivants
   via l'admin desktop (invitation par email, mot de passe initial) ou auto-ajout
   par clef SSH fournie.
@@ -265,7 +265,7 @@ Chaque fonctionnalité : objectif, modules, critère de fin.
   `0007_drop_project_locks.sql`). La concurrence est **assumée** :
   « **dernier qui écrit gagne** », conflits du suivi **journalisés**
   (`tracking.conflict`) ; la **publication forcée** est réservée aux comptes
-  habilités (rôle `admin`, ou `dev` attribué) — cf. §6.3 de `spec_gds.md`.
+  habilités (rôle `admin` ou `dev`) — cf. §6.3 de `spec_gds.md`.
 - **Modules** : `gds_client.rs` (sync), `gds_sync.rs` (pont du suivi),
   `gds_web.rs` (route `POST /api/gds/sync`), `gds_git.rs` (dépôt bare, clefs).
 - **Critère de fin** : deux postes synchronisent et poussent le même projet sans
@@ -431,8 +431,7 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   (jamais généré), ports/volumes, accès Tailscale, arrêt/redémarrage depuis Pilot.
 - **L3 — Rôles et droits** ✅ : migration `0006_roles.sql` (`admin` / `dev` /
   `standard` + statuts `pending`/`active`/`disabled`), CRUD utilisateurs côté
-  serveur, garde HTTP « admin », attribution des projets aux développeurs,
-  matrice de droits (`gds-core/src/roles.rs`), garde de la **publication forcée**
+  serveur, garde HTTP « admin », matrice de droits (`gds-core/src/roles.rs`), garde de la **publication forcée**
   redéfinie (§6.3 de la spec).
 - **L4 — Écran d'administration** ✅ : onglet **transverse** « 🖥️ GDS Serveur »
   (`src/js/gds-admin.js`) : connexion serveur, comptes, dépôts/projets, espace
@@ -475,8 +474,8 @@ problèmes** de son logiciel. **Aucune mention Pilot/Kalico visible.**
   quand désactivé).
 - **C1.3 Publication forcée du suivi (rôles)** ✅ (`gds_sync.rs` :
   `force_push_tracking` pousse TOUT le suivi local vers Postgres en écrasant les
-  données distantes, réservé à un **compte habilité** — `admin`, ou `dev`
-  attribué au projet (`gds-core/src/roles.rs`) — refus sinon (audit
+  données distantes, réservé à un **compte habilité** — `admin` ou `dev`
+  (`gds-core/src/roles.rs`, rôle seul) — refus sinon (audit
   `tracking.force.denied`) ; commande Tauri `gds_force_push_suivi` + route web
   `POST /api/gds/tracking/force` ; respecte `gds_enabled`).
 - **C1.4 Mode déconnecté + résumés visuels** ✅ (`gds_sync.rs` + `gds.js` :

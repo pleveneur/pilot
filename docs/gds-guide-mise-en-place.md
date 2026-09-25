@@ -595,20 +595,20 @@ dossier `gds-server` dans l'explorateur Windows, **clic droit dans le dossier �
   **ce n'est pas le mot de passe** : c'est le **piège du port** (encadré en tête
   du document).
 
-### 2.2 — Créer un compte développeur et lui attribuer un projet
+### 2.2 — Créer un compte développeur
 
 > Pour une personne **autre que vous**. Si vous êtes seul, sautez cette étape.
 
 - **Dans Pilot, vous faites :** dans l'écran d'administration, bloc
   **« Comptes »** → créez un compte : **adresse e-mail**, rôle **Développeur**
-  (`dev`) ou **Standard**, **mot de passe initial**. Puis bloc
-  **« Dépôts / projets »** → associez le projet à ce développeur.
-- **Vous voyez :** le compte apparaît dans la liste, état **Actif** par défaut ;
-  le projet est attribué. Transmettez à la personne son e-mail et son mot de
-  passe initial.
+  (`dev`) ou **Standard**, **mot de passe initial**. Il n'y a **rien d'autre à
+  faire** : avoir un compte sur le serveur suffit à voir et publier **tous** ses
+  projets.
+- **Vous voyez :** le compte apparaît dans la liste, état **Actif** par défaut.
+  Transmettez à la personne son e-mail et son mot de passe initial.
 - **Si ce n'est pas ça :** le développeur ne voit pas le projet dans
-  **« ⚙️ GDS — paramétrage » → Mes projets GDS** → l'association n'a pas été
-  faite : refaites la seconde moitié de l'étape.
+  **« ⚙️ GDS — paramétrage » → Mes projets GDS** → vérifiez qu'il est bien
+  connecté au **bon serveur** (`gds.json` du projet).
 - **Test à faire :** désactivez le compte → la connexion est refusée ; réactivez
   → elle remarche. Le **dernier administrateur actif** ne peut **pas** être
   désactivé (le serveur refuse) : vérifiez le refus.
@@ -800,13 +800,14 @@ local de clonage**, cliquez sur **« Enregistrer la configuration »**, puis
 | Rôle | Doit pouvoir | Doit être **refusé** |
 |---|---|---|
 | **Administrateur** (`admin`) | gérer comptes + dépôts, publier et forcer le suivi sur **tous** les projets, redémarrer/arrêter le **service** | — |
-| **Développeur** (`dev`) | publier et forcer le suivi des projets **attribués**, récupérer **tous** les projets en lecture | gérer les comptes/dépôts ; publier un projet **non attribué** |
+| **Développeur** (`dev`) | publier et forcer le suivi sur **tous** les projets, récupérer **tous** les projets en lecture | gérer les comptes/dépôts |
 | **Standard** (`standard`) | consulter et récupérer en lecture | publier quoi que ce soit |
 
 - **Dans Pilot, vous faites :** connectez-vous successivement avec un compte
-  `dev` non attribué à un projet, puis un compte `standard` (écran
-  d'administration → **Connexion serveur**).
-- **Vous voyez :** la publication est **refusée**, avec un message d'erreur.
+  `dev` (qui n'a reçu **aucune** attribution : il n'y en a plus), puis un compte
+  `standard` (écran d'administration → **Connexion serveur**).
+- **Vous voyez :** le `dev` publie **sans aucun refus** ; la publication du
+  compte `standard` est **refusée**, avec un message d'erreur.
 - **Pour vérifier la trace, dans Pilot :** écran d'administration, bloc
   **« Espace utilisé + journal des connexions »**, portée **Tout le journal** —
   **vous voyez** une action avec `ok = false` (et, pour la publication forcée

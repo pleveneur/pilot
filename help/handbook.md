@@ -286,7 +286,7 @@ d'un hébergement externe type GitHub.
   aucune configuration globale.
 - **Trois rôles de compte** (appliqués par le serveur) : **`admin`** gère les
   **comptes** et les **dépôts** sur tous les projets ; **`dev`** publie et force
-  le suivi des projets qui lui sont **attribués** ; **`standard`** est en
+  le suivi de **tous** les projets du serveur ; **`standard`** est en
   **lecture seule**. Le premier compte créé est administrateur.
 - **Interrupteur global (Paramètres → GDS)** : un paramètre global **actif par
   défaut** permet de **couper toutes les opérations GDS** (synchronisation,
@@ -384,7 +384,7 @@ d'un hébergement externe type GitHub.
   - **« 🖥️ GDS Serveur — administration »** : connexion au serveur (**sélecteur
     explicite** des serveurs d'administration mémorisés, ou saisie manuelle),
     **Comptes** (créer, changer le rôle, activer/désactiver, réinitialiser un
-    mot de passe), **Dépôts / projets** (membres, retrait avec purge),
+    mot de passe), **Dépôts / projets** (retrait avec purge),
     **Espace utilisé + journal des connexions**, et **Contrôle du service**
     (redémarrer le service GDS ou le conteneur) ;
   - **« ⚙️ GDS — paramétrage »** : **Serveurs GDS** mémorisés portant un **nom**
@@ -438,10 +438,10 @@ d'un hébergement externe type GitHub.
   projet courant, un message clair vous oriente vers l'onglet 🌐 GDS.
 - **Obtenir un compte** : un compte ne se crée **pas tout seul** —
   l'**administrateur** le crée dans l'écran « 🖥️ GDS Serveur — administration »
-  (bloc **Comptes** : e-mail, rôle `standard`/`dev`/`admin`, mot de passe initial),
-  puis **attribue le projet** au développeur (bloc **Dépôts / projets**) s'il doit
-  publier du code. Un développeur ne publie que les projets **qui lui sont
-  attribués**.
+  (bloc **Comptes** : e-mail, rôle `standard`/`dev`/`admin`, mot de passe initial).
+  Il n'y a **plus rien à attribuer** : dès qu'une personne a un compte sur le
+  serveur, elle **voit et publie tous les projets** de ce serveur (décision
+  2026-09) ; seul le rôle `standard` reste en lecture seule.
 - **Qui fait quoi** : Pilot s'occupe du **suivi partagé** et des opérations liées
   au serveur (création du dépôt et push initial lors de « Ajouter ce projet au
   GDS », synchronisation à l'ouverture d'un projet connecté). **Publier votre

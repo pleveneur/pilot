@@ -581,8 +581,8 @@ réseau privé), remettez `GDS_BIND_ADDR=127.0.0.1` et commentez le bloc §2bis 
   (projet Compose `pilot-gds-e2e`, image `pilot-gds:e2e-local`, ports
   `18080`/`12222`/`55432`, aucun socket Docker monté, `.env` de production jamais
   lu). Sur un volume vierge, le script rejoue le parcours complet — compte
-  administrateur, connexion, création d'un développeur, attribution d'un projet,
-  enregistrement d'une clef SSH, `push` réel en SSH, journal d'audit,
+  administrateur, connexion, création d'un développeur (qui accède à tous les
+  projets : plus d'attribution), enregistrement d'une clef SSH, `push` réel en SSH, journal d'audit,
   redémarrage du service, état de santé — puis **supprime tout** (conteneur,
   volumes, image) et vérifie qu'aucun élément préexistant n'a bougé.
   Lancement : `bash gds-server/tests/e2e.sh` (ajouter `E2E_REBUILD=1` pour
@@ -787,7 +787,7 @@ rien ne se publie tout seul.
 | À ne pas transmettre | Ce qu'il contient |
 |---|---|
 | `gds-server/.env` | **vos** mots de passe (`POSTGRES_PASSWORD`, mot de passe administrateur) : le destinataire hériterait de vos comptes et pourrait joindre votre base |
-| VOLUME `pilot-gds_pgdata` | la base : **vos comptes**, vos projets attribués, vos clefs publiques, votre journal d'audit |
+| VOLUME `pilot-gds_pgdata` | la base : **vos comptes**, vos projets, vos clefs publiques, votre journal d'audit |
 | VOLUME `pilot-gds_repos` | les **dépôts git de vos projets** : tout l'historique de votre travail |
 | VOLUMES `pilot-gds_ssh-host-keys`, `pilot-gds_supervisor` | l'empreinte sshd de votre serveur et ses journaux |
 | Sauvegardes (§9.4 : `G:\sauvegarde-gds`, ou par défaut `gds-server/backups/<horodatage>` avec `npm run gds:reload`) | une copie **complète** des trois premiers |
@@ -870,5 +870,5 @@ la base est appliqué **par le conteneur lui-même** — dépôts bare et
 - sur la machine : `curl http://127.0.0.1:8080/api/gds/health` répond ;
 - dans Pilot : le bouton **Tester** de l'onglet **🌐 GDS** confirme la connexion,
   et le badge du projet passe à **● Connecté** ;
-- `git ls-remote` en SSH sur un dépôt attribué **ne demande pas de mot de passe**
+- `git ls-remote` en SSH sur un dépôt du serveur **ne demande pas de mot de passe**
   (partie 1, étape 2.4 de `docs/gds-guide-mise-en-place.md`).
