@@ -1294,6 +1294,41 @@ fn escalate_service_trust(_config_path: &str, _wanted: &str) -> Result<(), Strin
     Err("élévation disponible uniquement sous Windows".to_string())
 }
 
+/// Repli **Windows** pour la portée **machine** (`git config --system`) : même
+/// invitation unique, mais l'écriture est **conditionnelle** — l'entrée étroite
+/// n'est ajoutée que si absente, l'entrée large `*` est retirée, et aucune autre
+/// racine déjà déclarée n'est perdue. La valeur passe par une variable
+/// d'environnement (aucun échappement de chemin à gérer).
+#[cfg(windows)]
+fn escalate_system_service_trust(wanted: &str) -> Result<(), String> {
+    let script = concat!(
+        "$b = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('",
+        "if (@(git config --system --get-all safe.directory 2>$null) -notcontains $env:PILOT_TRUST_VALUE) { ",
+        "git config --system --fixed-value --unset-all safe.directory ''*'' 2>$null; ",
+        "git config --system --add safe.directory $env:PILOT_TRUST_VALUE }')); ",
+        "Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath powershell ",
+        "-ArgumentList @('-NoProfile','-EncodedCommand',$b)"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .env("PILOT_TRUST_VALUE", wanted)
+        .output()
+        .map_err(|e| format!("élévation impossible : {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "élévation refusée ou échouée : {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    // La preuve reste la RELECTURE faite par l'appelant (jamais supposée).
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn escalate_system_service_trust(_wanted: &str) -> Result<(), String> {
+    Err("élévation disponible uniquement sous Windows".to_string())
+}
+
 /// Un clic : (re)pose la confiance **étroite** du compte de service `git` sur
 /// la racine des dépôts de ce projet. Si l'écriture est refusée, une invitation
 /// système Windows est déclenchée (aucune commande à taper), puis le fichier est
@@ -1318,6 +1353,19 @@ pub async fn gds_service_trust(project: String) -> Result<Value, String> {
     if let Some(err) = &report.error {
         return Err(format!("Confiance Git non posée : {}", err));
     }
+    // Portée **machine** : le git lancé par sshd (ForceCommand du compte `git`)
+    // n'a PAS le home du compte de service — seul `git config --system` le fait
+    // passer (le `receive-pack` d'un push refuse sinon en « dubious ownership »).
+    // Même entrée étroite, mêmes garanties : idempotent, jamais `*` seul.
+    let mut system = gds_git::ensure_system_service_trust(&repos_root);
+    if system.error.is_some() {
+        escalate_system_service_trust(&system.wanted)?;
+        escalated = true;
+        system = gds_git::ensure_system_service_trust(&repos_root);
+    }
+    if let Some(err) = &system.error {
+        return Err(format!("Confiance Git de portée machine non posée : {}", err));
+    }
     Ok(json!({
         "ok": true,
         "config_path": report.config_path,
@@ -1326,6 +1374,9 @@ pub async fn gds_service_trust(project: String) -> Result<Value, String> {
         "broad_found": report.broad_found,
         "escalated": escalated,
         "entries": report.final_values,
+        "system_scope": system.config_path,
+        "system_modified": system.modified,
+        "system_entries": system.final_values,
     }))
 }
 

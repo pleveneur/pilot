@@ -399,6 +399,125 @@ pub fn ensure_service_trust(repos_root: &str) -> ServiceTrustReport {
     report
 }
 
+/// Ce qu'il reste à faire pour qu'un jeu d'entrées `safe.directory` satisfasse
+/// la confiance **étroite** attendue. Pure — testable sans disque ni droits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SafeDirectoryPlan {
+    /// Rien à faire (l'entrée étroite est déjà la seule, ou rien à poser).
+    Nothing,
+    /// Une entrée trop large (`*` seul) est à retirer ; l'étroite est déjà là.
+    DropBroad,
+    /// Poser l'entrée étroite (aucune entrée large présente).
+    Add,
+    /// Retirer l'entrée large PUIS poser l'entrée étroite.
+    DropBroadAndAdd,
+}
+
+/// Décision **pure** (aucun accès disque) : une entrée trop large (`*` seul) est
+/// toujours retirée ; l'entrée étroite `wanted` est posée si absente ; les
+/// autres entrées étroites (autres racines) sont **conservées**. Une `wanted`
+/// vide n'ajoute rien — on n'écrit jamais `*` seul.
+fn plan_safe_directory(existing: &[String], wanted: &str) -> SafeDirectoryPlan {
+    let broad = existing.iter().any(|v| v == "*");
+    let need_add = !wanted.is_empty() && !existing.iter().any(|v| v == wanted);
+    match (broad, need_add) {
+        (false, false) => SafeDirectoryPlan::Nothing,
+        (true, false) => SafeDirectoryPlan::DropBroad,
+        (false, true) => SafeDirectoryPlan::Add,
+        (true, true) => SafeDirectoryPlan::DropBroadAndAdd,
+    }
+}
+
+/// Entrées `safe.directory` de la portée **machine** (constatées avec Git).
+#[cfg(windows)]
+fn system_safe_directories() -> Vec<String> {
+    let (stdout, _, _) = run_captured_full(
+        "git",
+        &["config", "--system", "--get-all", "safe.directory"],
+        Duration::from_secs(10),
+    );
+    stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Confiance Git de **portée machine** (`git config --system`) : c'est la seule
+/// portée lue par le `git` lancé par sshd, dont le `HOME` n'est pas celui du
+/// compte de service — le `receive-pack` d'un push refusait alors le dépôt en
+/// « dubious ownership ». Mêmes garanties que `ensure_service_trust` : entrée
+/// **étroite** `<racine>/*` (jamais `*` seul), idempotent, aucune autre racine
+/// supprimée. Windows uniquement ; l'écriture demande les droits administrateur
+/// (échec remonté dans `error`, jamais bloquant).
+#[cfg(windows)]
+pub fn ensure_system_service_trust(repos_root: &str) -> ServiceTrustReport {
+    const SAFE_KEY: &str = "safe.directory";
+    let wanted = crate::ssh::narrow_safe_directory(repos_root);
+    let mut report = ServiceTrustReport {
+        wanted: wanted.clone(),
+        config_path: "git config --system".to_string(),
+        ..Default::default()
+    };
+    if wanted.is_empty() {
+        report.error = Some("racine des dépôts vide : aucune confiance posée".to_string());
+        return report;
+    }
+    let existing = system_safe_directories();
+    report.broad_found = existing.iter().any(|v| v == "*");
+    report.final_values = existing.clone();
+    let plan = plan_safe_directory(&existing, &wanted);
+    if plan == SafeDirectoryPlan::Nothing {
+        return report; // déjà la seule entrée étroite : aucune réécriture.
+    }
+    if matches!(plan, SafeDirectoryPlan::DropBroad | SafeDirectoryPlan::DropBroadAndAdd) {
+        // `--fixed-value` = correspondance littérale (pas une expression régulière).
+        let (_, stderr, ok) = run_captured_full(
+            "git",
+            &[
+                "config",
+                "--system",
+                "--fixed-value",
+                "--unset-all",
+                SAFE_KEY,
+                "*",
+            ],
+            Duration::from_secs(10),
+        );
+        if !ok {
+            report.error = Some(format!(
+                "retrait de l'entrée large refusé (portée machine) : {}",
+                stderr.trim()
+            ));
+            return report;
+        }
+    }
+    if matches!(plan, SafeDirectoryPlan::Add | SafeDirectoryPlan::DropBroadAndAdd) {
+        let (_, stderr, ok) = run_captured_full(
+            "git",
+            &["config", "--system", "--add", SAFE_KEY, &wanted],
+            Duration::from_secs(10),
+        );
+        if !ok {
+            report.error = Some(format!(
+                "écriture de l'entrée étroite refusée (portée machine) : {}",
+                stderr.trim()
+            ));
+            return report;
+        }
+    }
+    report.modified = true;
+    report.final_values = system_safe_directories();
+    report
+}
+
+/// Hors Windows, la confiance est assurée par le `chown` des dépôts : rien à
+/// écrire en portée machine (comportement inchangé).
+#[cfg(not(windows))]
+pub fn ensure_system_service_trust(_repos_root: &str) -> ServiceTrustReport {
+    ServiceTrustReport::default()
+}
+
 // ── Conteneur (L2.6) : racine des dépôts et matérialisation depuis la base ──
 
 /// Chemin du dépôt bare d'un projet **dans la racine du serveur** : la racine
@@ -892,5 +1011,40 @@ mod tests {
 
         std::env::remove_var("PILOT_GIT_USER_HOME");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Décision PURE de confiance `safe.directory` : sert la portée **machine**
+    /// (`git config --system`), seule lue par le git lancé en ssh (le `HOME` de
+    /// cette session n'est pas celui du compte de service). Entrée toujours
+    /// ÉTROITE (jamais `*` seul), idempotent, autres racines **conservées**.
+    #[test]
+    fn plan_safe_directory_is_narrow_idempotent_and_keeps_other_roots() {
+        let want = "C:/GDS/repos/*";
+        let v = |s: &str| s.to_string();
+        assert_eq!(plan_safe_directory(&[], want), SafeDirectoryPlan::Add);
+        assert_eq!(
+            plan_safe_directory(&[v(want)], want),
+            SafeDirectoryPlan::Nothing,
+            "déjà étroite seule : aucune écriture"
+        );
+        assert_eq!(
+            plan_safe_directory(&[v("*")], want),
+            SafeDirectoryPlan::DropBroadAndAdd,
+            "`*` seul est retiré, l'entrée étroite est posée"
+        );
+        assert_eq!(
+            plan_safe_directory(&[v("*"), v(want)], want),
+            SafeDirectoryPlan::DropBroad
+        );
+        assert_eq!(
+            plan_safe_directory(&[v("D:/autre/repos/*")], want),
+            SafeDirectoryPlan::Add,
+            "une autre racine n'est jamais perdue"
+        );
+        assert_eq!(
+            plan_safe_directory(&[v("*")], ""),
+            SafeDirectoryPlan::DropBroad,
+            "racine vide : jamais `*` posé"
+        );
     }
 }
