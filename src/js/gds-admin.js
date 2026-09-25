@@ -52,7 +52,7 @@ export const ADMIN_SECTIONS = [
     id: "repos",
     icon: "folder-git-2",
     title: "Dépôts / projets",
-    desc: "Projets du serveur, dépôt bare associé et membres ; attribuer ou retirer un développeur, retirer un projet avec option de purge.",
+    desc: "Projets du serveur et dépôt bare associé ; retirer un projet avec option de purge.",
     todo: "L4.4",
   },
   {
@@ -668,7 +668,7 @@ export function formatProjectRemoveConfirmation(project, purge) {
   const name = String(p.name || p.project_id || "");
   const lines = [
     `Retirer le projet « ${name} » du serveur GDS.`,
-    "Ses entrées en base seront supprimées : le projet, son dépôt associé, ses membres attribués et son suivi fusionné.",
+    "Ses entrées en base seront supprimées : le projet, son dépôt associé et son suivi fusionné.",
   ];
   if (purge) {
     lines.push(

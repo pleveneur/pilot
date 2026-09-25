@@ -1356,9 +1356,9 @@ async fn add_project_with(
     let name = project_name(project);
     // Matrice des droits (L3.5) : l'ajout d'un projet au serveur et sa
     // publication initiale sont réservés à l'administrateur ou à un développeur
-    // ; pour un projet **déjà enregistré**, il faut en outre y être **attribué**
-    // (`can_publish_project`). Refus AVANT toute action (clef SSH, dépôt, push)
-    // pour ne rien modifier en cas de refus.
+    // (tout compte du serveur voit tous les projets, sans attribution ; le rôle
+    // `standard` reste en lecture seule). Refus AVANT toute action (clef SSH,
+    // dépôt, push) pour ne rien modifier en cas de refus.
     // Les DEUX voies appliquent cette même règle : ici, la base du poste est
     // interrogée (`ensure_can_add_project`) ; sur la voie SERVICE, c'est le
     // serveur qui l'applique (`POST /api/gds/projects/create` →

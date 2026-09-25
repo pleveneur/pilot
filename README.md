@@ -200,8 +200,8 @@ machine ou ton réseau, au lieu d'un hébergement externe.
   données, l'accès aux dépôts Git et le service. Le guide d'installation est
   fourni avec le projet (`gds-server/README.md`).
 - **Trois rôles** pour les comptes : **administrateur** (gère les comptes et les
-  dépôts), **développeur** (publie et force le suivi des projets qui lui sont
-  attribués) ou **standard** (lecture seule).
+  dépôts) ; **développeur** (publie et force le suivi de **tous** les projets du
+  serveur) ; **standard** (lecture seule).
 - **Deux écrans dédiés** dans Pilot, accessibles sans projet ouvert :
   **« 🖥️ GDS Serveur — administration »** (connexion, comptes, dépôts/projets,
   espace et journal, contrôle du service) et **« ⚙️ GDS — paramétrage »**
