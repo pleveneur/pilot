@@ -14,14 +14,19 @@
 //! son modèle intégré (aucune erreur bloquante).
 //!
 //! Pilot peut enfin demander un **arrêt propre** du visage (`GET /close`) quand
-//! l'utilisateur le désactive — jamais à la fermeture de Pilot.
+//! l'utilisateur le désactive — et, puisque c'est Pilot qui l'a lancé, Pilot le
+//! **referme aussi à sa propre fermeture** (un visage lancé à la main par la
+//! personne n'est jamais refermé par Pilot).
 //!
 //! Garanties :
 //! - jamais bloquant (sonde avec timeout court < 1 s, lancement en tâche de fond
 //!   détachée) ;
 //! - jamais d'erreur visible au démarrage si l'exécutable est absent ou si le
 //!   lancement échoue (l'utilisateur sans PLface ne voit aucune différence) ;
-//! - PLface n'est PAS refermé à la fermeture de Pilot (processus non suivi) ;
+//! - le visage lancé par Pilot ne lui survit pas : il est refermé à la fermeture
+//!   de Pilot, et un reste après une fermeture brutale est nettoyé au démarrage
+//!   suivant (sinon il verrouillerait sa propre copie dans le dossier de
+//!   compilation et bloquerait toute préparation du paquet) ;
 //! - aucune dépendance externe (bibliothèque standard uniquement).
 
 use std::path::Path;
@@ -34,6 +39,15 @@ use serde::Serialize;
 pub(crate) const PLFACE_API_HOST: &str = "127.0.0.1";
 /// Port de l'API locale PLface.
 pub(crate) const PLFACE_API_PORT: u16 = 3000;
+/// Nom du fichier de trace du visage lancé par Pilot, écrit dans le dossier de
+/// données de l'application. Il retient l'identifiant **et** le nom du programme
+/// lancés par Pilot : c'est ce qui permet de ne refermer **que** le visage
+/// démarré par Pilot (jamais celui ouvert à la main par la personne) et de le
+/// nettoyer au démarrage suivant si Pilot a été fermé brutalement — sinon le
+/// visage resterait en vie et verrouillerait sa propre copie, empêchant la
+/// préparation du paquet en développement.
+pub(crate) const PID_FILE_NAME: &str = "plface.pid";
+
 /// Timeout de la sonde réseau : strictement inférieur à 1 seconde.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 
@@ -176,6 +190,164 @@ pub(crate) fn decide_launch(
     PlfaceDecision::Launch
 }
 
+/// Contenu du fichier de trace pour un lancement donné : identifiant puis nom
+/// du programme, sur deux lignes. PURE.
+pub(crate) fn format_pid_file(pid: u32, exe_name: &str) -> String {
+    format!("{pid}\n{exe_name}\n")
+}
+
+/// Lit le fichier de trace : `(identifiant, nom du programme)`. PURE.
+/// `None` si l'un des deux manque ou si l'identifiant n'est pas un nombre
+/// strictement positif : dans le doute, on n'arrête **rien**.
+pub(crate) fn parse_pid_file(raw: &str) -> Option<(u32, String)> {
+    let mut lines = raw.lines().map(str::trim).filter(|l| !l.is_empty());
+    let pid = lines.next()?.parse::<u32>().ok().filter(|p| *p > 0)?;
+    let name = lines.next()?;
+    Some((pid, name.to_string()))
+}
+
+/// Dernier segment d'un chemin (nom du fichier). PURE.
+pub(crate) fn exe_file_name(exe_path: &str) -> String {
+    exe_path
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Vrai si le nom de processus observé est bien celui attendu : comparaison sur
+/// le dernier segment de chemin, insensible à la casse. PURE.
+pub(crate) fn name_matches(observed: &str, expected: &str) -> bool {
+    let base = exe_file_name(observed);
+    !base.is_empty() && base.eq_ignore_ascii_case(expected.trim())
+}
+
+/// Lit la trace disque. Toute erreur (fichier absent, illisible) = `None`.
+pub(crate) fn read_pid_file(path: &Path) -> Option<(u32, String)> {
+    parse_pid_file(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Écrit la trace disque (crée le dossier au besoin). Fail-open : toute erreur
+/// d'écriture est ignorée (au pire, pas de nettoyage au démarrage suivant).
+pub(crate) fn write_pid_file(path: &Path, pid: u32, exe_name: &str) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format_pid_file(pid, exe_name));
+}
+
+/// Efface la trace disque. Fail-open.
+pub(crate) fn clear_pid_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
+}
+
+/// Extrait le nom du premier processus d'une sortie CSV de `tasklist`
+/// (`"plface.exe","1234","Console",…`). `None` sur la ligne d'information
+/// « aucun processus » (qui ne commence pas par un guillemet). PURE.
+#[cfg(windows)]
+fn parse_csv_process_name(output: &str) -> Option<String> {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix('"'))
+        .and_then(|rest| rest.split('"').next())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// Nom de l'image du processus `pid`, ou `None` s'il n'existe pas. Sert de
+/// garde avant tout arrêt : on ne referme **jamais** un processus dont le nom
+/// n'est pas celui du visage (un identifiant peut être réutilisé par une autre
+/// application). Fail-open : toute erreur = `None`.
+#[cfg(windows)]
+fn observed_process_name(pid: u32) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    let output = cmd.output().ok()?;
+    parse_csv_process_name(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn observed_process_name(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Arrête le processus `pid` **uniquement s'il s'agit bien du visage**
+/// (`expected_name`). Renvoie `true` quand le processus visé n'existe plus
+/// après la tentative (déjà terminé, nom différent, ou arrêté). Jamais bloquant.
+#[cfg(windows)]
+fn kill_process(pid: u32, expected_name: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    match observed_process_name(pid) {
+        Some(name) if name_matches(&name, expected_name) => {}
+        // Rien à arrêter : le pid appartient à une autre application (réutilisé)
+        // ou le visage est déjà terminé.
+        _ => return true,
+    }
+    let mut cmd = Command::new("taskkill");
+    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.creation_flags(crate::CREATE_NO_WINDOW);
+    let _ = cmd.status();
+    observed_process_name(pid).is_none()
+}
+
+#[cfg(not(windows))]
+fn kill_process(pid: u32, expected_name: &str) -> bool {
+    match observed_process_name(pid) {
+        Some(name) if name_matches(&name, expected_name) => {}
+        _ => return true,
+    }
+    let _ = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status();
+    observed_process_name(pid).is_none()
+}
+
+/// Arrête le visage **que Pilot a lancé**, d'après le fichier de trace :
+/// - aucune trace → Pilot n'a rien lancé → ne touche à rien (`NotRunning`) ; un
+///   visage ouvert à la main par la personne n'est donc jamais refermé ;
+/// - trace présente → arrêt propre (`GET /close`, best effort borné) puis arrêt
+///   du processus (garde sur le nom : jamais une autre application), trace
+///   effacée.
+///
+/// Appelé à la **fermeture de Pilot** (le visage ne doit pas lui survivre et
+/// verrouiller un fichier du dossier de compilation) et **au démarrage
+/// suivant** (nettoyage d'un visage resté en vie après une fermeture brutale).
+/// Jamais bloquant au-delà de `PROBE_TIMEOUT`, jamais d'erreur remontée.
+pub(crate) fn stop_owned(pid_path: &Path) -> PlfaceStopOutcome {
+    let Some((pid, name)) = read_pid_file(pid_path) else {
+        return PlfaceStopOutcome::NotRunning;
+    };
+    if probe_api(PLFACE_API_HOST, PLFACE_API_PORT, PROBE_TIMEOUT) {
+        let _ = request_close(PLFACE_API_HOST, PLFACE_API_PORT, PROBE_TIMEOUT);
+    }
+    let stopped = kill_process(pid, &name);
+    clear_pid_file(pid_path);
+    if stopped {
+        PlfaceStopOutcome::Closed
+    } else {
+        PlfaceStopOutcome::Failed
+    }
+}
+
 /// Sonde l'API locale PLface en émettant une requête HTTP/1.1 `GET /status`
 /// avec un timeout très court. Retourne `true` dès qu'une réponse HTTP (toute
 /// ligne de statut `HTTP/…`) est reçue. Toute erreur réseau = `false`
@@ -216,17 +388,19 @@ pub(crate) fn probe_api(host: &str, port: u16, timeout: Duration) -> bool {
 }
 
 /// Lance l'exécutable PLface en tâche de fond, détaché de Pilot :
+/// - retourne l'identifiant du processus lancé, pour le tracer (`stop_owned`) ;
 /// - `--avatar <chemin>` n'est ajouté que si un modèle est renseigné ;
 /// - `--no-taskbar` est **toujours** transmis : un lancement par Pilot demande
 ///   au visage de ne pas figurer dans la barre des tâches Windows (mode discret).
 ///   Un visage lancé à la main par la personne reste visible comme avant ;
 /// - sans fenêtre de console sous Windows (`CREATE_NO_WINDOW`) ;
 /// - stdio redirigé vers `null` (aucune sortie parasite) ;
-/// - l'enfant n'est jamais attendu ni suivi → il survit à la fermeture de Pilot.
+/// - l'enfant n'est jamais attendu : c'est Pilot qui le referme (`stop_owned`),
+///   à sa fermeture comme au démarrage suivant.
 ///
 /// Multiplateforme : seule la neutralisation de la console est spécifique à
 /// Windows (`creation_flags`) ; macOS/Linux lancent l'exécutable normalement.
-pub(crate) fn spawn_detached(exe_path: &str, avatar: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn spawn_detached(exe_path: &str, avatar: Option<&str>) -> std::io::Result<u32> {
     let mut cmd = Command::new(exe_path);
     // Modèle choisi : transmis tel quel. `Command` passe les arguments sans
     // shell → un chemin avec espaces reste un argument unique (pas d'échappement).
@@ -246,18 +420,21 @@ pub(crate) fn spawn_detached(exe_path: &str, avatar: Option<&str>) -> std::io::R
         cmd.creation_flags(crate::CREATE_NO_WINDOW);
     }
 
-    // Le `Child` est abandonné (jamais `wait`) : le processus PLface continue
-    // indépendamment de Pilot. On ne le tue jamais à la fermeture.
-    let _child = cmd.spawn()?;
-    Ok(())
+    // Le `Child` est abandonné (jamais `wait`), mais son identifiant est tracé
+    // (`pid_path`) : le visage lancé par Pilot est refermé par Pilot.
+    let child = cmd.spawn()?;
+    Ok(child.id())
 }
 
 /// Orchestrateur non pur : sonde l'API puis lance si nécessaire.
-/// Jamais bloquant au-delà de `PROBE_TIMEOUT`, jamais d'erreur remontée.
+/// `pid_path` (facultatif) : fichier de trace où inscrire le processus lancé,
+/// afin que Pilot puisse le refermer plus tard. Jamais bloquant au-delà de
+/// `PROBE_TIMEOUT`, jamais d'erreur remontée.
 pub(crate) fn launch_if_needed(
     enabled: bool,
     exe_path: &str,
     avatar: Option<&str>,
+    pid_path: Option<&Path>,
 ) -> PlfaceLaunchOutcome {
     let trimmed = exe_path.trim();
 
@@ -274,7 +451,12 @@ pub(crate) fn launch_if_needed(
         PlfaceDecision::Disabled => PlfaceLaunchOutcome::Disabled,
         PlfaceDecision::ExecutableNotFound => PlfaceLaunchOutcome::ExecutableNotFound,
         PlfaceDecision::Launch => match spawn_detached(trimmed, avatar) {
-            Ok(()) => PlfaceLaunchOutcome::Launched,
+            Ok(pid) => {
+                if let Some(path) = pid_path {
+                    write_pid_file(path, pid, &exe_file_name(trimmed));
+                }
+                PlfaceLaunchOutcome::Launched
+            }
             Err(_) => PlfaceLaunchOutcome::LaunchFailed,
         },
     }
@@ -401,11 +583,11 @@ mod tests {
     fn launch_if_needed_disabled_never_touches_network() {
         // Chemin vide + désactivé : renvoie Disabled sans sonde (donc immédiat).
         assert_eq!(
-            launch_if_needed(false, "", None),
+            launch_if_needed(false, "", None, None),
             PlfaceLaunchOutcome::Disabled
         );
         assert_eq!(
-            launch_if_needed(true, "   ", None),
+            launch_if_needed(true, "   ", None, None),
             PlfaceLaunchOutcome::Disabled
         );
     }
@@ -413,7 +595,7 @@ mod tests {
     #[test]
     fn launch_if_needed_missing_exe_reports_not_found() {
         // Chemin renseigné mais introuvable, API muette → pas de lancement.
-        let outcome = launch_if_needed(true, "/chemin/qui/n-existe-pas/plface-xyz", None);
+        let outcome = launch_if_needed(true, "/chemin/qui/n-existe-pas/plface-xyz", None, None);
         assert!(matches!(
             outcome,
             PlfaceLaunchOutcome::ExecutableNotFound | PlfaceLaunchOutcome::AlreadyRunning
@@ -500,5 +682,109 @@ mod tests {
     #[test]
     fn stop_failed_when_api_up_but_no_ack() {
         assert_eq!(decide_stop(true, false), PlfaceStopOutcome::Failed);
+    }
+
+    #[test]
+    fn parse_pid_file_reads_pid_then_program_name() {
+        assert_eq!(
+            parse_pid_file("1234\nplface.exe\n"),
+            Some((1234, "plface.exe".to_string()))
+        );
+        assert_eq!(
+            parse_pid_file("  42 \n C:\\PLface\\PLface.exe \n"),
+            Some((42, "C:\\PLface\\PLface.exe".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_pid_file_refuses_empty_or_incomplete() {
+        // Sans identifiant exploitable ET nom de programme, on ne sait pas à
+        // quoi l'identifiant correspond : on refuse d'arrêter quoi que ce soit.
+        assert_eq!(parse_pid_file(""), None);
+        assert_eq!(parse_pid_file("1234"), None);
+        assert_eq!(parse_pid_file("abc\nplface.exe"), None);
+        assert_eq!(parse_pid_file("0\nplface.exe"), None);
+    }
+
+    #[test]
+    fn name_matches_compares_file_names_case_insensitively() {
+        assert!(name_matches("plface.exe", "plface.exe"));
+        assert!(name_matches("PLFACE.EXE", "plface.exe"));
+        assert!(name_matches("C:\\PLface\\plface.exe", "plface.exe"));
+        assert!(!name_matches("notepad.exe", "plface.exe"));
+        assert!(!name_matches("", "plface.exe"));
+    }
+
+    #[test]
+    fn exe_file_name_keeps_last_segment() {
+        assert_eq!(exe_file_name("C:\\PLface\\plface.exe"), "plface.exe");
+        assert_eq!(exe_file_name("/opt/plface/plface"), "plface");
+    }
+
+    #[test]
+    fn pid_file_round_trip_and_clear() {
+        let path = std::env::temp_dir().join(format!(
+            "pilot-plface-test-{}-round-trip.pid",
+            std::process::id()
+        ));
+        clear_pid_file(&path);
+        assert_eq!(read_pid_file(&path), None);
+        write_pid_file(&path, 4242, "plface.exe");
+        assert_eq!(read_pid_file(&path), Some((4242, "plface.exe".to_string())));
+        clear_pid_file(&path);
+        assert_eq!(read_pid_file(&path), None);
+    }
+
+    #[test]
+    fn stop_owned_does_nothing_without_trace() {
+        // Aucune trace = aucun visage lancé par Pilot : Pilot ne referme jamais
+        // un visage ouvert à la main par la personne.
+        let path = std::env::temp_dir().join(format!(
+            "pilot-plface-test-{}-absent.pid",
+            std::process::id()
+        ));
+        clear_pid_file(&path);
+        assert_eq!(stop_owned(&path), PlfaceStopOutcome::NotRunning);
+    }
+
+    // Sortie réelle de `tasklist /FI "PID eq <pid>" /FO CSV /NH` (Windows) :
+    // la garde de nom s'appuie dessus pour ne jamais arrêter une autre
+    // application dont l'identifiant aurait été réutilisé.
+    #[cfg(windows)]
+    #[test]
+    fn parse_csv_process_name_reads_tasklist_output() {
+        let real = "\"explorer.exe\",\"11824\",\"RDP-Tcp#5\",\"2\",\"200 876 Ko\"\r\n";
+        assert_eq!(parse_csv_process_name(real), Some("explorer.exe".to_string()));
+        // Ligne d'information (locale française sur ce poste) : aucun processus.
+        let none = "Information : aucune tâche en service ne correspond aux critères spécifiés.";
+        assert_eq!(parse_csv_process_name(none), None);
+        assert_eq!(parse_csv_process_name(""), None);
+    }
+
+    // Preuve réelle de l'arrêt, sur un processus témoin lancé par le test
+    // lui-même (jamais une application de la personne) : la garde de nom refuse
+    // d'arrêter un processus qui n'est pas le visage, et l'arrêt aboutit quand le
+    // nom correspond.
+    #[cfg(windows)]
+    #[test]
+    fn kill_process_spares_other_names_and_stops_matching_process() {
+        let mut witness = std::process::Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("processus témoin");
+        let pid = witness.id();
+
+        // Nom différent (identifiant réutilisé par une autre application) : la
+        // garde refuse et le processus témoin survit.
+        assert!(kill_process(pid, "pas-le-visage.exe"));
+        assert!(witness.try_wait().unwrap().is_none(), "témoin survivant");
+
+        // Nom attendu : le processus est bien arrêté.
+        assert!(kill_process(pid, "cmd.exe"));
+        assert!(kill_process(pid, "cmd.exe"));
+        let _ = witness.wait();
     }
 }

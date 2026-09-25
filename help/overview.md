@@ -98,8 +98,9 @@ externe.
   l'avatar, celui-ci **n'apparaît pas dans la barre des tâches** (mode discret) ;
   lancé à la main, il reste visible comme avant. Au démarrage de Pilot, si
   l'avatar n'est pas déjà
-  lancé, il est démarré automatiquement — il reste ouvert même si vous fermez
-  Pilot. Vous pouvez aussi **choisir le modèle d'avatar** (`.vrm`, bouton
+  lancé, il est démarré automatiquement. **Pilot referme l'avatar qu'il a
+  lancé quand vous quittez Pilot** (un avatar lancé à la main reste ouvert).
+  Vous pouvez aussi **choisir le modèle d'avatar** (`.vrm`, bouton
   « Choisir un modèle… ») : il est affiché au lancement. Laissez le champ vide
   pour utiliser le **modèle fourni par Pilot** ; si celui-ci est indisponible,
   le visage reprend son **modèle intégré** (aucune erreur). Le **bouton

@@ -1946,6 +1946,17 @@ fn default_plface_exe_path(app: &AppHandle) -> Option<String> {
     }
 }
 
+/// PLface : chemin du fichier de trace du visage lancé par Pilot (dans le
+/// dossier de données de l'application). Sert à refermer **ce visage-là** (et
+/// lui seul) à la fermeture de Pilot et à nettoyer un reste après une fermeture
+/// brutale. `None` si le dossier n'est pas résoluble (jamais bloquant).
+fn plface_pid_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(plface::PID_FILE_NAME))
+}
+
 /// PLface : exécute à la demande le contrôle de lancement (activé + API muette
 /// + exécutable existant → lancement détaché) et renvoie un état lisible.
 /// Utilisée par le contrôle au démarrage (via `plface::launch_if_needed`) et
@@ -1973,7 +1984,14 @@ fn check_and_launch_plface(
     // deux absents → aucun `--avatar` (modèle intégré du visage).
     let default_avatar = default_avatar_path(&app);
     let effective_avatar = plface::resolve_avatar(&avatar, default_avatar.as_deref());
-    plface::launch_if_needed(enabled, &effective_exe, effective_avatar.as_deref())
+    // Le lancement est tracé : Pilot refermera ce visage à sa fermeture.
+    let pid_path = plface_pid_path(&app);
+    plface::launch_if_needed(
+        enabled,
+        &effective_exe,
+        effective_avatar.as_deref(),
+        pid_path.as_deref(),
+    )
 }
 
 /// PLface : demande au visage de se fermer proprement (`GET /close`). Renvoie un
@@ -2615,32 +2633,44 @@ pub fn run() {
             // automatique du suivi quand le serveur redevient joignable (accumulation
             // locale en mode déconnecté). Thread autonome, fail-open.
             gds_sync::start_gds_sync_monitor(handle.clone());
-            // PLface : lancement automatique au démarrage. Thread dédié pour ne
+            // PLface : au démarrage, Pilot nettoie d'abord un visage resté en vie
+            // après une fermeture brutale (il verrouillerait sa propre copie dans
+            // le dossier de compilation et empêcherait la préparation du paquet),
+            // puis lance le visage si l'option est active. Thread dédié pour ne
             // JAMAIS bloquer l'ouverture de Pilot (la sonde réseau a un timeout
-            // court et l'échec est silencieux). Un utilisateur sans PLface ne
+            // court et l'échec est silencieux) : un utilisateur sans PLface ne
             // voit aucune différence.
             {
                 let cfg = state.config.lock().unwrap().clone();
-                if cfg.plface_autostart_enabled {
-                    let path = cfg.plface_exe_path.clone();
-                    let avatar = cfg.plface_avatar_path.clone();
-                    let handle = handle.clone();
-                    std::thread::spawn(move || {
-                        // Résolution des ressources livrées dans le thread (jamais
-                        // bloquant pour l'ouverture de Pilot), fail-open.
-                        let default_exe = default_plface_exe_path(&handle);
-                        let effective_exe = plface::resolve_exe(&path, default_exe.as_deref())
-                            .unwrap_or_default();
-                        let default_avatar = default_avatar_path(&handle);
-                        let effective_avatar =
-                            plface::resolve_avatar(&avatar, default_avatar.as_deref());
-                        let _ = plface::launch_if_needed(
-                            true,
-                            &effective_exe,
-                            effective_avatar.as_deref(),
-                        );
-                    });
-                }
+                let enabled = cfg.plface_autostart_enabled;
+                let path = cfg.plface_exe_path.clone();
+                let avatar = cfg.plface_avatar_path.clone();
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let pid_path = plface_pid_path(&handle);
+                    // Nettoyage d'abord : ne referme QUE le visage lancé par un
+                    // Pilot précédent (trace), jamais un visage ouvert à la main.
+                    if let Some(pid_path) = pid_path.as_deref() {
+                        let _ = plface::stop_owned(pid_path);
+                    }
+                    if !enabled {
+                        return;
+                    }
+                    // Résolution des ressources livrées dans le thread (jamais
+                    // bloquant pour l'ouverture de Pilot), fail-open.
+                    let default_exe = default_plface_exe_path(&handle);
+                    let effective_exe =
+                        plface::resolve_exe(&path, default_exe.as_deref()).unwrap_or_default();
+                    let default_avatar = default_avatar_path(&handle);
+                    let effective_avatar =
+                        plface::resolve_avatar(&avatar, default_avatar.as_deref());
+                    let _ = plface::launch_if_needed(
+                        true,
+                        &effective_exe,
+                        effective_avatar.as_deref(),
+                        pid_path.as_deref(),
+                    );
+                });
             }
             // GDS (chantier UX) : reconnecter le pool PostgreSQL en arrière-plan
             // pour un projet déjà provisionné, sans refaire `gds_provision` (saisie
@@ -3133,6 +3163,14 @@ pub fn run() {
                 {
                     let state = app.state::<AppState>();
                     rpc::do_shutdown_all_sessions(&state);
+                }
+                // PLface : c'est Pilot qui a lancé le visage, c'est donc à lui de le
+                // refermer. Sinon il resterait en vie et verrouillerait sa propre
+                // copie dans le dossier de compilation (préparation du paquet
+                // impossible au lancement suivant). Un visage ouvert à la main par
+                // la personne n'est pas tracé et n'est jamais refermé ici.
+                if let Some(pid_path) = plface_pid_path(app) {
+                    let _ = plface::stop_owned(&pid_path);
                 }
                 let tx_opt = {
                     let state = app.state::<AppState>();
