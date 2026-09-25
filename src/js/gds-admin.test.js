@@ -29,6 +29,7 @@ import {
   findRepoForProject,
   formatAccountDate,
   formatAuditTime,
+  formatBulkAssignConfirmation,
   formatBytes,
   formatProjectRemoveConfirmation,
   initialAccountsState,
@@ -38,6 +39,7 @@ import {
   initialStorageState,
   nextStatusToggle,
   pickPrefill,
+  projectsWithoutMember,
   adminServerOptionValue,
   renderAdminServerSelectorHtml,
   renderAccountsSectionHtml,
@@ -48,6 +50,8 @@ import {
   renderAuditTableHtml,
   renderConnectionSectionHtml,
   renderConnectionStatusHtml,
+  renderProjectBulkAssignConfirmHtml,
+  renderProjectBulkAssignHtml,
   renderProjectMembersHtml,
   renderProjectRemoveConfirmHtml,
   renderProjectsSectionHtml,
@@ -740,6 +744,62 @@ describe("L4.4 — dépôts / projets (rendus purs + charges utiles)", () => {
     });
     expect(shell).not.toContain("À venir — L4.4");
     expect(shell).toContain("À venir — L4.5");
+  });
+});
+
+describe("L4.7 — projets sans membre (repérage + attribution groupée)", () => {
+  it("liste UNIQUEMENT les projets sans aucun membre attribué", () => {
+    const projects = [
+      { id: 1, name: "alpha", member_count: 0 },
+      { id: 2, name: "beta", member_count: 2 },
+      { id: 3, name: "gamma" }, // member_count absent = aucun membre
+      { id: 4, name: "delta", member_count: 1 },
+    ];
+    expect(projectsWithoutMember(projects).map((p) => p.id)).toEqual([1, 3]);
+    expect(projectsWithoutMember(null)).toEqual([]);
+  });
+
+  it("repère « aucun membre » à l'écran et permet de filtrer", () => {
+    const projects = [
+      { id: 1, name: "alpha", member_count: 0 },
+      { id: 2, name: "beta", member_count: 3 },
+    ];
+    const html = renderProjectsTableHtml({ projects, repos: [] });
+    expect(html).toContain("aucun membre");
+    expect(html).toContain("3 membre(s)");
+    const filtered = renderProjectsTableHtml({ projects, repos: [], onlyOrphans: true });
+    expect(filtered).toContain("alpha");
+    expect(filtered).not.toContain("beta");
+  });
+
+  it("affiche le bloc groupé seulement s'il reste un projet sans membre", () => {
+    expect(
+      renderProjectBulkAssignHtml({ projects: [{ id: 2, name: "beta", member_count: 1 }] })
+    ).toContain("Aucun projet sans membre");
+    const html = renderProjectBulkAssignHtml({
+      projects: [{ id: 1, name: "alpha", member_count: 0 }],
+    });
+    expect(html).toContain('id="gds-admin-prj-orphan-email"');
+    expect(html).toContain('id="gds-admin-prj-orphan-role"');
+    expect(html).toContain('data-prj-action="assign-missing"');
+  });
+
+  it("exige une confirmation explicite du compte et du rôle choisis", () => {
+    expect(renderProjectBulkAssignConfirmHtml(initialProjectsState())).toBe("");
+    const html = renderProjectBulkAssignConfirmHtml({
+      projects: [
+        { id: 1, name: "alpha", member_count: 0 },
+        { id: 2, name: "beta", member_count: 1 },
+      ],
+      bulkConfirm: { email: "dev@x", role: "dev" },
+    });
+    expect(html).toContain("Confirmation");
+    expect(html).toContain("dev@x");
+    expect(html).toContain("1 projet(s)");
+    expect(html).toContain('data-prj-action="assign-missing-confirm"');
+    expect(html).toContain('data-prj-action="assign-missing-cancel"');
+    expect(html).toContain("idempotente");
+    expect(formatBulkAssignConfirmation(0, "dev@x", "dev")).toContain("0 projet(s)");
   });
 });
 
