@@ -624,6 +624,21 @@ describe("gds-params — section Mes projets GDS (L5.5)", () => {
     expect(pending).not.toContain('data-proj-action="remove"');
   });
 
+  it("renderProjectRowHtml : l'ajout au GDS avertit sur GitHub avant envoi", () => {
+    const project = { path: "/p", name: "p", provisioned: true, status: "not_configured", onServer: false };
+    // Aucune confirmation en attente : bouton d'ajout simple, sans avertissement.
+    const idle = renderProjectRowHtml(project);
+    expect(idle).toContain('data-proj-action="add"');
+    expect(idle).not.toContain("GitHub");
+    expect(idle).not.toContain("add-confirm");
+    // Confirmation en attente (3ᵉ paramètre) : confirmation + annulation + texte GitHub.
+    const pending = renderProjectRowHtml(project, null, "/p");
+    expect(pending).toContain('data-proj-action="add-confirm"');
+    expect(pending).toContain('data-proj-action="add-cancel"');
+    expect(pending).toContain("GitHub");
+    expect(pending).not.toContain('data-proj-action="add"');
+  });
+
   it("renderProjectRowHtml échappe le nom et le chemin", () => {
     const html = renderProjectRowHtml({ path: '/x"><script>', name: 'n<script>', provisioned: false, status: "not_configured" });
     expect(html).not.toContain("<script>");

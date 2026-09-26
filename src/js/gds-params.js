@@ -21,6 +21,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
 import { renderAdminShellHtml } from "./gds-admin.js";
+// Réutilise le rafraîchissement d'explorateur de l'onglet projet (même défaut :
+// le guetteur ignore `.git`, donc l'explorateur reste figé après une synchro ou
+// une publication faite depuis cet écran).
+import { refreshExplorerAfterGds } from "./gds.js";
 
 /**
  * Sections de l'écran de paramétrage (squelette L5.1).
@@ -606,6 +610,7 @@ export function initialProjectsState() {
     error: "",
     status: null,
     pendingRemove: null, // chemin du projet en attente de confirmation de retrait
+    pendingAdd: null, // chemin du projet en attente de confirmation d'ajout (avertissement GitHub)
   };
 }
 
@@ -641,8 +646,9 @@ export function projectStatusBadge(status, provisioned, onServer) {
  * Le retrait exige une double confirmation avec case « purger le serveur ».
  * @param {Object} p entrée projet `{ path, name, provisioned, status, onServer }`
  * @param {string|null} pendingRemove chemin du projet en attente de confirmation
+ * @param {string|null} pendingAdd chemin du projet en attente de confirmation d'ajout
  */
-export function renderProjectRowHtml(p = {}, pendingRemove = null) {
+export function renderProjectRowHtml(p = {}, pendingRemove = null, pendingAdd = null) {
   const path = String(p.path || "");
   const name = String(p.name || projectBasename(path));
   const badge = projectStatusBadge(p.status, p.provisioned, p.onServer);
@@ -650,6 +656,7 @@ export function renderProjectRowHtml(p = {}, pendingRemove = null) {
   const canAdd = !!p.provisioned && !p.onServer && !connected;
   const canRemove = connected || !!p.onServer;
   const isPend = !!pendingRemove && pendingRemove === path;
+  const isPendAdd = !!pendingAdd && pendingAdd === path;
   return `<div class="gds-params-srv-row" data-path="${esc(path)}">
         <div class="gds-params-srv-main">
           <div class="gds-params-srv-title">${esc(name)} <span class="gds-badge gds-badge-${badge.kind}">${esc(badge.text)}</span></div>
@@ -658,7 +665,12 @@ export function renderProjectRowHtml(p = {}, pendingRemove = null) {
         <div class="gds-params-srv-actions">
           <button class="gds-admin-btn" data-proj-action="open">Ouvrir</button>
           ${connected ? `<button class="gds-admin-btn" data-proj-action="sync">Synchroniser</button>` : ""}
-          ${canAdd ? `<button class="gds-admin-btn" data-proj-action="add">Ajouter au GDS</button>` : ""}
+          ${canAdd
+            ? isPendAdd
+              ? `<button class="gds-admin-btn" data-proj-action="add-confirm">Confirmer l'ajout</button>
+                   <button class="gds-admin-btn" data-proj-action="add-cancel">Annuler</button>`
+              : `<button class="gds-admin-btn" data-proj-action="add">Ajouter au GDS</button>`
+            : ""}
           ${
             canRemove
               ? isPend
@@ -669,6 +681,7 @@ export function renderProjectRowHtml(p = {}, pendingRemove = null) {
           }
         </div>
         ${isPend ? `<label class="gds-check"><input type="checkbox" data-proj-purge> Retirer aussi le travail côté serveur (dépôt bare et entrées en base) — <b>décoché</b> : le travail reste sur le serveur.</label>` : ""}
+        ${isPendAdd ? `<div class="gds-admin-hint">Si ce projet est aujourd'hui sur GitHub, il n'y sera <b>plus lié</b> dans Pilot après ce geste. Ce qui est déjà sur GitHub reste <b>intact</b> : Pilot n'y touche jamais. Pour retirer le projet de GitHub, c'est à <b>vous</b> de le supprimer sur le site de GitHub.</div>` : ""}
       </div>`;
 }
 
@@ -689,7 +702,7 @@ export function renderProjectsListHtml(state = {}) {
   if (!projects.length) {
     return `<div class="gds-admin-status idle">Aucun projet local connu. Ouvrez un projet, activez le GDS dans son onglet « 🌐 GDS », puis revenez ici pour le synchroniser, l'ajouter ou le retirer.</div>`;
   }
-  return projects.map((p) => renderProjectRowHtml(p, s.pendingRemove)).join("");
+  return projects.map((p) => renderProjectRowHtml(p, s.pendingRemove, s.pendingAdd)).join("");
 }
 
 /**
@@ -1309,6 +1322,8 @@ export function createGdsParams(container) {
       try {
         const res = await invoke("gds_sync_project", { project: path });
         projectsState.status = { kind: "ok", text: `✅ Synchronisé (${(res && res.action) || "ok"}).` };
+        // Le guetteur ignore `.git` : sans ce rappel, l'explorateur resterait figé.
+        refreshExplorerAfterGds();
         await refreshProjects();
       } catch (e) {
         projectsState.status = { kind: "error", text: friendlyGdsError(e) };
@@ -1318,7 +1333,20 @@ export function createGdsParams(container) {
     }
 
     if (action === "add") {
+      // Avertissement GitHub AVANT l'ajout (même règle que l'onglet du projet).
+      projectsState.pendingAdd = path;
+      projectsState.status = null;
+      draw();
+      return;
+    }
+    if (action === "add-cancel") {
+      projectsState.pendingAdd = null;
+      draw();
+      return;
+    }
+    if (action === "add-confirm") {
       const email = identityState.email.trim();
+      projectsState.pendingAdd = null;
       if (!email) {
         projectsState.status = { kind: "error", text: "Définissez d'abord votre identité (section « Mon identité »)." };
         draw();
@@ -1329,6 +1357,7 @@ export function createGdsParams(container) {
       try {
         await invoke("gds_add_project", { project: path, email, gitName: identityState.gitName.trim() || null });
         projectsState.status = { kind: "ok", text: `✅ Projet « ${entry.name} » ajouté au GDS.` };
+        refreshExplorerAfterGds();
         await refreshProjects();
       } catch (e) {
         projectsState.status = { kind: "error", text: friendlyGdsError(e) };
