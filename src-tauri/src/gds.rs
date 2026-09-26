@@ -1329,6 +1329,39 @@ fn escalate_system_service_trust(_wanted: &str) -> Result<(), String> {
     Err("élévation disponible uniquement sous Windows".to_string())
 }
 
+/// Nombre de relectures après une élévation Windows, et intervalle entre elles
+/// (~10 s au total) : `Start-Process -Verb RunAs -Wait` ne garantit PAS que le
+/// processus élevé ait fini d'écrire (ShellExecuteEx n'offre aucun handle
+/// d'attente) — une relecture immédiate et unique concluait donc à tort à un
+/// échec alors que l'entrée aboutissait juste après (faux négatif).
+const TRUST_RECHECK_ATTEMPTS: u32 = 40;
+const TRUST_RECHECK_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Relit l'état réel après une élévation, jusqu'à ce que la relecture constate
+/// l'entrée attendue (`error == None`) ou que la borne de relectures soit
+/// épuisée. La lecture et l'attente sont **injectées** : décision pure, donc
+/// testable sans disque, sans git et sans droits administrateur. Seul un échec
+/// réellement constaté à l'issue de la borne est rendu (jamais un faux échec).
+fn trust_after_escalation<R, S>(
+    mut read: R,
+    mut pause: S,
+    attempts: u32,
+) -> gds_git::ServiceTrustReport
+where
+    R: FnMut() -> gds_git::ServiceTrustReport,
+    S: FnMut(),
+{
+    let mut report = read();
+    for _ in 1..attempts {
+        if report.error.is_none() {
+            break;
+        }
+        pause();
+        report = read();
+    }
+    report
+}
+
 /// Un clic : (re)pose la confiance **étroite** du compte de service `git` sur
 /// la racine des dépôts de ce projet. Si l'écriture est refusée, une invitation
 /// système Windows est déclenchée (aucune commande à taper), puis le fichier est
@@ -1348,7 +1381,13 @@ pub async fn gds_service_trust(project: String) -> Result<Value, String> {
         // Écriture refusée → invitation système, puis RELECTURE (preuve).
         escalate_service_trust(&report.config_path, &report.wanted)?;
         escalated = true;
-        report = gds_git::ensure_service_trust(&repos_root);
+        // L'écriture autorisée peut aboutir APRÈS le retour du lanceur : on relit
+        // l'état réel plusieurs fois (borné) avant de conclure.
+        report = trust_after_escalation(
+            || gds_git::ensure_service_trust(&repos_root),
+            || std::thread::sleep(TRUST_RECHECK_INTERVAL),
+            TRUST_RECHECK_ATTEMPTS,
+        );
     }
     if let Some(err) = &report.error {
         return Err(format!("Confiance Git non posée : {}", err));
@@ -1361,7 +1400,12 @@ pub async fn gds_service_trust(project: String) -> Result<Value, String> {
     if system.error.is_some() {
         escalate_system_service_trust(&system.wanted)?;
         escalated = true;
-        system = gds_git::ensure_system_service_trust(&repos_root);
+        // Idem portée machine : relectures bornées, jamais une lecture unique.
+        system = trust_after_escalation(
+            || gds_git::ensure_system_service_trust(&repos_root),
+            || std::thread::sleep(TRUST_RECHECK_INTERVAL),
+            TRUST_RECHECK_ATTEMPTS,
+        );
     }
     if let Some(err) = &system.error {
         return Err(format!("Confiance Git de portée machine non posée : {}", err));
@@ -2831,6 +2875,58 @@ pub async fn gds_connection_status(
 mod tests {
     use super::*;
     use crate::git::ensure_git_repo_with_initial_commit;
+
+    fn trust_report(error: Option<&str>) -> gds_git::ServiceTrustReport {
+        gds_git::ServiceTrustReport {
+            error: error.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    /// Faux négatif d'origine : l'écriture autorisée aboutit APRÈS la première
+    /// relecture (le lanceur `RunAs -Wait` ne l'attend pas réellement). Le clic
+    /// doit conclure au SUCCÈS dès que l'entrée est finalement relue présente.
+    #[test]
+    fn late_first_read_is_not_a_failure() {
+        let mut reads = 0u32;
+        let r = trust_after_escalation(
+            || {
+                reads += 1;
+                trust_report(if reads < 3 {
+                    Some("Permission denied")
+                } else {
+                    None
+                })
+            },
+            || {},
+            5,
+        );
+        assert!(
+            r.error.is_none(),
+            "entrée présente à la 3e relecture ⇒ succès, jamais un faux échec"
+        );
+        assert_eq!(reads, 3, "aucune relecture inutile après le succès");
+    }
+
+    /// Entrée réellement absente : après la borne, l'échec est honnête (et la
+    /// relecture s'arrête, aucune boucle infinie).
+    #[test]
+    fn really_absent_entry_still_fails() {
+        let mut reads = 0u32;
+        let r = trust_after_escalation(
+            || {
+                reads += 1;
+                trust_report(Some("Permission denied"))
+            },
+            || {},
+            4,
+        );
+        assert!(
+            r.error.is_some(),
+            "aucune entrée après la borne ⇒ échec réel annoncé"
+        );
+        assert_eq!(reads, 4, "la relecture est bornée (pas de boucle infinie)");
+    }
 
     /// Attente qui ne se règle JAMAIS : c'est exactement l'étape de migration
     /// qui attend un verrou consultatif PostgreSQL déjà occupé. La borne doit
