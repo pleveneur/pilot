@@ -380,10 +380,11 @@ d'un hébergement externe type GitHub.
     que le serveur ne peut pas donner (service injoignable, chemin de dépôt
     obsolète) reste « **liaison à vérifier** », **jamais** « Connecté ».
     Ce premier envoi (comme « **Ajouter au GDS** ») **n'est pas immédiat** : un
-    **avertissement** s'affiche d'abord — une fois passé sur le GDS, le projet
-    n'est **plus lié à GitHub dans Pilot**, ce qui est **déjà sur GitHub reste
-    intact** (Pilot n'y touche jamais) et c'est à **vous** de le supprimer sur
-    GitHub si vous le souhaitez. **Rien n'est envoyé avant votre confirmation.**
+    **avertissement** s'affiche d'abord — **à partir de maintenant, ce projet
+    travaille avec le GDS : Pilot n'utilisera plus GitHub pour ce projet** ;
+    ce qui est **déjà sur GitHub reste intact** (Pilot n'y touche jamais), et
+    le **supprimer de GitHub est à votre main**. **Rien n'est envoyé avant votre
+    confirmation.**
     Après un envoi, un ajout ou une **synchronisation** réussis, l'**explorateur
     se rafraîchit tout seul** : fichiers, **marqueurs Git** et « **voir le
     diff Git** » sont à jour sans rien faire.

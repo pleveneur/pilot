@@ -128,10 +128,11 @@
 > encore inscrit** sur le serveur (`on_server` faux : même commande
 > `gds_add_project`) — ne partent plus au **premier
 > clic** : un bloc de confirmation **en langage simple** s'affiche d'abord
-> (même modèle que « Détacher ») — le projet **ne sera plus lié à GitHub dans
-> Pilot**, ce qui est **déjà sur GitHub reste intact** (Pilot n'y touche
-> jamais), et c'est à l'utilisateur de supprimer le projet sur GitHub s'il le
-> souhaite. Jamais affiché pour un projet **déjà sur le serveur** (`on_server` :
+> (même modèle que « Détacher ») — **à partir de maintenant, ce projet travaille
+> avec le GDS : Pilot n'utilisera plus GitHub pour ce projet** ; ce qui est
+> **déjà sur GitHub reste intact** (Pilot n'y touche jamais), et le
+> **supprimer de GitHub est à la main de l'utilisateur**. Jamais affiché pour un
+> projet **déjà sur le serveur** (`on_server` :
 > pas de répétition — un raccourci refait sur un projet déjà inscrit reste donc
 > immédiat, il ne publie rien de neuf et préserve `origin`) ; (g) **l'explorateur se rafraîchit après une
 > synchronisation ou une publication réussie** (`refreshExplorerAfterGds()`,
@@ -140,7 +141,9 @@
 > projet et la resynchronisation), jamais un nouveau mécanisme — le guetteur de
 > fichiers **ignore `.git`**, donc sans ce rappel l'arborescence, les
 > **marqueurs Git** et la visibilité de « **Voir le diff Git** » (calculée à
-> l'ouverture du menu depuis `gitByAbs`) restaient figés après une synchro.
+> l'ouverture du menu depuis `gitByAbs`) restaient figés après une synchro. Le
+> geste « **Synchroniser** » de la modale « Ajouter un projet depuis le GDS »
+> (`gds-menu.js`) passe par ce même rappel, après succès uniquement.
 >
 > **Liste de serveurs GDS (5 lots, implémenté)** — la fiche serveur porte
 > désormais un **nom** (obligatoire, court) et une **description** (facultative) :
