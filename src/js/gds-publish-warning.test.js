@@ -164,6 +164,33 @@ describe("avertissement GitHub avant le passage au GDS", () => {
     expect(calls).toContain("gds_add_project");
   });
 
+  it("projet pas encore inscrit : « (Re)créer le raccourci » ne fait rien avant confirmation", async () => {
+    // Ce bouton rejoue le MÊME geste que « Ajouter au GDS » : il doit donc
+    // passer par le même avertissement GitHub.
+    invokeImpl = (cmd) => {
+      if (cmd === "gds_identity_prefs") return Promise.resolve(identity);
+      if (cmd === "gds_connection_status") return Promise.resolve({ status: "error", on_server: false });
+      if (cmd === "gds_get_config") {
+        return Promise.resolve({ enabled: true, db_host: "127.0.0.1", db_user: "gds", db_port: "5432", gds_local_dir: "" });
+      }
+      if (cmd === "gds_list_saved_servers") return Promise.resolve([server]);
+      return Promise.resolve(null);
+    };
+    const container = makeContainer();
+    createGds(container);
+    await flush();
+
+    expect(bodyHtml(container)).toContain('id="gds-relink-github-notice"');
+
+    const relink = container.querySelector("#gds-relink-btn");
+    expect(relink, "bouton « (Re)créer le raccourci » absent").not.toBeNull();
+    await relink.click();
+    expect(calls, "aucun envoi avant confirmation").not.toContain("gds_add_project");
+
+    await container.querySelector("#gds-relink-github-confirm").click();
+    expect(calls).toContain("gds_add_project");
+  });
+
   it("projet déjà sur le serveur : aucun avertissement GitHub (pas de répétition)", async () => {
     invokeImpl = (cmd) => {
       if (cmd === "gds_identity_prefs") return Promise.resolve(identity);
@@ -181,6 +208,11 @@ describe("avertissement GitHub avant le passage au GDS", () => {
     const html = bodyHtml(container);
     expect(html).not.toContain("github-notice");
     expect(html).not.toContain("plus lié");
+
+    // Raccourci d'un projet DÉJÀ inscrit : le geste est immédiat (rien de
+    // nouveau n'est publié, `origin` est préservé).
+    await container.querySelector("#gds-relink-btn").click();
+    expect(calls).toContain("gds_add_project");
   });
 });
 

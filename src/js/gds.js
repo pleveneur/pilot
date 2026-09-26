@@ -664,6 +664,7 @@ export function createGds(container) {
           <button id="gds-relink-btn" class="web-btn"><i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt</button>
           <button id="gds-edit-cfg-btn" class="web-btn"><i data-lucide="wrench" class="icon-sm"></i> Changer de serveur</button>
         </div>
+        ${!onServer ? renderGithubNoticeHtml("gds-relink") : ""}
         <div class="gds-panel-desc" style="margin-top:8px">
           La liaison ne fonctionne pas ? Essayez <strong>« (Re)créer le raccourci vers le dépôt »</strong>
           (aucune suppression, aucune perte : le raccourci <code>gds</code> du dépôt local est
@@ -704,7 +705,19 @@ export function createGds(container) {
     // TOUJOURS préservé, et un projet déjà connu du serveur n'est jamais
     // défait (aucune perte de données).
     const relink = wrap.querySelector("#gds-relink-btn");
-    relink.addEventListener("click", async () => {
+    // Projet PAS ENCORE inscrit sur le serveur : ce bouton est le MÊME geste que
+    // « Ajouter le projet au GDS » — il passe donc par le même avertissement
+    // GitHub. Pour un projet DÉJÀ inscrit, le raccourci est simplement refait
+    // (aucun envoi nouveau) : aucune question à poser.
+    const relinkNotice = onServer ? null : wrap.querySelector("#gds-relink-github-notice");
+    const relinkNoticeOk = onServer ? null : wrap.querySelector("#gds-relink-github-confirm");
+    if (relinkNotice) {
+      wrap.querySelector("#gds-relink-github-cancel").addEventListener("click", () => {
+        relinkNotice.style.display = "none";
+      });
+    }
+
+    async function runRelink() {
       const project = currentProjectPath();
       if (!project) return;
       const errEl = wrap.querySelector("#gds-relink-err");
@@ -716,8 +729,13 @@ export function createGds(container) {
         errEl.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
         return;
       }
-      relink.disabled = true;
-      relink.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Raccourci…';
+      if (relinkNotice) relinkNotice.style.display = "none";
+      for (const b of [relink, relinkNoticeOk]) {
+        if (b) {
+          b.disabled = true;
+          b.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Raccourci…';
+        }
+      }
       refreshIcons(container);
       try {
         await invoke("gds_add_project", {
@@ -726,15 +744,39 @@ export function createGds(container) {
           gitName: String((identity && identity.git_name) || "").trim() || null,
         });
         notifyGdsChanged();
+        // Un premier envoi peut créer la branche et effacer des marqueurs :
+        // l'explorateur est rafraîchi, comme après une publication.
+        refreshExplorerAfterGds();
         okEl.textContent = "✅ Raccourci recréé vers le dépôt du serveur — cliquez « Vérifier la liaison ».";
       } catch (e) {
         showGdsError(errEl, e, () => relink.click());
       } finally {
-        relink.disabled = false;
-        relink.innerHTML = '<i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt';
+        for (const b of [relink, relinkNoticeOk]) {
+          if (b) {
+            b.disabled = false;
+            b.innerHTML = '<i data-lucide="link" class="icon-sm"></i> (Re)créer le raccourci vers le dépôt';
+          }
+        }
         refreshIcons(container);
       }
+    }
+
+    relink.addEventListener("click", async () => {
+      // Premier clic sur un projet non encore inscrit : l'avertissement GitHub
+      // d'abord (jamais deux gestes silencieux d'un seul clic).
+      if (relinkNotice && relinkNotice.style.display !== "block") {
+        const email = String((identity && identity.email) || "").trim();
+        if (!email) {
+          wrap.querySelector("#gds-relink-err").textContent =
+            "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
+          return;
+        }
+        relinkNotice.style.display = "block";
+        return;
+      }
+      await runRelink();
     });
+    if (relinkNoticeOk) relinkNoticeOk.addEventListener("click", () => runRelink());
 
     // « Corriger la configuration » : rouvre le formulaire d'activation
     // pré-rempli avec les valeurs actuelles (seul chemin d'édition des valeurs

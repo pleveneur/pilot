@@ -123,13 +123,17 @@
 > **Correction (retour d'usage, implémentée)** — (f) **avertissement GitHub au
 > passage au GDS** : le premier envoi (« Publier ce projet sur le GDS », écran
 > `not_published`) et « Ajouter le projet au GDS » (onglet du projet **et**
-> « Mes projets GDS » de « ⚙️ GDS — paramétrage ») ne partent plus au **premier
+> « Mes projets GDS » de « ⚙️ GDS — paramétrage ») — ainsi que
+> « **(Re)créer le raccourci vers le dépôt** » quand le projet n'est **pas
+> encore inscrit** sur le serveur (`on_server` faux : même commande
+> `gds_add_project`) — ne partent plus au **premier
 > clic** : un bloc de confirmation **en langage simple** s'affiche d'abord
 > (même modèle que « Détacher ») — le projet **ne sera plus lié à GitHub dans
 > Pilot**, ce qui est **déjà sur GitHub reste intact** (Pilot n'y touche
 > jamais), et c'est à l'utilisateur de supprimer le projet sur GitHub s'il le
 > souhaite. Jamais affiché pour un projet **déjà sur le serveur** (`on_server` :
-> pas de répétition) ; (g) **l'explorateur se rafraîchit après une
+> pas de répétition — un raccourci refait sur un projet déjà inscrit reste donc
+> immédiat, il ne publie rien de neuf et préserve `origin`) ; (g) **l'explorateur se rafraîchit après une
 > synchronisation ou une publication réussie** (`refreshExplorerAfterGds()`,
 > `gds.js`) : il réutilise `_rebuildTree()` de la barre latérale
 > (`window._pilotGetSidebar()` — le chemin déjà employé par l'ouverture de
