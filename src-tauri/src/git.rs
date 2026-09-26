@@ -163,8 +163,27 @@ fn git_op_result(
     Err(format!("{} a échoué ({}): {}", what, context, detail))
 }
 
+/// Garde-fou « plus de GitHub pour un projet sur le GDS ».
+///
+/// Un projet inscrit sur le GDS (`<projet>/.pilot/gds.json` avec `enabled`)
+/// ne publie JAMAIS ailleurs que sur son dépôt GDS : toute destination autre
+/// que le remote GDS est REFUSÉE **avant toute action**, avec un message en
+/// langage simple. Un projet non inscrit (ou dont la config n'est pas lisible)
+/// n'est pas concerné : aucune contrainte ajoutée.
+pub fn ensure_gds_push_destination(cwd: &str, remote: &str) -> Result<(), String> {
+    if remote != crate::gds_client::GDS_REMOTE && crate::gds::is_gds_enabled(cwd) {
+        return Err(format!(
+            "Ce projet travaille avec le GDS : l'envoi vers GitHub est désactivé. \
+             L'envoi doit viser le dépôt du GDS (remote « {} »).",
+            crate::gds_client::GDS_REMOTE
+        ));
+    }
+    Ok(())
+}
+
 /// Pousse la branche courante (ou HEAD) vers un remote.
 pub fn git_push(cwd: &str, remote: &str, branch: &str) -> Result<(), String> {
+    ensure_gds_push_destination(cwd, remote)?;
     let (stdout, stderr, ok) = crate::run_captured_full(
         "git",
         &["-C", cwd, "push", "-u", remote, branch],
@@ -560,6 +579,74 @@ mod tests {
         let log = run_captured("git", &["-C", &bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
         assert!(log.contains("initial commit"));
         let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&wd);
+    }
+
+    #[test]
+    fn git_push_refuses_github_for_a_gds_project() {
+        // Projet INSCRIT sur le GDS : une tentative d'envoi vers un autre dépôt
+        // (origin / GitHub) est REFUSÉE avant toute action, avec le message
+        // attendu. Le remote du GDS, lui, reste autorisé.
+        let (dir, d) = temp_work("gds-guard");
+        let pilot = std::path::Path::new(&d).join(".pilot");
+        std::fs::create_dir_all(&pilot).unwrap();
+        std::fs::write(
+            pilot.join("gds.json"),
+            r#"{"enabled":true,"identity_email":"a@b.c"}"#,
+        )
+        .unwrap();
+        let err = git_push(&d, "origin", "main").unwrap_err();
+        assert!(err.contains("travaille avec le GDS"), "message réel: {err}");
+        assert!(err.contains("GitHub"), "message réel: {err}");
+        assert!(ensure_gds_push_destination(&d, "gds").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_push_leaves_a_non_gds_project_untouched() {
+        // Projet NON inscrit : comportement strictement inchangé (aucune garde).
+        let (dir, d) = temp_work("non-gds-guard");
+        assert!(ensure_gds_push_destination(&d, "origin").is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bare_git_push_of_a_gds_project_goes_to_gds_not_origin() {
+        // Envoi SANS destination précisée : il doit viser le dépôt du GDS, jamais
+        // `origin`. `git_push` pose l'association (`-u`) — on le vérifie pour de vrai.
+        let _iso = identity_iso();
+        let (wd, work) = temp_work("bare-push-gds");
+        std::fs::write(std::path::Path::new(&work).join("a.txt"), "x").unwrap();
+        assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
+        let pilot = std::path::Path::new(&work).join(".pilot");
+        std::fs::create_dir_all(&pilot).unwrap();
+        std::fs::write(pilot.join("gds.json"), r#"{"enabled":true,"identity_email":"a@b.c"}"#).unwrap();
+
+        let origin_bare = std::env::temp_dir().join(format!("pilot-origin-bare-{}", std::process::id()));
+        let gds_bare = std::env::temp_dir().join(format!("pilot-gds-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&origin_bare);
+        let _ = std::fs::remove_dir_all(&gds_bare);
+        gds_core::git_cmd::git_init_bare(&origin_bare.to_string_lossy()).unwrap();
+        gds_core::git_cmd::git_init_bare(&gds_bare.to_string_lossy()).unwrap();
+        git_remote_add(&work, "origin", &origin_bare.to_string_lossy()).unwrap();
+        git_remote_add(&work, "gds", &gds_bare.to_string_lossy()).unwrap();
+
+        let branch = git_current_branch(&work);
+        git_push(&work, "gds", &branch).unwrap();
+        // L'association branche → remote GDS est posée (donc un `git push` nu
+        // ne peut pas viser `origin`).
+        let upstream = run_captured("git", &["-C", &work, "config", "--get", &format!("branch.{}.remote", branch)], Duration::from_secs(3));
+        assert_eq!(upstream.trim(), "gds", "upstream réel: {}", upstream.trim());
+
+        // Envoi SANS destination : il part vers le GDS, `origin` reste vide.
+        let (_o, _e, ok) = crate::run_captured_full("git", &["-C", &work, "push"], Duration::from_secs(20));
+        assert!(ok, "le `git push` nu doit réussir vers le GDS");
+        let gds_log = run_captured("git", &["-C", &gds_bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
+        assert!(gds_log.contains("initial commit"), "le dépôt GDS doit avoir reçu le commit");
+        let origin_log = run_captured("git", &["-C", &origin_bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
+        assert!(origin_log.trim().is_empty(), "origin doit rester vierge, reçu: {origin_log}");
+        let _ = std::fs::remove_dir_all(&origin_bare);
+        let _ = std::fs::remove_dir_all(&gds_bare);
         let _ = std::fs::remove_dir_all(&wd);
     }
 
