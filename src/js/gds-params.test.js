@@ -637,6 +637,10 @@ describe("gds-params — section Mes projets GDS (L5.5)", () => {
     expect(pending).toContain('data-proj-action="add-cancel"');
     expect(pending).toContain("GitHub");
     expect(pending).not.toContain('data-proj-action="add"');
+    // Le texte ne doit PAS annoncer que le lien GitHub est rompu (faux) :
+    // il doit dire que Pilot n'UTILISE plus GitHub pour ce projet.
+    expect(pending).not.toContain("plus lié");
+    expect(pending).toContain("n'utilisera plus GitHub pour ce projet");
   });
 
   it("renderProjectRowHtml échappe le nom et le chemin", () => {

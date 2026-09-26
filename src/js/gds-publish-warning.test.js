@@ -191,6 +191,36 @@ describe("avertissement GitHub avant le passage au GDS", () => {
     expect(calls).toContain("gds_add_project");
   });
 
+  it("le texte de l'avertissement ne prétend PAS que le lien GitHub est rompu", async () => {
+    // Défaut corrigé : l'écran affirmait « il n'y sera plus lié dans Pilot »,
+    // ce qui est FAUX (le dépôt d'origine est conservé exprès par le GDS).
+    // Le texte doit dire que Pilot n'UTILISE plus GitHub, sans annoncer une
+    // rupture ni une suppression du lien.
+    invokeImpl = (cmd) => {
+      if (cmd === "gds_identity_prefs") return Promise.resolve(identity);
+      if (cmd === "gds_connection_status") return Promise.resolve({ status: "not_published", on_server: true });
+      if (cmd === "gds_get_config") {
+        return Promise.resolve({ enabled: true, db_host: "127.0.0.1", db_user: "gds", db_port: "5432", gds_local_dir: "" });
+      }
+      if (cmd === "gds_list_saved_servers") return Promise.resolve([server]);
+      return Promise.resolve(null);
+    };
+    const container = makeContainer();
+    createGds(container);
+    await flush();
+
+    const html = bodyHtml(container);
+    // Les sauts de ligne du gabarit sont du blanc HTML : on compare sur une
+    // version normalisée pour ne pas dépendre du retour à la ligne.
+    const flat = html.replace(/\s+/g, " ");
+    expect(html).toContain('id="gds-publish-github-notice"');
+    // Aucune affirmation fausse : le lien GitHub n'est pas annoncé rompu/supprimé.
+    expect(flat, "le texte ne doit pas dire « plus lié »").not.toContain("plus lié");
+    expect(flat).not.toMatch(/n'y sera[^<]{0,40}(plus|supprim)/i);
+    // La formulation exacte attendue.
+    expect(flat).toContain("n'utilisera plus GitHub pour ce projet");
+  });
+
   it("projet déjà sur le serveur : aucun avertissement GitHub (pas de répétition)", async () => {
     invokeImpl = (cmd) => {
       if (cmd === "gds_identity_prefs") return Promise.resolve(identity);

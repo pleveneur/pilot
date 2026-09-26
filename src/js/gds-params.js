@@ -681,7 +681,7 @@ export function renderProjectRowHtml(p = {}, pendingRemove = null, pendingAdd = 
           }
         </div>
         ${isPend ? `<label class="gds-check"><input type="checkbox" data-proj-purge> Retirer aussi le travail côté serveur (dépôt bare et entrées en base) — <b>décoché</b> : le travail reste sur le serveur.</label>` : ""}
-        ${isPendAdd ? `<div class="gds-admin-hint">Si ce projet est aujourd'hui sur GitHub, il n'y sera <b>plus lié</b> dans Pilot après ce geste. Ce qui est déjà sur GitHub reste <b>intact</b> : Pilot n'y touche jamais. Pour retirer le projet de GitHub, c'est à <b>vous</b> de le supprimer sur le site de GitHub.</div>` : ""}
+        ${isPendAdd ? `<div class="gds-admin-hint">À partir de maintenant, ce projet travaille avec le GDS : Pilot n'utilisera plus GitHub pour ce projet. Ce qui est déjà sur GitHub reste <b>intact</b> (Pilot n'y touche jamais), et le supprimer de GitHub est à <b>votre</b> main.</div>` : ""}
       </div>`;
 }
 

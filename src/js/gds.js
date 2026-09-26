@@ -968,18 +968,18 @@ export function createGds(container) {
   // ── Avertissement AVANT le premier envoi vers le GDS ──
   // Même modèle que « Retirer du GDS » : bloc masqué, révélé au clic, confirmé
   // par un second bouton. Le geste ne touche PAS à GitHub (le remote `origin`
-  // est conservé) : l'écran le dit clairement, une seule fois — jamais sur un
-  // projet déjà sur le GDS (les écrans « (Re)créer le raccourci » et « Déjà
-  // ajouté » ne l'affichent donc pas).
+  // est conservé) : le texte ne dit donc JAMAIS que le lien GitHub est rompu ni
+  // qu'il sera supprimé, seulement que Pilot n'UTILISE plus GitHub pour ce
+  // projet. Affiché une seule fois — jamais sur un projet déjà sur le GDS (les
+  // écrans « (Re)créer le raccourci » et « Déjà ajouté » ne l'affichent pas).
   function renderGithubNoticeHtml(idPrefix) {
     return `
       <div id="${idPrefix}-github-notice" class="gds-panel" style="display:none; margin-top:8px">
         <div class="gds-panel-desc">
           <strong>Avant de publier sur le GDS, à savoir :</strong>
-          si ce projet est aujourd'hui sur GitHub, il n'y sera <strong>plus lié</strong>
-          dans Pilot après ce geste. Ce qui est déjà sur GitHub reste <strong>intact</strong> :
-          Pilot n'y touche jamais. Pour retirer le projet de GitHub, c'est à <strong>vous</strong>
-          de le supprimer sur le site de GitHub.
+          à partir de maintenant, ce projet travaille avec le GDS : Pilot n'utilisera plus GitHub
+          pour ce projet. Ce qui est déjà sur GitHub reste <strong>intact</strong> (Pilot n'y touche
+          jamais), et le supprimer de GitHub est à <strong>votre</strong> main.
         </div>
         <div class="gds-actions">
           <button id="${idPrefix}-github-confirm" class="web-btn"><i data-lucide="upload" class="icon-sm"></i> Confirmer et publier</button>

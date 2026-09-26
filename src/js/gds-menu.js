@@ -25,6 +25,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
+import { refreshExplorerAfterGds } from "./gds.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { toastSuccess, toastError } from "./toast.js";
 
@@ -197,6 +198,10 @@ export async function openProjectFromGds(sidebar) {
         }
         try {
           await invoke("gds_sync_project", { project: localPath });
+          // Le guetteur de fichiers ignore `.git` : sans ce rappel explicite,
+          // l'explorateur (arborescence + marqueurs Git) reste figé après la
+          // synchro. Même chemin que les autres gestes GDS, après succès seul.
+          refreshExplorerAfterGds();
           toastSuccess("Projet synchronisé avec le GDS : " + r.name);
         } catch (e) {
           toastError("Projet ouvert. Synchronisation GDS : " + String(e));
