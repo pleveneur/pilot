@@ -101,6 +101,21 @@ function notifyGdsChanged() {
   document.dispatchEvent(new CustomEvent("pilot-gds-changed"));
 }
 
+/**
+ * Rafraîchit l'explorateur (arborescence + marqueurs Git + « Voir le diff Git »)
+ * après un geste GDS qui change l'état Git du projet (publication,
+ * synchronisation). Le guetteur de fichiers IGNORE le dossier `.git` : sans cet
+ * appel explicite, l'explorateur reste figé. Réutilise `_rebuildTree()`, le
+ * chemin déjà employé ailleurs (après un renommage) — il recharge l'arbre ET
+ * les marqueurs Git dans un seul aller-retour.
+ */
+export function refreshExplorerAfterGds() {
+  const sb = typeof window !== "undefined" && typeof window._pilotGetSidebar === "function"
+    ? window._pilotGetSidebar()
+    : null;
+  if (sb && typeof sb._rebuildTree === "function") sb._rebuildTree();
+}
+
 /** Échappe le HTML pour injection sûre dans innerHTML. */
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -545,6 +560,7 @@ export function createGds(container) {
       <div class="gds-actions">
         <button id="gds-add-btn" class="web-btn"><i data-lucide="plus" class="icon-sm"></i> Ajouter le projet au GDS</button>
       </div>
+      ${renderGithubNoticeHtml("gds-add")}
     `;
     bodyEl.appendChild(panel);
     refreshIcons(container);
@@ -552,14 +568,30 @@ export function createGds(container) {
     const btn = panel.querySelector("#gds-add-btn");
     const err = panel.querySelector("#gds-add-err");
     const ok = panel.querySelector("#gds-add-ok");
-    btn.addEventListener("click", async () => {
+    const notice = panel.querySelector("#gds-add-github-notice");
+    const noticeOk = panel.querySelector("#gds-add-github-confirm");
+    // Premier clic : l'avertissement GitHub (modèle de confirmation de
+    // « Retirer du GDS »), puis le second confirme l'envoi.
+    btn.addEventListener("click", () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      if (!(identity.email || "").trim()) {
+        err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
+        return;
+      }
+      err.textContent = ""; ok.textContent = "";
+      notice.style.display = "block";
+    });
+    panel.querySelector("#gds-add-github-cancel").addEventListener("click", () => {
+      notice.style.display = "none";
+    });
+    noticeOk.addEventListener("click", async () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
       const email = (identity.email || "").trim();
-      if (!email) { err.textContent = "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité)."; return; }
       err.textContent = ""; ok.textContent = "";
-      btn.disabled = true;
-      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Ajout…';
+      noticeOk.disabled = true;
+      noticeOk.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Ajout…';
       refreshIcons(container);
       try {
         const res = await invoke("gds_add_project", {
@@ -570,16 +602,17 @@ export function createGds(container) {
         await refresh();
         const okEl = bodyEl.querySelector("#gds-add-ok");
         notifyGdsChanged();
+        refreshExplorerAfterGds();
         if (okEl) {
           okEl.textContent = res && res.initialized
             ? "✅ Projet ajouté au GDS (dossier initialisé en dépôt Git + identité réglée localement)."
             : "✅ Projet ajouté au GDS.";
         }
       } catch (e) {
-        showGdsError(err, e, () => btn.click());
+        showGdsError(err, e, () => noticeOk.click());
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i data-lucide="plus" class="icon-sm"></i> Ajouter le projet au GDS';
+        noticeOk.disabled = false;
+        noticeOk.innerHTML = '<i data-lucide="upload" class="icon-sm"></i> Confirmer et publier';
         refreshIcons(container);
       }
     });
@@ -790,6 +823,9 @@ export function createGds(container) {
         const res = await invoke("gds_sync_project", { project });
         ok.textContent = `✅ Synchronisé (${res.action}).`;
         await refreshSyncStatus();
+        // Le guetteur ignore `.git` : sans ce rappel, l'explorateur (marqueurs +
+        // « Voir le diff Git ») resterait figé après la synchronisation.
+        refreshExplorerAfterGds();
       } catch (e) {
         err.textContent = String(e);
       } finally {
@@ -829,6 +865,7 @@ export function createGds(container) {
         <div class="gds-actions">
           <button id="gds-publish-btn" class="web-btn"><i data-lucide="upload" class="icon-sm"></i> Publier ce projet sur le GDS</button>
         </div>
+        ${renderGithubNoticeHtml("gds-publish")}
         <div class="gds-panel-desc" style="margin-top:8px">Serveur : <strong>${esc(serverName)}</strong>.</div>
       </div>
       <div class="gds-panel">${renderRemoveHtml("gds-notpublished-remove")}</div>
@@ -839,18 +876,30 @@ export function createGds(container) {
     const err = wrap.querySelector("#gds-publish-err");
     const ok = wrap.querySelector("#gds-publish-ok");
     const btn = wrap.querySelector("#gds-publish-btn");
-    btn.addEventListener("click", async () => {
+    const notice = wrap.querySelector("#gds-publish-github-notice");
+    const noticeOk = wrap.querySelector("#gds-publish-github-confirm");
+    // Premier clic : l'avertissement GitHub, puis confirmation de l'envoi.
+    btn.addEventListener("click", () => {
       const project = currentProjectPath();
       if (!project) { err.textContent = "Aucun projet ouvert."; return; }
-      const email = String((identity && identity.email) || "").trim();
-      if (!email) {
+      if (!String((identity && identity.email) || "").trim()) {
         err.textContent =
           "Définissez d'abord votre email d'identité (onglet « ⚙️ GDS — paramétrage » → Mon identité).";
         return;
       }
       err.textContent = ""; ok.textContent = "";
-      btn.disabled = true;
-      btn.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Publication…';
+      notice.style.display = "block";
+    });
+    wrap.querySelector("#gds-publish-github-cancel").addEventListener("click", () => {
+      notice.style.display = "none";
+    });
+    noticeOk.addEventListener("click", async () => {
+      const project = currentProjectPath();
+      if (!project) { err.textContent = "Aucun projet ouvert."; return; }
+      const email = String((identity && identity.email) || "").trim();
+      err.textContent = ""; ok.textContent = "";
+      noticeOk.disabled = true;
+      noticeOk.innerHTML = '<i data-lucide="loader" class="icon-sm"></i> Publication…';
       refreshIcons(container);
       try {
         await invoke("gds_add_project", {
@@ -859,18 +908,43 @@ export function createGds(container) {
           gitName: String((identity && identity.git_name) || "").trim() || null,
         });
         notifyGdsChanged();
+        refreshExplorerAfterGds();
         ok.textContent = "✅ Premier envoi effectué — vérification de la liaison…";
         await refresh();
       } catch (e) {
-        showGdsError(err, e, () => btn.click());
+        showGdsError(err, e, () => noticeOk.click());
       } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i data-lucide="upload" class="icon-sm"></i> Publier ce projet sur le GDS';
+        noticeOk.disabled = false;
+        noticeOk.innerHTML = '<i data-lucide="upload" class="icon-sm"></i> Confirmer et publier';
         refreshIcons(container);
       }
     });
 
     wireRemove(wrap, "gds-notpublished-remove");
+  }
+
+  // ── Avertissement AVANT le premier envoi vers le GDS ──
+  // Même modèle que « Retirer du GDS » : bloc masqué, révélé au clic, confirmé
+  // par un second bouton. Le geste ne touche PAS à GitHub (le remote `origin`
+  // est conservé) : l'écran le dit clairement, une seule fois — jamais sur un
+  // projet déjà sur le GDS (les écrans « (Re)créer le raccourci » et « Déjà
+  // ajouté » ne l'affichent donc pas).
+  function renderGithubNoticeHtml(idPrefix) {
+    return `
+      <div id="${idPrefix}-github-notice" class="gds-panel" style="display:none; margin-top:8px">
+        <div class="gds-panel-desc">
+          <strong>Avant de publier sur le GDS, à savoir :</strong>
+          si ce projet est aujourd'hui sur GitHub, il n'y sera <strong>plus lié</strong>
+          dans Pilot après ce geste. Ce qui est déjà sur GitHub reste <strong>intact</strong> :
+          Pilot n'y touche jamais. Pour retirer le projet de GitHub, c'est à <strong>vous</strong>
+          de le supprimer sur le site de GitHub.
+        </div>
+        <div class="gds-actions">
+          <button id="${idPrefix}-github-confirm" class="web-btn"><i data-lucide="upload" class="icon-sm"></i> Confirmer et publier</button>
+          <button id="${idPrefix}-github-cancel" class="web-btn">Annuler</button>
+        </div>
+      </div>
+    `;
   }
 
   // ── Bloc HTML de « Retirer du GDS » (avec confirmation) ──
