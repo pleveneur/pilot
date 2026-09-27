@@ -383,9 +383,41 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-laya-model-dir">Dossier du modèle à charger :</label>
               <div class="setting-row-field">
-                <input type="text" id="setting-laya-model-dir" placeholder="laisser vide pour ne rien lancer" />
+                <input type="text" id="setting-laya-model-dir" placeholder="laisser vide pour utiliser model-ml à côté du service" />
                 <button id="btn-laya-model-browse" type="button" class="settings-btn">Choisir le dossier…</button>
               </div>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-laya-model-auto-download" />
+              <label for="setting-laya-model-auto-download" title="Si le modèle manque au démarrage de Pilot, il est téléchargé puis le service est lancé. Rien n'est téléchargé si le modèle est déjà complet.">Télécharger le modèle automatiquement s'il manque</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-laya-model-base-url">Adresse d'hébergement des fichiers du modèle :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-laya-model-base-url" placeholder="laisser vide tant que l'adresse n'est pas connue" />
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-laya-fetch-path">Programme de téléchargement du modèle :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-laya-fetch-path" placeholder="laisser vide : cherché à côté du service" />
+                <button id="btn-laya-fetch-browse" type="button" class="settings-btn">Choisir le programme…</button>
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <div class="setting-row-field">
+                <button id="btn-laya-model-download" type="button" class="settings-btn">Télécharger le modèle maintenant</button>
+                <button id="btn-laya-model-cancel" type="button" class="settings-btn">Interrompre</button>
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <progress id="laya-model-bar" max="100" value="0" style="width:220px;height:8px;"></progress>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="laya-model-state" style="font-size:12px;color:var(--text-muted);"></span>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="laya-model-message" style="font-size:11px;color:var(--text-muted);"></span>
             </div>
             <div class="setting-row setting-row-indent">
               <span id="laya-runtime-state" style="font-size:12px;color:var(--text-muted);"></span>

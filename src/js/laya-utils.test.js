@@ -1,6 +1,6 @@
 // Tests unitaires — laya-utils.js (réglage Service Laya : messages utilisateur purs)
 import { describe, it, expect } from "vitest";
-import { LAYA_OUTCOMES, layaStatusMessage, layaOutcomeMessage } from "./laya-utils.js";
+import { LAYA_OUTCOMES, layaStatusMessage, layaOutcomeMessage, LAYA_FETCH_REASONS, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 
 describe("LAYA_OUTCOMES", () => {
   it("couvre exactement les 6 issues renvoyées par le moteur", () => {
@@ -112,6 +112,93 @@ describe("layaOutcomeMessage", () => {
   it("aucun message d'issue ne contient de nom de code technique", () => {
     for (const outcome of LAYA_OUTCOMES) {
       expect(layaOutcomeMessage(outcome).text).not.toMatch(/outcome|camelCase|undefined|null|exception/i);
+    }
+  });
+});
+
+describe("LAYA_FETCH_REASONS", () => {
+  it("couvre exactement les 11 raisons du moteur", () => {
+    expect(LAYA_FETCH_REASONS).toEqual([
+      "ok",
+      "networkOffline",
+      "invalidAddress",
+      "diskFull",
+      "integrityFailed",
+      "addressMissing",
+      "fetchMissing",
+      "nodeMissing",
+      "cancelled",
+      "alreadyRunning",
+      "unknown",
+    ]);
+  });
+});
+
+describe("layaModelProgressPercent", () => {
+  it("borne à 0..100 et tolère l'inconnu", () => {
+    expect(layaModelProgressPercent({ percent: 0 })).toBe(0);
+    expect(layaModelProgressPercent({ percent: 42 })).toBe(42);
+    expect(layaModelProgressPercent({ percent: 100 })).toBe(100);
+    expect(layaModelProgressPercent({ percent: 250 })).toBe(100);
+    expect(layaModelProgressPercent({ percent: -3 })).toBe(0);
+    expect(layaModelProgressPercent({ percent: null })).toBe(0);
+    expect(layaModelProgressPercent({})).toBe(0);
+    expect(layaModelProgressPercent(null)).toBe(0);
+  });
+});
+
+describe("layaModelStateMessage", () => {
+  it("modèle présent → succès", () => {
+    const r = layaModelStateMessage({ present: true, downloading: false, reason: null });
+    expect(r.kind).toBe("success");
+    expect(r.text).toMatch(/prêt/i);
+  });
+
+  it("téléchargement en cours → informatif avec pourcentage", () => {
+    const r = layaModelStateMessage({ present: false, downloading: true, percent: 37 });
+    expect(r.kind).toBe("info");
+    expect(r.text).toMatch(/37 %/);
+  });
+
+  it("téléchargement en cours sans pourcentage → pas de faux chiffre", () => {
+    const r = layaModelStateMessage({ present: false, downloading: true, percent: null });
+    expect(r.kind).toBe("info");
+    expect(r.text).not.toMatch(/\d+ %/);
+  });
+
+  it("adresse non renseignée → état clair, jamais un crash", () => {
+    const r = layaModelStateMessage({ present: false, reason: "addressMissing" });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/adresse d'hébergement/i);
+  });
+
+  it("interrompu → reprise annoncée", () => {
+    const r = layaModelStateMessage({ present: false, reason: "cancelled" });
+    expect(r.kind).toBe("info");
+    expect(r.text).toMatch(/reprendra/i);
+  });
+
+  it("échec d'intégrité → erreur non technique", () => {
+    const r = layaModelStateMessage({ present: false, reason: "integrityFailed" });
+    expect(r.kind).toBe("error");
+    expect(r.text).toMatch(/abîmé/i);
+  });
+
+  it("modèle absent sans raison → invit à télécharger", () => {
+    const r = layaModelStateMessage({ present: false, downloading: false, reason: null });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/absent/i);
+  });
+
+  it("état indisponible (null/undefined) → jamais de crash", () => {
+    expect(layaModelStateMessage(null).text.length).toBeGreaterThan(0);
+    expect(layaModelStateMessage(undefined).text.length).toBeGreaterThan(0);
+  });
+
+  it("aucun message ne contient de nom de code ni de chemin technique", () => {
+    for (const reason of LAYA_FETCH_REASONS) {
+      const text = layaModelStateMessage({ present: false, reason }).text;
+      expect(text).not.toMatch(/camelCase|undefined|null|exception|\.onnx|\.part|[A-Za-z]:\\|\/home\/|integrityFailed|networkOffline/i);
     }
   });
 });

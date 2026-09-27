@@ -84,3 +84,112 @@ export function layaOutcomeMessage(outcome) {
       };
   }
 }
+
+/** Raisons possibles d'un téléchargement du modèle (`FetchReason`, camelCase). */
+export const LAYA_FETCH_REASONS = [
+  "ok",
+  "networkOffline",
+  "invalidAddress",
+  "diskFull",
+  "integrityFailed",
+  "addressMissing",
+  "fetchMissing",
+  "nodeMissing",
+  "cancelled",
+  "alreadyRunning",
+  "unknown",
+];
+
+/**
+ * Traduit l'état du modèle (commande `laya_model_state`) en message utilisateur.
+ * Aucun chemin brut, aucun nom de fichier ni code technique à l'écran : un état
+ * absent/`null` est traité comme « état indisponible », jamais un crash.
+ * @param {{present?: boolean, downloading?: boolean, percent?: (number|null), reason?: (string|null)}} [state]
+ * @returns {{ text: string, kind: "success"|"info"|"warning"|"error" }}
+ */
+export function layaModelStateMessage(state) {
+  const s = state && typeof state === "object" ? state : null;
+  if (!s) {
+    return { text: "État du modèle momentanément indisponible.", kind: "warning" };
+  }
+  if (s.downloading === true) {
+    const percent = layaModelProgressPercent(s);
+    return {
+      text: percent > 0
+        ? `Téléchargement du modèle en cours… ${percent} %`
+        : "Téléchargement du modèle en cours…",
+      kind: "info",
+    };
+  }
+  if (s.present === true) {
+    return { text: "Le modèle de classification est prêt.", kind: "success" };
+  }
+  switch (s.reason) {
+    case "networkOffline":
+      return {
+        text: "Le modèle n'a pas pu être téléchargé : la connexion à Internet semble indisponible.",
+        kind: "warning",
+      };
+    case "invalidAddress":
+      return {
+        text: "Le modèle n'a pas pu être téléchargé : l'adresse d'hébergement indiquée n'est pas valide.",
+        kind: "warning",
+      };
+    case "addressMissing":
+      return {
+        text: "Le modèle n'est pas encore téléchargeable : aucune adresse d'hébergement n'est renseignée.",
+        kind: "warning",
+      };
+    case "diskFull":
+      return {
+        text: "Le modèle n'a pas pu être téléchargé : il n'y a plus assez de place sur le disque.",
+        kind: "error",
+      };
+    case "integrityFailed":
+      return {
+        text: "Le modèle téléchargé est abîmé. Relancez le téléchargement : il reprendra et vérifiera les fichiers.",
+        kind: "error",
+      };
+    case "fetchMissing":
+      return {
+        text: "Le programme de téléchargement est introuvable. Indiquez le fichier de téléchargement du modèle.",
+        kind: "warning",
+      };
+    case "nodeMissing":
+      return {
+        text: "Le moteur d'exécution Node.js est introuvable : le modèle ne peut pas être téléchargé automatiquement.",
+        kind: "warning",
+      };
+    case "cancelled":
+      return {
+        text: "Téléchargement interrompu. Relancez-le : il reprendra où il s'était arrêté.",
+        kind: "info",
+      };
+    case "alreadyRunning":
+      return { text: "Un téléchargement du modèle est déjà en cours.", kind: "info" };
+    case "ok":
+      return { text: "Le modèle de classification est prêt.", kind: "success" };
+    case "unknown":
+      return {
+        text: "Le téléchargement du modèle a échoué. Relancez-le pour réessayer.",
+        kind: "error",
+      };
+    default:
+      return {
+        text: "Le modèle de classification est absent. Lancez le téléchargement pour activer le service.",
+        kind: "warning",
+      };
+  }
+}
+
+/**
+ * Pourcentage d'avancement borné 0..100 (0 si inconnu). Pur.
+ * @param {{percent?: (number|null)}} [state]
+ * @returns {number}
+ */
+export function layaModelProgressPercent(state) {
+  const s = state && typeof state === "object" ? state : {};
+  const percent = s.percent;
+  if (typeof percent !== "number" || !Number.isFinite(percent)) return 0;
+  return Math.min(100, Math.max(0, Math.round(percent)));
+}
