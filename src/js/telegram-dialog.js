@@ -28,6 +28,7 @@
 // dépendances INJECTÉES : testable sans réseau, sans Tauri et sans horloge.
 
 import { invoke } from "@tauri-apps/api/core";
+import { assistantKindFromAnswers, buildAssistantKindQuestion } from "./laya-gateway.js";
 
 /** Longueur maximale de la phrase envoyée à Telegram. */
 export const TELEGRAM_DIALOG_MAX_CHARS = 200;
@@ -172,6 +173,68 @@ export function classifyAssistantMessage(raw) {
 export function isUsefulAssistantMessage(raw) {
   const kind = classifyAssistantMessage(raw);
   return kind !== "empty" && kind !== "intermediate";
+}
+
+/**
+ * Appel par défaut : la commande Rust `laya_classify`, qui interroge le service
+ * Laya local UNIQUE (127.0.0.1:3017) lancé et surveillé par Pilot. Aucun modèle
+ * n'est chargé ici : c'est le service qui le garde en mémoire.
+ */
+async function defaultLayaClassify(text) {
+  return invoke("laya_classify", { text, questions: buildAssistantKindQuestion() });
+}
+
+/**
+ * Classement d'un message de l'Assistant PAR LE SERVICE LAYA (incrément 1) :
+ * Pilot prend une décision interne RÉELLE — « ce message est-il une alerte à
+ * transmettre ? » — sans appeler aucun agent de modèle de langage et sans
+ * consommer de jeton. Le service répond en une fraction de seconde ; sa réponse
+ * et sa CONFIANCE sont tracées.
+ *
+ * Fail-open de bout en bout : service éteint, modèle non encore chargé, réponse
+ * illisible ou confiance trop faible ⇒ repli STRICT sur la règle de mots-clés
+ * existante (`classifyAssistantMessage`), donc comportement identique à avant
+ * Laya — aucune erreur visible, aucun blocage, aucun routage modifié.
+ *
+ * @param {string} raw  message sortant de l'Assistant
+ * @param {{classify?: Function, heuristic?: Function, trace?: boolean}} [deps]
+ *   `classify` = appel injecté (tests) ; `trace: false` coupe la trace.
+ * @returns {Promise<{kind: string, source: "laya"|"keywords", confidence: number|null, ms: number|null}>}
+ */
+export async function classifyAssistantMessageWithLaya(raw, deps = {}) {
+  const heuristic = deps.heuristic || classifyAssistantMessage;
+  const kind = heuristic(raw);
+  const fallback = { kind, source: "keywords", confidence: null, ms: null };
+  // Rien d'exploitable (que du code / des chemins) : inutile d'interroger Laya.
+  if (kind === "empty") return fallback;
+
+  const call = deps.classify || defaultLayaClassify;
+  let res = null;
+  try {
+    res = await call(raw);
+  } catch (err) {
+    if (deps.trace !== false) {
+      console.info(
+        "[Laya] relais sortant : classement indisponible, repli sur les mots-clés —",
+        err && err.message ? err.message : String(err),
+      );
+    }
+    return fallback;
+  }
+
+  const verdict = assistantKindFromAnswers(res && res.answers);
+  if (!verdict) return fallback;
+  if (deps.trace !== false) {
+    console.info(
+      `[Laya] relais sortant : ${verdict.kind} (answer_confidence ${verdict.confidence}) en ${res.ms ?? "?"} ms`,
+    );
+  }
+  return {
+    kind: verdict.kind,
+    source: "laya",
+    confidence: verdict.confidence,
+    ms: typeof res.ms === "number" ? res.ms : null,
+  };
 }
 
 // ── État de la communication du dialogue ─────────────────────────────────────

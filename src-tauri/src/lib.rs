@@ -2228,6 +2228,21 @@ fn laya_status(app: AppHandle, state: State<AppState>) -> laya::LayaStatus {
     )
 }
 
+/// Service Laya : classe un texte auprès du service local UNIQUE
+/// (`POST /classify`) — choix parmi des libellés (`choice`), note sur une
+/// échelle (`score`), oui/non (`noul`). LECTURE SEULE : ne modifie ni le service,
+/// ni les réglages, ni le disque ; l'appelant reçoit les `answers` du service
+/// (chacune avec sa `confidence` et son `answer_confidence`). Toute panne (service
+/// éteint, modèle non prêt, question refusée) est une erreur au message clair —
+/// jamais une panique, jamais un modèle chargé ici.
+#[tauri::command]
+fn laya_classify(
+    text: String,
+    questions: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    laya::classify(&text, &questions)
+}
+
 /// Modèle Laya : état du modèle en LECTURE SEULE (dossier effectif, fichiers,
 /// téléchargement en cours, raison du dernier échec). Aucune écriture, aucun
 /// réseau : sert à afficher un état clair dans les Réglages.
@@ -3480,6 +3495,7 @@ pub fn run() {
             plface_status,
             // ── Service Laya : état du pilotage du service (lecture seule) ──
             laya_status,
+            laya_classify,
             laya_model_state,
             laya_model_download,
             laya_model_cancel,

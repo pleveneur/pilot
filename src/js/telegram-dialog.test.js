@@ -34,6 +34,7 @@ import {
   TELEGRAM_RAW_AVIS_GRACE_MS,
   condenseAssistantMessage,
   classifyAssistantMessage,
+  classifyAssistantMessageWithLaya,
   isUsefulAssistantMessage,
   relayAssistantMessageToTelegram,
   computeTelegramDialogVisibility,
@@ -381,5 +382,116 @@ describe("absence de doublon d'avis (et zéro perte)", () => {
     expect(telegramMessages()).toEqual([
       "⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.",
     ]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Incrément 1 Laya : la décision de relais sortant est prise par le service
+// Laya local (aucun jeton, confiance tracée), avec repli STRICT sur les
+// mots-clés quand le service est éteint ou le modèle non chargé.
+// Aucun réseau, aucun modèle : l'appel au service est SIMULÉ.
+describe("classifyAssistantMessageWithLaya", () => {
+  /** Faux service : réponse de classement prête à l'emploi. */
+  const answer = (choice, answer_confidence, ms = 96) => async () => ({
+    ok: true,
+    answers: {
+      assistant_message_kind: {
+        type: "choice",
+        choice,
+        probabilities: { alert: answer_confidence, report: 1 - answer_confidence },
+        confidence: answer_confidence,
+        answer_confidence,
+        action: { act_probability: 0.5 },
+      },
+    },
+    ms,
+  });
+
+  it("la décision vient de Laya, avec sa confiance et son temps", async () => {
+    // Les mots-clés diraient « alerte » : Laya tranche autrement, et c'est LUI qui décide.
+    const raw = "⚠️ Un agent semble bloqué, je l'ai relancé.";
+    expect(classifyAssistantMessage(raw)).toBe("alert");
+    const verdict = await classifyAssistantMessageWithLaya(raw, {
+      classify: answer("intermediate", 0.91, 88),
+      trace: false,
+    });
+    expect(verdict).toEqual({ kind: "intermediate", source: "laya", confidence: 0.91, ms: 88 });
+  });
+
+  it("service éteint : repli strict sur les mots-clés, sans exception", async () => {
+    const raw = "⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.";
+    const verdict = await classifyAssistantMessageWithLaya(raw, {
+      classify: async () => {
+        throw new Error("Le service Laya ne répond pas (service éteint ou injoignable).");
+      },
+      trace: false,
+    });
+    expect(verdict).toEqual({ kind: "alert", source: "keywords", confidence: null, ms: null });
+  });
+
+  it("confiance trop faible : repli sur les mots-clés", async () => {
+    const raw = "⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.";
+    const verdict = await classifyAssistantMessageWithLaya(raw, {
+      classify: answer("report", 0.34),
+      trace: false,
+    });
+    expect(verdict.source).toBe("keywords");
+    expect(verdict.kind).toBe("alert");
+  });
+
+  it("réponse illisible ou libellé inconnu : repli sur les mots-clés", async () => {
+    const raw = "Le compte rendu est prêt.";
+    const empty = await classifyAssistantMessageWithLaya(raw, {
+      classify: async () => ({ ok: true, answers: {}, ms: 5 }),
+      trace: false,
+    });
+    expect(empty.source).toBe("keywords");
+    const unknown = await classifyAssistantMessageWithLaya(raw, {
+      classify: async () => ({ ok: false, answers: null, ms: null, error: "erreur" }),
+      trace: false,
+    });
+    expect(unknown.source).toBe("keywords");
+  });
+
+  it("message sans contenu : le service n'est même pas interrogé", async () => {
+    let called = 0;
+    const verdict = await classifyAssistantMessageWithLaya("`rm -rf /tmp/x`\n```\n```", {
+      classify: async () => {
+        called += 1;
+        return { ok: true, answers: {}, ms: 1 };
+      },
+      trace: false,
+    });
+    expect(called).toBe(0);
+    expect(verdict.source).toBe("keywords");
+  });
+
+  it("appel réel : la commande Rust `laya_classify` avec la question du service", async () => {
+    invoke.mockResolvedValueOnce({
+      ok: true,
+      answers: { assistant_message_kind: { type: "choice", choice: "report", answer_confidence: 0.88 } },
+      ms: 104,
+    });
+    const verdict = await classifyAssistantMessageWithLaya("Le compte rendu est prêt.");
+    expect(verdict).toEqual({ kind: "report", source: "laya", confidence: 0.88, ms: 104 });
+    expect(invoke).toHaveBeenCalledWith("laya_classify", {
+      text: "Le compte rendu est prêt.",
+      questions: {
+        assistant_message_kind: {
+          type: "choice",
+          instructions: expect.stringContaining("`body`"),
+          criteria: expect.objectContaining({ alert: expect.any(String), report: expect.any(String) }),
+        },
+      },
+    });
+  });
+
+  it("commande Rust en échec (service éteint) : repli, jamais de rejet", async () => {
+    invoke.mockRejectedValueOnce(new Error("Le service Laya ne répond pas"));
+    const verdict = await classifyAssistantMessageWithLaya(
+      "⚠️ Un agent semble bloqué, je l'ai arrêté et relancé.",
+      { trace: false }
+    );
+    expect(verdict).toEqual({ kind: "alert", source: "keywords", confidence: null, ms: null });
   });
 });

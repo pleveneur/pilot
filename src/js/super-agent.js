@@ -54,8 +54,9 @@ import {
 // réponse finale (reformulée en une phrase simple) et gère le bouton d'activation
 // (visible uniquement si Telegram est configuré, état persisté).
 import {
-  classifyAssistantMessage,
+  classifyAssistantMessageWithLaya,
   flushRawTelegramAvis,
+  isTelegramDialogActive,
   loadTelegramDialogConfig,
   relayAssistantMessageToTelegram,
   setRawAvisTurnProbe,
@@ -1079,8 +1080,16 @@ function appendSystemMessage(messagesEl, text) {
   // anomalie, blocage) partent aussi sur Telegram, en une phrase simple, quand
   // la communication du dialogue est active. Les autres messages système
   // (accueil, session, suivi) ne sont jamais transmis.
-  if (classifyAssistantMessage(trimmed) === "alert") {
-    relayAssistantMessageToTelegram(trimmed);
+  //
+  // Incrément 1 Laya (§7.6 étape 4) : la DÉCISION « alerte à transmettre ? » est
+  // prise par le service Laya local quand il est disponible (classement en une
+  // fraction de seconde, aucun jeton, confiance tracée) ; service éteint ou
+  // modèle non chargé → repli STRICT sur la règle de mots-clés d'avant. C'est un
+  // feu et oubli : jamais bloquant pour l'affichage, jamais d'erreur visible.
+  if (isTelegramDialogActive()) {
+    classifyAssistantMessageWithLaya(trimmed).then((verdict) => {
+      if (verdict.kind === "alert") relayAssistantMessageToTelegram(trimmed);
+    });
   }
   const seq = infoSeq++;
   pendingInfo[seq] = { messagesEl, text: trimmed };

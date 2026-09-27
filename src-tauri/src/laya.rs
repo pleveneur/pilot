@@ -61,6 +61,19 @@ pub(crate) const READY_DEADLINE: Duration = Duration::from_secs(3);
 const PROBE_INTERVAL: Duration = Duration::from_millis(200);
 /// Route d'état du service (`{"ready":bool,"model":...}`).
 const STATUS_ROUTE: &str = "/status";
+/// Route de classification du service (`{"ok":bool,"answers":{...},"ms":int}`).
+const CLASSIFY_ROUTE: &str = "/classify";
+/// Délai maximal d'un appel de classification : le PREMIER appel charge le
+/// modèle (≈ 2,5 s mesurés), les suivants répondent en ≈ 0,1 s. Large à dessein
+/// pour ne jamais couper un chargement légitime, borné pour ne jamais bloquer
+/// l'appelant indéfiniment.
+pub(crate) const CLASSIFY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Taille maximale d'une réponse HTTP courte lue sur le service (garde-fou :
+/// aucune lecture non bornée).
+const MAX_HTTP_BODY: usize = 64 * 1024;
+/// Message de panne du service (jamais un nom technique nu).
+pub(crate) const SERVICE_DOWN_MESSAGE: &str =
+    "Le service Laya ne répond pas (service éteint ou injoignable sur la boucle locale).";
 
 /// Résultat d'une sonde : le service répond-il, et a-t-il chargé son modèle ?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -231,11 +244,156 @@ pub(crate) fn process_name_for(node_path: Option<&str>) -> String {
     name
 }
 
+/// Découpe une réponse HTTP/1.1 courte et renvoie son corps, **dé-encodé** si le
+/// serveur répond en morceaux (`Transfer-Encoding: chunked`, ce que fait le
+/// service Laya sur `/classify`). PURE : `None` si la réponse n'est pas du HTTP
+/// ou si les en-têtes ne sont pas complets.
+fn json_body(text: &str) -> Option<String> {
+    if !text.starts_with("HTTP/") {
+        return None;
+    }
+    let head = text.find("\r\n\r\n")?;
+    let (headers, body) = text.split_at(head);
+    let body = &body[4..];
+    if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+        return Some(dechunk(body));
+    }
+    Some(body.to_string())
+}
+
+/// Assemble les morceaux d'un corps `chunked` : « taille hexa CRLF données
+/// CRLF », terminé par un morceau de taille 0. Un morceau incomplet (ou une
+/// taille illisible) arrête l'assemblage : le texte obtenu est alors tronqué et
+/// la lecture reprend (`read_http_body`). Les prolongations éventuelles sont
+/// ignorées.
+fn dechunk(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    loop {
+        let Some((size, tail)) = rest.split_once("\r\n") else {
+            break;
+        };
+        let Ok(n) = usize::from_str_radix(size.trim(), 16) else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        if tail.len() < n {
+            out.push_str(tail);
+            break;
+        }
+        out.push_str(&tail[..n]);
+        rest = tail[n..].strip_prefix("\r\n").unwrap_or(&tail[n..]);
+    }
+    out
+}
+
+/// Lit une réponse HTTP courte : on s'arrête dès que le corps est un JSON
+/// COMPLET (`serde_json` accepte le corps entier, accolades imbriquées
+/// comprises) — le service peut garder la connexion ouverte après sa réponse.
+/// Lecture bornée à `max` octets ; toute erreur de flux termine la lecture.
+fn read_http_body(stream: &mut std::net::TcpStream, max: usize) -> Vec<u8> {
+    use std::io::Read;
+
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 1024];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+        }
+        let text = String::from_utf8_lossy(&raw);
+        if let Some(body) = json_body(&text) {
+            if serde_json::from_str::<serde_json::Value>(&body).is_ok() {
+                break;
+            }
+        }
+        if raw.len() >= max {
+            break;
+        }
+    }
+    raw
+}
+
+/// Classe un texte auprès d'un service Laya (fonction non pure, testable) :
+/// `POST /classify {"text","questions"}`. Renvoie le corps JSON COMPLET du
+/// service (`{"ok":true,"answers":{...},"ms":N}`).
+///
+/// Toute panne (service éteint, modèle non prêt, réponse illisible, HTTP 4xx/5xx)
+/// est une `Err` au message clair : jamais de panique, jamais de blocage au-delà
+/// du délai, aucune écriture (ni sur le service, ni sur le disque).
+pub(crate) fn classify_at(
+    host: &str,
+    port: u16,
+    text: &str,
+    questions: &serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, String> {
+    use std::io::Write;
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    if questions.is_null() {
+        return Err("Question manquante : 'questions' est obligatoire.".to_string());
+    }
+    let body = serde_json::json!({ "text": text, "questions": questions }).to_string();
+    let Some(addr) = (host, port).to_socket_addrs().ok().and_then(|mut a| a.next()) else {
+        return Err(SERVICE_DOWN_MESSAGE.to_string());
+    };
+    // Le CONNECT est borné court (comme la sonde) : sur certaines plateformes un
+    // port fermé ne refuse pas la connexion, il laisse expirer le délai — sans
+    // cette borne, « service éteint » se paierait au prix du délai de RÉPONSE.
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout.min(PROBE_TIMEOUT)) else {
+        return Err(SERVICE_DOWN_MESSAGE.to_string());
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = format!(
+        "POST {CLASSIFY_ROUTE} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return Err(SERVICE_DOWN_MESSAGE.to_string());
+    }
+
+    let raw = read_http_body(&mut stream, MAX_HTTP_BODY);
+    let text = String::from_utf8_lossy(&raw);
+    let Some(body) = json_body(&text) else {
+        return Err(SERVICE_DOWN_MESSAGE.to_string());
+    };
+    let status: u16 = text
+        .get(9..12)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return Err("Réponse illisible du service Laya.".to_string());
+    };
+    if status >= 400 || parsed.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let detail = parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("erreur inconnue");
+        return Err(format!(
+            "Le service Laya n'a pas pu classer (HTTP {status}) : {detail}"
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Classe un texte auprès du service Laya réel (`127.0.0.1:3017`).
+pub(crate) fn classify(
+    text: &str,
+    questions: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    classify_at(LAYA_API_HOST, LAYA_API_PORT, text, questions, CLASSIFY_TIMEOUT)
+}
+
 /// Sonde `/status` du service (HTTP/1.1, timeout court) : `reachable` dès qu'une
 /// réponse HTTP est reçue, `ready` si le corps annonce le modèle chargé. Toute
 /// erreur réseau = muet (jamais bloquant au-delà du timeout).
 pub(crate) fn probe_status(host: &str, port: u16, timeout: Duration) -> LayaProbe {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::{TcpStream, ToSocketAddrs};
 
     // `host` est une IP littérale : pas de résolution DNS bloquante.
@@ -258,38 +416,17 @@ pub(crate) fn probe_status(host: &str, port: u16, timeout: Duration) -> LayaProb
         return LayaProbe::DOWN;
     }
 
-    // Le service garde la connexion ouverte : on s'arrête dès que le corps JSON
-    // est complet (accolade fermante) au lieu d'attendre la fermeture.
-    let mut raw: Vec<u8> = Vec::new();
-    loop {
-        let mut buf = [0u8; 256];
-        match stream.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw);
-                if let Some(head) = text.find("\r\n\r\n") {
-                    if text[head + 4..].contains('}') {
-                        break;
-                    }
-                }
-                if raw.len() > 4096 {
-                    break;
-                }
-            }
-        }
-    }
+    // Le service peut garder la connexion ouverte : on s'arrête dès que le corps
+    // JSON est COMPLET (accolades imbriquées comprises), pas à la fermeture.
+    let raw = read_http_body(&mut stream, MAX_HTTP_BODY);
 
     let text = String::from_utf8_lossy(&raw);
-    if !text.starts_with("HTTP/") {
-        return LayaProbe::DOWN;
-    }
-    let Some(head) = text.find("\r\n\r\n") else {
+    let Some(body) = json_body(&text) else {
         return LayaProbe::DOWN;
     };
     LayaProbe {
         reachable: true,
-        ready: status_ready(&text[head + 4..]),
+        ready: status_ready(&body),
     }
 }
 
@@ -793,7 +930,7 @@ http.createServer((req, res) => {
     /// RÉEL (sans cet appel, `/status` dit toujours `ready:false`). Toute erreur
     /// renvoie `false`, jamais bloquant au-delà du délai.
     fn warm_up_model(timeout: Duration) -> bool {
-        use std::io::{Read, Write};
+        use std::io::Write;
         use std::net::{TcpStream, ToSocketAddrs};
 
         let body = concat!(
@@ -821,27 +958,222 @@ http.createServer((req, res) => {
         }
 
         // Le service garde la connexion ouverte : on s'arrête dès que le corps
-        // JSON est complet (accolade fermante), comme `probe_status`.
+        // JSON est complet, comme `probe_status` (même lecture bornée).
+        let raw = read_http_body(&mut stream, 8192);
+        String::from_utf8_lossy(&raw).contains("\"ok\":true")
+    }
+
+    /// Fin des en-têtes HTTP : CR LF CR LF, écrit en octets pour rester sans
+    /// ambiguïé d'echappement.
+    const HEADERS_END: [u8; 4] = [13, 10, 13, 10];
+
+    /// Lit la requête du client (elle commence par la MÉTHODE, pas par
+    /// « HTTP/ ») jusqu'aux en-têtes complets : l'écriture côté client est
+    /// unique, l'en-tête suffit donc à tout recevoir.
+    fn read_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        use std::io::Read;
+
         let mut raw: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 1024];
         loop {
-            let mut buf = [0u8; 512];
             match stream.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    raw.extend_from_slice(&buf[..n]);
-                    let text = String::from_utf8_lossy(&raw);
-                    if let Some(head) = text.find("\r\n\r\n") {
-                        if text[head + 4..].contains('}') {
-                            break;
-                        }
-                    }
-                    if raw.len() > 8192 {
-                        break;
-                    }
-                }
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+            }
+            if raw.windows(HEADERS_END.len()).any(|w| w == HEADERS_END) {
+                break;
             }
         }
-        String::from_utf8_lossy(&raw).contains("\"ok\":true")
+        raw
+    }
+
+    /// Faux service Laya en RUST : écoute sur un port libre, lit la requête
+    /// (transmise au test), répond `status_line` + `body`, puis s'arrête. Aucun
+    /// modèle, aucun réseau hors boucle locale, aucun port du service réel.
+    fn spawn_fake_laya(
+        status_line: &str,
+        body: String,
+    ) -> (u16, std::sync::mpsc::Receiver<String>) {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+        let port = listener.local_addr().expect("adresse locale").port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status_line = status_line.to_string();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let request = read_request(&mut stream);
+                let _ = tx.send(String::from_utf8_lossy(&request).to_string());
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (port, rx)
+    }
+
+    /// Port libre garanti (aucun service n'y écoute) : pour prouver le cas
+    /// « service éteint » sans jamais toucher au port du vrai service.
+    fn free_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+        let port = listener.local_addr().expect("adresse locale").port();
+        drop(listener);
+        port
+    }
+
+    #[test]
+    fn json_body_reads_the_body_of_an_http_response() {
+        assert_eq!(
+            json_body("HTTP/1.1 200 OK\r\nX: 1\r\n\r\n{\"a\":1}"),
+            Some("{\"a\":1}".to_string())
+        );
+        assert_eq!(json_body("HTTP/1.1 200 OK\r\n\r\n"), Some(String::new()));
+        assert_eq!(json_body("pas du http"), None);
+        assert_eq!(json_body("HTTP/1.1 200 OK"), None, "en-têtes incomplets");
+    }
+
+    /// Preuve du VRAI format de réponse du service Laya sur `/classify` :
+    /// `Transfer-Encoding: chunked` (relevé sur le service réel). Sans
+    /// dé-encodage, `classify` répondait « Réponse illisible ».
+    #[test]
+    fn json_body_decodes_a_chunked_response_like_the_real_service() {
+        // Tailles calculees : aucun comptage manuel (source d'erreur).
+        let one = "{\"ok\":true,\"answers\":{\"an";
+        let two = "swer\":{\"type\":\"choice\"}},\"ms\":45}";
+        let expected = format!("{one}{two}");
+        let raw = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json; charset=utf-8\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{one}\r\n{:x}\r\n{two}\r\n0\r\n\r\n",
+            one.len(),
+            two.len()
+        );
+        let body = json_body(&raw).expect("reponse HTTP");
+        assert_eq!(body, expected);
+        assert!(serde_json::from_str::<serde_json::Value>(&body).is_ok(), "corps recompose : {body}");
+    }
+
+    #[test]
+    fn dechunk_stops_on_an_incomplete_or_broken_chunk() {
+        assert_eq!(dechunk("5\r\nhello\r\n0\r\n\r\n"), "hello");
+        assert_eq!(dechunk("5\r\nhel"), "hel", "morceau incomplet : ce qui est recu");
+        assert_eq!(dechunk("zz\r\nnope"), "", "taille illisible");
+        assert_eq!(dechunk("5\r\nhello\r\n"), "hello", "prolongation sans zero final");
+    }
+
+    #[test]
+    fn classify_posts_the_text_and_questions_and_returns_the_answers() {
+        // Corps IMBRIQUÉ (`answers` → `answer`) : l'ancien arrêt sur la première
+        // accolade fermante aurait tronqué cette réponse.
+        let body = concat!(
+            "{\"ok\":true,\"answers\":{\"answer\":{\"type\":\"noul\",",
+            "\"noul\":0.12,\"answer_confidence\":0.88}},\"ms\":96}"
+        );
+        let (port, request) = spawn_fake_laya("200 OK", body.to_string());
+        let questions = serde_json::json!({
+            "answer": { "type": "noul", "instructions": "`body` est-il urgent ?" }
+        });
+        let out = classify_at(
+            "127.0.0.1",
+            port,
+            "Le serveur est tombé, toutes les tentatives échouent",
+            &questions,
+            Duration::from_secs(5),
+        )
+        .expect("le service de test doit répondre");
+        assert_eq!(out["answers"]["answer"]["noul"], serde_json::json!(0.12));
+        assert_eq!(out["answers"]["answer"]["answer_confidence"], serde_json::json!(0.88));
+        assert_eq!(out["ms"], serde_json::json!(96));
+
+        let sent = request.recv_timeout(Duration::from_secs(5)).expect("requête reçue");
+        assert!(sent.starts_with("POST /classify HTTP/1.1"), "requête : {sent}");
+        assert!(sent.contains("Le serveur est tombé"), "le texte est transmis : {sent}");
+        assert!(sent.contains("`body` est-il urgent ?"), "la question est transmise : {sent}");
+        assert!(sent.contains("\"type\":\"noul\""), "le type est transmis : {sent}");
+    }
+
+    #[test]
+    fn classify_surfaces_the_service_error_without_panicking() {
+        // Modèle refusé / non trouvé : le service répond 400 `ok:false`.
+        let body = "{\"ok\":false,\"error\":\"'text' (chaîne) est requis\"}";
+        let (port, _) = spawn_fake_laya("400 Bad Request", body.to_string());
+        let err = classify_at(
+            "127.0.0.1",
+            port,
+            "x",
+            &serde_json::json!({"answer": {"type": "noul"}}),
+            Duration::from_secs(5),
+        )
+        .expect_err("un refus du service est une erreur");
+        assert!(err.contains("'text' (chaîne) est requis"), "message : {err}");
+        assert!(err.contains("HTTP 400"), "message : {err}");
+    }
+
+    #[test]
+    fn classify_fails_fast_when_no_service_listens() {
+        let started = Instant::now();
+        let err = classify_at(
+            "127.0.0.1",
+            free_port(),
+            "x",
+            &serde_json::json!({"answer": {"type": "noul"}}),
+            Duration::from_secs(2),
+        )
+        .expect_err("service éteint = erreur");
+        assert_eq!(err, SERVICE_DOWN_MESSAGE);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "la panne doit être immédiate, pas un délai d'attente"
+        );
+    }
+
+    #[test]
+    fn classify_reports_an_unreadable_response() {
+        // Connexion acceptée puis fermée sans rien dire : « illisible », pas « panique ».
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("port libre");
+        let port = listener.local_addr().expect("adresse locale").port();
+        std::thread::spawn(move || {
+            let _ = listener.accept();
+        });
+        let err = classify_at(
+            "127.0.0.1",
+            port,
+            "x",
+            &serde_json::json!({"answer": {"type": "noul"}}),
+            Duration::from_secs(2),
+        )
+        .expect_err("réponse vide = erreur");
+        assert_eq!(err, SERVICE_DOWN_MESSAGE);
+    }
+
+    #[test]
+    fn classify_refuses_a_missing_question_without_touching_the_network() {
+        let err = classify_at(
+            "127.0.0.1",
+            free_port(),
+            "x",
+            &serde_json::Value::Null,
+            Duration::from_secs(2),
+        )
+        .expect_err("question absente = erreur");
+        assert!(err.contains("'questions' est obligatoire"), "message : {err}");
+    }
+
+    #[test]
+    fn classify_surfaces_the_real_service_message_when_it_is_busy() {
+        // Réponse 500 (prédiction en échec) : le message du service est remonté
+        // tel quel et le service reste vivant pour l'appel suivant.
+        let body = "{\"ok\":false,\"error\":\"dossier de modèle introuvable\"}";
+        let (port, _) = spawn_fake_laya("500 Internal Server Error", body.to_string());
+        let err = classify_at(
+            "127.0.0.1",
+            port,
+            "x",
+            &serde_json::json!({"answer": {"type": "choice"}}),
+            Duration::from_secs(5),
+        )
+        .expect_err("500 = erreur");
+        assert!(err.contains("dossier de modèle introuvable"), "message : {err}");
     }
 
     /// Chaîne RÉELLE avec la COPIE EMBARQUÉE (`src-tauri/laya/`) : c'est le
@@ -894,6 +1226,37 @@ http.createServer((req, res) => {
         // Le modèle n'est chargé qu'au premier `POST /classify` : on le demande
         // AVANT de lire l'état, sinon `ready` est faux par construction.
         let real_loaded = real_ok && warm_up_model(Duration::from_secs(300));
+        // Aucun `expect`/`panic` AVANT `stop_owned` : un échec doit arrêter le
+        // service (sinon un modèle de 1,6 Gio reste en vie et retient le tube).
+        let mut real_answer: Result<(String, f64), String> = Ok((String::new(), 0.0));
+        if real_loaded {
+            let questions = serde_json::json!({
+                "assistant_message_kind": {
+                    "type": "choice",
+                    "instructions": "Which kind of message is `body`? It is a message an AI assistant just wrote to its user.",
+                    "criteria": {
+                        "alert": "something went wrong and needs the user's attention now",
+                        "report": "a result, a finished task, a delivered work"
+                    }
+                }
+            });
+            let text = "ERREUR : le build de la nuit a échoué, je m'arrête là.";
+            real_answer = classify(text, &questions).map(|answers| {
+                eprintln!("PREUVE RÉELLE classify : {answers}");
+                (
+                    answers
+                        .pointer("/answers/assistant_message_kind/choice")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    answers
+                        .pointer("/answers/assistant_message_kind/answer_confidence")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
+                )
+            });
+        }
+
         let state = status(true, &service_str, &model_dir, true);
 
         // Arrêt AVANT toute assertion : un échec ne doit jamais laisser le
@@ -915,6 +1278,10 @@ http.createServer((req, res) => {
         if real_ok {
             assert!(real_loaded, "le vrai modèle devrait avoir répondu à /classify");
             assert!(state.ready, "le vrai modèle devrait être chargé : {state:?}");
+            // Le service est déjà arrêté : un échec ici ne laisse rien en vie.
+            let (kind, conf) = real_answer.expect("classify sur le vrai service");
+            assert!(!kind.is_empty(), "le vrai service doit rendre un libellé");
+            assert!(conf > 0.5, "confiance réelle attendue > 0,5");
         } else {
             eprintln!("NOTE : LAYA_REAL_MODEL_DIR absent → « ready » non vérifié (aucun téléchargement)");
         }
