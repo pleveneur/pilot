@@ -1533,7 +1533,9 @@ uniquement un bloc d'instructions dans le prompt système.
   avoir à réouvrir l'onglet 🧭. Côté technique (détails § 3) : événement pi
   `agent_settled` traité comme filet de finalisation, erreurs fournisseur
   différées à la fin du tour, et rejeu automatique des résumés en attente dès
-  la libération de la session Assistant. En cas de doute, l'Assistant relit
+  la libération de la session Assistant. Le message versé est **borné** (plafond
+  unique défini côté Rust, texte complet conservé — voir § 5 « Apprentissage en
+  continu »). En cas de doute, l'Assistant relit
   un résultat via `get_delegation_result(project, sessionId?|agent_id?)`
   (`sessionId` exposé par `list_agent_sessions` ; à défaut le jsonl le plus
   récent de l'agent ou sa session vivante `get_messages`), lecture seule et
@@ -1733,6 +1735,11 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   choix est **persisté immédiatement** (`set_super_agent_default_model`) et
   **préservé par l'enregistrement des Paramètres**, qui réécrit pourtant toute
   la configuration (`settings.js:1242`).
+- **Reprise du modèle choisi au redémarrage** : le **modèle choisi** dans le
+  sélecteur est **réappliqué à l'ouverture** de la session de l'Assistant (il ne
+  repart donc pas sur le défaut global). S'il n'est **plus installé** (modèle
+  retiré du registre), repli propre sur le modèle par défaut **dédié**, puis sur
+  le défaut **global** — sans erreur ni blocage du démarrage.
 
 ### Personnaliser le prompt
 - **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le

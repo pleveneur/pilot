@@ -470,7 +470,9 @@ uniquement un bloc d'instructions dans le prompt système.
   avoir à réouvrir l'onglet 🧭. Côté technique (détails § 3) : événement pi
   `agent_settled` traité comme filet de finalisation, erreurs fournisseur
   différées à la fin du tour, et rejeu automatique des résumés en attente dès
-  la libération de la session Assistant. En cas de doute, l'Assistant relit
+  la libération de la session Assistant. Le message versé est **borné** (plafond
+  unique défini côté Rust, texte complet conservé — voir § 5 « Apprentissage en
+  continu »). En cas de doute, l'Assistant relit
   un résultat via `get_delegation_result(project, sessionId?|agent_id?)`
   (`sessionId` exposé par `list_agent_sessions` ; à défaut le jsonl le plus
   récent de l'agent ou sa session vivante `get_messages`), lecture seule et
@@ -1024,6 +1026,16 @@ Tables (V1) :
   tâche d'orchestration), Pilot génère un **résumé** (réutilise la logique de
   capture H9 / synthèse d'orchestration) et l'**injecte** à l'Assistant via un
   prompt système ou un message dédié.
+- **Plafond de ce qui est versé** : le message réellement injecté dans la
+  conversation est **borné à 4 000 caractères**. Le plafond porte sur le
+  **message entier** (préfixe + résumé + avis de troncature), pas sur le seul
+  résumé : plusieurs versements successifs ne peuvent pas le contourner. Au-delà,
+  un **avis de troncature** indique le **nombre de caractères omis** et où lire
+  la suite. Le **texte complet n'est jamais détruit** : il reste conservé tel
+  quel dans le **suivi de l'assistant** (table `session_summaries`) et dans la
+  **session de l'agent**. Ce plafond a une **seule source de vérité** côté cœur
+  Rust (`super_agent.rs`, `MAX_INJECTED_MESSAGE_CHARS`) ; l'interface ne le
+  recopie pas et envoie le texte complet.
 - **Filtre d'insignifiance** (chat standard) : avant l'injection, la fonction
   pure `shouldRememberExchange` (`src/js/super-agent-exchange-filter.js`,
   branchée dans `agent-pi.js` à l'`agent_end`) refuse un échange vide, trop
@@ -1322,7 +1334,8 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 
 ## 10. Backend Rust (esquisse)
 
-- `super_agent.rs` : session dédiée, injection de résumés, commandes de base.
+- `super_agent.rs` : session dédiée, injection bornée des résumés (plafond unique
+  `MAX_INJECTED_MESSAGE_CHARS`, seule source de la règle), commandes de base.
 - Extensions pi : `pilot-assistant-files.ts` (espace d'écriture restreint
   `~/.pilot/assistant/`), `pilot-choices.ts` (questions),
   `pilot-assistant-actions.ts` (open_project / delegate_to_coder /
