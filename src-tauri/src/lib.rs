@@ -113,6 +113,8 @@ mod gds_service;
 mod group_assistant;
 mod plface;
 mod laya;
+mod laya_model;
+mod laya_download;
 
 // ── État global de l'application ──
 
@@ -797,8 +799,24 @@ struct AppConfig {
     #[serde(default)]
     laya_service_path: String,
     // Dossier du modèle de classification (relatif au dossier du service ou absolu).
+    // Vide = `<dossier du service>/model-ml` (défaut du manifeste et du
+    // téléchargeur) : l'utilisateur n'a donc rien à choisir pour l'emplacement.
     #[serde(default)]
     laya_model_dir: String,
+    // Télécharger le modèle automatiquement au démarrage s'il manque. Défaut
+    // désactivé : un utilisateur sans Laya ne voit aucune différence. Un
+    // téléchargement raté n'entraîne JAMAIS le lancement du service.
+    #[serde(default)]
+    laya_model_auto_download_enabled: bool,
+    // Adresse d'hébergement des fichiers du modèle (page de téléchargement).
+    // Vide tant que l'adresse n'est pas connue : l'état affiché est alors
+    // « adresse non renseignée », jamais un plantage.
+    #[serde(default)]
+    laya_model_base_url: String,
+    // Chemin du programme de téléchargement (`laya-fetch.mjs`). Vide = cherché à
+    // côté du service.
+    #[serde(default)]
+    laya_fetch_path: String,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -1061,6 +1079,9 @@ impl Default for AppConfig {
             laya_autostart_enabled: false,
             laya_service_path: String::new(),
             laya_model_dir: String::new(),
+            laya_model_auto_download_enabled: false,
+            laya_model_base_url: String::new(),
+            laya_fetch_path: String::new(),
         }
     }
 }
@@ -2042,20 +2063,102 @@ fn laya_pid_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join(laya::PID_FILE_NAME))
 }
 
+/// Modèle Laya : chemin du fichier de trace du téléchargement lancé par Pilot
+/// (dossier de données de l'application). Permet d'interrompre **ce**
+/// téléchargement-là et lui seul. `None` si le dossier n'est pas résoluble.
+fn laya_download_pid_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(laya_download::FETCH_PID_FILE_NAME))
+}
+
+/// Modèle Laya : chemins effectifs (dossier du modèle, téléchargeur, manifeste).
+/// Le dossier du modèle vide vaut `<dossier du service>/model-ml` (défaut du
+/// manifeste et du téléchargeur), comme le service qui reçoit ce même dossier.
+/// `fetch_override` non vide gagne sur la configuration (bouton « Télécharger
+/// maintenant » avec un champ pas encore enregistré).
+fn laya_download_paths(
+    cfg: &AppConfig,
+    fetch_override: &str,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let service_dir = std::path::Path::new(cfg.laya_service_path.trim())
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let fetch_setting = if fetch_override.trim().is_empty() {
+        cfg.laya_fetch_path.as_str()
+    } else {
+        fetch_override
+    };
+    let fetch = laya_model::resolve_fetch_path(fetch_setting, &service_dir);
+    let manifest = laya_model::manifest_path(&fetch);
+    let model_dir = laya_model::resolve_model_dir(&cfg.laya_model_dir, &service_dir);
+    (model_dir, fetch, manifest)
+}
+
 /// Service Laya : état du service en LECTURE SEULE (configuré, joignable, prêt,
 /// dernière issue de démarrage). Cette commande ne classe rien et ne modifie
 /// rien : elle sert à vérifier que le pilotage du service fonctionne.
 #[tauri::command]
 fn laya_status(state: State<AppState>) -> laya::LayaStatus {
-    let (enabled, service, model) = {
+    let (enabled, service, model_dir) = {
         let cfg = state.config.lock().unwrap();
+        let (model_dir, _fetch, _manifest) = laya_download_paths(&cfg, "");
         (
             cfg.laya_autostart_enabled,
             cfg.laya_service_path.clone(),
-            cfg.laya_model_dir.clone(),
+            model_dir.to_string_lossy().to_string(),
         )
     };
-    laya::status(enabled, &service, &model)
+    laya::status(enabled, &service, &model_dir)
+}
+
+/// Modèle Laya : état du modèle en LECTURE SEULE (dossier effectif, fichiers,
+/// téléchargement en cours, raison du dernier échec). Aucune écriture, aucun
+/// réseau : sert à afficher un état clair dans les Réglages.
+#[tauri::command]
+fn laya_model_state(state: State<AppState>) -> laya_download::ModelState {
+    let cfg = state.config.lock().unwrap().clone();
+    let (model_dir, _fetch, manifest) = laya_download_paths(&cfg, "");
+    let meta = laya_model::read_manifest(&manifest);
+    laya_download::model_state(&model_dir, &meta.files)
+}
+
+/// Modèle Laya : télécharge le modèle EN TÂCHE DE FOND (l'interface n'attend
+/// jamais). Un seul téléchargement à la fois. `base_url` / `fetch_path` non
+/// vides gagnent sur la configuration (champs pas encore enregistrés).
+#[tauri::command]
+fn laya_model_download(
+    app: AppHandle,
+    state: State<AppState>,
+    base_url: String,
+    fetch_path: String,
+) -> laya_download::DownloadStart {
+    let cfg = state.config.lock().unwrap().clone();
+    let (model_dir, fetch, manifest) = laya_download_paths(&cfg, &fetch_path);
+    let effective_base = if base_url.trim().is_empty() {
+        cfg.laya_model_base_url.clone()
+    } else {
+        base_url
+    };
+    let pid_path = laya_download_pid_path(&app);
+    laya_download::start_background(app, fetch, manifest, model_dir, effective_base, pid_path)
+}
+
+/// Modèle Laya : interrompt le téléchargement en cours (les fichiers partiels
+/// sont CONSERVÉS : le prochain essai reprend où il s'était arrêté). Renvoie
+/// `false` si aucun téléchargement n'était en cours.
+#[tauri::command]
+fn laya_model_cancel(app: AppHandle) -> bool {
+    match laya_download_pid_path(&app) {
+        Some(path) => laya_download::cancel(&path),
+        None => false,
+    }
 }
 
 #[tauri::command]
@@ -2729,9 +2832,6 @@ pub fn run() {
             // à 3 s, échec silencieux).
             {
                 let cfg = state.config.lock().unwrap().clone();
-                let enabled = cfg.laya_autostart_enabled;
-                let service = cfg.laya_service_path.clone();
-                let model = cfg.laya_model_dir.clone();
                 let handle = handle.clone();
                 std::thread::spawn(move || {
                     let pid_path = laya_pid_path(&handle);
@@ -2740,8 +2840,52 @@ pub fn run() {
                     if let Some(pid_path) = pid_path.as_deref() {
                         let _ = laya::stop_owned(pid_path);
                     }
-                    let outcome =
-                        laya::launch_if_needed(enabled, &service, &model, pid_path.as_deref());
+                    // ── Modèle ──
+                    // Dossier effectif identique à celui du service (réglage vide
+                    // = `<dossier du service>/model-ml`).
+                    let service_dir = std::path::Path::new(cfg.laya_service_path.trim())
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let model_dir =
+                        laya_model::resolve_model_dir(&cfg.laya_model_dir, &service_dir);
+                    let fetch = laya_model::resolve_fetch_path(&cfg.laya_fetch_path, &service_dir);
+                    let manifest = laya_model::manifest_path(&fetch);
+
+                    // Téléchargement automatique : seulement si le modèle manque
+                    // ET que la case est cochée. Garde unique : jamais deux.
+                    let meta = laya_model::read_manifest(&manifest);
+                    let present = laya_download::model_dir_has_all(&model_dir, &meta.files);
+                    let action = laya_model::decide_model_action(
+                        present,
+                        cfg.laya_model_auto_download_enabled,
+                        laya_download::is_downloading(),
+                    );
+                    if action == laya_model::ModelAction::Download {
+                        let download_pid = laya_download_pid_path(&handle);
+                        let _ = laya_download::download_blocking(
+                            Some(&handle),
+                            &fetch,
+                            &manifest,
+                            &model_dir,
+                            &cfg.laya_model_base_url,
+                            download_pid.as_deref(),
+                        );
+                    }
+
+                    // Le service ne démarre QUE si le modèle est complet : un
+                    // dossier contenant de simples `.part` ne suffit jamais.
+                    let meta = laya_model::read_manifest(&manifest);
+                    let outcome = if laya_download::model_dir_has_all(&model_dir, &meta.files) {
+                        laya::launch_if_needed(
+                            cfg.laya_autostart_enabled,
+                            &cfg.laya_service_path,
+                            &model_dir.to_string_lossy(),
+                            pid_path.as_deref(),
+                        )
+                    } else {
+                        laya::LayaOutcome::InvalidPath
+                    };
                     laya::set_outcome(outcome);
                 });
             }
@@ -3220,6 +3364,9 @@ pub fn run() {
             plface_status,
             // ── Service Laya : état du pilotage du service (lecture seule) ──
             laya_status,
+            laya_model_state,
+            laya_model_download,
+            laya_model_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")
