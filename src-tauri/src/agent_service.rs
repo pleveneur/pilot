@@ -2468,6 +2468,18 @@ impl AgentService {
                     if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
                         extensions.push(chrome_file.to_string_lossy().to_string());
                     }
+                    // Service Laya : classement local (choix parmi des libellés,
+                    // note sur une échelle, oui/non) par le service UNIQUE lancé et
+                    // surveillé par Pilot — aucun modèle chargé par la session.
+                    // Le cœur (`laya-gateway.js`, testé par Vitest) est écrit à côté
+                    // de l'extension, qui l'importe par `./laya-gateway.js`.
+                    let gateway_file = dir.join("laya-gateway.js");
+                    if std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).is_ok() {
+                        let laya_file = dir.join("pilot-laya.ts");
+                        if std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).is_ok() {
+                            extensions.push(laya_file.to_string_lossy().to_string());
+                        }
+                    }
                     // POC MCP : extension client MCP (SDK bundlé) si activé.
                     if mcp_enabled {
                         let mcp_file = dir.join("pilot-mcp-client.ts");

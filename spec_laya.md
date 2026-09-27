@@ -16,9 +16,22 @@
 ## Service Laya (classification locale)
 
 Le **service Laya** est un classement automatique local qui tourne sur votre
-ordinateur. Pilot ne classe rien lui-même : il se contente de **lancer et
-surveiller** ce service, une seule fois pour toute l'application (le service
-garde un gros modèle en mémoire, en lancer plusieurs épuiserait la machine).
+ordinateur. Pilot ne classe aucun texte à votre place : il **utilise** ce service
+pour une seule décision interne (savoir si un message de l'assistant mérite
+d'être envoyé vers Telegram), et il met la classification à la disposition de ses
+**agents** comme un outil bon marché. Dans tous les cas, le service est **lancé et
+surveillé une seule fois** pour toute l'application (il garde un gros modèle en
+mémoire : en lancer plusieurs épuiserait la machine), et chaque appel partage ce
+même service.
+
+- **Ce que Pilot classe lui-même** : quand le dialogue Telegram est ouvert,
+c'est Laya qui décide si un message de l'assistant est une alerte à relayer ;
+si le service ne répond pas (ou si la réponse est trop peu sûre), Pilot revient
+à son ancien tri par mots-clés, sans rien bloquer ni afficher d'erreur.
+- **Outil des agents** : les agents disposent d'un outil `laya_classify`
+(choix parmi des libellés, note sur une échelle, oui/non) qui interroge ce même
+service, sans charger de modèle et sans consommer de jetons. Service éteint ou
+modèle non prêt : l'agent reçoit un message clair et continue.
 
 **Rien à installer** : Pilot livre avec lui le service, son interpréteur et sa
 bibliothèque de calcul. Au premier démarrage, il ne manque que le **modèle**
@@ -296,8 +309,12 @@ Avatar (PLface) :
   frontend (marche 3)~~ → **fait en marche 3** : onglet « Service Laya » des
   Réglages (case de démarrage automatique, chemin du service, dossier du modèle,
   indicateur d'état) ; le réglage reste possible directement dans `config.json`.
-- **Pas de classement** : Pilot ne lit aucun document, ne décide d'aucune
-  étiquette ; il ne pilote que le service.
+- **Pas de classement d'office de vos documents** : ~~Pilot ne lit aucun
+  document, ne décide d'aucune étiquette ; il ne pilote que le service~~ →
+  **étendu (marche 13)** : Pilot décide **une** chose de lui-même (le genre d'un
+  message de l'assistant, pour le relais Telegram) et **expose** la
+  classification aux agents (`laya_classify`). Aucun document n'est classé sans
+  qu'un agent ou une décision nommée le demande — voir §9.
 - **Pas de surveillance périodique** ni de redémarrage automatique après crash
   (le service redémarre au prochain lancement de Pilot).
 - **Limite connue** : le nom tracé est celui de l'interpréteur (`node.exe`), pas
@@ -373,3 +390,60 @@ par défaut (`#[serde(default = "default_true")]` **et** `impl Default`) : un
 reste `false`. Un champ absent de l'objet enregistré par les Réglages reste le
 piège connu : tous les champs `laya_*`, y compris le nouveau `laya_node_path`,
 sont transmis à `save_config`.
+
+## 9. Marche 13 — Laya par Pilot lui-même, et par les agents
+
+**Objectif** : utiliser le service déjà lancé pour **deux** usages réels, sans
+jamais charger un second modèle ni consommer de jetons.
+
+### 9.1 Pilot décide lui-même (incrément 1)
+
+Quand le **dialogue Telegram** est ouvert, le relais d'un message de l'assistant
+(`src/js/super-agent.js`, dans `appendSystemMessage`) demande d'abord à Laya le
+**genre** du message (`assistant_message_kind` : `alert`, `approval`, `question`,
+`report`, `intermediate`) par la question typée `choice` définie dans
+`buildAssistantKindQuestion()` (`src/js/laya-gateway.js`). Seul `alert` déclenche
+le relais ; la décision, sa confiance (`answer_confidence`, seuil 0,5) et la durée
+sont tracées (`[Laya] relais sortant : …`) dans la console.
+
+- **Repli strict** : service éteint, réponse illisible, étiquette inconnue ou
+  confiance < 0,5 → l'ancien tri par mots-clés (`classifyAssistantMessage`) décide,
+  exactement comme avant. Aucun message d'erreur, aucun blocage, aucun
+  changement d'itinéraire. Les messages sans contenu utile (`empty`) n'interrogent
+  même pas le service.
+- **Appel** : commande Rust `laya_classify(text, questions)` (`src-tauri/src/lib.rs`)
+  → `laya::classify` (`src-tauri/src/laya.rs`), `POST /classify` par `TcpStream`
+  (même patron que `probe_status`, aucune dépendance ajoutée). Le **connect** est
+  borné à 400 ms (`PROBE_TIMEOUT`) pour que « service éteint » reste instantané ;
+  la **lecture** de la réponse est bornée à 30 s (le premier appel charge le
+  modèle).
+
+### 9.2 Laya comme outil des agents (incrément 2)
+
+L'extension **`src-tauri/extensions/pilot-laya.ts`** (une seule extension, un
+seul fichier), écrite dans `<app_data_dir>/extensions/` et passée en
+`--extension` aux sessions d'agent (`agent_service.rs`, `spawn_session`) avec son
+cœur `laya-gateway.js` (testé par Vitest), expose **un** outil :
+
+| | |
+|---|---|
+| Nom | `laya_classify` |
+| Paramètres | `text`, `type` (`choice` \| `score` \| `noul`), `instructions` (le texte à juger s'y écrit `` `body` ``), `options[]` (au moins deux pour `choice`/`score`) |
+| Retour | `Laya : choice « … » — confidence … / answer_confidence … — probabilities {…}` (+ ` en N ms`) ou `score …` / `noul …` ; en panne, un message clair avec `isError` |
+
+- Aucun modèle n'est chargé par la session : l'outil ne fait qu'un **appel local**
+  au service unique, qui garde le modèle en mémoire pour toute l'application.
+- **Fail-open** : service éteint → « Le service Laya ne répond pas… » ; modèle non
+  prêt → message 400 du service recopié ; question mal formée → refus **sans**
+  toucher au réseau. Jamais d'exception.
+- Les sessions qui ne reçoivent pas cette extension (Assistant 🧭, Aide, Review)
+  **ne voient pas** l'outil.
+
+### 9.3 Preuve
+
+`npm test` (Vitest) couvre le cœur (`src/js/laya-gateway.test.js`,
+`src/js/telegram-dialog.test.js` : service simulé, aucun réseau) ; `cargo test
+--lib laya` couvre le client Rust (faux service en `TcpListener`). Les preuves
+d'exécution réelle (réponses, confiances, durées, mémoire, un seul processus,
+cas de panne) sont consignées dans le rapport de mission, avec ses traces
+locales réexécutables (`.pilot/laya-inc1.*`, `.pilot/laya-inc2.*`).

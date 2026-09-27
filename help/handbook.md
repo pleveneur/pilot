@@ -2173,9 +2173,22 @@ indique son état et votre choix est conservé après un redémarrage de Pilot.
 ## Service Laya (classification locale)
 
 Le **service Laya** est un classement automatique local qui tourne sur votre
-ordinateur. Pilot ne classe rien lui-même : il se contente de **lancer et
-surveiller** ce service, une seule fois pour toute l'application (le service
-garde un gros modèle en mémoire, en lancer plusieurs épuiserait la machine).
+ordinateur. Pilot ne classe aucun texte à votre place : il **utilise** ce service
+pour une seule décision interne (savoir si un message de l'assistant mérite
+d'être envoyé vers Telegram), et il met la classification à la disposition de ses
+**agents** comme un outil bon marché. Dans tous les cas, le service est **lancé et
+surveillé une seule fois** pour toute l'application (il garde un gros modèle en
+mémoire : en lancer plusieurs épuiserait la machine), et chaque appel partage ce
+même service.
+
+- **Ce que Pilot classe lui-même** : quand le dialogue Telegram est ouvert,
+c'est Laya qui décide si un message de l'assistant est une alerte à relayer ;
+si le service ne répond pas (ou si la réponse est trop peu sûre), Pilot revient
+à son ancien tri par mots-clés, sans rien bloquer ni afficher d'erreur.
+- **Outil des agents** : les agents disposent d'un outil `laya_classify`
+(choix parmi des libellés, note sur une échelle, oui/non) qui interroge ce même
+service, sans charger de modèle et sans consommer de jetons. Service éteint ou
+modèle non prêt : l'agent reçoit un message clair et continue.
 
 **Rien à installer** : Pilot livre avec lui le service, son interpréteur et sa
 bibliothèque de calcul. Au premier démarrage, il ne manque que le **modèle**
