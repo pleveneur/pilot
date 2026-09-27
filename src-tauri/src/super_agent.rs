@@ -174,10 +174,11 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
 /// l'assistant), et `pilot-choices` fournit les outils de question (ask_choice,
 /// ask_input, ask_confirm, ask_multi_choice). Pas de skill. Canal dédié.
 pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) -> Result<(), String> {
-    let (pi_path, dedicated_default) = {
+    let (pi_path, chosen, dedicated_default) = {
         let cfg = state.config.lock().unwrap();
         (
             cfg.rpc_pi_path.clone(),
+            cfg.super_agent_model.clone(),
             cfg.super_agent_default_model.clone(),
         )
     };
@@ -187,8 +188,14 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
         .unwrap()
         .clone()
         .unwrap_or_default();
-    let default_model =
-        resolve_super_agent_default(&dedicated_default, default_model_from_config(&pi_path));
+    // Modèle de la session : modèle choisi (persisté) s'il est encore
+    // disponible → réglage dédié (#88) → défaut global du backend.
+    let default_model = resolve_super_agent_model(
+        &chosen,
+        &dedicated_default,
+        default_model_from_config(&pi_path),
+        crate::agents::available_model_specs(&pi_path).ok().as_deref(),
+    );
     state
         .agent_service
         .start_superagent(app, &cwd, &pi_path, default_model)
@@ -240,17 +247,31 @@ pub(crate) fn parse_model_spec(spec: &str) -> Option<(String, String)> {
     Some((provider.to_string(), model_id.to_string()))
 }
 
-/// Modèle par défaut EFFECTIF de l'assistant (issue #88).
-/// 1. réglage dédié `super_agent_default_model` s'il est renseigné et valide ;
-/// 2. sinon le défaut global des agents (`global`, déjà résolu par
+/// Modèle EFFECTIF de la session de l'assistant (issue #88, corrigé chantier #17).
+/// Priorité :
+/// 1. modèle **choisi** (`super_agent_model`) s'il est renseigné, bien formé ET
+///    encore présent dans la liste des modèles installés ;
+/// 2. réglage **dédié** `super_agent_default_model` s'il est renseigné et valide ;
+/// 3. **défaut global** des agents (`global`, résolu par
 ///    `default_model_from_config`).
+/// `available` = spécifications installées ("provider/modelId") ; `None` = liste
+/// illisible → aucune validation (fail-open : on fait confiance au réglage
+/// plutôt que de bloquer le démarrage).
 /// `global` est passé en paramètre (et non relu ici) pour que la fonction reste
 /// pure et testable sans accès disque.
-pub(crate) fn resolve_super_agent_default(
+pub(crate) fn resolve_super_agent_model(
+    chosen: &str,
     dedicated: &str,
     global: Option<(String, String)>,
+    available: Option<&[String]>,
 ) -> Option<(String, String)> {
-    parse_model_spec(dedicated).or(global)
+    // Un modèle choisi absent de la liste installée (modèle supprimé du
+    // registre) est ignoré → repli sur le dédié puis le global.
+    let chosen = match (parse_model_spec(chosen), available) {
+        (Some(m), Some(list)) if !list.iter().any(|s| s == &format!("{}/{}", m.0, m.1)) => None,
+        (m, _) => m,
+    };
+    chosen.or_else(|| parse_model_spec(dedicated)).or(global)
 }
 
 /// Liste concise des projets connus de la base (path + nom), pour que
@@ -699,19 +720,22 @@ pub async fn ask_super_agent(
         )
     };
 
-    // Si aucun modèle n'a été choisi, retomber sur le modèle par défaut de
-    // l'assistant (réglage dédié, issue #88) puis, à défaut, sur le modèle par
+    // Modèle effectif : modèle choisi s'il est encore disponible, sinon repli
+    // sur le réglage dédié de l'assistant (issue #88) puis sur le modèle par
     // défaut du backend (pi --no-session n'a pas de modèle par défaut).
-    if model.trim().is_empty() {
+    {
         let dedicated = state
             .config
             .lock()
             .unwrap()
             .super_agent_default_model
             .clone();
-        if let Some((p, id)) =
-            resolve_super_agent_default(&dedicated, default_model_from_config(&pi_path))
-        {
+        if let Some((p, id)) = resolve_super_agent_model(
+            &model,
+            &dedicated,
+            default_model_from_config(&pi_path),
+            crate::agents::available_model_specs(&pi_path).ok().as_deref(),
+        ) {
             model = format!("{}/{}", p, id);
         }
     }
@@ -1459,12 +1483,13 @@ pub async fn analyze_super_agent_personality(
             cfg.super_agent_default_model.clone(),
         )
     };
-    if model.trim().is_empty() {
-        if let Some((p, id)) =
-            resolve_super_agent_default(&dedicated_default, default_model_from_config(&pi_path))
-        {
-            model = format!("{}/{}", p, id);
-        }
+    if let Some((p, id)) = resolve_super_agent_model(
+        &model,
+        &dedicated_default,
+        default_model_from_config(&pi_path),
+        crate::agents::available_model_specs(&pi_path).ok().as_deref(),
+    ) {
+        model = format!("{}/{}", p, id);
     }
     let cwd = state
         .project_path
@@ -4076,7 +4101,7 @@ mod tests {
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         take_trash_entry, trash_entry_preview, validate_export_json, list_memory_trash_entries,
-        memory_removal_result, parse_model_spec, resolve_super_agent_default, MEMORY_FORMAT,
+        memory_removal_result, parse_model_spec, resolve_super_agent_model, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
@@ -4114,18 +4139,77 @@ mod tests {
     #[test]
     fn super_agent_default_prefers_dedicated_setting() {
         let global = Some(("pi".to_string(), "global".to_string()));
-        // Réglage dédié renseigné → il prend le pas sur le défaut global.
+        // Réglage dédié renseigné (aucun modèle choisi) → il prend le pas sur le
+        // défaut global.
         assert_eq!(
-            resolve_super_agent_default("plh/dedic", global.clone()),
+            resolve_super_agent_model("", "plh/dedic", global.clone(), None),
             Some(("plh".to_string(), "dedic".to_string()))
         );
         // Absent, vide ou mal formé → repli sur le défaut global (aucune
         // régression pour les configurations existantes).
-        assert_eq!(resolve_super_agent_default("", global.clone()), global);
-        assert_eq!(resolve_super_agent_default("   ", global.clone()), global);
-        assert_eq!(resolve_super_agent_default("invalide", global.clone()), global);
+        assert_eq!(resolve_super_agent_model("", "", global.clone(), None), global);
+        assert_eq!(resolve_super_agent_model("", "   ", global.clone(), None), global);
+        assert_eq!(
+            resolve_super_agent_model("", "invalide", global.clone(), None),
+            global
+        );
         // Ni réglage dédié ni défaut global → None (comportement historique).
-        assert_eq!(resolve_super_agent_default("", None), None);
+        assert_eq!(resolve_super_agent_model("", "", None, None), None);
+    }
+
+    // ── Chantier #17 : le modèle CHOISI survit au redémarrage ──
+    #[test]
+    fn super_agent_model_prefers_chosen_over_dedicated_and_global() {
+        let global = Some(("pi".to_string(), "global".to_string()));
+        let available = vec!["plh/choisi".to_string(), "plh/dedic".to_string()];
+        // 1. modèle choisi encore installé → il gagne (le bug : il était ignoré
+        // au démarrage et l'assistant repartait sur le défaut global).
+        assert_eq!(
+            resolve_super_agent_model(
+                "plh/choisi",
+                "plh/dedic",
+                global.clone(),
+                Some(&available)
+            ),
+            Some(("plh".to_string(), "choisi".to_string()))
+        );
+        // 2. aucun modèle choisi → réglage dédié.
+        assert_eq!(
+            resolve_super_agent_model("", "plh/dedic", global.clone(), Some(&available)),
+            Some(("plh".to_string(), "dedic".to_string()))
+        );
+        // 3. ni choisi ni dédié → défaut global.
+        assert_eq!(
+            resolve_super_agent_model("", "", global.clone(), Some(&available)),
+            global
+        );
+    }
+
+    #[test]
+    fn super_agent_model_ignores_unavailable_chosen() {
+        let global = Some(("pi".to_string(), "global".to_string()));
+        // Modèle choisi supprimé du registre → repli propre sur le dédié…
+        let available = vec!["plh/dedic".to_string()];
+        assert_eq!(
+            resolve_super_agent_model(
+                "plh/choisi",
+                "plh/dedic",
+                global.clone(),
+                Some(&available)
+            ),
+            Some(("plh".to_string(), "dedic".to_string()))
+        );
+        // … puis sur le défaut global quand le dédié est vide.
+        assert_eq!(
+            resolve_super_agent_model("plh/choisi", "", global.clone(), Some(&available)),
+            global
+        );
+        // Liste illisible (`None`) → aucune validation : le réglage est respecté
+        // (fail-open, on ne bloque pas le démarrage).
+        assert_eq!(
+            resolve_super_agent_model("plh/choisi", "", global, None),
+            Some(("plh".to_string(), "choisi".to_string()))
+        );
     }
 
     fn mem_conn() -> Connection {

@@ -550,8 +550,15 @@ pub fn convert_pdf_to_md_ai(state: State<AppState>, text: String) -> Result<Stri
 /// Retourne un tableau de chaînes "provider/modelId" trié alphabétiquement.
 #[tauri::command]
 pub fn get_available_models_list(state: State<AppState>) -> Result<Vec<String>, String> {
-    let pi_path = state.config_snapshot().rpc_pi_path.clone();
-    let models_path = resolve_agent_home(&pi_path)?.join("agent").join("models.json");
+    available_model_specs(&state.config_snapshot().rpc_pi_path)
+}
+
+/// Cœur de `get_available_models_list` : liste "provider/modelId" des modèles
+/// installés du backend donné (`~/.{stem}/agent/models.json`), triée. Factorisé
+/// pour être réutilisé par la résolution du modèle de l'assistant au démarrage
+/// (lecture disque uniquement, aucune session pi requise).
+pub(crate) fn available_model_specs(pi_path: &str) -> Result<Vec<String>, String> {
+    let models_path = resolve_agent_home(pi_path)?.join("agent").join("models.json");
     let json_str = std::fs::read_to_string(&models_path)
         .map_err(|e| format!("Lecture models.json: {}", e))?;
     let config: Value = serde_json::from_str(&json_str)
