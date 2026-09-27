@@ -245,21 +245,8 @@ Ton rôle :
 4. Quand un agent te retourne un résultat, décide de la suite : délègue à un autre agent ou réponds à l'utilisateur.
 5. Quand la demande est entièrement traitée, réponds directement à l'utilisateur avec DONE: <résumé final>.
 
-Délégation PARALLÈLE :
-- Si plusieurs sous-tâches sont INDÉPENDANTES (aucune dépendance entre elles), lance-les en parallèle pour gagner du temps, en terminant ta réponse par EXACTEMENT :
-[[PARALLEL]]
-agent: <agent_id>
-task: <brief pour cet agent>
----
-agent: <agent_id>
-task: <brief pour cet agent>
-[[/PARALLEL]]
-- Chaque bloc "agent:" + "task:" est une sous-tâche confiée à un agent distinct, exécutée simultanément.
-- Les agents parallèles sont des agents "feuille" : ils exécutent leur brief et retournent leur résultat (pas de délégation imbriquée).
-- Tu reçois ensuite les résultats agrégés de tous les agents et tu synthétises.
-
 Règles :
-- Un seul [[CALL]] ou [[PARALLEL]] par réponse.
+- Un seul [[CALL]] par réponse.
 - Ne fais pas le travail toi-même ; délègue toujours.
 - Sois concis dans tes synthèses.`,
     models,
