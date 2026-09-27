@@ -1,6 +1,6 @@
 // Tests unitaires — laya-utils.js (réglage Service Laya : messages utilisateur purs)
 import { describe, it, expect } from "vitest";
-import { LAYA_OUTCOMES, layaStatusMessage, layaOutcomeMessage, LAYA_FETCH_REASONS, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
+import { LAYA_OUTCOMES, layaStatusMessage, layaOutcomeMessage, LAYA_FETCH_REASONS, layaModelStateMessage, layaModelProgressPercent, splitLayaChunks } from "./laya-utils.js";
 
 describe("LAYA_OUTCOMES", () => {
   it("couvre exactement les 6 issues renvoyées par le moteur", () => {
@@ -251,5 +251,60 @@ describe("layaModelStateMessage", () => {
       const text = layaModelStateMessage({ present: false, reason }).text;
       expect(text).not.toMatch(/camelCase|undefined|null|exception|\.onnx|\.part|[A-Za-z]:\\|\/home\/|integrityFailed|networkOffline/i);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Découpe en morceaux à UN SEUL SUJET avant appel Laya (aucun modèle, déterministe)
+describe("splitLayaChunks", () => {
+  it("un seul sujet donne 1 morceau", () => {
+    expect(splitLayaChunks("Le compte rendu est prêt.")).toEqual(["Le compte rendu est prêt."]);
+  });
+
+  it("deux sujets joints par « ; » donnent 2 morceaux", () => {
+    const chunks = splitLayaChunks("L'agent A a terminé ; l'agent B a échoué.");
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatch(/agent A/);
+    expect(chunks[1]).toMatch(/agent B/);
+  });
+
+  it("deux sujets joints par « et » donnent 2 morceaux", () => {
+    const chunks = splitLayaChunks("L'agent A a terminé et l'agent B a échoué.");
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toMatch(/agent A/);
+    expect(chunks[1]).toMatch(/agent B/);
+  });
+
+  it("une ponctuation multiple ne produit aucun morceau vide", () => {
+    const chunks = splitLayaChunks("Bonjour... Merci !!!");
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const chunk of chunks) expect(chunk.trim().length).toBeGreaterThan(0);
+  });
+
+  it("un texte très court donne 1 morceau", () => {
+    expect(splitLayaChunks("OK")).toEqual(["OK"]);
+    expect(splitLayaChunks("  Ok !  ")).toEqual(["Ok !"]);
+  });
+
+  it("un texte vide ne donne aucun morceau", () => {
+    expect(splitLayaChunks("")).toEqual([]);
+    expect(splitLayaChunks("   ")).toEqual([]);
+    expect(splitLayaChunks(null)).toEqual([]);
+  });
+
+  it("un nombre décimal n'est jamais coupé", () => {
+    expect(splitLayaChunks("Le ratio est de 1.5 sur 10.")).toHaveLength(1);
+  });
+
+  it("un point interne à un nom de fichier ou une version ne coupe pas", () => {
+    expect(splitLayaChunks("Le fichier README.md a été mis à jour.")).toHaveLength(1);
+    expect(splitLayaChunks("Mise à jour vers v0.2.5 sur le disque.")).toHaveLength(1);
+  });
+
+  it("un morceau trop court est fusionné avec son voisin", () => {
+    const chunks = splitLayaChunks("Une alerte sérieuse ici. Ok.");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatch(/alerte sérieuse/);
+    expect(chunks[0]).toMatch(/Ok\./);
   });
 });

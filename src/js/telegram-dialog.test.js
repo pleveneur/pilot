@@ -486,6 +486,30 @@ describe("classifyAssistantMessageWithLaya", () => {
     });
   });
 
+  it("plusieurs sujets : un appel Laya par morceau, le PREMIER morceau fait foi", async () => {
+    invoke
+      .mockResolvedValueOnce({
+        ok: true,
+        answers: { assistant_message_kind: { type: "choice", choice: "report", answer_confidence: 0.85 } },
+        ms: 60,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        answers: { assistant_message_kind: { type: "choice", choice: "alert", answer_confidence: 0.99 } },
+        ms: 70,
+      });
+    const verdict = await classifyAssistantMessageWithLaya(
+      "L'agent A a terminé et l'agent B a échoué.",
+      { trace: false }
+    );
+    // Deux morceaux à un seul sujet ⇒ deux appels distincts.
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls[0][1].text).toMatch(/agent A/);
+    expect(invoke.mock.calls[1][1].text).toMatch(/agent B/);
+    // La décision vient du PREMIER morceau, pas d'un verdict sur le texte entier.
+    expect(verdict).toEqual({ kind: "report", source: "laya", confidence: 0.85, ms: 60 });
+  });
+
   it("commande Rust en échec (service éteint) : repli, jamais de rejet", async () => {
     invoke.mockRejectedValueOnce(new Error("Le service Laya ne répond pas"));
     const verdict = await classifyAssistantMessageWithLaya(

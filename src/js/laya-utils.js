@@ -222,3 +222,81 @@ export function layaModelProgressPercent(state) {
   if (typeof percent !== "number" || !Number.isFinite(percent)) return 0;
   return Math.min(100, Math.max(0, Math.round(percent)));
 }
+
+// ── Découpe d'un texte en morceaux à UN SEUL SUJET (avant appel Laya) ─────────
+// Laya ne donne un verdict fiable que sur un texte à un seul sujet : sur un
+// texte à plusieurs sujets il répond sur un seul d'entre eux, parfois le mauvais,
+// avec une confiance élevée. Le même texte découpé en phrases puis classé
+// morceau par morceau donne des réponses fiables. La découpe ci-dessous est
+// DÉTERMINISTE : aucune règle apprise, aucun modèle, aucun appel réseau.
+
+/** En dessous de cette longueur, un morceau est fusionné avec son voisin. */
+export const LAYA_CHUNK_MIN_CHARS = 12;
+
+/** Marqueur interne de coupe sur connecteur (jamais présent dans un texte). */
+const LAYA_SPLIT_MARK = "\u0000";
+
+/** Connecteurs qui introduisent un AUTRE sujet (coupure au niveau du connecteur). */
+const LAYA_CONNECTOR_RE = /\s(?:et|puis|aussi|également|egalement|sauf|and|then)\s/gi;
+
+/**
+ * Découpe un texte en morceaux à UN SEUL sujet, de façon DÉTERMINISTE (aucun
+ * modèle) : coupe sur la ponctuation forte (point, point-virgule, point
+ * d'exclamation, point d'interrogation, points de suspension) et sur les
+ * connecteurs qui introduisent un autre problème (« et », « puis », « aussi »,
+ * « également », « sauf », « and », « then »). Les morceaux vides ou trop courts
+ * sont fusionnés avec leur voisin ; un point interne à un mot (extension de
+ * fichier, version, décimale) ne coupe pas ; un texte sans séparateur (le cas le
+ * plus fréquent) donne UN SEUL morceau, identique à l'entrée. Fonction PURE.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function splitLayaChunks(text) {
+  const t = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return [];
+  const marked = t.replace(LAYA_CONNECTOR_RE, ` ${LAYA_SPLIT_MARK} `);
+  const raw = [];
+  let start = 0;
+  for (let i = 0; i < marked.length; i++) {
+    const ch = marked[i];
+    if (ch === LAYA_SPLIT_MARK) {
+      raw.push(marked.slice(start, i));
+      start = i + 1;
+      continue;
+    }
+    if (ch === "." || ch === "!" || ch === "?" || ch === ";" || ch === "…") {
+      // Un point ne sépare que s'il n'est pas suivi d'une lettre/chiffre :
+      // « 1.5 », « README.md » et « v0.2.5 » restent entiers.
+      if (ch === "." && /[\p{L}\p{N}]/u.test(marked[i + 1] || "")) continue;
+      raw.push(marked.slice(start, i + 1));
+      start = i + 1;
+    }
+  }
+  raw.push(marked.slice(start));
+  // Nettoyage : jamais de morceau vide (ponctuation multiple, connecteur doublé).
+  const chunks = raw
+    .map((s) =>
+      s
+        .replace(/^[\s.;!?…]+/, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter((s) => s.length > 0);
+  // Fusion d'un morceau trop court avec son voisin (précédent, puis suivant
+  // pour le tout premier) plutôt que de le garder isolé.
+  const merged = [];
+  for (const chunk of chunks) {
+    if (merged.length > 0 && chunk.length < LAYA_CHUNK_MIN_CHARS) {
+      merged[merged.length - 1] = `${merged[merged.length - 1]} ${chunk}`;
+    } else {
+      merged.push(chunk);
+    }
+  }
+  if (merged.length > 1 && merged[0].length < LAYA_CHUNK_MIN_CHARS) {
+    merged[1] = `${merged[0]} ${merged[1]}`;
+    merged.shift();
+  }
+  return merged;
+}

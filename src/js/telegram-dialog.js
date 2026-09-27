@@ -29,6 +29,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { assistantKindFromAnswers, buildAssistantKindQuestion } from "./laya-gateway.js";
+import { splitLayaChunks } from "./laya-utils.js";
 
 /** Longueur maximale de la phrase envoyée à Telegram. */
 export const TELEGRAM_DIALOG_MAX_CHARS = 200;
@@ -179,9 +180,24 @@ export function isUsefulAssistantMessage(raw) {
  * Appel par défaut : la commande Rust `laya_classify`, qui interroge le service
  * Laya local UNIQUE (127.0.0.1:3017) lancé et surveillé par Pilot. Aucun modèle
  * n'est chargé ici : c'est le service qui le garde en mémoire.
+ *
+ * Découpe à UN SEUL SUJET avant l'appel (`splitLayaChunks`) : Laya n'est fiable
+ * que sur un texte à un seul sujet. Un morceau = un appel ; un texte sans
+ * séparateur (cas le plus fréquent) donne UN appel STRICTEMENT identique à avant.
+ * Le PREMIER morceau fait foi pour la décision, les autres sont conservés sous
+ * `chunks` sans changer la forme de retour attendue par les appelants.
  */
 async function defaultLayaClassify(text) {
-  return invoke("laya_classify", { text, questions: buildAssistantKindQuestion() });
+  const chunks = splitLayaChunks(text);
+  if (chunks.length <= 1) {
+    return invoke("laya_classify", { text, questions: buildAssistantKindQuestion() });
+  }
+  const results = [];
+  for (const chunk of chunks) {
+    results.push(await invoke("laya_classify", { text: chunk, questions: buildAssistantKindQuestion() }));
+  }
+  const first = results[0];
+  return first ? { ...first, chunks: results } : null;
 }
 
 /**
