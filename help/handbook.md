@@ -1558,8 +1558,8 @@ agents du registre (`~/.pilot/agents.json`). Il peut :
    global et devient aussitôt sélectionnable.
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
-   confie une tâche. Pilot les lance (en parallèle si plusieurs) et renvoie le
-   résultat agrégé à l'Assistant, qui continue son raisonnement.
+   confie une tâche. Pilot les lance et renvoie le résultat agrégé
+   à l'Assistant, qui continue son raisonnement.
 
 Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
 l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un

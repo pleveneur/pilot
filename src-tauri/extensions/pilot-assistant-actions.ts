@@ -137,11 +137,11 @@ export default function (pi: ExtensionAPI) {
     name: "run_agents",
     label: "Run Agents",
     description:
-      "Choisir quels agents disponibles utiliser et lancer une tâche sur eux. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés pour obtenir ce que tu veux, et tu leur confies une tâche. Pilot les lance (en parallèle si plusieurs) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail sur un projet via les agents du registre. Bloque jusqu'à ce que les agents aient terminé.",
+      "Choisir quels agents disponibles utiliser et lancer une tâche sur eux. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés pour obtenir ce que tu veux, et tu leur confies une tâche. Pilot les lance et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail sur un projet via les agents du registre. Bloque jusqu'à ce que les agents aient terminé.",
     promptSnippet: "run_agents: sélectionner des agents et lancer une tâche sur eux",
     promptGuidelines: [
       "Use run_agents when you need to execute work on a project through the registered agents. Select the agent ids that best fit the task (e.g. codeur, testeur, reviewer, or a custom agent you created).",
-      "Provide a clear, atomic task description. If you select multiple agents, they run in parallel and you receive the aggregated results.",
+      "Provide a clear, atomic task description.",
       "Prefer selecting the most appropriate agents rather than delegating everything to the standard coder. You are the coordinator: you choose the team.",
       "If no suitable agent exists, create one first with create_agent, then run_agents.",
       "Pass the absolute path of the target project in `project` when the work must be done on a project that differs from the active one (e.g. the user is on 'pilot' but asks for changes on 'PLh'). If omitted, the active project is used.",
@@ -167,7 +167,7 @@ export default function (pi: ExtensionAPI) {
     name: "run_assistant_agents",
     label: "Run Assistant Agents",
     description:
-      "Lancer une tâche sur des agents d'assistant (agents SANS rattachement à un projet), pour un travail qui concerne l'assistant lui-même (recherche, analyse, tâches internes de coordination) plutôt qu'un projet. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés et tu leur confies une tâche. Pilot les lance (en parallèle si plusieurs) dans l'espace réservé ~/.pilot/assistant/ (pas de contexte de projet injecté) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail hors de tout projet. Bloque jusqu'à ce que les agents aient terminé.",
+      "Lancer une tâche sur des agents d'assistant (agents SANS rattachement à un projet), pour un travail qui concerne l'assistant lui-même (recherche, analyse, tâches internes de coordination) plutôt qu'un projet. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés et tu leur confies une tâche. Pilot les lance dans l'espace réservé ~/.pilot/assistant/ (pas de contexte de projet injecté) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail hors de tout projet. Bloque jusqu'à ce que les agents aient terminé.",
     promptSnippet: "run_assistant_agents: sélectionner des agents d'assistant (sans projet) et lancer une tâche",
     promptGuidelines: [
       "Use run_assistant_agents when you need to execute work that is NOT tied to a specific project: research, analysis, internal coordination tasks for the assistant itself. The agents run in the reserved assistant workspace (~/.pilot/assistant/), without any project context.",

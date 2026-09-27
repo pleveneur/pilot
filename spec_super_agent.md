@@ -495,8 +495,8 @@ agents du registre (`~/.pilot/agents.json`). Il peut :
    global et devient aussitôt sélectionnable.
 2. **Choisir quels agents utiliser** (outil `run_agents`) : il sélectionne les
    agents disponibles (par leur id) qui lui semblent les plus adaptés et leur
-   confie une tâche. Pilot les lance (en parallèle si plusieurs) et renvoie le
-   résultat agrégé à l'Assistant, qui continue son raisonnement.
+   confie une tâche. Pilot les lance et renvoie le résultat agrégé
+   à l'Assistant, qui continue son raisonnement.
 
 Ainsi, au lieu de tout déléguer à l'agent standard, l'Assistant constitue
 l'équipe la plus adaptée à chaque demande (codeur, testeur, reviewer, ou un
@@ -838,7 +838,7 @@ Sessions d'agents (chat / orchestration)
   `create_agent`
   (créer un agent sur mesure dans le registre global `~/.pilot/agents.json`
   quand les agents disponibles ne conviennent pas) et `run_agents` (choisir
-  quels agents disponibles utiliser et lancer une tâche sur eux, en parallèle,
+  quels agents disponibles utiliser et lancer une tâche sur eux,
   en renvoyant le résultat agrégé à l'Assistant). La demande déléguée est affichée dans la
   discussion de l'agent du projet (à droite, comme un message utilisateur, mais
   en violet pour montrer qu'elle provient de l'Assistant — issue #45). La
