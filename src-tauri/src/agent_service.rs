@@ -2306,6 +2306,19 @@ impl AgentService {
                     if std::fs::write(&chrome_file, include_str!("../extensions/pilot-chrome.ts")).is_ok() {
                         extensions.push(chrome_file.to_string_lossy().to_string());
                     }
+                    // Service Laya : l'outil `laya_classify` doit être disponible
+                    // pour TOUTE session d'agent, y compris celles lancées par
+                    // l'assistant (`run_agents`) et les agents multi-rôles — qui
+                    // passent par ce chemin, pas par `spawn_session`. Le cœur
+                    // `laya-gateway.js` est écrit à côté (l'extension l'importe
+                    // par `./laya-gateway.js`).
+                    let gateway_file = dir.join("laya-gateway.js");
+                    if std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).is_ok() {
+                        let laya_file = dir.join("pilot-laya.ts");
+                        if std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).is_ok() {
+                            extensions.push(laya_file.to_string_lossy().to_string());
+                        }
+                    }
                     // #21 : quand l'assistant active l'héritage de contexte, les
                     // agents spécifiques chargent aussi pilot-context.ts (comme
                     // l'agent standard) pour hériter du contexte projet.
