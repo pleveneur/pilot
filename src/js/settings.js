@@ -12,7 +12,8 @@ import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT_STDIO, formatArgs, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
-import { layaStatusMessage } from "./laya-utils.js";
+import { layaStatusMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
+import { listen } from "@tauri-apps/api/event";
 
 let currentConfig = null;
 
@@ -138,6 +139,15 @@ export async function initSettings() {
   const btnLayaModelBrowse = document.getElementById("btn-laya-model-browse");
   const layaState = document.getElementById("laya-runtime-state");
   const layaMessage = document.getElementById("laya-message");
+  const chkLayaModelAutoDownload = document.getElementById("setting-laya-model-auto-download");
+  const inputLayaModelBaseUrl = document.getElementById("setting-laya-model-base-url");
+  const inputLayaFetchPath = document.getElementById("setting-laya-fetch-path");
+  const btnLayaFetchBrowse = document.getElementById("btn-laya-fetch-browse");
+  const btnLayaModelDownload = document.getElementById("btn-laya-model-download");
+  const btnLayaModelCancel = document.getElementById("btn-laya-model-cancel");
+  const layaModelBar = document.getElementById("laya-model-bar");
+  const layaModelState = document.getElementById("laya-model-state");
+  const layaModelMessage = document.getElementById("laya-model-message");
   const chkIntegratedTerminal = document.getElementById("setting-integrated-terminal");
   const chkRpcAgent = document.getElementById("setting-rpc-agent");
   const inputRpcPath = document.getElementById("setting-rpc-path");
@@ -717,7 +727,12 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (chkLayaAutostart) chkLayaAutostart.checked = currentConfig.laya_autostart_enabled === true;
     if (inputLayaServicePath) inputLayaServicePath.value = currentConfig.laya_service_path || "";
     if (inputLayaModelDir) inputLayaModelDir.value = currentConfig.laya_model_dir || "";
+    if (chkLayaModelAutoDownload) chkLayaModelAutoDownload.checked = currentConfig.laya_model_auto_download_enabled === true;
+    if (inputLayaModelBaseUrl) inputLayaModelBaseUrl.value = currentConfig.laya_model_base_url || "";
+    if (inputLayaFetchPath) inputLayaFetchPath.value = currentConfig.laya_fetch_path || "";
     refreshLayaState();
+    startLayaProgressListener();
+    refreshLayaModelState();
     chkIntegratedTerminal.checked = currentConfig.integrated_terminal || false;
     chkRpcAgent.checked = currentConfig.rpc_agent_enabled || false;
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
@@ -1178,6 +1193,132 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     });
   }
 
+  // ── Modèle Laya : état, téléchargement, interruption ──
+  // Traduit l'état du modèle (`laya_model_state`) et suit la progression émise
+  // par le moteur (`laya-download-progress`). Aucun échec de commande n'est
+  // bloquant : état « momentanément indisponible » + note discrète.
+  const LAYA_KIND_COLORS = {
+    success: "var(--success)",
+    info: "var(--text-secondary)",
+    warning: "var(--warning)",
+    error: "var(--danger)",
+  };
+
+  let layaModelPoll = null;
+  function stopLayaModelPoll() {
+    if (layaModelPoll) {
+      clearInterval(layaModelPoll);
+      layaModelPoll = null;
+    }
+  }
+  function startLayaModelPoll() {
+    stopLayaModelPoll();
+    layaModelPoll = setInterval(refreshLayaModelState, 1000);
+  }
+
+  function applyLayaModelState(state, available = true) {
+    const { text, kind } = layaModelStateMessage(available ? state : null);
+    if (layaModelState) {
+      layaModelState.textContent = text;
+      layaModelState.style.color = LAYA_KIND_COLORS[kind] || "var(--text-muted)";
+    }
+    if (layaModelBar) layaModelBar.value = layaModelProgressPercent(state);
+    if (layaModelMessage) {
+      layaModelMessage.textContent = available ? "" : "État du modèle momentanément indisponible.";
+      layaModelMessage.style.color = "var(--text-muted)";
+    }
+  }
+
+  async function refreshLayaModelState() {
+    if (!layaModelState) return;
+    let state = null;
+    let ok = true;
+    try {
+      state = await invoke("laya_model_state");
+    } catch (_) {
+      state = null;
+      ok = false;
+    }
+    applyLayaModelState(state, ok);
+    // Le sondage s'arrête de lui-même dès que le téléchargement est terminé.
+    if (!ok || !state || state.downloading !== true) stopLayaModelPoll();
+  }
+
+  // Écoute de la progression : une seule écoute à la fois, désinscrite à la
+  // fermeture de la modale (jamais de fuite d'écouteur).
+  let layaProgressUnlisten = null;
+  async function startLayaProgressListener() {
+    if (layaProgressUnlisten) return;
+    try {
+      layaProgressUnlisten = await listen("laya-download-progress", (event) => {
+        const payload = event && event.payload ? event.payload : {};
+        applyLayaModelState({ present: false, downloading: true, percent: payload.percent }, true);
+      });
+    } catch (_) {
+      layaProgressUnlisten = null;
+    }
+  }
+  function stopLayaProgressListener() {
+    if (layaProgressUnlisten) {
+      try {
+        layaProgressUnlisten();
+      } catch (_) {}
+      layaProgressUnlisten = null;
+    }
+  }
+
+  if (btnLayaFetchBrowse) {
+    btnLayaFetchBrowse.addEventListener("click", async () => {
+      try {
+        const picked = await dialogOpen({
+          multiple: false,
+          directory: false,
+          filters: [
+            { name: "Programme de téléchargement (.mjs)", extensions: ["mjs"] },
+            { name: "Tous les fichiers", extensions: ["*"] },
+          ],
+        });
+        if (!picked) return; // annulé
+        if (inputLayaFetchPath) inputLayaFetchPath.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du programme : " + e, "error");
+      }
+    });
+  }
+  if (btnLayaModelDownload) {
+    btnLayaModelDownload.addEventListener("click", async () => {
+      try {
+        const res = await invoke("laya_model_download", {
+          baseUrl: inputLayaModelBaseUrl ? inputLayaModelBaseUrl.value.trim() : "",
+          fetchPath: inputLayaFetchPath ? inputLayaFetchPath.value.trim() : "",
+        });
+        if (res === "alreadyRunning") {
+          showToast("Un téléchargement du modèle est déjà en cours.", "info");
+        } else {
+          showToast("Téléchargement du modèle lancé en arrière-plan.");
+        }
+        startLayaModelPoll();
+        await refreshLayaModelState();
+      } catch (e) {
+        showToast("Téléchargement du modèle : " + e, "error");
+      }
+    });
+  }
+  if (btnLayaModelCancel) {
+    btnLayaModelCancel.addEventListener("click", async () => {
+      try {
+        const stopped = await invoke("laya_model_cancel");
+        showToast(
+          stopped ? "Téléchargement interrompu (la reprise continuera au même point)." : "Aucun téléchargement en cours.",
+          stopped ? "info" : "warning"
+        );
+        await refreshLayaModelState();
+      } catch (e) {
+        showToast("Interruption : " + e, "error");
+      }
+    });
+  }
+
   if (btnMemImport) {
     btnMemImport.addEventListener("click", async () => {
       try {
@@ -1245,6 +1386,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   // Fermer (Annuler) — annule aussi les modifs providers non sauvegardées
   btnClose.addEventListener("click", async () => {
     await cancelProvidersIfDirty();
+    stopLayaModelPoll();
+    stopLayaProgressListener();
     // Revert l'aperçu en direct : on revient au thème/sous-thème sauvegardé
     applyTheme(savedTheme, savedSubtheme);
     modal.classList.add("hidden");
@@ -1264,6 +1407,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       if (tabBtn) tabBtn.click();
     }
     modal.classList.remove("hidden");
+    startLayaProgressListener();
+    refreshLayaModelState();
     if (!wanted) {
       try { inputRpcPath.focus(); inputRpcPath.scrollIntoView({ block: "center" }); } catch (_) {}
     }
@@ -1319,6 +1464,9 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         laya_autostart_enabled: chkLayaAutostart ? chkLayaAutostart.checked : false,
         laya_service_path: inputLayaServicePath ? inputLayaServicePath.value.trim() : "",
         laya_model_dir: inputLayaModelDir ? inputLayaModelDir.value.trim() : "",
+        laya_model_auto_download_enabled: chkLayaModelAutoDownload ? chkLayaModelAutoDownload.checked : false,
+        laya_model_base_url: inputLayaModelBaseUrl ? inputLayaModelBaseUrl.value.trim() : "",
+        laya_fetch_path: inputLayaFetchPath ? inputLayaFetchPath.value.trim() : "",
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),
@@ -1556,6 +1704,8 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     } catch (e) {
       console.error("Erreur sauvegarde config:", e);
     }
+    stopLayaModelPoll();
+    stopLayaProgressListener();
     modal.classList.add("hidden");
   });
 
