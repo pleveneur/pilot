@@ -287,6 +287,18 @@ fn observed_process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// Le processus `pid` est-il encore vivant **et** bien celui attendu ?
+///
+/// `false` quand le processus n'existe plus **ou** qu'un autre programme a
+/// repris son identifiant (l'ancien processus a donc bel et bien disparu).
+/// Sert de garde d'appartenance (service Laya) : on ne referme le service d'une
+/// autre copie de Pilot que si cette copie a disparu. S'appuie sur les mêmes
+/// outils système que `kill_process` (`tasklist` sous Windows, `ps` ailleurs),
+/// déjà requis pour la garde de nom à l'arrêt.
+pub(crate) fn owner_alive(pid: u32, expected_name: &str) -> bool {
+    observed_process_name(pid).is_some_and(|name| name_matches(&name, expected_name))
+}
+
 /// Attend (borné à 2 s) que le processus `pid` disparaisse des tables du
 /// système, puis dit s'il est bien parti.
 ///

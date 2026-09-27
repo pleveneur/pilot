@@ -16,9 +16,16 @@
 //!   sous Windows, jamais bloquant pour l'interface ; un service qui répond
 //!   déjà (lancé à la main par le propriétaire) n'est **jamais** doublé ;
 //! - **attente** : au plus 3 s après le lancement, on sait si le service répond ;
-//! - **arrêt** : uniquement le processus tracé (`laya.pid`) — donc uniquement
-//!   celui que Pilot a lancé ;
-//! - **trace** : `<app_data_dir>/laya.pid` (identifiant + nom de programme).
+//! - **arrêt** : uniquement le processus tracé (`laya.pid`) **et uniquement
+//!   celui que CETTE copie a lancé** (la trace porte le propriétaire) ;
+//! - **trace** : `<app_data_dir>/laya.pid` (service : identifiant + nom de
+//!   programme ; propriétaire : identifiant + nom de programme de Pilot) ;
+//! - **journal** : `<app_data_dir>/laya.log` (sortie standard ET d'erreur du
+//!   service, pour que « pourquoi il n'a pas démarré » soit lisible).
+//!
+//! Deux copies de Pilot ouvertes en même temps partagent la trace : le nettoyage
+//! du démarrage ne referme donc un service restant que si son propriétaire n'est
+//! PLUS vivant ; une copie vivante garde le sien, et la nouvelle la réutilise.
 //!
 //! Limites assumées : le nom de programme tracé est celui de l'interpréteur
 //! (`node.exe`), pas du script — la garde de nom seule ne distingue donc pas
@@ -46,6 +53,8 @@ pub(crate) const LAYA_API_HOST: &str = "127.0.0.1";
 pub(crate) const LAYA_API_PORT: u16 = 3017;
 /// Fichier de trace du service lancé par Pilot (dossier de données de l'app).
 pub(crate) const PID_FILE_NAME: &str = "laya.pid";
+/// Journal du service (sortie standard ET d'erreur), à côté de la trace.
+pub(crate) const LOG_FILE_NAME: &str = "laya.log";
 /// Sous-dossier des ressources embarquées dans la version livrée
 /// (`$RESOURCE/laya/…`, cf. `bundle.resources` et `scripts/prepare-laya.js`).
 pub(crate) const RESOURCE_DIR: &str = "laya";
@@ -467,9 +476,14 @@ pub(crate) fn last_outcome() -> Option<LayaOutcome> {
 
 /// Lance le service en tâche de fond, détaché de Pilot :
 /// `<interpréteur> <service_path> <model_dir>`, sans fenêtre de console sous
-/// Windows, stdio redirigé vers `null`. Le répertoire courant est celui du
-/// service (le dossier de modèle configuré peut ainsi être relatif, comme à la
-/// main). Renvoie l'identifiant du processus lancé, pour la trace.
+/// Windows. Le répertoire courant est celui du service (le dossier de modèle
+/// configuré peut ainsi être relatif, comme à la main). Renvoie l'identifiant du
+/// processus lancé, pour la trace.
+///
+/// La sortie standard ET la sortie d'erreur vont dans `log_path` (fichier
+/// journal, ouvert en ajout) : sans lui, l'échec de démarrage du service restait
+/// invisible. Si le journal ne peut pas être ouvert, on retombe sur `null`
+/// (jamais bloquant, jamais de panne remontée).
 ///
 /// `node` : interpréteur effectif (`laya_node_path` → embarqué → `node` du
 /// système, cf. `resolve_node_path`).
@@ -477,15 +491,27 @@ pub(crate) fn spawn_detached(
     node: &str,
     service_path: &str,
     model_dir: &str,
+    log_path: Option<&Path>,
 ) -> std::io::Result<u32> {
     let mut cmd = Command::new(node);
     cmd.arg(service_path).arg(model_dir);
     if let Some(dir) = Path::new(service_path).parent() {
         cmd.current_dir(dir);
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.stdin(Stdio::null());
+    match log_path.and_then(open_log) {
+        Some(log) => match log.try_clone() {
+            Ok(err) => {
+                cmd.stdout(Stdio::from(log)).stderr(Stdio::from(err));
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            }
+        },
+        None => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
 
     #[cfg(windows)]
     {
@@ -495,7 +521,28 @@ pub(crate) fn spawn_detached(
 
     // Le `Child` est abandonné (jamais `wait`), mais son identifiant est tracé
     // (`laya.pid`) : le service lancé par Pilot est refermé par Pilot.
+    write_log_header(log_path, node, service_path, model_dir);
     Ok(cmd.spawn()?.id())
+}
+
+/// Ouvre le journal en AJOUT (le crée au besoin). `None` si le dossier ou le
+/// fichier est inaccessible : fail-open, jamais bloquant.
+fn open_log(path: &Path) -> Option<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// Écrit un repère de tentative de démarrage en tête du journal (pour qu'un
+/// journal contenant plusieurs essais reste lisible). Fail-open : toute erreur
+/// d'écriture est ignorée.
+fn write_log_header(log_path: Option<&Path>, node: &str, service_path: &str, model_dir: &str) {
+    use std::io::Write;
+
+    let Some(path) = log_path else { return };
+    let Some(mut file) = open_log(path) else { return };
+    let _ = writeln!(file, "\n=== démarrage : {node} {service_path} {model_dir} ===");
 }
 
 /// Orchestrateur non pur : sonde, décide, lance, puis attend (≤ 3 s) que le
@@ -528,10 +575,24 @@ pub(crate) fn launch_if_needed(
             // système (nom nu, résolu par le système d'exploitation via PATH).
             let node = resolve_node_path(node_path.unwrap_or(""), None)
                 .unwrap_or_else(|| node_exe_name().to_string());
-            match spawn_detached(&node, trimmed, model_dir.trim()) {
+            // Le journal vit à côté de la trace (même dossier de données).
+            let log_path = pid_path.map(|p| p.with_file_name(LOG_FILE_NAME));
+            match spawn_detached(&node, trimmed, model_dir.trim(), log_path.as_deref()) {
                 Ok(pid) => {
                     if let Some(path) = pid_path {
-                        crate::plface::write_pid_file(path, pid, &process_name_for(Some(&node)));
+                        // La trace dit AUSSI à qui appartient ce service : c'est
+                        // ce qui permet de ne jamais refermer celui d'une autre
+                        // copie de Pilot encore ouverte (cf. `stop_owned` /
+                        // `cleanup_stale`).
+                        write_trace(
+                            path,
+                            &LayaTrace {
+                                pid,
+                                name: process_name_for(Some(&node)),
+                                owner_pid: std::process::id(),
+                                owner_name: owner_process_name(),
+                            },
+                        );
                     }
                     // Attente bornée : au plus tard à `READY_DEADLINE`, Pilot sait
                     // si le service répond (l'interface, elle, n'a jamais attendu).
@@ -547,22 +608,149 @@ pub(crate) fn launch_if_needed(
     }
 }
 
-/// Arrête **le service que Pilot a lancé**, d'après la trace disque :
-/// - aucune trace → Pilot n'a rien lancé → ne touche à rien (`true`) ; un
-///   service ouvert à la main par le propriétaire n'est donc jamais refermé ;
-/// - trace présente → arrêt du processus (avec garde de nom : jamais une autre
-///   application), trace effacée.
+/// Propriétaire d'un service lancé par Pilot, tel qu'inscrit dans la trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LayaTrace {
+    /// Identifiant du processus du SERVICE lancé par Pilot.
+    pub pid: u32,
+    /// Nom de programme attendu du service (garde d'arrêt).
+    pub name: String,
+    /// Identifiant du processus de l'application Pilot qui a lancé le service.
+    pub owner_pid: u32,
+    /// Nom de programme de l'application propriétaire (contre la réutilisation
+    /// d'un identifiant par une autre application).
+    pub owner_name: String,
+}
+
+/// Contenu de la trace disque, quatre lignes. PURE.
+pub(crate) fn format_trace(trace: &LayaTrace) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n",
+        trace.pid, trace.name, trace.owner_pid, trace.owner_name
+    )
+}
+
+/// Lit la trace disque : `None` si l'identifiant du service manque/est illisible
+/// **ou si le propriétaire n'est pas inscrit** (trace d'une ancienne version :
+/// dans le doute, on ne referme RIEN — jamais le service d'une autre copie de
+/// Pilot encore ouverte). PURE.
+pub(crate) fn parse_trace(raw: &str) -> Option<LayaTrace> {
+    let lines: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let pid = lines.first()?.parse::<u32>().ok().filter(|p| *p > 0)?;
+    let name = lines.get(1)?.to_string();
+    let owner_pid = lines
+        .get(2)?
+        .parse::<u32>()
+        .ok()
+        .filter(|p| *p > 0)?;
+    let owner_name = lines.get(3).unwrap_or(&"").to_string();
+    Some(LayaTrace {
+        pid,
+        name,
+        owner_pid,
+        owner_name,
+    })
+}
+
+/// Lit la trace disque. Toute erreur (fichier absent, illisible) = `None`.
+pub(crate) fn read_trace(path: &Path) -> Option<LayaTrace> {
+    parse_trace(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Écrit la trace disque (crée le dossier au besoin). Fail-open : toute erreur
+/// d'écriture est ignorée (au pire, pas de nettoyage au démarrage suivant).
+pub(crate) fn write_trace(path: &Path, trace: &LayaTrace) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format_trace(trace));
+}
+
+/// Nom de programme de l'application Pilot en cours (propriétaire inscrit dans
+/// la trace). PURE vis-à-vis du processus : lit seulement son propre chemin.
+pub(crate) fn owner_process_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+        .unwrap_or_default()
+}
+
+/// Décision PURE de **nettoyage au démarrage** : faut-il refermer le service
+/// restant ?
 ///
-/// Appelé à la **fermeture de Pilot** et **au démarrage suivant** (nettoyage
-/// d'un service resté en vie après une fermeture brutale). Jamais bloquant
-/// au-delà du timeout de sonde, jamais d'erreur remontée.
-pub(crate) fn stop_owned(pid_path: &Path) -> bool {
-    let Some((pid, name)) = crate::plface::read_pid_file(pid_path) else {
-        return true;
-    };
-    let stopped = crate::plface::kill_process(pid, &name);
+/// - trace absente/illisible (`owner = None`) → non, on ne touche à rien ;
+/// - trace qui nous appartient (relance interne) → oui ;
+/// - propriétaire encore VIVANT (autre copie de Pilot ouverte) → non, sa trace
+///   reste : c'est LUI qui le refermera, et la nouvelle copie le réutilise ;
+/// - propriétaire mort → oui : service orphelin d'une fermeture brutale.
+pub(crate) fn decide_startup_cleanup(
+    owner: Option<u32>,
+    owner_alive: bool,
+    self_pid: u32,
+) -> bool {
+    match owner {
+        None => false,
+        Some(pid) if pid == self_pid => true,
+        Some(_) => !owner_alive,
+    }
+}
+
+/// Décision PURE d'**arrêt à la fermeture** : on ne referme QUE le service que
+/// CETTE copie de Pilot a lancé (trace portant son identifiant). PURE.
+pub(crate) fn decide_shutdown_stop(owner: Option<u32>, self_pid: u32) -> bool {
+    owner == Some(self_pid)
+}
+
+/// Referme le service décrit par la trace (garde de nom : jamais une autre
+/// application) et efface la trace. Jamais bloquant au-delà de l'arrêt borné.
+fn kill_traced(trace: &LayaTrace, pid_path: &Path) -> bool {
+    let stopped = crate::plface::kill_process(trace.pid, &trace.name);
     crate::plface::clear_pid_file(pid_path);
     stopped
+}
+
+/// Arrête **le service que CETTE copie de Pilot a lancé** (fermeture de
+/// l'application) :
+/// - aucune trace → rien à faire (`true`) ; un service ouvert à la main par le
+///   propriétaire n'est donc jamais refermé ;
+/// - trace appartenant à une autre copie (encore ouverte ou non) → on n'y touche
+///   pas : c'est son propriétaire qui la referme (règle unique, cf.
+///   `decide_shutdown_stop`).
+///
+/// Jamais bloquant au-delà de l'arrêt borné, jamais d'erreur remontée.
+pub(crate) fn stop_owned(pid_path: &Path) -> bool {
+    let Some(trace) = read_trace(pid_path) else {
+        return true;
+    };
+    if !decide_shutdown_stop(Some(trace.owner_pid), std::process::id()) {
+        return true;
+    }
+    kill_traced(&trace, pid_path)
+}
+
+/// **Nettoyage au démarrage suivant** : referme un service resté en vie après
+/// une fermeture brutale, mais JAMAIS celui d'une autre copie de Pilot encore
+/// vivante (règle unique, cf. `decide_startup_cleanup`) : dans ce cas la trace
+/// est laissée intacte et le service qui répond est réutilisé tel quel.
+/// Jamais bloquant, jamais d'erreur remontée.
+pub(crate) fn cleanup_stale(pid_path: &Path) -> bool {
+    let Some(trace) = read_trace(pid_path) else {
+        return true;
+    };
+    // Propriétaire sans nom inscrit : impossible de vérifier qu'il est mort →
+    // on ne referme rien (règle de prudence).
+    if trace.owner_name.trim().is_empty() {
+        return true;
+    }
+    let alive = crate::plface::owner_alive(trace.owner_pid, &trace.owner_name);
+    if !decide_startup_cleanup(Some(trace.owner_pid), alive, std::process::id()) {
+        return true;
+    }
+    kill_traced(&trace, pid_path)
 }
 
 /// État du service, tel que rendu à l'interface (commande `laya_status`).
@@ -1300,5 +1488,176 @@ http.createServer((req, res) => {
         ));
         crate::plface::clear_pid_file(&path);
         assert!(stop_owned(&path));
+    }
+
+    // ── Appartenance : la trace dit à qui appartient le service ──
+
+    #[test]
+    fn trace_round_trip_keeps_the_owner() {
+        let path = std::env::temp_dir().join(format!(
+            "pilot-laya-test-{}-owner.pid",
+            std::process::id()
+        ));
+        let trace = LayaTrace {
+            pid: 4242,
+            name: "node.exe".to_string(),
+            owner_pid: 777,
+            owner_name: "pilot.exe".to_string(),
+        };
+        write_trace(&path, &trace);
+        assert_eq!(read_trace(&path), Some(trace));
+        crate::plface::clear_pid_file(&path);
+        assert_eq!(read_trace(&path), None);
+    }
+
+    #[test]
+    fn an_unreadable_trace_is_never_used_to_close_anything() {
+        // Trace d'une ancienne version (deux lignes, propriétaire absent),
+        // trace vide, trace d'identifiant illisible : `None` → on ne referme
+        // rien, jamais le service d'une autre copie de Pilot.
+        assert_eq!(parse_trace("4242\nnode.exe\n"), None);
+        assert_eq!(parse_trace(""), None);
+        assert_eq!(parse_trace("pas-un-nombre\nnode.exe\n12\npilot.exe\n"), None);
+        assert_eq!(parse_trace("0\nnode.exe\n12\npilot.exe\n"), None);
+        assert_eq!(parse_trace("42\nnode.exe\n0\npilot.exe\n"), None);
+        assert_eq!(
+            parse_trace("42\nnode.exe\n12\npilot.exe\n"),
+            Some(LayaTrace {
+                pid: 42,
+                name: "node.exe".to_string(),
+                owner_pid: 12,
+                owner_name: "pilot.exe".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn startup_cleanup_spares_a_live_owner_and_stops_an_orphan() {
+        const SELF: u32 = 2;
+        const OTHER: u32 = 1;
+        // Copie de Pilot ENCORE VIVANTE : on ne touche pas à son service.
+        assert!(!decide_startup_cleanup(Some(OTHER), true, SELF));
+        // Copie de Pilot DISPARUE (fermeture brutale) : service orphelin.
+        assert!(decide_startup_cleanup(Some(OTHER), false, SELF));
+        // Trace absente ou illisible : rien à refermer.
+        assert!(!decide_startup_cleanup(None, false, SELF));
+        // Trace qui nous appartient (relance interne) : à nous.
+        assert!(decide_startup_cleanup(Some(SELF), true, SELF));
+    }
+
+    #[test]
+    fn shutdown_stops_only_its_own_service() {
+        const SELF: u32 = 2;
+        assert!(decide_shutdown_stop(Some(2), SELF));
+        assert!(!decide_shutdown_stop(Some(1), SELF), "service d'une autre copie");
+        assert!(!decide_shutdown_stop(None, SELF), "aucune trace");
+    }
+
+    #[test]
+    fn stop_owned_leaves_the_trace_of_another_pilot_untouched() {
+        // Trace d'une AUTRE copie : l'arrêt de la nôtre ne doit ni la refermer
+        // ni l'effacer (le propriétaire réel s'en chargera à sa fermeture).
+        let path = std::env::temp_dir().join(format!(
+            "pilot-laya-test-{}-other-owner.pid",
+            std::process::id()
+        ));
+        let trace = LayaTrace {
+            pid: u32::MAX - 1,
+            name: node_exe_name().to_string(),
+            owner_pid: std::process::id().wrapping_add(1),
+            owner_name: "pilot.exe".to_string(),
+        };
+        write_trace(&path, &trace);
+        assert!(stop_owned(&path), "rien à refermer, et jamais celui d'autrui");
+        assert_eq!(read_trace(&path), Some(trace), "la trace d'autrui reste intacte");
+        crate::plface::clear_pid_file(&path);
+    }
+
+    /// Preuve par MESURE (vrais processus) : le nettoyage du démarrage ne
+    /// referme pas le service d'une autre copie de Pilot encore vivante, et
+    /// referme bien un orphelin dont le propriétaire a disparu. Sauté si `node`
+    /// est absent de la machine.
+    #[test]
+    fn cleanup_spares_a_live_owner_and_stops_a_dead_owner_for_real() {
+        let node_ok = Command::new("node")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !node_ok {
+            eprintln!("SAUTÉ : `node` absent de la machine");
+            return;
+        }
+
+        let sleep = |ms: &str| {
+            let mut cmd = Command::new("node");
+            cmd.args(["-e", &format!("setTimeout(()=>{{}}, {ms})")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(crate::CREATE_NO_WINDOW);
+            }
+            cmd
+        };
+
+        let root = std::env::temp_dir().join(format!(
+            "pilot-laya-owner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("dossier temporaire");
+        let pid_path = root.join(PID_FILE_NAME);
+
+        // « Autre copie de Pilot » et son « service » : deux vrais processus.
+        let mut owner = sleep("20000").spawn().expect("processus propriétaire");
+        let mut service = sleep("20000").spawn().expect("processus service");
+        let trace = LayaTrace {
+            pid: service.id(),
+            name: node_exe_name().to_string(),
+            owner_pid: owner.id(),
+            owner_name: node_exe_name().to_string(),
+        };
+        write_trace(&pid_path, &trace);
+
+        // 1) Propriétaire VIVANT : rien n'est refermé, la trace reste (la
+        //    nouvelle copie réutilise le service qui répond).
+        assert!(cleanup_stale(&pid_path));
+        assert_eq!(read_trace(&pid_path), Some(trace.clone()), "trace laissée intacte");
+        assert!(
+            crate::plface::owner_alive(service.id(), node_exe_name()),
+            "le service de l'autre copie doit survivre"
+        );
+
+        // 2) Propriétaire DISPARU : le service orphelin est refermé, trace effacée.
+        let _ = owner.kill();
+        let _ = owner.wait();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while crate::plface::owner_alive(trace.owner_pid, node_exe_name())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(
+            !crate::plface::owner_alive(trace.owner_pid, node_exe_name()),
+            "le propriétaire doit avoir disparu"
+        );
+        assert!(cleanup_stale(&pid_path));
+        assert_eq!(read_trace(&pid_path), None, "trace effacée après nettoyage");
+        assert!(
+            !crate::plface::owner_alive(service.id(), node_exe_name()),
+            "le service orphelin doit être refermé"
+        );
+
+        let _ = service.kill();
+        let _ = service.wait();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

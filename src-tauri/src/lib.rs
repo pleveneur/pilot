@@ -2243,6 +2243,40 @@ fn laya_classify(
     laya::classify(&text, &questions)
 }
 
+/// Service Laya : démarre le service TOUT DE SUITE (bouton « Démarrer le
+/// service maintenant »), sans relancer Pilot. Si le service répond déjà, il
+/// n'est ni refermé ni doublé ; sinon il est lancé et son identifiant est tracé
+/// avec son propriétaire (cette copie de Pilot). Renvoie l'issue RÉELLE de la
+/// tentative, pour que l'écran l'affiche au lieu d'une phrase vide de sens.
+#[tauri::command]
+fn laya_service_start(app: AppHandle, state: State<AppState>) -> laya::LayaOutcome {
+    let cfg = state.config.lock().unwrap().clone();
+    let paths = laya_effective_paths(&app, &cfg, "");
+    let model_dir = paths.model_dir.to_string_lossy().to_string();
+    // Même règle qu'au démarrage : le service ne se lance que si le modèle est
+    // complet (un dossier de simples `.part` ne suffit jamais). Ici le réglage
+    // « au démarrage » ne s'y oppose pas : l'utilisateur l'a demandé à la main.
+    let meta = laya_model::read_manifest(&paths.manifest);
+    let outcome = if laya_download::model_dir_has_all(&paths.model_dir, &meta.files) {
+        laya_pid_path(&app)
+            .as_deref()
+            .map(|pid_path| {
+                laya::launch_if_needed(
+                    true,
+                    &paths.service,
+                    paths.node.as_deref(),
+                    &model_dir,
+                    Some(pid_path),
+                )
+            })
+            .unwrap_or(laya::LayaOutcome::LaunchFailed)
+    } else {
+        laya::LayaOutcome::InvalidPath
+    };
+    laya::set_outcome(outcome);
+    outcome
+}
+
 /// Modèle Laya : état du modèle en LECTURE SEULE (dossier effectif, fichiers,
 /// téléchargement en cours, raison du dernier échec). Aucune écriture, aucun
 /// réseau : sert à afficher un état clair dans les Réglages.
@@ -2968,10 +3002,12 @@ pub fn run() {
                 let handle = handle.clone();
                 std::thread::spawn(move || {
                     let pid_path = laya_pid_path(&handle);
-                    // Nettoyage d'abord : ne referme QUE le service lancé par un
-                    // Pilot précédent (trace), jamais celui du propriétaire.
+                    // Nettoyage d'abord : ne referme un service restant QUE si son
+                    // propriétaire n'est plus vivant. Une autre copie de Pilot
+                    // encore ouverte garde donc le sien (trace laissée intacte,
+                    // service réutilisé tel quel).
                     if let Some(pid_path) = pid_path.as_deref() {
-                        let _ = laya::stop_owned(pid_path);
+                        let _ = laya::cleanup_stale(pid_path);
                     }
                     // ── Modèle + service : MÊMES chemins effectifs que l'interface
                     // (réglage à la main → ressource embarquée → système), calculés
@@ -3495,6 +3531,8 @@ pub fn run() {
             plface_status,
             // ── Service Laya : état du pilotage du service (lecture seule) ──
             laya_status,
+            // ── Service Laya : démarrage à la demande (bouton) ──
+            laya_service_start,
             laya_classify,
             laya_model_state,
             laya_model_download,
