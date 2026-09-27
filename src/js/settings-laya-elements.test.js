@@ -40,4 +40,17 @@ describe("Réglages — éléments Laya", () => {
       expect(source).toContain(`${key}:`);
     }
   });
+
+  // Défaut trouvé le 27/09/2026 (issue #23) : un service tué au démarrage ne
+  // pouvait être relancé qu'en redémarrant Pilot, et l'écran ne disait jamais
+  // POURQUOI il ne répondait pas. Le bouton de démarrage à la demande affiche
+  // l'issue RÉELLE renvoyée par le moteur.
+  it("propose un démarrage du service à la demande, câblé sur la commande réelle", () => {
+    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    expect(html).toMatch(/id="btn-laya-service-start"[^>]*class="settings-btn"/);
+    expect(html).toMatch(/Démarrer le service maintenant/);
+    expect(source).toContain("btnLayaServiceStart.addEventListener");
+    expect(source).toContain('invoke("laya_service_start")');
+    expect(source).toContain("layaOutcomeMessage(outcome)");
+  });
 });

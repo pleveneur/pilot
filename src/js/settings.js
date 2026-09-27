@@ -12,7 +12,7 @@ import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT_STDIO, formatArgs, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
-import { layaStatusMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
+import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 import { listen } from "@tauri-apps/api/event";
 
 let currentConfig = null;
@@ -139,6 +139,7 @@ export async function initSettings() {
   const btnLayaServiceBrowse = document.getElementById("btn-laya-service-browse");
   const btnLayaModelBrowse = document.getElementById("btn-laya-model-browse");
   const btnLayaNodeBrowse = document.getElementById("btn-laya-node-browse");
+  const btnLayaServiceStart = document.getElementById("btn-laya-service-start");
   const layaState = document.getElementById("laya-runtime-state");
   const layaMessage = document.getElementById("laya-message");
   const chkLayaModelAutoDownload = document.getElementById("setting-laya-model-auto-download");
@@ -1156,6 +1157,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       success: "var(--success)",
       info: "var(--text-secondary)",
       warning: "var(--warning)",
+      error: "var(--danger)",
     };
     layaState.textContent = text;
     layaState.style.color = colors[kind] || "var(--text-muted)";
@@ -1163,6 +1165,30 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
       layaMessage.textContent = ok ? "" : "État du service momentanément indisponible.";
       layaMessage.style.color = "var(--text-muted)";
     }
+  }
+  // Démarrage du service À LA DEMANDE (sans redémarrer Pilot) : affiche l'issue
+  // RÉELLE de la tentative, pour que « pourquoi il n'a pas démarré » soit
+  // visible à l'écran (les détails restant dans le journal du service). Si le
+  // service répond déjà, il n'est ni arrêté ni relancé.
+  if (btnLayaServiceStart) {
+    btnLayaServiceStart.addEventListener("click", async () => {
+      btnLayaServiceStart.disabled = true;
+      if (layaState) {
+        layaState.textContent = "Démarrage du service Laya…";
+        layaState.style.color = "var(--text-secondary)";
+      }
+      let outcome = "";
+      try {
+        outcome = await invoke("laya_service_start");
+      } catch (_) {
+        outcome = "";
+      }
+      btnLayaServiceStart.disabled = false;
+      const { text, kind } = layaOutcomeMessage(outcome);
+      showToast(text, kind);
+      // Relit l'état : l'issue réelle reste affichée dans la ligne d'état.
+      await refreshLayaState();
+    });
   }
   if (btnLayaServiceBrowse) {
     btnLayaServiceBrowse.addEventListener("click", async () => {

@@ -46,6 +46,30 @@ describe("layaStatusMessage", () => {
     expect(r.text).toMatch(/arrêté/i);
   });
 
+  it("injoignable AVEC une issue de démarrage → l'issue RÉELLE, jamais « arrêté »", () => {
+    const r = layaStatusMessage({
+      configured: true,
+      reachable: false,
+      ready: false,
+      outcome: "launchFailed",
+    });
+    expect(r.kind).toBe("error");
+    expect(r.text).toMatch(/échoué/i);
+    expect(r.text).not.toMatch(/arrêté/i);
+  });
+
+  it("injoignable mais service en cours de chargement → le dit (issue réelle)", () => {
+    const r = layaStatusMessage({ configured: true, reachable: false, outcome: "launchedNotReady" });
+    expect(r.kind).toBe("info");
+    expect(r.text).toMatch(/charge encore/i);
+  });
+
+  it("issue inconnue dans le statut → jamais de crash ni de terme technique", () => {
+    const r = layaStatusMessage({ configured: true, reachable: false, outcome: "inattendue" });
+    expect(r.text.length).toBeGreaterThan(0);
+    expect(r.text).not.toMatch(/outcome|undefined|null|exception/i);
+  });
+
   it("joignable mais modèle non chargé → en cours de chargement", () => {
     const r = layaStatusMessage({ configured: true, reachable: true, ready: false });
     expect(r.kind).toBe("info");
@@ -73,6 +97,7 @@ describe("layaStatusMessage", () => {
     const states = [
       { configured: false },
       { configured: true, reachable: false },
+      { configured: true, reachable: false, outcome: "launchFailed" },
       { configured: true, reachable: true, ready: false },
       { configured: true, reachable: true, ready: true },
     ];

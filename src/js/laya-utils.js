@@ -23,8 +23,8 @@ export const LAYA_OUTCOMES = [
  * Traduit l'état du service (commande `laya_status`) en message utilisateur.
  * Un état absent/`null` est traité comme « réglages incomplets » : jamais de
  * crash, jamais de nom technique à l'écran.
- * @param {{configured?: boolean, reachable?: boolean, ready?: boolean, embedded?: boolean}} [status]
- * @returns {{ text: string, kind: "success"|"info"|"warning" }}
+ * @param {{configured?: boolean, reachable?: boolean, ready?: boolean, embedded?: boolean, outcome?: (string|null)}} [status]
+ * @returns {{ text: string, kind: "success"|"info"|"warning"|"error" }}
  */
 export function layaStatusMessage(status) {
   const s = status && typeof status === "object" ? status : {};
@@ -52,6 +52,12 @@ export function layaStatusMessage(status) {
     };
   }
   if (s.reachable !== true) {
+    // Issue RÉELLE du dernier contrôle de démarrage : c'est elle qui EXPLIQUE
+    // pourquoi le service ne répond pas. Un lancement raté ne doit jamais être
+    // annoncé comme « arrêté » (et jamais rester invisible).
+    if (typeof s.outcome === "string" && s.outcome.length > 0) {
+      return layaOutcomeMessage(s.outcome);
+    }
     return { text: "Le service Laya est arrêté.", kind: "info" };
   }
   if (s.ready !== true) {
