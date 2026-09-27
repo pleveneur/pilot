@@ -135,10 +135,11 @@ describe("layaOutcomeMessage", () => {
 });
 
 describe("LAYA_FETCH_REASONS", () => {
-  it("couvre exactement les 11 raisons du moteur", () => {
+  it("couvre exactement les 12 raisons du moteur", () => {
     expect(LAYA_FETCH_REASONS).toEqual([
       "ok",
       "networkOffline",
+      "serverRefused",
       "invalidAddress",
       "diskFull",
       "integrityFailed",
@@ -188,6 +189,13 @@ describe("layaModelStateMessage", () => {
     const r = layaModelStateMessage({ present: false, reason: "addressMissing" });
     expect(r.kind).toBe("warning");
     expect(r.text).toMatch(/adresse d'hébergement/i);
+  });
+
+  it("refus du serveur → motif distinct du réseau, jamais « pas d'Internet »", () => {
+    const r = layaModelStateMessage({ present: false, reason: "serverRefused" });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/refusé/i);
+    expect(r.text).not.toMatch(/Internet/i);
   });
 
   it("interrompu → reprise annoncée", () => {

@@ -84,7 +84,9 @@ fermeture.
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse
 manquante »… Tous ces messages sont en langage courant (jamais de chemin ni de
-nom de fichier technique).
+nom de fichier technique). **Un échec dit toujours sa cause réelle** : « le
+serveur d'hébergement a refusé la demande » (surcharge, quota) n'est jamais
+présenté comme une absence de connexion Internet, et inversement.
 
 Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
 Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
@@ -132,7 +134,7 @@ Fonctions Rust internes du modèle (`laya_model::`, `laya_download::`) :
 |---|---|
 | `resolve_model_dir`, `resolve_model_dir_with_default`, `resolve_fetch_path`, `manifest_path` | Chemins **purs** (défauts : `model-ml`, `laya-fetch.mjs`, `model-manifest.json`) |
 | `decide_model_action(present, enabled, downloading)` | Décision pure : `nothing` / `download` / `alreadyRunning` |
-| `fetch_exit_reason(code)` | Traduit le code de sortie (0→`ok`, 1→`networkOffline`, 2→`invalidAddress`, 3→`diskFull`, 4→`integrityFailed`) |
+| `fetch_exit_reason(code)` | Traduit le code de sortie (0→`ok`, 1→`networkOffline`, 2→`invalidAddress`, 3→`diskFull`, 4→`integrityFailed`, 5→`serverRefused`, autre→`unknown`) |
 | `percent(current, total)`, `effective_base_url`, `is_placeholder_base` | Pourcentage borné, adresse effective, détection du marqueur `A_CHOISIR` |
 | `parse_manifest`, `read_manifest` | Lecture du manifeste (ne **rate jamais** : repli sur les 4 noms connus) |
 | `run` / `download_blocking` / `start_background` / `cancel` | Exécution de `<interpréteur> <fetch> <manifeste> <dossier> [--base <url>]`, version bloquante (démarrage), version fil (bouton), interruption |
@@ -209,11 +211,20 @@ jamais refermé.
 Toute erreur est silencieuse et non bloquante (fail-open).
 
 **Raisons d'échec du modèle** (`FetchReason`, `camelCase`) : `ok`,
-`networkOffline`, `invalidAddress`, `diskFull`, `integrityFailed`,
+`networkOffline`, `serverRefused`, `invalidAddress`, `diskFull`, `integrityFailed`,
 `addressMissing` (adresse non renseignée : refus **avant** tout lancement),
 `fetchMissing` (programme absent), `nodeMissing` (Node introuvable),
 `cancelled`, `alreadyRunning`, `unknown`. Jamais de code brut affiché à
 l'utilisateur : chaque raison a un message en langage courant.
+
+**Classement honnête des échecs** (corrigé) : le programme de téléchargement
+rend un code **5** quand le serveur a **répondu en refusant** la demande
+(surcharge, quota, statut HTTP distinct de 200/206/401/403/404) et un code **6**
+quand l'échec est inattendu (ni réseau, ni adresse, ni disque, ni intégrité). Le
+code **1** (`networkOffline`) est **réservé** aux vraies pannes de réseau
+(`fetch` qui échoue) : un refus de serveur n'est plus jamais annoncé comme « la
+connexion à Internet semble indisponible ». Les refus passagers (5) restent
+retentés comme les pannes réseau (3 essais) — le motif final, lui, reste honnête.
 
 **Garde anti-double** : un seul téléchargement à la fois pour toute
 l'application (drapeau global) ; un second appel est refusé poliment

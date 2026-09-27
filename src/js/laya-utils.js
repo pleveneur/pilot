@@ -106,6 +106,7 @@ export function layaOutcomeMessage(outcome) {
 export const LAYA_FETCH_REASONS = [
   "ok",
   "networkOffline",
+  "serverRefused",
   "invalidAddress",
   "diskFull",
   "integrityFailed",
@@ -170,6 +171,11 @@ export function layaModelStateMessage(state) {
     case "fetchMissing":
       return {
         text: "Le programme de téléchargement est introuvable. Indiquez le fichier de téléchargement du modèle.",
+        kind: "warning",
+      };
+    case "serverRefused":
+      return {
+        text: "Le modèle n'a pas pu être téléchargé : le serveur d'hébergement a refusé la demande. Réessayez dans quelques minutes.",
         kind: "warning",
       };
     case "nodeMissing":

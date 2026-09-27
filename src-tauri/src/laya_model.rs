@@ -91,6 +91,10 @@ pub(crate) enum FetchReason {
     InvalidAddress,
     DiskFull,
     IntegrityFailed,
+    /// Le serveur a répondu mais a refusé la demande (surcharge, quota, statut
+    /// inhabituel) : distinct d'une absence de réseau — on ne prétend jamais
+    /// « pas d'Internet » quand Internet a répondu.
+    ServerRefused,
     /// Adresse d'hébergement non renseignée (réglage vide + manifeste en attente).
     AddressMissing,
     /// Aucun fichier `laya-fetch.mjs` à l'emplacement indiqué.
@@ -190,6 +194,7 @@ pub(crate) fn fetch_exit_reason(code: i32) -> FetchReason {
         2 => FetchReason::InvalidAddress,
         3 => FetchReason::DiskFull,
         4 => FetchReason::IntegrityFailed,
+        5 => FetchReason::ServerRefused,
         _ => FetchReason::Unknown,
     }
 }
@@ -356,7 +361,8 @@ mod tests {
         assert_eq!(fetch_exit_reason(2), FetchReason::InvalidAddress);
         assert_eq!(fetch_exit_reason(3), FetchReason::DiskFull);
         assert_eq!(fetch_exit_reason(4), FetchReason::IntegrityFailed);
-        assert_eq!(fetch_exit_reason(5), FetchReason::Unknown);
+        assert_eq!(fetch_exit_reason(5), FetchReason::ServerRefused);
+        assert_eq!(fetch_exit_reason(6), FetchReason::Unknown);
         assert_eq!(fetch_exit_reason(-1), FetchReason::Unknown);
     }
 

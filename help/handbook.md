@@ -2241,7 +2241,9 @@ fermeture.
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse
 manquante »… Tous ces messages sont en langage courant (jamais de chemin ni de
-nom de fichier technique).
+nom de fichier technique). **Un échec dit toujours sa cause réelle** : « le
+serveur d'hébergement a refusé la demande » (surcharge, quota) n'est jamais
+présenté comme une absence de connexion Internet, et inversement.
 
 Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
 Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
