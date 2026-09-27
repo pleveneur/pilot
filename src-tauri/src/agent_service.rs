@@ -1994,6 +1994,12 @@ impl AgentService {
             dir.join("face-gateway.js"),
             include_str!("../../src/js/face-gateway.js"),
         );
+        // Service Laya : l'outil `laya_classify` doit aussi être disponible pour
+        // les agents d'assistant (tâche #140), qui tournent dans
+        // `~/.pilot/assistant/` et non dans un projet.
+        if let Some(laya_file) = Self::write_laya_extension(&dir) {
+            extensions.push(laya_file);
+        }
         extensions
     }
 
@@ -2192,6 +2198,11 @@ impl AgentService {
                         dir.join("face-gateway.js"),
                         include_str!("../../src/js/face-gateway.js"),
                     );
+                    // Service Laya : l'outil `laya_classify` doit être disponible
+                    // pour la session de l'assistant comme pour tout autre agent.
+                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
+                        extensions.push(laya_file);
+                    }
                     // Assistant piloté MCP (brique A) : si MCP est activé, l'assistant
                     // charge l'extension client MCP (comme l'agent standard) pour
                     // découvrir les serveurs avec ses outils mcp_<serveur>_<outil>.

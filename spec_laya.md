@@ -484,8 +484,10 @@ sont tracées (`[Laya] relais sortant : …`) dans la console.
 L'extension **`src-tauri/extensions/pilot-laya.ts`** (une seule extension, un
 seul fichier), écrite dans `<app_data_dir>/extensions/` et passée en
 `--extension` à **toute** session d'agent (`agent_service.rs`,
-`spawn_session` **et** `spawn_agent_process` — agents lancés par l'assistant
-et agents multi-rôles) avec son cœur `laya-gateway.js` (testé par Vitest),
+`spawn_session`, `spawn_agent_process` — agents lancés par l'assistant,
+agents multi-rôles — **et** les sessions d'assistant : `spawn_superagent_session`
+(Assistant 🧭) et `write_assistant_extensions` utilisée par `spawn_assistant_session`,
+agents d'assistant de tâche #140) avec son cœur `laya-gateway.js` (testé par Vitest),
 expose **un** outil :
 
 | | |
@@ -499,8 +501,8 @@ expose **un** outil :
 - **Fail-open** : service éteint → « Le service Laya ne répond pas… » ; modèle non
   prêt → message 400 du service recopié ; question mal formée → refus **sans**
   toucher au réseau. Jamais d'exception.
-- Les sessions qui ne reçoivent pas cette extension (Assistant 🧭, Aide, Review)
-  **ne voient pas** l'outil.
+- Les sessions qui ne reçoivent pas cette extension (Aide, Review, reviewer
+d'orchestration, assistant de groupe) **ne voient pas** l'outil.
 
 ### 9.3 Preuve
 
