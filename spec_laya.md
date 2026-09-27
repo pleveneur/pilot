@@ -334,6 +334,17 @@ Avatar (PLface) :
 
 ## 7. Ce qui n'est PAS fait (assumé)
 
+- **Pas de trace par copie de Pilot** (marche 6) : les deux copies partagent le
+  même `<app_data_dir>/laya.pid`. Chaque copie ne referme donc que le service
+  qu'elle a lancé, mais si le propriétaire se ferme, le service disparaît aussi
+  pour une copie restée ouverte (elle le relance au besoin : bouton de démarrage
+  à la demande ou redémarrage). Un fichier de trace par copie serait le remède
+  si le partage gênait en pratique.
+- **Pas de rotation du journal** `laya.log` : un repère par tentative, le service
+  écrit très peu — la taille reste négligeable ; aucune purge automatique.
+- **Trace d'une version antérieure** (deux lignes) : traitée comme illisible →
+  **rien n'est refermé** ; au premier redémarrage après mise à jour, un service
+  orphelin peut donc rester en vie (sans conséquence : il est réutilisé tel quel).
 - ~~**Adresse d'hébergement inconnue**~~ → **résolu (marche 5)** : le manifeste
   porte désormais l'adresse réelle
   (`https://huggingface.co/pleveneur/laya-multilingual-onnx/resolve/main`).
