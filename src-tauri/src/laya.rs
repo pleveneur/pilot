@@ -1091,6 +1091,14 @@ http.createServer((req, res) => {
         let (pid, name) = crate::plface::read_pid_file(&pid_path).expect("trace laya.pid");
         assert!(pid > 0);
         assert_eq!(name, node_exe_name());
+        // La trace dit AUSSI à qui appartient ce service : ce processus-ci.
+        let trace = read_trace(&pid_path).expect("trace avec propriétaire");
+        assert_eq!(trace.owner_pid, std::process::id());
+        assert_eq!(trace.owner_name, owner_process_name());
+        assert!(
+            !trace.owner_name.is_empty(),
+            "le nom de programme du propriétaire doit être inscrit"
+        );
 
         // 3) État lu : configuré, joignable, modèle chargé.
         let st = status(true, &service, &model, true);
