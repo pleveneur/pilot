@@ -1801,12 +1801,14 @@ pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
 
 // ── Apprentissage : injection de résumé de session ──
 
-// P0-4 : borne de taille du résumé injecté à l'assistant. Un résumé de fin de
-// tâche (run d'agents délégués, délégation, session) trop volumineux encombre
-// le contexte de l'assistant. On tronque au-delà de cette borne et on ajoute un
-// marqueur de troncature explicite.
-const SUPER_AGENT_SUMMARY_MAX_CHARS: usize = 8000;
-const SUMMARY_TRUNCATION_MARKER: &str = "\n…[résumé tronqué : trop volumineux]";
+// P0-4 : plafond UNIQUE de ce qui est réellement VERSÉ dans la conversation de
+// l'assistant par une remontée automatique (fin de mission d'agents, résultat
+// agrégé, délégation, session). Il borne le MESSAGE D'INJECTION ENTIER (préfixe
+// + résumé + avis de troncature), pas le seul résumé : c'est la taille versée
+// qui compte, et plusieurs morceaux ne doivent pas contourner la limite. Le
+// résumé COMPLET reste stocké tel quel (`session_summaries`) — seule la copie
+// injectée est bornée.
+const MAX_INJECTED_MESSAGE_CHARS: usize = 4000;
 // Issue #141 : rafale de réflexions à l'ouverture de l'onglet. Chaque résumé
 // en attente rejoué lance un VRAI tour de génération. Borne max injectée par
 // appel (cycle) + délai entre deux injections : les résumés restants sont
@@ -1820,14 +1822,36 @@ const SUPER_AGENT_REPLAY_INTERVAL_MS: u64 = 150;
 static REPLAY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 const REPLAY_TRIGGER_DELAY_MS: u64 = 400;
 
-/// Tronque un résumé pour l'injection à l'assistant (borne + marqueur).
-fn truncate_summary(summary: &str) -> String {
-    if summary.len() <= SUPER_AGENT_SUMMARY_MAX_CHARS {
-        return summary.to_string();
+/// Construit le message réellement injecté à l'assistant : message complet
+/// borné au plafond UNIQUE `MAX_INJECTED_MESSAGE_CHARS`. Au-delà, on tronque en
+/// ANNONÇANT honnêtement la troncature (nombre de caractères omis + où lire la
+/// suite). L'avis de troncature compte lui-même dans la taille versée : le
+/// résultat ne dépasse donc jamais le plafond. Le résumé d'origine n'est jamais
+/// modifié ici (le texte complet reste en base).
+fn build_capped_injection_message(project_path: Option<&str>, summary: &str) -> String {
+    let full = build_injection_message(project_path, summary);
+    let total = full.chars().count();
+    if total <= MAX_INJECTED_MESSAGE_CHARS {
+        return full;
     }
-    let mut cut = summary.chars().take(SUPER_AGENT_SUMMARY_MAX_CHARS).collect::<String>();
-    cut.push_str(SUMMARY_TRUNCATION_MARKER);
-    cut
+    let mut keep = MAX_INJECTED_MESSAGE_CHARS;
+    loop {
+        let omitted = total - keep;
+        let notice = format!(
+            "\n\n[…tronqué : {} caractères omis. Texte complet conservé dans le suivi de l'assistant (table session_summaries) et dans la session de l'agent.]",
+            omitted
+        );
+        let used = keep + notice.chars().count();
+        if used <= MAX_INJECTED_MESSAGE_CHARS {
+            let mut cut: String = full.chars().take(keep).collect();
+            cut.push_str(&notice);
+            return cut;
+        }
+        keep = keep.saturating_sub(used - MAX_INJECTED_MESSAGE_CHARS);
+        if keep == 0 {
+            return notice;
+        }
+    }
 }
 
 /// Résultat de la mise en boîte d'une remontée de session avant toute tentative
@@ -1961,7 +1985,7 @@ where
         )
         .ok()
     });
-    let msg = build_injection_message(project_path.as_deref(), summary);
+    let msg = build_capped_injection_message(project_path.as_deref(), summary);
     match send(&msg) {
         Ok(()) => {
             mark_session_summary_delivered(conn, id)?;
@@ -1990,10 +2014,9 @@ pub fn inject_session_summary(
     summary: String,
     defer: Option<bool>,
 ) -> Result<Value, String> {
-    // P0-4 : borne le résumé (quant à la taille) pour ne pas encombrer le
-    // contexte de l'assistant. Tronqué ici à la source, le marqueur de
-    // troncature informe l'assistant que le résultat a été agrégé.
-    let summary = truncate_summary(&summary);
+    // P0-4 : le résumé COMPLET est stocké tel quel (aucune destruction à la
+    // source) ; seule la copie VERSÉE dans la conversation est bornée, au
+    // moment de l'injection (`build_capped_injection_message`).
     // Persister TOUJOURS dans la base (delivered=0 par défaut). En cas de
     // super-agent indisponible ou occupé, le résumé est conservé en attente et
     // sera rejoué plus tard (`replay_pending_superagent_summaries`) → plus
@@ -2030,7 +2053,7 @@ pub fn inject_session_summary(
     // en attente (delivered=0) : le rejeu le délivrera à la prochaine
     // opportunité.
     if superagent_available(state.inner()) {
-        let msg = build_injection_message(project_path.as_deref(), &summary);
+        let msg = build_capped_injection_message(project_path.as_deref(), &summary);
         let cmd = serde_json::json!({"type": "prompt", "message": msg});
         match state.agent_service.send_superagent(cmd) {
             Ok(()) => {
@@ -4045,7 +4068,8 @@ mod tests_inner_helper {
 }
 mod tests {
     use super::{
-        build_project_context, deliver_one_summary, enqueue_session_summary, init_db,
+        build_capped_injection_message, build_project_context, deliver_one_summary,
+        enqueue_session_summary, init_db,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
@@ -4053,7 +4077,7 @@ mod tests {
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         take_trash_entry, trash_entry_preview, validate_export_json, list_memory_trash_entries,
         memory_removal_result, parse_model_spec, resolve_super_agent_default, MEMORY_FORMAT,
-        MEMORY_VERSION,
+        MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
     };
@@ -4941,6 +4965,64 @@ mod tests {
         // Le marquage est idempotent.
         mark_session_summary_delivered(&conn, enq.rowid).unwrap();
         assert!(pending_session_summaries(&conn).unwrap().is_empty());
+    }
+
+    // ── Plafond UNIQUE de ce qui est versé dans la conversation de l'assistant ──
+
+    #[test]
+    fn injected_message_stays_under_single_cap_while_full_text_kept() {
+        // Deux versements successifs mis bout à bout (fin de mission + résultat
+        // agrégé) : c'est le TOTAL versé qui doit rester borné, pas chaque
+        // morceau pris séparément.
+        let block = "x".repeat(6000);
+        let huge = format!("{block}\n{block}\n{block}");
+
+        // 1. Le message réellement injecté ne dépasse jamais le plafond unique.
+        let msg = build_capped_injection_message(Some("/proj/plafond"), &huge);
+        assert!(
+            msg.chars().count() <= MAX_INJECTED_MESSAGE_CHARS,
+            "le message versé doit être borné au plafond"
+        );
+        // La troncature est ANNONCÉE honnêtement (nombre de caractères omis).
+        assert!(msg.contains("tronqué"));
+        assert!(msg.contains("caractères omis"));
+        assert!(msg.contains("session_summaries"), "l'avis doit indiquer où lire la suite");
+
+        // 2. Un résumé court reste intact (comportement historique préservé).
+        let short = build_capped_injection_message(Some("/proj/plafond"), "compte rendu court");
+        assert!(short.contains("compte rendu court"));
+        assert!(!short.contains("tronqué"));
+
+        // 3. Le texte COMPLET n'est pas détruit : il reste stocké à la source.
+        let conn = mem_conn();
+        let enq =
+            enqueue_session_summary(&conn, Some("/proj/plafond"), None, &huge, false).unwrap();
+        let stored: String = conn
+            .query_row(
+                "SELECT summary FROM session_summaries WHERE id = ?1",
+                [enq.rowid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, huge, "le texte complet doit rester stocké tel quel");
+
+        // 4. Plusieurs versements SUCCESSIFS : aucun ne dépasse le plafond.
+        let sent = std::cell::RefCell::new(Vec::<String>::new());
+        let pending = pending_session_summaries(&conn).unwrap();
+        for (id, project_id, _session_id, summary) in &pending {
+            deliver_one_summary(&conn, *id, *project_id, summary, |m| {
+                sent.borrow_mut().push(m.to_string());
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert!(!sent.borrow().is_empty());
+        for m in sent.borrow().iter() {
+            assert!(
+                m.chars().count() <= MAX_INJECTED_MESSAGE_CHARS,
+                "un versement successif ne doit pas contourner le plafond"
+            );
+        }
     }
 
     #[test]
