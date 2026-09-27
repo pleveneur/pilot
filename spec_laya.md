@@ -483,8 +483,10 @@ sont tracées (`[Laya] relais sortant : …`) dans la console.
 
 L'extension **`src-tauri/extensions/pilot-laya.ts`** (une seule extension, un
 seul fichier), écrite dans `<app_data_dir>/extensions/` et passée en
-`--extension` aux sessions d'agent (`agent_service.rs`, `spawn_session`) avec son
-cœur `laya-gateway.js` (testé par Vitest), expose **un** outil :
+`--extension` à **toute** session d'agent (`agent_service.rs`,
+`spawn_session` **et** `spawn_agent_process` — agents lancés par l'assistant
+et agents multi-rôles) avec son cœur `laya-gateway.js` (testé par Vitest),
+expose **un** outil :
 
 | | |
 |---|---|
@@ -504,7 +506,10 @@ cœur `laya-gateway.js` (testé par Vitest), expose **un** outil :
 
 `npm test` (Vitest) couvre le cœur (`src/js/laya-gateway.test.js`,
 `src/js/telegram-dialog.test.js` : service simulé, aucun réseau) ; `cargo test
---lib laya` couvre le client Rust (faux service en `TcpListener`). Les preuves
+--lib laya` couvre le client Rust (faux service en `TcpListener`). Un test Rust
+(`write_laya_extension_ecrit_extension_et_coeur`) prouve que le couple
+`pilot-laya.ts` + `laya-gateway.js` est bien écrit sur disque par le chemin
+partagé. Les preuves
 d'exécution réelle (réponses, confiances, durées, mémoire, un seul processus,
 cas de panne) sont consignées dans le rapport de mission, avec ses traces
 locales réexécutables (`.pilot/laya-inc1.*`, `.pilot/laya-inc2.*`).
