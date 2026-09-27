@@ -367,7 +367,7 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
 /// les outils d'agents (`run_agents`, `create_agent`, `delegate_to_coder`,
 /// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le flux « plan-maker »
 /// pour les demandes de code importantes (plan → validation → délégation).
-const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `run_agents(agent_ids, task)` (méthode par défaut : lance une tâche sur un/plusieurs agents en arrière-plan, tu reçois un accusé puis le résultat agrégé), `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent de chaque spécialité peut tourner à la fois sur un projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin (ne la relance pas).\n\nExécute le travail via des agents spécifiques (`run_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), montre-la à l'utilisateur, puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, présente-le et fais valider les tâches par l'utilisateur (`ask_multi_choice`/`ask_confirm`), puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `run_agents(agent_ids, task)` (méthode par défaut : lance une tâche sur un/plusieurs agents en arrière-plan, tu reçois un accusé puis le résultat agrégé), `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent de chaque spécialité peut tourner à la fois sur un projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin (ne la relance pas).\n\nExécute le travail via des agents spécifiques (`run_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
 /// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
@@ -442,10 +442,10 @@ fn concise_guideline(enabled: bool) -> String {
 }
 
 /// Construit la consigne « Assistant coordinateur pur » à injecter dans le
-/// prompt système du super-agent. Quand activé, l'assistant propose les étapes
-/// et les agents, l'utilisateur valide avant lancement ; il répond lui-même aux
-/// questions simples et délègue dès qu'il faut réfléchir sur un projet. Retourne
-/// une chaîne vide si le mode est désactivé. Le mode est UNIQUEMENT un texte
+/// prompt système du super-agent. Quand activé, l'assistant annonce les étapes
+/// et les agents puis lance directement ; il répond lui-même aux questions
+/// simples et délègue dès qu'il faut réfléchir sur un projet. Retourne une
+/// chaîne vide si le mode est désactivé. Le mode est UNIQUEMENT un texte
 /// d'instructions : aucun changement du mécanisme d'échange assistant↔agents.
 fn coordinator_guideline(enabled: bool) -> String {
     if !enabled {
@@ -453,12 +453,11 @@ fn coordinator_guideline(enabled: bool) -> String {
     }
     "\n\n## Mode « Assistant coordinateur pur »
 Tu es le coordinateur, pas l'exécutant. Règles :
-1. PROPOSE, l'utilisateur VALIDE : pour tout travail substantiel lié à un projet (réfléchir, analyser, modifier, vérifier), présente d'abord les étapes ET l'équipe d'agents que tu comptes utiliser, puis fais valider par l'utilisateur (ask_confirm / ask_multi_choice) avant de lancer. Ne lance pas de run_agents ni de délégation sans cette validation, sauf demande explicite.
+1. PROPOSE ET LANCE : pour tout travail substantiel lié à un projet (réfléchir, analyser, modifier, vérifier), annonce en une ligne les étapes ET l'équipe d'agents que tu utilises, puis lance directement.
 2. RÉPONDS TOI-MÊME aux questions simples : état d'une tâche, information déjà connue de ton suivi (base), question de compréhension. Ne délègue pas pour répondre à une question dont tu as déjà la réponse.
 3. DÉLÈGUE dès qu'il faut RÉFLÉCHIR sur une demande liée à un projet (analyse, recherche, rédaction, modification) : confie le raisonnement à l'agent le plus adapté.
 4. Les appels Git liés aux issues passent par un agent (github-tracker / git-point), pas par tes outils Git directs. La vérification de l'état d'un agent passe par un agent, pas par list_agent_sessions.
-5. Si l'utilisateur tape pendant que tu délègues, traite son message EN PRIORITÉ : réponds immédiatement, signale que la délégation continue en arrière-plan, et reviens dessus à la fin.
-6. L'utilisateur garde le contrôle : ne lance jamais un agent sans validation ; propose, il décide (ou il lance lui-même).".to_string()
+5. Si l'utilisateur tape pendant que tu délègues, traite son message EN PRIORITÉ : réponds immédiatement, signale que la délégation continue en arrière-plan, et reviens dessus à la fin.".to_string()
 }
 
 /// Construit la consigne « mode user-friendly » (issue #16) à injecter dans le
@@ -478,7 +477,7 @@ fn user_friendly_guideline(enabled: bool) -> String {
 /// pour que le style soit permanent dans le noyau plutôt que dans la mémoire
 /// d'un agent.
 fn voice_guideline() -> String {
-    "\n\nVoix de l'assistant (style de réponse permanent) :\n1. Phrases courtes et claires, NON techniques : un non-spécialiste doit tout comprendre sans effort.\n2. Structure en points : un point clé en tête, puis de courtes lignes qui avancent (pas de blabla).\n3. Orienté décision : proposer, trancher, lancer — ne pas rester dans le flou.\n4. Reformuler les retours techniques des agents en langage simple, orienté résultat, sans code ni noms de fichiers ou de fonctions.\n5. Quand un plan est montré : le présenter en étapes claires puis demander la validation par un geste simple (choix/confirmation).\n6. Concision : informer et décider, sans tout détailler, sauf demande explicite.\n7. Ton confiant et posé, conversation naturelle.".to_string()
+    "\n\nVoix de l'assistant (style de réponse permanent) :\n1. Phrases courtes et claires, NON techniques : un non-spécialiste doit tout comprendre sans effort.\n2. Structure en points : un point clé en tête, puis de courtes lignes qui avancent (pas de blabla).\n3. Orienté décision : proposer, trancher, lancer — ne pas rester dans le flou.\n4. Reformuler les retours techniques des agents en langage simple, orienté résultat, sans code ni noms de fichiers ou de fonctions.\n5. Quand un plan est montré : le présenter en étapes claires.\n6. Concision : informer et décider, sans tout détailler, sauf demande explicite.\n7. Ton confiant et posé, conversation naturelle.".to_string()
 }
 
 /// Construit la consigne « personnalité adaptée à l'utilisateur » (A18) à

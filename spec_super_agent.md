@@ -199,17 +199,15 @@ apprend et répond.
 - **Désactivé par défaut**.
 
 ### Mode « Assistant coordinateur pur »
-- **Paramètres ⚙️ → onglet « Assistant » → « Assistant coordinateur (proposer +
-  validation, déléguer quand il faut réfléchir) »** : quand activé (désactivé
+- **Paramètres ⚙️ → onglet « Assistant » → « Assistant coordinateur
+  (déléguer quand il faut réfléchir) »** : quand activé (désactivé
   par défaut), l'Assistant passe en mode **coordinateur pur**. Il **ne modifie
   pas** le mécanisme d'échange assistant↔agents : c'est uniquement un bloc
   d'instructions injecté dans son prompt système.
-- **Règles injectées** (les 6 points) :
-  1. **PROPOSE, l'utilisateur VALIDE** : pour tout travail substantiel lié à un
-     projet (réfléchir, analyser, modifier, vérifier), il présente d'abord les
-     étapes ET l'équipe d'agents qu'il compte utiliser, puis fait valider
-     (`ask_confirm` / `ask_multi_choice`) avant de lancer. Il ne lance pas de
-     `run_agents` ni de délégation sans cette validation, sauf demande explicite.
+- **Règles injectées** (les 5 points) :
+  1. **PROPOSE ET LANCE** : pour tout travail substantiel lié à un projet
+     (réfléchir, analyser, modifier, vérifier), il annonce en une ligne les
+     étapes ET l'équipe d'agents qu'il utilise, puis lance directement.
   2. **RÉPONDS TOI-MÊME aux questions simples** : état d'une tâche, information
      déjà connue de son suivi (base), question de compréhension. Il ne délègue
      pas pour répondre à une question dont il a déjà la réponse.
@@ -222,16 +220,14 @@ apprend et répond.
   5. **Priorité au message utilisateur** : s'il tape pendant qu'il délègue,
      l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
      la délégation continue en arrière-plan, puis revient dessus à la fin).
-  6. **L'utilisateur garde le contrôle** : ne lance jamais un agent sans
-     validation ; il propose, l'utilisateur décide (ou lance lui-même).
 
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
 Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
-(proposer + validation, déléguer quand il faut réfléchir) »** (désactivée par
-défaut) fait passer l'Assistant en mode **coordinateur** plutôt qu'exécutant :
-- Il **propose d'abord les étapes ET les agents**, et vous **validez avant
-  lancement** (pour tout travail substantiel lié à un projet).
+(déléguer quand il faut réfléchir) »** (désactivée par défaut) fait passer
+l'Assistant en mode **coordinateur** plutôt qu'exécutant :
+- Il **annonce les étapes ET les agents** puis **lance directement** (pour tout
+  travail substantiel lié à un projet).
 - Il **répond lui-même aux questions simples** (état d'une tâche, information
   déjà connue de son suivi).
 - Il **délègue dès qu'il faut réfléchir** sur un projet (analyse, recherche,
@@ -240,7 +236,6 @@ défaut) fait passer l'Assistant en mode **coordinateur** plutôt qu'exécutant 
   passent par des agents (pas par ses outils directs).
 - Si vous tapez pendant une délégation, il vous répond **en priorité** puis
   revient sur la tâche en cours.
-- Vous gardez le contrôle : rien ne se lance sans votre validation.
 Ce mode ne change pas le mécanisme d'échange assistant↔agents : c'est
 uniquement un bloc d'instructions dans le prompt système.
 <!-- /HELP:super-agent-coordinator -->
@@ -485,10 +480,8 @@ uniquement un bloc d'instructions dans le prompt système.
 - **Plan structuré avant délégation (plan-maker)** : pour les demandes
   importantes, l'Assistant peut d'abord appeler l'agent **`plan-maker`** (via
   `run_agents`) pour obtenir un **plan structuré** (tâches, fichiers concernés,
-  coût estimé en tokens, contraintes suggérées). Il **présente ce plan à
-  l'utilisateur** (via `ask_multi_choice` pour cocher les tâches à exécuter, puis
-  `ask_confirm` pour valider), puis **délègue au codeur** avec le plan approuvé
-  et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
+  coût estimé en tokens, contraintes suggérées), puis **délègue au codeur** avec
+  ce plan et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
   modifie aucun code ; il ne fait que produire le plan JSON.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
@@ -1062,9 +1055,8 @@ Tables (V1) :
 - **Flux « plan-maker »** : le prompt système décrit la procédure de
   planification avant délégation au codeur — pour les demandes importantes,
   appeler `run_agents(["plan-maker"], …)` pour obtenir un plan JSON (tâches,
-  fichiers, coût estimé, contraintes), le présenter à l'utilisateur
-  (`ask_multi_choice` pour cocher les tâches + `ask_confirm` pour valider),
-  puis déléguer au codeur via `delegate_to_coder` avec le plan approuvé. Les
+  fichiers, coût estimé, contraintes), puis déléguer au codeur via
+  `delegate_to_coder` avec ce plan. Les
   demandes simples peuvent être déléguées directement sans plan-maker. Voir
   aussi la section « Déléguer le code à l'agent du projet » (plan-maker).
 
