@@ -536,6 +536,108 @@ mod tests {
         assert_eq!(crate::plface::read_pid_file(&path), None);
     }
 
+    /// Service de test : un vrai serveur HTTP node sur le port du service, qui
+    /// annonce son modèle chargé — même contrat que `laya-service.mjs` (arguments
+    /// `[script, dossier-modèle]`, route `/status`).
+    const FAKE_SERVICE_SOURCE: &str = r#"import http from "node:http";
+http.createServer((req, res) => {
+  if (req.url === "/status") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ready: true, model: process.argv[2] ?? "" }));
+  } else { res.writeHead(404); res.end(); }
+}).listen(3017, "127.0.0.1");
+"#;
+
+    /// Chaîne RÉELLE (vrai processus, vrai port, vraie trace) : état honnête
+    /// quand le modèle manque, démarrage, trace du pid, service déjà vivant
+    /// jamais doublé, arrêt propre. Sauté si `node` est absent ; réduit au seul
+    /// « jamais doublé » si un service tourne déjà sur ce poste (le service réel
+    /// du propriétaire n'est jamais perturbé par un test).
+    #[test]
+    fn real_launch_trace_already_running_and_clean_stop() {
+        let node_ok = Command::new("node")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !node_ok {
+            eprintln!("SAUTÉ : `node` absent de la machine");
+            return;
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "pilot-laya-real-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&root).expect("dossier temporaire");
+        let model_dir = root.join("model-ml");
+        let pid_path = root.join(PID_FILE_NAME);
+        let service = root.join("laya-service.mjs");
+        std::fs::write(&service, FAKE_SERVICE_SOURCE).expect("service de test");
+        let service = service.to_string_lossy().to_string();
+        let model = model_dir.to_string_lossy().to_string();
+
+        if probe().reachable {
+            // Service réel déjà en place : jamais doublé (aucune sonde d'écriture).
+            assert_eq!(
+                launch_if_needed(true, &service, &model, Some(&pid_path)),
+                LayaOutcome::AlreadyRunning
+            );
+            eprintln!("SAUTÉ (suite) : un service répond déjà sur {LAYA_API_HOST}:{LAYA_API_PORT}");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        // 1) Modèle absent (fichier de service présent) : état honnête, aucune
+        //    panique, aucun lancement.
+        assert_eq!(
+            launch_if_needed(true, &service, &model, Some(&pid_path)),
+            LayaOutcome::InvalidPath
+        );
+        assert_eq!(crate::plface::read_pid_file(&pid_path), None);
+
+        // 2) Démarrage réel : le service répond et son pid est tracé.
+        std::fs::create_dir_all(&model_dir).expect("dossier de modèle");
+        let outcome = launch_if_needed(true, &service, &model, Some(&pid_path));
+        assert!(
+            matches!(outcome, LayaOutcome::Launched | LayaOutcome::LaunchedNotReady),
+            "issue inattendue : {outcome:?}"
+        );
+        assert!(
+            wait_until_reachable(Duration::from_secs(10), PROBE_INTERVAL).reachable,
+            "le service lancé devrait répondre sur /status"
+        );
+        let (pid, name) = crate::plface::read_pid_file(&pid_path).expect("trace laya.pid");
+        assert!(pid > 0);
+        assert_eq!(name, node_process_name());
+
+        // 3) État lu : configuré, joignable, modèle chargé.
+        let st = status(true, &service, &model);
+        assert!(st.configured && st.reachable && st.ready, "{st:?}");
+
+        // 4) Service déjà vivant : jamais doublé, trace inchangée.
+        assert_eq!(
+            launch_if_needed(true, &service, &model, Some(&pid_path)),
+            LayaOutcome::AlreadyRunning
+        );
+        assert_eq!(crate::plface::read_pid_file(&pid_path), Some((pid, name)));
+
+        // 5) Arrêt propre : seul le processus tracé est refermé, trace effacée.
+        assert!(stop_owned(&pid_path));
+        assert_eq!(crate::plface::read_pid_file(&pid_path), None);
+        assert!(
+            !wait_until_reachable(Duration::from_secs(10), PROBE_INTERVAL).reachable,
+            "le service arrêté ne devrait plus répondre"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn stop_owned_does_nothing_without_trace() {
         // Aucune trace = aucun service lancé par Pilot : le service du
