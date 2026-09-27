@@ -254,6 +254,7 @@
         <nav class="settings-tabs" role="tablist" aria-label="Catégories de paramètres">
           <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true"><i data-lucide="sliders-horizontal" class="icon"></i> Général</button>
           <button class="settings-tab" data-settings-tab="avatar" role="tab" aria-selected="false"><i data-lucide="user-round" class="icon"></i> Avatar</button>
+          <button class="settings-tab" data-settings-tab="laya" role="tab" aria-selected="false"><i data-lucide="boxes" class="icon"></i> Service Laya</button>
           <button class="settings-tab" data-settings-tab="agent" role="tab" aria-selected="false"><i data-lucide="bot" class="icon"></i> Agent Pi</button>
           <button class="settings-tab" data-settings-tab="models" role="tab" aria-selected="false"><i data-lucide="cpu" class="icon"></i> Modèles IA</button>
           <button class="settings-tab" data-settings-tab="providers" role="tab" aria-selected="false"><i data-lucide="server" class="icon"></i> Fournisseurs</button>
@@ -361,6 +362,36 @@
             </div>
             <div class="setting-row setting-row-indent">
               <span id="plface-test-status" style="font-size:11px;color:var(--text-muted);"></span>
+            </div>
+          </div>
+          </div>
+
+          <div class="settings-panel" data-settings-panel="laya" role="tabpanel">
+          <div class="settings-section">
+            <h3 class="settings-section-title"><i data-lucide="boxes" class="icon-sm"></i> Service Laya</h3>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-laya-autostart" />
+              <label for="setting-laya-autostart" title="Lance le service Laya au démarrage de Pilot, seulement s'il ne répond pas déjà. Sans effet si le service n'est pas installé.">Lancer le service Laya au démarrage</label>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-laya-service-path">Programme du service (laya-service.mjs) :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-laya-service-path" placeholder="laisser vide pour ne rien lancer" />
+                <button id="btn-laya-service-browse" type="button" class="settings-btn">Choisir le service…</button>
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-laya-model-dir">Dossier du modèle à charger :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-laya-model-dir" placeholder="laisser vide pour ne rien lancer" />
+                <button id="btn-laya-model-browse" type="button" class="settings-btn">Choisir le dossier…</button>
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="laya-runtime-state" style="font-size:12px;color:var(--text-muted);"></span>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="laya-message" style="font-size:11px;color:var(--text-muted);"></span>
             </div>
           </div>
           </div>

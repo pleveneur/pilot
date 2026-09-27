@@ -12,6 +12,7 @@ import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT_STDIO, formatArgs, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
+import { layaStatusMessage } from "./laya-utils.js";
 
 let currentConfig = null;
 
@@ -129,6 +130,14 @@ export async function initSettings() {
   const btnPlfaceStop = document.getElementById("btn-plface-stop");
   const plfaceTestStatus = document.getElementById("plface-test-status");
   const plfaceState = document.getElementById("plface-runtime-state");
+  // ── Service Laya ──
+  const chkLayaAutostart = document.getElementById("setting-laya-autostart");
+  const inputLayaServicePath = document.getElementById("setting-laya-service-path");
+  const inputLayaModelDir = document.getElementById("setting-laya-model-dir");
+  const btnLayaServiceBrowse = document.getElementById("btn-laya-service-browse");
+  const btnLayaModelBrowse = document.getElementById("btn-laya-model-browse");
+  const layaState = document.getElementById("laya-runtime-state");
+  const layaMessage = document.getElementById("laya-message");
   const chkIntegratedTerminal = document.getElementById("setting-integrated-terminal");
   const chkRpcAgent = document.getElementById("setting-rpc-agent");
   const inputRpcPath = document.getElementById("setting-rpc-path");
@@ -704,6 +713,11 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (inputPlfacePath) inputPlfacePath.value = currentConfig.plface_exe_path || "";
     if (inputPlfaceAvatar) inputPlfaceAvatar.value = currentConfig.plface_avatar_path || "";
     refreshPlfaceState();
+    // ── Service Laya : réglages du service local ──
+    if (chkLayaAutostart) chkLayaAutostart.checked = currentConfig.laya_autostart_enabled === true;
+    if (inputLayaServicePath) inputLayaServicePath.value = currentConfig.laya_service_path || "";
+    if (inputLayaModelDir) inputLayaModelDir.value = currentConfig.laya_model_dir || "";
+    refreshLayaState();
     chkIntegratedTerminal.checked = currentConfig.integrated_terminal || false;
     chkRpcAgent.checked = currentConfig.rpc_agent_enabled || false;
     inputRpcPath.value = currentConfig.rpc_pi_path || "";
@@ -1106,6 +1120,64 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     });
   }
 
+  // ── Service Laya : état + parcours des réglages ──
+  // Indicateur d'état lisible : traduit l'état renvoyé par `laya_status`. Un
+  // échec de sonde n'est jamais bloquant (état « non configuré » + note discrète).
+  async function refreshLayaState() {
+    if (!layaState) return;
+    let status = null;
+    let ok = true;
+    try {
+      status = await invoke("laya_status");
+    } catch (_) {
+      status = null;
+      ok = false;
+    }
+    const { text, kind } = layaStatusMessage(status);
+    const colors = {
+      success: "var(--success)",
+      info: "var(--text-secondary)",
+      warning: "var(--warning)",
+    };
+    layaState.textContent = text;
+    layaState.style.color = colors[kind] || "var(--text-muted)";
+    if (layaMessage) {
+      layaMessage.textContent = ok ? "" : "État du service momentanément indisponible.";
+      layaMessage.style.color = "var(--text-muted)";
+    }
+  }
+  if (btnLayaServiceBrowse) {
+    btnLayaServiceBrowse.addEventListener("click", async () => {
+      try {
+        const picked = await dialogOpen({
+          multiple: false,
+          directory: false,
+          filters: [
+            { name: "Service Laya (.mjs)", extensions: ["mjs"] },
+            { name: "Tous les fichiers", extensions: ["*"] },
+          ],
+        });
+        if (!picked) return; // annulé
+        // Remplit UNIQUEMENT le champ du service (jamais celui du modèle).
+        if (inputLayaServicePath) inputLayaServicePath.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du fichier : " + e, "error");
+      }
+    });
+  }
+  if (btnLayaModelBrowse) {
+    btnLayaModelBrowse.addEventListener("click", async () => {
+      try {
+        const picked = await dialogOpen({ multiple: false, directory: true });
+        if (!picked) return; // annulé
+        // Remplit UNIQUEMENT le champ du modèle.
+        if (inputLayaModelDir) inputLayaModelDir.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du dossier : " + e, "error");
+      }
+    });
+  }
+
   if (btnMemImport) {
     btnMemImport.addEventListener("click", async () => {
       try {
@@ -1243,6 +1315,10 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         plface_autostart_enabled: chkPlfaceAutostart ? chkPlfaceAutostart.checked : false,
         plface_exe_path: inputPlfacePath ? inputPlfacePath.value.trim() : "",
         plface_avatar_path: inputPlfaceAvatar ? inputPlfaceAvatar.value.trim() : "",
+        // ── Service Laya : réglages du service local ──
+        laya_autostart_enabled: chkLayaAutostart ? chkLayaAutostart.checked : false,
+        laya_service_path: inputLayaServicePath ? inputLayaServicePath.value.trim() : "",
+        laya_model_dir: inputLayaModelDir ? inputLayaModelDir.value.trim() : "",
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),
