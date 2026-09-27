@@ -64,18 +64,12 @@ import {
 
 const SUPERAGENT_CHANNEL = "rpc-event-superagent";
 
-// P0-4 : borne de taille du résumé injecté à l'assistant (alignée sur la borne
-// Rust `inject_session_summary`). Un résumé de fin de tâche trop volumineux
-// encombre le contexte de l'assistant : on tronque avec un marqueur explicite.
-const SUPER_AGENT_SUMMARY_MAX_CHARS = 8000;
-const SUMMARY_TRUNCATION_MARKER = "\n…[résumé tronqué : trop volumineux]";
-
-/** Tronque un résumé (borne + marqueur) pour l'injection à l'assistant. */
-export function truncateSuperAgentSummary(summary) {
-  const text = String(summary || "");
-  if (text.length <= SUPER_AGENT_SUMMARY_MAX_CHARS) return text;
-  return text.slice(0, SUPER_AGENT_SUMMARY_MAX_CHARS) + SUMMARY_TRUNCATION_MARKER;
-}
+// P0-4 : le plafond de taille de ce qui est VERSÉ dans la conversation de
+// l'assistant est défini UNE SEULE FOIS côté Rust
+// (`MAX_INJECTED_MESSAGE_CHARS`, `super_agent.rs`) : il borne le message
+// d'injection ENTIER (préfixe + résumé + avis de troncature). Le frontend ne
+// tronque plus (aucune valeur recopiée) et envoie le texte COMPLET, que Rust
+// conserve tel quel en base ; seule la copie injectée est bornée.
 
 /**
  * Verdict de lancement d'une run d'agents (défaut « faux succès de lancement »).
@@ -4998,7 +4992,7 @@ async function sendSuperAgentReport(entry, opts = {}) {
  */
 export async function injectExternalMessageToSuperAgent(text) {
   await superAgentReportGate.deliver({
-    summary: truncateSuperAgentSummary(text),
+    summary: text,
     projectPath: null,
     category: "telegram",
   });
@@ -5017,7 +5011,7 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
   // mis en attente (assistant occupé).
   // P0-4 : borne la taille du résumé avant injection.
   const entry = {
-    summary: truncateSuperAgentSummary(summary),
+    summary,
     projectPath: projectPath || null,
     category: "session",
     delegation: pendingDelegation,
@@ -5066,7 +5060,7 @@ async function injectRunAgentsResultToSuperAgent(result, projectPath, opts = {})
   // P0-4 : borne la taille du compte-rendu agrégé (ne pas encombrer le contexte
   // de l'assistant). Porte d'accusé de lecture via superAgentReportGate.
   await superAgentReportGate.deliver({
-    summary: truncateSuperAgentSummary(buildRunAgentsSummary(result)),
+    summary: buildRunAgentsSummary(result),
     projectPath: projectPath || null,
     category: "runagents",
   });

@@ -33,7 +33,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { shouldScrollSuperToBottom, truncateSuperAgentSummary, computeSuperAtBottomFlag, buildInvisibleAgentFinalSummary } = await import("./super-agent.js");
+const { shouldScrollSuperToBottom, computeSuperAtBottomFlag, buildInvisibleAgentFinalSummary } = await import("./super-agent.js");
 
 // Fenêtre d'exemple : scrollHeight = 1000, clientHeight = 500.
 const SCROLL_HEIGHT = 1000;
@@ -98,27 +98,11 @@ describe("computeSuperAtBottomFlag (réarmement du suivi automatique, SOUCIS 1)"
   });
 });
 
-describe("truncateSuperAgentSummary (P0-4 : résumé de fin de tâche borné)", () => {
-  it("laisse un résumé court inchangé", () => {
-    expect(truncateSuperAgentSummary("court")).toBe("court");
-    expect(truncateSuperAgentSummary("")).toBe("");
-    expect(truncateSuperAgentSummary(null)).toBe("");
-  });
-
-  it("tronque un résumé trop volumineux avec un marqueur", () => {
-    const big = "x".repeat(20000);
-    const r = truncateSuperAgentSummary(big);
-    expect(r.length).toBeLessThan(20000);
-    expect(r.length).toBeGreaterThan(8000);
-    expect(r.endsWith("[résumé tronqué : trop volumineux]")).toBe(true);
-    expect(r.slice(0, 8000)).toBe(big.slice(0, 8000));
-  });
-
-  it("laisse un résumé à la borne tel quel", () => {
-    const big = "y".repeat(8000);
-    expect(truncateSuperAgentSummary(big)).toBe(big);
-  });
-});
+// Le plafond de taille versée dans la conversation de l'assistant a été
+// déplacé côté Rust (`MAX_INJECTED_MESSAGE_CHARS`, `super_agent.rs`) : le
+// frontend ne tronque plus (valeur unique, non recopiée). Le comportement est
+// couvert par le test Rust
+// `injected_message_stays_under_single_cap_while_full_text_kept`.
 
 describe("buildInvisibleAgentFinalSummary (compte rendu de fin d'agent invisible)", () => {
   it("inclut le RÉSULTAT réel de l'agent (dernier message assistant)", () => {
