@@ -2239,7 +2239,7 @@ pub fn initialize_super_agent(
     do_start_super_agent_session(state.inner(), &app)?;
 
     let msg = format!(
-        "Tu es l'assistant de suivi du projet « {} ». Analyse ce projet (structure, documentation, historique) puis pose les questions nécessaires à ton fonctionnement : contexte, objectifs, client, jalons, état d'avancement. Tu es en lecture seule : ne modifie aucun fichier du projet.",
+        "Tu es l'assistant de suivi du projet « {} ». Analyse ce projet (structure, documentation, historique) et enregistre dans ton suivi son contexte, ses objectifs et son état d'avancement. Lecture seule : ne modifie aucun fichier du projet.",
         project_path
     );
     let cmd = serde_json::json!({"type": "prompt", "message": msg});
