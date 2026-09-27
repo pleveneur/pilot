@@ -1506,8 +1506,8 @@ uniquement un bloc d'instructions dans le prompt système.
   - **Détection de boucle** : les appels `run_agents` identiques répétés sont
     détectés (empreinte `agent_ids` + tâche) et arrêtent l'Assistant.
   - **Consigne système** : l'Assistant est invité à construire des prompts
-    structurés et à **ne jamais relancer la même tâche à l'identique** — en
-    cas d'échec, il change d'approche ou interroge l'utilisateur.
+    structurés et, en cas d'échec, à **relancer en changeant d'approche** (au
+    moins une fois).
 - **#65 — Reprise après arrêt** : après un `stop_agent`, l'agent du projet est
   **recréé automatiquement** à la prochaine délégation (ou purge) — plus
   besoin de redémarrer Pilot pour redéleguer.

@@ -372,10 +372,10 @@ const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
 /// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
 /// seule formulation par règle). L'assistant construit des demandes structurées,
-/// ne relance pas une tâche à l'identique et ne s'arrête pas au premier
-/// obstacle. Distinct de la détection de boucle technique (issue #55), qui reste
-/// un filet de sécurité contre les répétitions exactes.
-const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Résilience et anti-boucle — `run_agents`\nConstruis toujours une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. L'enveloppe « ## Contexte/## Objectif/## Consignes/## Ce qu'il ne faut PAS faire » est ajoutée MÉCANIQUEMENT par Pilot : n'insère que le contenu de la tâche.\n\nNe relance JAMAIS la même tâche à l'identique. Si une tâche déléguée ou une action échoue, relance AU MOINS UNE FOIS en changeant d'approche (autre agent, autre formulation, autre méthode, autre découpage) ; au 2e échec consécutif sur la même tâche, préviens l'utilisateur avec un point clair (ce qui a été tenté, pourquoi ça bloque, options proposées). Si tu as déjà reçu un résultat, passe à la suite. Relancer en changeant d'approche n'est PAS une répétition en boucle : la détection de boucle technique reste un filet de sécurité distinct.\n";
+/// relance une tâche échouée en changeant d'approche et ne s'arrête pas au
+/// premier obstacle. Distinct de la détection de boucle technique (issue #55),
+/// qui reste un filet de sécurité contre les répétitions exactes.
+const SUPER_AGENT_RESILIENCE_PROMPT: &str = "\n\n## Résilience et anti-boucle — `run_agents`\nConstruis toujours une demande STRUCTURÉE et COMPLÈTE (contexte, objectif, contraintes, vérifications attendues, ce qu'il ne faut PAS faire) pour que l'agent réussisse du premier coup. L'enveloppe « ## Contexte/## Objectif/## Consignes/## Ce qu'il ne faut PAS faire » est ajoutée MÉCANIQUEMENT par Pilot : n'insère que le contenu de la tâche.\n\nSi une tâche déléguée ou une action échoue, relance AU MOINS UNE FOIS en changeant d'approche (autre agent, autre formulation, autre méthode, autre découpage) ; au 2e échec consécutif sur la même tâche, préviens l'utilisateur avec un point clair (ce qui a été tenté, pourquoi ça bloque, options proposées). Si tu as déjà reçu un résultat, passe à la suite. Relancer en changeant d'approche n'est PAS une répétition en boucle : la détection de boucle technique reste un filet de sécurité distinct.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règle
 /// par défaut sur le fichier AGENTS.md des projets. Quand l'assistant travaille
