@@ -670,6 +670,11 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   choix est **persisté immédiatement** (`set_super_agent_default_model`) et
   **préservé par l'enregistrement des Paramètres**, qui réécrit pourtant toute
   la configuration (`settings.js:1242`).
+- **Reprise du modèle choisi au redémarrage** : le **modèle choisi** dans le
+  sélecteur est **réappliqué à l'ouverture** de la session de l'Assistant (il ne
+  repart donc pas sur le défaut global). S'il n'est **plus installé** (modèle
+  retiré du registre), repli propre sur le modèle par défaut **dédié**, puis sur
+  le défaut **global** — sans erreur ni blocage du démarrage.
 
 ### Personnaliser le prompt
 - **Paramètres ⚙️ → onglet « Assistant » → Prompt système** : définissez le
