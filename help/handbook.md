@@ -2214,6 +2214,16 @@ Ces trois champs sont **facultatifs** : les remplir sert uniquement à utiliser
 un service ou un interpréteur installé à la main, ailleurs. Dans ce cas, c'est
 votre réglage qui l'emporte.
 
+- **Démarrer le service maintenant** : lance le service tout de suite, sans
+  fermer puis rouvrir Pilot. L'écran indique ensuite ce qui s'est **réellement**
+  passé ; si le service tourne déjà, il n'est ni arrêté ni relancé. En cas
+  d'échec, la raison exacte est notée dans le fichier `laya.log`, à côté des
+  données de Pilot.
+
+**Plusieurs fenêtres de Pilot ouvertes** : elles partagent le même service. Une
+fenêtre ne referme jamais le service lancé par une autre : elle le réutilise
+tant qu'il répond, et chaque fenêtre ne referme que le sien.
+
 **Téléchargement du modèle** : Pilot peut récupérer le modèle lui-même, sans
 que vous ayez de commande à taper.
 

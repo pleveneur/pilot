@@ -9,6 +9,9 @@
 > le service, l'interpréteur et la bibliothèque d'inférence sont livrés avec
 > Pilot, le modèle va dans les données de Pilot, tout fonctionne sans rien
 > installer. Le **classement** lui-même est fait par le service, pas par Pilot.
+> Marche 6 = **appartenance du service** : une copie de Pilot ne referme jamais
+> le service lancé par une autre, le service a un **journal**, et un bouton
+> permet de le démarrer tout de suite en affichant l'issue réelle.
 
 ---
 
@@ -56,6 +59,16 @@ Réglages disponibles dans **Paramètres → Service Laya** :
 Ces trois champs sont **facultatifs** : les remplir sert uniquement à utiliser
 un service ou un interpréteur installé à la main, ailleurs. Dans ce cas, c'est
 votre réglage qui l'emporte.
+
+- **Démarrer le service maintenant** : lance le service tout de suite, sans
+  fermer puis rouvrir Pilot. L'écran indique ensuite ce qui s'est **réellement**
+  passé ; si le service tourne déjà, il n'est ni arrêté ni relancé. En cas
+  d'échec, la raison exacte est notée dans le fichier `laya.log`, à côté des
+  données de Pilot.
+
+**Plusieurs fenêtres de Pilot ouvertes** : elles partagent le même service. Une
+fenêtre ne referme jamais le service lancé par une autre : elle le réutilise
+tant qu'il répond, et chaque fenêtre ne referme que le sien.
 
 **Téléchargement du modèle** : Pilot peut récupérer le modèle lui-même, sans
 que vous ayez de commande à taper.
@@ -107,6 +120,7 @@ par session. Patron repris de `plface.rs`, adapté aux différences du service.
 | Nom exact | Type | Rôle |
 |---|---|---|
 | `laya_status` | commande Tauri (lecture seule, reçoit `AppHandle`) | Rend `{configured, reachable, ready, embedded, outcome}` — aucune écriture, aucune modification du service |
+| `laya_service_start` | commande Tauri | Démarre le service **tout de suite** (bouton), sans redémarrer Pilot ; rend l'issue `LayaOutcome` réelle ; service qui répond déjà → `alreadyRunning`, jamais doublé ni arrêté |
 | `laya_model_state` | commande Tauri (lecture seule, reçoit `AppHandle`) | Rend `ModelState` : dossier du modèle, présence des fichiers, téléchargement en cours, pourcentage, dernière raison d'échec |
 | `laya_model_download(base_url, fetch_path)` | commande Tauri | Lance le téléchargement en arrière-plan ; rend `started` ou `alreadyRunning` (jamais deux téléchargements à la fois) |
 | `laya_model_cancel` | commande Tauri | Interrompt le téléchargement tracé ; rend `true` si un téléchargement a bien été arrêté ; **conserve** les fichiers partiels |
@@ -116,7 +130,10 @@ Fonctions Rust internes (`laya::`) :
 | Nom exact | Rôle |
 |---|---|
 | `launch_if_needed(enabled, service_path, node_path, model_dir, pid_path)` | Sonde, décide, lance, attend (≤ 3 s) |
-| `stop_owned(pid_path)` | Referme **uniquement** le service tracé dans `pid_path` |
+| `stop_owned(pid_path)` | **Fermeture de Pilot** : referme le service tracé **uniquement s'il nous appartient** (trace portant notre identifiant de processus) |
+| `cleanup_stale(pid_path)` | **Démarrage suivant** : referme un service orphelin, mais **jamais** celui d'une autre copie de Pilot encore vivante, dont la trace est laissée intacte |
+| `decide_shutdown_stop(owner, self_pid)` / `decide_startup_cleanup(owner, owner_alive, self_pid)` | Règles d'appartenance **pures** (une seule source de vérité, testée) |
+| `format_trace` / `parse_trace` / `read_trace` / `write_trace` | Trace disque à quatre lignes ; trace illisible ou d'une ancienne version (deux lignes) → **on ne referme rien** |
 | `status(enabled, service_path, model_dir, embedded)` | Compose l'état (config + sonde live + dernière issue) |
 | `resolve_service_path(configured, embedded)` | Priorité **réglage → ressource embarquée** (pure) |
 | `resolve_node_path(configured, embedded)` | Priorité **réglage → ressource embarquée → `None`** (= `node` du système) (pure) |
@@ -159,10 +176,17 @@ Réglages dans `config.json` (dossier de configuration de Pilot) :
 - **Modèle** : le dossier désigné par `laya_model_dir`, passé en argument au
   service ; c'est le service qui le charge (jamais Pilot).
 - **Trace** : `<app_data_dir>/laya.pid` (dossier de données de l'application),
-  deux lignes — identifiant du processus, nom du programme (`node.exe` sous
-  Windows, `node` ailleurs). Constantes : `PID_FILE_NAME`, `LAYA_API_HOST`
-  (`127.0.0.1`), `LAYA_API_PORT` (`3017`), `PROBE_TIMEOUT` (400 ms),
-  `READY_DEADLINE` (3 s), `PROBE_INTERVAL` (200 ms).
+  **quatre** lignes — identifiant du processus du service, nom du programme du
+  service (`node.exe` sous Windows, `node` ailleurs), identifiant du processus de
+  l'application Pilot qui l'a lancé, nom de programme de cette application.
+  C'est cette **appartenance** qui permet de ne jamais refermer le service d'une
+  autre copie de Pilot. Constantes : `PID_FILE_NAME`, `LOG_FILE_NAME`
+  (`laya.log`), `LAYA_API_HOST` (`127.0.0.1`), `LAYA_API_PORT` (`3017`),
+  `PROBE_TIMEOUT` (400 ms), `READY_DEADLINE` (3 s), `PROBE_INTERVAL` (200 ms).
+- **Journal** : `<app_data_dir>/laya.log`, à côté de la trace — la sortie standard
+  **et** la sortie d'erreur du service y sont écrites (ajout), avec un repère
+  `=== démarrage : … ===` par tentative. C'est là que se lit la cause exacte d'un
+  service qui démarre puis meurt (port déjà pris, module manquant…).
 - **Téléchargement** : le programme `laya-fetch.mjs` (jamais modifié par Pilot)
   reçoit `node <fetch> <manifeste> <dossier> [--base <adresse>]` et écrit
   `<nom>.part` puis renomme ; c'est ce qui rend la reprise possible. Le
@@ -181,8 +205,9 @@ Réglages dans `config.json` (dossier de configuration de Pilot) :
 
 **Démarrage** (à l'ouverture de Pilot, dans un thread dédié : l'interface
 n'attend jamais) :
-1. nettoyage : `stop_owned` referme un service laissé en vie par un Pilot
-   précédent (trace présente) ;
+1. nettoyage : `cleanup_stale` referme un service laissé en vie par un Pilot
+   **disparu** ; une autre copie de Pilot **encore ouverte** garde le sien (trace
+   laissée intacte) et le service qui répond est réutilisé tel quel ;
 2. **modèle** : le dossier du modèle est résolu ; si la case « télécharger
    automatiquement » est cochée **et** qu'il manque des fichiers **et** qu'aucun
    téléchargement n'est déjà en cours, le téléchargement démarre et est attendu
@@ -190,8 +215,9 @@ n'attend jamais) :
 3. `launch_if_needed` : désactivé ou chemin vide → rien, en silence ; chemin en
    forme d'URL (`http://`, `hf://`…) → refusé (aucun téléchargement réseau) ;
    service qui répond déjà → **jamais doublé** ; fichier de service ou dossier de
-   modèle absent → rien ; sinon lancement détaché, trace écrite, attente bornée
-   à 3 s.
+   modèle absent → rien ; sinon lancement détaché, sortie et erreurs vers
+   `laya.log`, trace écrite (avec l'identité du propriétaire), attente bornée à
+   3 s.
 
 **Jamais de service sur un modèle incomplet** : si le modèle n'est pas complet
 après l'étape 2 (téléchargement refusé, échoué, adresse manquante, interrompu),
@@ -201,10 +227,17 @@ dossier ne contenant qu'un `.part` ne lance donc jamais le service.
 **Veille** : aucune surveillance périodique en marche 2. L'état est à la
 demande (`laya_status`) ; la dernière issue (`outcome`) est mémorisée.
 
-**Arrêt** (fermeture de Pilot) : `stop_owned` → arrêt du processus tracé (garde
-de nom : jamais une autre application dont le pid serait réutilisé), trace
-effacée. Un service **lancé à la main** par la personne n'est jamais tracé, donc
-jamais refermé.
+**Arrêt** (fermeture de Pilot) : `stop_owned` → arrêt du processus tracé **si et
+seulement si la trace nous appartient** (garde de nom : jamais une autre
+application dont le pid serait réutilisé), trace effacée. Un service **lancé à
+la main** par la personne n'est jamais tracé, donc jamais refermé ; le service
+d'une autre copie de Pilot est laissé à son propriétaire.
+
+**Démarrage à la demande** (`laya_service_start`, bouton « Démarrer le service
+maintenant ») : mêmes règles que le démarrage automatique, à une exception près —
+le réglage « au démarrage » ne s'y oppose pas (l'utilisateur l'a demandé). Un
+service qui répond déjà rend `alreadyRunning` : **il n'est ni arrêté ni relancé**
+(rien n'est modifié quand tout va bien).
 
 **Issues** (`LayaOutcome`, en `camelCase` dans le JSON) : `disabled`,
 `invalidPath`, `alreadyRunning`, `launched`, `launchedNotReady`, `launchFailed`.
@@ -272,8 +305,9 @@ Avatar (PLface) :
   (`data-settings-panel="laya"`) : case `setting-laya-autostart`, champ
   `setting-laya-service-path` + `btn-laya-service-browse`, champ
   `setting-laya-node-path` + `btn-laya-node-browse` (marche 5), champ
-  `setting-laya-model-dir` + `btn-laya-model-browse`, indicateur
-  `laya-runtime-state`, zone de message `laya-message`. Marche 4 : case
+  `setting-laya-model-dir` + `btn-laya-model-browse`, bouton
+  `btn-laya-service-start` (« Démarrer le service maintenant », marche 6),
+  indicateur `laya-runtime-state`, zone de message `laya-message`. Marche 4 : case
   `setting-laya-model-auto-download`, champ `setting-laya-model-base-url`,
   champ `setting-laya-fetch-path` + `btn-laya-fetch-browse`, boutons
   `btn-laya-model-download` / `btn-laya-model-cancel`, barre `laya-model-bar`,
@@ -282,11 +316,16 @@ Avatar (PLface) :
   `layaOutcomeMessage(outcome)`, `layaModelStateMessage(state)` (rend
   `{text, kind}`) et `layaModelProgressPercent(state)` (borné 0..100), plus la
   liste `LAYA_FETCH_REASONS`. Messages utilisateur non techniques.
+  `layaStatusMessage` affiche **l'issue réelle** enregistrée dans le statut
+  (`outcome`) quand le service ne répond pas ; « arrêté » n'est plus qu'un repli
+  quand aucune issue n'est connue.
 - `src/js/settings.js` — constantes DOM, remplissage à l'ouverture depuis
   `currentConfig`, **ajout obligatoire** des **sept** champs `laya_*` à l'objet
   transmis à `save_config` (sinon un enregistrement remet les réglages à zéro),
   parcours de fichier (`.mjs`) et de dossier, `refreshLayaState()` (échec de
-  sonde = « non configuré », jamais bloquant), `refreshLayaModelState()`,
+  sonde = « non configuré », jamais bloquant), démarrage à la demande
+  (`btn-laya-service-start` → `laya_service_start`, issue affichée via
+  `layaOutcomeMessage`), `refreshLayaModelState()`,
   `applyLayaModelState()` (couleur selon `kind`), sondage auto-limité (1 s,
   s'arrête seul quand le téléchargement est fini), écoute de
   `laya-download-progress` **désinscrite** à la fermeture de la modale,
