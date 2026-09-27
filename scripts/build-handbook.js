@@ -46,6 +46,7 @@ const SOURCES = [
   "spec_vault.md",
   "spec_anomaly.md",
   "spec_telegram.md",
+  "spec_laya.md",
 ];
 const OUT = path.join(ROOT, "help", "handbook.md");
 

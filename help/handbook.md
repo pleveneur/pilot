@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-26 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram -->
+<!-- PILOT-HELP generated=2026-09-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2167,3 +2167,31 @@ les détails techniques ne vous sont pas envoyés. Quand cette communication est
 autres avis sont envoyés si l'Assistant n'a finalement rien dit. Quand elle est
 **coupée** (par défaut), les avis continuent exactement comme avant. Le bouton
 indique son état et votre choix est conservé après un redémarrage de Pilot.
+
+---
+
+## Service Laya (classification locale)
+
+Le **service Laya** est un classement automatique local qui tourne sur votre
+ordinateur. Pilot ne classe rien lui-même : il se contente de **lancer et
+surveiller** ce service, une seule fois pour toute l'application (le service
+garde un gros modèle en mémoire, en lancer plusieurs épuiserait la machine).
+
+Réglages disponibles dans **Paramètres → Service Laya** :
+
+- **Lancer le service Laya au démarrage** : si activé, Pilot démarre le service
+  à son ouverture, uniquement s'il ne répond pas déjà. Sans effet si le service
+  n'est pas installé.
+- **Programme du service** : le fichier `laya-service.mjs`. Laissez vide pour ne
+  rien lancer.
+- **Dossier du modèle à charger** : le dossier contenant le modèle de
+  classification. C'est le service qui le charge, pas Pilot.
+
+**Lire l'indicateur d'état** : sous les deux champs, une ligne vous dit où en
+est le service — « arrêté », « en cours de chargement du modèle… », « prêt »,
+ ou « non configuré » tant que les réglages sont incomplets. Un service lancé à
+la main n'est jamais arrêté par Pilot ; seul le service que Pilot a démarré est
+refermé à la fermeture.
+
+Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
+Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.

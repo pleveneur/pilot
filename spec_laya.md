@@ -1,8 +1,41 @@
 # Spec — Service Laya (pilotage du service local de classification)
 
-> Document de spécification — Statut : **✅ Marche 2 implémentée et testée**
+> Document de spécification — Statut : **✅ Marche 3 implémentée et testée**
 > (branche `feat/laya-marche2`). Marche 2 = pilotage : démarrage, veille,
-> arrêt, trace. Le **classement** lui-même est fait par le service, pas par Pilot.
+> arrêt, trace. Marche 3 = interface : onglet « Service Laya » dans les
+> Réglages. Le **classement** lui-même est fait par le service, pas par Pilot.
+
+---
+
+<!-- HELP:laya -->
+## Service Laya (classification locale)
+
+Le **service Laya** est un classement automatique local qui tourne sur votre
+ordinateur. Pilot ne classe rien lui-même : il se contente de **lancer et
+surveiller** ce service, une seule fois pour toute l'application (le service
+garde un gros modèle en mémoire, en lancer plusieurs épuiserait la machine).
+
+Réglages disponibles dans **Paramètres → Service Laya** :
+
+- **Lancer le service Laya au démarrage** : si activé, Pilot démarre le service
+  à son ouverture, uniquement s'il ne répond pas déjà. Sans effet si le service
+  n'est pas installé.
+- **Programme du service** : le fichier `laya-service.mjs`. Laissez vide pour ne
+  rien lancer.
+- **Dossier du modèle à charger** : le dossier contenant le modèle de
+  classification. C'est le service qui le charge, pas Pilot.
+
+**Lire l'indicateur d'état** : sous les deux champs, une ligne vous dit où en
+est le service — « arrêté », « en cours de chargement du modèle… », « prêt »,
+ ou « non configuré » tant que les réglages sont incomplets. Un service lancé à
+la main n'est jamais arrêté par Pilot ; seul le service que Pilot a démarré est
+refermé à la fermeture.
+
+Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
+Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
+<!-- /HELP:laya -->
+
+---
 
 ## 1. Rôle
 
@@ -87,7 +120,25 @@ service, puis l'arrête et constate la disparition du service et de la trace. Il
 est sauté si `node` est absent, et réduit au seul « jamais doublé » si un
 service tourne déjà sur le poste (le service réel n'est jamais perturbé).
 
-## 6. Ce qui n'est PAS fait (assumé)
+## 6. Interface (marche 3)
+
+Onglet **« Service Laya »** de la fenêtre des Paramètres, calqué sur le bloc
+Avatar (PLface) :
+
+- `index.html` — entrée d'onglet (`data-settings-tab="laya"`) et panneau
+  (`data-settings-panel="laya"`) : case `setting-laya-autostart`, champ
+  `setting-laya-service-path` + `btn-laya-service-browse`, champ
+  `setting-laya-model-dir` + `btn-laya-model-browse`, indicateur
+  `laya-runtime-state`, zone de message `laya-message`.
+- `src/js/laya-utils.js` — fonctions pures `layaStatusMessage(status)` et
+  `layaOutcomeMessage(outcome)` (messages utilisateur non techniques).
+- `src/js/settings.js` — constantes DOM, remplissage à l'ouverture depuis
+  `currentConfig`, **ajout obligatoire** des trois champs `laya_*` à l'objet
+  transmis à `save_config` (sinon un enregistrement remet les réglages à zéro),
+  parcours de fichier (`.mjs`) et de dossier, `refreshLayaState()` (échec de
+  sonde = « non configuré », jamais bloquant).
+
+## 7. Ce qui n'est PAS fait (assumé)
 
 - **Pas de publication** : aucun push, tag, binaire ou paquet — code local à la
   branche `feat/laya-marche2`.
@@ -95,8 +146,10 @@ service tourne déjà sur le poste (le service réel n'est jamais perturbé).
 - **Pas de multi-plateforme testé** : seuls Windows (MSVC) a été exercé ; le
   garde de nom de processus (`node.exe` vs `node`) et les chemins sont prévus
   pour macOS/Linux, mais non testés ici.
-- **Pas d'interface** : aucun onglet, bouton, réglage d'écran ni commande du
-  frontend (marche 3) ; le réglage se fait dans `config.json`.
+- **Pas d'interface** : ~~aucun onglet, bouton, réglage d'écran ni commande du
+  frontend (marche 3)~~ → **fait en marche 3** : onglet « Service Laya » des
+  Réglages (case de démarrage automatique, chemin du service, dossier du modèle,
+  indicateur d'état) ; le réglage reste possible directement dans `config.json`.
 - **Pas de classement** : Pilot ne lit aucun document, ne décide d'aucune
   étiquette ; il ne pilote que le service.
 - **Pas de surveillance périodique** ni de redémarrage automatique après crash
