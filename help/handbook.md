@@ -2185,13 +2185,35 @@ Réglages disponibles dans **Paramètres → Service Laya** :
 - **Programme du service** : le fichier `laya-service.mjs`. Laissez vide pour ne
   rien lancer.
 - **Dossier du modèle à charger** : le dossier contenant le modèle de
-  classification. C'est le service qui le charge, pas Pilot.
+  classification. C'est le service qui le charge, pas Pilot. Laissez vide pour
+  utiliser le dossier habituel (`model-ml`, à côté du service).
+
+**Téléchargement du modèle** : Pilot peut récupérer le modèle lui-même, sans
+que vous ayez de commande à taper.
+
+- **Télécharger le modèle automatiquement s'il manque** : à l'ouverture de
+  Pilot, si le modèle est incomplet, il est d'abord téléchargé, puis le service
+  est lancé. Rien n'est téléchargé si le modèle est déjà complet.
+- **Télécharger le modèle maintenant** : lance le téléchargement tout de suite,
+  même hors démarrage. Une barre indique l'avancement.
+- **Interrompre** : arrête le téléchargement en cours. La reprise continuera au
+  même endroit plus tard (aucun octet déjà récupéré n'est perdu).
+- **Adresse d'hébergement des fichiers du modèle** : l'adresse où les fichiers
+  sont publiés. Tant qu'elle n'est pas renseignée, Pilot affiche clairement
+  qu'elle manque et ne tente rien (aucune erreur, aucun plantage).
+- **Programme de téléchargement du modèle** : le fichier `laya-fetch.mjs`.
+  Laissez vide pour qu'il soit cherché à côté du service.
 
 **Lire l'indicateur d'état** : sous les deux champs, une ligne vous dit où en
 est le service — « arrêté », « en cours de chargement du modèle… », « prêt »,
  ou « non configuré » tant que les réglages sont incomplets. Un service lancé à
 la main n'est jamais arrêté par Pilot ; seul le service que Pilot a démarré est
 refermé à la fermeture.
+
+Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
+« prêt », « absent », « téléchargement… n % », « interrompu », « adresse
+manquante »… Tous ces messages sont en langage courant (jamais de chemin ni de
+nom de fichier technique).
 
 Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
 Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
