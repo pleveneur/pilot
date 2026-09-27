@@ -2309,15 +2309,9 @@ impl AgentService {
                     // Service Laya : l'outil `laya_classify` doit être disponible
                     // pour TOUTE session d'agent, y compris celles lancées par
                     // l'assistant (`run_agents`) et les agents multi-rôles — qui
-                    // passent par ce chemin, pas par `spawn_session`. Le cœur
-                    // `laya-gateway.js` est écrit à côté (l'extension l'importe
-                    // par `./laya-gateway.js`).
-                    let gateway_file = dir.join("laya-gateway.js");
-                    if std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).is_ok() {
-                        let laya_file = dir.join("pilot-laya.ts");
-                        if std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).is_ok() {
-                            extensions.push(laya_file.to_string_lossy().to_string());
-                        }
+                    // passent par ce chemin, pas par `spawn_session`.
+                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
+                        extensions.push(laya_file);
                     }
                     // #21 : quand l'assistant active l'héritage de contexte, les
                     // agents spécifiques chargent aussi pilot-context.ts (comme
@@ -2404,6 +2398,20 @@ impl AgentService {
     /// Lance un nouveau processus pi --mode rpc pour un agent d'un projet.
     /// Reproduit la logique de démarrage de la session principale (config,
     /// dossier de session, skill quality-gate, extensions pi, canal projet).
+    /// Écrit le couple Laya dans le dossier d'extensions : l'extension
+    /// `pilot-laya.ts` (l'outil `laya_classify`) et son cœur `laya-gateway.js`,
+    /// importé par `./laya-gateway.js`. Partagé par les DEUX chemins d'agent
+    /// (`spawn_session` pour le chat principal, `spawn_agent_process` pour les
+    /// agents lancés par l'assistant et les agents multi-rôles) : sans cela, un
+    /// agent ne reçoit pas l'outil. Retourne le chemin du `.ts` si tout est écrit.
+    fn write_laya_extension(dir: &std::path::Path) -> Option<String> {
+        let gateway_file = dir.join("laya-gateway.js");
+        std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).ok()?;
+        let laya_file = dir.join("pilot-laya.ts");
+        std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).ok()?;
+        Some(laya_file.to_string_lossy().to_string())
+    }
+
     fn spawn_session(app: &AppHandle, project: &str, agent_id: &str) -> Result<rpc_manager::RpcSession, String> {
         let state = app.state::<AppState>();
         let (pi_path, no_session, session_dir, qg_enabled, confirm_file_edits, mcp_enabled) = {
@@ -2484,14 +2492,8 @@ impl AgentService {
                     // Service Laya : classement local (choix parmi des libellés,
                     // note sur une échelle, oui/non) par le service UNIQUE lancé et
                     // surveillé par Pilot — aucun modèle chargé par la session.
-                    // Le cœur (`laya-gateway.js`, testé par Vitest) est écrit à côté
-                    // de l'extension, qui l'importe par `./laya-gateway.js`.
-                    let gateway_file = dir.join("laya-gateway.js");
-                    if std::fs::write(&gateway_file, include_str!("../../src/js/laya-gateway.js")).is_ok() {
-                        let laya_file = dir.join("pilot-laya.ts");
-                        if std::fs::write(&laya_file, include_str!("../extensions/pilot-laya.ts")).is_ok() {
-                            extensions.push(laya_file.to_string_lossy().to_string());
-                        }
+                    if let Some(laya_file) = Self::write_laya_extension(&dir) {
+                        extensions.push(laya_file);
                     }
                     // POC MCP : extension client MCP (SDK bundlé) si activé.
                     if mcp_enabled {
@@ -4067,5 +4069,28 @@ mod tests {
                 .expect("reset inconnu"),
             0
         );
+    }
+
+    /// L'outil `laya_classify` doit être écrit AVEC son cœur dans le dossier
+    /// d'extensions, pour que les agents le reçoivent en `--extension`
+    /// (défaut : les agents lancés par l'assistant ne l'avaient pas).
+    #[test]
+    fn write_laya_extension_ecrit_extension_et_coeur() {
+        let dir = std::env::temp_dir().join(format!("pilot-laya-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dossier temporaire");
+
+        let ext = AgentService::write_laya_extension(&dir).expect("extension Laya écrite");
+        assert!(ext.ends_with("pilot-laya.ts"), "chemin attendu : {ext}");
+        assert!(
+            std::fs::read_to_string(&ext).expect("extension lisible").contains("laya_classify")
+        );
+        assert!(
+            std::fs::read_to_string(dir.join("laya-gateway.js"))
+                .expect("cœur lisible")
+                .contains("askLaya")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
