@@ -112,6 +112,7 @@ mod gds_admin;
 mod gds_service;
 mod group_assistant;
 mod plface;
+mod laya;
 
 // ── État global de l'application ──
 
@@ -781,6 +782,23 @@ struct AppConfig {
     // strictement identique à avant.
     #[serde(default)]
     plface_avatar_path: String,
+    // ── Service Laya (classification locale) : lancement automatique ──
+    // Si activé ET qu'un fichier de service ET un dossier de modèle sont
+    // renseignés (et existent), Pilot sonde le service (127.0.0.1:3017, route
+    // /status) au démarrage. S'il ne répond pas, Pilot lance `node
+    // <laya-service.mjs> <dossier-modèle>` en tâche de fond détachée, UNE SEULE
+    // fois pour toute l'application (le modèle chargé pèse ~1,6 Gio : un
+    // processus par session est exclu), et le referme à sa propre fermeture.
+    // Défaut désactivé : un utilisateur sans service Laya ne voit aucune
+    // différence au démarrage.
+    #[serde(default)]
+    laya_autostart_enabled: bool,
+    // Chemin du fichier de service (`laya-service.mjs`).
+    #[serde(default)]
+    laya_service_path: String,
+    // Dossier du modèle de classification (relatif au dossier du service ou absolu).
+    #[serde(default)]
+    laya_model_dir: String,
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
@@ -1040,6 +1058,9 @@ impl Default for AppConfig {
             plface_autostart_enabled: false,
             plface_exe_path: String::new(),
             plface_avatar_path: String::new(),
+            laya_autostart_enabled: false,
+            laya_service_path: String::new(),
+            laya_model_dir: String::new(),
         }
     }
 }
@@ -2010,6 +2031,33 @@ fn plface_status() -> bool {
     plface::is_running()
 }
 
+/// Service Laya : chemin du fichier de trace du service lancé par Pilot (dossier
+/// de données de l'application). Sert à refermer **ce service-là** (et lui seul)
+/// à la fermeture de Pilot et à nettoyer un reste après une fermeture brutale.
+/// `None` si le dossier n'est pas résoluble (jamais bloquant).
+fn laya_pid_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(laya::PID_FILE_NAME))
+}
+
+/// Service Laya : état du service en LECTURE SEULE (configuré, joignable, prêt,
+/// dernière issue de démarrage). Cette commande ne classe rien et ne modifie
+/// rien : elle sert à vérifier que le pilotage du service fonctionne.
+#[tauri::command]
+fn laya_status(state: State<AppState>) -> laya::LayaStatus {
+    let (enabled, service, model) = {
+        let cfg = state.config.lock().unwrap();
+        (
+            cfg.laya_autostart_enabled,
+            cfg.laya_service_path.clone(),
+            cfg.laya_model_dir.clone(),
+        )
+    };
+    laya::status(enabled, &service, &model)
+}
+
 #[tauri::command]
 fn add_favorite(state: State<AppState>, app: AppHandle, path: String) -> Result<(), String> {
     let mut config = state.config.lock().unwrap().clone();
@@ -2672,6 +2720,31 @@ pub fn run() {
                     );
                 });
             }
+            // Service Laya : même patron que le visage — d'abord nettoyer le
+            // service resté en vie après une fermeture brutale (trace), puis le
+            // lancer s'il est configuré et qu'il ne répond pas déjà. UN SEUL
+            // service pour toute l'application (le modèle chargé pèse ~1,6 Gio :
+            // un processus par session d'agent est exclu). Thread dédié :
+            // l'ouverture de Pilot n'attend jamais (sonde courte, attente bornée
+            // à 3 s, échec silencieux).
+            {
+                let cfg = state.config.lock().unwrap().clone();
+                let enabled = cfg.laya_autostart_enabled;
+                let service = cfg.laya_service_path.clone();
+                let model = cfg.laya_model_dir.clone();
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let pid_path = laya_pid_path(&handle);
+                    // Nettoyage d'abord : ne referme QUE le service lancé par un
+                    // Pilot précédent (trace), jamais celui du propriétaire.
+                    if let Some(pid_path) = pid_path.as_deref() {
+                        let _ = laya::stop_owned(pid_path);
+                    }
+                    let outcome =
+                        laya::launch_if_needed(enabled, &service, &model, pid_path.as_deref());
+                    laya::set_outcome(outcome);
+                });
+            }
             // GDS (chantier UX) : reconnecter le pool PostgreSQL en arrière-plan
             // pour un projet déjà provisionné, sans refaire `gds_provision` (saisie
             // des paramètres une seule fois). Fail-open : aucun serveur par défaut,
@@ -3145,6 +3218,8 @@ pub fn run() {
             // ── PLface : arrêt propre + état (bouton Arrêter / indicateur) ──
             stop_plface,
             plface_status,
+            // ── Service Laya : état du pilotage du service (lecture seule) ──
+            laya_status,
         ])
         .build(tauri::generate_context!())
         .expect("Erreur au lancement de Pilot")
@@ -3170,6 +3245,12 @@ pub fn run() {
                 // la personne n'est pas tracé et n'est jamais refermé ici.
                 if let Some(pid_path) = plface_pid_path(app) {
                     let _ = plface::stop_owned(&pid_path);
+                }
+                // Service Laya : idem — Pilot referme le service qu'il a lancé, et
+                // jamais celui que le propriétaire a lancé à la main (aucune trace
+                // dans ce cas).
+                if let Some(pid_path) = laya_pid_path(app) {
+                    let _ = laya::stop_owned(&pid_path);
                 }
                 let tx_opt = {
                     let state = app.state::<AppState>();

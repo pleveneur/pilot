@@ -290,8 +290,12 @@ fn observed_process_name(pid: u32) -> Option<String> {
 /// Arrête le processus `pid` **uniquement s'il s'agit bien du visage**
 /// (`expected_name`). Renvoie `true` quand le processus visé n'existe plus
 /// après la tentative (déjà terminé, nom différent, ou arrêté). Jamais bloquant.
+///
+/// Réutilisé tel quel par `laya.rs` : la garde de nom (ne jamais arrêter une
+/// autre application dont l'identifiant aurait été réutilisé) est la même pour
+/// tout processus lancé par Pilot.
 #[cfg(windows)]
-fn kill_process(pid: u32, expected_name: &str) -> bool {
+pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
     use std::os::windows::process::CommandExt;
     match observed_process_name(pid) {
         Some(name) if name_matches(&name, expected_name) => {}
@@ -310,7 +314,7 @@ fn kill_process(pid: u32, expected_name: &str) -> bool {
 }
 
 #[cfg(not(windows))]
-fn kill_process(pid: u32, expected_name: &str) -> bool {
+pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
     match observed_process_name(pid) {
         Some(name) if name_matches(&name, expected_name) => {}
         _ => return true,
