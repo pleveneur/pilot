@@ -24,6 +24,14 @@
 //! (`node.exe`), pas du script — la garde de nom seule ne distingue donc pas
 //! deux processus `node` ; c'est le couple trace/pid qui garantit qu'on ne
 //! referme pas le service du propriétaire (lancé à la main, jamais tracé).
+//!
+//! **Version livrée** : le service, l'interpréteur et le moteur d'inférence sont
+//! embarqués dans les ressources de l'application (`$RESOURCE/laya/…`).
+//! L'interpréteur se choisit dans cet ordre : chemin réglé à la main, puis
+//! interpréteur embarqué, puis `node` du système. Le dossier du modèle par
+//! défaut bascule vers le dossier de **données** de l'application (inscriptible)
+//! quand le service est celui des ressources : la version livrée ne s'écrit
+//! jamais dans elle-même.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -38,6 +46,13 @@ pub(crate) const LAYA_API_HOST: &str = "127.0.0.1";
 pub(crate) const LAYA_API_PORT: u16 = 3017;
 /// Fichier de trace du service lancé par Pilot (dossier de données de l'app).
 pub(crate) const PID_FILE_NAME: &str = "laya.pid";
+/// Sous-dossier des ressources embarquées dans la version livrée
+/// (`$RESOURCE/laya/…`, cf. `bundle.resources` et `scripts/prepare-laya.js`).
+pub(crate) const RESOURCE_DIR: &str = "laya";
+/// Nom du service embarqué, dans le sous-dossier de ressources.
+pub(crate) const DEFAULT_SERVICE_FILE: &str = "laya-service.mjs";
+/// Sous-dossier de l'interpréteur embarqué, dans le sous-dossier de ressources.
+pub(crate) const NODE_DIR: &str = "node";
 /// Timeout de sonde réseau : strictement inférieur à 1 seconde.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 /// Délai maximal accordé au service pour répondre après le lancement.
@@ -163,14 +178,57 @@ pub(crate) fn status_ready(body: &str) -> bool {
         .contains("\"ready\":true")
 }
 
-/// Nom du programme interpréteur tel qu'il apparaît dans la table des
-/// processus : c'est lui qui est tracé pour pouvoir refermer le service.
-fn node_process_name() -> &'static str {
+/// Nom de l'interpréteur installé avec le système d'exploitation (utilisé quand
+/// aucun interpréteur embarqué ni réglé à la main n'est disponible), tel qu'il
+/// apparaît dans la table des processus.
+pub(crate) fn node_exe_name() -> &'static str {
     if cfg!(windows) {
         "node.exe"
     } else {
         "node"
     }
+}
+
+/// Chemin effectif du service. PURE : un chemin réglé à la main gagne sur la
+/// ressource embarquée (`None` = paquet sans Laya). Un chemin vide désactive le
+/// lancement (comportement inchangé) ; l'existence réelle du fichier est vérifiée
+/// au moment du lancement.
+pub(crate) fn resolve_service_path(configured: &str, embedded: Option<&str>) -> String {
+    let trimmed = configured.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    embedded.unwrap_or("").to_string()
+}
+
+/// Chemin effectif de l'INTERPRÉTEUR qui exécute le service. PURE, par ordre de
+/// priorité : 1. chemin réglé à la main ; 2. interpréteur embarqué dans les
+/// ressources ; 3. `None` → `node` du système (résolu par le système via `PATH`).
+pub(crate) fn resolve_node_path(configured: &str, embedded: Option<&str>) -> Option<String> {
+    let trimmed = configured.trim();
+    if !trimmed.is_empty() {
+        return Some(trimmed.to_string());
+    }
+    embedded.map(|p| p.to_string())
+}
+
+/// Nom de programme attendu par la garde d'arrêt, déduit de l'interpréteur
+/// utilisé : nom de fichier de l'interpréteur réglé à la main, sinon le nom de
+/// l'interpréteur (`node.exe`). Un nom sans extension (interpréteur lancé via
+/// `PATH`) prend l'extension du système : sous Windows le processus s'appelle
+/// `node.exe`, un nom tracé « node » ne serait pas reconnu à l'arrêt. PURE.
+pub(crate) fn process_name_for(node_path: Option<&str>) -> String {
+    let name = node_path
+        .and_then(|p| Path::new(p.trim()).file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if name.is_empty() {
+        return node_exe_name().to_string();
+    }
+    if cfg!(windows) && !name.contains('.') {
+        return format!("{name}.exe");
+    }
+    name
 }
 
 /// Sonde `/status` du service (HTTP/1.1, timeout court) : `reachable` dès qu'une
@@ -271,12 +329,19 @@ pub(crate) fn last_outcome() -> Option<LayaOutcome> {
 }
 
 /// Lance le service en tâche de fond, détaché de Pilot :
-/// `node <service_path> <model_dir>`, sans fenêtre de console sous Windows,
-/// stdio redirigé vers `null`. Le répertoire courant est celui du service (le
-/// dossier de modèle configuré peut ainsi être relatif, comme à la main).
-/// Renvoie l'identifiant du processus lancé, pour la trace.
-pub(crate) fn spawn_detached(service_path: &str, model_dir: &str) -> std::io::Result<u32> {
-    let mut cmd = Command::new("node");
+/// `<interpréteur> <service_path> <model_dir>`, sans fenêtre de console sous
+/// Windows, stdio redirigé vers `null`. Le répertoire courant est celui du
+/// service (le dossier de modèle configuré peut ainsi être relatif, comme à la
+/// main). Renvoie l'identifiant du processus lancé, pour la trace.
+///
+/// `node` : interpréteur effectif (`laya_node_path` → embarqué → `node` du
+/// système, cf. `resolve_node_path`).
+pub(crate) fn spawn_detached(
+    node: &str,
+    service_path: &str,
+    model_dir: &str,
+) -> std::io::Result<u32> {
+    let mut cmd = Command::new(node);
     cmd.arg(service_path).arg(model_dir);
     if let Some(dir) = Path::new(service_path).parent() {
         cmd.current_dir(dir);
@@ -302,6 +367,7 @@ pub(crate) fn spawn_detached(service_path: &str, model_dir: &str) -> std::io::Re
 pub(crate) fn launch_if_needed(
     enabled: bool,
     service_path: &str,
+    node_path: Option<&str>,
     model_dir: &str,
     pid_path: Option<&Path>,
 ) -> LayaOutcome {
@@ -320,21 +386,27 @@ pub(crate) fn launch_if_needed(
         LayaDecision::Disabled => LayaOutcome::Disabled,
         LayaDecision::InvalidPath => LayaOutcome::InvalidPath,
         LayaDecision::AlreadyRunning => LayaOutcome::AlreadyRunning,
-        LayaDecision::Launch => match spawn_detached(trimmed, model_dir.trim()) {
-            Ok(pid) => {
-                if let Some(path) = pid_path {
-                    crate::plface::write_pid_file(path, pid, node_process_name());
+        LayaDecision::Launch => {
+            // Interpréteur : réglé à la main, sinon embarqué, sinon celui du
+            // système (nom nu, résolu par le système d'exploitation via PATH).
+            let node = resolve_node_path(node_path.unwrap_or(""), None)
+                .unwrap_or_else(|| node_exe_name().to_string());
+            match spawn_detached(&node, trimmed, model_dir.trim()) {
+                Ok(pid) => {
+                    if let Some(path) = pid_path {
+                        crate::plface::write_pid_file(path, pid, &process_name_for(Some(&node)));
+                    }
+                    // Attente bornée : au plus tard à `READY_DEADLINE`, Pilot sait
+                    // si le service répond (l'interface, elle, n'a jamais attendu).
+                    if wait_until_reachable(READY_DEADLINE, PROBE_INTERVAL).reachable {
+                        LayaOutcome::Launched
+                    } else {
+                        LayaOutcome::LaunchedNotReady
+                    }
                 }
-                // Attente bornée : au plus tard à `READY_DEADLINE`, Pilot sait
-                // si le service répond (l'interface, elle, n'a jamais attendu).
-                if wait_until_reachable(READY_DEADLINE, PROBE_INTERVAL).reachable {
-                    LayaOutcome::Launched
-                } else {
-                    LayaOutcome::LaunchedNotReady
-                }
+                Err(_) => LayaOutcome::LaunchFailed,
             }
-            Err(_) => LayaOutcome::LaunchFailed,
-        },
+        }
     }
 }
 
@@ -366,13 +438,22 @@ pub(crate) struct LayaStatus {
     pub reachable: bool,
     /// Le service a chargé son modèle (`"ready":true`).
     pub ready: bool,
+    /// Le service est EMBARQUÉ dans les ressources de ce paquet, indépendamment
+    /// des réglages : `false` sur un paquet construit sans Laya (l'interface peut
+    /// alors le DIRE au lieu de rester muette).
+    pub embedded: bool,
     /// Dernière issue connue du contrôle de démarrage (`null` avant la fin).
     pub outcome: Option<LayaOutcome>,
 }
 
 /// Compose l'état courant : configuration déclarée + sonde live + dernière
 /// issue de démarrage. Aucune écriture, aucune modification du service.
-pub(crate) fn status(enabled: bool, service_path: &str, model_dir: &str) -> LayaStatus {
+pub(crate) fn status(
+    enabled: bool,
+    service_path: &str,
+    model_dir: &str,
+    embedded: bool,
+) -> LayaStatus {
     let configured = is_configured(
         enabled,
         service_path,
@@ -384,6 +465,7 @@ pub(crate) fn status(enabled: bool, service_path: &str, model_dir: &str) -> Laya
         configured,
         reachable: probe.reachable,
         ready: probe.ready,
+        embedded,
         outcome: last_outcome(),
     }
 }
@@ -446,11 +528,11 @@ mod tests {
     fn launch_if_needed_disabled_never_touches_network() {
         // Chemin vide + désactivé : issu immédiat, sans sonde réseau.
         assert_eq!(
-            launch_if_needed(false, "", "", None),
+            launch_if_needed(false, "", None, "", None),
             LayaOutcome::Disabled
         );
         assert_eq!(
-            launch_if_needed(true, "  ", "G:\\IA_PL\\LayaPL\\model-ml", None),
+            launch_if_needed(true, "  ", None, "G:\\IA_PL\\LayaPL\\model-ml", None),
             LayaOutcome::Disabled
         );
     }
@@ -458,7 +540,7 @@ mod tests {
     #[test]
     fn launch_if_needed_url_reports_invalid_path() {
         assert_eq!(
-            launch_if_needed(true, "https://exemple.test/laya-service.mjs", ".", None),
+            launch_if_needed(true, "https://exemple.test/laya-service.mjs", None, ".", None),
             LayaOutcome::InvalidPath
         );
     }
@@ -468,6 +550,7 @@ mod tests {
         let outcome = launch_if_needed(
             true,
             "/chemin/qui/n-existe-pas/laya-service.mjs",
+            None,
             "/chemin/qui/n-existe-pas/model-ml",
             None,
         );
@@ -500,24 +583,84 @@ mod tests {
     fn status_reports_unconfigured_without_touching_service() {
         // Rien de configuré : `configured=false` (la sonde, elle, ne fait que
         // lire — service absent sur la machine de test).
-        let st = status(false, "", "");
+        let st = status(false, "", "", false);
         assert!(!st.configured);
+        assert!(!st.embedded);
     }
 
     #[test]
-    fn absent_configuration_defaults_to_disabled() {
-        // Configuration absente (ancien config.json) : service désactivé, aucun
-        // chemin — donc aucun lancement, en silence.
+    fn status_exposes_whether_the_service_is_embedded() {
+        // Paquet livré AVEC Laya : service embarqué mais service pas encore
+        // lancé → `embedded=true` (l'interface peut expliquer l'attente).
+        let st = status(true, "/ressources/laya/laya-service.mjs", "/donnees/model-ml", true);
+        assert!(st.embedded);
+    }
+
+    #[test]
+    fn absent_configuration_defaults_to_the_whole_chain_enabled() {
+        // Configuration absente (ancien config.json) : sans rien régler, la
+        // chaîne complète doit fonctionner — démarrage du service ET
+        // téléchargement du modèle activés par défaut, chemins vides (= ceux du
+        // paquet embarqué, calculés à l'exécution).
         let cfg: crate::AppConfig = serde_json::from_str("{}").expect("config par défaut");
-        assert!(!cfg.laya_autostart_enabled);
+        assert!(cfg.laya_autostart_enabled);
+        assert!(cfg.laya_model_auto_download_enabled);
         assert!(cfg.laya_service_path.is_empty());
         assert!(cfg.laya_model_dir.is_empty());
-        assert!(!is_configured(
-            cfg.laya_autostart_enabled,
-            &cfg.laya_service_path,
-            false,
-            false
-        ));
+        assert!(cfg.laya_node_path.is_empty());
+        assert!(cfg.laya_model_base_url.is_empty());
+    }
+
+    #[test]
+    fn an_explicitly_disabled_flag_stays_disabled() {
+        // Un config.json qui stocke explicitement `false` n'est PAS écrasé par
+        // le nouveau défaut (aucun réglage n'est remis en route contre l'avis de
+        // son propriétaire).
+        let cfg: crate::AppConfig =
+            serde_json::from_str(r#"{"laya_autostart_enabled":false,"laya_model_auto_download_enabled":false}"#)
+                .expect("config explicite");
+        assert!(!cfg.laya_autostart_enabled);
+        assert!(!cfg.laya_model_auto_download_enabled);
+    }
+
+    // Interpréteur : chemin réglé à la main → embarqué → `node` du système.
+    #[test]
+    fn interpreter_priority_is_manual_then_embedded_then_system() {
+        assert_eq!(
+            resolve_node_path("C:\\outils\\node.exe", Some("/ressources/laya/node/node")),
+            Some("C:\\outils\\node.exe".to_string())
+        );
+        assert_eq!(
+            resolve_node_path("  ", Some("/ressources/laya/node/node")),
+            Some("/ressources/laya/node/node".to_string())
+        );
+        assert_eq!(resolve_node_path("", None), None);
+    }
+
+    #[test]
+    fn service_path_priority_is_manual_then_embedded() {
+        assert_eq!(
+            resolve_service_path("/home/moi/laya-service.mjs", Some("/ressources/laya/laya-service.mjs")),
+            "/home/moi/laya-service.mjs"
+        );
+        assert_eq!(
+            resolve_service_path("", Some("/ressources/laya/laya-service.mjs")),
+            "/ressources/laya/laya-service.mjs"
+        );
+        // Paquet sans Laya et rien de réglé : chemin vide → aucun lancement.
+        assert_eq!(resolve_service_path("  ", None), "");
+    }
+
+    #[test]
+    fn traced_process_name_follows_the_interpreter_used() {
+        // Interpréteur embarqué/du système : le nom du fichier est celui tracé.
+        assert_eq!(
+            process_name_for(Some("/ressources/laya/node/node.exe")),
+            "node.exe"
+        );
+        assert_eq!(process_name_for(Some("node")), node_exe_name());
+        // Aucun interpréteur résolu : nom par défaut du système.
+        assert_eq!(process_name_for(None), node_exe_name());
     }
 
     #[test]
@@ -527,10 +670,10 @@ mod tests {
             std::process::id()
         ));
         crate::plface::clear_pid_file(&path);
-        crate::plface::write_pid_file(&path, 4242, node_process_name());
+        crate::plface::write_pid_file(&path, 4242, node_exe_name());
         assert_eq!(
             crate::plface::read_pid_file(&path),
-            Some((4242, node_process_name().to_string()))
+            Some((4242, node_exe_name().to_string()))
         );
         crate::plface::clear_pid_file(&path);
         assert_eq!(crate::plface::read_pid_file(&path), None);
@@ -553,8 +696,15 @@ http.createServer((req, res) => {
     /// jamais doublé, arrêt propre. Sauté si `node` est absent ; réduit au seul
     /// « jamais doublé » si un service tourne déjà sur ce poste (le service réel
     /// du propriétaire n'est jamais perturbé par un test).
+    /// Sérialise les deux tests qui utilisent le VRAI port du service
+    /// (`127.0.0.1:3017`) : `cargo test` exécute les tests en parallèle et deux
+    /// processus ne peuvent pas écouter sur le même port — sans ce verrou, un test
+    /// lirait l'état du service de l'autre. Verrou empoisonné = réutilisé.
+    static REAL_PORT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn real_launch_trace_already_running_and_clean_stop() {
+        let _port = REAL_PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let node_ok = Command::new("node")
             .arg("--version")
             .stdout(Stdio::null())
@@ -586,7 +736,7 @@ http.createServer((req, res) => {
         if probe().reachable {
             // Service réel déjà en place : jamais doublé (aucune sonde d'écriture).
             assert_eq!(
-                launch_if_needed(true, &service, &model, Some(&pid_path)),
+                launch_if_needed(true, &service, None, &model, Some(&pid_path)),
                 LayaOutcome::AlreadyRunning
             );
             eprintln!("SAUTÉ (suite) : un service répond déjà sur {LAYA_API_HOST}:{LAYA_API_PORT}");
@@ -597,14 +747,14 @@ http.createServer((req, res) => {
         // 1) Modèle absent (fichier de service présent) : état honnête, aucune
         //    panique, aucun lancement.
         assert_eq!(
-            launch_if_needed(true, &service, &model, Some(&pid_path)),
+            launch_if_needed(true, &service, None, &model, Some(&pid_path)),
             LayaOutcome::InvalidPath
         );
         assert_eq!(crate::plface::read_pid_file(&pid_path), None);
 
         // 2) Démarrage réel : le service répond et son pid est tracé.
         std::fs::create_dir_all(&model_dir).expect("dossier de modèle");
-        let outcome = launch_if_needed(true, &service, &model, Some(&pid_path));
+        let outcome = launch_if_needed(true, &service, None, &model, Some(&pid_path));
         assert!(
             matches!(outcome, LayaOutcome::Launched | LayaOutcome::LaunchedNotReady),
             "issue inattendue : {outcome:?}"
@@ -615,15 +765,15 @@ http.createServer((req, res) => {
         );
         let (pid, name) = crate::plface::read_pid_file(&pid_path).expect("trace laya.pid");
         assert!(pid > 0);
-        assert_eq!(name, node_process_name());
+        assert_eq!(name, node_exe_name());
 
         // 3) État lu : configuré, joignable, modèle chargé.
-        let st = status(true, &service, &model);
-        assert!(st.configured && st.reachable && st.ready, "{st:?}");
+        let st = status(true, &service, &model, true);
+        assert!(st.configured && st.reachable && st.ready && st.embedded, "{st:?}");
 
         // 4) Service déjà vivant : jamais doublé, trace inchangée.
         assert_eq!(
-            launch_if_needed(true, &service, &model, Some(&pid_path)),
+            launch_if_needed(true, &service, None, &model, Some(&pid_path)),
             LayaOutcome::AlreadyRunning
         );
         assert_eq!(crate::plface::read_pid_file(&pid_path), Some((pid, name)));
@@ -636,6 +786,158 @@ http.createServer((req, res) => {
             "le service arrêté ne devrait plus répondre"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Force le chargement du modèle : le service charge PARESSEUSEMENT, au
+    /// premier `POST /classify`. C'est ce qui permet d'observer un `"ready":true`
+    /// RÉEL (sans cet appel, `/status` dit toujours `ready:false`). Toute erreur
+    /// renvoie `false`, jamais bloquant au-delà du délai.
+    fn warm_up_model(timeout: Duration) -> bool {
+        use std::io::{Read, Write};
+        use std::net::{TcpStream, ToSocketAddrs};
+
+        let body = concat!(
+            "{\"text\":\"I will cancel my subscription today.\",",
+            "\"questions\":{\"churn_risk\":{\"type\":\"noul\",",
+            "\"instructions\":\"Does the user threaten to cancel?\"}}}"
+        );
+        let Ok(mut addrs) = (LAYA_API_HOST, LAYA_API_PORT).to_socket_addrs() else {
+            return false;
+        };
+        let Some(addr) = addrs.next() else {
+            return false;
+        };
+        let Ok(mut stream) = TcpStream::connect_timeout(&addr, timeout) else {
+            return false;
+        };
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+        let request = format!(
+            "POST /classify HTTP/1.1\r\nHost: {LAYA_API_HOST}:{LAYA_API_PORT}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        if stream.write_all(request.as_bytes()).is_err() {
+            return false;
+        }
+
+        // Le service garde la connexion ouverte : on s'arrête dès que le corps
+        // JSON est complet (accolade fermante), comme `probe_status`.
+        let mut raw: Vec<u8> = Vec::new();
+        loop {
+            let mut buf = [0u8; 512];
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw);
+                    if let Some(head) = text.find("\r\n\r\n") {
+                        if text[head + 4..].contains('}') {
+                            break;
+                        }
+                    }
+                    if raw.len() > 8192 {
+                        break;
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&raw).contains("\"ok\":true")
+    }
+
+    /// Chaîne RÉELLE avec la COPIE EMBARQUÉE (`src-tauri/laya/`) : c'est le
+    /// code de Pilot (`launch_if_needed` → `spawn_detached` → trace → `stop_owned`)
+    /// qui lance le service livré avec l'interpréteur livré. Sauté si la copie
+    /// n'a pas été préparée (`npm run prepare:laya`) ou si un service répond déjà.
+    ///
+    /// `LAYA_REAL_MODEL_DIR` (dossier d'un modèle déjà présent sur la machine)
+    /// pousse jusqu'à la prédiction RÉELLE et à `ready:true`. L'arrêt a lieu
+    /// AVANT les assertions : un échec ne laisse jamais le service (≈ 1,6 Gio de
+    /// modèle) en vie.
+    #[test]
+    fn real_embedded_service_launches_and_stops_through_pilot_code() {
+        let _port = REAL_PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(RESOURCE_DIR);
+        let node = base.join(NODE_DIR).join(node_exe_name());
+        let service = base.join(DEFAULT_SERVICE_FILE);
+        if !node.is_file() || !service.is_file() {
+            eprintln!("SAUTÉ : copie embarquée absente ({})", base.display());
+            return;
+        }
+        if probe().reachable {
+            eprintln!("SAUTÉ : un service répond déjà sur {LAYA_API_HOST}:{LAYA_API_PORT}");
+            return;
+        }
+
+        // Un dossier de modèle suffit au LANCEMENT (le modèle est chargé
+        // paresseusement). `LAYA_REAL_MODEL_DIR` permet d'aller plus loin :
+        // `ready:true` avec le vrai modèle, sans jamais rien télécharger.
+        let real = std::env::var("LAYA_REAL_MODEL_DIR").unwrap_or_default();
+        let (model_dir, real_ok) = if !real.trim().is_empty() && Path::new(real.trim()).is_dir() {
+            (real.trim().to_string(), true)
+        } else {
+            let tmp = std::env::temp_dir().join(format!("pilot-laya-emb-{}", std::process::id()));
+            std::fs::create_dir_all(&tmp).expect("dossier de modèle temporaire");
+            (tmp.to_string_lossy().to_string(), false)
+        };
+        let pid_path = std::env::temp_dir().join(format!("pilot-laya-emb-{}.pid", std::process::id()));
+        crate::plface::clear_pid_file(&pid_path);
+
+        let node_str = node.to_string_lossy().to_string();
+        let service_str = service.to_string_lossy().to_string();
+        let outcome = launch_if_needed(true, &service_str, Some(&node_str), &model_dir, Some(&pid_path));
+        let reachable = wait_until_reachable(Duration::from_secs(10), PROBE_INTERVAL).reachable;
+
+        // La trace porte le nom de l'interpréteur RÉELLEMENT lancé : c'est ce qui
+        // autorise l'arrêt (garde de nom).
+        let trace = crate::plface::read_pid_file(&pid_path);
+
+        // Le modèle n'est chargé qu'au premier `POST /classify` : on le demande
+        // AVANT de lire l'état, sinon `ready` est faux par construction.
+        let real_loaded = real_ok && warm_up_model(Duration::from_secs(300));
+        let state = status(true, &service_str, &model_dir, true);
+
+        // Arrêt AVANT toute assertion : un échec ne doit jamais laisser le
+        // service en vie (fuite de 1,6 Gio qui retient aussi le tube du test).
+        // Le booléen de `stop_owned` peut être un FAUX NÉGATIF : le contrôle a lieu
+        // juste après le `taskkill`, or node met un temps non nul à libérer un
+        // modèle de plusieurs centaines de Mio. Les appelants de production
+        // l'ignorent (`let _ =`) : on confirme donc la disparition par une
+        // revérification bornée au lieu de l'exiger instantanée.
+        let _ = stop_owned(&pid_path);
+        let stopped = match trace.as_ref() {
+            None => true,
+            Some((pid, name)) => {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut done = crate::plface::kill_process(*pid, name);
+                while !done && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(200));
+                    done = crate::plface::kill_process(*pid, name);
+                }
+                done
+            }
+        };
+        let trace_cleared = crate::plface::read_pid_file(&pid_path).is_none();
+        let gone = !wait_until_reachable(Duration::from_secs(10), PROBE_INTERVAL).reachable;
+
+        assert!(
+            matches!(outcome, LayaOutcome::Launched | LayaOutcome::LaunchedNotReady),
+            "issue inattendue avec la copie embarquée : {outcome:?}"
+        );
+        assert!(reachable, "le service embarqué devrait répondre sur /status");
+        let (pid, name) = trace.expect("trace laya.pid");
+        assert!(pid > 0);
+        assert_eq!(name, node_exe_name());
+        assert_eq!(name, process_name_for(Some(&node_str)));
+        assert!(state.reachable, "état du service embarqué : {state:?}");
+        if real_ok {
+            assert!(real_loaded, "le vrai modèle devrait avoir répondu à /classify");
+            assert!(state.ready, "le vrai modèle devrait être chargé : {state:?}");
+        } else {
+            eprintln!("NOTE : LAYA_REAL_MODEL_DIR absent → « ready » non vérifié (aucun téléchargement)");
+        }
+        assert!(stopped, "le service embarqué devrait être arrêté");
+        assert!(trace_cleared, "la trace laya.pid devrait être effacée après l'arrêt");
+        assert!(gone, "le service embarqué arrêté ne devrait plus répondre");
     }
 
     #[test]

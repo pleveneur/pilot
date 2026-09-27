@@ -22,6 +22,24 @@ describe("layaStatusMessage", () => {
     expect(r.text).toMatch(/non configuré/i);
   });
 
+  it("service embarqué mais pas encore exploitable → le dit sans parler de réglage", () => {
+    const r = layaStatusMessage({ configured: false, embedded: true, ready: false });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/livré avec Pilot/i);
+    expect(r.text).not.toMatch(/embarque pas/i);
+  });
+
+  it("paquet SANS Laya → le dit clairement (aucun réglage ne peut l'activer)", () => {
+    const r = layaStatusMessage({ configured: false, embedded: false });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/n'embarque pas le service Laya/i);
+  });
+
+  it("service embarqué et prêt → succès (même message qu'un service externe)", () => {
+    const r = layaStatusMessage({ configured: true, embedded: true, reachable: true, ready: true });
+    expect(r.kind).toBe("success");
+  });
+
   it("configuré mais injoignable → service arrêté", () => {
     const r = layaStatusMessage({ configured: true, reachable: false, ready: false });
     expect(r.kind).toBe("info");

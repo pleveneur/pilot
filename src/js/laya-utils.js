@@ -23,12 +23,29 @@ export const LAYA_OUTCOMES = [
  * Traduit l'état du service (commande `laya_status`) en message utilisateur.
  * Un état absent/`null` est traité comme « réglages incomplets » : jamais de
  * crash, jamais de nom technique à l'écran.
- * @param {{configured?: boolean, reachable?: boolean, ready?: boolean}} [status]
+ * @param {{configured?: boolean, reachable?: boolean, ready?: boolean, embedded?: boolean}} [status]
  * @returns {{ text: string, kind: "success"|"info"|"warning" }}
  */
 export function layaStatusMessage(status) {
   const s = status && typeof status === "object" ? status : {};
   if (s.configured !== true) {
+    // Service EMBARQUÉ mais pas encore exploitable : le modèle n'est pas complet
+    // (téléchargement en cours/à faire) ou le démarrage automatique a été
+    // désactivé. Il n'y a rien à régler : le dire évite un conseil sans effet.
+    if (s.embedded === true) {
+      return {
+        text: "Le service Laya est livré avec Pilot : modèle pas encore téléchargé, ou démarrage automatique désactivé.",
+        kind: "warning",
+      };
+    }
+    // Paquet construit SANS Laya (`embedded` renseigné à `false`) : aucun réglage
+    // ne peut le faire apparaître, le dire clairement.
+    if (s.embedded === false) {
+      return {
+        text: "Cette version de Pilot n'embarque pas le service Laya. Indiquez un programme de service et un dossier de modèle pour en utiliser un.",
+        kind: "warning",
+      };
+    }
     return {
       text: "Service Laya non configuré : activez le démarrage automatique, puis indiquez le service et le dossier du modèle.",
       kind: "warning",

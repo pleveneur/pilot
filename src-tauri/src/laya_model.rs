@@ -111,9 +111,30 @@ pub(crate) enum FetchReason {
 /// - chemin absolu → tel quel ;
 /// - chemin relatif → résolu depuis le dossier du service (comme `laya.rs`).
 pub(crate) fn resolve_model_dir(model_dir: &str, service_dir: &str) -> PathBuf {
+    resolve_model_dir_with_default(
+        model_dir,
+        service_dir,
+        &Path::new(service_dir).join(DEFAULT_MODEL_DIR),
+    )
+}
+
+/// Même règle que `resolve_model_dir`, mais avec un dossier par défaut EXPLICITE.
+/// PURE : aucun accès disque.
+///
+/// Sert au service **embarqué** dans les ressources de l'application : celles-ci
+/// sont en LECTURE SEULE (une version installée dans `Program Files` ne se
+/// laisse pas écrire), le modèle — 1,26 Go téléchargé — doit donc aller dans un
+/// dossier inscriptible fourni par l'appelant (dossier de données de
+/// l'application), jamais à côté du service livré. Un chemin réglé à la main
+/// garde la priorité, donc un service externe ne change pas de comportement.
+pub(crate) fn resolve_model_dir_with_default(
+    model_dir: &str,
+    service_dir: &str,
+    default_dir: &Path,
+) -> PathBuf {
     let trimmed = model_dir.trim();
     if trimmed.is_empty() {
-        return Path::new(service_dir).join(DEFAULT_MODEL_DIR);
+        return default_dir.to_path_buf();
     }
     let path = Path::new(trimmed);
     if path.is_absolute() {
@@ -253,6 +274,35 @@ mod tests {
         assert_eq!(
             resolve_model_dir("   ", "/opt/laya"),
             PathBuf::from("/opt/laya").join(DEFAULT_MODEL_DIR)
+        );
+    }
+
+    // Service EMBARQUÉ : les ressources livrées sont en lecture seule, le modèle
+    // (téléchargé) doit donc aller dans le dossier inscriptible fourni par
+    // l'appelant — jamais dans le dossier livré. Un réglage explicite garde la
+    // priorité, donc un service externe ne change pas de comportement.
+    #[test]
+    fn embedded_service_sends_default_model_dir_to_writable_dir() {
+        let res = if cfg!(windows) {
+            Path::new("C:\\Program Files\\Pilot\\laya")
+        } else {
+            Path::new("/usr/lib/pilot/laya")
+        };
+        let data = Path::new("/donnees-application/laya/model-ml");
+        // Réglage vide : dossier de données, PAS le dossier livré.
+        assert_eq!(
+            resolve_model_dir_with_default("", &res.to_string_lossy(), data),
+            data.to_path_buf()
+        );
+        // Réglage explicite : il gagne (service externe inchangé).
+        assert_eq!(
+            resolve_model_dir_with_default("mes-poids", &res.to_string_lossy(), data),
+            res.join("mes-poids")
+        );
+        let abs = if cfg!(windows) { "C:\\poids\\ml" } else { "/poids/ml" };
+        assert_eq!(
+            resolve_model_dir_with_default(abs, "ignoré", data),
+            PathBuf::from(abs)
         );
     }
 

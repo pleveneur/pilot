@@ -198,14 +198,6 @@ fn read_stream<R: std::io::Read + Send + 'static>(reader: Option<R>, app: Option
     }
 }
 
-fn node_process_name() -> &'static str {
-    if cfg!(windows) {
-        "node.exe"
-    } else {
-        "node"
-    }
-}
-
 fn acquire() -> bool {
     DOWNLOADING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -235,15 +227,21 @@ fn finish(reason: FetchReason) {
     });
 }
 
-/// Cœur non pur : vérifie l'adresse, lance `node <laya-fetch.mjs> <manifeste>
-/// <dossier> [--base <adresse>]`, draine la sortie, publie la progression,
-/// attend la fin et traduit le code de sortie.
+/// Cœur non pur : vérifie l'adresse, lance `<interpréteur> <laya-fetch.mjs>
+/// <manifeste> <dossier> [--base <adresse>]`, draine la sortie, publie la
+/// progression, attend la fin et traduit le code de sortie.
+///
+/// `node` : interpréteur effectif (`None` = `node` du système). La même règle de
+/// priorité que le service (réglé à la main → embarqué → système) est appliquée
+/// par l'appelant : une version livrée sans Node.js installé télécharge donc son
+/// modèle quand même ; un service externe garde son comportement d'avant.
 fn run(
     app: Option<&AppHandle>,
     fetch: &Path,
     manifest: &Path,
     model_dir: &Path,
     base_url: &str,
+    node: Option<&str>,
     pid_path: Option<&Path>,
 ) -> FetchReason {
     let meta = laya_model::read_manifest(manifest);
@@ -260,7 +258,11 @@ fn run(
         return FetchReason::FetchMissing;
     }
 
-    let mut cmd = Command::new("node");
+    let node_exe = node
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| crate::laya::node_exe_name().to_string());
+    let mut cmd = Command::new(&node_exe);
     cmd.arg(fetch).arg(manifest).arg(model_dir);
     if !base_url.trim().is_empty() {
         cmd.arg("--base").arg(base_url.trim());
@@ -282,7 +284,11 @@ fn run(
         Err(_) => return FetchReason::NodeMissing,
     };
     if let Some(path) = pid_path {
-        crate::plface::write_pid_file(path, child.id(), node_process_name());
+        crate::plface::write_pid_file(
+            path,
+            child.id(),
+            &crate::laya::process_name_for(Some(&node_exe)),
+        );
     }
 
     let stdout = child.stdout.take();
@@ -328,13 +334,14 @@ pub(crate) fn download_blocking(
     manifest: &Path,
     model_dir: &Path,
     base_url: &str,
+    node: Option<&str>,
     pid_path: Option<&Path>,
 ) -> FetchReason {
     if !acquire() {
         return FetchReason::AlreadyRunning;
     }
     CANCELLED.store(false, Ordering::SeqCst);
-    let reason = run(app, fetch, manifest, model_dir, base_url, pid_path);
+    let reason = run(app, fetch, manifest, model_dir, base_url, node, pid_path);
     finish(reason);
     release();
     reason
@@ -349,6 +356,7 @@ pub(crate) fn start_background(
     manifest: PathBuf,
     model_dir: PathBuf,
     base_url: String,
+    node: Option<String>,
     pid_path: Option<PathBuf>,
 ) -> DownloadStart {
     if !acquire() {
@@ -362,6 +370,7 @@ pub(crate) fn start_background(
             &manifest,
             &model_dir,
             &base_url,
+            node.as_deref(),
             pid_path.as_deref(),
         );
         finish(reason);
@@ -515,7 +524,7 @@ await new Promise((r) => setTimeout(r, 5000));
             let model_dir = root.join("model-ml");
             let pid = root.join(FETCH_PID_FILE_NAME);
             let meta = laya_model::read_manifest(&manifest);
-            let reason = download_blocking(None, &fetch, &manifest, &model_dir, base, Some(&pid));
+            let reason = download_blocking(None, &fetch, &manifest, &model_dir, base, None, Some(&pid));
             assert_eq!(reason, FetchReason::Ok, "sortie 0 attendue");
             assert!(model_dir_has_all(&model_dir, &meta.files), "fichier final présent");
             assert!(progress_events() >= 1, "au moins un point de progression");
@@ -532,7 +541,7 @@ await new Promise((r) => setTimeout(r, 5000));
             let fetch = write_fake_fetch(&root, FAKE_INTEGRITY);
             let manifest = write_manifest(&root, "https://exemple.invalid/ml");
             let model_dir = root.join("model-ml");
-            let reason = download_blocking(None, &fetch, &manifest, &model_dir, base, None);
+            let reason = download_blocking(None, &fetch, &manifest, &model_dir, base, None, None);
             assert_eq!(reason, FetchReason::IntegrityFailed);
             assert!(!model_dir.join("encoder.onnx").exists(), "aucun fichier final");
             let meta = laya_model::read_manifest(&manifest);
@@ -549,7 +558,7 @@ await new Promise((r) => setTimeout(r, 5000));
             let pid = root.join(FETCH_PID_FILE_NAME);
             let (f, m, d, p) = (fetch.clone(), manifest.clone(), model_dir.clone(), pid.clone());
             let handle =
-                std::thread::spawn(move || download_blocking(None, &f, &m, &d, base, Some(&p)));
+                std::thread::spawn(move || download_blocking(None, &f, &m, &d, base, None, Some(&p)));
             let deadline = std::time::Instant::now() + Duration::from_secs(15);
             loop {
                 if crate::plface::read_pid_file(&pid).is_some()
@@ -582,7 +591,7 @@ await new Promise((r) => setTimeout(r, 5000));
             let pid = root.join(FETCH_PID_FILE_NAME);
             let (f, m, d, p) = (fetch.clone(), manifest.clone(), model_dir.clone(), pid.clone());
             let handle =
-                std::thread::spawn(move || download_blocking(None, &f, &m, &d, base, Some(&p)));
+                std::thread::spawn(move || download_blocking(None, &f, &m, &d, base, None, Some(&p)));
             let deadline = std::time::Instant::now() + Duration::from_secs(15);
             while !is_downloading() {
                 if std::time::Instant::now() >= deadline {
@@ -590,7 +599,7 @@ await new Promise((r) => setTimeout(r, 5000));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
-            let second = download_blocking(None, &fetch, &manifest, &model_dir, base, None);
+            let second = download_blocking(None, &fetch, &manifest, &model_dir, base, None, None);
             assert_eq!(second, FetchReason::AlreadyRunning, "jamais deux à la fois");
             let _ = cancel(&pid);
             let _ = handle.join();
@@ -603,7 +612,7 @@ await new Promise((r) => setTimeout(r, 5000));
             let fetch = write_fake_fetch(&root, FAKE_OK);
             let manifest = write_manifest(&root, "A_CHOISIR");
             let reason =
-                download_blocking(None, &fetch, &manifest, &root.join("model-ml"), "", None);
+                download_blocking(None, &fetch, &manifest, &root.join("model-ml"), "", None, None);
             assert_eq!(reason, FetchReason::AddressMissing);
             assert!(!root.join("model-ml").exists(), "aucun dossier créé sans adresse");
             let _ = std::fs::remove_dir_all(&root);

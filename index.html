@@ -376,14 +376,21 @@
             <div class="setting-row setting-row-indent">
               <label for="setting-laya-service-path">Programme du service (laya-service.mjs) :</label>
               <div class="setting-row-field">
-                <input type="text" id="setting-laya-service-path" placeholder="laisser vide pour ne rien lancer" />
+                <input type="text" id="setting-laya-service-path" placeholder="laisser vide pour utiliser le service livré avec Pilot" />
                 <button id="btn-laya-service-browse" type="button" class="settings-btn">Choisir le service…</button>
+              </div>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-laya-node-path" title="Programme qui exécute le service et le téléchargement du modèle. Laissez vide pour utiliser l'interpréteur livré avec Pilot, puis celui du système.">Programme interpréteur (Node.js) :</label>
+              <div class="setting-row-field">
+                <input type="text" id="setting-laya-node-path" placeholder="laisser vide : interpréteur livré avec Pilot, sinon celui du système" />
+                <button id="btn-laya-node-browse" type="button" class="settings-btn">Choisir le programme…</button>
               </div>
             </div>
             <div class="setting-row setting-row-indent">
               <label for="setting-laya-model-dir">Dossier du modèle à charger :</label>
               <div class="setting-row-field">
-                <input type="text" id="setting-laya-model-dir" placeholder="laisser vide pour utiliser model-ml à côté du service" />
+                <input type="text" id="setting-laya-model-dir" placeholder="laisser vide : dans les données de Pilot (service livré) ou à côté du service" />
                 <button id="btn-laya-model-browse" type="button" class="settings-btn">Choisir le dossier…</button>
               </div>
             </div>

@@ -70,3 +70,9 @@ latest.json
 # Sauvegardes locales des volumes GDS (scripts/gds-reload.js) — volumineuses et
 # propres au poste : jamais versionnées.
 gds-server/backups/
+
+# Ressources du service Laya préparées au moment de la construction depuis un
+# dépôt EXTERNE (scripts/prepare-laya.js) : jamais versionnées (licence et dépôt
+# distincts, 114 Mo dont un interpréteur Node). Embarquées dans le paquet livré
+# via bundle.resources.
+src-tauri/laya/

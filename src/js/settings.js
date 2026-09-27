@@ -1467,6 +1467,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         laya_model_auto_download_enabled: chkLayaModelAutoDownload ? chkLayaModelAutoDownload.checked : false,
         laya_model_base_url: inputLayaModelBaseUrl ? inputLayaModelBaseUrl.value.trim() : "",
         laya_fetch_path: inputLayaFetchPath ? inputLayaFetchPath.value.trim() : "",
+        laya_node_path: inputLayaNodePath ? inputLayaNodePath.value.trim() : "",
         integrated_terminal: chkIntegratedTerminal.checked,
         rpc_agent_enabled: chkRpcAgent.checked,
         rpc_pi_path: inputRpcPath.value.trim(),

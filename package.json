@@ -10,6 +10,7 @@
     "tauri": "node scripts/tauri.js",
     "build:handbook": "node scripts/build-handbook.js",
     "build:mcp": "node scripts/build-mcp-extension.js",
+    "prepare:laya": "node scripts/prepare-laya.js",
     "gds:reload": "node scripts/gds-reload.js",
     "gds:image": "node scripts/gds-reload.js --image-only",
     "test": "vitest run",

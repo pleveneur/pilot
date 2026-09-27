@@ -2177,16 +2177,29 @@ ordinateur. Pilot ne classe rien lui-même : il se contente de **lancer et
 surveiller** ce service, une seule fois pour toute l'application (le service
 garde un gros modèle en mémoire, en lancer plusieurs épuiserait la machine).
 
+**Rien à installer** : Pilot livre avec lui le service, son interpréteur et sa
+bibliothèque de calcul. Au premier démarrage, il ne manque que le **modèle**
+(plusieurs centaines de Mo) : Pilot le télécharge tout seul, puis lance le
+service. Vous n'avez aucune commande à taper. Le modèle est enregistré dans le
+dossier de **données** de Pilot, jamais dans le dossier du programme.
+
 Réglages disponibles dans **Paramètres → Service Laya** :
 
 - **Lancer le service Laya au démarrage** : si activé, Pilot démarre le service
-  à son ouverture, uniquement s'il ne répond pas déjà. Sans effet si le service
-  n'est pas installé.
-- **Programme du service** : le fichier `laya-service.mjs`. Laissez vide pour ne
-  rien lancer.
+  à son ouverture, uniquement s'il ne répond pas déjà.
+- **Programme du service** : le fichier `laya-service.mjs`. Laissez vide pour
+  utiliser celui livré avec Pilot.
+- **Programme interpréteur (Node.js)** : le programme qui exécute le service et
+  le téléchargement du modèle. Laissez vide : Pilot prend celui qu'il livre, et
+  à défaut celui installé sur l'ordinateur.
 - **Dossier du modèle à charger** : le dossier contenant le modèle de
   classification. C'est le service qui le charge, pas Pilot. Laissez vide pour
-  utiliser le dossier habituel (`model-ml`, à côté du service).
+  utiliser le dossier habituel (dans les données de Pilot si le service est
+  livré, sinon `model-ml` à côté du service).
+
+Ces trois champs sont **facultatifs** : les remplir sert uniquement à utiliser
+un service ou un interpréteur installé à la main, ailleurs. Dans ce cas, c'est
+votre réglage qui l'emporte.
 
 **Téléchargement du modèle** : Pilot peut récupérer le modèle lui-même, sans
 que vous ayez de commande à taper.
@@ -2199,16 +2212,18 @@ que vous ayez de commande à taper.
 - **Interrompre** : arrête le téléchargement en cours. La reprise continuera au
   même endroit plus tard (aucun octet déjà récupéré n'est perdu).
 - **Adresse d'hébergement des fichiers du modèle** : l'adresse où les fichiers
-  sont publiés. Tant qu'elle n'est pas renseignée, Pilot affiche clairement
-  qu'elle manque et ne tente rien (aucune erreur, aucun plantage).
+  sont publiés. Laissez vide pour utiliser l'adresse indiquée par le modèle —
+  c'est le cas normal. La renseigner **force** une autre adresse (hébergement
+  personnel, miroir).
 - **Programme de téléchargement du modèle** : le fichier `laya-fetch.mjs`.
   Laissez vide pour qu'il soit cherché à côté du service.
 
-**Lire l'indicateur d'état** : sous les deux champs, une ligne vous dit où en
-est le service — « arrêté », « en cours de chargement du modèle… », « prêt »,
- ou « non configuré » tant que les réglages sont incomplets. Un service lancé à
-la main n'est jamais arrêté par Pilot ; seul le service que Pilot a démarré est
-refermé à la fermeture.
+**Lire l'indicateur d'état** : sous ces champs, une ligne vous dit où en est le
+service — « arrêté », « en cours de chargement du modèle… », « prêt », « modèle
+pas encore téléchargé », ou « cette version de Pilot n'embarque pas le service
+Laya » (paquet construit sans lui). Un service lancé à la main n'est jamais
+arrêté par Pilot ; seul le service que Pilot a démarré est refermé à la
+fermeture.
 
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse

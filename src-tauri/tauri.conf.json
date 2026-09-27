@@ -18,7 +18,8 @@
     ],
     "resources": {
       "assets/PilotBase.vrm": "PilotBase.vrm",
-      "assets/plface.exe": "plface.exe"
+      "assets/plface.exe": "plface.exe",
+      "laya": "laya"
     },
     "windows": {
       "nsis": {
@@ -29,8 +30,8 @@
     }
   },
   "build": {
-    "beforeDevCommand": "npm run build:mcp && npm run build:handbook && npm run dev",
-    "beforeBuildCommand": "npm run build:mcp && npm run build:handbook && npm run build",
+    "beforeDevCommand": "npm run build:mcp && npm run build:handbook && npm run prepare:laya && npm run dev",
+    "beforeBuildCommand": "npm run build:mcp && npm run build:handbook && npm run prepare:laya && npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"
   },
