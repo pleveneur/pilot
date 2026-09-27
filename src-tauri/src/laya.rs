@@ -898,24 +898,7 @@ http.createServer((req, res) => {
 
         // Arrêt AVANT toute assertion : un échec ne doit jamais laisser le
         // service en vie (fuite de 1,6 Gio qui retient aussi le tube du test).
-        // Le booléen de `stop_owned` peut être un FAUX NÉGATIF : le contrôle a lieu
-        // juste après le `taskkill`, or node met un temps non nul à libérer un
-        // modèle de plusieurs centaines de Mio. Les appelants de production
-        // l'ignorent (`let _ =`) : on confirme donc la disparition par une
-        // revérification bornée au lieu de l'exiger instantanée.
-        let _ = stop_owned(&pid_path);
-        let stopped = match trace.as_ref() {
-            None => true,
-            Some((pid, name)) => {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                let mut done = crate::plface::kill_process(*pid, name);
-                while !done && Instant::now() < deadline {
-                    std::thread::sleep(Duration::from_millis(200));
-                    done = crate::plface::kill_process(*pid, name);
-                }
-                done
-            }
-        };
+        let stopped = stop_owned(&pid_path);
         let trace_cleared = crate::plface::read_pid_file(&pid_path).is_none();
         let gone = !wait_until_reachable(Duration::from_secs(10), PROBE_INTERVAL).reachable;
 

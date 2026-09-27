@@ -287,9 +287,30 @@ fn observed_process_name(pid: u32) -> Option<String> {
     }
 }
 
+/// Attend (borné à 2 s) que le processus `pid` disparaisse des tables du
+/// système, puis dit s'il est bien parti.
+///
+/// `taskkill`/`kill` rendent la main **avant** que le système n'ait retiré le
+/// processus : un service qui vient de charger 1,6 Gio de modèle reste listé
+/// ~200 ms après un arrêt RÉUSSI (mesuré : présent à +100 ms, absent à +200 ms).
+/// Sans cette attente, un arrêt réussi était rapporté comme un échec.
+fn wait_until_gone(pid: u32) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if observed_process_name(pid).is_none() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 /// Arrête le processus `pid` **uniquement s'il s'agit bien du visage**
 /// (`expected_name`). Renvoie `true` quand le processus visé n'existe plus
-/// après la tentative (déjà terminé, nom différent, ou arrêté). Jamais bloquant.
+/// après la tentative (déjà terminé, nom différent, ou arrêté). Jamais bloquant
+/// (au plus 2 s, le temps que le processus disparaisse des tables).
 ///
 /// Réutilisé tel quel par `laya.rs` : la garde de nom (ne jamais arrêter une
 /// autre application dont l'identifiant aurait été réutilisé) est la même pour
@@ -310,7 +331,7 @@ pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
         .stderr(Stdio::null());
     cmd.creation_flags(crate::CREATE_NO_WINDOW);
     let _ = cmd.status();
-    observed_process_name(pid).is_none()
+    wait_until_gone(pid)
 }
 
 #[cfg(not(windows))]
@@ -322,7 +343,7 @@ pub(crate) fn kill_process(pid: u32, expected_name: &str) -> bool {
     let _ = Command::new("kill")
         .args(["-9", &pid.to_string()])
         .status();
-    observed_process_name(pid).is_none()
+    wait_until_gone(pid)
 }
 
 /// Arrête le visage **que Pilot a lancé**, d'après le fichier de trace :

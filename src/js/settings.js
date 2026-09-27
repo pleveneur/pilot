@@ -135,8 +135,10 @@ export async function initSettings() {
   const chkLayaAutostart = document.getElementById("setting-laya-autostart");
   const inputLayaServicePath = document.getElementById("setting-laya-service-path");
   const inputLayaModelDir = document.getElementById("setting-laya-model-dir");
+  const inputLayaNodePath = document.getElementById("setting-laya-node-path");
   const btnLayaServiceBrowse = document.getElementById("btn-laya-service-browse");
   const btnLayaModelBrowse = document.getElementById("btn-laya-model-browse");
+  const btnLayaNodeBrowse = document.getElementById("btn-laya-node-browse");
   const layaState = document.getElementById("laya-runtime-state");
   const layaMessage = document.getElementById("laya-message");
   const chkLayaModelAutoDownload = document.getElementById("setting-laya-model-auto-download");
@@ -727,6 +729,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     if (chkLayaAutostart) chkLayaAutostart.checked = currentConfig.laya_autostart_enabled === true;
     if (inputLayaServicePath) inputLayaServicePath.value = currentConfig.laya_service_path || "";
     if (inputLayaModelDir) inputLayaModelDir.value = currentConfig.laya_model_dir || "";
+    if (inputLayaNodePath) inputLayaNodePath.value = currentConfig.laya_node_path || "";
     if (chkLayaModelAutoDownload) chkLayaModelAutoDownload.checked = currentConfig.laya_model_auto_download_enabled === true;
     if (inputLayaModelBaseUrl) inputLayaModelBaseUrl.value = currentConfig.laya_model_base_url || "";
     if (inputLayaFetchPath) inputLayaFetchPath.value = currentConfig.laya_fetch_path || "";
@@ -1189,6 +1192,21 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         if (inputLayaModelDir) inputLayaModelDir.value = Array.isArray(picked) ? picked[0] : picked;
       } catch (e) {
         showToast("Sélection du dossier : " + e, "error");
+      }
+    });
+  }
+  if (btnLayaNodeBrowse) {
+    btnLayaNodeBrowse.addEventListener("click", async () => {
+      try {
+        // Aucun filtre : l'interpréteur s'appelle `node.exe` sous Windows et
+        // `node` ailleurs — filtrer par extension rendrait le bouton inutile
+        // sur macOS et Linux.
+        const picked = await dialogOpen({ multiple: false, directory: false });
+        if (!picked) return; // annulé
+        // Remplit UNIQUEMENT le champ de l'interpréteur.
+        if (inputLayaNodePath) inputLayaNodePath.value = Array.isArray(picked) ? picked[0] : picked;
+      } catch (e) {
+        showToast("Sélection du programme : " + e, "error");
       }
     });
   }
