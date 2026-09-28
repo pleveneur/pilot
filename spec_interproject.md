@@ -74,6 +74,16 @@ le modifier). La base du mécanisme est le **dépôt d'une tâche inter-projets*
 - L'agent de la cible traite le handoff de façon **asynchrone** : l'utilisateur peut
   consulter la discussion dans l'onglet agent de la cible après le dépôt.
 - Les liens orphelins (projets supprimés) sont filtrés à la lecture.
+- **Limite : le dépôt de tâche inter-projets contourne le verrou par projet**
+  (même classe que le mode distant, cf. `idees_evolutions.md` § 30). Le handoff est
+  envoyé **côté Rust** (`src-tauri/src/interproject.rs:151`, `do_send_agent_prompt`)
+  après avoir parké la session active et rendu la cible active : il ne passe par
+  aucun bus JS, donc la politique d'admission (lecture partagée / modification
+  exclusive) n'y est pas évaluée. Un handoff peut donc lancer une modification sur
+  la cible pendant qu'une mission y tourne (ex. run `run_agents` de l'Assistant qui
+  n'existe que dans le bus JS). Correctif à écrire en **Rust** (interroger
+  l'occupation réelle par projet côté AgentService) — **tracé**, non corrigé à ce
+  stade (`idees_evolutions.md` § 31).
 
 ---
 

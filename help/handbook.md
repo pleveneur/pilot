@@ -1450,6 +1450,12 @@ uniquement un bloc d'instructions dans le prompt système.
   demande pendant que l'agent travaille encore, elle n'est **plus perdue** :
   elle est **mise en file** et transmise automatiquement dès la fin de la
   tâche en cours. Un `stop_agent` **annule** la file d'attente.
+- **Rejeu garanti de la file de missions (POINT G)** : une mission
+  (`run_agents` / `run_assistant_agents`) mise en file est rejouée
+  automatiquement **dès que le projet est libre**, y compris quand l'occupation
+  vient d'une **commande manuelle** ou d'un **prompt distant** : l'admission
+  réelle (verrou du bus OU travail en cours) est surveillée périodiquement, donc
+  la file ne peut plus rester bloquée.
 - **Issue #87 — Accusé de lancement honnête (plus de faux « ok »)** : quand
   l'Assistant lance une mission (`run_agents`), l'accusé retourné à l'Assistant
   distingue désormais trois situations au lieu d'un « ok » fourre-tout :

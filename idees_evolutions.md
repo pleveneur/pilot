@@ -934,3 +934,25 @@ la session web (jamais un silence).
 
 **Valeur :** 🟠 moyenne (cohérence sécurité/robustesse entre desktop et distant) ·
 **Effort :** moyen (Rust, testable via `cargo test -p` si cargo disponible).
+
+---
+
+## 31. Dépôt de tâche inter-projets — le verrou par projet ne s'y applique pas (à traiter)
+
+> **Tâche tracée** (même chantier « fermer les contournements du verrou par
+> projet » que § 30 ; point G). Limite documentée dans `spec_interproject.md` § 5.
+
+**Constat** : le **dépôt d'une tâche inter-projets** envoie le prompt de handoff
+**côté Rust** (`src-tauri/src/interproject.rs:151`, `do_send_agent_prompt`), sans
+passer par le bus JS : la politique d'admission (lecture partagée / modification
+exclusive) n'y est donc pas évaluée. Le chemin parke bien la session *active* et
+rend la cible active, mais une **mission** en cours sur la cible (run
+`run_agents` de l'Assistant, qui n'existe que dans le bus JS) n'est pas vue : un
+handoff peut lancer une modification sur la cible pendant ce temps.
+
+**Piste** : comme § 30, exposer l'occupation réelle par projet depuis
+l'AgentService (Rust) et refuser ou mettre en file le handoff, avec un refus
+**visible** (jamais un silence).
+
+**Valeur :** 🟠 moyenne (cohérence entre projets liés) ·
+**Effort :** moyen (Rust, testable via `cargo test -p` si cargo disponible).
