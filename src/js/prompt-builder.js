@@ -2,6 +2,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { toastError, toastWarning } from "./toast.js";
+// Verrou par projet : « Envoyer à l'agent » est une commande manuelle (elle
+// peut modifier le projet) → même politique d'admission que le chat.
+import { canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { isRunInProgress } from "./agents-bus.js";
+import { isProjectAgentBusy } from "./super-agent.js";
 
 // Lazy-load markdown-it pour isoler d'éventuelles erreurs d'import
 let md = null;
@@ -308,6 +313,14 @@ export async function createPromptBuilder(container, sidebar) {
       prompt = await assemblePrompt();
     }
     if (!prompt) return;
+
+    // POINT B2 : ce chemin appelait `invoke("send_agent_prompt")` en direct,
+    // sans consulter la politique d'admission → il contournait le verrou par
+    // projet. Refus VISIBLE (toast), envoi bloqué (le prompt reste assemblé).
+    if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+      toastWarning(MANUAL_COMMAND_BLOCKED_MESSAGE);
+      return;
+    }
 
     try {
       // Ouvrir l'onglet Agent Pi

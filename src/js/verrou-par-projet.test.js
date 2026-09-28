@@ -155,6 +155,15 @@ describe("POINT B1 — menu contextuel de la barre latérale (sidebar.js)", () =
   });
 });
 
+describe("POINT B2 — bouton « Envoyer à l'agent » du constructeur de prompts", () => {
+  it("B2 — le garde précède l'envoi direct, refus visible", () => {
+    const src = readFileSync(new URL("./prompt-builder.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("async function sendToAgent()");
+    expect(fnIdx).toBeGreaterThan(-1);
+    assertGuardBeforeSend(src.slice(fnIdx), "prompt-builder.js sendToAgent");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
