@@ -316,17 +316,17 @@ export default function (pi: ExtensionAPI) {
     name: "delegate_to_coder",
     label: "Delegate to Coder",
     description:
-      "Déléguer une demande de modification de code à un agent d'un projet (pi/plh de coding). Cible de la délégation (ordre de résolution) : (1) l'agent explicitement demandé via `agent_id` ; (2) sinon le codeur du projet (agent du registre classé codeur) ; (3) sinon l'agent par défaut du projet en dernier recours. Ce que tu désignes est donc bien ce qui est lancé. Par défaut, délègue au projet actif et ouvre son onglet (le rend visible) en lui envoyant la demande dans sa session de discussion. Si `background=true`, démarre l'agent en mode invisible (en arrière-plan, sans ouvrir d'onglet). Si `project` est fourni, délègue à CE projet (même s'il n'est pas actif) : son agent est démarré en arrière-plan (invisible) automatiquement, sans ouvrir le projet ni l'onglet. L'agent finalement retenu est affiché dans le retour. À utiliser quand l'utilisateur demande une modification de code sur un projet. Bloque jusqu'à ce que Pilot ait transmis la demande.",
+      "Déléguer une demande de modification de code à un agent d'un projet (pi/plh de coding). L'agent cible est OBLIGATOIRE : tu DOIS le désigner via `agent_id` (l'agent que tu désignes est exactement celui qui est lancé). Sans `agent_id`, la délégation est REFUSÉE avec un message demandant de préciser l'agent — il n'y a aucun repli implicite sur un autre agent. Par défaut, délègue au projet actif et ouvre son onglet (le rend visible) en lui envoyant la demande dans sa session de discussion. Si `background=true`, démarre l'agent en mode invisible (en arrière-plan, sans ouvrir d'onglet). Si `project` est fourni, délègue à CE projet (même s'il n'est pas actif) : son agent est démarré en arrière-plan (invisible) automatiquement, sans ouvrir le projet ni l'onglet. L'agent finalement retenu est affiché dans le retour. À utiliser quand l'utilisateur demande une modification de code sur un projet. Bloque jusqu'à ce que Pilot ait transmis la demande.",
     promptSnippet: "delegate_to_coder: déléguer une demande de code à l'agent d'un projet",
     promptGuidelines: [
       "Use delegate_to_coder when the user asks for a code modification on a project. The request is sent to a project agent (pi/plh), which opens its tab and receives the request in its discussion. Only delegate actual code work — for simple questions about how something works, answer directly.",
-      "Pass `agent_id` to delegate to the SPECIFIC agent you designate (e.g. 'codeur'). If omitted, Pilot falls back to the project's coder, then to the project's default agent. The agent finally retained is reported back to you.",
+      "ALWAYS pass `agent_id` to designate the SPECIFIC agent that must do the work (e.g. 'codeur'). Without it, the delegation is REFUSED with a message asking to name the agent — Pilot never silently falls back to another agent.",
       "Set background=true to start the agent in invisible mode (background, without opening a tab). This is useful when you want the agent to work without disturbing the user's current view.",
       "Pass `project` (absolute path) to delegate to a specific project even if it is not the active one. Its agent is started in the background (invisible) automatically, without opening the project or its tab.",
     ],
     parameters: Type.Object({
       request: Type.String({ description: "La demande de code à transmettre à l'agent du projet" }),
-      agent_id: Type.Optional(Type.String({ description: "Identifiant de l'agent explicitement demandé (ex: 'codeur'). Si omis, Pilot retombe sur le codeur du projet, puis sur l'agent par défaut." })),
+      agent_id: Type.String({ description: "Identifiant de l'agent désigné pour la tâche (obligatoire, ex: 'codeur'). Sans cette désignation, la délégation est refusée : aucun repli automatique." }),
       project: Type.Optional(Type.String({ description: "Chemin absolu du projet cible. Si omis, délègue au projet actif." })),
       background: Type.Optional(Type.Boolean({ description: "true → démarrer l'agent en mode invisible (arrière-plan, sans ouvrir d'onglet). Défaut : false (onglet ouvert)." })),
     }),
@@ -336,7 +336,7 @@ export default function (pi: ExtensionAPI) {
       const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
       if (ok) {
         const mode = params.background === true ? "en arrière-plan (agent invisible)" : "(son onglet est ouvert)";
-        const target = params.agent_id ? `l'agent « ${params.agent_id} »` : (params.project ? `un agent du projet « ${params.project} »` : "un agent du projet actif");
+        const target = `l'agent « ${params.agent_id} »`;
         return { content: [{ type: "text", text: `La demande a été transmise à ${target} ${mode}. L'agent finalement retenu est indiqué dans le retour de Pilot.` }] };
       }
       return { content: [{ type: "text", text: "Échec de la transmission de la demande à l'agent du projet." }] };

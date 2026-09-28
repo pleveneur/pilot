@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-27 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-09-28 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1514,17 +1514,18 @@ uniquement un bloc d'instructions dans le prompt système.
 - **#64 — Agent invisible joignable** : rédéléguer à un agent invisible déjà
   actif **reprend** sa session au lieu de bloquer (l'Assistant n'a plus besoin
   de l'arrêter entre deux demandes).
-- **C2 — Agent demandé introuvable : échec franc, jamais de repli silencieux** :
-  si l'agent **explicitement demandé** (id transmis par `run_agents` /
-  `delegate_to_coder`) **n'existe pas** dans le registre, la délégation est
-  **annulée avec une erreur explicite citant l'id demandé** et **AUCUN agent
-  n'est lancé**. Le repli (codeur du projet → agent `default`) ne s'applique
-  **que** lorsqu'**aucun agent n'est demandé**. Avant, la demande partait
-  silencieusement à un autre agent sans que personne ne le sache (détour
-  silencieux). Décision portée par la fonction **pure**
-  `resolveDelegationTargetDecision` (super-agent.js ; `resolveDelegationTarget`
-  ne collecte que l'I/O), couverte par
-  `src/js/super-agent-delegation-target.test.js` (5 cas, dont « introuvable »).
+- **C2 — L'agent cible est OBLIGATOIRE (échec franc, aucun repli silencieux)** :
+  la délégation (`delegate_to_coder`) exige l'`agent_id` de l'agent cible
+  (paramètre **requis** du schéma de l'outil). **Sans agent désigné**, la
+  délégation est **refusée** avec un message explicite (« Aucun agent n'a été
+  désigné pour cette tâche. Précise quel agent doit la faire ») et **AUCUN
+  agent n'est lancé** : plus aucun repli implicite sur le codeur du projet ni
+  sur l'agent `default`. Si l'agent **désigné** n'existe **pas** dans le
+  registre, même refus explicite citant l'id demandé. Décision portée par la
+  fonction **pure** `resolveDelegationTargetDecision` (super-agent.js ;
+  `resolveDelegationTarget` ne collecte que l'I/O), couverte par
+  `src/js/super-agent-delegation-target.test.js` (agent résolu, introuvable,
+  absent).
 - **Restitution fiable du résultat (fin de run → Assistant)** : le résultat
   d'une délégation arrive **automatiquement** dans la conversation de
   l'Assistant à la fin de la tâche — même si pi a dû **se relancer** après une
