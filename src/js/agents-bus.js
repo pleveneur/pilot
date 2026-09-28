@@ -96,14 +96,51 @@ const AGENT_READ_ONLY_TOOLS = new Set([
 // ABANDONNÉE de supprimer, à sa fin tardive, le contexte d'une run NOUVELLE
 // démarrée entre-temps (protection par génération dans endRun).
 let runGenerationSeq = 0;
+// Compteur monotone des clés de run de LECTURE (`projet#read:<n>`). Une mission
+// qui MODIFIE garde la clé par défaut (le projet lui-même). Deux missions de
+// LECTURE sur un même projet ont ainsi des contextes de run distincts (elles ne
+// s'écrasent plus).
+let readRunSeq = 0;
+// Séparateur projet ↔ clé de run de lecture : permet de retrouver, à partir
+// d'un projet réel, TOUTES ses runs (par défaut + lectures parallèles).
+const READ_KEY_SEP = "#read:";
 
-function newRunCtx(project) {
+/** Clé de run par défaut (mission qui MODIFIE) : le projet lui-même. */
+function runKey(project) {
+  return project || ".";
+}
+
+/** Projet RÉEL d'une clé de run (retire le suffixe de lecture éventuel). */
+function projectOfRunKey(key) {
+  const i = key.indexOf(READ_KEY_SEP);
+  return i < 0 ? key : key.slice(0, i);
+}
+
+/** Toutes les clés de run appartenant au projet donné (défaut + lectures). */
+function runKeysOfProject(project) {
+  const base = runKey(project);
+  const keys = [];
+  for (const k of Object.keys(busState.runs)) {
+    if (k === base || k.startsWith(base + READ_KEY_SEP)) keys.push(k);
+  }
+  return keys;
+}
+
+/** Clé de run NEUVE pour une mission de LECTURE (partageable sur le projet). */
+export function nextReadRunKey(project) {
+  return `${runKey(project)}${READ_KEY_SEP}${++readRunSeq}`;
+}
+
+function newRunCtx(key, project) {
   return {
     project,
     // Clé de la run dans `busState.runs` (et des sinks de mission). Distincte du
-    // projet pour les missions de LECTURE, qui peuvent tourner en parallèle sur
-    // un même projet (verrou par projet à lecteurs partagés).
-    runKey: project,
+    // projet pour les missions de LECTURE (`projet#read:<n>`), qui peuvent
+    // tourner en parallèle sur un même projet (lecture partagée).
+    runKey: key,
+    // Nature de la mission : true = LECTURE (partageable), false = MODIFICATION
+    // (exclusive sur le projet). Alimente isRunInProgress(projet, { nature }).
+    readonly: false,
     runState: "idle", // "idle" | "running" | "stopping"
     // Issue #87 : instant de (re)création du contexte de run. `beginRun`
     // recopie tous les champs du contexte neuf → l'instant est réarmé à chaque
@@ -208,19 +245,20 @@ let busState = {
 // distincte. Doit rester distinct de "" (super-agent) et de tout projet réel.
 export const ASSISTANT_SPACE = "__assistant__";
 
-function runKey(project) {
-  return project || ".";
+/** Contexte de run par CLÉ DE RUN (créé au besoin). */
+function getRunCtxByKey(key) {
+  if (!busState.runs[key]) busState.runs[key] = newRunCtx(key, projectOfRunKey(key));
+  return busState.runs[key];
 }
 
 /**
- * Retourne le contexte de run du projet, en le créant s'il n'existe pas.
+ * Retourne le contexte de run du projet (clé par défaut), en le créant s'il
+ * n'existe pas.
  * @param {string} [project]
  * @returns {object} runCtx
  */
 function getRunCtx(project) {
-  const key = runKey(project);
-  if (!busState.runs[key]) busState.runs[key] = newRunCtx(key);
-  return busState.runs[key];
+  return getRunCtxByKey(runKey(project));
 }
 
 /**
@@ -230,8 +268,13 @@ function getRunCtx(project) {
  * @returns {string}
  */
 export function getRunState(project) {
-  const ctx = busState.runs[runKey(project)];
-  return ctx ? ctx.runState : "idle";
+  // Une mission de LECTURE a sa propre clé de run : l'état d'un PROJET est
+  // "running" dès qu'une de ses runs (défaut ou lecture) n'est pas idle.
+  for (const key of runKeysOfProject(project)) {
+    const ctx = busState.runs[key];
+    if (ctx && ctx.runState !== "idle") return ctx.runState;
+  }
+  return "idle";
 }
 
 /**
@@ -240,11 +283,16 @@ export function getRunState(project) {
  * @param {string} [project]
  * @returns {object} runCtx neuf en état "running"
  */
-export function beginRun(project) {
-  const key = runKey(project);
-  const fresh = newRunCtx(key);
-  const ctx = getRunCtx(key);
+export function beginRun(project, options) {
+  // Une mission de LECTURE (options.readOnly) reçoit une clé de run NEUVE, donc
+  // un contexte distinct : deux lectures sur un même projet ne s'écrasent plus.
+  const readOnly = !!(options && options.readOnly);
+  const key = readOnly ? nextReadRunKey(project) : runKey(project);
+  const fresh = newRunCtx(key, project);
+  const ctx = getRunCtxByKey(key);
   for (const k of Object.keys(fresh)) if (k !== "project") ctx[k] = fresh[k];
+  ctx.project = project;
+  ctx.readonly = readOnly;
   ctx.budgetTotal = (busState.config && busState.config.agent_max_total_calls) || DEFAULT_TOTAL_BUDGET;
   ctx.runState = "running";
   // Génération NEUVE : les fins de run antérieures (endRun tardif portant
@@ -259,16 +307,31 @@ export function beginRun(project) {
  * @param {string} [project]
  */
 export function endRun(project, generation) {
-  const key = runKey(project);
-  const ctx = busState.runs[key];
-  if (!ctx) return;
   // Protection par génération (fin de run tardive) : une run abandonnée qui se
   // termine APRÈS le démarrage d'une nouvelle run porte l'ANCIENNE génération ;
-  // son endRun ne doit PAS supprimer le contexte de la nouvelle. `generation`
-  // omise (appel legacy / libération forcée) → comportement inchangé.
-  if (generation !== undefined && ctx.generation !== generation) return;
-  if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
-  delete busState.runs[key];
+  // son endRun ne doit PAS supprimer le contexte de la nouvelle.
+  // `generation` omise (appel legacy / libération forcée) → uniquement la clé
+  // par défaut du projet, comportement inchangé.
+  if (generation === undefined) {
+    const key = runKey(project);
+    const ctx = busState.runs[key];
+    if (ctx) {
+      if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+      delete busState.runs[key];
+    }
+    return;
+  }
+  // Les missions de LECTURE ont leur propre clé : on retrouve la run par sa
+  // GÉNÉRATION sur toutes les clés du projet (défaut + lectures), car les
+  // appelants passent le PROJET RÉEL (`ctx.project`), pas la clé de run.
+  for (const key of runKeysOfProject(project)) {
+    const ctx = busState.runs[key];
+    if (ctx && ctx.generation === generation) {
+      if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+      delete busState.runs[key];
+      return;
+    }
+  }
 }
 
 // Réinitialise tous les contextes de run (utilisé par destroyAgentsBus et
@@ -301,9 +364,16 @@ function clearAllRuns() {
 // Tâche 2 : s'assure aussi que le cas 3 remonte bien le projet (key) pour
 // drainer la bonne file (les files d'exclusivité sont scopées PAR PROJET).
 export async function releaseStuckRunLock(project) {
-  const key = runKey(project);
-  if (getRunState(key) !== "running") return;
+  // Toutes les runs du projet (défaut + lectures parallèles) peuvent porter un
+  // verrou fantôme : le watchdog est appliqué à CHACUNE.
+  for (const key of runKeysOfProject(project)) {
+    await releaseStuckRunLockForKey(key);
+  }
+}
+
+async function releaseStuckRunLockForKey(key) {
   const ctx = busState.runs[key];
+  if (!ctx || ctx.runState !== "running") return;
 
   // 1. Cas nominal : aucun agent actif et aucun groupe parallèle en cours →
   //    verrou bloqué (fin normale/erreur sans libération).
@@ -404,7 +474,11 @@ export async function releaseStuckRunLock(project) {
 // ; false si la file est vide (rien à drainer → le verrou peut être libéré).
 // S'appuie sur launchNextQueued (getRunCtx(project)) qui démarre le tour de la
 // demande suivante et conserve le groupe parallèle (pending préservé).
-async function drainExclusivityQueues(ctx, project) {
+async function drainExclusivityQueues(ctx, runKeyValue) {
+  // Les files d'exclusivité sont indexées par PROJET RÉEL : pour une mission de
+  // LECTURE (clé `projet#read:<n>`), on draine la file du projet avec le
+  // contexte de CETTE run.
+  const project = ctx.project || runKeyValue;
   const queue = ctx.exclusivityQueue || {};
   const keys = Object.keys(queue);
   if (keys.length === 0) return false;
@@ -415,7 +489,7 @@ async function drainExclusivityQueues(ctx, project) {
     const agentId = key.slice(idx + 1);
     if (!agentId) continue;
     if ((queue[key] || []).length > 0) {
-      await launchNextQueued(agentId, project);
+      await launchNextQueued(agentId, project, runKeyValue);
       launched = true;
     }
   }
@@ -637,8 +711,10 @@ export function setBusNotifyCallback(fn) {
  * file, donc la run ne se termine pas avant que la demande en attente ne se soit
  * réellement exécutée.
  */
-async function launchNextQueued(agentId, project) {
-  const ctx = getRunCtx(project);
+async function launchNextQueued(agentId, project, runKeyOverride) {
+  // `project` = projet RÉEL (clé de la file d'exclusivité) ; `runKeyOverride` =
+  // clé de run propriétaire de la file (différente du projet pour une lecture).
+  const ctx = runKeyOverride ? getRunCtxByKey(runKeyOverride) : getRunCtx(project);
   const next = dequeueExclusivity(ctx.exclusivityQueue, agentId, project);
   if (!next) return;
   const id = next.agentId || agentId;
@@ -1033,12 +1109,19 @@ function handleAgentMessageError(agentId, msg, ctx) {
 // projet (rpc_manager.rs) → on route vers busState.runs[project]. Fallback :
 // on cherche le contexte dont l'agent est actif (rétrocompat).
 function runCtxForEvent(payload) {
-  if (payload && payload.project) {
-    const ctx = busState.runs[payload.project];
-    if (ctx) return ctx;
-  }
+  const project = payload && payload.project;
   const agentId = payload && payload.agent_id;
   if (!agentId) return null;
+  // 1. Contexte où CET agent est actif sur le projet de l'événement : une
+  //    mission de LECTURE a une clé de run distincte de la clé par défaut du
+  //    projet, donc `runs[payload.project]` ne suffit plus.
+  if (project) {
+    for (const key of runKeysOfProject(project)) {
+      const ctx = busState.runs[key];
+      if (ctx && ctx.activeAgents.has(agentId)) return ctx;
+    }
+  }
+  // 2. Rétrocompat : n'importe quelle run où l'agent est actif.
   for (const key of Object.keys(busState.runs)) {
     if (busState.runs[key].activeAgents.has(agentId)) return busState.runs[key];
   }
@@ -1364,7 +1447,7 @@ async function finishAgentTurn(agentId, ctx) {
   delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
   // de la file d'attente, s'il y en a une.
-  if (project) await launchNextQueued(agentId, project);
+  if (project) await launchNextQueued(agentId, project, ctx.runKey);
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
@@ -1492,7 +1575,7 @@ async function failAgentTurn(agentId, reason, ctx) {
   delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
   // de la file d'attente, s'il y en a une.
-  if (project) await launchNextQueued(agentId, project);
+  if (project) await launchNextQueued(agentId, project, ctx.runKey);
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
   if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
@@ -1550,15 +1633,26 @@ export async function startParallelRun(assignments, projectContext = "", options
   // actif). Deux runs sur des projets DIFFÉRENTS peuvent tourner en parallèle.
   const runProject = (assignments && assignments[0] && assignments[0].project) || window._pilotProjectPath || ".";
   await releaseStuckRunLock(runProject);
-  // T2 : garde projet-scopée — une run sur un AUTRE projet ne bloque pas.
-  if (getRunState(runProject) === "running") {
-    throw new Error("Une run est déjà en cours sur ce projet.");
-  }
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }
+  // Nature de la mission : LECTURE seulement si TOUS les agents assignés le sont
+  // (registre des agents, champ `readonly`). Sinon MODIFICATION exclusive.
+  const readOnly =
+    Array.isArray(assignments) &&
+    assignments.length > 0 &&
+    assignments.every((a) => {
+      const ag = busState.agents.get(a.agentId);
+      return !!(ag && ag.readonly === true);
+    });
+  const nature = readOnly ? "read" : "write";
+  // T2 : garde projet-scopée — une run sur un AUTRE projet ne bloque pas.
+  // Lecture partagée : une mission de LECTURE cohabite avec d'autres lectures.
+  if (isRunInProgress(runProject, { nature })) {
+    throw new Error("Une run est déjà en cours sur ce projet.");
+  }
 
-  const ctx = beginRun(runProject);
+  const ctx = beginRun(runProject, { readOnly });
   ctx.callStack = [];
   ctx.turnCount = 0;
   // Signal « la run a réellement démarré » (défaut « faux succès de lancement ») :
@@ -1683,11 +1777,18 @@ export async function runAgentsForAssistantAsync(assignments, onDone, onError, o
  * @param {string} [project]
  * @returns {boolean}
  */
-export function isRunInProgress(project) {
-  const keys = project ? [runKey(project)] : Object.keys(busState.runs);
+export function isRunInProgress(project, options) {
+  const nature = options && options.nature;
+  // Projet : toutes ses clés de run (défaut + lectures) — une run sur un AUTRE
+  // projet ne bloque jamais.
+  const keys = project ? runKeysOfProject(project) : Object.keys(busState.runs);
   return keys.some((k) => {
     const ctx = busState.runs[k];
-    return ctx && (ctx.runState === "running" || ctx.runState === "stopping");
+    if (!ctx || (ctx.runState !== "running" && ctx.runState !== "stopping")) return false;
+    // Nature de la mission à admettre : une LECTURE n'est bloquée que par une
+    // MODIFICATION ; une MODIFICATION est bloquée par n'importe quelle run.
+    if (nature === "read") return ctx.readonly !== true;
+    return true;
   });
 }
 

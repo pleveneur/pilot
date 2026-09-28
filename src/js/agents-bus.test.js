@@ -626,3 +626,29 @@ describe("livraison du rapport par mission (sink par clé de run)", () => {
     expect(settleMission("projetSansSink", "done", { text: "x" })).toBe(false);
   });
 });
+
+describe("clés de run — missions de LECTURE partagées (morceau 2)", () => {
+  it("deux missions de LECTURE sur le MÊME projet ont des clés distinctes (aucun écrasement)", () => {
+    const a = beginRun("projetRead2", { readOnly: true });
+    const b = beginRun("projetRead2", { readOnly: true });
+    expect(a.runKey).not.toBe(b.runKey);
+    expect(a.runKey.startsWith("projetRead2#read:")).toBe(true);
+    // Le PROJET RÉEL reste distinct de la clé de run (routage des événements).
+    expect(a.project).toBe("projetRead2");
+    expect(b.project).toBe("projetRead2");
+    expect(a.readonly).toBe(true);
+    expect(isRunInProgress("projetRead2", { nature: "read" })).toBe(false);
+    endRun("projetRead2", a.generation);
+    // La seconde lecture survit à la fin de la première.
+    expect(getRunState("projetRead2")).toBe("running");
+    endRun("projetRead2", b.generation);
+    expect(getRunState("projetRead2")).toBe("idle");
+  });
+
+  it("une MODIFICATION est bloquée par une lecture sur ce projet, pas par un AUTRE projet", () => {
+    beginRun("projetMix", { readOnly: true });
+    expect(isRunInProgress("projetMix", { nature: "write" })).toBe(true);
+    expect(isRunInProgress("projetAutre", { nature: "write" })).toBe(false);
+    endRun("projetMix", undefined);
+  });
+});
