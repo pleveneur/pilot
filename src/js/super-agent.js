@@ -3206,6 +3206,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           qualityGate: configCache.super_agent_quality_gate !== false,
         });
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer }));
+        // Nature de la mission : LECTURE seulement si TOUS les agents demandés
+        // sont en lecture seule (registre des agents, champ `readonly`). Une
+        // mission de LECTURE est partagée ; une MODIFICATION est exclusive sur
+        // le projet (verrou par projet à lecteurs partagés).
+        const missionReadOnly = agentIds.every((aid) => {
+          const ag = (registry.agents || []).find((a) => a && a.id === aid);
+          return !!(ag && ag.readonly === true);
+        });
+        const missionNature = missionReadOnly ? "read" : "write";
         const projectPath = window._pilotProjectPath || null;
         // T5 : exclusivité des spécialités par projet. Si un agent demandé est
         // déjà actif sur le projet cible, la demande sera mise en file d'attente
@@ -3358,7 +3367,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // réellement lancée.
         const launchOrQueue = async () => {
           await releaseStuckRunLock(target);
-          if (isRunInProgress(target)) {
+          if (isRunInProgress(target, { nature: missionNature })) {
             // Verrou occupé par une AUTRE run : renoncer au flag in-flight de
             // CETTE demande (il repassera à true au vrai lancement depuis la
             // file) et désarmer son watchdog.
@@ -3451,10 +3460,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // en cours (run précédente jamais finalisée, verrou fantôme), le
           // réinitialiser pour ne pas mettre la demande en file derrière une
           // run morte.
+          const blockedByBus = isRunInProgress(target, { nature: missionNature });
           if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
             runAgentsInFlightByProject[target] = false;
           }
-          if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
+          // Nature de la mission : une LECTURE partage le créneau avec d'autres
+          // lectures et n'attend qu'une MODIFICATION réellement en cours ; une
+          // MODIFICATION attend toute run en cours sur le projet.
+          const blockedByFlag = missionNature === "write" && runAgentsInFlightByProject[target];
+          if (blockedByFlag || blockedByBus) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
             appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");

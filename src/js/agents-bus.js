@@ -15,6 +15,7 @@ import { notifyAgentDone } from "./desktop-notify.js";
 // immédiat, jamais retardé par le délai de sécurité).
 import { resetDeferredSound } from "./sound-deferred.js";
 import { buildProjectContext } from "./context-engine.js";
+import { canStartMission } from "./run-policy.js";
 import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
 import {
@@ -1782,14 +1783,19 @@ export function isRunInProgress(project, options) {
   // Projet : toutes ses clés de run (défaut + lectures) — une run sur un AUTRE
   // projet ne bloque jamais.
   const keys = project ? runKeysOfProject(project) : Object.keys(busState.runs);
-  return keys.some((k) => {
+  // Nature de chaque run en cours sur le périmètre.
+  const runningNatures = [];
+  for (const k of keys) {
     const ctx = busState.runs[k];
-    if (!ctx || (ctx.runState !== "running" && ctx.runState !== "stopping")) return false;
-    // Nature de la mission à admettre : une LECTURE n'est bloquée que par une
-    // MODIFICATION ; une MODIFICATION est bloquée par n'importe quelle run.
-    if (nature === "read") return ctx.readonly !== true;
-    return true;
-  });
+    if (ctx && (ctx.runState === "running" || ctx.runState === "stopping")) {
+      runningNatures.push(ctx.readonly === true ? "read" : "write");
+    }
+  }
+  // Sans nature demandée : rétrocompat strict ("une run tourne-t-elle ?").
+  if (!nature) return runningNatures.length > 0;
+  // Sinon, la politique PURE d'admission (lecture partagée / modification
+  // exclusive) tranche — source unique de vérité (run-policy.js).
+  return !canStartMission(nature, runningNatures);
 }
 
 export async function stopAgentsRun(options = {}) {
