@@ -4110,6 +4110,27 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         } else if (waitingMissions > 0) {
           appendSystemMessage(messagesEl, `⏳ ${waitingMissions} mission(s) toujours en attente : une autre tâche tourne encore sur ce projet.`);
         }
+        // POINT F : même trou pour la file des missions D'ASSISTANT
+        // (`runAgentsQueueByProject[ASSISTANT_SPACE]`, alimentée par
+        // `run_assistant_agents`). Aucun chemin d'arrêt ne la vidait : une
+        // mission d'assistant mise en file derrière une run d'assistant arrêtée
+        // ne se rejouait jamais (pas de watchdog côté assistant) et disparaissait
+        // sans un mot. MÊME traitement que pour un projet, sur la SEULE clé
+        // ASSISTANT_SPACE (les files et verrous des projets ne sont pas touchés).
+        const assistantKey = ASSISTANT_SPACE;
+        const pendingAssistant = (runAgentsQueueByProject[assistantKey] || []).length;
+        if (pendingAssistant > 0) {
+          await releaseStuckRunLock(assistantKey);
+          if (!isRunInProgress(assistantKey)) {
+            runAgentsInFlightByProject[assistantKey] = false;
+            const wdA = runAgentsWatchdogByProject[assistantKey];
+            if (wdA) { clearTimeout(wdA); delete runAgentsWatchdogByProject[assistantKey]; }
+            appendSystemMessage(messagesEl, `📋 ${pendingAssistant} mission(s) d'assistant en attente annulée(s) par l'arrêt de l'agent (plus aucune run d'assistant ne tourne).`);
+            delete runAgentsQueueByProject[assistantKey];
+          } else {
+            appendSystemMessage(messagesEl, `⏳ ${pendingAssistant} mission(s) d'assistant toujours en attente : une autre tâche d'assistant tourne encore.`);
+          }
+        }
         // #28 : si l'agent arrêté est l'agent standard du projet actif
         // (`default`), fermer son onglet s'il est ouvert (évite un onglet
         // fantôme alors que l'agent n'est plus fonctionnel). Ne touche pas aux

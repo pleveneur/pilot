@@ -241,6 +241,38 @@ describe("POINT E — run_assistant_agents : file réelle, jamais un faux « que
   });
 });
 
+// POINT F — l'arrêt d'un agent ne doit plus laisser une mission D'ASSISTANT en
+// attente sans suite. La file des missions d'assistant
+// (`runAgentsQueueByProject[ASSISTANT_SPACE]`, alimentée par
+// `run_assistant_agents`) n'était vidée par aucun chemin d'arrêt : la mission
+// mise en file derrière une run d'assistant arrêtée ne se rejouait jamais et
+// disparaissait en silence. Ce test ÉCHOUE si la branche `stop_agent` cesse de
+// traiter cette file (ou cesse de le signaler), ou si elle se met à purger
+// globalement les files.
+describe("POINT F — l'arrêt d'un agent ne perd plus une mission d'ASSISTANT en attente", () => {
+  it("la branche stop_agent traite la file d'assistant (même file) avec un message visible", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const stopIdx = src.indexOf('action === "stop_agent"');
+    const nextIdx = src.indexOf('action === "create_agent"', stopIdx);
+    expect(stopIdx).toBeGreaterThan(-1);
+    expect(nextIdx).toBeGreaterThan(stopIdx);
+    const branch = src.slice(stopIdx, nextIdx);
+    // Même file et même principe que le point C : clé ASSISTANT_SPACE.
+    const assistantKeyIdx = branch.indexOf("const assistantKey = ASSISTANT_SPACE;");
+    expect(assistantKeyIdx).toBeGreaterThan(-1);
+    expect(branch).toContain("runAgentsQueueByProject[assistantKey]");
+    expect(branch).toContain("delete runAgentsQueueByProject[assistantKey];");
+    expect(branch).toContain("isRunInProgress(assistantKey)");
+    // Traitement APRÈS celui du projet, et sur SA seule clé (pas de mélange).
+    expect(assistantKeyIdx).toBeGreaterThan(branch.indexOf("const queueKey ="));
+    // Rien ne disparaît en silence : un message visible dans les DEUX cas.
+    expect(branch).toContain("mission(s) d'assistant en attente annulée(s)");
+    expect(branch).toContain("mission(s) d'assistant toujours en attente");
+    // Aucune purge globale des files (les projets restent intacts).
+    expect(branch).not.toContain("runAgentsQueueByProject = {}");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
