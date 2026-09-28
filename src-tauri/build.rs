@@ -1,4 +1,17 @@
 fn main() {
+    // The Laya service is an OPTIONAL external resource: it is never versioned
+    // (.gitignore -> src-tauri/laya/) and is copied in by `npm run prepare:laya`
+    // only when the LayaPL source happens to be available. Tauri's build script
+    // resolves every entry of `bundle.resources` at compile time and fails with
+    // "resource path `laya` doesn't exist" when the directory is absent (as on a
+    // fresh clone or in CI, where beforeBuildCommand is not run before
+    // `cargo test`). Ensure the directory exists so the compilation succeeds:
+    // an empty resource directory embeds nothing and Laya stays optional.
+    let laya = std::path::Path::new("laya");
+    if !laya.exists() {
+        let _ = std::fs::create_dir_all(laya);
+    }
+
     tauri_build::build();
 
     // Embed the Windows application manifest (Common Controls v6) into test
