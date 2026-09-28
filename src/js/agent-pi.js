@@ -45,11 +45,11 @@ import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js"
 // jamais pendant que le texte / le raisonnement s'affiche encore.
 import { noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound } from "./sound-deferred.js";
 import { recordCurrentSession } from "./session-history.js";
-import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
+import { injectSessionSummaryToSuperAgent, isProjectAgentBusy } from "./super-agent.js";
 // Verrou par projet : une commande manuelle peut modifier le projet → elle
 // passe par la même politique d'admission que les missions (run-policy.js),
 // appliquée au bus d'agents (isRunInProgress).
-import { canSendManualCommand, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { canSendManualCommand, canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { isRunInProgress } from "./agents-bus.js";
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
 import { buildWorkStateSnapshot } from "./work-state.js";
@@ -7862,6 +7862,15 @@ function movePromptSelection(delta) {
 
 async function applyPromptSelection() {
   if (promptIndex < 0 || promptIndex >= promptTemplates.length) return;
+  // POINT B3 : /prompt est une commande manuelle qui ENVOIE réellement un
+  // prompt à un agent → elle doit passer par la politique d'admission, au lieu
+  // d'être exclue du garde en tant que « slash-command ». On garde AVANT tout
+  // effacement : en cas de refus, la saisie reste intacte dans la zone de
+  // saisie et le refus est affiché dans le chat.
+  if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+    if (promptMessagesEl) appendSystemMessage(promptMessagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+    return;
+  }
   const tmpl = promptTemplates[promptIndex];
   hidePromptPopup();
   acInputEl.value = "";

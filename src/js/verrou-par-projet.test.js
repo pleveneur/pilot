@@ -164,6 +164,30 @@ describe("POINT B2 — bouton « Envoyer à l'agent » du constructeur de prompt
   });
 });
 
+// POINT B3 — la commande /prompt (popup de templates) etait explicitement
+// EXCLUE du garde au motif qu'elle est une « slash-command ». Or elle ENVOIE
+// reellement un prompt a un agent : elle doit donc passer par la politique,
+// sans casser les commandes de l'interface qui ne lancent aucun travail (elles
+// restent hors du garde). Le refus est visible et la saisie est conservee.
+describe("POINT B3 — popup de prompt /prompt (agent-pi.js applyPromptSelection)", () => {
+  it("B3 — le garde precede l'envoi ET tout effacement de la saisie", () => {
+    const src = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("async function applyPromptSelection()");
+    const nextIdx = src.indexOf("\nfunction ", fnIdx + 1);
+    expect(fnIdx).toBeGreaterThan(-1);
+    const body = src.slice(fnIdx, nextIdx > fnIdx ? nextIdx : undefined);
+    assertGuardBeforeSend(body, "agent-pi.js applyPromptSelection");
+    // La garde est posee AVANT tout effacement de la saisie (texte conserve).
+    const clearIdx = body.indexOf('acInputEl.value = ""');
+    expect(clearIdx).toBeGreaterThan(-1);
+    expect(body.indexOf("canSendManualCommandAsync(")).toBeLessThan(clearIdx);
+    // Les commandes qui ne lancent pas de travail restent hors du garde : la
+    // condition d'exclusion du chat (`!isSlashCommand`) est intacte.
+    expect(src).toContain('invoke("send_agent_prompt", payload)');
+    expect(src).toContain("!isSlashCommand && !canSendManualCommand(window._pilotProjectPath");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
