@@ -13,18 +13,66 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 
-// Same stub as agents-bus.test.js: aucun accès Tauri réel en environnement Node.
+// POINT G : les preuves de rejeu de la file de missions importent `super-agent.js`
+// (module d'UI qui touche `window` à l'évaluation). On installe donc un `window`
+// minimal AVANT son import (vi.hoisted s'exécute avant les imports), comme dans
+// `super-agent-launch-verdict.test.js`.
 import { vi } from "vitest";
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async () => undefined),
-}));
+vi.hoisted(() => {
+  const noop = () => {};
+  const el = () => ({
+    addEventListener: noop,
+    removeEventListener: noop,
+    appendChild: noop,
+    remove: noop,
+    classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+    style: {},
+    dataset: {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    setAttribute: noop,
+    getAttribute: () => null,
+    focus: noop,
+    scrollIntoView: noop,
+    insertAdjacentHTML: noop,
+    innerHTML: "",
+    textContent: "",
+    value: "",
+  });
+  globalThis.window = globalThis;
+  globalThis.addEventListener = noop;
+  globalThis.removeEventListener = noop;
+  globalThis.dispatchEvent = noop;
+  globalThis.document = {
+    createElement: el,
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener: noop,
+    removeEventListener: noop,
+    body: el(),
+    documentElement: el(),
+  };
+  globalThis.localStorage = { getItem: () => null, setItem: noop, removeItem: noop };
+  globalThis.requestAnimationFrame = (cb) => setTimeout(() => cb(0), 0);
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.matchMedia = () => ({ matches: false, addEventListener: noop, removeEventListener: noop });
+});
 
+// Same stub as agents-bus.test.js: aucun accès Tauri réel en environnement Node.
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn(async () => true),
+  requestPermission: vi.fn(async () => "granted"),
+  sendNotification: vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
+
+import { invoke } from "@tauri-apps/api/core";
 import { beginRun, endRun, isRunInProgress, getRunState } from "./agents-bus.js";
-import {
-  canSendManualCommand,
-  MANUAL_COMMAND_NATURE,
-  MANUAL_COMMAND_BLOCKED_MESSAGE,
-} from "./run-policy.js";
+import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject } from "./super-agent.js";
 
 describe("PREUVE (a) — deux missions de LECTURE tournent en parallèle sur le même projet", () => {
   it("(a) deux lectures coexistuent (clés distinctes), sans être bloquées ni s'écraser", () => {
@@ -286,5 +334,103 @@ describe("POINT C — l'arrêt d'un agent libère la file de missions du projet"
     expect(branch).toContain("runAgentsQueueByProject[queueKey]");
     // La suite n'est jamais perdue en silence : un message est émis.
     expect(branch).toContain("mission(s) en attente annulée(s)");
+  });
+});
+
+// POINT G — une mission mise en file a TOUJOURS un déclencheur de rejeu.
+// Défaut : la file de missions n'était rejouée que par `settleRun` (fin de run du
+// BUS). Une mission mise en file derrière une commande MANUELLE (qui n'inscrit
+// aucune run dans le bus) restait donc bloquée pour toujours, alors que le
+// message promettait un démarrage automatique. Ces tests ÉCHOUENT si le rejeu
+// périodique disparaît, si l'admission n'est plus sondée, ou si un chemin de mise
+// en file cesse d'armer le déclencheur.
+describe("POINT G — rejeu garanti de la file de missions", () => {
+  it("le contrôle de rejeu attend tant que le projet est occupé, puis lance la tête de file", async () => {
+    const p = "point-g-rejeu";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    try {
+      // Occupé (ex: une commande manuelle que le bus ne voit pas) → rien ne part.
+      let free = false;
+      let r = await replayQueuedMissionForProject(p, { isAdmissionFree: async () => free });
+      expect(r).toEqual({ replayed: false, reason: "busy" });
+      expect(launched).toBe(0);
+      expect(runAgentsQueueByProject[p]).toHaveLength(1);
+      // Libéré → la mission en file démarre RÉELLEMENT.
+      free = true;
+      r = await replayQueuedMissionForProject(p, { isAdmissionFree: async () => free });
+      expect(r).toEqual({ replayed: true, reason: "launched" });
+      expect(launched).toBe(1);
+      expect(runAgentsQueueByProject[p] || []).toHaveLength(0);
+    } finally {
+      delete runAgentsQueueByProject[p];
+    }
+  });
+
+  it("une sonde d'admission en échec ne perd pas la mission (fail-closed, on réessaie)", async () => {
+    const p = "point-g-sonde-ko";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    try {
+      const r = await replayQueuedMissionForProject(p, { isAdmissionFree: async () => { throw new Error("sonde HS"); } });
+      expect(r.replayed).toBe(false);
+      expect(launched).toBe(0);
+      expect(runAgentsQueueByProject[p]).toHaveLength(1); // toujours en file
+    } finally {
+      delete runAgentsQueueByProject[p];
+    }
+  });
+
+  // Preuve déterministe (horloge simulée) du scénario de la mission : une mission
+  // mise en file derrière une COMMANDE MANUELLE (session busy, invisible du bus)
+  // FINIT par démarrer dès que l'admission se libère.
+  it("le déclencheur périodique rejoue la mission derrière une commande manuelle dès libération", async () => {
+    vi.useFakeTimers();
+    const p = "point-g-commande-manuelle";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    try {
+      // Commande manuelle en cours sur ce projet : sa session est busy → le bus
+      // ne la voit pas, mais la sonde d'activité réelle (`isRunStillActive`) oui.
+      invoke.mockResolvedValue({
+        sessions: [{ project: p, alive: true, busy: true, lastActivity: new Date().toISOString() }],
+      });
+      armQueueReplay(p);
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(launched, "occupé : la mission ne doit PAS démarrer").toBe(0);
+      expect(runAgentsQueueByProject[p]).toHaveLength(1);
+      // Commande manuelle terminée → admission libre : le rejeu démarre la file.
+      invoke.mockResolvedValue({ sessions: [] });
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(launched, "libéré : la mission en file doit démarrer").toBe(1);
+    } finally {
+      vi.useRealTimers();
+      invoke.mockReset();
+      invoke.mockResolvedValue(undefined);
+      delete runAgentsQueueByProject[p];
+    }
+  });
+
+  it("les trois chemins de mise en file arment le rejeu, et plus aucun message ne promet un faux délai", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    // 1. run_agents — filet d'attente du lancement différé (launchOrQueue).
+    const loq = src.slice(src.indexOf("const launchOrQueue = async () => {"), src.indexOf("const reportDeferredLaunch"));
+    expect(loq).toContain("runAgentsQueueByProject[target].push(");
+    expect(loq).toContain("armQueueReplay(target)");
+    // 2. run_agents — garde de démarrage (startRun).
+    const srIdx = src.indexOf("const startRun = async () => {");
+    const sr = src.slice(srIdx, src.indexOf("const launchResult = await startRun();", srIdx));
+    expect(sr).toContain("runAgentsQueueByProject[target].push(");
+    expect(sr).toContain("armQueueReplay(target)");
+    // 3. run_assistant_agents — même déclencheur (aucun watchdog d'assistant).
+    const aIdx = src.indexOf("const target = ASSISTANT_SPACE;");
+    const aSrIdx = src.indexOf("const startRun = async () => {", aIdx);
+    const aSr = src.slice(aSrIdx, src.indexOf("const launchedNow = await startRun();", aSrIdx));
+    expect(aSr).toContain("runAgentsQueueByProject[target].push(");
+    expect(aSr).toContain("armQueueReplay(target)");
+    // Plus de promesse de délai intenable (« à la fin de la tâche en cours »).
+    expect(src).not.toContain("je la mets en file d'attente et la lancerai dès la fin de la tâche en cours");
+    expect(src).not.toContain("la demande est mise en file et se lancera automatiquement");
+    expect(src).not.toContain("La demande est mise en file d'attente et se lancera automatiquement");
   });
 });

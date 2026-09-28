@@ -368,13 +368,28 @@ let superAgentStderrBuffer = "";
 // module-level et passée par inject_session_summary (Rust) → elle survit à la
 // fermeture de l'onglet 🧭 (notification + injection du résultat).
 let runAgentsInFlightByProject = {}; // project → true (run en cours pour ce projet)
-const runAgentsQueueByProject = {}; // project → [{ launch }]
+export const runAgentsQueueByProject = {}; // project → [{ launch }]
 // Filet de sécurité (watchdog) PAR PROJET : si une run ne se termine pas sous
 // quelques minutes (ex: blocage du lancement, verrou graphe), on réinitialise
 // le flag du projet et on vide sa file pour empêcher le blocage permanent des
 // runs suivantes de CE projet. Timer module-level, annulé dans `settleRun`.
 let runAgentsWatchdogByProject = {}; // project → timer id
 const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
+
+// POINT G : déclencheur de rejeu GARANTI de la file de missions.
+// Une mission peut être mise en file derrière : une run du bus, une commande
+// MANUELLE (le bus ne la voit pas), un prompt distant, ou une run d'assistant.
+// Or seule la fin d'une run du bus (`settleRun`) rejouait la file : une mission
+// mise en file derrière une commande manuelle pouvait rester bloquée POUR
+// TOUJOURS, alors que le message promettait « elle démarrera automatiquement à
+// la fin de la tâche en cours ». On sonde donc périodiquement l'admission
+// RÉELLE du projet — même sonde consciente de l'activité que le watchdog
+// (`isRunStillActive` : verrou du bus OU travail réel en cours) — et on lance la
+// tête de file dès que le projet est libre. Map DÉDIÉE (pour ne pas écraser le
+// watchdog de run du même projet, qui peut coexister) et indexée PAR PROJET :
+// un projet libre n'attend jamais un autre projet.
+let runAgentsQueueReplayByProject = {}; // project → timer id
+const RUN_AGENTS_QUEUE_REPLAY_MS = 15 * 1000; // 15 s de latence max après libération
 
 /**
  * Filet de sécurité CONSCIENT DE L'ACTIVITÉ (watchdog run_agents) : détermine
@@ -402,6 +417,57 @@ async function isRunStillActive(runProject) {
   } catch (_) {
     return true; // fail-open : ne jamais couper une run saine par erreur
   }
+}
+
+/**
+ * POINT G — contrôle de rejeu de la file de missions d'un projet (UNE passe).
+ * Lance la tête de file si — et seulement si — l'admission du projet est libre
+ * (bus sans run ET aucun agent du projet ne travaille réellement). Ne mute rien
+ * si la file est vide ou le projet occupé : l'appelant réarme alors le
+ * déclencheur. Extrait pour être testé de façon déterministe (injection de la
+ * sonde d'admission).
+ * @param {string} target - projet (clé de file)
+ * @param {{isAdmissionFree?: (target: string) => Promise<boolean>}} [deps]
+ * @returns {Promise<{replayed: boolean, reason: string}>}
+ */
+export async function replayQueuedMissionForProject(target, deps = {}) {
+  if (!target) return { replayed: false, reason: "no_target" };
+  const queue = runAgentsQueueByProject[target] || [];
+  if (queue.length === 0) return { replayed: false, reason: "empty" };
+  const isFree = deps.isAdmissionFree || (async (p) => !(await isRunStillActive(p)));
+  let free;
+  try {
+    free = await isFree(target);
+  } catch (_) {
+    free = false; // fail-closed : on réessaie, la mission en file reste en file
+  }
+  if (!free) return { replayed: false, reason: "busy" };
+  const next = queue.shift();
+  if (!next) {
+    delete runAgentsQueueByProject[target];
+    return { replayed: false, reason: "empty" };
+  }
+  runAgentsInFlightByProject[target] = true;
+  next.launch();
+  return { replayed: true, reason: "launched" };
+}
+
+/**
+ * POINT G — arme (une seule fois) le déclencheur de rejeu périodique du projet.
+ * Tant que la file n'est pas vide, le contrôle se réarme : une mission mise en
+ * file a donc TOUJOURS un déclencheur de rejeu, quelle que soit la raison du
+ * blocage. Une passe sur file vide est un no-op (rien à rejouer).
+ * @param {string} target
+ */
+export function armQueueReplay(target) {
+  if (!target || runAgentsQueueReplayByProject[target]) return;
+  runAgentsQueueReplayByProject[target] = setTimeout(async () => {
+    delete runAgentsQueueReplayByProject[target];
+    const r = await replayQueuedMissionForProject(target);
+    if (!r.replayed && (runAgentsQueueByProject[target] || []).length > 0) {
+      armQueueReplay(target); // encore occupé : on reste prêt à rejouer
+    }
+  }, RUN_AGENTS_QUEUE_REPLAY_MS);
 }
 
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
@@ -3249,7 +3315,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target && !isBusyStale(s))
           );
           if (queuedIds.length > 0) {
-            const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.`;
+            const msg = `⏳ L'agent${queuedIds.length > 1 ? "s" : ""} ${queuedIds.join(", ")} est déjà actif sur ce projet. La demande est mise en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.`;
             appendSystemMessage(messagesEl, msg);
             injectRunAgentsResultToSuperAgent(`[Info run_agents] ${msg}`, projectPath);
           }
@@ -3382,7 +3448,12 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
-            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
+            // POINT G : la mise en file n'est plus confiée au seul `settleRun`. On
+            // arme le déclencheur de rejeu du projet (sonde d'admission réelle),
+            // sinon une mission mise en file derrière une commande MANUELLE (que le
+            // bus ne voit pas) reste bloquée pour toujours.
+            armQueueReplay(target);
+            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
             return { queued: true, started: false, error: null }; // mise en file : PAS un lancement
           }
           const launched = await launchRun();
@@ -3398,7 +3469,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           const v = verdict || {};
           if (v.queued) {
             injectRunAgentsResultToSuperAgent(
-              `[Info run_agents] La tâche a été mise en file d'attente sur le projet ${target} (une run était déjà en cours) : elle démarrera automatiquement à la fin de la tâche en cours.`,
+              `[Info run_agents] La tâche a été mise en file d'attente sur le projet ${target} (une run était déjà en cours) : elle démarrera automatiquement dès que le projet sera libre (rejeu surveillé).`,
               projectPath,
             );
           } else if (!v.started) {
@@ -3477,7 +3548,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           if (blockedByFlag || blockedByBus) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
-            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente et la lancerai dès la fin de la tâche en cours.");
+            // POINT G : même garantie que dans `launchOrQueue` — déclencheur de
+            // rejeu armé sur le projet (voir `armQueueReplay`).
+            armQueueReplay(target);
+            appendSystemMessage(messagesEl, "⏳ Une run d'agents est déjà en cours sur ce projet — je la mets en file d'attente ; elle démarrera automatiquement dès que le projet sera libre.");
             // Issue #87 : accusé de lancement structuré (même contrat que les
             // autres branches `launchWithEstimate`). Renvoyer `true` produisait
             // un accusé mensonger `{ok:true, launched:false, queued:false,
@@ -3618,7 +3692,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // jamais pousser dans une file → mission perdue en silence.
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: () => { startRun(); } });
-            appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file et se lancera automatiquement.");
+            // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
+            // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
+            // demande pouvait rester en vol sans suite).
+            armQueueReplay(target);
+            appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file ; elle démarrera automatiquement dès que le projet sera libre.");
             return false; // PAS lancée maintenant : RÉELLEMENT mise en file
           }
           runAgentsInFlightByProject[target] = true;
