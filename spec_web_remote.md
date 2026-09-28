@@ -117,6 +117,22 @@ Le mot de passe est configuré dans les **Paramètres** du desktop. Aucun « tok
 Le sélecteur construit `value = "provider/id"` et le modèle courant est
 `"${data.model.provider}/${data.model.id}"` (aligné sur `src/js/agent-pi.js`).
 
+### Limite connue — le verrou par projet ne couvre pas le prompt distant
+
+Le verrou **par projet** (lecture partagée / modification exclusive) vit dans le
+**JavaScript du bureau** (`src/js/agents-bus.js`, `src/js/run-policy.js`). Or
+`POST /api/agent/prompt` envoie le prompt **entièrement côté Rust**
+(`src-tauri/src/web_server.rs`, handler axum → `do_send_agent_prompt`) : ce
+chemin ne charge ni n'exécute le bus JS, donc **aucune garde JS n'y est
+appelée**. Conséquence assumée : un prompt envoyé depuis l'accès distant peut
+encore lancer une modification pendant qu'une run tourne sur le même projet.
+
+Un correctif côté front est donc **impossible par construction** : il doit être
+écrit **en Rust** (interroger l'occupation réelle de l'agent du projet via
+l'AgentService, puis refuser ou mettre en file, avec un refus **visible** dans la
+session web — jamais un silence). Tâche tracée : `idees_evolutions.md` § 30 ;
+détail du chantier : `.pilot/rapport-verrou-par-projet.md` § 7 ter.
+
 ### Édition (hors v1 — futur)
 | Méthode | Route | Description |
 |---|---|---|

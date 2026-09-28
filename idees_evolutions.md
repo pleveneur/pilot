@@ -906,3 +906,31 @@ dépendance), il **demande d'abord** à l'utilisateur, qui doit **valider** (via
 
 **Valeur :** 🟡 haute (l'assistant devient autonome pour optimiser son suivi) ·
 **Effort :** moyen.
+
+---
+
+## 30. Mode distant web — le verrou par projet ne s'y applique pas (à traiter)
+
+> **Tâche tracée** (issue du chantier « fermer les contournements du verrou par
+> projet », points B1/B2/B3/D/E traités, seul le mode distant reste ouvert).
+> Limite documentée dans `.pilot/rapport-verrou-par-projet.md` § 7 ter.
+
+**Constat** : le verrou par projet (lecture partagée / modification exclusive) est
+décidé **côté JavaScript** (`src/js/agents-bus.js`, `src/js/run-policy.js`). Le
+mode d'accès distant envoie un prompt **côté Rust**
+(`src-tauri/src/web_server.rs:485-494`, `do_send_agent_prompt`), sans passer par
+ce bus : un prompt distant peut donc lancer une modification pendant qu'une run
+tourne sur le même projet.
+
+**Pourquoi un correctif côté front ne suffit pas** : ce chemin n'exécute aucun
+frontend (pas de bus JS chargé), donc aucune garde JS n'y est appelée. Le
+correctif doit être écrit en **Rust**, au même endroit où la décision d'admission
+existe déjà côté desktop — soit en interrogeant l'AgentService (occupation réelle
+de l'agent du projet), soit en dupliquant la politique par projet.
+
+**Piste** : exposer l'occupation/la file par projet depuis l'AgentService et
+faire refuser ou mettre en file le prompt distant, avec un refus **visible** dans
+la session web (jamais un silence).
+
+**Valeur :** 🟠 moyenne (cohérence sécurité/robustesse entre desktop et distant) ·
+**Effort :** moyen (Rust, testable via `cargo test -p` si cargo disponible).
