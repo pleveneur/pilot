@@ -4063,6 +4063,30 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         }
         stoppedDeleg.queue.length = 0;
         stoppedDeleg.busy = false;
+        // POINT C : l'arrêt doit aussi libérer la place du PROJET pour la file
+        // des MISSIONS (`runAgentsQueueByProject`, indexée par projet). Elle
+        // n'était PAS vidée ici : une mission mise en attente derrière la run
+        // arrêtée ne démarrait jamais et finissait perdue par le watchdog (5 min).
+        // Même traitement que la file de délégation : si plus aucune run ne
+        // tourne sur ce projet, on libère le créneau et on SIGNALE que les
+        // missions en attente ne démarreront pas — jamais perdues en silence.
+        // Si une autre tâche tourne encore sur le projet, la file reste posée
+        // (visible) et se videra normalement à la fin de cette tâche.
+        const queueKey = (info.project && String(info.project).trim()) || window._pilotProjectPath || ".";
+        await releaseStuckRunLock(queueKey);
+        const stillRunning = isRunInProgress(queueKey);
+        const waitingMissions = (runAgentsQueueByProject[queueKey] || []).length;
+        if (!stillRunning) {
+          runAgentsInFlightByProject[queueKey] = false;
+          const wd = runAgentsWatchdogByProject[queueKey];
+          if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[queueKey]; }
+          if (waitingMissions > 0) {
+            appendSystemMessage(messagesEl, `📋 ${waitingMissions} mission(s) en attente annulée(s) par l'arrêt de l'agent (le projet n'est plus occupé).`);
+          }
+          delete runAgentsQueueByProject[queueKey];
+        } else if (waitingMissions > 0) {
+          appendSystemMessage(messagesEl, `⏳ ${waitingMissions} mission(s) toujours en attente : une autre tâche tourne encore sur ce projet.`);
+        }
         // #28 : si l'agent arrêté est l'agent standard du projet actif
         // (`default`), fermer son onglet s'il est ouvert (évite un onglet
         // fantôme alors que l'agent n'est plus fonctionnel). Ne touche pas aux

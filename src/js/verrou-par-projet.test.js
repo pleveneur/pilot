@@ -125,3 +125,24 @@ describe("POINT B — commande manuelle soumise à la politique d'admission", ()
     expect(guardIdx).toBeLessThan(sendIdx);
   });
 });
+
+// POINT C — arrêter un agent libère aussi la place du PROJET.
+// La file des MISSIONS (`runAgentsQueueByProject`, indexée par projet) n'était
+// pas vidée à l'arrêt : une mission en attente ne démarrait jamais puis était
+// perdue par le watchdog. Ce test ÉCHOUE si la branche `stop_agent` cesse de
+// libérer le créneau / la file du projet, ou cesse de le signaler.
+describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
+  it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const stopIdx = src.indexOf('action === "stop_agent"');
+    const nextIdx = src.indexOf('action === "create_agent"', stopIdx);
+    expect(stopIdx).toBeGreaterThan(-1);
+    expect(nextIdx).toBeGreaterThan(stopIdx);
+    const branch = src.slice(stopIdx, nextIdx);
+    expect(branch).toContain("releaseStuckRunLock(queueKey)");
+    expect(branch).toContain("runAgentsInFlightByProject[queueKey]");
+    expect(branch).toContain("runAgentsQueueByProject[queueKey]");
+    // La suite n'est jamais perdue en silence : un message est émis.
+    expect(branch).toContain("mission(s) en attente annulée(s)");
+  });
+});
