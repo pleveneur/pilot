@@ -7878,18 +7878,8 @@ function movePromptSelection(delta) {
 
 async function applyPromptSelection() {
   if (promptIndex < 0 || promptIndex >= promptTemplates.length) return;
-  // POINT B3 : /prompt est une commande manuelle qui ENVOIE réellement un
-  // prompt à un agent → elle doit passer par la politique d'admission, au lieu
-  // d'être exclue du garde en tant que « slash-command ». On garde AVANT tout
-  // effacement : en cas de refus, la saisie reste intacte dans la zone de
-  // saisie et le refus est affiché dans le chat.
-  if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
-    if (promptMessagesEl) appendSystemMessage(promptMessagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
-    return;
-  }
   const tmpl = promptTemplates[promptIndex];
   hidePromptPopup();
-  acInputEl.value = "";
 
   const projectPath = window._pilotProjectPath || "";
   const projectName = projectPath ? projectPath.replace(/\\/g, "/").split("/").pop() : "";
@@ -7920,6 +7910,19 @@ async function applyPromptSelection() {
     if (promptMessagesEl) appendSystemMessage(promptMessagesEl, "⚠️ Aucun contenu à envoyer. Le template ne contient pas d'instructions.");
     return;
   }
+
+  // POINT B3 : /prompt est une commande manuelle qui ENVOIE réellement un
+  // prompt à un agent → elle doit passer par la politique d'admission, au lieu
+  // d'être exclue du garde en tant que « slash-command ». POINT G : le test
+  // « template vide » ci-dessus passe désormais AVANT, pour ne pas annoncer un
+  // refus d'admission quand il n'y a rien à envoyer. La garde reste AVANT tout
+  // effacement : en cas de refus, la saisie reste intacte et le refus est
+  // affiché dans le chat.
+  if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+    if (promptMessagesEl) appendSystemMessage(promptMessagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+    return;
+  }
+  acInputEl.value = "";
 
   // Afficher un résumé dans le chat et envoyer
   if (promptMessagesEl) {

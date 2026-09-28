@@ -234,6 +234,23 @@ describe("POINT B3 — popup de prompt /prompt (agent-pi.js applyPromptSelection
     expect(src).toContain('invoke("send_agent_prompt", payload)');
     expect(src).toContain("!isSlashCommand && !canSendManualCommand(window._pilotProjectPath");
   });
+
+  // POINT G (réserve cosmétique) : la garde était évaluée AVANT le test
+  // « template vide », donc un template vide pendant qu'un travail tourne
+  // affichait « commande bloquée » au lieu de « aucun contenu ». Le test
+  // « vide » doit précéder la garde.
+  it("B3/G — le test « template vide » precede la garde (pas de faux refus)", () => {
+    const src = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("async function applyPromptSelection()");
+    const nextIdx = src.indexOf("\nfunction ", fnIdx + 1);
+    expect(fnIdx).toBeGreaterThan(-1);
+    const body = src.slice(fnIdx, nextIdx > fnIdx ? nextIdx : undefined);
+    const emptyIdx = body.indexOf("Aucun contenu à envoyer");
+    const guardIdx = body.indexOf("canSendManualCommandAsync(");
+    expect(emptyIdx, "test « vide » absent").toBeGreaterThan(-1);
+    expect(guardIdx, "garde absente").toBeGreaterThan(-1);
+    expect(emptyIdx, "le test « vide » doit précéder la garde").toBeLessThan(guardIdx);
+  });
 });
 
 // POINT D — sens inverse : une mission d'ÉCRITURE (`run_agents`) doit voir une
