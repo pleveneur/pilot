@@ -11,6 +11,7 @@
 // `startParallelRun` après sa garde d'admission `isRunInProgress(project,
 // { nature })` (elle-même utilisée par la file d'attente de super-agent.js).
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 
 // Same stub as agents-bus.test.js: aucun accès Tauri réel en environnement Node.
 import { vi } from "vitest";
@@ -19,6 +20,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { beginRun, endRun, isRunInProgress, getRunState } from "./agents-bus.js";
+import {
+  canSendManualCommand,
+  MANUAL_COMMAND_NATURE,
+  MANUAL_COMMAND_BLOCKED_MESSAGE,
+} from "./run-policy.js";
 
 describe("PREUVE (a) — deux missions de LECTURE tournent en parallèle sur le même projet", () => {
   it("(a) deux lectures coexistuent (clés distinctes), sans être bloquées ni s'écraser", () => {
@@ -78,5 +84,44 @@ describe("PREUVE (b) — modification exclusive par projet, autres projets indé
     endRun(proj, writeRun.generation);
     expect(isRunInProgress(proj, { nature: "write" })).toBe(false);
     expect(isRunInProgress(proj, { nature: "read" })).toBe(false);
+  });
+});
+
+// POINT B — le verrou n'est pas contournable par une commande manuelle.
+// Une commande envoyée à la main (prompt tapé dans l'interface) peut modifier
+// le projet : elle compte comme MODIFICATION exclusive et passe par la même
+// politique d'admission que les missions. Ces tests ÉCHOUENT si l'on revient au
+// comportement d'avant (garde absente du chemin manuel, ou nature « lecture »).
+describe("POINT B — commande manuelle soumise à la politique d'admission", () => {
+  it("la nature d'une commande manuelle est une MODIFICATION exclusive", () => {
+    expect(MANUAL_COMMAND_NATURE).toBe("write");
+  });
+
+  it("refusée tant qu'une mission tourne sur le MÊME projet — jamais bloquée par un autre projet", () => {
+    const proj = "point-b";
+    const autre = "point-b-autre";
+    // Rien ne tourne → autorisée.
+    expect(canSendManualCommand(proj, isRunInProgress)).toBe(true);
+    // Même une mission de LECTURE bloque la commande manuelle (exclusive).
+    const readRun = beginRun(proj, { readOnly: true });
+    expect(canSendManualCommand(proj, isRunInProgress)).toBe(false);
+    expect(canSendManualCommand(autre, isRunInProgress)).toBe(true);
+    endRun(proj, readRun.generation);
+    // Une mission de MODIFICATION bloque aussi.
+    const writeRun = beginRun(proj);
+    expect(canSendManualCommand(proj, isRunInProgress)).toBe(false);
+    endRun(proj, writeRun.generation);
+    expect(canSendManualCommand(proj, isRunInProgress)).toBe(true);
+  });
+
+  it("le prompt manuel (agent-pi.js) applique la garde AVANT d'envoyer le prompt", () => {
+    const src = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8");
+    const guardIdx = src.indexOf("!canSendManualCommand(window._pilotProjectPath");
+    const sendIdx = src.indexOf('invoke("send_agent_prompt", payload)');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(src).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+    expect(sendIdx).toBeGreaterThan(-1);
+    // La garde est branchée dans le chemin d'envoi, avant l'invoke.
+    expect(guardIdx).toBeLessThan(sendIdx);
   });
 });

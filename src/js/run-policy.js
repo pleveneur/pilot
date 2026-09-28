@@ -32,3 +32,32 @@ export function canStartMission(nature, runningNatures) {
   // Une lecture cohabite uniquement avec d'autres lectures.
   return running.every((n) => n === "read");
 }
+
+// ── Commande MANUELLE (prompt tapé dans l'interface) ───────────────────────
+//
+// Une commande manuelle envoyée à un agent peut MODIFIER le projet (les agents
+// de codage disposent des outils d'écriture) : elle compte donc comme une
+// MODIFICATION, exclusive sur le projet, quel que soit l'agent visé. Elle
+// passe par la MÊME politique d'admission que les missions (`canStartMission`,
+// via `isRunInProgress` côté bus) au lieu de l'ignorer.
+
+/** Nature d'une commande manuelle : modification exclusive du projet. */
+export const MANUAL_COMMAND_NATURE = "write";
+
+/** Message utilisateur (non technique) quand la commande manuelle est refusée. */
+export const MANUAL_COMMAND_BLOCKED_MESSAGE =
+  "⏳ Une tâche d'agents est déjà en cours sur ce projet. Attendez la fin de cette " +
+  "tâche (ou arrêtez-la) avant d'envoyer votre message : deux travaux ne peuvent " +
+  "pas modifier le projet en même temps.";
+
+/**
+ * Une commande manuelle peut-elle être envoyée maintenant sur ce projet ?
+ * @param {string} project - projet ciblé (le verrou est PAR PROJET)
+ * @param {function(string, {nature:string}):boolean} isRunInProgress - sonde du
+ *   verrou d'admission du bus (agents-bus.js), injectée pour rester pur.
+ * @returns {boolean} false si une run tourne déjà sur le même projet
+ */
+export function canSendManualCommand(project, isRunInProgress) {
+  if (typeof isRunInProgress !== "function") return true;
+  return !isRunInProgress(project, { nature: MANUAL_COMMAND_NATURE });
+}

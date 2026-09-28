@@ -46,6 +46,11 @@ import { notifyAgentDoneFromRemote, notifyAgentDone } from "./desktop-notify.js"
 import { noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound } from "./sound-deferred.js";
 import { recordCurrentSession } from "./session-history.js";
 import { injectSessionSummaryToSuperAgent } from "./super-agent.js";
+// Verrou par projet : une commande manuelle peut modifier le projet → elle
+// passe par la même politique d'admission que les missions (run-policy.js),
+// appliquée au bus d'agents (isRunInProgress).
+import { canSendManualCommand, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { isRunInProgress } from "./agents-bus.js";
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
 import { buildWorkStateSnapshot } from "./work-state.js";
 import {
@@ -1033,10 +1038,20 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     }
     const text = inputEl.value.trim();
     if (!text || state.isStreaming) return;
+    const isSlashCommand = text.startsWith("/");
+    // Verrou par projet (lecture partagée / modification exclusive) : une
+    // commande MANUELLE peut modifier le projet → elle est EXCLUSIVE. Si une
+    // mission d'agents tourne déjà sur CE projet, on refuse l'envoi (message
+    // clair, non technique) au lieu de la laisser tourner en parallèle en
+    // silence. Le texte saisi RESTE dans la zone de saisie pour être renvoyé
+    // une fois la tâche terminée.
+    if (!isSlashCommand && !canSendManualCommand(window._pilotProjectPath || ".", isRunInProgress)) {
+      appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      return;
+    }
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     autoResizeTextarea();
-    const isSlashCommand = text.startsWith("/");
     hideAutocomplete();
     // Réinitialiser le flag d'erreur de connexion (nouvel envoi utilisateur)
     state.orchestrationConnErrorSeen = false;
