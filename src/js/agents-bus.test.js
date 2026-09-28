@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -583,5 +583,46 @@ describe("handleAgentEvent — restitution fiable (fin de run → assistant)", (
     // L'erreur mémorisée est prononcée à la FIN du tour (plus d'échec immédiat).
     expect(ctx.activeAgents.has("coder")).toBe(false);
     expect(ctx.parallelGroup.results["coder"].status).toBe("error");
+  });
+});
+
+// ── Livraison croisée des rapports (missions parallèles) ────────────────────
+// Défaut corrigé : `_runAgentsForAssistant` écrasait l'état GLOBAL
+// `busState.callbacks` → la seconde mission écrasait la première et un rapport
+// de fin pouvait être livré à la mauvaise mission. La livraison est désormais
+// indexée par CLÉ DE RUN (sink par mission).
+describe("livraison du rapport par mission (sink par clé de run)", () => {
+  it("chaque mission reçoit SON rapport (aucune livraison croisée)", () => {
+    const ctxA = beginRun("projetMissionA");
+    const ctxB = beginRun("projetMissionB");
+    const got = {};
+    attachMissionSink(ctxA.runKey, { onDone: (t) => (got.A = t), onError: () => (got.A = "erreur") });
+    attachMissionSink(ctxB.runKey, { onDone: (t) => (got.B = t), onError: () => (got.B = "erreur") });
+
+    expect(settleMission(ctxA.runKey, "done", { text: "rapport A" })).toBe(true);
+    expect(got.A).toBe("rapport A");
+    expect(got.B).toBeUndefined(); // le rapport de A n'est PAS livré à B
+
+    expect(settleMission(ctxB.runKey, "done", { text: "rapport B" })).toBe(true);
+    expect(got.B).toBe("rapport B");
+    expect(got.A).toBe("rapport A"); // inchangé
+
+    endRun("projetMissionA", ctxA.generation);
+    endRun("projetMissionB", ctxB.generation);
+  });
+
+  it("un sink n'est résolu qu'une fois (pas de double rapport)", () => {
+    const ctx = beginRun("projetMissionOnce");
+    let count = 0;
+    attachMissionSink(ctx.runKey, { onDone: () => count++, onError: () => count++ });
+    expect(settleMission(ctx.runKey, "done", { text: "x" })).toBe(true);
+    expect(settleMission(ctx.runKey, "error", { message: "y" })).toBe(false);
+    expect(settleMission(ctx.runKey, "stop", {})).toBe(false);
+    expect(count).toBe(1);
+    endRun("projetMissionOnce", ctx.generation);
+  });
+
+  it("settleMission sans sink (run hors assistant) est un no-op", () => {
+    expect(settleMission("projetSansSink", "done", { text: "x" })).toBe(false);
   });
 });

@@ -100,6 +100,10 @@ let runGenerationSeq = 0;
 function newRunCtx(project) {
   return {
     project,
+    // Clé de la run dans `busState.runs` (et des sinks de mission). Distincte du
+    // projet pour les missions de LECTURE, qui peuvent tourner en parallèle sur
+    // un même projet (verrou par projet à lecteurs partagés).
+    runKey: project,
     runState: "idle", // "idle" | "running" | "stopping"
     // Issue #87 : instant de (re)création du contexte de run. `beginRun`
     // recopie tous les champs du contexte neuf → l'instant est réarmé à chaque
@@ -183,6 +187,11 @@ let busState = {
   agents: new Map(),
   config: null,
   callbacks: {},
+  // Livraison des RAPPORTS par mission : un sink par CLÉ DE RUN. Avant, chaque
+  // mission écrasait `busState.callbacks` (état global) → la seconde mission
+  // écrasait la première et un rapport de fin pouvait être livré à la mauvaise
+  // mission, ou perdu. Avec un sink par run, la livraison croisée est impossible.
+  missionSinks: {},
   // Config dérivée, partagée entre toutes les runs (lecture seule pendant l'exécution).
   maxDepth: DEFAULT_MAX_DEPTH,
   timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -380,6 +389,12 @@ export async function releaseStuckRunLock(project) {
   } else {
     console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
   }
+  // Livraison fiable : une run libérée par le watchdog (bloquée) doit aussi
+  // résoudre SON sink, sinon la mission attendrait un rapport qui n'arrivera
+  // jamais.
+  settleMission(ctx.runKey, "error", {
+    message: "Run libérée par le watchdog : plus aucune activité réelle détectée sur ce projet.",
+  });
   endRun(key, ctx.generation);
 }
 
@@ -453,6 +468,53 @@ async function projectHasWorkingSession(project) {
 function emit(event, data) {
   const cb = busState.callbacks[event];
   if (cb) cb(data);
+}
+
+// ── Livraison du rapport PAR MISSION ───────────────────────────────────────
+// Un sink est enregistré sous la clé de run de SA mission ; la fin de la run
+// résout ce sink. Deux missions parallèles ne partagent donc plus aucune
+// variable de rappel : chacune reçoit son propre rapport. Exporté pour les
+// tests vitest (livraison des rapports).
+/**
+ * @param {string} key - clé de run (ctx.runKey)
+ * @param {{onDone:function(string):void, onError:function(Error):void}} handlers
+ */
+export function attachMissionSink(key, handlers) {
+  if (!key || !handlers) return;
+  busState.missionSinks[key] = {
+    onDone: handlers.onDone,
+    onError: handlers.onError,
+    settled: false,
+  };
+}
+
+/**
+ * Résout (une seule fois) le sink de la mission `key`. No-op s'il n'y a pas de
+ * sink (run lancée hors assistant) ou s'il a déjà été résolu.
+ * @param {string} key - clé de run (ctx.runKey)
+ * @param {"done"|"error"|"stop"} kind
+ * @param {{text?:string, message?:string}} [payload]
+ * @returns {boolean} true si le sink vient d'être résolu
+ */
+export function settleMission(key, kind, payload) {
+  const sink = key ? busState.missionSinks[key] : null;
+  if (!sink || sink.settled) return false;
+  sink.settled = true;
+  delete busState.missionSinks[key];
+  try {
+    if (kind === "done") {
+      sink.onDone((payload && payload.text) || "");
+    } else if (typeof sink.onError === "function") {
+      const msg =
+        kind === "stop"
+          ? "Run agents arrêtée."
+          : (payload && payload.message) || "Erreur de la run agents.";
+      sink.onError(new Error(msg));
+    }
+  } catch (_) {
+    // fail-open : un consommateur défaillant ne doit pas casser le bus.
+  }
+  return true;
 }
 
 /**
@@ -603,7 +665,11 @@ function resetTimeout(ctx) {
     // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
     // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
     const agentId = ctx.currentAgentId;
-    emit("error", { message: `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).` });
+    const msg = `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).`;
+    emit("error", { message: msg });
+    // Livraison du rapport : la mission qui a lancé la run doit recevoir cette
+    // erreur, même si la relance ensuite par stopAgentsRun.
+    settleMission(ctx.runKey, "error", { message: msg });
     // P7 : notification desktop à l'arrêt auto (réutilise desktop-notify.js).
     notifyAgentDone({
       title: "Pilot — Agent en timeout",
@@ -1446,6 +1512,7 @@ async function failAgentTurn(agentId, reason, ctx) {
     await runAgentTurn(busState.agents.get(caller.agentId), result);
   } else {
     emit("error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
+    settleMission(ctx.runKey, "error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
     endRun(ctx.project, ctx.generation);
   }
 }
@@ -1500,7 +1567,7 @@ export async function startParallelRun(assignments, projectContext = "", options
   // rapporter un lancement réel au lieu d'un succès optimiste.
   if (options && typeof options.onStart === "function") {
     try {
-      options.onStart(runProject);
+      options.onStart(runProject, ctx);
     } catch (_) {
       // fail-open : un hook défaillant ne doit pas casser la run.
     }
@@ -1512,6 +1579,9 @@ export async function startParallelRun(assignments, projectContext = "", options
       const aggregated = aggregateParallelResults(results);
       emit("parallelDone", { results });
       emit("done", { agentId: "parallel", text: aggregated });
+      // Livraison du rapport à LA mission qui a lancé cette run (sink par run).
+      // Appelé avant endRun (le contexte disparaît avec lui).
+      settleMission(ctx.runKey, "done", { text: aggregated });
       // Bug #9 + T4 : libérer le verrou de run de CE PROJET à la fin normale (ou
       // erreur agrégée) de la run parallèle, sans toucher aux autres projets.
       // Protection par génération : un onComplete TARDIF (run abandonnée) ne
@@ -1520,6 +1590,7 @@ export async function startParallelRun(assignments, projectContext = "", options
     }, options, runProject, ctx);
   } catch (e) {
     // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
+    settleMission(ctx.runKey, "error", { message: e && e.message ? e.message : String(e) });
     endRun(runProject, ctx.generation);
     throw e;
   }
@@ -1530,23 +1601,35 @@ export async function startParallelRun(assignments, projectContext = "", options
 // `options.purge` : si vrai, purge la conversation de chaque agent avant la
 // run (contexte vierge, comme le mode manuel) — utilisé par `run_agents`.
 function _runAgentsForAssistant(assignments, onDone, onError, options) {
-  const prevCallbacks = busState.callbacks;
-  // Bug #9 : garde anti double-résolution — le callback ne doit être appelé
-  // qu'une seule fois (done/error/stop/échec de startParallelRun).
+  // Livraison du rapport PAR MISSION : le sink est enregistré sous la clé de run
+  // réelle (fournie par onStart), jamais dans l'état global `busState.callbacks`
+  // — c'était la cause de la livraison croisée entre missions parallèles.
+  const callerOnStart = options && typeof options.onStart === "function" ? options.onStart : null;
   let settled = false;
-  const finish = (fn, value) => {
+  const done = (text) => {
     if (settled) return;
     settled = true;
-    busState.callbacks = prevCallbacks;
-    fn(value);
+    onDone(text);
   };
-  busState.callbacks = {
-    ...prevCallbacks,
-    done: ({ text }) => finish(onDone, text || ""),
-    error: ({ message }) => finish(onError, new Error(message || "Erreur de la run agents.")),
-    stop: () => finish(onError, new Error("Run agents arrêtée.")),
+  const failed = (e) => {
+    if (settled) return;
+    settled = true;
+    onError(e instanceof Error ? e : new Error(String(e)));
   };
-  startParallelRun(assignments, "", options).catch((e) => finish(onError, e));
+  const opts = {
+    ...options,
+    onStart: (project, ctx) => {
+      attachMissionSink((ctx && ctx.runKey) || runKey(project), { onDone: done, onError: failed });
+      if (callerOnStart) {
+        try {
+          callerOnStart(project, ctx);
+        } catch (_) {
+          // fail-open : un hook défaillant ne doit pas casser la run.
+        }
+      }
+    },
+  };
+  startParallelRun(assignments, "", opts).catch((e) => failed(e));
 }
 
 /**
@@ -1622,6 +1705,9 @@ export async function stopAgentsRun(options = {}) {
   for (const key of runningKeys) {
     const ctx = busState.runs[key];
     ctx.runState = "stopping";
+    // Livraison du rapport : chaque mission arrêtée reçoit SON arrêt (et non
+    // celui d'une autre mission, comme avec l'ancien état global écrasé).
+    settleMission(ctx.runKey, "stop", {});
     // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
     for (const agentId of ctx.activeAgents) {
       invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
