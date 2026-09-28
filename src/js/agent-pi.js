@@ -1049,6 +1049,14 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
       return;
     }
+    // POINT D (sens inverse) : deux commandes MANUELLES concurrentes (même projet,
+    // deux onglets d'agent) n'inscrivent aucune run dans le bus → la sonde du bus
+    // ne les voit pas. On sonde donc aussi l'activité réelle de l'agent du projet
+    // (même sonde que la délégation). Refus visible, texte conservé.
+    if (!isSlashCommand && !(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+      appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      return;
+    }
     if (voiceActive) stopVoiceInput();
     inputEl.value = "";
     autoResizeTextarea();

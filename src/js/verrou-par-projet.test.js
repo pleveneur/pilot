@@ -188,6 +188,36 @@ describe("POINT B3 — popup de prompt /prompt (agent-pi.js applyPromptSelection
   });
 });
 
+// POINT D — sens inverse : une mission d'ÉCRITURE (`run_agents`) doit voir une
+// commande manuelle en cours (le bus ne la voit pas) et être MISE EN FILE, au
+// lieu de démarrer en parallèle. Même garde pour deux commandes manuelles
+// concurrentes sur le même projet (deux onglets d'agent). Ces tests ÉCHOUENT si
+// l'on revient à la seule sonde du bus.
+describe("POINT D — le sens inverse : commande manuelle vs mission d'écriture", () => {
+  it("run_agents sonde l'activité du projet en écriture et met en file", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("const launchOrQueue = async () => {");
+    const endIdx = src.indexOf("const reportDeferredLaunch", fnIdx);
+    expect(fnIdx).toBeGreaterThan(-1);
+    const body = src.slice(fnIdx, endIdx);
+    expect(body).toContain("isProjectAgentBusy(target)");
+    expect(body).toContain('missionNature === "write"');
+    // Mise en file réelle (même file que les autres missions), pas un refus sec.
+    expect(body).toContain("runAgentsQueueByProject[target].push(");
+  });
+
+  it("deux commandes manuelles concurrentes : le chat sonde aussi l'activité", () => {
+    const src = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("const sendPrompt = async () => {");
+    const endIdx = src.indexOf("if (voiceActive) stopVoiceInput();", fnIdx);
+    expect(fnIdx).toBeGreaterThan(-1);
+    const body = src.slice(fnIdx, endIdx);
+    expect(body).toContain("canSendManualCommandAsync(window._pilotProjectPath");
+    expect(body).toContain("isProjectAgentBusy");
+    expect(body).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");

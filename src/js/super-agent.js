@@ -3367,7 +3367,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // réellement lancée.
         const launchOrQueue = async () => {
           await releaseStuckRunLock(target);
-          if (isRunInProgress(target, { nature: missionNature })) {
+          // POINT D : le bus ne voit PAS une commande MANUELLE en cours (elle
+          // n'inscrit aucune run). On sonde en plus l'activité réelle de l'agent
+          // du projet — même sonde que la délégation (isProjectAgentBusy) — pour
+          // une mission d'ÉCRITURE : on met alors en file au lieu de modifier le
+          // projet pendant qu'un agent y travaille. Une LECTURE reste légitime.
+          const busyManual = missionNature === "write" && await isProjectAgentBusy(target);
+          if (isRunInProgress(target, { nature: missionNature }) || busyManual) {
             // Verrou occupé par une AUTRE run : renoncer au flag in-flight de
             // CETTE demande (il repassera à true au vrai lancement depuis la
             // file) et désarmer son watchdog.
