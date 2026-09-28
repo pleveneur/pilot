@@ -434,3 +434,29 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
     expect(src).not.toContain("La demande est mise en file d'attente et se lancera automatiquement");
   });
 });
+
+// POINT G (suite) — le bouton « Refaire » du dialogue de boucle renvoie un
+// prompt à l'agent : il doit passer par la politique d'admission, AVANT la
+// nouvelle session (sinon un refus détruirait la conversation sans rien
+// relancer). Ce test ÉCHOUE si la garde disparaît ou passe après la nouvelle
+// session / l'envoi.
+describe("POINT G — le bouton « Refaire » (dialogue de boucle) est gardé", () => {
+  it("la garde précède l'envoi ET la nouvelle session, refus visible", () => {
+    const src = readFileSync(new URL("./agent-pi.js", import.meta.url), "utf8");
+    const fnIdx = src.indexOf("function renderLoopAbandonChoices(");
+    const nextIdx = src.indexOf("\n/**", fnIdx);
+    expect(fnIdx).toBeGreaterThan(-1);
+    const body = src.slice(fnIdx, nextIdx > fnIdx ? nextIdx : undefined);
+    const guardIdx = body.indexOf("canSendManualCommandAsync(");
+    const sendIdx = body.indexOf('invoke("send_agent_prompt", { message: prompt })');
+    const newSessionIdx = body.indexOf('invoke("new_agent_session")');
+    expect(guardIdx, "garde absente").toBeGreaterThan(-1);
+    expect(body).toContain("MANUAL_COMMAND_BLOCKED_MESSAGE");
+    expect(sendIdx, "envoi absent").toBeGreaterThan(-1);
+    expect(newSessionIdx, "nouvelle session absente").toBeGreaterThan(-1);
+    expect(guardIdx, "la garde doit précéder l'envoi").toBeLessThan(sendIdx);
+    expect(guardIdx, "la garde doit précéder la nouvelle session").toBeLessThan(newSessionIdx);
+    // Le test « aucun prompt » est AVANT la garde (message exact, pas un faux refus).
+    expect(body.indexOf("Aucun prompt à relancer")).toBeLessThan(guardIdx);
+  });
+});

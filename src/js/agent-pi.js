@@ -5853,7 +5853,7 @@ function renderLoopAbandonChoices(messagesEl, state, kind) {
   const title = isAction
     ? "⚠️ L'agent a répété les mêmes actions plusieurs fois malgré les corrections. Que faire ?"
     : "⚠️ L'agent a tourné en boucle plusieurs fois. Que faire ?";
-  renderLocalChoice(messagesEl, state, title, ["Continuer", "Refaire", "Arrêter"], (choice) => {
+  renderLocalChoice(messagesEl, state, title, ["Continuer", "Refaire", "Arrêter"], async (choice) => {
     if (choice === "Continuer") {
       if (isAction) {
         state.actionLoopCorrectionCount++;
@@ -5878,17 +5878,25 @@ function renderLoopAbandonChoices(messagesEl, state, kind) {
     } else if (choice === "Refaire") {
       // Repartir d'un point propre : nouvelle session + relance du dernier prompt.
       resetLoopState(state);
-      invoke("new_agent_session").catch((e) => console.error("Erreur new_agent_session (Refaire):", e));
       const prompt = state.lastUserPrompt || "";
-      if (prompt) {
-        appendSystemMessage(messagesEl, "🔄 Nouvelle tentative depuis un contexte propre…");
-        invoke("send_agent_prompt", { message: prompt }).catch((e) => {
-          console.error("Erreur relance après Refaire:", e);
-          appendErrorMessage(messagesEl, `❌ Erreur lors de la relance : ${e}`);
-        });
-      } else {
+      if (!prompt) {
         appendSystemMessage(messagesEl, "ℹ️ Aucun prompt à relancer. Veuillez reformuler votre demande.");
+        return;
       }
+      // POINT G — garde d'admission : « Refaire » renvoie RÉELLEMENT un prompt à
+      // l'agent (nouvelle session puis envoi), donc même politique que les autres
+      // commandes manuelles. Évaluée AVANT `new_agent_session` : un refus ne doit
+      // pas détruire la conversation sans rien relancer. Refus visible.
+      if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+        return;
+      }
+      invoke("new_agent_session").catch((e) => console.error("Erreur new_agent_session (Refaire):", e));
+      appendSystemMessage(messagesEl, "🔄 Nouvelle tentative depuis un contexte propre…");
+      invoke("send_agent_prompt", { message: prompt }).catch((e) => {
+        console.error("Erreur relance après Refaire:", e);
+        appendErrorMessage(messagesEl, `❌ Erreur lors de la relance : ${e}`);
+      });
     } else {
       // Arrêter : abandon définitif (comportement actuel).
       if (isAction) {
