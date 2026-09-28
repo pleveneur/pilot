@@ -64,7 +64,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
 
-import { resolveDelegationTargetDecision } from "./super-agent.js";
+import { resolveDelegationTargetDecision, delegationState } from "./super-agent.js";
 
 const coder = { id: "codeur", name: "Codeur du projet" };
 const fallback = { id: "default", name: "Agent standard" };
@@ -128,5 +128,36 @@ describe("resolveDelegationTargetDecision — cause C2 (détour silencieux)", ()
     });
     expect(r.ok).toBe(true);
     expect(r.id).toBe("default");
+  });
+});
+
+// Verrou de délégation PAR PROJET (delegate_to_coder). Avant le correctif, le
+// créneau (`busy`), la file (`queue`) et la délégation en attente (`pending`)
+// étaient des singletons globaux : une délégation vers B était mise en file
+// dernière une délégation en cours sur A, et le compte rendu de fin de A était
+// étiqueté avec la demande de B.
+describe("delegationState — verrou de délégation indexé par projet", () => {
+  it("créneau et file sont propres à chaque projet (aucun partage)", () => {
+    const a = delegationState("/projets/A");
+    const b = delegationState("/projets/B");
+    expect(a).not.toBe(b);
+    a.busy = true;
+    a.queue.push({ projectPath: "/projets/A" });
+    expect(b.busy).toBe(false);
+    expect(b.queue).toEqual([]);
+    // Stable pour une même clé (pas de recréation à chaque appel).
+    expect(delegationState("/projets/A")).toBe(a);
+  });
+
+  it("délégations en attente de compte rendu distinctes par projet", () => {
+    const pa = { request: "demande A", projectPath: "/projets/A" };
+    const pb = { request: "demande B", projectPath: "/projets/B" };
+    delegationState("/projets/A").pending = pa;
+    delegationState("/projets/B").pending = pb;
+    expect(delegationState("/projets/A").pending).toBe(pa);
+    expect(delegationState("/projets/B").pending).toBe(pb);
+    // Vider A ne touche pas B (le marqueur de B n'est pas perdu).
+    delegationState("/projets/A").pending = null;
+    expect(delegationState("/projets/B").pending).toBe(pb);
   });
 });

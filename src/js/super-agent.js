@@ -300,23 +300,34 @@ function scrollSuperToBottom(messagesEl) {
 let configCache = { name: "Assistant", clients: [], project_client: {}, prompt: "", show_thinking: true, show_tools: false, super_agent_quality_gate: true, super_agent_auto_check_startup: false };
 
 // Issue #47 : délégation en attente de feedback. Quand l'assistant délègue une
-// tâche à l'agent d'un projet (delegate_to_coder), on mémorise la demande ici.
+// tâche à l'agent d'un projet (delegate_to_coder), on mémorise la demande.
 // À l'agent_end du chat standard, le résumé injecté au super-agent inclut le
 // contexte de délégation (demande + résultat) pour que l'assistant mette à jour
 // son suivi et décide des prochaines étapes. Puis on vide le tracker.
-let pendingDelegation = null;
-
+//
 // Issue #66 : file d'attente des délégations. Quand l'assistant délègue une
 // nouvelle demande (delegate_to_coder) à un agent qui n'a pas fini sa tâche
 // précédente, la demande était PERDUE (pi ne traite pas un 2ᵉ prompt pendant
 // qu'il travaille — il l'ignore silencieusement). On met maintenant la demande
 // en file et on la transmet à la fin de la tâche en cours (agent_end).
-// `delegationBusy` suit si l'agent travaille sur une délégation ; la file
-// `delegationQueue` conserve les demandes en attente. Vidée sur agent_end
-// (visible via injectSessionSummaryToSuperAgent, invisible via
-// finalizeInvisibleAgent — les deux appellent flushDelegationQueue).
-let delegationBusy = false;
-let delegationQueue = []; // { request, projectPath, agentId, messagesEl }
+//
+// VERROU PAR PROJET : ces trois états (`pending`, `busy`, `queue`) sont indexés
+// par projet, comme le verrou de run des missions (`agents-bus.js`). Une
+// délégation vers le projet B ne doit pas être mise en file derrière une
+// délégation en cours sur le projet A, et la fin d'une tâche sur A ne doit pas
+// être étiquetée avec la demande du projet B. Vidée sur agent_end (visible via
+// injectSessionSummaryToSuperAgent, invisible via finalizeInvisibleAgent — les
+// deux appellent flushDelegationQueue avec le projet concerné).
+const delegationStates = new Map(); // clé projet → { busy, queue, pending }
+export function delegationState(projectPath) {
+  const key = projectPath || "";
+  let st = delegationStates.get(key);
+  if (!st) {
+    st = { busy: false, queue: [], pending: null };
+    delegationStates.set(key, st);
+  }
+  return st;
+}
 
 // Anti-« compte rendu marqué transmis avant lecture » : les comptes rendus de
 // run / délégation passent par une PORTE (module pur `super-agent-reports.js`).
@@ -2180,9 +2191,10 @@ export async function createSuperAgent(container) {
       // agents délégués run_agents sont gérés par agents-bus.js.
       if (!agentId || !reason.includes("Agent standard")) return;
       console.warn("[super-agent] arrêt automatique de l'agent standard", agentId, reason);
-      // Libère delegationBusy et transmet la prochaine demande en file (si
-      // présente) à un agent redémarré. Ne casse pas l'ordre de la file.
-      flushDelegationQueue();
+      // Libère le créneau de délégation DU PROJET (`p.project` est émis côté
+      // Rust) et transmet la prochaine demande en file (si présente) à un agent
+      // redémarré. Ne casse pas l'ordre de la file.
+      flushDelegationQueue(p.project);
       appendSystemMessage(
         superMessagesEl,
         `⏱️ L'agent du projet a été arrêté automatiquement (bloqué sans progression). Les demandes en file seront transmises à un agent redémarré.`
@@ -3210,17 +3222,19 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // la demande en file derrière un fantôme. Une session busy-stale n'est
           // plus exclusive (tâche 1) : on ne la compte PAS comme active.
           const stale = sessions.some((s) => s.mode === "agent_process" && s.project === target && isBusyStale(s));
-          if (stale && (delegationBusy || delegationQueue.length > 0)) {
+          const staleProject = targetProject || window._pilotProjectPath || null;
+          const staleDeleg = delegationState(staleProject);
+          if (stale && (staleDeleg.busy || staleDeleg.queue.length > 0)) {
             // C'est là qu'a échoué 205e417 (côté super-agent seulement) : le
             // pré-check de run_agents ne libérait pas le flux de DÉLÉGATION. Un
-            // agent standard busy-stale retient delegationBusy=true sans jamais
-            // émettre agent_end → toutes les délégations suivantes s'empilent dans
-            // delegationQueue pour toujours. On libère le flag et on rejoue la
+            // agent standard busy-stale retient busy=true sans jamais émettre
+            // agent_end → toutes les délégations suivantes s'empilent dans la
+            // file pour toujours. On libère le flag DU PROJET et on rejoue la
             // demande suivante (flushDelegationQueue) pour ne pas laisser les
             // demandes coincées derrière un fantôme.
-            appendSystemMessage(messagesEl, `🧹 ${delegationQueue.length} demande(s) en file de délégation libérée(s) : l'agent marqué actif est figé (busy-stale, sans progression).`);
-            delegationBusy = false;
-            flushDelegationQueue();
+            appendSystemMessage(messagesEl, `🧹 ${staleDeleg.queue.length} demande(s) en file de délégation libérée(s) : l'agent marqué actif est figé (busy-stale, sans progression).`);
+            staleDeleg.busy = false;
+            flushDelegationQueue(staleProject);
           }
           const queuedIds = agentIds.filter((aid) =>
             sessions.some((s) => s.agent === aid && s.busy && s.mode === "agent_process" && s.project === target && !isBusyStale(s))
@@ -3964,20 +3978,21 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       // Issue #66 : si l'agent travaille déjà (sur une délégation précédente ou
       // un prompt manuel), on NE perd PAS la demande — on la met en file
       // (traitée à la fin de la tâche en cours via flushDelegationQueue).
-      // `delegationBusy` couvre les délégations consécutives ; `isProjectBusy`
+      // `ds.busy` couvre les délégations consécutives DU PROJET ; `isProjectBusy`
       // couvre le cas où l'agent est occupé par un prompt manuel (onglet visible).
-      const busy = delegationBusy || await isProjectAgentBusy(projectPath);
+      const ds = delegationState(projectPath);
+      const busy = ds.busy || await isProjectAgentBusy(projectPath);
       if (busy) {
-        delegationQueue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
+        ds.queue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
         appendSystemMessage(messagesEl, "📋 L'agent travaille déjà sur une tâche. Demande mise en file (elle sera transmise à la fin de la tâche en cours).");
         await respondSuperAgentAction(id, true);
         return;
       }
 
-      delegationBusy = true;
+      ds.busy = true;
       const ok = await transmitDelegationToAgent({ request, projectPath, agentId, messagesEl, tabs, invisible, forceInvisible, agentTabOpen });
       if (!ok) {
-        delegationBusy = false;
+        ds.busy = false;
         await respondSuperAgentAction(id, false);
         return;
       }
@@ -4028,11 +4043,12 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         // Issue #66 : l'arrêt annule les délégations en file d'attente — on ne
         // veut pas qu'elles soient (re)transmises automatiquement après un arrêt
         // explicite (l'utilisateur/assistant a décidé d'interrompre le travail).
-        if (delegationQueue.length > 0) {
-          appendSystemMessage(messagesEl, `📋 ${delegationQueue.length} demande(s) en file d'attente annulée(s) par l'arrêt de l'agent.`);
+        const stoppedDeleg = delegationState(projectPath);
+        if (stoppedDeleg.queue.length > 0) {
+          appendSystemMessage(messagesEl, `📋 ${stoppedDeleg.queue.length} demande(s) en file d'attente annulée(s) par l'arrêt de l'agent.`);
         }
-        delegationQueue = [];
-        delegationBusy = false;
+        stoppedDeleg.queue.length = 0;
+        stoppedDeleg.busy = false;
         // #28 : si l'agent arrêté est l'agent standard du projet actif
         // (`default`), fermer son onglet s'il est ouvert (évite un onglet
         // fantôme alors que l'agent n'est plus fonctionnel). Ne touche pas aux
@@ -4173,7 +4189,7 @@ export async function transmitDelegationToAgent({ request, projectPath, agentId,
     }
     // Issue #47 : mémoriser la délégation en attente (consommée à l'agent_end
     // pour injecter le feedback au super-agent).
-    pendingDelegation = {
+    delegationState(projectPath).pending = {
       request: String(request),
       projectPath,
     };
@@ -4195,8 +4211,8 @@ export async function transmitDelegationToAgent({ request, projectPath, agentId,
  * Indique si l'agent d'un projet est actuellement occupé (travaille sur une
  * tâche). Sonde l'activité RPC du projet via `get_project_agent_states` (pour
  * le projet actif / un projet ouvert avec un onglet visible). Pour un projet
- * headless non ouvert, retombe sur `delegationBusy` (les agents headless ne
- * sont pilotés QUE par délégation, donc `delegationBusy` les couvre).
+ * headless non ouvert, retombe sur l'état de délégation du projet (les agents
+ * headless ne sont pilotés QUE par délégation, donc il les couvre).
  * @param {string|null} projectPath
  * @returns {Promise<boolean>}
  */
@@ -4209,20 +4225,23 @@ async function isProjectAgentBusy(projectPath) {
     }
   } catch (_) {}
   // Projet non listé (headless non ouvert) : on ne sait pas — on retombe sur
-  // delegationBusy (géré par l'appelant via le `||`).
+  // l'état de délégation du projet (géré par l'appelant via le `||`).
   return false;
 }
 
 /**
- * Vide la file des délégations en attente : marque l'agent comme libre, puis
- * s'il reste une demande en file, la transmet (et remet l'agent occupé).
- * Appelée à l'agent_end (visible via injectSessionSummaryToSuperAgent,
- * invisible via finalizeInvisibleAgent).
+ * Vide la file des délégations en attente DU PROJET : marque l'agent du projet
+ * comme libre, puis s'il reste une demande en file, la transmet (et remet
+ * l'agent occupé). Appelée à l'agent_end (visible via
+ * injectSessionSummaryToSuperAgent, invisible via finalizeInvisibleAgent) en
+ * passant le projet concerné, pour ne pas libérer la file d'un autre projet.
+ * @param {string|null} projectPath
  */
-function flushDelegationQueue() {
-  delegationBusy = false;
-  if (delegationQueue.length === 0) return;
-  const next = delegationQueue.shift();
+function flushDelegationQueue(projectPath) {
+  const ds = delegationState(projectPath);
+  ds.busy = false;
+  if (ds.queue.length === 0) return;
+  const next = ds.queue.shift();
   const tabs = window._pilotTabs;
   if (!tabs) {
     // Gestionnaire d'onglets indisponible : on perd la file (ne devrait pas
@@ -4230,7 +4249,7 @@ function flushDelegationQueue() {
     console.warn("[delegation-queue] tabs indisponibles, demande perdue");
     return;
   }
-  delegationBusy = true;
+  ds.busy = true;
   // Transmettre la demande suivante (fire-and-forget : le résultat sera
   // reporté dans le chat via transmitDelegationToAgent).
   transmitDelegationToAgent({
@@ -4247,8 +4266,8 @@ function flushDelegationQueue() {
       appendSystemMessage(next.messagesEl, "📋 Demande mise en file transmise à l'agent (la tâche précédente est terminée).");
     } else {
       // Échec de la transmission : on libère et on essaie la suite.
-      delegationBusy = false;
-      flushDelegationQueue();
+      ds.busy = false;
+      flushDelegationQueue(next.projectPath);
     }
   });
 }
@@ -4406,7 +4425,7 @@ function finalizeInvisibleAgent(messagesEl, agentId, projectPath, message) {
   const finalText = t.loop && typeof t.loop.lastText === "string" ? t.loop.lastText : "";
   stopInvisibleAgentMonitoring(agentId, projectPath);
   appendSystemMessage(messagesEl, message);
-  // Injecter le feedback de délégation (consomme pendingDelegation → notification
+  // Injecter le feedback de délégation (consomme pending → notification
   // + consignation dans le suivi de l'assistant), avec le RÉSULTAT de l'agent.
   // Garde de curation : un compte rendu sans résultat (agent sans texte final)
   // n'est pas mémorisé — SAUF s'il porte le feedback d'une délégation en attente
@@ -4952,7 +4971,8 @@ async function sendSuperAgentReport(entry, opts = {}) {
     // toujours le même marqueur : une délégation plus récente ne doit pas être
     // écrasée par une remise tardive). Le texte du marqueur est inclus dans le
     // compte rendu, donc persisté en base même si la remise est différée.
-    if (pendingDelegation === del) pendingDelegation = null;
+    const delState = delegationStates.get(del.projectPath || "");
+    if (delState && delState.pending === del) delState.pending = null;
     const marker =
       `[Tâche déléguée terminée] Demande transmise à l'agent du projet ${del.projectPath || ""} : ${del.request}\n`;
     summary = marker + summary;
@@ -5010,11 +5030,12 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
   // réelle (sendSuperAgentReport), pour ne pas le perdre si le compte rendu est
   // mis en attente (assistant occupé).
   // P0-4 : borne la taille du résumé avant injection.
+  const projectDelegationState = delegationStates.get(projectPath || "");
   const entry = {
     summary,
     projectPath: projectPath || null,
     category: "session",
-    delegation: pendingDelegation,
+    delegation: projectDelegationState ? projectDelegationState.pending : null,
   };
   // Garde de curation (fil de mémoire) : l'appelant signale une entrée sans
   // valeur via `opts.remember = false` (filtre) ; elle n'est alors pas remise,
@@ -5031,7 +5052,7 @@ export async function injectSessionSummaryToSuperAgent(summary, projectPath, opt
   // Appelé aussi bien pour l'agent_end visible (agent-pi.js) que pour l'agent
   // invisible (finalizeInvisibleAgent appelle cette même fonction). Toujours
   // exécuté, indépendamment du filtre de mémorisation ci-dessus.
-  flushDelegationQueue();
+  flushDelegationQueue(projectPath);
 }
 
 /**
