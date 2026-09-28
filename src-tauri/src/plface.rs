@@ -273,18 +273,75 @@ fn observed_process_name(pid: u32) -> Option<String> {
     parse_csv_process_name(&String::from_utf8_lossy(&output.stdout))
 }
 
-#[cfg(not(windows))]
+/// Sous Linux, l'identité ne peut pas venir de `ps -o comm=` (nom du **thread** :
+/// node le renomme « MainThread ») — sinon le service Laya n'est jamais refermé.
+#[cfg(target_os = "linux")]
 fn observed_process_name(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
-        .output()
-        .ok()?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // `/proc/<pid>/stat` = "<pid> (<comm>) <état> …" : état ET `comm` en une
+    // seule lecture. Le `comm` peut contenir espaces et parenthèses → on repart
+    // de la DERNIÈRE parenthèse fermante. Fichier absent = processus disparu.
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after = stat.rsplit(')').next().unwrap_or("").trim_start();
+    let comm = stat
+        .split_once('(')
+        .and_then(|(_, rest)| rest.rsplit_once(')'))
+        .map(|(c, _)| c.to_string())
+        .unwrap_or_default();
+    // `Z` (zombie) : processus mort, fichiers **fermés**, seul son code de sortie
+    // reste à récolter — et `spawn_detached` n'attend jamais l'enfant, donc tout
+    // service tué finit ainsi. Sans ce test, `wait_until_gone` attendait 2 s pour
+    // rien et un arrêt RÉUSSI était rapporté comme un échec.
+    if after.starts_with('Z') {
+        return None;
+    }
+    // L'**image** réellement exécutée — et non `comm` (ce que rend
+    // `ps -o comm=`), qui sur Linux est le nom du **thread** : node le renomme
+    // (« MainThread »), le service Laya n'était alors jamais reconnu comme le
+    // sien et n'était donc **jamais** refermé. `/proc/<pid>/exe` est aussi la
+    // source de `current_exe()` : le nom observé et celui du propriétaire inscrit
+    // dans la trace viennent du même endroit.
+    let image = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(path) => {
+            let base = exe_file_name(&path.to_string_lossy());
+            // Image remplacée sur le disque : le noyau suffixe le lien.
+            base.strip_suffix(" (deleted)").unwrap_or(&base).to_string()
+        }
+        // Image déjà détachée mais processus encore en cours de sortie : surtout
+        // ne pas le déclarer disparu (sa socket répond encore un instant).
+        Err(_) => comm,
+    };
+    if image.is_empty() {
+        None
+    } else {
+        Some(image)
+    }
+}
+
+/// Ailleurs sous Unix (macOS/BSD), `ps -o comm=` donne bien le nom de l'image
+/// (`node`) ; on écarte en plus les **zombies** (état `Z`), qu'un arrêt réussi
+/// laisse listés tant que l'enfant n'est pas récolté : même raison que ci-dessus.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn observed_process_name(pid: u32) -> Option<String> {
+    if ps_field(pid, "stat=").starts_with('Z') {
+        return None;
+    }
+    let name = ps_field(pid, "comm=");
     if name.is_empty() {
         None
     } else {
         Some(name)
     }
+}
+
+/// Un champ de `ps -p <pid>` (chaîne vide si le processus n'existe pas).
+#[cfg(all(unix, not(target_os = "linux")))]
+fn ps_field(pid: u32, field: &str) -> String {
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", field])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 /// Le processus `pid` est-il encore vivant **et** bien celui attendu ?
@@ -305,7 +362,9 @@ pub(crate) fn owner_alive(pid: u32, expected_name: &str) -> bool {
 /// `taskkill`/`kill` rendent la main **avant** que le système n'ait retiré le
 /// processus : un service qui vient de charger 1,6 Gio de modèle reste listé
 /// ~200 ms après un arrêt RÉUSSI (mesuré : présent à +100 ms, absent à +200 ms).
-/// Sans cette attente, un arrêt réussi était rapporté comme un échec.
+/// Sans cette attente, un arrêt réussi était rapporté comme un échec. Sous Unix,
+/// un enfant tué que Pilot ne récolte pas reste listé comme **zombie** :
+/// `observed_process_name` le déclare alors disparu (cf. sa note par plateforme).
 fn wait_until_gone(pid: u32) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
