@@ -3591,6 +3591,17 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             delete runAgentsWatchdogByProject[target];
           }
           finishRunAgentsToSuperAgent(result, projectPath, ok);
+          // POINT E : rejouer la mission suivante RÉELLEMENT mise en file (même
+          // file que `run_agents`). Sans ce vidage, un accusé « queued » restait
+          // sans effet et la mission était perdue en silence.
+          const queue = runAgentsQueueByProject[target] || [];
+          const next = queue.shift();
+          if (next) {
+            runAgentsInFlightByProject[target] = true;
+            next.launch();
+          } else {
+            delete runAgentsQueueByProject[target];
+          }
         };
         const startRun = async () => {
           // Bug : verrou de run fantôme (même correctif que run_agents) —
@@ -3602,8 +3613,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             runAgentsInFlightByProject[target] = false;
           }
           if (runAgentsInFlightByProject[target] || isRunInProgress(target)) {
+            // POINT E : mise en file RÉELLE (même file que `run_agents`, rejouée
+            // par `settleRun`). Auparavant ce chemin répondait « queued » sans
+            // jamais pousser dans une file → mission perdue en silence.
+            if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+            runAgentsQueueByProject[target].push({ launch: () => { startRun(); } });
             appendSystemMessage(messagesEl, "⏳ Une run d'assistant est déjà en cours — la demande est mise en file et se lancera automatiquement.");
-            return true; // mise en file : PAS un lancement (état rapporté honnêtement)
+            return false; // PAS lancée maintenant : RÉELLEMENT mise en file
           }
           runAgentsInFlightByProject[target] = true;
           runAgentsForAssistantAsync(
@@ -3629,9 +3645,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             appendSystemMessage(messagesEl, `❌ Échec de la préparation de la run d'assistant : ${e}`);
             settleRun(false, `[Échec de la préparation de la run d'assistant] ${e}`);
           });
+          return true; // réellement lancée maintenant
         };
-        const queuedAssist = await startRun();
-        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: !queuedAssist, queued: queuedAssist }), false);
+        const launchedNow = await startRun();
+        await respondSuperAgent(id, JSON.stringify({ ok: true, launched: launchedNow, queued: !launchedNow }), false);
       } catch (e) {
         console.error("Erreur run_assistant_agents (assistant):", e);
         appendSystemMessage(messagesEl, `❌ Échec de la run d'assistant : ${e}`);

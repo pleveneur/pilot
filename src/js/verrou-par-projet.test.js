@@ -218,6 +218,29 @@ describe("POINT D — le sens inverse : commande manuelle vs mission d'écriture
   });
 });
 
+// POINT E — `run_assistant_agents` : plus de « mise en file » mensongère. Si
+// c'est occupé, la demande est RÉELLEMENT mise dans la file du projet (rejouée
+// par settleRun), donc jamais perdue en silence.
+describe("POINT E — run_assistant_agents : file réelle, jamais un faux « queued »", () => {
+  it("la branche occupée pousse dans la file et settleRun la rejoue", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const startIdx = src.indexOf("const target = ASSISTANT_SPACE;");
+    const endIdx = src.indexOf("if (title.startsWith(SESSIONS_SENTINEL))", startIdx);
+    expect(startIdx).toBeGreaterThan(-1);
+    const branch = src.slice(startIdx, endIdx);
+    // La branche occupée pousse réellement dans la file partagée…
+    expect(branch).toContain("runAgentsQueueByProject[target].push(");
+    // …et settleRun vide la file (rejeu automatique, comme run_agents).
+    const settleIdx = branch.indexOf("const settleRun = (ok, result) => {");
+    const startRunIdx = branch.indexOf("const startRun = async () => {");
+    const settleBody = branch.slice(settleIdx, startRunIdx);
+    expect(settleBody).toContain("runAgentsQueueByProject[target] || []");
+    expect(settleBody).toContain("next.launch()");
+    // L'accusé rapporte le lancement RÉEL (plus de « queued » sans file).
+    expect(branch).toContain("JSON.stringify({ ok: true, launched: launchedNow, queued: !launchedNow })");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
