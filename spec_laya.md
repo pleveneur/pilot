@@ -419,6 +419,13 @@ incomplet → **sortie 1** (mieux vaut échouer que livrer une copie incomplète
 Le dossier cible est vidé puis reconstruit : deux exécutions donnent un résultat
 identique.
 
+`bundle.resources` est résolu par le **script de construction Tauri** (`tauri-build`)
+au moment de la compilation : sans le dossier, `cargo build`/`cargo test` échouaient
+(« resource path `laya` doesn't exist » — cas d'un clone neuf et du job `test` de la
+CI, qui ne passe pas par `beforeBuildCommand`). `src-tauri/build.rs` crée donc le
+dossier **vide** s'il manque : la compilation réussit et un dossier vide n'embarque
+rien — Laya reste optionnelle.
+
 ### 8.2 Résolution des chemins
 
 Un seul point de calcul (`laya_effective_paths(app, cfg, override)` dans
