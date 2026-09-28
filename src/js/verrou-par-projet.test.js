@@ -131,6 +131,30 @@ describe("POINT B — commande manuelle soumise à la politique d'admission", ()
 // pas vidée à l'arrêt : une mission en attente ne démarrait jamais puis était
 // perdue par le watchdog. Ce test ÉCHOUE si la branche `stop_agent` cesse de
 // libérer le créneau / la file du projet, ou cesse de le signaler.
+// POINT B1/B2/B3 — plus aucun chemin manuel n'appelle `send_agent_prompt` en
+// direct : chacun passe par la politique d'admission (`canSendManualCommandAsync`)
+// AVANT l'envoi, avec un refus visible. Ces tests ÉCHOUENT si l'un des trois
+// chemins revient à un `invoke("send_agent_prompt")` non gardé.
+function assertGuardBeforeSend(src, label) {
+  const guardIdx = src.indexOf("canSendManualCommandAsync(");
+  const sendIdx = src.indexOf('invoke("send_agent_prompt", {');
+  const refuseIdx = src.indexOf("MANUAL_COMMAND_BLOCKED_MESSAGE");
+  expect(guardIdx, `${label} : garde absente`).toBeGreaterThan(-1);
+  expect(refuseIdx, `${label} : refus non visible`).toBeGreaterThan(-1);
+  expect(sendIdx, `${label} : envoi absent`).toBeGreaterThan(-1);
+  expect(guardIdx, `${label} : la garde doit précéder l'envoi`).toBeLessThan(sendIdx);
+}
+
+describe("POINT B1 — menu contextuel de la barre latérale (sidebar.js)", () => {
+  it("B1 — le garde précède l'envoi direct, refus visible", () => {
+    const src = readFileSync(new URL("./sidebar.js", import.meta.url), "utf8");
+    const handlerIdx = src.indexOf("ctxSendAgent.addEventListener(");
+    const endIdx = src.indexOf("ctxAddPromptBuilder.addEventListener(", handlerIdx);
+    expect(handlerIdx).toBeGreaterThan(-1);
+    assertGuardBeforeSend(src.slice(handlerIdx, endIdx), "sidebar.js ctxSendAgent");
+  });
+});
+
 describe("POINT C — l'arrêt d'un agent libère la file de missions du projet", () => {
   it("la branche stop_agent libère le créneau et vide la file de missions (avec message)", () => {
     const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");

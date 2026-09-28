@@ -14,9 +14,13 @@ import { shouldCloseTab } from "./tab-scoping.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { refreshIcons, setIcon, setIconText } from "./icons.js";
 import { loadModelAliases } from "./agent-pi.js";
-import { switchToSuperAgent } from "./super-agent.js";
+import { switchToSuperAgent, isProjectAgentBusy } from "./super-agent.js";
 import { projectGdsInfo } from "./gds-status.js";
-import { toastError, toastSuccess, toastInfo } from "./toast.js";
+import { toastError, toastSuccess, toastInfo, toastWarning } from "./toast.js";
+// Verrou par projet : « Envoyer à l'agent » est une commande manuelle (elle
+// peut modifier le projet) → même politique d'admission que le chat.
+import { canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
+import { isRunInProgress } from "./agents-bus.js";
 
 // Mapping extension → Lucide icon name (kebab-case) for file type icons.
 // Rendu via <i data-lucide="..."> dans l'arbre (cf. icons.js / refreshIcons).
@@ -318,6 +322,13 @@ class Sidebar {
       const targetPath = this.contextMenuPath;
       const isDir = this.contextMenuIsDir;
       this.hideContextMenu();
+      // POINT B1 : ce chemin appelait `invoke("send_agent_prompt")` en direct,
+      // sans consulter la politique d'admission → il contournait le verrou par
+      // projet. Refus VISIBLE (toast), envoi bloqué (rien n'est envoyé).
+      if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+        toastWarning(MANUAL_COMMAND_BLOCKED_MESSAGE);
+        return;
+      }
       try {
         await this.tabs.openFile(agentDisplayLabel(), "agent");
         await new Promise((resolve) => setTimeout(resolve, 500));

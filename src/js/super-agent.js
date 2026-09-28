@@ -4254,7 +4254,7 @@ export async function transmitDelegationToAgent({ request, projectPath, agentId,
  * @param {string|null} projectPath
  * @returns {Promise<boolean>}
  */
-async function isProjectAgentBusy(projectPath) {
+export async function isProjectAgentBusy(projectPath) {
   try {
     const states = await invoke("get_project_agent_states");
     const key = projectPath || window._pilotProjectPath || null;

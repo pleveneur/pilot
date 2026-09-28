@@ -61,3 +61,27 @@ export function canSendManualCommand(project, isRunInProgress) {
   if (typeof isRunInProgress !== "function") return true;
   return !isRunInProgress(project, { nature: MANUAL_COMMAND_NATURE });
 }
+
+/**
+ * Variante ASYNCHRONE de `canSendManualCommand` : elle consulte EN PLUS la
+ * sonde d'ACTIVITÉ réelle de l'agent du projet (`get_project_agent_states.busy`
+ * via `isProjectAgentBusy`). Indispensable car une commande manuelle n'inscrit
+ * AUCUNE run dans le bus : deux commandes manuelles concurrentes sur le même
+ * projet (deux onglets d'agent) seraient invisibles l'une pour l'autre avec la
+ * seule sonde du bus. Mêmes règles, source de décision élargie.
+ * @param {string} project - projet ciblé (le verrou est PAR PROJET)
+ * @param {function(string, {nature:string}):boolean} isRunInProgress
+ * @param {function(string):Promise<boolean>} [isAgentBusy] - sonde d'activité
+ *   réelle de l'agent du projet (injectée pour rester sans dépendance).
+ * @returns {Promise<boolean>}
+ */
+export async function canSendManualCommandAsync(project, isRunInProgress, isAgentBusy) {
+  if (!canSendManualCommand(project, isRunInProgress)) return false;
+  if (typeof isAgentBusy !== "function") return true;
+  try {
+    return !(await isAgentBusy(project));
+  } catch (_) {
+    // Sonde en échec : on ne bloque pas l'utilisateur (fail-open borné).
+    return true;
+  }
+}
