@@ -389,7 +389,11 @@ const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
 // watchdog de run du même projet, qui peut coexister) et indexée PAR PROJET :
 // un projet libre n'attend jamais un autre projet.
 let runAgentsQueueReplayByProject = {}; // project → timer id
-const RUN_AGENTS_QUEUE_REPLAY_MS = 15 * 1000; // 15 s de latence max après libération
+// ponytail: sondage périodique (latence max 15 s après la libération du projet)
+// plutôt qu'un réveil événementiel sur chaque fin d'occupation — la sonde
+// d'admission est déjà réutilisée telle quelle. Passer à un réveil direct si
+// l'attente devient perceptible.
+const RUN_AGENTS_QUEUE_REPLAY_MS = 15 * 1000;
 
 /**
  * Filet de sécurité CONSCIENT DE L'ACTIVITÉ (watchdog run_agents) : détermine
