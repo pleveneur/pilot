@@ -10,7 +10,7 @@
 // `beginRun(project, { readOnly })` est exactement ce qu'appelle
 // `startParallelRun` après sa garde d'admission `isRunInProgress(project,
 // { nature })` (elle-même utilisée par la file d'attente de super-agent.js).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 
 // POINT G : les preuves de rejeu de la file de missions importent `super-agent.js`
@@ -70,7 +70,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { beginRun, endRun, isRunInProgress, getRunState } from "./agents-bus.js";
+import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject } from "./super-agent.js";
 
@@ -99,6 +99,82 @@ describe("PREUVE (a) — deux missions de LECTURE tournent en parallèle sur le 
     expect(getRunState(p)).toBe("running");
     endRun(p, run2.generation);
     expect(getRunState(p)).toBe("idle");
+  });
+});
+
+// POINT H — défaut « verrou par projet » (agents-bus) : une mission de LECTURE
+// n'inscrivait pas son agent dans SA clé de run (`projet#read:N`) — l'agent
+// atterrissait dans la clé par défaut du projet, donc TOUS ses événements
+// étaient jetés : la lecture ne produisait rien, son verrou ne se libérait
+// jamais, et la mission mise en file ne repartait jamais.
+// Ce test ÉCHOUE avant le correctif (l'agent est absent de la clé de lecture).
+describe("PREUVE (h) — deux missions, un projet : la lecture survit, se termine, puis la file repart", () => {
+  const runsOf = (p) => Object.values(globalThis.__agentBusState.runs).filter((c) => c.project === p);
+  const flushAsync = async () => {
+    for (let i = 0; i < 8; i++) await new Promise((r) => setImmediate(r));
+  };
+
+  afterEach(() => {
+    for (const key of Object.keys(globalThis.__agentBusState.runs)) delete globalThis.__agentBusState.runs[key];
+    delete runAgentsQueueByProject["preuve-h"];
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+  });
+
+  it("l'agent de lecture est inscrit dans SA clé de run, la run se termine, puis la mission en file démarre", async () => {
+    const p = "preuve-h";
+    // Sonde de sessions : l'agent n'est PAS encore déclaré occupé au lancement
+    // (sinon la T5 le mettrait lui-même en file) ; on le déclare occupé ensuite
+    // pour représenter la mission silencieuse en cours (outil long).
+    let lecteurBusy = false;
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agents") {
+        return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
+      }
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agent_sessions") {
+        return lecteurBusy
+          ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
+          : { sessions: [] };
+      }
+      return undefined;
+    });
+    await initAgentsBus({});
+    await startParallelRun([{ agentId: "lecteur", project: p, brief: "lis le projet" }], "", {});
+
+    // 1. L'agent de la mission de LECTURE est inscrit dans la run de lecture
+    //    (et non dans la clé par défaut du projet).
+    const readRun = runsOf(p).find((c) => c.readonly === true && [...c.activeAgents].includes("lecteur"));
+    expect(
+      readRun,
+      "l'agent de lecture doit être inscrit dans SA clé de run: " +
+        JSON.stringify(Object.values(globalThis.__agentBusState.runs).map((c) => ({ k: c.runKey, ro: c.readonly, ag: [...c.activeAgents], st: c.runState }))),
+    ).toBeTruthy();
+    const readKey = readRun.runKey;
+
+    // 2. La première mission est SILENCIEUSE mais en cours ; sa sonde dit qu'elle
+    //    travaille → elle SURVIT au passage du watchdog (deuxième vague).
+    attachMissionSink(readKey, { onDone: () => {}, onError: () => {} });
+    readRun.lastActivityAt = Date.now() - 11 * 60 * 1000;
+    lecteurBusy = true;
+    await releaseStuckRunLock(p);
+    expect(getRunState(p), "la lecture silencieuse mais active ne doit pas être libérée").toBe("running");
+
+    // 3. La lecture se TERMINE réellement (agent_start → agent_end).
+    let done = false;
+    attachMissionSink(readKey, { onDone: () => (done = true), onError: () => (done = true) });
+    handleAgentEvent({ payload: { project: p, agent_id: "lecteur", event: { type: "agent_start" } } });
+    handleAgentEvent({ payload: { project: p, agent_id: "lecteur", event: { type: "agent_end" } } });
+    await flushAsync();
+    expect(done, "la mission de lecture doit rendre son rapport et se terminer").toBe(true);
+    expect(isRunInProgress(p), "le projet doit être libéré à la fin de la lecture").toBe(false);
+
+    // 4. La seconde mission (MODIFICATION) mise en file démarre alors.
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    const r = await replayQueuedMissionForProject(p, { isAdmissionFree: async () => !isRunInProgress(p) });
+    expect(r).toEqual({ replayed: true, reason: "launched" });
+    expect(launched).toBe(1);
   });
 });
 

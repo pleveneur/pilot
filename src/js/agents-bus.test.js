@@ -274,6 +274,19 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(getRunState("projetA")).toBe("running");
   });
 
+  it("agent au travail (busy=true) mais silence apparent > agent_timeout_ms → verrou MAINTENU (outil long silencieux)", async () => {
+    const ctx = beginRunWithAgent();
+    // Le bus n'a reçu aucun événement depuis le seuil d'inactivité (outil long :
+    // build, tests, lecture)…
+    ctx.lastActivityAt = Date.now() - 11 * 60 * 1000;
+    // …mais la sonde de vivacité dit que l'agent travaille encore.
+    mockSessions([session({ busy: true, lastActivity: new Date().toISOString() })]);
+    await releaseStuckRunLock("projetA");
+    // La garde de temps ne doit PAS libérer le créneau d'un agent en travail
+    // (elle ne s'applique qu'en l'absence de tout agent actif).
+    expect(getRunState("projetA")).toBe("running");
+  });
+
   it("activité très récente (busy pas encore posé, lastActivity < 2 min) → verrou maintenu (fenêtre de grâce)", async () => {
     beginRunWithAgent();
     mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 30_000).toISOString() })]);
