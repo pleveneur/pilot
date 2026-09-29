@@ -417,8 +417,13 @@ async function releaseStuckRunLockForKey(key) {
     //    `startedAt` sert de repère quand aucun événement d'agent n'a jamais été
     //    reçu (`lastActivityAt` null) : sans lui, le verrou n'était jamais
     //    libéré (issue #87).
+    //    `noActive` est EXIGÉ : on n'entre ici que si `!stuck`, donc si la sonde
+    //    de vivacité vient de répondre « un agent enregistré TRAVAILLE » — la
+    //    libérer quand même coupait un agent actif (lecture longue, build,
+    //    tests) simplement parce qu'il n'émettait aucun événement. Un tel agent
+    //    reste couvert par les filets fantômes (25 min) et l'arrêt auto T2.
     const idleSince = ctx.lastActivityAt || ctx.startedAt;
-    if (idleSince && Date.now() - idleSince > busState.timeoutMs) {
+    if (noActive && idleSince && Date.now() - idleSince > busState.timeoutMs) {
       const drained = await drainExclusivityQueues(ctx, key);
       if (drained) {
         console.warn("[agents-bus] watchdog : run inactive depuis trop longtemps mais demandes en file → relance.");
