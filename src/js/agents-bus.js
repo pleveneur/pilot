@@ -738,7 +738,7 @@ async function launchNextQueued(agentId, project, runKeyOverride) {
     return;
   }
   emit("notify", { agentId: id, message: `▶️ L'agent ${id} démarre sa tâche en file d'attente sur ce projet.` });
-  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null);
+  await runAgentTurn(agent, next.brief, "", next.project || project, undefined, next.mcp_server || null, ctx);
 }
 
 function resetTimeout(ctx) {
@@ -1483,7 +1483,7 @@ async function finishAgentTurn(agentId, ctx) {
       const aggregated = aggregateParallelResults(results);
       const result = buildResultPrompt("parallel", "done", aggregated, busState.config.agent_max_result_tokens);
       emit("parallelDone", { results });
-      await runAgentTurn(busState.agents.get(agentId), result);
+      await runAgentTurn(busState.agents.get(agentId), result, "", null, undefined, null, ctx);
     }, undefined, project, ctx);
     return;
   }
@@ -1523,7 +1523,7 @@ async function finishAgentTurn(agentId, ctx) {
     ctx.callStack.push({ agentId, textBeforeCall: call.before });
 
     // Lancer / réinitialiser l'agent cible et lui envoyer le brief
-    await runAgentTurn(targetAgent, brief);
+    await runAgentTurn(targetAgent, brief, "", null, undefined, null, ctx);
     return;
   }
 
@@ -1532,7 +1532,7 @@ async function finishAgentTurn(agentId, ctx) {
     const caller = ctx.callStack.pop();
     const result = buildResultPrompt(agentId, "done", text, busState.config.agent_max_result_tokens);
     emit("result", { from: agentId, to: caller.agentId, text: result });
-    await runAgentTurn(busState.agents.get(caller.agentId), result);
+    await runAgentTurn(busState.agents.get(caller.agentId), result, "", null, undefined, null, ctx);
   } else {
     // Fin de la run : coordinateur a répondu. endRun (projet-scopé) ne libère
     // QUE la run de ce projet, sans toucher aux runs d'autres projets (T4).
@@ -1601,7 +1601,7 @@ async function failAgentTurn(agentId, reason, ctx) {
     const caller = ctx.callStack.pop();
     const result = buildResultPrompt(agentId, "error", `Erreur de l'agent ${agentId} : ${reason}`, busState.config.agent_max_result_tokens);
     emit("result", { from: agentId, to: caller.agentId, text: result });
-    await runAgentTurn(busState.agents.get(caller.agentId), result);
+    await runAgentTurn(busState.agents.get(caller.agentId), result, "", null, undefined, null, ctx);
   } else {
     emit("error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
     settleMission(ctx.runKey, "error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
@@ -1899,7 +1899,7 @@ async function forceStaleAgentProcessRestartIfNeeded(agent, project) {
   }
 }
 
-async function runAgentTurn(agent, brief, projectContext = "", project = null, options, mcpServer = null) {
+async function runAgentTurn(agent, brief, projectContext = "", project = null, options, mcpServer = null, runCtx = null) {
   if (!agent) {
     emit("error", { message: "Agent introuvable pour ce tour." });
     return;
@@ -1908,9 +1908,14 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   // Ciblage de projet (run_agents) : cwd = projet cible si fourni, sinon projet
   // actif (rétrocompatible). Mémorisé pour router les commandes (abort/command/
   // prompt) vers la bonne session pendant le tour.
-  const cwd = project || window._pilotProjectPath || ".";
+  const cwd = project || (runCtx && runCtx.project) || window._pilotProjectPath || ".";
   const isAssistant = cwd === ASSISTANT_SPACE;
-  const ctx = getRunCtx(cwd);
+  // Contexte de run FOURNI par l'appelant quand il le connaît déjà : une mission
+  // de LECTURE a une clé de run propre (`projet#read:N`), donc redériver ici la
+  // clé par défaut du projet inscrivait l'agent dans le MAUVAIS contexte — tous
+  // ses événements étaient jetés (mission inerte, verrou jamais libéré, mission
+  // en file jamais rejouée).
+  const ctx = runCtx || getRunCtx(cwd);
   ctx.currentAgentId = agent.id;
   ctx.activeAgents.add(agent.id);
   ctx.streamingTextByAgent[agent.id] = "";
@@ -2137,7 +2142,7 @@ async function dispatchParallel(assignments, onComplete, options, runProject, ct
       emit("notify", { agentId: a.agentId, message: `⏳ L'agent ${a.agentId} est déjà actif sur ce projet. La demande est mise en file d'attente et se lancera automatiquement à la fin de la tâche en cours.` });
       continue;
     }
-    await runAgentTurn(agent, a.brief, "", a.project, options, a.mcp_server || null);
+    await runAgentTurn(agent, a.brief, "", a.project, options, a.mcp_server || null, ctx);
   }
   // Si tous les agents ont échoué au démarrage (inconnus / budget), on agrège
   // immédiatement sans attendre d'agent_end.
