@@ -534,7 +534,10 @@ async function projectHasWorkingSession(project) {
   try {
     const res = await invoke("list_agent_sessions");
     const sessions = (res && res.sessions) || [];
-    return isProjectWorking(sessions, runKey(project));
+    // `project` peut être une CLÉ DE RUN (`projet#read:N`) : on compare à la
+    // session par son PROJET RÉEL, sinon la comparaison était toujours fausse et
+    // une lecture légitime et active pouvait être libérée de force.
+    return isProjectWorking(sessions, projectOfRunKey(project));
   } catch (_) {
     return true;
   }
