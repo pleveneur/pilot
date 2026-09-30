@@ -44,7 +44,8 @@ le modifier). La base du mécanisme est le **dépôt d'une tâche inter-projets*
   **écrit le fichier** mais **ne lance pas l'agent** : le dépôt est **différé**
   (réponse `deferred: true`), avec un message honnête « déposé mais non lancé »
   affiché en avertissement — pas de faux succès, pas d'écrasement de la mission en
-  cours. Le fichier reste à traiter quand le projet sera libre.
+  cours.
+- **Dépôt différé — reprise manuelle** : rien ne rejoue automatiquement un dépôt différé (pas de fonctionnalité de rejeu). Le message affiché indique donc la marche à suivre — demander à l'agent du projet cible de lire le fichier déposé, ou relancer le dépôt une fois le projet libre.
 
 ## 3. Architecture backend (Rust)
 
@@ -84,7 +85,9 @@ le modifier). La base du mécanisme est le **dépôt d'une tâche inter-projets*
   Rust** (aucun bus JS), mais une **porte** y vérifie désormais l'occupation réelle
   de la cible (`anomaly::project_has_working_agent`) avant tout lancement. Si un
   agent travaille déjà sur la cible, le dépôt est **différé** (fichier écrit,
-  message honnête, aucune exécution) au lieu d'écraser la mission en cours.
+  message honnête, aucune exécution) au lieu d'écraser la mission en cours. Ce
+  dépôt différé n'est rejoué par aucun mécanisme (choix assumé : pas de rejeu) :
+  le message invite à reprendre la tâche à la main.
   Reste ouvert, lui : le **mode distant web** (`idees_evolutions.md` § 30), qui
   envoie un prompt sans passer par cette porte.
 
@@ -110,6 +113,7 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 - L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
   agent du projet cible.
 - **Si le projet cible travaille déjà** : la tâche est **déposée mais pas lancée**
-  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/` ; il
-  sera à traiter quand le projet sera libre.
+  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/`. Pour
+  la reprendre, demande à l'agent du projet cible de **lire ce fichier**, ou
+  relance le dépôt quand le projet est libre (aucun rejeu automatique).
 <!-- /HELP:interprojets -->

@@ -1066,8 +1066,9 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
 - L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
   agent du projet cible.
 - **Si le projet cible travaille déjà** : la tâche est **déposée mais pas lancée**
-  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/` ; il
-  sera à traiter quand le projet sera libre.
+  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/`. Pour
+  la reprendre, demande à l'agent du projet cible de **lire ce fichier**, ou
+  relance le dépôt quand le projet est libre (aucun rejeu automatique).
 
 ---
 

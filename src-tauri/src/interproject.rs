@@ -146,8 +146,8 @@ pub fn interproject_handoff(
             "source_name": source_name,
             "deferred": true,
             "message": format!(
-                "Tâche déposée dans « {} », mais AUCUNE exécution n'a été lancée : un agent y travaille déjà. Le fichier de handoff reste disponible, à traiter quand le projet sera libre.",
-                target_name
+                "Tâche déposée dans « {} », mais AUCUNE exécution n'a été lancée : un agent y travaille déjà. Pour reprendre la tâche, demandez à l'agent du projet cible de lire le fichier déposé ({}) — ou relancez le dépôt une fois le projet libre.",
+                target_name, handoff_str
             ),
         }));
     }

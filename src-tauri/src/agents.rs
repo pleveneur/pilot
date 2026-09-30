@@ -301,7 +301,7 @@ pub(crate) fn ensure_agent_not_busy(
 ) -> Result<(), String> {
     if service.agent_process_busy(anomaly_map, project, agent_id) {
         return Err(format!(
-            "L'agent « {} » est déjà en train de travailler sur ce projet — le prompt n'a pas été envoyé (deux exécutions concurrentes sur le même projet sont interdites).",
+            "L'agent « {} » est déjà en train de travailler — le prompt n'a pas été envoyé (une seconde exécution concurrente sur ce MÊME agent est interdite).",
             agent_id
         ));
     }
