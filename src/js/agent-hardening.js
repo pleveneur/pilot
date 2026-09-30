@@ -21,6 +21,19 @@ export function isTerminalAgentEnd(event) {
 }
 
 /**
+ * F3 quater — Un `agent_end` doit-il clôturer le suivi d'un agent DÉLÉGUÉ ?
+ * `agent_end` n'est pas forcément terminal : pi peut l'émettre avec
+ * `willRetry: true` (relance automatique : erreur transitoire, troncature,
+ * compaction, continuation) puis repartir. Finaliser ici annoncerait « l'agent a
+ * terminé » alors qu'il travaille encore (faux terminé observé le 30-09). Seul
+ * un agent_end terminal SANS relance — ou l'`agent_settled` final — clôture.
+ */
+export function shouldFinalizeOnAgentEnd(event) {
+  if (!isTerminalAgentEnd(event)) return false;
+  return !(event && event.willRetry === true);
+}
+
+/**
  * F3 bis — Un « terminé » déclaré est-il crédible ?
  * On ne croit pas l'agent sur parole : il faut une production observable
  * (texte ou résultat d'outil) et un arrêt non fautif.

@@ -1,8 +1,10 @@
 // Tests déterministes des protections du dialogue avec l'agent (R2 / LOT 5).
 // Aucune attente réelle, aucun réseau, aucun DOM : uniquement des décisions pures.
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   isTerminalAgentEnd,
+  shouldFinalizeOnAgentEnd,
   isCompletionCredible,
   completionRefusalReason,
   isResendLost,
@@ -40,6 +42,37 @@ describe("F3 — faux « terminé »", () => {
     expect(completionRefusalReason({ stopReason: "error" })).toMatch(/erreur/);
     expect(completionRefusalReason({ stopReason: "aborted" })).toMatch(/interrompu/);
     expect(completionRefusalReason({})).toMatch(/sans production/);
+  });
+});
+
+describe("F3 quater — avis de fin de l'agent délégué (jamais pendant une relance)", () => {
+  it("un agent_end avec willRetry=true ne clôture PAS (l'agent peut reprendre)", () => {
+    expect(shouldFinalizeOnAgentEnd({ type: "agent_end", willRetry: true })).toBe(false);
+  });
+
+  it("un agent_end non terminal ne clôture PAS", () => {
+    expect(shouldFinalizeOnAgentEnd({ type: "agent_end", isTerminal: false })).toBe(false);
+  });
+
+  it("un agent_end terminal sans relance clôture (comportement pi inchangé)", () => {
+    expect(shouldFinalizeOnAgentEnd({ type: "agent_end" })).toBe(true);
+    expect(shouldFinalizeOnAgentEnd({ type: "agent_end", isTerminal: true, willRetry: false })).toBe(true);
+  });
+
+  it("le suivi de l'agent invisible applique la garde AVANT l'avis de fin, et l'agent_settled finalise", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const start = src.indexOf('if (type === "agent_end") {');
+    const settled = src.indexOf('if (type === "agent_settled") {', start);
+    expect(start, "la branche agent_end doit exister").toBeGreaterThan(-1);
+    expect(settled, "la branche agent_settled doit exister après agent_end").toBeGreaterThan(start);
+    const branch = src.slice(start, settled);
+    // La garde précède le SEUL avis de fin de la branche agent_end.
+    expect(branch).toContain("shouldFinalizeOnAgentEnd(payload)");
+    expect(branch.indexOf("shouldFinalizeOnAgentEnd(payload)")).toBeLessThan(
+      branch.indexOf("checkInvisibleAgentCompletion("),
+    );
+    const settledBranch = src.slice(settled, src.indexOf('if (type === "process_exit"', settled));
+    expect(settledBranch).toContain("checkInvisibleAgentCompletion(");
   });
 });
 

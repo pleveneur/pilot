@@ -36,6 +36,7 @@ import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-age
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
+import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
 import { toastInfo } from "./toast.js";
 import { createReportDeliveryGate } from "./super-agent-reports.js";
 import {
@@ -4531,6 +4532,26 @@ function handleInvisibleAgentEvent(payload, messagesEl, agentId, projectPath, lo
     // 4.2/4.3 : fin pilotée par l'état de l'objet. Si l'agent est en
     // Compacting, on N'INJECTE PAS de résumé « tâche non faite » (issue #54) et
     // on garde le suivi (le vrai agent_end post-compaction viendra finaliser).
+    //
+    // F5 (avis de fin prématuré, Kodali 30-09) : `agent_end` n'est PAS forcément
+    // terminal — pi peut l'émettre avec `willRetry: true` (erreur transitoire,
+    // troncature, compaction, continuation) puis repartir. Annoncer « terminé »
+    // ici faussait le suivi pendant que l'agent travaillait encore. On réarme les
+    // buffers et on attend le prochain agent_end / l'agent_settled, exactement
+    // comme le bus (agents-bus.js).
+    if (!shouldFinalizeOnAgentEnd(payload)) {
+      loop.buffer = "";
+      loop.lastText = "";
+      return;
+    }
+    checkInvisibleAgentCompletion(messagesEl, agentId, projectPath);
+    return;
+  }
+  if (type === "agent_settled") {
+    // Filet « zéro perte » : `agent_settled` = run TOTALEMENT terminée (aucune
+    // relance/compaction en attente). Si l'`agent_end` final a été raté, on
+    // finalise ici (idempotent : `finalizeInvisibleAgent` ne fait rien si le
+    // suivi est déjà consommé).
     checkInvisibleAgentCompletion(messagesEl, agentId, projectPath);
     return;
   }
