@@ -318,18 +318,20 @@ file d'exclusivité `exclusivity-queue.js`). Ce chantier a fermé les
   brut et normalisé testés), `interproject_handoff` **écrit quand même** le fichier
   de handoff (jamais perdu) mais **ne lance aucune exécution** : la réponse porte
   `deferred: true` + un message explicite, affiché en **avertissement** (« tâche
-  déposée mais non lancée ») au lieu d'un faux succès. Le fichier reste à traiter
-  quand le projet sera libre.
-- **Rejeu périodique de la file (demande jamais perdue)** : à chaque mise en file
-  d'une demande de délégation (`super-agent.js`), un déclencheur de rejeu est armé
-  (`armDelegationQueueReplay`, sonde périodique 15 s).
+  déposée mais non lancée ») au lieu d'un faux succès. Le message **dit ce qu'il
+  faut faire pour reprendre** : demander à l'agent du projet cible de lire le
+  fichier déposé, ou relancer le dépôt quand le projet est libre.
+- **Rejeu périodique de la file (demande jamais perdue tant que l'application tourne)** :
+  à chaque mise en file d'une demande de délégation (`super-agent.js`), un
+  déclencheur de rejeu est armé (`armDelegationQueueReplay`, sonde périodique 15 s).
   `replayDelegationQueueForProject` sonde l'**activité réelle** de l'agent cible
   (`isRunStillActive`, pas l'état local `busy` qui peut être périmé) et transmet la
   tête de file seulement si l'agent est réellement libre ; sonde en échec →
-  **fail-closed**, la demande reste en file et le rejeu se réarme tant que la file
-  n'est pas vide. Une demande mise en file a donc toujours un déclencheur de rejeu,
-  même si l'`agent_end` attendu n'arrive pas (prompt distant, session figée) :
-  jamais de blocage silencieux durable.
+  **fail-closed**, la demande reste en file. Le rejeu se réarme dès qu'il **reste**
+  une demande (succès ou échec), pas seulement en cas d'échec : une passe réussie
+  ne retire qu'une demande, les suivantes gardent donc un déclencheur. Les files
+  (missions et délégations) vivent **en mémoire** : un redémarrage de l'application
+  les vide.
 - **Fin de run (ne jamais annoncer une fin qui peut reprendre)** : `agent_end`
   n'est pas forcément terminal. `shouldFinalizeOnAgentEnd` (`agent-hardening.js`)
   n'accepte de clôturer le suivi d'un agent délégué que si l'événement est terminal

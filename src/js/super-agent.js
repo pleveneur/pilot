@@ -468,9 +468,12 @@ export function armQueueReplay(target) {
   if (!target || runAgentsQueueReplayByProject[target]) return;
   runAgentsQueueReplayByProject[target] = setTimeout(async () => {
     delete runAgentsQueueReplayByProject[target];
-    const r = await replayQueuedMissionForProject(target);
-    if (!r.replayed && (runAgentsQueueByProject[target] || []).length > 0) {
-      armQueueReplay(target); // encore occupé : on reste prêt à rejouer
+    await replayQueuedMissionForProject(target);
+    // Une passe réussie ne retire QU'UNE mission de la file : on se réarme dès
+    // qu'il en RESTE, succès ou échec — sinon la 2ᵉ mission perdrait tout
+    // déclencheur (R1, relecture indépendante).
+    if ((runAgentsQueueByProject[target] || []).length > 0) {
+      armQueueReplay(target); // encore des missions en file : on reste prêt
     }
   }, RUN_AGENTS_QUEUE_REPLAY_MS);
 }
@@ -527,9 +530,11 @@ export function armDelegationQueueReplay(projectPath) {
   if (!projectPath || delegationQueueReplayByProject[projectPath]) return;
   delegationQueueReplayByProject[projectPath] = setTimeout(async () => {
     delete delegationQueueReplayByProject[projectPath];
-    const r = await replayDelegationQueueForProject(projectPath);
-    if (!r.replayed && delegationState(projectPath).queue.length > 0) {
-      armDelegationQueueReplay(projectPath); // encore occupé : on reste prêt
+    await replayDelegationQueueForProject(projectPath);
+    // Même règle que la file de missions (R1) : on se réarme dès qu'il RESTE
+    // des demandes, succès ou échec (une passe réussie n'en retire qu'une).
+    if (delegationState(projectPath).queue.length > 0) {
+      armDelegationQueueReplay(projectPath); // encore des demandes : on reste prêt
     }
   }, DELEGATION_QUEUE_REPLAY_MS);
 }
@@ -4469,14 +4474,15 @@ function flushDelegationQueue(projectPath) {
   const ds = delegationState(projectPath);
   ds.busy = false;
   if (ds.queue.length === 0) return;
-  const next = ds.queue.shift();
   const tabs = window._pilotTabs;
   if (!tabs) {
-    // Gestionnaire d'onglets indisponible : on perd la file (ne devrait pas
-    // arriver). On consomme quand même pour ne pas boucler sur un item mort.
-    console.warn("[delegation-queue] tabs indisponibles, demande perdue");
+    // Gestionnaire d'onglets indisponible : on GARDE la demande en tête de file
+    // (le rejeu périodique la reprendra) au lieu de la consommer puis la perdre
+    // — SEUL chemin qui perdait vraiment une demande (R10).
+    console.warn("[delegation-queue] tabs indisponibles, demande conservée en file");
     return;
   }
+  const next = ds.queue.shift();
   ds.busy = true;
   // Transmettre la demande suivante (fire-and-forget : le résultat sera
   // reporté dans le chat via transmitDelegationToAgent).

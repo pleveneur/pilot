@@ -635,6 +635,37 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
     expect(src).not.toContain("la demande est mise en file et se lancera automatiquement");
     expect(src).not.toContain("La demande est mise en file d'attente et se lancera automatiquement");
   });
+
+  // R1 (relecture indépendante) : une passe RÉUSSIE ne retire qu'UNE mission de
+  // la file. Avant le correctif, le déclencheur ne se réarmait qu'en cas
+  // d'ÉCHEC (`!r.replayed`) : avec deux missions en file, la seconde perdait
+  // TOUT déclencheur dès que la première était lancée. Ce test ÉCHOUE si l'on
+  // revient à `if (!r.replayed && ...)`, ou si le réarmement disparaît.
+  it("R1 : une passe réussie sur deux missions laisse un déclencheur armé pour la seconde", async () => {
+    vi.useFakeTimers();
+    const p = "r1-file-missions";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [
+      { launch: () => { launched++; } },
+      { launch: () => { launched++; } },
+    ];
+    try {
+      invoke.mockResolvedValue({ sessions: [] }); // admission libre
+      armQueueReplay(p);
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(launched, "1re mission lancée par la passe").toBe(1);
+      expect(runAgentsQueueByProject[p]).toHaveLength(1);
+      // La passe a RÉUSSI : le déclencheur doit malgré tout s'être réarmé.
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(launched, "2e mission lancée par le déclencheur réarmé").toBe(2);
+      expect(runAgentsQueueByProject[p] || []).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      invoke.mockReset();
+      invoke.mockResolvedValue(undefined);
+      delete runAgentsQueueByProject[p];
+    }
+  });
 });
 
 describe("POINT C — rejeu garanti de la file de DÉLÉGATIONS (issue #66)", () => {
@@ -695,6 +726,52 @@ describe("POINT C — rejeu garanti de la file de DÉLÉGATIONS (issue #66)", ()
     expect(route).toContain("do_send_agent_prompt");
     expect(route).not.toContain("send_agent_command_to");
   });
+
+  // R1 : même garantie de réarmement que la file de missions, sur la file de
+  // délégations. Le gestionnaire d'onglets est volontairement absent : `flush`
+  // ne peut pas vider la file, donc la passe « réussit » sans rien consommer —
+  // un déclencheur doit rester armé après elle. Ce test ÉCHOUE si l'on revient
+  // à `if (!r.replayed && ...)` (aucun timer réarmé).
+  it("R1 : une passe réussie laisse un déclencheur armé tant qu'il reste des demandes", async () => {
+    vi.useFakeTimers();
+    const ds = delegationState(P);
+    const prevTabs = window._pilotTabs;
+    window._pilotTabs = undefined; // pas de gestionnaire d'onglets
+    ds.queue.push({ request: "r1-a", projectPath: P, agentId: "a" });
+    ds.queue.push({ request: "r1-b", projectPath: P, agentId: "a" });
+    try {
+      invoke.mockResolvedValue({ sessions: [] }); // agent libre
+      armDelegationQueueReplay(P);
+      await vi.advanceTimersByTimeAsync(16000);
+      expect(ds.queue, "demandes toujours en file").toHaveLength(2);
+      expect(vi.getTimerCount(), "un declencheur doit rester arme").toBeGreaterThan(0);
+    } finally {
+      window._pilotTabs = prevTabs;
+      vi.useRealTimers();
+      invoke.mockReset();
+      invoke.mockResolvedValue(undefined);
+      resetDs();
+    }
+  });
+
+  // R10 : si le gestionnaire d'onglets est indisponible, l'élément de tête ne
+  // doit PAS être consommé puis perdu (seul chemin qui perdait une demande).
+  // Ce test ÉCHOUE si `flushDelegationQueue` fait `shift()` avant de tester
+  // `tabs` : la demande aurait disparu de la file.
+  it("R10 : onglets indisponibles → la demande reste en file (jamais perdue)", async () => {
+    const ds = delegationState(P);
+    const prevTabs = window._pilotTabs;
+    window._pilotTabs = undefined;
+    ds.queue.push({ request: "r10", projectPath: P, agentId: "a", agentTabOpen: true });
+    try {
+      const r = await replayDelegationQueueForProject(P, { isAgentFree: async () => true });
+      expect(r.replayed).toBe(true);
+      expect(ds.queue, "la demande reste en file").toHaveLength(1);
+    } finally {
+      window._pilotTabs = prevTabs;
+      resetDs();
+    }
+  });
 });
 
 // POINT G (suite) — le bouton « Refaire » du dialogue de boucle renvoie un
@@ -720,5 +797,23 @@ describe("POINT G — le bouton « Refaire » (dialogue de boucle) est gardé", 
     expect(guardIdx, "la garde doit précéder la nouvelle session").toBeLessThan(newSessionIdx);
     // Le test « aucun prompt » est AVANT la garde (message exact, pas un faux refus).
     expect(body.indexOf("Aucun prompt à relancer")).toBeLessThan(guardIdx);
+  });
+});
+
+// R2 (relecture indépendante) — le dépôt inter-projets DIFFÉRÉ n'est rejoué par
+// aucun mécanisme : le message doit donc dire COMMENT reprendre la tâche, et la
+// spec doit le dire aussi (pas de fausse promesse de rejeu). Ce test ÉCHOUE si
+// le message perd la marche à suivre, ou si la spec la retire.
+describe("R2 — le dépôt inter-projets différé dit comment reprendre", () => {
+  it("le message backend et la spec indiquent la reprise manuelle", () => {
+    const rust = readFileSync(new URL("../../src-tauri/src/interproject.rs", import.meta.url), "utf8");
+    const i = rust.indexOf("AUCUNE exécution n'a été lancée");
+    expect(i).toBeGreaterThan(-1);
+    const msg = rust.slice(i, i + 500);
+    expect(msg).toContain("lire le fichier déposé");
+    expect(msg).toContain("relancez le dépôt");
+    const spec = readFileSync(new URL("../../spec_interproject.md", import.meta.url), "utf8");
+    expect(spec).toContain("reprise manuelle");
+    expect(spec).toContain("aucun rejeu automatique");
   });
 });
