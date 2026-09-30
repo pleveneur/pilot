@@ -279,6 +279,51 @@ export function superAgentReflectingFromEvent(type) {
   return null;
 }
 
+/**
+ * Consigne préparée envoyée dans la conversation de l'Assistant par le bouton
+ * « Analyser et ranger mes données » de l'onglet 🧭 (spec_super_agent.md §7).
+ *
+ * Fonction pure : le texte est verrouillé par un test qui exige ses garanties
+ * (lecture seule stricte, rapport écrit + proposition de rangement en trois
+ * parties, aveu honnête de ce qui n'a pas pu être examiné) et l'interdiction de
+ * toute modification. Aucune machinerie nouvelle n'est ajoutée au cœur du
+ * logiciel : l'Assistant dispose déjà de ses outils pour LIRE son dossier de
+ * travail (`~/.pilot/assistant/`) et sa base de suivi
+ * (`~/.pilot/super-agent.db`) ; ce texte décrit le travail et ses limites.
+ * @returns {string}
+ */
+export function buildDataAnalysisPrompt() {
+  return [
+    "**Analyser et ranger mes données — analyse en LECTURE SEULE.**",
+    "",
+    "Cette consigne a été préparée par le bouton « Analyser et ranger mes données » de l'onglet Assistant. Elle décrit exactement le travail attendu et ses limites : suis-la telle quelle.",
+    "",
+    "**1) Examine, en lecture seule :**",
+    "- ton dossier de travail (`~/.pilot/assistant/`, organisé par client puis par projet) : ce qu'il contient, comment c'est rangé, ce qui est vide, en double ou orphelin ;",
+    "- ta base de suivi (`~/.pilot/super-agent.db` : clients, projets, tâches, décisions, jalons, résumés de session).",
+    "Utilise uniquement tes outils de LECTURE (lecture de fichiers, `db_query` en SELECT).",
+    "",
+    "**2) Interdictions — pendant toute cette analyse :**",
+    "- ne RIEN modifier, ne RIEN supprimer, ne rien renommer, ne rien déplacer ;",
+    "- aucune écriture : pas de `db_execute`, aucun fichier créé, édité, renommé ou supprimé ;",
+    "- tu ne fais que lire et rapporter : ce n'est pas un rangement, c'est une analyse.",
+    "",
+    "**3) Rends un rapport écrit dans cette conversation :**",
+    "- ce que contiennent tes données : volumes, organisation, ce qui est bien rangé et ce qui l'est moins ;",
+    "- doublons, incohérences, éléments orphelins, dossiers ou tables vides, noms ambigus ;",
+    "- ce que tu n'as pas pu conclure (et pourquoi).",
+    "",
+    "**4) Présente ensuite une PROPOSITION DE RANGEMENT**, clairement séparée en trois parties :",
+    "- **ce qui est sûr** : rangement évident, sans risque ;",
+    "- **ce qui est discutable** : il y a un choix à faire ;",
+    "- **ce qui doit être décidé par l'utilisateur** : ce que tu ne peux pas trancher seul.",
+    "",
+    "**5) Honnêteté :** si quelque chose n'a pas pu être examiné (outil indisponible, donnée illisible, dossier inaccessible), dis-le explicitement au lieu de le passer sous silence. N'invente aucun chiffre.",
+    "",
+    "Rappel final : tu ne modifies rien. Tu observes, tu rapportes et tu proposes — l'utilisateur décidera ensuite du rangement.",
+  ].join("\n");
+}
+
 // Flag de suivi automatique du bas (ré-armé par le listener `scroll`). Module
 // scope : une seule discussion assistant à la fois. Vrai par défaut (on suit
 // le flux au démarrage) ; passe à false quand l'utilisateur remonte pour relire
@@ -1453,6 +1498,7 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="analyze-data" title="Analyser et ranger mes données (analyse en lecture seule : rapport + proposition de rangement)"><i data-lucide="folder-search" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="telegram-dialog" id="superagent-telegram-btn" title="Communication Telegram" aria-label="Communication Telegram" hidden><i data-lucide="message-circle" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
     <span class="agent-status" id="superagent-status">Prêt</span>
@@ -1661,6 +1707,7 @@ export async function createSuperAgent(container) {
   const statusEl = toolbar.querySelector("#superagent-status");
   const inputEl = inputBar.querySelector("#superagent-input");
   const modelSelect = toolbar.querySelector("#superagent-model-select");
+  const analyzeDataBtn = toolbar.querySelector('[data-action="analyze-data"]');
   registerPendingBar(pendingBar, inputEl);
   // Affiche/masque le bandeau « assistant occupé » dans la barre de saisie.
   function setBusyHint(visible) {
@@ -1707,6 +1754,17 @@ export async function createSuperAgent(container) {
     // réelle (aucune question en attente).
     reflectingActive = !!reflecting;
     applyReflecting();
+    // Bouton « Analyser et ranger mes données » : désactivé pendant que
+    // l'Assistant travaille (MÊME signal que la teinte de réflexion, pas une
+    // nouvelle source de vérité). Deux conséquences voulues : l'utilisateur
+    // voit immédiatement que le travail a démarré, et un second clic ne peut
+    // pas lancer une analyse en parallèle.
+    if (analyzeDataBtn) {
+      analyzeDataBtn.disabled = !!reflecting;
+      analyzeDataBtn.title = reflecting
+        ? "Analyse en cours… (lecture seule : rapport + proposition de rangement)"
+        : "Analyser et ranger mes données (analyse en lecture seule : rapport + proposition de rangement)";
+    }
   };
 
   // ── Chargement de la liste des modèles ──
@@ -2182,6 +2240,8 @@ export async function createSuperAgent(container) {
       } else {
         trackingEl.classList.add("hidden");
       }
+    } else if (action === "analyze-data") {
+      await launchDataAnalysis();
     } else if (action === "voice") {
       toggleVoiceInput();
     } else if (action === "telegram-dialog") {
@@ -2251,6 +2311,27 @@ export async function createSuperAgent(container) {
       statusEl.textContent = "Prêt";
       setReflecting(false);
     }
+  }
+
+  // ── Bouton « Analyser et ranger mes données » (spec_super_agent.md §7) ──
+  // Un clic dépose dans la conversation une consigne PRÉPARÉE (fonction pure
+  // `buildDataAnalysisPrompt`) qui impose une analyse en LECTURE SEULE puis un
+  // rapport + une proposition de rangement. Le clic a un effet visible
+  // immédiat : la bulle de la demande apparaît et le bouton se désactive (la
+  // désactivation est pilotée par `setReflecting`, donc elle tient pendant
+  // toute l'analyse). Les deux gardes ci-dessous empêchent en plus un lancement
+  // pendant une question en attente ou pendant que l'Assistant travaille.
+  async function launchDataAnalysis() {
+    if (hasPendingQuestion()) {
+      appendSystemMessage(messagesEl, "ℹ️ Répondez d'abord à la question en attente, puis relancez l'analyse.");
+      return;
+    }
+    if (isStreaming || backendBusy) {
+      appendSystemMessage(messagesEl, "⏳ Analyse impossible pour l'instant : l'Assistant est déjà en train de travailler.");
+      return;
+    }
+    inputEl.value = buildDataAnalysisPrompt();
+    await send();
   }
 
   inputEl.addEventListener("keydown", (e) => {

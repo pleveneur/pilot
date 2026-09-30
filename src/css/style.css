@@ -3554,6 +3554,15 @@ body.zen-mode #project-footer {
   background: var(--bg-hover);
 }
 
+.agent-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agent-btn:disabled:hover {
+  background: var(--bg-input);
+}
+
 .agent-btn.active {
   background: var(--success);
   border-color: var(--success);

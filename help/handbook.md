@@ -1840,6 +1840,27 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   restauré à la réouverture de l'onglet.
 - **Identique sur l'accès distant web** : en mode « 🧭 Assistant », le bouton
   **⛶** en haut de l'interface web ouvre le même mode immersif.
+<!-- HELP:super-agent-data-care -->
+### Analyser et ranger vos données d'assistant (lecture seule)
+- Dans la barre de boutons de l'onglet 🧭 Assistant, le bouton **🔍 (Analyser et
+  ranger mes données)** lance une **analyse en lecture seule** des données de
+  votre assistant : son **dossier de travail** (`~/.pilot/assistant/`) et sa
+  **base de suivi** (clients, projets, tâches, décisions, jalons, résumés de
+  session).
+- **Vous voyez tout de suite que ça a démarré** : votre demande apparaît dans
+  la conversation et le bouton se **désactive** (« Analyse en cours… ») tant
+  que l'analyse tourne. Un second clic ne lance pas une seconde analyse en
+  parallèle.
+- **Rien n'est modifié** pendant cette analyse : l'assistant **observe et
+  propose** — il ne supprime, ne déplace, ne renomme et ne modifie rien.
+- Il rend un **rapport écrit** (contenu, organisation, doublons, incohérences,
+  éléments orphelins, ce qui n'a pas pu être conclu) puis une **proposition de
+  rangement** en trois parties : **ce qui est sûr**, **ce qui est discutable**,
+  **ce qui reste à décider par vous**. Il signale honnêtement ce qu'il n'a pas
+  pu examiner.
+- **C'est vous qui décidez** ensuite : si vous voulez que le rangement proposé
+  soit appliqué, demandez-le dans la conversation.
+<!-- /HELP:super-agent-data-care -->
 
 ---
 
