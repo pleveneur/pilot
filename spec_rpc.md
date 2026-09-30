@@ -101,6 +101,11 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 
 > **Résolution du shim npm scopé (issue #84)** : pour les paquets npm scopés (ex. `@earendil-works/pi-coding-agent`), `resolve_pi_executable()` (pi_update.rs) ne suppose plus un dossier `node_modules/pi` fixe. Il résout le vrai cli via le champ `bin` du `package.json` des paquets de `node_modules` (directs ET scopés), préférant le paquet nommé « pi » — aucun chemin de build codé en dur. Si aucun cli n'est trouvé, le shim est lancé via `cmd.exe /c` sous Windows. `probe_backend()`/`get_backend_info` (rpc.rs) réutilisent la MÊME résolution que le lancement réel pour que le health-check soit fidèle au spawn. Le message « Connexion au super-agent perdue » (super-agent.js) joint désormais un court extrait du stderr réel à la cause.
 
+### 4bis. Santé et mise à jour du backend (issue #26)
+
+- **Health check au démarrage (E4)** : Pilot sonde `<rpc_pi_path> --version` au lancement de l'application (commande `pi_health_check`, timeout 3 s) → `{ok, kind, version, error, path}` (voir §5). Si l'exécutable est absent ou injoignable, toast d'avertissement + gate dans l'onglet agent (écran « π indisponible » avec bouton « Ouvrir les paramètres » au lieu d'une session RPC qui planterait). Re-sonde automatique au changement de chemin pi.
+- **Mise à jour de Pi** : à l'ouverture de l'onglet agent, si le backend est `pi` (pas `plh`) et que `pi_skip_update_check` est `false`, `pi_update::check_pi_update` compare la version installée (`pi --version`) à la dernière publiée (`https://pi.dev/api/latest-version`). Si une mise à jour existe : modale **[Mettre à jour]** / **[Plus tard]** / **[Ne plus demander]**. « Mettre à jour » lance `pi update --self` (`pi_update::update_pi`) ; « Ne plus demander » persiste `pi_skip_update_check=true` dans la config.
+
 ---
 
 ## 5. Commandes Tauri implémentées

@@ -1,180 +1,71 @@
 # Spécifications — Pilot
 
 > Spécifications fonctionnelles et techniques de l'éditeur Pilot.
-> Pour l'architecture et la stack, voir `AGENTS.md`.
+> Architecture, stack et arborescence : `AGENTS.md`.
+> Chaque feature a sa spec dédiée (table de navigation rapide dans `AGENTS.md`).
 
-**Pilot** est un **environnement de développement intégré (IDE)** multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) dont le cœur est constitué des agents IA de codage **pi** et **plh**. Les **fournisseurs et modèles LLM sont paramétrables** (d'autres providers et modèles d'API peuvent être configurés ; certains modèles peuvent ne pas être testés — des évolutions peuvent être demandées). Pilot porte la **vision particulière de son développeur (Patrick Leveneur)**, potentiellement différente des autres solutions existantes, avec une **intégration maximale de l'IA**. Le but final : un **assistant de codage** mais aussi un **assistant de suivi de dossiers** — grâce à l'IA et aux agents, suivre une activité de façon très efficace et faire des propositions et ajustements très élaborés.
+**Pilot** est un **environnement de développement intégré (IDE)** multiplateforme (Tauri v2, Rust + HTML/CSS/JS/Vite) dont le cœur est constitué des agents IA de codage **pi** et **plh**. Les **fournisseurs et modèles LLM sont paramétrables** (certains modèles peuvent ne pas être testés). Pilot porte la **vision particulière de son développeur (Patrick Leveneur)** avec une **intégration maximale de l'IA** : un **assistant de codage** mais aussi un **assistant de suivi de dossiers** — suivre une activité efficacement et faire des propositions et ajustements élaborés.
 
 ---
 
 ## 1. Interface
 
-L'interface se divise en trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Panneau d'Actions** (bas gauche).
+Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Panneau d'Actions** (bas gauche). Titre de fenêtre : `Pilot` par défaut, `Pilot <chemin>` si un projet est ouvert.
 
 ### A. Barre Latérale
-
-- **Sélecteur de projet** : bouton "Projets" avec dropdown (📁 Nouveau + 10 récents). Dossier = "Projet de l'Agent IA".
-- **Arborescence** : tree view sans dossier racine, flèches ▶/▼, mise à jour temps réel (poller custom). Les dossiers lourds/non pertinents (`node_modules`, `.git`, `target`, `dist`, `build`, `vendor`, `bundle`, environnements virtuels Python `.venv`/`venv`/`.tox`, caches `__pycache__`/`.mypy_cache`/`.pytest_cache`/`.ruff_cache`, caches IDE/CI…) sont ignorés à la lecture **et** par le watcher (source unique `IGNORED_DIRS` dans `lib.rs`) pour éviter l'explosion mémoire sur les gros projets. Drag & drop externe.
-- **Filtre** : champ texte pour filtrer par nom, `Ctrl+P` pour focus.
-- **Favoris** : section « ⭐ Favoris » en haut de l'arborescence, collapsible. Clic droit → Ajouter/Retirer des favoris. `Ctrl+Shift+B` pour le fichier actif. Persistance dans la config.
-- **Menu contextuel** :
-  - Fichier `.md` : Prévisualiser, Exporter PDF, Supprimer, Envoyer à l'agent Pi
-  - Fichier `.pdf` : Prévisualiser, **Créer un fichier Markdown** (heuristiques + IA configurable), Supprimer
-  - Fichier `.csv` : Prévisualiser CSV, Supprimer
-  - Autre fichier : Supprimer, Envoyer à l'agent Pi
-  - Dossier : Créer fichier, Créer dossier, Supprimer, Analyser ce dossier
-  - Zone vide : Créer fichier, Créer dossier
-- **Menus natifs WebView2 désactivés** (issue #23) : le clic droit sur un ascenseur
-  (scrollbar) n'affiche plus de menu système. Un menu custom (Copier/Couper/Coller)
-  remplace le menu natif dans l'éditeur CodeMirror et les champs de saisie.
-- Suppression avec confirmation native, fermeture auto des onglets concernés.
-- Persistance de l'expansion des dossiers après rafraîchissement.
+- **Sélecteur de projet** : bouton "Projets" (📁 Nouveau + 10 récents). Un dossier = un "Projet de l'Agent IA".
+- **Arborescence** : tree view sans racine, flèches ▶/▼, temps réel (poller custom), drag & drop externe, expansion persistée. Les dossiers lourds/non pertinents (`node_modules`, `.git`, `target`, `dist`, `build`, `vendor`, environnements virtuels Python, caches IDE/CI…) sont ignorés à la lecture **et** par le watcher (liste unique `IGNORED_DIRS`, `lib.rs`) pour éviter l'explosion mémoire sur les gros projets.
+- **Filtre** : champ texte, `Ctrl+P`. **Favoris** : section « ⭐ Favoris » collapsible, clic droit (ajouter/retirer), `Ctrl+Shift+B` pour le fichier actif, persistés en config.
+- **Menu contextuel** : `.md` → prévisualiser / exporter PDF / supprimer / envoyer à l'agent Pi ; `.pdf` → prévisualiser / **créer un fichier Markdown** (heuristiques + IA configurable) / supprimer ; `.csv` → prévisualiser ; autre fichier → envoyer à l'agent Pi / supprimer ; dossier → créer fichier/dossier, supprimer, analyser ; zone vide → créer. Suppression avec confirmation native (onglets concernés fermés automatiquement) ; menus natifs WebView2 désactivés (issue #23) au profit d'un menu custom Copier/Couper/Coller dans l'éditeur et les champs.
 
 ### B. Zone de Travail
-
-| Mode | Fichiers | Icône | Technologie |
-|---|---|---|---|
-| Édition | `.md`, `.js`, `.ts`, `.py`, `.rs`, `.json`, `.yaml`, `.html`, `.css`, `.sql`, `.java`, `.cpp`, `.xml`, `.php`… | 📝 | CodeMirror 6 (multi-langages via `languages.js`) |
-| Split (éditeur + prévisualisation) | `.md` | 📝👁️ | CodeMirror 6 + markdown-it, `Ctrl+Shift+E` pour basculer — scroll synchronisé proportionnellement dans les deux sens, position préservée pendant l'édition |
-| Prévisualisation Markdown | `.md` | 👁️ | markdown-it + Mermaid.js — liens cliquables (interne → onglet, externe → navigateur, ancre → scroll) |
-| Prévisualisation PDF | `.pdf` | 📕 | PDF.js |
-| Prévisualisation image | `.png`, `.jpg`, `.gif`, `.webp`, `.svg` | 🖼️ | `<img>` + zoom/fit |
-| Prévisualisation CSV | `.csv` | 📊 | Parseur JS + tableau HTML |
-| Terminal intégré | — | 🖥️ | xterm.js + PTY |
-| Agent Pi | — | π | RPC (voir `spec_rpc.md`) |
-| Multi-onglets agents | — | π + | Plusieurs onglets agent indépendants (bouton « + ») ; nombre + noms configurés par projet dans `.pilot/agents.json`, rechargés au démarrage (voir [`spec_project_agents.md`](spec_project_agents.md)) |
-| Prompt Builder | — | 🧩 | Clic-droit → Ajouter + templates + envoi à Agent Pi |
-| Agents multi-rôles | — | 🎭 | Coordinateur + agents spécialisés, protocole `[[CALL:…]]` séquentiel (voir [`spec_gestion_agents.md`](spec_gestion_agents.md)) |
-
-- **Raccourcis Markdown** : `Ctrl+B` gras, `Ctrl+I` italique, `Ctrl+K` lien, `Ctrl+Shift+E` split view.
-- **Recherche globale** : `Ctrl+Shift+F` ouvre un panneau de recherche full-text dans tous les fichiers du projet (regex + filtre par extension).
-- **Outline** : `Ctrl+Shift+O` bascule la table des matières Markdown (headings cliquables, mise à jour en temps réel).
-- **Palette de commandes** : `Ctrl+Shift+P` fuzzy search sur toutes les actions avec navigation clavier.
-- **Navigation** : `Ctrl+G` aller à la ligne, `Ctrl+Tab`/`Ctrl+Shift+Tab` onglet suivant/précédent (fonctionne aussi dans le terminal), `Ctrl+1`…`Ctrl+9` aller à l'onglet par position, `Ctrl+P` filtre fichiers, `Ctrl+Shift+S` enregistrer sous.
-- **Coloration multi-langages** : 14 langages supportés (JS/TS, Python, Rust, Java, C++, CSS, HTML, JSON, YAML, SQL, XML, PHP) avec chargement lazy et folding du code. Les blocs de code Markdown sont aussi colorés.
-- **Notifications (Toasts)** : retours visuels non-bloquants en bas à droite pour les opérations réussies (sauvegarde, création, suppression) et les erreurs (lecture, écriture, export).
-- **Statistiques barre de statut** : mots / caractères / lignes + temps de lecture estimé (~200 mots/min) pour Markdown ; encodage (UTF-8/UTF-8 BOM/UTF-16) ; fin de ligne (LF/CRLF).
-- **Auto-save configurable** : option activable dans les paramètres avec délai personnalisable (défaut 3s), indicateur visuel dans la barre de statut, sauvegarde tous les onglets dirty.
-- **Auto-complétion IA inline** : `Ctrl+Space` déclenche une suggestion en gris (ghost text). `Tab` accepte, `Escape` rejette. Toute saisie rejette aussi.
-- **Images** : drag & drop / Ctrl+V → copie dans `images/` + `![]()`.
-- **Export PDF** : génération HTML + `window.print()`.
-- **Onglets** : ouverture/fermeture, sauvegarde auto, détection conflits (flash rouge), fermeture auto au changement de projet, confirmation avant fermeture de l'onglet Agent, `Ctrl+Shift+S` enregistrer sous avec mise à jour du chemin.
-- **KaTeX/LaTeX** : formules `$...$` et `$$...$$` rendues dans la prévisualisation (plugin `@traptitech/markdown-it-katex`), adaptées au thème dark/light, incluses dans l'export PDF.
-- **Sidebar** : redimensionnement par séparateur draggable, largeur persistée dans la config, double-clic = largeur par défaut (280px).
-- **Mode Zen** : `F11` → plein écran sans barre latérale.
+- **Édition** : CodeMirror 6 multi-langages (14 langages, chargement lazy + folding ; blocs de code Markdown colorés) — `.md`, `.js`, `.ts`, `.py`, `.rs`, `.json`, `.yaml`, `.html`, `.css`, `.sql`, `.java`, `.cpp`, `.xml`, `.php`…
+- **Prévisualisations** : Markdown (markdown-it + Mermaid + KaTeX `$...$`/`$$...$$`, liens internes/externes/ancres) avec **split** éditeur+aperçu (`Ctrl+Shift+E`, scroll synchronisé dans les deux sens) ; PDF (PDF.js) ; images (zoom/fit) ; CSV (tableau HTML).
+- **Terminal intégré** : xterm.js + PTY. **Agent Pi** : RPC → [`spec_rpc.md`](spec_rpc.md). **Multi-onglets agents** : onglets π indépendants, configurés par projet dans `.pilot/agents.json` → [`spec_project_agents.md`](spec_project_agents.md).
+- **Agents multi-rôles** (coordinateur + agents spécialisés, protocole `[[CALL:…]]` séquentiel) → [`spec_gestion_agents.md`](spec_gestion_agents.md). **Prompt Builder** : clic droit → ajouter + templates + envoi à l'agent Pi.
+- **Raccourcis** : `Ctrl+B`/`Ctrl+I`/`Ctrl+K` (Markdown), `Ctrl+Shift+E` (split), `Ctrl+Shift+F` (recherche globale full-text, regex + filtre par extension), `Ctrl+Shift+O` (outline), `Ctrl+Shift+P` (palette de commandes fuzzy), `Ctrl+G` (aller à la ligne), `Ctrl+Tab`/`Ctrl+Shift+Tab` et `Ctrl+1…9` (onglets), `Ctrl+Shift+S` (enregistrer sous), `Ctrl+Space` (complétion IA inline : ghost text, `Tab` accepte, `Échap` rejette), `F11` (mode Zen).
+- **Barre de statut** : mots / caractères / lignes + temps de lecture (~200 mots/min), encodage (UTF-8 / BOM / UTF-16), fin de ligne (LF/CRLF), indicateur d'auto-save configurable (défaut 3 s, sauvegarde tous les onglets dirty). **Divers** : images (drag & drop / `Ctrl+V` → copie dans `images/` + `![]()`), export PDF (HTML + `window.print()`, KaTeX inclus), notifications toast non bloquantes, sidebar redimensionnable (largeur persistée, double-clic = 280 px), onglets (sauvegarde auto, conflit → flash rouge, fermeture auto au changement de projet, confirmation avant de fermer l'onglet Agent).
 
 ### C. Panneau d'Actions
-
-- ⚙️ **Paramètres** : modale en onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant). Thème dark/light + **sous-thèmes** (5 par mode, aperçu en direct avant enregistrement), commande défaut, auto-load projet, terminal intégré, params RPC (5 champs), renvoi à la ligne automatique (word wrap).
-- 📂 **Explorateur** : ouvre le dossier projet dans l'explorateur OS.
-- 🖥️ **Terminal** : intégré (xterm.js) ou externe selon paramètre.
-- π **Agent Pi** : ouvre l'onglet agent (si RPC activé).
-- 🎭 **Agents** : équipe d'agents multi-rôles (coordinateur, architecte, codeur, reviewer, testeur, documenteur) si le mode est activé dans les paramètres. Voir [`spec_gestion_agents.md`](spec_gestion_agents.md).
-- 💬 **Feedback** : ouvre l'onglet de remarques/évolutions (formulaire GitHub/email + lecture des issues, voir [`spec_feedback.md`](spec_feedback.md)). Accessible sans projet ouvert.
-
-### D. Titre de fenêtre
-
-- `Pilot` par défaut, `Pilot <chemin>` si projet ouvert.
+- ⚙️ **Paramètres** : modale à onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant / Avatar / Serveurs MCP + écrans transverses GDS et service Laya). Thème dark/light + sous-thèmes (5 par mode, aperçu en direct), commande défaut, auto-load projet, terminal (intégré/externe), params RPC, word wrap.
+- 📂 **Explorateur** (dossier projet dans l'OS) · 🖥️ **Terminal** · π **Agent Pi** · ▶ **Commandes du projet** (voir plus bas) · 🎭 **Agents** · 🔍 **Review** · 📜 **Sessions** · 📊 **Tableau de bord** · 🔐 **Coffre** · 💬 **Feedback** (accessible sans projet) · écrans GDS (« GDS Serveur », « GDS paramétrage »).
 
 ### E. Design system & icônes
-
-- **Design tokens CSS** : échelles partagées (`--space-*`, `--radius-*`, `--shadow-*`, `--ring`, `--transition*`) + ombres/anneaux de focus par thème (dark/light). Utilisés par tous les composants (modales, boutons, inputs, onglets, menu contextuel) pour un rendu cohérent et « pro ».
-- **Icônes Lucide** (SVG inline, package `lucide`) : remplacent les emojis des boutons, titres, menu contextuel, arbre explorateur (fichiers/dossiers) et onglet agent (toolbar + mode Orchestration + micro/send). Tailles uniformes `.icon` (16px) / `.icon-sm` (14px) / `.icon-lg` (20px). Couleur = `currentColor` (suit le thème). Helpers dans `src/js/icons.js` : `refreshIcons(root?)` (rend toutes les `<i data-lucide>` d'un sous-arbre, après injection HTML), `setIcon(el, name)` (bouton à état, ex: abort/reconnect, dossier ouvert/fermé), `setIconText(el, name, text)` (item de menu = icône + libellé). **Icônes par type de fichier** (`sidebar.js`) : `FILE_ICONS` (map extension→icône, ex: `.md`→`file-text`, `.html`→`globe`, `.css`→`palette`, `.ts`→`file-code-2`, `.sh`→`file-terminal`, `.json`→`file-json`, `.yaml`→`braces`, `.env`→`file-key`, `.mp3`→`file-audio`, `.mp4`→`file-video`, `.exe`→`binary`, `.db`→`database`, `.log`→`file-clock`, `.diff`→`file-diff`…) + `FILE_NAMES` (noms complets sans extension ou multi-points, ex: `Dockerfile`→`box`, `Makefile`→`wrench`, `LICENSE`→`scroll-text`, `.env.local`→`file-key`). Résolution : nom complet → extension → défaut `file`. Lucide étant monochrome et sans logos de marque, les langages de programmation génériques partagent `file-code` ; seules les **familles fonctionnelles** sont distinguées. **Coloration par catégorie** : `ICON_CATEGORY` (map icône→catégorie) + helper `iconCategory()` posent une classe `icon-cat-<cat>` sur le wrapper `<span class='icon'>` de l'explorateur (dossiers, fichiers, favoris, projets récents uniquement — pas les boutons de l'agent qui restent neutres). CSS : tokens `--cat-*` par thème (palette Catppuccin Mocha/Latte, désaturée) + règles `.icon-cat-* { color: var(--cat-*) }`. Catégories : folder (ambré), doc (bleu), web (orange), style (violet), code (bleu-ciel), terminal (vert), data (jaune), config (gris), build (orange), secret (rouge), image (turquoise), media (rose), archive (orange foncé), binary (gris foncé), database (cyan), diag (gris), default (neutre). Le SVG Lucide utilisant `currentColor` pour son trait, la couleur posée sur le wrapper se propage à l'icône.
+- **Design tokens CSS** partagés (`--space-*`, `--radius-*`, `--shadow-*`, `--ring`, `--transition*`) + ombres / anneau de focus par thème, utilisés par tous les composants (modales, boutons, inputs, onglets, menu contextuel).
+- **Icônes Lucide** (SVG inline ; `src/js/icons.js` : `refreshIcons`, `setIcon`, `setIconText`) à la place des emojis, tailles `.icon`/`.icon-sm`/`.icon-lg`, couleur `currentColor`. Icône par type de fichier (`FILE_ICONS` / `FILE_NAMES`, `sidebar.js`) et coloration par catégorie (`ICON_CATEGORY` → classe `icon-cat-*`, tokens `--cat-*` par thème).
 
 ---
 
 ## 2. Spécifications Techniques
 
-### Mode dev vs installé (issue #25)
-
-`npm run tauri dev` (via le wrapper `scripts/tauri.js`) fusionne
-`src-tauri/tauri.dev.conf.json` qui remplace l'identifiant par
-`com.pilot.editor.dev`. Conséquences : verrou single-instance distinct,
-`app_data_dir` distinct (config, sessions, audit, extensions, skills) → la
-version dev tourne en parallèle de la version installée. Le port web distant
-effectif est décalé de +1 en build dev (`effective_web_port` dans `lib.rs`,
-utilisé par `web_server.rs`, `tailscale.rs` et `web_commands.rs`).
-
-### File Watching
-- File watcher : poller custom (`std::fs::read_dir` récursif, filtrage `IGNORED_DIRS` pendant le walk, polling 2 s) → événements Tauri `file-change`. Remplace l'ancien `notify::PollWatcher` qui re-scanne récursivement tout le projet (y compris `target/`, `node_modules/`) à chaque poll et figeait l'UI sur les gros projets Rust.
-- Debounce 500ms + déduplication côté backend et frontend.
-
-### PTY (Terminal intégré)
-- `portable-pty` : ConPTY (Windows), PTY natif (macOS/Linux).
-- Shell : `cmd.exe` / `$SHELL` ou `zsh` / `$SHELL` ou `bash`.
-- **Windows** : le PATH complet (système + utilisateur) est reconstruit depuis la
-  registry (HKLM + HKCU) et injecté dans le PTY, car le processus Pilot peut ne
-  pas avoir le PATH utilisateur à jour (ex: `.cargo\bin` ajouté après son
-  lancement). Les commandes comme `cargo` sont donc trouvées dans le terminal
-  intégré.
-- Streaming via `terminal-output`, ResizeObserver, thème adaptatif.
-- Copier/Coller contextuel : `Ctrl+C` copie si sélection, sinon SIGINT.
+- **Mode dev vs installé (issue #25)** : `npm run tauri dev` (wrapper `scripts/tauri.js` + `tauri.dev.conf.json`) prend l'identifiant `com.pilot.editor.dev` et un port web décalé de +1 → la version dev tourne en parallèle de l'installée (verrou single-instance et `app_data_dir` distincts).
+- **File watching** : poller custom (`read_dir` récursif filtré par `IGNORED_DIRS`, 2 s) → événements `file-change`, debounce 500 ms + déduplication. Remplace `notify::PollWatcher` (re-scan complet qui figeait l'UI sur les gros projets Rust).
+- **PTY (terminal intégré)** : `portable-pty` (ConPTY Windows, PTY natif macOS/Linux), shell `cmd.exe` / `$SHELL` (zsh/bash) ; sous Windows le PATH complet (registry HKLM + HKCU) est injecté dans le PTY. Streaming `terminal-output`, `Ctrl+C` = copie si sélection sinon SIGINT.
+- **Persistance** : config JSON dans `app_data_dir` (thème, commande, projets récents, params RPC, options). **Permissions Tauri** : `core:default` + `dialog:default` + `updater:default` + `process:default`.
 
 ### Agent Pi (RPC)
-- Processus `pi --mode rpc` lancé par `rpc_manager.rs`.
-- Dialogue JSON/JSONL sur stdin/stdout, 15+ commandes Tauri.
-- **Démarrage auto de l'agent** : réglage « Démarrer l'agent au lancement de Pilot » (`agent_start_on_launch`, défaut **false**, case dans Paramètres → Démarrage). Couvre TOUT démarrage automatique de l'agent : au lancement de Pilot (activé + agent RPC activé + un projet chargé ⇒ ouverture de l'onglet agent) ET à l'ouverture/bascule d'un projet (les onglets agents persistés ne sont pas restaurés). Aucun effet sur l'ouverture manuelle ni sur le cycle de vie des sessions ; les vues mémorisées (`agent_views`) restent sauvegardées — réouverture manuelle possible et restauration retrouvée si le réglage est réactivé.
-- **Assistant 🧭 au lancement** : réglage « Démarrer l'assistant au lancement de Pilot » (`super_agent_start_on_launch`, défaut **true**, case dans Paramètres → Démarrage). Rouvre l'onglet 🧭 Assistant au démarrage de Pilot ; cumulé (OU) avec le drapeau historique `super_agent_open` (reprise de l'état d'ouverture à la fermeture, conservé pour compat). Voir [`spec_super_agent.md`](spec_super_agent.md).
-- **Avatar (PLface)** : onglet **Paramètres → Avatar**. Réglage « Lancer mon avatar (PLface) au démarrage » (`plface_autostart_enabled`, défaut **false** ; chemin de l'exécutable `plface_exe_path`, défaut vide ; modèle `plface_avatar_path`, défaut vide) ainsi qu'un **bouton d'arrêt** et un **indicateur d'état** (avatar lancé / arrêté). Au démarrage de Pilot, si l'option est active, Pilot sonde l'API locale de PLface (`http://127.0.0.1:3000/status`, timeout court < 1 s) ; si elle ne répond pas, il lance l'exécutable **détaché**. Le visage lancé par Pilot est **tracé** (fichier `plface.pid` dans le dossier de données : identifiant + nom du programme) : Pilot le **referme à sa fermeture** (arrêt propre `GET /close` puis arrêt du processus, avec garde sur le nom du processus pour ne jamais arrêter une autre application), et **nettoie au démarrage suivant** un visage resté en vie après une fermeture brutale (sinon il verrouille sa propre copie dans le dossier de compilation et bloque la préparation du paquet en dev, « os error 32 »). Un visage lancé **à la main** n'est pas tracé et n'est **jamais** refermé par Pilot (bouton « Arrêter mon avatar » inchangé, `stop_if_running`). L'exécutable est résolu dynamiquement : champ `plface_exe_path` renseigné → chemin choisi par la personne ; champ vide → **programme du visage livré avec Pilot** (`src-tauri/assets/plface.exe`, une seule copie physique, ressource embarquée via `bundle.resources` et résolue dynamiquement en dev comme une fois installée, **clé en main**) ; programme livré introuvable (ou plateforme non Windows) → aucun lancement, en silence. Un lancement par Pilot transmet **toujours** `--no-taskbar` au visage (mode discret : absent de la barre des tâches Windows) ; un visage lancé à la main reste visible comme avant. Si `plface_avatar_path` est renseigné, le modèle `.vrm` est transmis au visage via `--avatar <chemin>` ; si le réglage est vide, le **modèle d'avatar par défaut livré avec Pilot** (`src-tauri/assets/PilotBase.vrm`, une seule copie physique, ressource embarquée via `bundle.resources` et résolue dynamiquement en dev comme une fois installée) est utilisé ; s'il est absent ou illisible, aucun argument n'est ajouté (le visage se rabat sur son modèle intégré, sans erreur). Boutons « Tester maintenant » (commande `check_and_launch_plface`) et « Arrêter mon avatar » (commande `stop_plface`, `GET /close` du visage ; discret si l'avatar n'est pas lancé ou ne répond pas) + case décochée = arrêt propre. Jamais bloquant, fail-open : un utilisateur sans PLface ne voit aucune différence. Messages **clairs et non techniques** (`src/js/plface-utils.js`). Moteur : [`src-tauri/src/plface.rs`](src-tauri/src/plface.rs) (logique pure `decide_launch`, `decide_stop`, `avatar_arg`, `resolve_avatar`, `resolve_exe`, `parse_pid_file`, `name_matches`, `stop_owned`) et résolveurs de ressource `default_avatar_path` / `default_plface_exe_path` (`src-tauri/src/lib.rs`).
-- **Mode Orchestration** (voir [`spec_orchestration.md`](spec_orchestration.md)) : orchestrateur cloud + codeur local, planification en micro-tâches, édition chirurgicale `SEARCH/REPLACE`, linting-in-the-loop et directive globale.
-- **Quality-gate interne** (voir [`spec_quality_gate.md`](spec_quality_gate.md)) : bouton 🛡️ dans la toolbar de l'agent → active un protocole anti-régression embarqué par Pilot (`--skill`), persistant (`quality_gate_enabled`), relance l'agent au clic.
-- **Health check au démarrage** (E4) : Pilot sonde `<rpc_pi_path> --version` au lancement ; si l'exécutable est absent/injoignable, toast d'avertissement + gate dans l'onglet agent (écran « π indisponible » avec bouton « Ouvrir les paramètres » au lieu d'une session RPC qui planterait). Re-sonde automatique sur changement de chemin pi.
-- **Mise à jour de Pi** (issue #26) : à l'ouverture de l'onglet agent, si le backend est `pi` (pas `plh`) et que `pi_skip_update_check` est `false`, `pi_update::check_pi_update` compare la version installée (`pi --version`) à la dernière (`https://pi.dev/api/latest-version`). Si une mise à jour existe, modale [Mettre à jour] [Plus tard] [Ne plus demander] ; « Mettre à jour » lance `pi update --self` (`pi_update::update_pi`). « Ne plus demander » persiste `pi_skip_update_check=true` dans la config.
-- Voir [`spec_rpc.md`](spec_rpc.md) pour le détail complet.
+- Processus `pi --mode rpc` (ou programme 100 % compatible pi, ex. plh) piloté en JSON/JSONL ; sessions gérées par l'`AgentService` (clé composite (projet, agent), parking, pointeur actif). Détail complet : [`spec_rpc.md`](spec_rpc.md).
+- **Démarrage auto** : `agent_start_on_launch` (défaut **false**) règle **tout** démarrage automatique de l'agent (au lancement de Pilot et à l'ouverture/bascule d'un projet) ; `super_agent_start_on_launch` (défaut **true**) rouvre l'onglet 🧭 Assistant → [`spec_multiprojects.md`](spec_multiprojects.md), [`spec_super_agent.md`](spec_super_agent.md).
+- **Santé et mise à jour du backend** : health check `--version` au lancement → gate « π indisponible » dans l'onglet agent, re-sonde au changement de chemin pi (E4) ; si backend `pi` et `pi_skip_update_check` false, comparaison avec la dernière version → modale [Mettre à jour] (`pi update --self`) / [Plus tard] / [Ne plus demander] (issue #26). Détail : [`spec_rpc.md`](spec_rpc.md) §4bis.
+- **Extensions pi embarquées** : Mode Orchestration → [`spec_orchestration.md`](spec_orchestration.md) ; quality-gate 🛡️ (protocole anti-régression, persistant, relance l'agent) → [`spec_quality_gate.md`](spec_quality_gate.md) ; porte pré-écriture (diff avant/après des `write`/`edit`) → [`spec_diff_review.md`](spec_diff_review.md) ; boutons de choix/confirmation/saisie → [`spec_rpc.md`](spec_rpc.md) §8bis ; MCP (voir ci-dessous).
+- **Avatar (PLface)** : Paramètres → Avatar — `plface_autostart_enabled` (défaut false), `plface_exe_path`, `plface_avatar_path` ; programme et modèle livrés avec Pilot (`assets/plface.exe`, `assets/PilotBase.vrm`, résolus dynamiquement, sinon aucun lancement en silence). Pilot sonde l'API locale du visage et le lance détaché si elle ne répond pas ; un avatar lancé par Pilot est **tracé** (`plface.pid`) et refermé à la fermeture (arrêt propre `GET /close`, garde sur le nom du processus), un avatar lancé à la main n'est jamais refermé ; lancement toujours `--no-taskbar`. Boutons « Tester maintenant » / « Arrêter mon avatar ». Fail-open, non bloquant (`plface.rs`, `plface-utils.js`). Doc utilisateur : `help/overview.md`.
 
-### Accès distant web (mode remote)
-- Serveur HTTP (axum) + UI web (`web/`) : consultation, chat agent, dictée vocale (Web Speech API), en lecture seule ou non.
-- Auth : mot de passe distant (hash argon2) + token opaque + sessions, rate limiting, audit (ring buffer 500).
-- **Automatisation Tailscale Serve** (opt-in, voir [`spec_web_remote.md`](spec_web_remote.md) §14) : expose automatiquement `https://<nom-magicdns>.ts.net/` (HTTPS 443 → `127.0.0.1:port`), resync au changement de port, URL + QR code affichés dans les Paramètres. Exige `web_bind = 127.0.0.1`.
-
-### Aide intégrée (❓)
-- Onglet « ❓ Aide » : chat LLM sur le **handbook** (doc condensée embarquée, générée à la compilation depuis les blocs `<!-- HELP:* -->` des specs). Voir [`spec_help.md`](spec_help.md).
-- Backend Option A : process pi temporaire `--no-session` cadré (pas d'outils, pas de fichiers). Isolé de l'agent de coding.
-
-### Context Engine (auto-contexte agent)
-- Avant le 1er prompt de chaque session agent (chat standard), Pilot construit et injecte automatiquement un **contexte projet** (AGENTS.md, `.pilot/context.md`, fichier actif, imports, manifestes, specs référencées, fichiers récents) dans un budget de tokens configurable. Bouton 📑 dans la toolbar pour forcer la ré-injection. Voir [`spec_context_engine.md`](spec_context_engine.md). V1 heuristique.
-
-### Diff Review agent (porte pré-écriture)
-- Paramètre **« Porte pré-écriture »** (`confirm_file_edits`, désactivé par défaut). Activé : avant chaque `write`/`edit` de l'agent, un **diff (avant/après)** s'affiche avec **✓ Accepter** (l'outil s'exécute) / **✗ Refuser** (l'outil est bloqué, fichier **intact**). Implémenté via une extension pi (`pilot-edit-gate`) qui bloque `tool_call` + `ctx.ui.confirm` (RPC bloquant). Auto-approve en Mode Orchestration. Voir [`spec_diff_review.md`](spec_diff_review.md).
-
-### Mémoire de projet auto-maintenue
-- `PROJECT_MEMORY.md` à la racine du projet, **tenu par l'agent** (conventions, pièges, décisions d'architecture, dépendances clés). Injecté avant chaque tâche (Mode Orchestration) et avant le 1er prompt d'une session (chat). Extraction automatique opt-in : après chaque tâche d'orchestration réussie, l'agent extrait 1–3 faits appris et les ajoute au fichier. Bouton 📝 (toolbar agent) pour ouvrir/éditer le fichier. Git-committable. Voir [`spec_project_memory.md`](spec_project_memory.md).
-
-### Git intégré (C1)
-- Badges de statut Git dans l'explorateur : `M` (orange = modifié working tree), `M`/`A` (vert = staged/add), `D` (rouge = supprimé), `?` (gris = non suivi) ; dossiers contenant un fichier modifié marqués `•`. Via CLI `git status --porcelain` (zéro dep Cargo). Rafraîchi sur watcher, en parallèle de `refresh_tree`.
-- **Diff visuel** : clic droit → « 🔖 Voir le diff Git » → modale plein écran read-only réutilisant le moteur de diff d'A4 (`diff-view.js`), `before` = `git show HEAD:<path>`, `after` = contenu disque. Désactivé gracieusement si le projet n'est pas un repo Git (ou `git` absent).
-
-### GDS (gestionnaire de sources)
-- **Serveur conteneurisé** : `gds-server/` = **un seul service** (PostgreSQL + sshd + service HTTP) ; socle partagé `gds-core/` **sans dépendance Tauri**. Sources Git + **suivi fusionné** dans une base PostgreSQL unique. Activation **par projet** (`.pilot/gds.json`).
-- **Trois rôles** appliqués par le serveur : `admin` (comptes + dépôts), `dev` (publier / forcer le suivi — **tous** les projets du serveur, décision 2026-09), `standard` (lecture seule).
-- **Sans verrou** : concurrence « **dernier qui écrit gagne** », conflits **journalisés** (`tracking.conflict`), pas de fusion horodatée.
-- **Deux écrans transverses** (ouverts sans projet, boutons de la barre d'outils) : « 🖥️ GDS Serveur — administration » (connexion, comptes, dépôts, espace/journal, contrôle du service) et « ⚙️ GDS — paramétrage » (serveurs, identité, clés, projets). L'onglet « 🌐 GDS » reste **par projet** (statut suivi fusionné, synchroniser, retirer). Voir [`spec_gds.md`](spec_gds.md), [`spec_assistant_sync.md`](spec_assistant_sync.md).
-
-### Revue de code assistée (H5)
-- Onglet **🔍 Review** (bouton 🔍) : l'agent joue le rôle de **second reviewer** sur le diff Git. Portée : modifs non commitées (`git diff HEAD`) ou dernier commit (`git diff HEAD~1 HEAD`). Process pi temporaire cadré (`ask_pi_caged`, réutilise l'aide intégrée) — **lecture seule**, aucune modification du projet. Revue structurée (bugs, sécurité, perfs, style, cohérence specs) + questions de suivi. Voir [`spec_review.md`](spec_review.md).
-
-### Historique de sessions searchable (H9)
-- Onglet **📜** (bouton 📜) : index local de **toutes les sessions agent** (passées et nouvelles) dans `.pilot/sessions.jsonl` (append-only) + tags dans `.pilot/sessions-tags.json`. Recherche full-text (regex si la requête commence par `/`) + filtres tag / fichier (chemin relatif) / type (chat/orchestration/review). Détail d'une session : relecture du JSONL pi (messages + tool calls, lecture seule). Tags éditables (chips + autocomplétion). **Rétro-indexation automatique** à la 1re ouverture (lecture du dossier de sessions pi du projet) + bouton « Réindexer ». **Capture live** à l'`agent_end` (chat standard, hors orchestration). Ne dépend pas de pi (consultable hors-ligne). Confidentialité : index local au projet, jamais envoyé au cloud ni au web distant. Voir [`spec_session_history.md`](spec_session_history.md).
-
-### Feedback utilisateurs (💬)
-- Onglet **💬** (bouton `message-square-plus`) : permet à l'utilisateur d'envoyer un retour (bug / évolution / remarque) via deux canaux sans backend ni secret embarqué : **Ouvrir sur GitHub** (`issues/new` pré-rempli, navigateur système) ou **Envoyer par email** (`mailto:` vers l'adresse de feedback). Le corps est pré-construit (type, titre, description, version Pilot auto, OS auto, email optionnel). **Lecture des issues existantes** via l'API publique GitHub (dépôt public `pleveneur/pilot`, anonyme, CORS `*`) pour éviter les doublons. Accessible sans projet ouvert. Voir [`spec_feedback.md`](spec_feedback.md).
-
-### Palette de commandes du projet (#17)
-- Bouton **▶** (panneau d'actions, `square-terminal`) : modale listant les **commandes paramétrées du projet courant**, stockées **par projet** dans `.pilot/commands.json`. Actions **Ajouter / Modifier / Supprimer** (suppression confirmée).
-- Chaque commande = **nom** + **commande shell** (ex: `npm run build`, `cargo build`) + **dossier de travail** (relatif au projet, vide = racine).
-- **Clic sur une commande** → le système se place dans le dossier configuré puis lance la commande dans un **onglet terminal dédié** (#29) : titre = nom de la commande, liste des commandes fermée. Relancer une commande déjà ouverte **bascule** sur son onglet (sans relancer le process). Fermer l'onglet arrête le PTY (comportement identique au terminal intégré).
-- Backend : `files::read_project_commands` / `files::save_project_commands` (`.pilot/commands.json`), `terminal::spawn_terminal_command` (PTY avec `cwd` + commande explicites). Frontend : `project-commands.js`.
+### Features transverses (une spec dédiée par sujet)
+- **Accès distant web** : serveur axum + UI `web/` (consultation, chat, dictée vocale), auth argon2 + token opaque + sessions, rate limiting, audit ; automatisation Tailscale Serve opt-in (HTTPS 443, URL + QR code) → [`spec_web_remote.md`](spec_web_remote.md).
+- **Aide intégrée ❓** : chat LLM sur le handbook embarqué (doc condensée générée à la compilation depuis les blocs HELP des specs) via un process pi temporaire cadré, isolé de l'agent de coding → [`spec_help.md`](spec_help.md).
+- **Context Engine 📑** : injection automatique du contexte projet avant le 1er prompt (budget de tokens configurable, bouton de ré-injection) → [`spec_context_engine.md`](spec_context_engine.md).
+- **Mémoire de projet 📝** : `PROJECT_MEMORY.md` tenu par l'agent (conventions, pièges, décisions, dépendances), injecté avant chaque tâche, extraction opt-in après une tâche réussie → [`spec_project_memory.md`](spec_project_memory.md).
+- **Git intégré** : badges de statut dans l'explorateur (`M`/`A`/`D`/`?`, dossiers contenant une modification marqués `•`) + diff visuel read-only (CLI `git`, zéro dépendance Cargo).
+- **GDS** : serveur conteneurisé unique (`gds-server/` : PostgreSQL + sshd + HTTP), socle partagé sans Tauri (`gds-core/`), sources Git + suivi fusionné, activation par projet (`.pilot/gds.json`), rôles `admin` (comptes + dépôts), `dev` (publier / forcer le suivi — tous les projets du serveur), `standard` (lecture seule), **sans verrou** (« dernier qui écrit gagne », conflits journalisés). Écrans transverses « GDS Serveur » et « GDS paramétrage » + onglet 🌐 GDS par projet → [`spec_gds.md`](spec_gds.md), [`spec_assistant_sync.md`](spec_assistant_sync.md).
+- **Autres onglets et features** : Review 🔍, Sessions 📜, Feedback 💬, Tableau de bord 📊, Coffre 🔐, Dictée vocale, Service Laya, Passerelle Telegram, Code Graph, sous-projets liés → specs dédiées (`spec_review.md`, `spec_session_history.md`, `spec_feedback.md`, `spec_dashboard.md`, `spec_vault.md`, `spec_voice_input.md`, `spec_laya.md`, `spec_telegram.md`, `spec_code_graph.md`, `spec_subprojects.md`).
+- **Mises à jour de Pilot** : `tauri-plugin-updater` (endpoint `plugins.updater.endpoints`, modale version + date + changelog `notes` de `latest.json`, boutons « Installer maintenant » / « Plus tard », vérification manuelle par la palette, `dialog:false` — l'UI est gérée par `updater.js`), artefacts signés (clé publique dans `tauri.conf.json`, clé privée en secret GitHub `TAURI_SIGNING_PRIVATE_KEY`), workflow `.github/workflows/release.yml` (tag `v*` : release idempotente → builds Windows NSIS/MSI, macOS DMG x86_64/aarch64, Linux AppImage → `latest.json` généré par `scripts/gen-latest-json.js`), changelog utilisateur `release-notes/vX.Y.Z.md` (fallback catégorisé depuis `git log`).
 
 ### Mode consommateur MCP
-- **Deux transports** : **local** (`stdio`, un programme de cet ordinateur) et **distant** (`http`/`https`, une adresse réseau + clé d'accès). Pilot peut se connecter à un **serveur MCP externe** via une **extension pi dédiée** qui embarque le **SDK MCP bundlé** (esbuild ; `StreamableHTTPClientTransport` pour le distant).
-- Flux : extension `mcp-client.src.ts` → bundlé par `npm run build:mcp` → `pilot-mcp-client.ts` (généré, `.gitignore`, **ne jamais éditer à la main**). Au spawn d'une session agent avec MCP, l'extension est écrite dans `<app_data_dir>/extensions/` et `PILOT_MCP_CONFIG` pointe vers `mcp.json`.
-- `mcp_config.rs` lit/écrit `mcp.json` dans `app_data_dir` (**pas AppConfig**) : `McpServer { id, name, transport, enabled, command, args, url, secret_ref }` (rétrocompatible avec l'ancien format à 6 champs ; transport vide/inconnu = local). L'extension choisit le serveur : `PILOT_MCP_SERVER` (serveur cible désigné) s'il est `enabled`, sinon repli sur le **1er serveur activé** (quel que soit son transport). Découvre `tools/list` et enregistre chaque outil en `mcp_<serverId>_<name>` (fail-open).
-- **Clé d'accès (sécurité)** : `mcp.json` ne contient **jamais** la clé, seulement sa **référence de coffre** (`secret_ref`, ex. `vault:mon-entree`). La valeur est résolue côté Rust (coffre déverrouillé) et transmise à la session par `PILOT_MCP_SECRET`, en **en-tête** `Authorization` (jamais dans l'URL) ; tout message d'erreur MCP est masqué (`redact_token`), et la clé n'est jamais renvoyée à l'UI (`mcp_list_servers` / `mcp_get_state`).
-- **Chargement au démarrage (brique A)** : `spawn_superagent_session` charge MCP dans le super-agent si `mcp_enabled` (extension + env). **Pas au démarrage** des agents d'assistant/multi-rôles — MCP n'y est ajouté qu'à la demande (brique B) : l'assistant passe `mcp_server` à `run_agents`/`run_assistant_agents` → transmis via les assignments (super-agent.js, agents-bus.js) → `start_agent_process` / `start_assistant_agent_process` (param `mcp_server`) → au spawn, si `mcp_enabled`, écriture de l'extension + `PILOT_MCP_CONFIG` + `PILOT_MCP_SERVER`. Limite connue : les variables d'env ne valent qu'au spawn — une session reprise ne change pas de serveur.
-- **Confirmation utilisateur (brique C)** : flag `AppConfig.mcp_agent_confirm` (défaut **ON**, `#[serde(default = "default_true")]`). L'assistant lit l'état via l'outil `mcp_state` (`mcp_get_state` → `{ enabled, confirm, servers }`) ; si `confirm` ON, il demande une confirmation (`ask_confirm`) avant qu'un agent utilise un serveur ; OFF → choix et lancement automatiques.
-- Commandes : `mcp_list_servers`, `mcp_save_servers`, `mcp_test_connection` (handshake `initialize` : processus local ou POST distant), `mcp_set_enabled` (persiste `mcp_enabled` dans AppConfig), `mcp_set_agent_confirm`, `mcp_get_state`.
-- **UI Paramètres « Serveurs MCP »** : onglet dédié (case globale activer/désactiver MCP → `mcp_set_enabled` ; case « Demande une confirmation utilisateur avant qu'un agent utilise un serveur MCP » → `mcp_set_agent_confirm` ; lister/ajouter/modifier/supprimer les serveurs → `mcp_list_servers`/`mcp_save_servers` ; suppression confirmée). Un éditeur unique avec bascule **Type** : *Local (commande)* → commande + arguments ; *Distant (adresse)* → adresse (`url`) + référence de clé (`secret_ref`, la valeur n'est jamais affichée). Bouton « Tester la connexion » par serveur → `mcp_test_connection` (interroge le serveur distant ou le programme local). Helpers purs testés dans `src/js/mcp-utils.js` (+ `.test.js`).
-- Dette technique à lever (post-POC) : résolution des collisions de noms d'outils.
+- **Deux transports** : **local** (`stdio`) et **distant** (`http`/`https`) via une extension pi qui embarque le SDK MCP (source `mcp-client.src.ts` → `npm run build:mcp` → `pilot-mcp-client.ts`, **généré, jamais édité à la main**). Config `mcp.json` (dans `app_data_dir`, pas dans AppConfig) : `McpServer { id, name, transport, enabled, command, args, url, secret_ref }` ; l'extension découvre `tools/list` et enregistre chaque outil en `mcp_<serverId>_<name>` (fail-open), serveur cible `PILOT_MCP_SERVER` sinon le 1er serveur activé.
+- **Sécurité** : la clé d'accès n'est **jamais** dans `mcp.json`, seulement sa **référence de coffre** (`secret_ref`, ex. `vault:mon-entree`) ; la valeur est résolue côté Rust (coffre déverrouillé) et transmise en **en-tête** `Authorization` (`PILOT_MCP_SECRET`), masquée dans les erreurs et jamais renvoyée à l'UI.
+- **Chargement** : super-agent au spawn si `mcp_enabled` (brique A) ; agents d'assistant/multi-rôles **à la demande** uniquement, via `mcp_server` passé à `run_agents`/`run_assistant_agents` → assignments → `start_agent_process` / `start_assistant_agent_process` (brique B).
+- **Confirmation (brique C)** : `mcp_agent_confirm` (défaut **ON**) ; l'assistant lit l'état via l'outil `mcp_state` et, si ON, demande `ask_confirm` avant qu'un agent utilise un serveur. Limite connue : les variables d'environnement ne valent qu'au spawn (une session reprise ne change pas de serveur).
+- **UI et commandes** : Paramètres → « Serveurs MCP » (activer MCP, case de confirmation, lister/ajouter/modifier/supprimer, « Tester la connexion » ; éditeur unique avec bascule *Local (commande)* / *Distant (adresse)*) ; commandes `mcp_list_servers`, `mcp_save_servers`, `mcp_test_connection`, `mcp_set_enabled`, `mcp_set_agent_confirm`, `mcp_get_state` ; helpers purs `src/js/mcp-utils.js`. Dette post-POC : collisions de noms d'outils.
 
 <!-- HELP:commands -->
 ## Commandes du projet (▶)
@@ -196,17 +87,7 @@ d'actions (icône **▶ square-terminal**).
   versionnable avec le projet).
 <!-- /HELP:commands -->
 
-### Persistance
-- Config JSON dans `app_data_dir` : thème, commande, projets récents, params RPC.
-
-### Permissions Tauri
-- `core:default` + `dialog:default` + `updater:default` + `process:default`.
-
-### Mises à jour automatiques
-- Plugin `tauri-plugin-updater` : au démarrage, Pilot interroge l'endpoint configuré (`plugins.updater.endpoints` dans `tauri.conf.json`, GitHub Releases par défaut). Si une MAJ est disponible, une modale affiche la nouvelle version, sa date et le **changelog** (champ `notes` de `latest.json`, rendu en Markdown) avec deux boutons : « Installer maintenant » (téléchargement + barre de progression + redémarrage) et « Plus tard ». Vérification manuelle via la palette de commandes (« Vérifier les mises à jour »). `dialog:false` dans `tauri.conf.json` (l'UI est gérée par `updater.js`, pas la boîte native Tauri).
-- Signature des artefacts via clé asymétrique (clé publique dans `tauri.conf.json`, clé privée en secret GitHub `TAURI_SIGNING_PRIVATE_KEY`).
-- Publication : workflow GitHub Actions `.github/workflows/release.yml` (tag `v*`) → `create-release` (crée la release de façon idempotente pour éviter la condition de course entre builds parallèles) → build multi-plateforme (Windows NSIS/MSI, macOS DMG x86_64/aarch64, Linux AppImage) → `latest.json` (`scripts/gen-latest-json.js`) qui génère le changelog, met à jour le body de la release GitHub, et injecte ce changelog dans le champ `notes` de `latest.json` (affiché par l'updater dans la modale de mise à jour). `tauri-action` a `updaterJson:false` (sinon il génère son propre latest.json sans changelog qui écraserait le nôtre).
-  - Notes orientées utilisateur : si `release-notes/vX.Y.Z.md` existe (rédigé à la main, en français), son contenu est utilisé comme `notes`. Sinon, fallback automatique catégorisé depuis `git log` (✨ Nouveautés / 🐛 Corrections / ⚡ Performances / 🔧 Maintenance), préfixe technique retiré, `bump version` filtré. Recommandé : rédiger `release-notes/vX.Y.Z.md` avant chaque release visible par les utilisateurs.
+Backend des commandes : `files::read_project_commands` / `save_project_commands` (`.pilot/commands.json`), `terminal::spawn_terminal_command` (PTY avec `cwd` + commande), frontend `src/js/project-commands.js`.
 
 ---
 
