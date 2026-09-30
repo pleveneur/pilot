@@ -72,7 +72,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() 
 import { invoke } from "@tauri-apps/api/core";
 import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
-import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject } from "./super-agent.js";
+import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay } from "./super-agent.js";
 
 describe("PREUVE (a) — deux missions de LECTURE tournent en parallèle sur le même projet", () => {
   it("(a) deux lectures coexistuent (clés distinctes), sans être bloquées ni s'écraser", () => {
@@ -579,6 +579,66 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
     expect(src).not.toContain("je la mets en file d'attente et la lancerai dès la fin de la tâche en cours");
     expect(src).not.toContain("la demande est mise en file et se lancera automatiquement");
     expect(src).not.toContain("La demande est mise en file d'attente et se lancera automatiquement");
+  });
+});
+
+describe("POINT C — rejeu garanti de la file de DÉLÉGATIONS (issue #66)", () => {
+  const P = "point-c-delegations";
+  const resetDs = () => {
+    const ds = delegationState(P);
+    ds.queue.length = 0;
+    ds.busy = false;
+    ds.pending = null;
+  };
+  afterEach(resetDs);
+
+  it("ne transmet PAS tant que l'agent cible travaille, puis transmet dès qu'il est libre", async () => {
+    const ds = delegationState(P);
+    ds.queue.push({ request: "r", projectPath: P, agentId: "a" });
+    let free = false;
+    let flushed = 0;
+    const flush = () => { flushed++; ds.queue.length = 0; };
+    let r = await replayDelegationQueueForProject(P, { isAgentFree: async () => free, flush });
+    expect(r).toEqual({ replayed: false, reason: "busy" });
+    expect(flushed, "occupé : la demande ne doit PAS partir").toBe(0);
+    expect(ds.queue, "la demande reste en file").toHaveLength(1);
+    free = true;
+    r = await replayDelegationQueueForProject(P, { isAgentFree: async () => free, flush });
+    expect(r).toEqual({ replayed: true, reason: "flushed" });
+    expect(flushed, "libéré : la demande en file est transmise").toBe(1);
+  });
+
+  it("une sonde en échec ne perd pas la demande (fail-closed)", async () => {
+    const ds = delegationState(P);
+    ds.queue.push({ request: "r", projectPath: P, agentId: "a" });
+    let flushed = 0;
+    const r = await replayDelegationQueueForProject(P, {
+      isAgentFree: async () => { throw new Error("sonde HS"); },
+      flush: () => { flushed++; ds.queue.length = 0; },
+    });
+    expect(r.replayed).toBe(false);
+    expect(flushed).toBe(0);
+    expect(ds.queue, "toujours en file").toHaveLength(1);
+  });
+
+  it("le chemin de mise en file de delegate_to_coder arme le rejeu (jamais de blocage silencieux)", () => {
+    const src = readFileSync(new URL("./super-agent.js", import.meta.url), "utf8");
+    const idx = src.indexOf("ds.queue.push({ request, projectPath, agentId");
+    expect(idx, "la mise en file de délégation doit exister").toBeGreaterThan(-1);
+    expect(src.slice(idx, idx + 600)).toContain("armDelegationQueueReplay(projectPath)");
+  });
+
+  it("le chemin distant (agent_prompt) ne court-circuite pas ce rejeu (pas de send_agent_command_to)", () => {
+    const rust = readFileSync(new URL("../../src-tauri/src/web_server.rs", import.meta.url), "utf8");
+    const start = rust.indexOf("async fn agent_prompt(");
+    const end = rust.indexOf("async fn superagent_prompt(", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const route = rust.slice(start, end);
+    // Le distant écrit dans la session principale, jamais dans la file de
+    // délégations : c'est la sonde périodique ci-dessus qui relance la file.
+    expect(route).toContain("do_send_agent_prompt");
+    expect(route).not.toContain("send_agent_command_to");
   });
 });
 

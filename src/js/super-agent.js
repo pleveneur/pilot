@@ -475,6 +475,65 @@ export function armQueueReplay(target) {
   }, RUN_AGENTS_QUEUE_REPLAY_MS);
 }
 
+// POINT C (file de DÉLÉGATIONS, issue #66) — déclencheur de rejeu explicite,
+// même modèle que la file de missions (`replayQueuedMissionForProject`) :
+// sonde RÉELLE de l'activité de l'agent cible, fail-closed, la demande n'est
+// jamais perdue. La file n'était vidée qu'à l'`agent_end` de l'agent cible :
+// une demande mise en file derrière un prompt DISTANT (session principale, dont
+// l'`agent_end` n'atteint pas le suivi de l'assistant) restait coincée en
+// silence. Le chemin distant (`web_server.rs` → `do_send_agent_prompt`) ne
+// court-circuite pas ce rejeu : il n'écrit pas dans la file, c'est cette sonde
+// périodique qui la relance dès que l'agent est réellement libre.
+let delegationQueueReplayByProject = {}; // project → timer id
+// ponytail: sonde périodique (latence max 15 s) plutôt qu'un réveil événementiel
+// sur chaque fin d'occupation — même pas que la file de missions, sonde réutilisée.
+const DELEGATION_QUEUE_REPLAY_MS = 15 * 1000;
+
+/**
+ * POINT C — contrôle de rejeu de la file de DÉLÉGATIONS d'un projet (UNE passe).
+ * Transmet la tête de file si — et seulement si — l'agent cible ne travaille
+ * réellement plus (sonde d'activité, pas l'état local `ds.busy` qui peut être
+ * périmé par une fin de tâche non reçue). Fail-closed : sonde en échec → la
+ * demande reste en file, jamais perdue. Extrait pour être testé de façon
+ * déterministe (injection de la sonde et du vidage).
+ * @param {string} projectPath
+ * @param {{isAgentFree?: (p: string) => Promise<boolean>, flush?: (p: string) => void}} [deps]
+ * @returns {Promise<{replayed: boolean, reason: string}>}
+ */
+export async function replayDelegationQueueForProject(projectPath, deps = {}) {
+  if (!projectPath) return { replayed: false, reason: "no_target" };
+  const ds = delegationState(projectPath);
+  if (ds.queue.length === 0) return { replayed: false, reason: "empty" };
+  const isFree = deps.isAgentFree || (async (p) => !(await isRunStillActive(p)));
+  let free;
+  try {
+    free = await isFree(projectPath);
+  } catch (_) {
+    free = false; // fail-closed : on réessaie, la demande reste en file
+  }
+  if (!free) return { replayed: false, reason: "busy" };
+  (deps.flush || flushDelegationQueue)(projectPath);
+  return { replayed: true, reason: "flushed" };
+}
+
+/**
+ * POINT C — arme (une seule fois) le déclencheur de rejeu périodique de la file
+ * de délégations d'un projet. Tant que la file n'est pas vide, le contrôle se
+ * réarme : une demande mise en file a donc TOUJOURS un déclencheur de rejeu,
+ * quelle que soit la raison du blocage. Une passe sur file vide est un no-op.
+ * @param {string} projectPath
+ */
+export function armDelegationQueueReplay(projectPath) {
+  if (!projectPath || delegationQueueReplayByProject[projectPath]) return;
+  delegationQueueReplayByProject[projectPath] = setTimeout(async () => {
+    delete delegationQueueReplayByProject[projectPath];
+    const r = await replayDelegationQueueForProject(projectPath);
+    if (!r.replayed && delegationState(projectPath).queue.length > 0) {
+      armDelegationQueueReplay(projectPath); // encore occupé : on reste prêt
+    }
+  }, DELEGATION_QUEUE_REPLAY_MS);
+}
+
 // A19 : synthèse vocale (Web Speech API) — lit la dernière réponse de
 // l'assistant quand le mode « Assistant Only » immersif est actif et que le
 // toggle « synthèse » est activé. Module-scope car handleSuperAgentEvent y
@@ -4104,6 +4163,10 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       const busy = ds.busy || await isProjectAgentBusy(projectPath);
       if (busy) {
         ds.queue.push({ request, projectPath, agentId, messagesEl, invisible, forceInvisible, agentTabOpen });
+        // POINT C : la demande en file est TOUJOURS rejouée (sonde réelle de
+        // l'agent cible) — jamais de blocage silencieux si l'agent_end n'arrive
+        // pas (prompt distant, session figée…).
+        armDelegationQueueReplay(projectPath);
         appendSystemMessage(messagesEl, "📋 L'agent travaille déjà sur une tâche. Demande mise en file (elle sera transmise à la fin de la tâche en cours).");
         await respondSuperAgentAction(id, true);
         return;
