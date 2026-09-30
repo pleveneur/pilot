@@ -9,6 +9,10 @@ import {
   buildKanbanColumns,
   countByColumn,
   buildKanbanByClient,
+  isOpenTaskStatus,
+  taskStatusLabel,
+  filterOpenTasksByClient,
+  formatTaskDeadline,
 } from "./super-agent-kanban.js";
 
 describe("KANBAN_COLUMNS", () => {
@@ -154,5 +158,88 @@ describe("buildKanbanByClient", () => {
     expect(buildKanbanByClient([null])).toEqual([
       { name: "Sans client", columns: buildKanbanColumns([]) },
     ]);
+  });
+});
+
+// Onglet « Tâches » du panneau cloche : seules les tâches OUVERTES sont vues
+describe("isOpenTaskStatus", () => {
+  it("considère ouvertes les tâches à faire, en cours et à valider", () => {
+    expect(isOpenTaskStatus("demande")).toBe(true);
+    expect(isOpenTaskStatus("en_cours")).toBe(true);
+    expect(isOpenTaskStatus("a_valider")).toBe(true);
+    expect(isOpenTaskStatus("blablabla")).toBe(true);
+  });
+
+  it("exclut les tâches terminées et annulées", () => {
+    expect(isOpenTaskStatus("terminee")).toBe(false);
+    expect(isOpenTaskStatus("livree")).toBe(false);
+    expect(isOpenTaskStatus("annulee")).toBe(false);
+    expect(isOpenTaskStatus("abandonne")).toBe(false);
+  });
+});
+
+describe("taskStatusLabel", () => {
+  it("rend le libellé de la colonne du statut", () => {
+    expect(taskStatusLabel("en_cours")).toBe("En cours");
+    expect(taskStatusLabel("a_valider")).toBe("À valider");
+    expect(taskStatusLabel("terminee")).toBe("Terminé");
+    expect(taskStatusLabel("demande")).toBe("À faire");
+  });
+
+  it("rend « Annulée » pour un statut annulé, « À faire » pour un statut inconnu", () => {
+    expect(taskStatusLabel("annulee")).toBe("Annulée");
+    expect(taskStatusLabel("blablabla")).toBe("À faire");
+  });
+});
+
+describe("filterOpenTasksByClient", () => {
+  it("ne garde que les tâches ouvertes et retire les clients sans tâche ouverte", () => {
+    const clients = [
+      {
+        name: "Acme",
+        tasks: [
+          { id: 1, status: "en_cours" },
+          { id: 2, status: "terminee" },
+          { id: 3, status: "demande" },
+        ],
+      },
+      { name: "Globex", tasks: [{ id: 4, status: "annulee" }] },
+    ];
+    const out = filterOpenTasksByClient(clients);
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("Acme");
+    expect(out[0].tasks.map((t) => t.id)).toEqual([1, 3]);
+  });
+
+  it("gère une entrée vide ou null", () => {
+    expect(filterOpenTasksByClient([])).toEqual([]);
+    expect(filterOpenTasksByClient(null)).toEqual([]);
+  });
+});
+
+describe("formatTaskDeadline", () => {
+  const now = new Date(2026, 8, 30); // 30/09/2026
+
+  it("formate une date ISO en JJ/MM/AAAA", () => {
+    expect(formatTaskDeadline("2026-10-15", now)).toEqual({
+      text: "15/10/2026",
+      overdue: false,
+      iso: "2026-10-15",
+    });
+  });
+
+  it("signale un retard (échéance strictement antérieure au jour courant)", () => {
+    expect(formatTaskDeadline("2026-09-29", now).overdue).toBe(true);
+    expect(formatTaskDeadline("2026-09-30", now).overdue).toBe(false);
+  });
+
+  it("accepte un horodatage ISO complet", () => {
+    expect(formatTaskDeadline("2026-10-15T08:00:00Z", now).text).toBe("15/10/2026");
+  });
+
+  it("renvoie null pour une échéance absente ou illisible", () => {
+    expect(formatTaskDeadline(undefined, now)).toBeNull();
+    expect(formatTaskDeadline("", now)).toBeNull();
+    expect(formatTaskDeadline("pas une date", now)).toBeNull();
   });
 });

@@ -191,3 +191,66 @@ export function buildKanbanByClient(clients) {
     columns: buildKanbanColumns((client && client.tasks) || []),
   }));
 }
+
+/**
+ * Une tâche est-elle OUVERTE ? Une tâche terminée ou annulée/abandonnée ne
+ * l'est pas : l'onglet « Tâches » du panneau cloche ne montre que ce qu'il
+ * reste à faire, pas l'historique. Toute autre valeur (y compris un statut
+ * inconnu, classé « À faire ») est ouverte. Pur et testable.
+ * @param {string} status statut brut en base
+ * @returns {boolean}
+ */
+export function isOpenTaskStatus(status) {
+  const key = normalizeTaskStatus(status);
+  return key !== "done" && key !== "cancelled";
+}
+
+/**
+ * Libellé français d'une colonne Kanban pour un statut brut (« À faire », « En
+ * cours », « À valider », « Terminé »). Sert à afficher le statut de façon
+ * lisible dans la liste des tâches ouvertes. Un statut annulé/abandonné
+ * retombe sur « Annulée » ; un statut inconnu sur « À faire ». Pur.
+ * @param {string} status
+ * @returns {string}
+ */
+export function taskStatusLabel(status) {
+  const key = normalizeTaskStatus(status);
+  if (key === "cancelled") return "Annulée";
+  const col = KANBAN_COLUMNS.find((c) => c.key === key);
+  return col ? col.label : "À faire";
+}
+
+/**
+ * Ne garde, dans la réponse de `get_super_agent_kanban`, que les tâches
+ * OUVERTES, en conservant la structure par client. Un client dont toutes les
+ * tâches sont terminées/annulées est retiré (pas d'en-tête vide). Pur.
+ * @param {Array<{name?: string, tasks?: Array}>} clients
+ * @returns {Array<{name: string, tasks: Array}>}
+ */
+export function filterOpenTasksByClient(clients) {
+  const out = [];
+  for (const client of clients || []) {
+    if (!client) continue;
+    const tasks = (client.tasks || []).filter((t) => isOpenTaskStatus(t && t.status));
+    if (tasks.length) out.push({ name: client.name || "Sans client", tasks });
+  }
+  return out;
+}
+
+/**
+ * Formate la date d'échéance d'une tâche (colonne `deadline`, ISO `YYYY-MM-DD`)
+ * pour l'affichage : `{ text: "JJ/MM/AAAA", overdue, iso }`, ou `null` si
+ * absente ou illisible. La comparaison au jour courant se fait sur la chaîne
+ * ISO (ordre lexicographique = ordre chronologique). `now` est injectable pour
+ * un test déterministe. Pur.
+ * @param {string|undefined|null} deadline
+ * @param {Date} [now]
+ * @returns {{text: string, overdue: boolean, iso: string}|null}
+ */
+export function formatTaskDeadline(deadline, now = new Date()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(deadline || "").trim());
+  if (!m) return null;
+  const iso = `${m[1]}-${m[2]}-${m[3]}`;
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return { text: `${m[3]}/${m[2]}/${m[1]}`, overdue: iso < today, iso };
+}

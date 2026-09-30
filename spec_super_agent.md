@@ -106,6 +106,16 @@ apprend et répond.
     (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
     précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
+- **Volet « Tâches » dans le panneau cloche** : en plus des **Événements**, le
+  panneau cloche propose un **second onglet « Tâches »** (**Paramètres ⚙️ →
+  onglet « Assistant » → « Onglet « Tâches » dans le panneau de la cloche »**,
+  **activé par défaut**). Il liste les **tâches ouvertes** de votre suivi
+  multi-projets (à faire, en cours, à valider), groupées par client, avec leur
+  statut et leur **échéance** (signalée en retard) ; les tâches **terminées ou
+  annulées** n'y figurent pas. **Cliquez une tâche** : son détail (statut,
+  projet, échéance, description) s'affiche **dans la conversation** de
+  l'Assistant. La liste est **rechargée à chaque ouverture** et **défile** si
+  elle est longue.
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
@@ -302,6 +312,33 @@ uniquement un bloc d'instructions dans le prompt système.
   (`~/.pilot/super-agent.db`) : l'Assistant reste **lecture seule** sur les
   fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
   la vue.
+
+### Volet « Tâches » du panneau cloche
+- Le **panneau cloche** (#139, en bas à droite de l'onglet 🧭) porte désormais
+  **deux onglets commutables** dans son en-tête : **« Événements »** (historique
+  en direct, inchangé) et **« Tâches »**. La commutation est purement visuelle
+  (aucun aller-retour réseau pour Événements) ; le volet Tâches est **rechargé à
+  chaque activation** via la commande existante `get_super_agent_kanban` (aucune
+  nouvelle commande Rust).
+- Le volet Tâches n'affiche que les tâches **ouvertes** (statuts normalisés
+  ≠ `done`/`cancelled` — logique pure `isOpenTaskStatus` /
+  `filterOpenTasksByClient` dans `super-agent-kanban.js`), groupées **par
+  client**, avec **statut** (`taskStatusLabel`) et **échéance**
+  (`formatTaskDeadline`, retard signalé). La liste **défile** (même hauteur
+  maximale que celle des événements).
+- **Clic (ou Entrée/Espace) sur une tâche** : son **détail** est ajouté comme
+  **bulle de l'Assistant dans la conversation** (`showSuperTaskDetail`, jamais
+  une fenêtre ni un onglet), puis le panneau se referme pour ne pas masquer la
+  bulle.
+- **Réglage global** `super_agent_tasks_tab_enabled` (`AppConfig`, `default_true`
+  = **activé par défaut**, case **Paramètres ⚙️ → Assistant → « Onglet
+  « Tâches » dans le panneau de la cloche »**) : désactivé → panneau historique
+  (Événements seuls) et bouton d'onglet Tâches masqué. Le réglage est appliqué
+  **à chaud** à chaque `pilot-config-changed` (`applySuperEventsTabsVisibility`),
+  sans redémarrer. Fail-open : réglage illisible → on garde les deux onglets.
+- Le bouton **« tout effacer »** 🗑️ reste propre au volet Événements (masqué
+  dans le volet Tâches). Le **badge non-lus** et la **restauration de l'état
+  ouvert/fermé** (localStorage) restent inchangés pour le panneau entier.
 
 ### Espace d'écriture dédié (fichiers de suivi)
 - L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`

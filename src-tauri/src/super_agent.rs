@@ -1318,6 +1318,7 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         // Tâche #160 : overlay plein écran des événements (activé + durée s).
         "super_agent_events_overlay_enabled": cfg.super_agent_events_overlay_enabled,
         "super_agent_events_overlay_seconds": cfg.super_agent_events_overlay_seconds,
+        "super_agent_tasks_tab_enabled": cfg.super_agent_tasks_tab_enabled,
     }))
 }
 
@@ -1339,6 +1340,7 @@ pub fn set_super_agent_config(
     super_agent_auto_check_startup: Option<bool>,
     super_agent_events_overlay_enabled: Option<bool>,
     super_agent_events_overlay_seconds: Option<u32>,
+    super_agent_tasks_tab_enabled: Option<bool>,
 ) -> Result<(), String> {
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
@@ -1382,6 +1384,9 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = super_agent_events_overlay_seconds {
         cfg.super_agent_events_overlay_seconds = v;
+    }
+    if let Some(v) = super_agent_tasks_tab_enabled {
+        cfg.super_agent_tasks_tab_enabled = v;
     }
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
@@ -1763,7 +1768,7 @@ pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
     let mut stmt = conn
         .prepare(
             "SELECT c.name, p.name, p.path, t.id, t.title, t.description, \
-                    t.status, t.created_at, t.updated_at \
+                    t.status, t.deadline, t.created_at, t.updated_at \
              FROM tasks t \
              JOIN projects p ON p.id = t.project_id \
              LEFT JOIN clients c ON c.id = p.client_id \
@@ -1781,8 +1786,9 @@ pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
                 r.get::<_, String>(6)?,
-                r.get::<_, String>(7)?,
+                r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, String>(9)?,
             ))
         })
         .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
@@ -1792,13 +1798,14 @@ pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
     let mut by_client: Vec<(String, Vec<Value>)> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for row in rows {
-        if let Ok((client, pname, ppath, tid, title, desc, status, created, updated)) = row {
+        if let Ok((client, pname, ppath, tid, title, desc, status, deadline, created, updated)) = row {
             let client_name = client.unwrap_or_else(|| "Sans client".to_string());
             let task = serde_json::json!({
                 "id": tid,
                 "title": title,
                 "description": desc,
                 "status": status,
+                "deadline": deadline,
                 "created_at": created,
                 "updated_at": updated,
                 "project_name": pname,

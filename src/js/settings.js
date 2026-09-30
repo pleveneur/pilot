@@ -262,6 +262,8 @@ const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagen
 const chkSuperAgentEventsOverlay = document.getElementById("setting-superagent-events-overlay");
 const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-superagent-events-overlay-seconds");
 const superAgentEventsOverlayDurationRow = document.getElementById("superagent-events-overlay-duration-row");
+// Onglet « Tâches » du panneau cloche (actif par défaut).
+const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-tab");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -864,6 +866,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   if (chkSuperAgentEventsOverlay) chkSuperAgentEventsOverlay.checked = currentConfig.super_agent_events_overlay_enabled === true;
   if (inputSuperAgentEventsOverlaySeconds) inputSuperAgentEventsOverlaySeconds.value = currentConfig.super_agent_events_overlay_seconds ?? 5;
   if (superAgentEventsOverlayDurationRow) superAgentEventsOverlayDurationRow.style.display = (chkSuperAgentEventsOverlay && chkSuperAgentEventsOverlay.checked) ? "" : "none";
+  if (chkSuperAgentTasksTab) chkSuperAgentTasksTab.checked = currentConfig.super_agent_tasks_tab_enabled !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -1692,6 +1695,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         // ── Tâche #160 : overlay plein écran des événements ──
         super_agent_events_overlay_enabled: chkSuperAgentEventsOverlay ? chkSuperAgentEventsOverlay.checked === true : false,
         super_agent_events_overlay_seconds: inputSuperAgentEventsOverlaySeconds ? (parseInt(inputSuperAgentEventsOverlaySeconds.value, 10) || 5) : 5,
+        super_agent_tasks_tab_enabled: chkSuperAgentTasksTab ? chkSuperAgentTasksTab.checked !== false : true,
       };
     try {
       await invoke("save_config", { config });

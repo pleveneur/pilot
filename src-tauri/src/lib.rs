@@ -754,6 +754,13 @@ struct AppConfig {
     // Paramètres → onglet « Assistant ». Borne côté JS (1-120 s).
     #[serde(default = "default_super_agent_events_overlay_seconds")]
     super_agent_events_overlay_seconds: u32,
+    // Onglet « Tâches » du panneau cloche (onglet 🧭 Assistant) : quand activé,
+    // le panneau affiche DEUX onglets (« Événements » + « Tâches ») et permet
+    // de voir les tâches OUVERTES du suivi, rafraîchies à l'affichage. Actif par
+    // défaut (default_true) : un utilisateur qui ne touche à rien voit les deux
+    // onglets. Désactivé → panneau inchangé (Événements seuls).
+    #[serde(default = "default_true")]
+    super_agent_tasks_tab_enabled: bool,
     // ── GDS (spec_gds.md) : paramètre GLOBAL d'activation/désactivation ──
     // Distinct de l'activation par projet (.pilot/gds.json, décision 29/08/2026) :
     // ce toggle global coupe TOUTES les opérations GDS (sync, verrous, suivi
@@ -1085,6 +1092,7 @@ impl Default for AppConfig {
             stale_busy_grace_minutes: default_stale_busy_grace_minutes(),
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
+            super_agent_tasks_tab_enabled: true,
             gds_enabled: true,
             group_assistant_model: String::new(),
             plface_autostart_enabled: false,

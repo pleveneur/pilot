@@ -33,6 +33,12 @@ import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel
 import { mountCollapsibleAgentList } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
+import {
+  normalizeTaskStatus,
+  taskStatusLabel,
+  filterOpenTasksByClient,
+  formatTaskDeadline,
+} from "./super-agent-kanban.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
@@ -149,6 +155,18 @@ let superEventsBadge = null;   // badge compteur .sa-events-badge
 let superEventsList = null;    // liste .sa-events-list
 let superEventsOpen = false;   // panneau ouvert ?
 let superEventsUnread = 0;     // événements non lus depuis la dernière ouverture
+// Onglet « Tâches » du même panneau (tâches OUVERTES du suivi) : le panneau
+// porte DEUX onglets commutables (« Événements » — existant, inchangé — et
+// « Tâches »), activés par le réglage global `super_agent_tasks_tab_enabled`
+// (actif par défaut). Le volet Tâches est rafraîchi à chaque affichage (jamais
+// une photo périmée).
+let superEventsTabEventsBtn = null; // bouton d'onglet « Événements »
+let superEventsTabTasksBtn = null;  // bouton d'onglet « Tâches »
+let superEventsPaneEvents = null;   // volet Événements
+let superEventsPaneTasks = null;    // volet Tâches
+let superTasksList = null;          // liste .sa-tasks-list
+let superTasksById = new Map();     // cache des tâches affichées (id → tâche) pour le détail
+let superEventsActiveTab = "events"; // onglet actif du panneau
 
 // ── Overlay plein écran des événements (tâche #160) ──
 // Quand le réglage `super_agent_events_overlay_enabled` est actif, chaque
@@ -1384,6 +1402,10 @@ function openSuperEvents() {
   if (superEventsPanel) superEventsPanel.classList.remove("hidden");
   if (superEventsBtn) superEventsBtn.classList.remove("agent-pulse");
   localStorage.setItem(SUPER_EVENTS_KEY, "1");
+  // Onglet « Tâches » : rafraîchir la liste à l'ouverture (état réel, pas une
+  // photo périmée). L'onglet « Événements » reste alimenté en direct par le
+  // tampon mémoire existant (inchangé).
+  if (superEventsActiveTab === "tasks") loadSuperTasks();
 }
 
 /** Ferme le panneau des événements. */
@@ -1397,6 +1419,111 @@ function closeSuperEvents() {
 function toggleSuperEvents() {
   if (superEventsOpen) closeSuperEvents();
   else openSuperEvents();
+}
+
+/**
+ * Active un onglet du panneau cloche (« Événements » | « Tâches »). Le volet
+ * Tâches est RAFRAÎCHI à chaque activation (état réel de la base, jamais une
+ * photo périmée) ; la commutation est purement visuelle (aucun aller-retour
+ * réseau pour Événements). L'onglet Tâches n'est sélectionnable que s'il est
+ * affiché (réglage global activé).
+ * @param {"events"|"tasks"} tab
+ */
+function switchSuperEventTab(tab) {
+  const tasksAvailable = !!(superEventsTabTasksBtn && !superEventsTabTasksBtn.hidden);
+  superEventsActiveTab = tab === "tasks" && tasksAvailable ? "tasks" : "events";
+  const isTasks = superEventsActiveTab === "tasks";
+  if (superEventsTabEventsBtn) superEventsTabEventsBtn.classList.toggle("active", !isTasks);
+  if (superEventsTabTasksBtn) superEventsTabTasksBtn.classList.toggle("active", isTasks);
+  if (superEventsPaneEvents) superEventsPaneEvents.classList.toggle("hidden", isTasks);
+  if (superEventsPaneTasks) superEventsPaneTasks.classList.toggle("hidden", !isTasks);
+  // Le bouton « tout effacer » ne concerne que la liste des événements.
+  if (superEventsPanel) {
+    const clearBtn = superEventsPanel.querySelector(".sa-events-clear");
+    if (clearBtn) clearBtn.hidden = isTasks;
+  }
+  if (isTasks) loadSuperTasks();
+}
+
+/**
+ * Applique le réglage global `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT)
+ * au panneau cloche : activé → deux onglets (Événements + Tâches) ; désactivé →
+ * panneau historique inchangé (Événements seuls). Fail-open : réglage illisible
+ * → on garde les deux onglets. Appelée à la construction du panneau ET à chaque
+ * changement de configuration (bascule à chaud sans rouvrir l'onglet).
+ */
+function applySuperEventsTabsVisibility() {
+  const enabled = (configCache || {}).super_agent_tasks_tab_enabled !== false;
+  if (superEventsTabTasksBtn) superEventsTabTasksBtn.hidden = !enabled;
+  if (!enabled && superEventsActiveTab === "tasks") switchSuperEventTab("events");
+}
+
+/**
+ * Rend la liste des tâches OUVERTES du suivi de l'assistant (commande existante
+ * `get_super_agent_kanban`, filtrée sur les statuts ouverts — aucune nouvelle
+ * commande). Fail-open : une erreur de lecture affiche un message explicite,
+ * jamais une liste vide trompeuse.
+ */
+async function loadSuperTasks() {
+  if (!superTasksList) return;
+  superTasksList.innerHTML = `<div class="dash-loading">Chargement des tâches…</div>`;
+  let clients = [];
+  try {
+    const data = await invoke("get_super_agent_kanban");
+    clients = (data && data.clients) || [];
+  } catch (e) {
+    console.error("get_super_agent_kanban:", e);
+    superTasksList.innerHTML = `<div class="dash-muted">⚠️ Impossible de lire les tâches.</div>`;
+    return;
+  }
+  const open = filterOpenTasksByClient(clients);
+  superTasksById.clear();
+  if (!open.length) {
+    superTasksList.innerHTML =
+      `<div class="dash-muted">Aucune tâche ouverte : rien à faire pour l'instant.</div>`;
+    return;
+  }
+  let html = "";
+  for (const client of open) {
+    html += `<div class="sa-task-client">${escapeHtmlForSuper(client.name)} <span class="dash-muted">${client.tasks.length}</span></div>`;
+    for (const t of client.tasks) {
+      superTasksById.set(t.id, t);
+      const dl = formatTaskDeadline(t.deadline);
+      const meta = [escapeHtmlForSuper(t.project_name || "")];
+      if (dl) meta.push(`échéance ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
+      html += `<div class="sa-task-item" data-task-id="${escapeAttrForSuper(String(t.id))}" role="button" tabindex="0" title="Afficher le détail dans la conversation">
+        <div class="sa-task-head">
+          <span class="sa-task-title">${escapeHtmlForSuper(t.title || "Sans titre")}</span>
+          <span class="sa-task-status tone-${normalizeTaskStatus(t.status)}">${escapeHtmlForSuper(taskStatusLabel(t.status))}</span>
+        </div>
+        <div class="sa-task-meta">${meta.filter(Boolean).join(" · ")}</div>
+      </div>`;
+    }
+  }
+  superTasksList.innerHTML = html;
+  refreshIcons(superTasksList);
+}
+
+/**
+ * Affiche le détail d'une tâche DANS la conversation de l'Assistant (fil de
+ * discussion), jamais dans une fenêtre ni un onglet : bulle assistant au format
+ * Markdown, avec statut, projet, échéance (signalée en retard) et description.
+ * @param {string|number} taskId
+ */
+function showSuperTaskDetail(taskId) {
+  const t = superTasksById.get(Number(taskId));
+  if (!t || !superMessagesEl) return;
+  const lines = [`### 📋 ${t.title || "Sans titre"}`, ""];
+  lines.push(`- **Statut** : ${taskStatusLabel(t.status)}`);
+  if (t.project_name) lines.push(`- **Projet** : ${t.project_name}`);
+  const dl = formatTaskDeadline(t.deadline);
+  if (dl) lines.push(`- **Échéance** : ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
+  const desc = String(t.description || "").trim();
+  if (desc) {
+    lines.push("");
+    lines.push(desc);
+  }
+  appendMessage(superMessagesEl, "assistant", lines.join("\n"));
 }
 
 /**
@@ -1450,6 +1577,9 @@ export async function createSuperAgent(container) {
   // changement de config et références à window._pilotTabs après teardown).
   const onConfigChanged = () => {
     refreshSuperAgentConfig().then(() => {
+      // Réglage global de l'onglet « Tâches » : activation/désactivation à chaud,
+      // sans redémarrer (le panneau cloche suit immédiatement).
+      applySuperEventsTabsVisibility();
       const tabs = window._pilotTabs;
       if (tabs && typeof tabs.updateSuperAgentLabel === "function") {
         tabs.updateSuperAgentLabel(superAgentDisplayLabel());
@@ -1598,28 +1728,65 @@ export async function createSuperAgent(container) {
   const eventsPanel = document.createElement("div");
   eventsPanel.id = "superagent-events-panel";
   eventsPanel.className = "sa-events-panel hidden";
+  // Le panneau porte DEUX onglets commutables : « Événements » (historique,
+  // inchangé) et « Tâches » (tâches OUVERTES du suivi, ajouté quand le réglage
+  // global `super_agent_tasks_tab_enabled` est actif — il l'est par défaut).
   eventsPanel.innerHTML = `
     <div class="sa-events-header">
-      <span class="sa-events-title">Événements</span>
+      <div class="sa-events-tabs" role="tablist">
+        <button class="sa-events-tab active" role="tab" data-sa-tab="events">Événements</button>
+        <button class="sa-events-tab" role="tab" data-sa-tab="tasks" hidden>Tâches</button>
+      </div>
       <div class="sa-events-header-actions">
         <button class="agent-btn sa-events-clear" title="Tout effacer" aria-label="Tout effacer"><i data-lucide="trash-2" class="icon-sm"></i></button>
         <button class="agent-btn sa-events-close" title="Fermer" aria-label="Fermer"><i data-lucide="x" class="icon-sm"></i></button>
       </div>
     </div>
-    <div class="sa-events-list"></div>
+    <div class="sa-events-pane sa-events-pane-events">
+      <div class="sa-events-list"></div>
+    </div>
+    <div class="sa-events-pane sa-events-pane-tasks hidden">
+      <div class="sa-tasks-list"></div>
+    </div>
   `;
   wrapper.appendChild(eventsPanel);
   superEventsPanel = eventsPanel;
   superEventsBtn = eventsBtn;
   superEventsBadge = eventsBadge;
   superEventsList = eventsPanel.querySelector(".sa-events-list");
+  superEventsTabEventsBtn = eventsPanel.querySelector('.sa-events-tab[data-sa-tab="events"]');
+  superEventsTabTasksBtn = eventsPanel.querySelector('.sa-events-tab[data-sa-tab="tasks"]');
+  superEventsPaneEvents = eventsPanel.querySelector(".sa-events-pane-events");
+  superEventsPaneTasks = eventsPanel.querySelector(".sa-events-pane-tasks");
+  superTasksList = eventsPanel.querySelector(".sa-tasks-list");
   superEventsOpen = false;
   superEventsUnread = 0;
+  superEventsActiveTab = "events";
   eventsBtn.addEventListener("click", toggleSuperEvents);
   eventsPanel.querySelector(".sa-events-close").addEventListener("click", closeSuperEvents);
   eventsPanel.querySelector(".sa-events-clear").addEventListener("click", () => {
     if (superEventsList) superEventsList.innerHTML = "";
   });
+  // Commutation des onglets (le volet Tâches est rechargé à chaque activation).
+  superEventsTabEventsBtn.addEventListener("click", () => switchSuperEventTab("events"));
+  superEventsTabTasksBtn.addEventListener("click", () => switchSuperEventTab("tasks"));
+  // Clic (ou Entrée/Espace, la carte est focusable) sur une tâche → son détail
+  // s'affiche DANS LA CONVERSATION, puis le panneau se referme pour ne pas
+  // masquer la bulle qui vient d'être ajoutée au fil.
+  const onTaskActivate = (e) => {
+    const item = e.target.closest(".sa-task-item");
+    if (!item) return;
+    showSuperTaskDetail(item.dataset.taskId);
+    closeSuperEvents();
+  };
+  superTasksList.addEventListener("click", onTaskActivate);
+  superTasksList.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onTaskActivate(e);
+  });
+  // Réglage global : panneau historique (Événements seuls) si désactivé.
+  applySuperEventsTabsVisibility();
   // Restaurer l'état ouvert/fermé mémorisé (localStorage).
   if (localStorage.getItem(SUPER_EVENTS_KEY) === "1") {
     openSuperEvents();
