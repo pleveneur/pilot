@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -328,6 +328,20 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(getRunState("projetA")).toBe("idle");
   });
 
+  it("instrumentation : le message NOMME la porte qui a tiré, l'agent et l'inactivité mesurée", async () => {
+    const ctx = beginRunWithAgent();
+    ctx.lastActivityAt = Date.now() - 10 * 60 * 1000;
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })]);
+    let msg = "";
+    attachMissionSink(ctx.runKey, { onDone: () => {}, onError: (e) => (msg = e.message) });
+    await releaseStuckRunLock("projetA");
+    // Avant : les quatre portes émettaient le même message. Maintenant la cause
+    // est visible : porte + agents + inactivité réellement mesurée.
+    expect(msg).toContain("agents déclarés actifs");
+    expect(msg).toContain("magnus");
+    expect(msg).toContain("10 min");
+  });
+
   it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
     beginRun("projetA");
     await releaseStuckRunLock("projetA");
@@ -335,7 +349,26 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
   });
 });
 
-// ── Issue #87 : verrou orphelin « travail en file sans porteur » ───────────
+// Instrumentation pure (mission « libération abusive du verrou de run ») : le
+// message de libération doit distinguer les quatre portes (avant, un seul
+// message identique pour toutes → cause invisible).
+describe("buildWatchdogReleaseMessage — instrumentation des portes du watchdog", () => {
+  it("les quatre portes produisent des messages DIFFÉRENTS et nomment agents + inactivité", () => {
+    const msgs = ["noActive", "residualParallel", "ghosts", "orphanQueue"].map((door) =>
+      buildWatchdogReleaseMessage({ door, agents: ["magnus"], idleMs: 90_000, queued: 2 }),
+    );
+    expect(new Set(msgs).size).toBe(4);
+    expect(msgs[2]).toContain("agents déclarés actifs mais plus aucun ne travaille");
+    expect(msgs[2]).toContain("magnus");
+    expect(msgs[2]).toContain("1 min 30 s");
+    expect(msgs[2]).toContain("2 demande(s) encore en file");
+    // Sans agent et sans mesure : message honnête, pas de champ inventé.
+    const bare = buildWatchdogReleaseMessage({ door: "noActive" });
+    expect(bare).toContain("aucun agent actif");
+    expect(bare).toContain("aucun agent enregistré");
+    expect(bare).not.toContain("inactivité");
+  });
+});
 // Incident : après la mort silencieuse d'un agent (proc_state='Running' sans
 // processus vivant, busy retombé à 0), le verrou de run du projet restait
 // « running » indéfiniment : `releaseStuckRunLock` ne détectait pas le cas

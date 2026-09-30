@@ -63,6 +63,52 @@ const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des o
 // `activeAgents`) tout en récupérant un verrou orphelin en ~1 min.
 const QUEUED_ORPHAN_GRACE_MS = 60 * 1000;
 
+// Watchdog — instrumentation (mission « libération abusive du verrou de run ») :
+// les QUATRE portes de libération (noActive, residualParallel, ghosts,
+// orphanQueue) émettaient le MÊME message, ce qui rendait la cause invisible et
+// empêchait de savoir pourquoi un verrou avait été libéré. Ce formateur NOMME la
+// porte, les agents concernés, la durée d'inactivité réellement mesurée et le
+// nombre de demandes restant en file. Fonction PURE (exportée pour les tests).
+const WATCHDOG_DOOR_LABELS = {
+  noActive: "aucun agent actif (run terminée sans libération)",
+  residualParallel: "groupe parallèle résiduel (tous les agents ont terminé)",
+  ghosts: "agents déclarés actifs mais plus aucun ne travaille (session fantôme ou inactive)",
+  orphanQueue: "travail en file sans agent porteur (verrou orphelin)",
+  timeGuard: "garde de temps dépassée (aucun agent actif)",
+};
+
+/** Formate une durée d'inactivité en clair (secondes < 2 min, minutes sinon). */
+function formatDurationMs(ms) {
+  if (typeof ms !== "number" || ms < 0) return "inconnue";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  return s % 60 === 0 ? `${m} min` : `${m} min ${s % 60} s`;
+}
+
+/**
+ * Construit le message de libération du watchdog (porte + agents + inactivité).
+ * @param {{door?:string, agents?:string[], idleMs?:number|null, queued?:number}} info
+ * @returns {string}
+ */
+export function buildWatchdogReleaseMessage(info = {}) {
+  const label = WATCHDOG_DOOR_LABELS[info.door] || String(info.door || "inconnue");
+  const agents = (info.agents || []).filter(Boolean);
+  const parts = [`porte : ${label}`];
+  parts.push(agents.length ? `agent(s) : ${agents.join(", ")}` : "aucun agent enregistré");
+  if (typeof info.idleMs === "number" && info.idleMs >= 0) {
+    parts.push(`inactivité mesurée : ${formatDurationMs(info.idleMs)}`);
+  }
+  if (info.queued) parts.push(`${info.queued} demande(s) encore en file`);
+  return `Run libérée par le watchdog (${parts.join(" · ")}).`;
+}
+
+/** Nombre de demandes encore en file d'exclusivité dans un contexte de run. */
+function pendingExclusivityCount(ctx) {
+  const queue = (ctx && ctx.exclusivityQueue) || {};
+  return Object.keys(queue).reduce((n, k) => n + ((queue[k] || []).length), 0);
+}
+
 // Issue #37 : détection de boucle dans la réflexion des sous-agents.
 // Escalade adaptative : jusqu'à MAX_LOOP_ESCALATION stratégies par agent et par
 // run, puis abandon (voir loop-detection.js).
@@ -411,6 +457,14 @@ async function releaseStuckRunLockForKey(key) {
   }
 
   const stuck = (noActive && noParallel) || residualParallel || ghosts || orphanQueue;
+  // Instrumentation : quelle porte a conclu « verrou bloqué » ?
+  const door = noActive && noParallel
+    ? "noActive"
+    : residualParallel
+      ? "residualParallel"
+      : orphanQueue
+        ? "orphanQueue"
+        : "ghosts";
   if (!stuck) {
     // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
     //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
@@ -430,7 +484,15 @@ async function releaseStuckRunLockForKey(key) {
         resetTimeout(ctx);
         return;
       }
-      console.warn("[agents-bus] watchdog : verrou de run inactif depuis trop longtemps, libération forcée.");
+      const idleMs = idleSince ? Date.now() - idleSince : null;
+      const message = buildWatchdogReleaseMessage({
+        door: "timeGuard",
+        agents: Array.from(ctx.activeAgents),
+        idleMs,
+        queued: pendingExclusivityCount(ctx),
+      });
+      console.warn("[agents-bus] watchdog :", message);
+      settleMission(ctx.runKey, "error", { message });
       endRun(key, ctx.generation);
     }
     return;
@@ -456,21 +518,19 @@ async function releaseStuckRunLockForKey(key) {
   }
 
   // Rien en file : libérer réellement le verrou (la vraie run est terminée).
-  if (noActive && noParallel) {
-    console.warn("[agents-bus] watchdog : verrou de run bloqué (aucun agent actif), libération forcée.");
-  } else if (orphanQueue) {
-    console.warn("[agents-bus] watchdog : travail en file sans agent porteur (verrou orphelin), libération forcée.");
-  } else if (residualParallel) {
-    console.warn("[agents-bus] watchdog : groupe parallèle résiduel (pending<=0), libération forcée.");
-  } else {
-    console.warn("[agents-bus] watchdog : aucun agent réellement en activité (session fantôme ou inactive), libération forcée.");
-  }
   // Livraison fiable : une run libérée par le watchdog (bloquée) doit aussi
   // résoudre SON sink, sinon la mission attendrait un rapport qui n'arrivera
-  // jamais.
-  settleMission(ctx.runKey, "error", {
-    message: "Run libérée par le watchdog : plus aucune activité réelle détectée sur ce projet.",
+  // jamais. Le message NOMME la porte qui a tiré, les agents concernés et
+  // l'inactivité mesurée (instrumentation — cause enfin visible).
+  const idleSince = ctx.lastActivityAt || ctx.startedAt || null;
+  const message = buildWatchdogReleaseMessage({
+    door,
+    agents: Array.from(ctx.activeAgents),
+    idleMs: idleSince ? Date.now() - idleSince : null,
+    queued: pendingExclusivityCount(ctx),
   });
+  console.warn("[agents-bus] watchdog :", message);
+  settleMission(ctx.runKey, "error", { message });
   endRun(key, ctx.generation);
 }
 
