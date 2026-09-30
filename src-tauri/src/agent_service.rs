@@ -3456,6 +3456,70 @@ mod tests {
         );
     }
 
+    /// Porte Rust du verrou par projet (mission « portes du verrou ») :
+    /// `agents::ensure_agent_not_busy` refuse un prompt DIRECT vers une session
+    /// AgentProcess vivante ET busy (deux exécutions concurrentes sur le même
+    /// couple (projet, agent) interdites) et l'autorise dès que la session est
+    /// idle/settled, absente, ou son process mort — les relances légitimes du
+    /// bus (après agent_end) ne sont donc jamais bloquées.
+    #[test]
+    fn prompt_gate_refuses_while_agent_process_is_busy() {
+        let svc = AgentService::new();
+        let proj = "/p/gate";
+        let anomaly_map: Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Session absente → autorisé.
+        assert!(
+            crate::agents::ensure_agent_not_busy(&svc, &anomaly_map, proj, "codeur").is_ok(),
+            "session absente → prompt autorisé"
+        );
+        // Session AgentProcess vivante + busy=true (agent_start) → refus explicite.
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                AgentService::session_key(proj, "codeur"),
+                SessionEntry {
+                    session: fake_session(),
+                    project: proj.to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::AgentProcess,
+                },
+            );
+        }
+        anomaly_map.lock().unwrap().insert(
+            format!("{}\u{1f}{}", proj, "codeur"),
+            anomaly::AgentAnomalyState {
+                last_activity: Instant::now(),
+                last_progress: Instant::now(),
+                last_activity_wall: Some(std::time::SystemTime::now()),
+                last_event: "agent_start".to_string(),
+                busy: true,
+                blocked_reported: false,
+                auto_stopped_reported: false,
+                awaiting_user: false,
+                tool_in_progress: false,
+                produced_output: false,
+            },
+        );
+        let err = crate::agents::ensure_agent_not_busy(&svc, &anomaly_map, proj, "codeur")
+            .expect_err("un agent qui travaille doit être refusé");
+        assert!(
+            err.contains("codeur") && err.contains("déjà"),
+            "refus honnête et nommé : {err}"
+        );
+        // busy=false (agent_settled) → autorisé (relance légitime du bus).
+        anomaly_map
+            .lock()
+            .unwrap()
+            .get_mut(&format!("{}\u{1f}{}", proj, "codeur"))
+            .unwrap()
+            .busy = false;
+        assert!(
+            crate::agents::ensure_agent_not_busy(&svc, &anomaly_map, proj, "codeur").is_ok(),
+            "settled → prompt autorisé"
+        );
+    }
+
     /// Bug #152 : `has_dead_agent_process` détecte une session d'agent délégué
     /// ENCORE ENREGISTRÉE dont le processus est mort (busy résiduel à purger).
     /// Une session vivante, une session morte déjà retirée du registre ou une

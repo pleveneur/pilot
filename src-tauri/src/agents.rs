@@ -276,8 +276,36 @@ pub fn stop_assistant_agents(state: State<AppState>) -> Result<(), String> {
 
 pub(crate) fn do_send_agent_process_prompt(state: &AppState, agent_id: String, message: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
+    ensure_agent_not_busy(&state.agent_service, &state.agent_anomaly, &project, &agent_id)?;
     let cmd = serde_json::json!({ "type": "prompt", "message": message });
     state.agent_service.send(&project, &agent_id, cmd)
+}
+
+/// Porte Rust du verrou par projet (mission « portes du verrou ») : refuse
+/// d'envoyer un prompt DIRECT à une session d'agent (projet, agent) déjà en
+/// train de travailler. Sans elle, un appel hors bus JS pouvait lancer une
+/// seconde exécution concurrente sur le même couple, en contournant la
+/// politique d'admission du frontend (`isRunInProgress`). Refus HONNÊTE
+/// (message explicite) plutôt qu'un double tour silencieux.
+///
+/// Les envois légitimes du bus (relance après `agent_end`, correction de boucle,
+/// reprise de troncature) passent : l'observateur RPC met `busy` à `false` AVANT
+/// d'émettre l'événement au frontend, donc le créneau est libre quand le bus
+/// renvoie son prompt. Un `busy` périmé (process figé) n'est pas exclusif
+/// (`agent_process_busy` réutilise la même politique busy-stale).
+pub(crate) fn ensure_agent_not_busy(
+    service: &crate::agent_service::AgentService,
+    anomaly_map: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, crate::anomaly::AgentAnomalyState>>>,
+    project: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    if service.agent_process_busy(anomaly_map, project, agent_id) {
+        return Err(format!(
+            "L'agent « {} » est déjà en train de travailler sur ce projet — le prompt n'a pas été envoyé (deux exécutions concurrentes sur le même projet sont interdites).",
+            agent_id
+        ));
+    }
+    Ok(())
 }
 
 /// Envoie un prompt à un agent multi-rôles H2 V2.
@@ -292,6 +320,9 @@ pub async fn send_agent_process_prompt(state: State<'_, AppState>, agent_id: Str
     let project = project
         .or_else(|| state.inner().project_path.lock().unwrap().clone())
         .unwrap_or_default();
+    // Porte Rust du verrou par projet : même refus honnête que
+    // `do_send_agent_process_prompt` (voir `ensure_agent_not_busy`).
+    ensure_agent_not_busy(&agent_service, &state.inner().agent_anomaly, &project, &agent_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let cmd = serde_json::json!({ "type": "prompt", "message": message });
         agent_service.send(&project, &agent_id, cmd)
