@@ -895,10 +895,14 @@ export function setBusNotifyCallback(fn) {
  * ctx.runKey)` ne regardant que la file de la run appelante.
  * `ownRunKey` (la run qui vient de libérer son tour) est essayé en premier ;
  * une seule demande est lancée pour préserver l'exclusivité du couple.
- * Reste volontairement en l'état : si l'agent bloquant n'émet ni `agent_end`
- * ni `agent_settled`, la récupération dépend encore d'un événement extérieur
- * (watchdog Assistant ≤ 5 min, ou lancement d'une nouvelle run) pour un run
- * parallèle manuel — cf. `.pilot/rapports/correction-verrou-portes-20260930.md`.
+ * Reste volontairement en l'état (comportement assumé, jamais silencieux) :
+ * lorsque l'agent bloquant n'émet ni `agent_end` ni `agent_settled`, la reprise
+ * est RATTRAPÉE par un déclencheur extérieur — `releaseStuckRunLock` (watchdog :
+ * rappelé à chaque nouvelle run et toutes les 5 min par le watchdog d'assistant) :
+ * la porte « file sans porteur » (`orphanQueue`, ~60 s sans session travailleuse)
+ * ou la garde de temps (`agent_timeout_ms`) DRAINE la file d'exclusivité du
+ * projet au lieu de la perdre (log + notify). Preuve : `verrou-par-projet.test.js`,
+ * « C1 (reste) — sans événement de fin, le watchdog relance la demande en file ».
  */
 async function launchNextQueuedForProject(agentId, project, ownRunKey) {
   const keys = [];

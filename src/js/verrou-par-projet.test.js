@@ -232,6 +232,61 @@ describe("C1 — une demande mise en file dans une run de LECTURE repart quand l
   });
 });
 
+describe("C1 (reste) — sans événement de fin, le watchdog relance la demande en file (jamais silencieux)", () => {
+  const runsOf = (p) => Object.values(globalThis.__agentBusState.runs).filter((c) => c.project === p);
+  const flushAsync = async () => {
+    for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
+  };
+
+  afterEach(() => {
+    for (const key of Object.keys(globalThis.__agentBusState.runs)) delete globalThis.__agentBusState.runs[key];
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+  });
+
+  it("aucun agent_end : le watchdog DRAINE la file d'exclusivité au lieu de la perdre", async () => {
+    const p = "preuve-c1-sans-fin";
+    let busy = false;
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agents") {
+        return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
+      }
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agent_sessions") {
+        return busy
+          ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
+          : { sessions: [] };
+      }
+      return undefined;
+    });
+    await initAgentsBus({});
+
+    await startParallelRun([{ agentId: "lecteur", project: p, brief: "A" }], "", {});
+    const runA = runsOf(p).find((c) => c.readonly && c.activeAgents.has("lecteur"));
+    expect(runA).toBeTruthy();
+    busy = true; // l'agent travaille → la demande suivante est mise en file
+
+    await startParallelRun([{ agentId: "lecteur", project: p, brief: "B" }], "", {});
+    const runB = runsOf(p).find((c) => c !== runA);
+    expect(runB, "la run de lecture B doit exister").toBeTruthy();
+    const qk = `${p}\u{1f}lecteur`;
+    expect(runB.exclusivityQueue[qk] && runB.exclusivityQueue[qk].length, "la demande B doit être en file").toBe(1);
+
+    // L'agent bloquant se FIGE : plus aucun travail, et AUCUN `agent_end`
+    // n'arrivera (cas C1 laissé en l'état). Le watchdog est le déclencheur
+    // extérieur qui doit rattraper la demande — jamais la perdre.
+    // La porte « file sans porteur » ne s'arme qu'après la fenêtre de grâce
+    // (~60 s sans session travailleuse) : on vieillit la dernière activité.
+    busy = false;
+    runB.lastActivityAt = Date.now() - 2 * 60 * 1000;
+    await releaseStuckRunLock(p);
+    await flushAsync();
+
+    expect(runB.exclusivityQueue[qk], "la file doit être drainée par le watchdog").toBeUndefined();
+    expect(runB.activeAgents.has("lecteur"), "la demande en file doit être RÉELLEMENT relancée").toBe(true);
+  });
+});
+
 describe("PREUVE (b) — modification exclusive par projet, autres projets indépendants", () => {
   it("(b) une MODIFICATION attend toute run; une LECTURE attend une MODIFICATION; un autre projet n'attend pas", () => {
     const proj = "preuve-b";
