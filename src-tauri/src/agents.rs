@@ -132,6 +132,13 @@ fn build_default_agent_registry(config: &AppConfig) -> Value {
 /// que le frontend puisse rafraîchir l'UI sans relecture base.
 /// Le registre par défaut contient 7 agents : coordinateur, architecte, codeur,
 /// reviewer, testeur, documenteur et plan-maker.
+///
+/// D5 — ne touche QUE ces 7 agents : l'ancienne implémentation faisait un
+/// `replace_agents(None, …)` = `DELETE FROM agents WHERE project_path IS NULL`,
+/// qui détruisait AUSSI les agents globaux créés par l'utilisateur. Un upsert par
+/// agent fourni met à jour la ligne existante (ou l'insère si elle a été
+/// supprimée) et laisse les autres intactes. Les agents de projet restent hors
+/// périmètre.
 #[tauri::command]
 pub fn reset_agent_registry(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let config = state.config_snapshot();
@@ -139,8 +146,47 @@ pub fn reset_agent_registry(state: State<AppState>, app: AppHandle) -> Result<Va
     let agents_val = default.get("agents").cloned().unwrap_or(Value::Array(vec![]));
     let agents: Vec<crate::agent::Agent> = serde_json::from_value(agents_val)
         .map_err(|e| format!("Erreur désérialisation agents par défaut: {}", e))?;
-    state.agent_service.replace_agents(&app, None, &agents)?;
+    for a in &agents {
+        let mut a = a.clone();
+        a.project_path = None; // agents fournis = périmètre global
+        state.agent_service.upsert_agent(&app, &a)?;
+    }
     Ok(serde_json::json!({ "version": 1, "agents": agents }))
+}
+
+/// Identifiants des agents **fournis** d'origine (D4). Le frontend s'en sert pour
+/// interdire la création d'un agent qui porterait l'un de ces identifiants : la
+/// réinitialisation l'écraserait. Source unique de vérité = le registre par
+/// défaut lui-même (aucune liste dupliquée côté JS).
+pub(crate) fn default_agent_ids_from_config(config: &AppConfig) -> Vec<String> {
+    build_default_agent_registry(config)
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// D4 — un agent GLOBAL ne peut pas être **créé** avec l'identifiant d'un agent
+/// fourni (la remise à zéro l'écraserait). La règle ne s'applique qu'à la
+/// création (`!exists`) : un agent fourni existant reste modifiable (l'éditeur
+/// met à jour ses réglages), et un agent de PROJET portant le même id vit dans un
+/// périmètre distinct (la remise à zéro ne touche que le global).
+pub(crate) fn creating_provided_agent_is_forbidden(
+    id: &str,
+    project_scoped: bool,
+    exists: bool,
+    default_ids: &[String],
+) -> bool {
+    !project_scoped && !exists && default_ids.iter().any(|d| d == id)
+}
+
+#[tauri::command]
+pub fn default_agent_ids(state: State<AppState>) -> Vec<String> {
+    default_agent_ids_from_config(&state.config_snapshot())
 }
 
 pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool) -> Result<(), String> {
@@ -609,4 +655,25 @@ pub(crate) fn available_model_specs(pi_path: &str) -> Result<Vec<String>, String
     }
     result.sort();
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::creating_provided_agent_is_forbidden;
+
+    /// D4 : la création d'un agent global avec l'identifiant d'un agent fourni est
+    /// refusée ; modification d'un fourni existant, agent de projet, et id libre
+    /// restent autorisés.
+    #[test]
+    fn d4_forbids_creating_global_agent_with_provided_id() {
+        let defaults: Vec<String> = vec!["coordinateur".into(), "codeur".into()];
+        // Création d'un global avec un id fourni → refusé.
+        assert!(creating_provided_agent_is_forbidden("codeur", false, false, &defaults));
+        // Mise à jour d'un fourni existant → autorisé.
+        assert!(!creating_provided_agent_is_forbidden("codeur", false, true, &defaults));
+        // Agent de projet portant le même id → autorisé (périmètre distinct).
+        assert!(!creating_provided_agent_is_forbidden("codeur", true, false, &defaults));
+        // Id libre → autorisé.
+        assert!(!creating_provided_agent_is_forbidden("mon-agent", false, false, &defaults));
+    }
 }

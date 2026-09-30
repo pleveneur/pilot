@@ -495,7 +495,7 @@ uniquement un bloc d'instructions dans le prompt système.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
-agents du registre (`~/.pilot/agents.json`). Il peut :
+agents du registre global (base SQLite). Il peut :
 
 1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
    agents disponibles ne conviennent pas à la tâche : il définit lui-même le
@@ -850,8 +850,9 @@ Sessions d'agents (chat / orchestration)
   précisément un agent secondaire/spécialisé/spécifique créé à la volée et
   lancé via `run_agents`, sinon arrête l'agent standard du projet actif),
   `create_agent`
-  (créer un agent sur mesure dans le registre global `~/.pilot/agents.json`
-  quand les agents disponibles ne conviennent pas) et `run_agents` (choisir
+  (créer un agent sur mesure dans le registre global (base SQLite de
+  l'application, tables `agents` / `agent_views`) quand les agents
+  disponibles ne conviennent pas) et `run_agents` (choisir
   quels agents disponibles utiliser et lancer une tâche sur eux,
   en renvoyant le résultat agrégé à l'Assistant). La demande déléguée est affichée dans la
   discussion de l'agent du projet (à droite, comme un message utilisateur, mais
@@ -1076,7 +1077,7 @@ Tables (V1) :
   des discussions.
 - **Agents du registre + outils d'agents** : le prompt système injecte
   dynamiquement la **liste des agents disponibles** dans le registre global
-  (`~/.pilot/agents.json` / base SQLite), sous forme d'un résumé compact
+  (base SQLite de l'application, tables `agents` / `agent_views`), sous forme d'un résumé compact
   (`id`, icône, description courte) — l'Assistant sait ainsi quels agents il
   peut piloter via `run_agents`. Il documente aussi les outils à sa disposition :
   `run_agents`, `create_agent`, `delegate_to_coder`, `ask_multi_choice`,

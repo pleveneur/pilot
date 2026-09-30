@@ -75,6 +75,14 @@ pub struct Agent {
     // ── Configuration ──
     pub models: AgentModels,
     pub capabilities: Vec<String>,
+    /// Compétences (skills) de la bibliothèque commune `~/.pilot/skills` que CET
+    /// agent peut voir (noms de dossiers). Filtrage STRICT côté session pi : un
+    /// agent ne voit que les compétences de sa liste (+ quality-gate, jamais
+    /// filtré). `#[serde(default)]` OBLIGATOIRE : `agent_from_value` désérialise
+    /// les agents poussés par le frontend (upsert_agent / replace_agents) qui
+    /// peuvent omettre ce champ.
+    #[serde(default)]
+    pub skills: Vec<String>,
     pub readonly: bool,
     pub keep_context: bool,
     pub max_calls_per_run: u32,
@@ -128,6 +136,7 @@ impl Agent {
     /// Construit un Agent depuis une ligne SQLite (`agents`).
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Agent> {
         let capabilities: String = row.get("capabilities")?;
+        let skills: String = row.get("skills")?;
         let proc_state: String = row.get("proc_state")?;
         Ok(Agent {
             id: row.get("id")?,
@@ -140,6 +149,7 @@ impl Agent {
                 plh: row.get("models_plh")?,
             },
             capabilities: serde_json::from_str(&capabilities).unwrap_or_default(),
+            skills: serde_json::from_str(&skills).unwrap_or_default(),
             readonly: row.get::<_, i64>("readonly")? != 0,
             keep_context: row.get::<_, i64>("keep_context")? != 0,
             max_calls_per_run: row.get::<_, i64>("max_calls_per_run")? as u32,

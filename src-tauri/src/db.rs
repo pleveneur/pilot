@@ -49,6 +49,7 @@ pub(crate) fn init_db(conn: &Connection) -> Result<(), String> {
             models_pi     TEXT DEFAULT '',
             models_plh    TEXT DEFAULT '',
             capabilities  TEXT DEFAULT '[]',         -- JSON array
+            skills        TEXT NOT NULL DEFAULT '[]', -- JSON array (noms de compétences)
             readonly      INTEGER DEFAULT 0,
             keep_context  INTEGER DEFAULT 0,
             max_calls_per_run INTEGER DEFAULT 5,
@@ -77,5 +78,35 @@ pub(crate) fn init_db(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|e| format!("Erreur migration pilot.db: {}", e))?;
+
+    // Migration idempotente : ajoute `skills` aux bases existantes (le
+    // `CREATE TABLE IF NOT EXISTS` ci-dessus ne modifie pas une table déjà
+    // créée). On sonde `PRAGMA table_info` pour éviter l'erreur « duplicate
+    // column name ». La colonne est NOT NULL DEFAULT '[]' → renseignée pour
+    // les lignes existantes à l'ALTER, sans perte.
+    add_column_if_missing(
+        conn,
+        "agents",
+        "skills",
+        "ALTER TABLE agents ADD COLUMN skills TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    Ok(())
+}
+
+/// Ajoute une colonne à une table si elle n'existe pas (migration idempotente).
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, alter_sql: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(|e| format!("Erreur PRAGMA table_info({}): {}", table, e))?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("Erreur lecture colonnes {}: {}", table, e))?
+        .filter_map(Result::ok)
+        .collect();
+    drop(stmt);
+    if !names.iter().any(|n| n == column) {
+        conn.execute(alter_sql, [])
+            .map_err(|e| format!("Erreur migration {}.{}: {}", table, column, e))?;
+    }
     Ok(())
 }

@@ -228,6 +228,7 @@ pilot/
     │   ├── mcp-client.src.ts # POC MCP : source extension client MCP (SDK bundlé · génère pilot-mcp-client.ts)
     │   ├── pilot-edit-gate.ts # A4 V2 : porte pré-écriture write/edit (tool_call + ctx.ui.confirm)
     │   ├── pilot-context.ts   # H1/H3 : contexte+mémoire projet → system prompt (before_agent_start)
+    │   ├── pilot-skills.ts    # D6 : filtrage strict des compétences par agent (before_agent_start)
     │   ├── pilot-chrome.ts    # Navigateur : autorise les outils chrome_* (pi-chrome) dans les sessions d'agents
     │   ├── pilot-choices.ts   # Issue #30 : boutons choix/confirmation/saisie (ask_choice, ask_confirm, ask_input, ask_multi_choice)
     │   ├── pilot-assistant-files.ts # 🧭 : espace d'écriture restreint ~/.pilot/assistant/ (lecture seule projets)

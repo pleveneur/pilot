@@ -28,6 +28,25 @@ export async function upsertAgent(agent) {
   return await invoke("upsert_agent", { agent });
 }
 
+/**
+ * Registre à afficher après une remise à zéro des agents fournis (D5).
+ *
+ * `reset_agent_registry` ne touche QUE les 7 agents fournis et renvoie CE
+ * registre seul. Or la base peut encore contenir des agents personnalisés :
+ * redessiner depuis ce retour les ferait disparaître de l'écran, et la
+ * sauvegarde suivante (qui repart de la liste affichée) les effacerait en base.
+ * La source de vérité est donc le registre RÉEL relu en base ; le retour de la
+ * commande n'est qu'un accusé de réception.
+ *
+ * @param {object} resetResult retour de `reset_agent_registry` (ignoré si le réel est valide)
+ * @param {object} realRegistry registre relu (`list_agents`)
+ * @returns {object} le registre réel à afficher
+ */
+export function registryAfterReset(resetResult, realRegistry) {
+  if (realRegistry && Array.isArray(realRegistry.agents)) return realRegistry;
+  return resetResult && Array.isArray(resetResult.agents) ? resetResult : { version: 1, agents: [] };
+}
+
 /** Applique les valeurs par défaut manquantes sur un agent. */
 export function normalizeAgent(agent) {
   if (!agent || typeof agent !== "object") return null;
@@ -43,6 +62,9 @@ export function normalizeAgent(agent) {
       plh: String(models.plh || "").trim(),
     },
     capabilities: Array.isArray(agent.capabilities) ? agent.capabilities.map(String) : [],
+    // Compétences (bibliothèque commune `~/.pilot/skills`) : DOIT être préservé,
+    // sinon tout aller-retour registre → UI → registre écrasait la liste par [].
+    skills: Array.isArray(agent.skills) ? agent.skills.map(String) : [],
     readonly: !!agent.readonly,
     keep_context: !!agent.keep_context,
     max_calls_per_run: typeof agent.max_calls_per_run === "number" ? agent.max_calls_per_run : 5,

@@ -953,51 +953,38 @@ des sessions (jours)** (0 = désactivé).
 
 ---
 
-## Aide utilisateur — Mode Agents
+## Aide utilisateur — Agents
 
-L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker) sur une demande.
+L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
 
-### Comment ça marche
-1. Cliquez sur **🎭 Agents** dans le panneau d'actions (bouton visible dès qu'un projet est ouvert).
-2. Saisissez votre demande dans le chat ; le **coordinateur** la reçoit.
-3. Le coordinateur délègue chaque sous-tâche à l'agent adapté via `[[CALL:agent_id]]`.
-4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
-5. Le coordinateur synthétise la réponse finale.
+### L'écran
+- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les modèles (`π` = pi, `ℓ` = plh), et des badges : **lecture seule** et le **nombre de compétences**.
+- **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
+- **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
+- **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
 
-### Mode parallèle
-- Cliquez sur le bouton **⚡ Mode parallèle** (icône `layers`) à côté du champ de saisie.
-- Sélectionnez plusieurs agents, puis envoyez votre tâche : elle est lancée **simultanément** sur tous les agents sélectionnés (sans coordinateur).
-- Chaque agent travaille dans sa propre bulle de réflexion ; les résultats sont affichés agrégés à la fin.
-- Le coordinateur peut aussi lancer des sous-tâches indépendantes en parallèle via `[[PARALLEL]]` (blocs `agent:`/`task:` séparés par `---`).
+### Créer / modifier un agent
+- **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
+- **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
+- **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir.
+- **Lecture seule** : consigne stricte de ne pas écrire de fichiers. **Garder le contexte** : la session n'est pas remise à zéro entre deux appels.
+- **Max appels / run** et **Profondeur max** : garde-fous propres à l'agent.
 
-### Suivre une run
-- Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
-  **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
-  appelle un collègue, a terminé), avec le rappel de son rôle.
-- **L'agent actif est mis en avant** (carte surlignée en vert) pour savoir
-  qui travaille en ce moment.
-- Au centre, une **bulle « réflexion »** affiche en direct la pensée de l'agent
-  courant (son texte qui se construit) et les outils qu'il utilise.
-- La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
-  **profondeur** atteinte sont affichés.
-- Le bilan reste visible après la fin de la run pour relire qui a fait quoi.
-- **Timeout d'inactivité** : si un agent reste silencieux plus de 5 minutes, la run s'arrête
-  et un message le signale clairement (sans le « Run arrêtée par l'utilisateur »). Vous pouvez
-  ajuster la durée dans **Paramètres → Agents → Timeout d'inactivité (ms)**.
+### Compétences par agent
+- Les compétences (skills) forment une **bibliothèque commune** dans `~/.pilot/skills/` : un dossier par compétence, contenant un fichier `SKILL.md`.
+- Cochez dans l'éditeur les compétences que **cet** agent peut voir. Un agent ne voit **que** les compétences cochées (filtrage strict) — plus la compétence `quality-gate`, jamais filtrée.
+- Compétence absente de la liste mais déjà cochée = dossier introuvable dans `~/.pilot/skills` : elle reste affichée pour ne pas disparaître sans que vous le sachiez.
+- Pour en ajouter une : créez le dossier `<nom>/SKILL.md` dans `~/.pilot/skills`, puis rouvrez l'éditeur de l'agent.
 
-### Gérer les agents
-- Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
-- Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
-- Le bouton **Réinitialiser** recrée les 7 agents par défaut.
-
-### Garde-fous
-- Profondeur max d'appel, budget total et par agent, détection de cycle, timeout d'inactivité, bouton **⏹ Arrêter**.
-- Les agents marqués **lecture seule** ont une consigne stricte dans leur rôle ; ils ne doivent pas modifier de fichiers.
+### Suivre et arrêter
+- Une tâche lancée sur un agent **peut en appeler un autre** : Pilot relaie le résultat à l'appelant, un seul agent travaille à la fois (hors sous-tâches parallèles).
+- **Détection de cycle** : un agent déjà dans la chaîne ne peut pas être rappelé.
+- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (5 min par défaut), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents**.
+- **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 
 ### Conseils
-- Le modèle du coordinateur doit être puissant (cloud) pour bien router les tâches.
+- Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
-- Si une run dérape, cliquez sur **Arrêter** : tous les processus agents seront stoppés.
 
 ---
 
@@ -1562,7 +1549,7 @@ uniquement un bloc d'instructions dans le prompt système.
 
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
-agents du registre (`~/.pilot/agents.json`). Il peut :
+agents du registre global (base SQLite). Il peut :
 
 1. **Créer un agent sur mesure** (outil `create_agent`) s'il estime que les
    agents disponibles ne conviennent pas à la tâche : il définit lui-même le

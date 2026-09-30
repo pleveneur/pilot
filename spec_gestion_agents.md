@@ -1,53 +1,40 @@
 # Spécification — Gestion d'agents (H2 V2)
 
-> Onglet **🎭 Agents** : équipe d'agents nommés, rôlés, qui s'appellent séquentiellement sous le pilotage de Pilot.
+> Onglet **🎭 Agents** : **écran de configuration** de l'équipe d'agents (registre : liste, éditeur, compétences) + affichage de l'**activité** des runs en cours. Les lancements se font depuis l'onglet 🧭 **Assistant** (délégation) et les **onglets d'agents** du projet.
 
 <!-- HELP:agents -->
-## Aide utilisateur — Mode Agents
+## Aide utilisateur — Agents
 
-L'onglet **🎭 Agents** permet de lancer une équipe d'agents spécialisés (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker) sur une demande.
+L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
 
-### Comment ça marche
-1. Cliquez sur **🎭 Agents** dans le panneau d'actions (bouton visible dès qu'un projet est ouvert).
-2. Saisissez votre demande dans le chat ; le **coordinateur** la reçoit.
-3. Le coordinateur délègue chaque sous-tâche à l'agent adapté via `[[CALL:agent_id]]`.
-4. Pilot orchestre les appels : un seul agent travaille à la fois, les résultats sont renvoyés à l'appelant.
-5. Le coordinateur synthétise la réponse finale.
+### L'écran
+- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les modèles (`π` = pi, `ℓ` = plh), et des badges : **lecture seule** et le **nombre de compétences**.
+- **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
+- **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
+- **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
 
-### Mode parallèle
-- Cliquez sur le bouton **⚡ Mode parallèle** (icône `layers`) à côté du champ de saisie.
-- Sélectionnez plusieurs agents, puis envoyez votre tâche : elle est lancée **simultanément** sur tous les agents sélectionnés (sans coordinateur).
-- Chaque agent travaille dans sa propre bulle de réflexion ; les résultats sont affichés agrégés à la fin.
-- Le coordinateur peut aussi lancer des sous-tâches indépendantes en parallèle via `[[PARALLEL]]` (blocs `agent:`/`task:` séparés par `---`).
+### Créer / modifier un agent
+- **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
+- **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
+- **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir.
+- **Lecture seule** : consigne stricte de ne pas écrire de fichiers. **Garder le contexte** : la session n'est pas remise à zéro entre deux appels.
+- **Max appels / run** et **Profondeur max** : garde-fous propres à l'agent.
 
-### Suivre une run
-- Le panneau **Activité** (à droite) affiche un tableau de bord de l'équipe :
-  **ce que fait chaque agent** en temps réel (réfléchit, utilise un outil,
-  appelle un collègue, a terminé), avec le rappel de son rôle.
-- **L'agent actif est mis en avant** (carte surlignée en vert) pour savoir
-  qui travaille en ce moment.
-- Au centre, une **bulle « réflexion »** affiche en direct la pensée de l'agent
-  courant (son texte qui se construit) et les outils qu'il utilise.
-- La **chaîne des appels** (« qui appelle qui »), le **budget restant** et la
-  **profondeur** atteinte sont affichés.
-- Le bilan reste visible après la fin de la run pour relire qui a fait quoi.
-- **Timeout d'inactivité** : si un agent reste silencieux plus de 5 minutes, la run s'arrête
-  et un message le signale clairement (sans le « Run arrêtée par l'utilisateur »). Vous pouvez
-  ajuster la durée dans **Paramètres → Agents → Timeout d'inactivité (ms)**.
+### Compétences par agent
+- Les compétences (skills) forment une **bibliothèque commune** dans `~/.pilot/skills/` : un dossier par compétence, contenant un fichier `SKILL.md`.
+- Cochez dans l'éditeur les compétences que **cet** agent peut voir. Un agent ne voit **que** les compétences cochées (filtrage strict) — plus la compétence `quality-gate`, jamais filtrée.
+- Compétence absente de la liste mais déjà cochée = dossier introuvable dans `~/.pilot/skills` : elle reste affichée pour ne pas disparaître sans que vous le sachiez.
+- Pour en ajouter une : créez le dossier `<nom>/SKILL.md` dans `~/.pilot/skills`, puis rouvrez l'éditeur de l'agent.
 
-### Gérer les agents
-- Les agents sont stockés dans `~/.pilot/agents.json` (partagés entre tous les projets).
-- Vous pouvez modifier leurs noms, icônes, descriptions, rôles et modèles (`pi` et `plh` séparément).
-- Le bouton **Réinitialiser** recrée les 7 agents par défaut.
-
-### Garde-fous
-- Profondeur max d'appel, budget total et par agent, détection de cycle, timeout d'inactivité, bouton **⏹ Arrêter**.
-- Les agents marqués **lecture seule** ont une consigne stricte dans leur rôle ; ils ne doivent pas modifier de fichiers.
+### Suivre et arrêter
+- Une tâche lancée sur un agent **peut en appeler un autre** : Pilot relaie le résultat à l'appelant, un seul agent travaille à la fois (hors sous-tâches parallèles).
+- **Détection de cycle** : un agent déjà dans la chaîne ne peut pas être rappelé.
+- **Timeout d'inactivité** : si un agent reste silencieux trop longtemps (5 min par défaut), la run s'arrête et un message le signale. Réglable dans **Paramètres → Agents**.
+- **⏹ Arrêter** arrête tous les processus d'agents. Fermer l'onglet les arrête aussi.
 
 ### Conseils
-- Le modèle du coordinateur doit être puissant (cloud) pour bien router les tâches.
+- Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
-- Si une run dérape, cliquez sur **Arrêter** : tous les processus agents seront stoppés.
 <!-- /HELP:agents -->
 
 ### Agent `plan-maker` (planificateur)
@@ -77,8 +64,8 @@ concernés + coût estimé en tokens + contraintes suggérées + dépendances).
 
 ## 1. Objectifs
 
-- Définir des agents nommés dans un registre global `~/.pilot/agents.json`.
-- Chaque agent a un rôle (system prompt) et un modèle par backend (`pi` / `plh`).
+- Définir des agents nommés dans un **registre global** persisté en base SQLite (`pilot.db`, tables `agents` / `agent_views`) — et non dans un fichier `~/.pilot/agents.json` (voir § 3).
+- Chaque agent a un rôle (system prompt), un modèle par backend (`pi` / `plh`) et une liste de **compétences** (skills) visibles.
 - Un coordinateur reçoit la demande utilisateur et déclenche les agents spécialisés.
 - Protocole séquentiel `[[CALL:agent_id]]` / `[[RESULT from agent_id]]`.
 - Garde-fous : profondeur, budget, cycle, timeout, stop global.
@@ -104,27 +91,30 @@ Pilot renvoie le résultat à l'appelant
 
 ## 3. Données
 
-### `~/.pilot/agents.json`
+### Registre global (base SQLite)
 
-```json
+Le registre global vit dans la base SQLite de l'application (`pilot.db`, dossier de configuration Pilot), tables `agents` et `agent_views` :
+
+- `agents` : objet agent (id, nom, icône, description, rôle, modèles, **compétences**, drapeaux, limites d'appel) avec `project_path IS NULL` pour le périmètre global (les agents rattachés à un projet portent leur chemin).
+- `agent_views` : vues d'onglets (ordre, nom affiché, onglet actif).
+- La colonne `skills` est un tableau JSON de noms de dossiers de `~/.pilot/skills` (migration idempotente `NOT NULL DEFAULT '[]'`).
+- Un ancien fichier `~/.pilot/agents.json` peut subsister sur une installation ancienne : il **n'est plus lu ni écrit**.
+
+```jsonc
+// forme sérialisée d'un agent (colonne → JSON)
 {
-  "version": 1,
-  "updated_at": "2026-08-10T12:00:00Z",
-  "agents": [
-    {
-      "id": "coordinateur",
-      "name": "Coordinateur",
-      "icon": "🧠",
-      "description": "Pilote l'équipe d'agents.",
-      "role": "Tu es le chef d'orchestre...",
-      "models": { "pi": "deepseek/deepseek-chat", "plh": "deepseek/deepseek-chat" },
-      "capabilities": ["delegate", "synthesize"],
-      "readonly": false,
-      "keep_context": true,
-      "max_calls_per_run": 20,
-      "call_depth": 0
-    }
-  ]
+  "id": "coordinateur",
+  "name": "Coordinateur",
+  "icon": "🧠",
+  "description": "Pilote l'équipe d'agents.",
+  "role": "Tu es le chef d'orchestre...",
+  "models": { "pi": "deepseek/deepseek-chat", "plh": "deepseek/deepseek-chat" },
+  "capabilities": ["delegate", "synthesize"],
+  "skills": ["quality-gate"],
+  "readonly": false,
+  "keep_context": true,
+  "max_calls_per_run": 20,
+  "call_depth": 0
 }
 ```
 
@@ -132,16 +122,31 @@ Pilot renvoie le résultat à l'appelant
 
 | Champ | Description |
 |---|---|
-| `id` | Identifiant machine unique (kebab-case). |
+| `id` | Identifiant machine unique (kebab-case). Un id fourni par Pilot n'est pas créable (D4). |
 | `name` | Nom affiché. |
 | `icon` | Emoji/icône. |
 | `description` | Description fonctionnelle utilisée par le coordinateur pour router. |
 | `role` | Instructions système injectées en début de chaque prompt. |
 | `models.pi` / `models.plh` | Modèle selon le backend actif. |
+| `skills` | Noms de dossiers de `~/.pilot/skills` que **cet** agent voit (filtrage strict, § 3.1). |
 | `readonly` | `true` → agent qui ne doit pas écrire. |
 | `keep_context` | `true` → ne pas faire `new_session` entre deux appels. |
 | `max_calls_per_run` | Limite d'appels pour cet agent dans une run. |
 | `call_depth` | Profondeur max à laquelle cet agent peut être appelé (0 = coordinateur). |
+
+### 3.1 Compétences par agent (skills)
+
+- **Bibliothèque commune** : `~/.pilot/skills/<nom>/SKILL.md` (dossier utilisateur Pilot, résolu cross-platform). Un dossier sans `SKILL.md` lisible est ignoré. Aucun fichier n'est créé par Pilot (création à l'usage, par l'utilisateur).
+- **Un skill n'ajoute pas d'outil** : c'est un document de consignes (frontmatter `name`, `description`, `disable-model-invocation`) chargé dans le prompt système.
+- **Filtrage STRICT (D6)** : un agent ne voit que les compétences de sa liste. Pilot passe à la session pi les chemins `--skill` correspondants (`common_skill_path` refuse tout nom vide ou contenant `/`, `\`, `..`) et exporte `PILOT_AGENT_SKILLS` (JSON des noms). L'extension embarquée `pilot-skills.ts` (`filterSkillsForAgent`), chargée dans TOUTES les sessions d'agent (jamais conditionnée à un autre réglage), retire alors de `event.systemPromptOptions.skills` toute compétence auto-découverte non listée.
+- **`quality-gate` n'est jamais filtré** : il reste disponible même s'il n'est pas listé (il est aussi chargé via `--skill` par les sessions concernées).
+- **Fail-open** : si `PILOT_AGENT_SKILLS` est absent (session non-agent), aucun filtrage n'a lieu.
+- Les agents **fournis** n'ont pas de compétence par défaut : la liste se remplit dans l'éditeur de l'onglet 🎭.
+
+### Commandes Tauri (compétences)
+
+- `list_common_skills() → [{ name, description }]` : inventaire de `~/.pilot/skills` pour le sélecteur de l'éditeur (lecture seule).
+- `default_agent_ids() → [String]` : identifiants des 7 agents fournis (source unique, sert au garde-fou de création).
 
 ## 4. Protocole inter-agents
 
@@ -200,12 +205,9 @@ task: Documente la nouvelle route dans le README.
 - Garde-fous appliqués par agent : budget (`max_calls_per_run`), budget total,
   timeout d'inactivité. `stopAgentsRun` abort **tous** les agents actifs.
 
-### Mode parallèle piloté par l'utilisateur
+### Mode parallèle piloté par l'Assistant
 
-Dans l'onglet 🎭 Agents, le bouton **⚡ Mode parallèle** (icône `layers`) permet
-à l'utilisateur de sélectionner plusieurs agents et d'envoyer une même tâche à
-tous **simultanément**, sans coordinateur. Chaque agent stream dans sa propre
-bulle de réflexion ; les résultats sont affichés agrégés à la fin.
+Le mode parallèle de l'onglet 🎭 (sélection d'agents + envoi depuis un champ de saisie) **n'existe plus** : la colonne « discussion » a été retirée de l'écran de configuration. Les runs parallèles restent possibles via le bloc `[[PARALLEL]]` du coordinateur et via `runAgentsForAssistant(assignments)` (bus d'agents), utilisés par l'Assistant.
 
 ### L'Assistant comme coordinateur (spec_super_agent.md)
 
@@ -213,8 +215,9 @@ L'**Assistant** (onglet 🧭) est le **coordinateur de la redistribution des
 tâches** entre les agents du registre. Via les outils `create_agent` et
 `run_agents` (extension `pilot-assistant-actions`), il peut :
 
-1. **Créer un agent sur mesure** dans `~/.pilot/agents.json` s'il estime que les
-   agents disponibles ne conviennent pas (rôle construit selon son besoin).
+1. **Créer un agent sur mesure** dans le registre global (base SQLite) s'il
+   estime que les agents disponibles ne conviennent pas (rôle construit selon
+   son besoin).
 2. **Choisir quels agents utiliser** (sélection par id) et lancer une tâche sur
    eux (en parallèle), en recevant le résultat agrégé pour continuer son
    raisonnement.
@@ -253,12 +256,13 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 - `set_agent_process_model(agent_id, provider, model_id)`
 - `abort_agent_process(agent_id)`
 - `get_agent_process_state(agent_id)`
-- `load_agent_registry()`
-- `save_agent_registry(registry)`
+- `load_agent_registry()` / `save_agent_registry(registry)` : anciennes commandes fichier ; elles persistent désormais en base via `list_agents` / `replace_agents`.
+- `list_common_skills()` : inventaire des compétences de `~/.pilot/skills`.
+- `default_agent_ids()` : identifiants des agents fournis.
 
 ### Dossier global
 
-`~/.pilot/` résolu cross-platform via `dirs::home_dir()` (ou équivalent Tauri).
+`~/.pilot/` résolu cross-platform (dossier utilisateur Pilot). Il contient la base du registre (`pilot.db`), la bibliothèque de compétences (`skills/`) et les espaces de l'Assistant.
 
 ## 6. Frontend
 
@@ -268,7 +272,7 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 |---|---|
 | `src/js/agents.js` | Fonctions pures : registre, modèles, prompts, parsing (`[[CALL]]`, `[[PARALLEL]]`), agrégation, garde-fous. |
 | `src/js/agents-bus.js` | Bus d'exécution : pile, timeouts, envois/réceptions, dispatch parallèle (`dispatchParallel`, `startParallelRun`), buffers par agent. |
-| `src/js/agents-ui.js` | Rendu de l'onglet Agents (bulles de réflexion multiples, mode parallèle). |
+| `src/js/agents-ui.js` | Rendu de l'onglet Agents : **configuration** (liste + éditeur, dont le sélecteur de compétences) et panneau d'**activité** des runs. |
 
 ### Résolution du modèle
 
@@ -295,6 +299,9 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 - Toutes les sessions passent par l'AgentService (une seule indirection `send`), jamais par un accès direct à une map dans `AppState`.
 - Utiliser un canal séparé `rpc-event-agents` pour ne pas polluer les canaux existants.
 - Tous les agents sont lazy et arrêtés proprement.
+- Les sessions d'agents reçoivent leurs `--skill` + `PILOT_AGENT_SKILLS` dans `spawn_agent_process` (agent_service.rs) : ne pas revenir à un spawn sans compétences.
+- **Réinitialiser** ne doit jamais faire de `DELETE` du périmètre global (D5) : un upsert par agent fourni, sans toucher aux agents personnalisés. Le frontend doit **réafficher le registre réel relu en base** (`list_agents`), jamais le retour de `reset_agent_registry` (qui ne contient que les fournis) : sinon les agents personnalisés disparaissent à l'écran, puis en base à la sauvegarde suivante (le frontend redessine et renvoie la liste affichée).
+- **D4 (création avec l'id d'un fourni) refusé aussi dans le cœur** : la commande `upsert_agent` refuse la création d'un agent GLOBAL dont l'id est celui d'un agent fourni (mise à jour d'un fourni existant et agents de projet restent autorisés). Un appel IPC direct ne doit pas pouvoir contourner la règle appliquée par l'interface.
 
 ---
 

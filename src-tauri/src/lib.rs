@@ -3268,6 +3268,7 @@ pub fn run() {
             rpc::get_reviewer_state,
             // ── Gestion d'agents multi-rôles (H2 V2) ──
             agents::reset_agent_registry,
+            agents::default_agent_ids,
             // ── Refonte système d'agents (cahier §3.1) : objet Agent en base ──
             agent_service::list_agents,
             agent_service::get_agent,
@@ -3278,6 +3279,7 @@ pub fn run() {
             agent_service::list_agent_views,
             agent_service::save_agent_views,
             agent_service::list_agent_sessions,
+            agent_service::list_common_skills,
             agents::start_agent_process,
             agents::stop_agent_process,
             agents::stop_all_agent_processes,

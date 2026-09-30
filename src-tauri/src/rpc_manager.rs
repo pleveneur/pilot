@@ -53,7 +53,7 @@ pub type EventObserver = Arc<dyn Fn(&Value) + Send + Sync>;
 /// `agent_id` : si Some, chaque événement est enveloppé dans
 /// `{ "agent_id": id, "event": value }` sur `event_channel` (bus d'agents H2 V2).
 /// `observer` : observateur d'événements optionnel (indicateur d'activité par projet).
-pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_path: Option<&str>, extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>, env_vars: Option<Vec<(String, String)>>) -> Result<RpcSession, String> {
+pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: &str, skill_paths: &[String], extensions: Vec<String>, app_handle: AppHandle, event_tx: tokio::sync::broadcast::Sender<Value>, event_channel: &str, agent_id: Option<&str>, observer: Option<EventObserver>, broadcast_channel: Option<String>, env_vars: Option<Vec<(String, String)>>) -> Result<RpcSession, String> {
     // Robustesse shim (issue #76) : si le chemin pointe vers un shim npm
     // `pi.cmd`/`pi.ps1`/`pi.bat` (ou est vide → repli "pi" via le PATH), le
     // résoudre vers le vrai exécutable (node + cli.js) car `Command::new` ne
@@ -69,12 +69,11 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     if !session_dir.is_empty() {
         cmd.args(["--session-dir", session_dir]);
     }
-    // Quality-gate interne (Évolution 7) : skill embarqué par Pilot, ajouté quand
-    // l'option est activée. Les autres skills globaux restent chargés (découverte auto).
-    if let Some(sp) = skill_path {
-        if !sp.is_empty() {
-            cmd.args(["--skill", sp]);
-        }
+    // Compétences (skills) : `--skill <chemin>` est répétable et additif avec la
+    // découverte auto. Quality-gate interne (Évolution 7) + compétences de la
+    // bibliothèque commune `~/.pilot/skills` sélectionnées pour CET agent.
+    for sp in skill_paths.iter().filter(|s| !s.is_empty()) {
+        cmd.args(["--skill", sp]);
     }
     // Extensions pi (pilot-edit-gate porte pré-écriture A4 V2, pilot-context
     // injection contexte/mémoire dans le system prompt). `--extension` accepte

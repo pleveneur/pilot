@@ -734,9 +734,9 @@ impl AgentService {
             // au lieu de coder_model — sinon le modèle configuré de l'agent est
             // écrasé par le modèle par défaut du codeur (doublon projet-scopé
             // sans modèles). Fallback coder_model si aucun agent global.
-            let (models_pi, models_plh) = match self.get_agent(app, agent_id, None)? {
-                Some(g) => (g.models.pi.clone(), g.models.plh.clone()),
-                None => (coder_model.clone(), coder_model),
+            let (models_pi, models_plh, inherited_skills) = match self.get_agent(app, agent_id, None)? {
+                Some(g) => (g.models.pi.clone(), g.models.plh.clone(), g.skills.clone()),
+                None => (coder_model.clone(), coder_model, Vec::new()),
             };
             let agent = Agent {
                 id: agent_id.to_string(),
@@ -749,6 +749,7 @@ impl AgentService {
                     plh: models_plh,
                 },
                 capabilities: Vec::new(),
+                skills: inherited_skills,
                 readonly: false,
                 keep_context: false,
                 max_calls_per_run: 0,
@@ -1434,7 +1435,7 @@ impl AgentService {
             pi_path,
             true, // no_session : contexte vierge, jetable
             "",
-            None,
+            &[],
             Vec::new(),
             app.clone(),
             state.event_tx.clone(),
@@ -1757,7 +1758,7 @@ impl AgentService {
             pi_path,
             true, // no_session : contexte vierge, jetable
             "",
-            None,
+            &[],
             extensions,
             app.clone(),
             state.event_tx.clone(),
@@ -2091,7 +2092,7 @@ impl AgentService {
             pi_path,
             no_session,
             &session_dir_str,
-            None,
+            &[],
             extensions,
             app.clone(),
             state.event_tx.clone(),
@@ -2259,7 +2260,7 @@ impl AgentService {
             pi_path,
             true, // no_session : contexte vierge, jetable
             "",
-            None,
+            &[],
             extensions,
             app.clone(),
             state.event_tx.clone(),
@@ -2278,9 +2279,12 @@ impl AgentService {
         Ok(session)
     }
 
-    /// Lance un nouveau processus pi --mode rpc pour un agent multi-rôles H2 V2.
+    /// Lance un nouveau processus pi --mode rpc pour un agent multi-rôles H2 V2
+    /// (et pour les agents lancés par l'assistant via `run_agents`).
     /// Reproduit la logique de `do_start_agent_process` (canal rpc-event-agents,
-    /// pas d'extensions ni de skill, dossier de session dédié par agent).
+    /// dossier de session dédié par agent) + compétences : les skills de la
+    /// bibliothèque commune listés par l'agent (`--skill`) et le filtrage strict
+    /// `PILOT_AGENT_SKILLS` (extension toujours chargée `pilot-skills.ts`, D6).
     fn spawn_agent_process(
         app: &AppHandle,
         project: &str,
@@ -2333,6 +2337,13 @@ impl AgentService {
                             extensions.push(ctx_file.to_string_lossy().to_string());
                         }
                     }
+                    // Filtrage STRICT des compétences (D6) : TOUJOURS chargé (jamais
+                    // conditionné à `inherit_context`, sinon les compétences
+                    // auto-découvertes fuiteraient dans les agents sans héritage).
+                    let skills_file = dir.join("pilot-skills.ts");
+                    if std::fs::write(&skills_file, include_str!("../extensions/pilot-skills.ts")).is_ok() {
+                        extensions.push(skills_file.to_string_lossy().to_string());
+                    }
                     // Agent piloté MCP (brique B) : si l'assistant a désigné un
                     // serveur MCP cible via run_agents (mcp_server) ET que MCP est
                     // activé, on charge l'extension client MCP à la volée pour CET
@@ -2381,12 +2392,27 @@ impl AgentService {
                 .join(agent_id.replace(|c: char| !c.is_alphanumeric(), "_"))
         };
         let session_dir_str = session_dir_resolved.to_string_lossy().to_string();
+        // Compétences de CET agent (bibliothèque commune `~/.pilot/skills`) :
+        // `--skill` additif + `PILOT_AGENT_SKILLS` (filtrage strict côté pi, lu
+        // par pilot-skills.ts). Les agents multi-rôles / délégations de
+        // l'assistant sont enregistrés au périmètre GLOBAL (project_path NULL) :
+        // on regarde d'abord la row du projet, puis la globale (comme le seed de
+        // `start`). Même logique que `spawn_session` — sans elle, un agent lancé
+        // par l'assistant ne voyait jamais ses compétences.
+        let agent = state
+            .agent_service
+            .get_agent(app, agent_id, Some(project))
+            .ok()
+            .flatten()
+            .or_else(|| state.agent_service.get_agent(app, agent_id, None).ok().flatten());
+        let skill_paths = agent_skill_paths(agent.as_ref());
+        let env_vars = merge_env_vars(mcp_env_vars, agent_skills_env(agent.as_ref()));
         let session = rpc_manager::spawn_and_start(
             project,
             pi_path,
             no_session,
             &session_dir_str,
-            None,
+            &skill_paths,
             extensions,
             app.clone(),
             state.event_tx.clone(),
@@ -2400,7 +2426,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, agent_id),
             )),
             None,
-            mcp_env_vars,
+            env_vars,
         )
         .map_err(|e| format!("Erreur lancement agent {} : {}", agent_id, e))?;
         Ok(session)
@@ -2490,6 +2516,13 @@ impl AgentService {
                     if std::fs::write(&ctx_file, include_str!("../extensions/pilot-context.ts")).is_ok() {
                         extensions.push(ctx_file.to_string_lossy().to_string());
                     }
+                    // Filtrage STRICT des compétences (D6) : TOUJOURS chargé, quel
+                    // que soit `inherit_context` — sans lui, un agent verrait les
+                    // compétences auto-découvertes de toutes les autres sessions.
+                    let skills_file = dir.join("pilot-skills.ts");
+                    if std::fs::write(&skills_file, include_str!("../extensions/pilot-skills.ts")).is_ok() {
+                        extensions.push(skills_file.to_string_lossy().to_string());
+                    }
                     let choices_file = dir.join("pilot-choices.ts");
                     if std::fs::write(&choices_file, include_str!("../extensions/pilot-choices.ts")).is_ok() {
                         extensions.push(choices_file.to_string_lossy().to_string());
@@ -2537,12 +2570,24 @@ impl AgentService {
         };
 
         let channel = agent_event_channel(project, agent_id);
+        // Compétences de cet agent (bibliothèque commune) + filtrage strict.
+        let agent = state
+            .agent_service
+            .get_agent(app, agent_id, Some(project))
+            .ok()
+            .flatten();
+        let mut skill_paths: Vec<String> = Vec::new();
+        if let Some(sp) = skill_path {
+            skill_paths.push(sp);
+        }
+        skill_paths.extend(agent_skill_paths(agent.as_ref()));
+        let env_vars = merge_env_vars(mcp_env_vars, agent_skills_env(agent.as_ref()));
         let mut session = rpc_manager::spawn_and_start(
             project,
             &pi_path,
             no_session,
             &session_dir_str,
-            skill_path.as_deref(),
+            &skill_paths,
             extensions,
             app.clone(),
             state.event_tx.clone(),
@@ -2558,7 +2603,7 @@ impl AgentService {
                 &format!("{}\u{1f}{}", project, agent_id),
             )),
             None,
-            mcp_env_vars,
+            env_vars,
         )
         .map_err(|e| {
             if pi_path.is_empty() {
@@ -2672,6 +2717,8 @@ fn collect_session_states(
 fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), String> {
     let capabilities = serde_json::to_string(&agent.capabilities)
         .map_err(|e| format!("Erreur sérialisation capabilities: {}", e))?;
+    let skills = serde_json::to_string(&agent.skills)
+        .map_err(|e| format!("Erreur sérialisation skills: {}", e))?;
     if agent.project_path.is_none() {
         let exists: bool = conn
             .query_row(
@@ -2683,13 +2730,13 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
         if exists {
             conn.execute(
                 "UPDATE agents SET name=?1, icon=?2, description=?3, role=?4,
-                 models_pi=?5, models_plh=?6, capabilities=?7, readonly=?8,
-                 keep_context=?9, max_calls_per_run=?10, call_depth=?11,
-                 loaded=?12, busy=?13, proc_state=?14, visible=?15, last_active_at=?16
-                 WHERE id=?17 AND project_path IS NULL",
+                 models_pi=?5, models_plh=?6, capabilities=?7, skills=?8, readonly=?9,
+                 keep_context=?10, max_calls_per_run=?11, call_depth=?12,
+                 loaded=?13, busy=?14, proc_state=?15, visible=?16, last_active_at=?17
+                 WHERE id=?18 AND project_path IS NULL",
                 params![
                     agent.name, agent.icon, agent.description, agent.role,
-                    agent.models.pi, agent.models.plh, capabilities,
+                    agent.models.pi, agent.models.plh, capabilities, skills,
                     agent.readonly as i64, agent.keep_context as i64,
                     agent.max_calls_per_run as i64, agent.call_depth as i64,
                     agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -2701,12 +2748,12 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
             conn.execute(
                 "INSERT INTO agents (
                     id, project_path, name, icon, description, role,
-                    models_pi, models_plh, capabilities, readonly, keep_context,
+                    models_pi, models_plh, capabilities, skills, readonly, keep_context,
                     max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-                 ) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 ) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     agent.id, agent.name, agent.icon, agent.description, agent.role,
-                    agent.models.pi, agent.models.plh, capabilities,
+                    agent.models.pi, agent.models.plh, capabilities, skills,
                     agent.readonly as i64, agent.keep_context as i64,
                     agent.max_calls_per_run as i64, agent.call_depth as i64,
                     agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -2719,19 +2766,19 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
         conn.execute(
             "INSERT INTO agents (
                 id, project_path, name, icon, description, role,
-                models_pi, models_plh, capabilities, readonly, keep_context,
+                models_pi, models_plh, capabilities, skills, readonly, keep_context,
                 max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT(id, project_path) DO UPDATE SET
                 name=excluded.name, icon=excluded.icon, description=excluded.description,
                 role=excluded.role, models_pi=excluded.models_pi, models_plh=excluded.models_plh,
-                capabilities=excluded.capabilities, readonly=excluded.readonly,
+                capabilities=excluded.capabilities, skills=excluded.skills, readonly=excluded.readonly,
                 keep_context=excluded.keep_context, max_calls_per_run=excluded.max_calls_per_run,
                 call_depth=excluded.call_depth, loaded=excluded.loaded, busy=excluded.busy,
                 proc_state=excluded.proc_state, visible=excluded.visible, last_active_at=excluded.last_active_at",
             params![
                 agent.id, agent.project_path, agent.name, agent.icon, agent.description, agent.role,
-                agent.models.pi, agent.models.plh, capabilities,
+                agent.models.pi, agent.models.plh, capabilities, skills,
                 agent.readonly as i64, agent.keep_context as i64,
                 agent.max_calls_per_run as i64, agent.call_depth as i64,
                 agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -2745,11 +2792,74 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
 
 /// Dossier utilisateur Pilot (`~/.pilot`). Utilisé pour le dossier de session
 /// des agents multi-rôles H2 V2 quand le chemin de config n'est pas résoluble.
-fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
+pub(crate) fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .map_err(|_| "Impossible de trouver le home dir".to_string())?;
     Ok(std::path::PathBuf::from(home).join(".pilot"))
+}
+
+// ── Compétences (skills) de la bibliothèque commune ──
+
+/// Répertoire de la bibliothèque commune de compétences : `~/.pilot/skills`.
+/// ⚠️ Volontairement DISTINCT de `~/.pi/agent/skills` et `<projet>/.pi/skills`
+/// (que pi découvre nativement et annoncerait à TOUS les agents) : une
+/// compétence de la bibliothèque n'est visible que par les agents dont la
+/// liste la référence, via un `--skill <chemin>` explicite.
+pub(crate) fn common_skills_dir() -> Result<std::path::PathBuf, String> {
+    Ok(pilot_user_dir()?.join("skills"))
+}
+
+/// Chemin absolu du `SKILL.md` d'une compétence de la bibliothèque commune.
+/// `None` si le nom est vide/relatif ou si le fichier n'existe pas (compétence
+/// supprimée ou nom erroné) — tolérant, jamais d'erreur bloquante.
+fn common_skill_path(name: &str) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return None;
+    }
+    let file = common_skills_dir().ok()?.join(name).join("SKILL.md");
+    if file.is_file() {
+        Some(file.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+/// Chemins `--skill` à injecter pour un agent : compétences de sa liste
+/// présentes dans la bibliothèque commune. (Le quality-gate est ajouté à part
+/// par l'appelant, selon l'option de configuration.)
+fn agent_skill_paths(agent: Option<&Agent>) -> Vec<String> {
+    agent
+        .map(|a| a.skills.iter().filter_map(|n| common_skill_path(n)).collect())
+        .unwrap_or_default()
+}
+
+/// Variable d'environnement `PILOT_AGENT_SKILLS` (liste JSON des compétences
+/// autorisées pour CET agent). TOUJOURS passée pour une session d'agent, même
+/// vide : l'extension `pilot-skills.ts` en déduit qu'elle doit filtrer
+/// strictement les compétences annoncées par pi.
+fn agent_skills_env(agent: Option<&Agent>) -> Vec<(String, String)> {
+    let skills = agent.map(|a| a.skills.clone()).unwrap_or_default();
+    vec![(
+        "PILOT_AGENT_SKILLS".to_string(),
+        serde_json::to_string(&skills).unwrap_or_else(|_| "[]".to_string()),
+    )]
+}
+
+/// Fusionne des variables d'environnement supplémentaires dans une liste
+/// optionnelle existante (MCP) sans écraser les précédentes.
+fn merge_env_vars(
+    base: Option<Vec<(String, String)>>,
+    extra: Vec<(String, String)>,
+) -> Option<Vec<(String, String)>> {
+    let mut vars = base.unwrap_or_default();
+    vars.extend(extra);
+    if vars.is_empty() {
+        None
+    } else {
+        Some(vars)
+    }
 }
 
 // ── Conversion Value ↔ Agent (IPC) ──
@@ -2789,9 +2899,31 @@ pub fn get_agent(state: State<AppState>, app: AppHandle, agent_id: String, proje
 }
 
 /// Insère ou met à jour un agent. Retourne l'agent persisté.
+///
+/// D4 — garde-fou cœur : refuse la **création** d'un agent GLOBAL portant
+/// l'identifiant d'un agent fourni (la remise à zéro l'écraserait). Sans lui, un
+/// appel IPC direct contournait la règle appliquée par l'interface. La mise à jour
+/// d'un agent fourni existant et les agents de projet restent autorisés. La remise
+/// à zéro ne passe pas par cette commande (elle utilise le service directement),
+/// donc elle peut réinsérer un agent fourni supprimé.
 #[tauri::command]
 pub fn upsert_agent(state: State<AppState>, app: AppHandle, agent: Value) -> Result<Value, String> {
     let a = agent_from_value(&agent)?;
+    let exists = state
+        .agent_service
+        .get_agent(&app, &a.id, a.project_path.as_deref())?
+        .is_some();
+    if crate::agents::creating_provided_agent_is_forbidden(
+        &a.id,
+        a.project_path.is_some(),
+        exists,
+        &crate::agents::default_agent_ids_from_config(&state.config_snapshot()),
+    ) {
+        return Err(format!(
+            "« {} » est un identifiant fourni par Pilot : un agent ne peut pas être créé avec cet identifiant (D4).",
+            a.id
+        ));
+    }
     let saved = state.agent_service.upsert_agent(&app, &a)?;
     Ok(agent_to_value(&saved))
 }
@@ -2851,9 +2983,194 @@ pub fn list_agent_sessions(state: State<AppState>, app: AppHandle) -> Result<Val
     state.agent_service.list_agent_sessions(&app)
 }
 
+// ── Bibliothèque commune : inventaire pour l'UI de configuration ──
+
+/// Compétence de la bibliothèque commune, telle qu'affichée dans l'éditeur
+/// d'agent : nom = nom du dossier, description = `description:` du frontmatter.
+#[derive(Debug, serde::Serialize)]
+pub struct CommonSkillInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Extrait la valeur de `description:` du frontmatter YAML d'un `SKILL.md`.
+/// Tolérant (le frontmatter est écrit à la main) : retourne "" si absente,
+/// gère les guillemets simples/doubles, s'arrête au `---` de fermeture.
+fn skill_description(content: &str) -> String {
+    let mut inside = false;
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if i == 0 && trimmed != "---" {
+            return String::new(); // pas de frontmatter
+        }
+        if trimmed == "---" {
+            if inside {
+                break; // frontmatter terminé
+            }
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("description:") {
+            return rest.trim().trim_matches(['"', '\'']).to_string();
+        }
+    }
+    String::new()
+}
+
+/// Inclut les compétences de `dir` (dossiers contenant un `SKILL.md`), triées par
+/// nom. Ne crée rien, ne renvoie jamais d'erreur : un dossier sans SKILL.md
+/// lisible est simplement ignoré.
+fn scan_skills_dir(dir: &std::path::Path) -> Vec<CommonSkillInfo> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path.join("SKILL.md")) else {
+            continue;
+        };
+        out.push(CommonSkillInfo {
+            name: entry.file_name().to_string_lossy().to_string(),
+            description: skill_description(&content),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// Compétences disponibles dans la bibliothèque commune `~/.pilot/skills`, pour
+/// le sélecteur de l'éditeur d'agent. Lecture seule.
+#[tauri::command]
+pub fn list_common_skills() -> Vec<CommonSkillInfo> {
+    common_skills_dir()
+        .map(|d| scan_skills_dir(&d))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Agent minimal pour les tests de compétences.
+    fn sample_agent(id: &str) -> Agent {
+        Agent {
+            id: id.to_string(),
+            name: id.to_string(),
+            icon: "🤖".to_string(),
+            description: String::new(),
+            role: String::new(),
+            models: crate::agent::AgentModels { pi: String::new(), plh: String::new() },
+            capabilities: Vec::new(),
+            skills: Vec::new(),
+            readonly: false,
+            keep_context: false,
+            max_calls_per_run: 5,
+            call_depth: 1,
+            project_path: None,
+            loaded: false,
+            busy: false,
+            state: AgentProcessState::Unloaded,
+            visible: true,
+            last_active_at: None,
+        }
+    }
+
+    // ── Compétences (lot 2 : injection + filtrage strict) ──
+
+    /// Un nom de compétence invalide (chemin, `..`, séparateur Windows) ne
+    /// produit JAMAIS de `--skill` — garde-fou anti-traversée de
+    /// `common_skill_path`. Sans compétence, aucune injection.
+    #[test]
+    fn agent_skill_paths_rejects_relative_and_traversal_names() {
+        let mut agent = sample_agent("codeur");
+        agent.skills = vec![
+            "../secret".to_string(),
+            "a/b".to_string(),
+            "a\\b".to_string(),
+            String::new(),
+        ];
+        assert!(agent_skill_paths(Some(&agent)).is_empty());
+        assert!(agent_skill_paths(None).is_empty());
+    }
+
+    /// `PILOT_AGENT_SKILLS` est TOUJOURS posée pour une session d'agent, même
+    /// vide : c'est le signal de filtrage strict lu par `pilot-skills.ts`.
+    #[test]
+    fn agent_skills_env_always_emitted() {
+        assert_eq!(
+            agent_skills_env(None),
+            vec![("PILOT_AGENT_SKILLS".to_string(), "[]".to_string())]
+        );
+        let mut agent = sample_agent("codeur");
+        agent.skills = vec!["rust".to_string(), "tests".to_string()];
+        assert_eq!(agent_skills_env(Some(&agent))[0].1, "[\"rust\",\"tests\"]");
+    }
+
+    /// `merge_env_vars` n'écrase aucune variable existante (MCP) et retourne
+    /// `None` quand il n'y a rien à passer.
+    #[test]
+    fn merge_env_vars_appends_and_keeps_none() {
+        assert!(merge_env_vars(None, vec![]).is_none());
+        let merged = merge_env_vars(
+            Some(vec![("MCP_X".to_string(), "1".to_string())]),
+            vec![("PILOT_AGENT_SKILLS".to_string(), "[]".to_string())],
+        )
+        .expect("env fusionnée");
+        assert_eq!(
+            merged,
+            vec![
+                ("MCP_X".to_string(), "1".to_string()),
+                ("PILOT_AGENT_SKILLS".to_string(), "[]".to_string()),
+            ]
+        );
+    }
+
+    /// `skill_description` lit le frontmatter sans se laisser déborder sur le
+    /// corps du document.
+    #[test]
+    fn skill_description_reads_frontmatter() {
+        assert_eq!(
+            skill_description("---\nname: rust\ndescription: \"Consignes Rust\"\n---\n\nCorps.\n"),
+            "Consignes Rust"
+        );
+        assert_eq!(skill_description("---\ndescription: sans guillemets\n---\n"), "sans guillemets");
+        assert_eq!(skill_description("Pas de frontmatter"), "");
+        assert_eq!(skill_description("---\nname: x\n---\n"), "");
+        assert_eq!(skill_description("---\ndescription: hors bloc\n"), "hors bloc");
+        assert_eq!(skill_description("---\nname: x\n---\ndescription: dans le corps\n"), "");
+    }
+
+    /// `scan_skills_dir` : seuls les dossiers contenant un `SKILL.md` lisible
+    /// sont listés, triés par nom ; un dossier absent ne fait pas échouer.
+    #[test]
+    fn scan_skills_dir_lists_only_skills() {
+        let dir = std::env::temp_dir().join(format!("pilot-skills-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("zeta")).expect("mkdir zeta");
+        std::fs::write(dir.join("zeta").join("SKILL.md"), "---\ndescription: Zêta\n---\n").expect("write zeta");
+        std::fs::create_dir_all(dir.join("alpha")).expect("mkdir alpha");
+        std::fs::write(dir.join("alpha").join("SKILL.md"), "---\nname: a\ndescription: Alpha\n---\n").expect("write alpha");
+        std::fs::create_dir_all(dir.join("sans-skill")).expect("mkdir sans-skill");
+        std::fs::write(dir.join("fichier.txt"), "x").expect("write fichier");
+
+        let skills = scan_skills_dir(&dir);
+        assert_eq!(
+            skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "zeta"]
+        );
+        assert_eq!(skills[0].description, "Alpha");
+        assert_eq!(skills[1].description, "Zêta");
+        assert!(scan_skills_dir(&dir.join("inexistant")).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn session_key_is_composite_and_unique() {
@@ -3194,7 +3511,8 @@ mod tests {
                 id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
                 icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
                 models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
-                capabilities TEXT DEFAULT '[]', readonly INTEGER DEFAULT 0,
+                capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
+                readonly INTEGER DEFAULT 0,
                 keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
                 call_depth INTEGER DEFAULT 1, loaded INTEGER DEFAULT 0, busy INTEGER DEFAULT 0,
                 proc_state TEXT DEFAULT 'Unloaded', visible INTEGER DEFAULT 1, last_active_at TEXT,
@@ -3211,6 +3529,7 @@ mod tests {
             role: "Tu analyses.".to_string(),
             models: crate::agent::AgentModels { pi: String::new(), plh: String::new() },
             capabilities: Vec::new(),
+            skills: Vec::new(),
             readonly: true,
             keep_context: false,
             max_calls_per_run: 5,
