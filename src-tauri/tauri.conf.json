@@ -30,7 +30,7 @@
     }
   },
   "build": {
-    "beforeDevCommand": "npm run build:mcp && npm run build:handbook && npm run prepare:laya && npm run dev",
+    "beforeDevCommand": "npm run build:mcp && npm run build:handbook && npm run prepare:laya -- --allow-missing && npm run dev",
     "beforeBuildCommand": "npm run build:mcp && npm run build:handbook && npm run prepare:laya && npm run build",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../dist"

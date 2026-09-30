@@ -216,6 +216,13 @@ describe("layaModelStateMessage", () => {
     expect(r.text).toMatch(/adresse d'hébergement/i);
   });
 
+  it("téléchargeur absent → dit la vraie cause, jamais une fausse adresse", () => {
+    const r = layaModelStateMessage({ present: false, reason: "fetchMissing" });
+    expect(r.kind).toBe("warning");
+    expect(r.text).toMatch(/programme de téléchargement/i);
+    expect(r.text).toMatch(/n'est pas livré/i);
+  });
+
   it("refus du serveur → motif distinct du réseau, jamais « pas d'Internet »", () => {
     const r = layaModelStateMessage({ present: false, reason: "serverRefused" });
     expect(r.kind).toBe("warning");

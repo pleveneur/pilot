@@ -2530,6 +2530,22 @@ mark.search-highlight {
   margin-left: 4px;
 }
 
+/* Réglages avancés repliés : par défaut, seul le titre-résumé est visible. Une
+   fois déplié, les champs retrouvent leur mise en page habituelle. */
+.settings-advanced {
+  margin: 6px 0 2px;
+}
+.settings-advanced > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+}
+.settings-advanced > summary:hover {
+  color: var(--text-primary);
+}
+
 /* Ligne « champ + bouton » (onglet Avatar) : le champ occupe la largeur, le
    bouton reste compact à droite, dans la MÊME ligne que son champ → le rôle du
    bouton est sans ambiguïté. */

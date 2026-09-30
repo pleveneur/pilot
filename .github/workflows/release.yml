@@ -119,12 +119,22 @@ jobs:
         include:
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
+            laya_platform: win32/x64
           - platform: macos-latest
             rust_target: aarch64-apple-darwin
+            laya_platform: darwin/arm64
+          # macOS Intel : le moteur ONNX utilisé par le service n'existe plus pour
+          # darwin/x64 (onnxruntime-node ne livre plus qu'arm64 côté macOS). On
+          # continue SANS Laya sur cette seule cible — l'écran le dit alors
+          # explicitement (« n'embarque pas le service Laya ») au lieu de
+          # l'annoncer à tort. Les 3 autres cibles l'embarquent et sont STRICTES.
           - platform: macos-latest
             rust_target: x86_64-apple-darwin
+            laya_platform: darwin/x64
+            laya_allow_missing: "1"
           - platform: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
+            laya_platform: linux/x64
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -134,6 +144,18 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      - name: Récupérer la source LayaPL (service embarqué)
+        # Source HORS dépôt Pilot (dépôt et licence distincts) : récupérée ici
+        # pour que le service soit RÉELLEMENT embarqué dans le paquet publié.
+        # Placée à côté du dépôt Pilot (rien n'est versionné dans ce dépôt).
+        run: git clone --depth 1 https://github.com/pleveneur/LayaPL.git "${{ github.workspace }}/../LayaPL"
+
+      - name: Installer les dépendances de LayaPL (moteur ONNX + bibliothèque)
+        # `laya-ts/dist` est versionné ; seuls les paquets npm sont à installer
+        # (`onnxruntime-node` fournit le moteur natif par plateforme).
+        working-directory: ${{ github.workspace }}/../LayaPL/laya-ts
+        run: npm ci --omit=dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -178,6 +200,16 @@ jobs:
         # être généré avant le build Tauri, sinon cargo échoue (exit 101).
         run: npm run build:mcp
 
+      - name: Préparer le service Laya embarqué (ÉCHOUE si incomplet)
+        # Garde-fou principal : refuse de fabriquer un paquet sans le service
+        # Laya. Sur la seule cible macOS Intel (moteur inexistant),
+        # `laya_allow_missing` bascule en avertissement assumé.
+        env:
+          LAYA_SOURCE_DIR: ${{ github.workspace }}/../LayaPL
+          LAYA_TARGET_PLATFORM: ${{ matrix.laya_platform }}
+          LAYA_ALLOW_MISSING: ${{ matrix.laya_allow_missing }}
+        run: npm run prepare:laya
+
       - name: Build and sign Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -188,6 +220,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # `beforeBuildCommand` relance prepare:laya : mêmes entrées, donc même
+          # résultat (idempotent).
+          LAYA_SOURCE_DIR: ${{ github.workspace }}/../LayaPL
+          LAYA_TARGET_PLATFORM: ${{ matrix.laya_platform }}
+          LAYA_ALLOW_MISSING: ${{ matrix.laya_allow_missing }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Pilot ${{ github.ref_name }}"

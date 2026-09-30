@@ -1274,7 +1274,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
   }
 
   async function refreshLayaModelState() {
-    if (!layaModelState) return;
+    if (!layaModelState) return null;
     let state = null;
     let ok = true;
     try {
@@ -1286,6 +1286,7 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
     applyLayaModelState(state, ok);
     // Le sondage s'arrête de lui-même dès que le téléchargement est terminé.
     if (!ok || !state || state.downloading !== true) stopLayaModelPoll();
+    return ok ? state : null;
   }
 
   // Écoute de la progression : une seule écoute à la fois, désinscrite à la
@@ -1338,11 +1339,23 @@ const superAgentEventsOverlayDurationRow = document.getElementById("superagent-e
         });
         if (res === "alreadyRunning") {
           showToast("Un téléchargement du modèle est déjà en cours.", "info");
-        } else {
-          showToast("Téléchargement du modèle lancé en arrière-plan.");
         }
         startLayaModelPoll();
-        await refreshLayaModelState();
+        const state = await refreshLayaModelState();
+        // Aucun message de succès lancé « à l'aveugle » : c'est la ligne d'état
+        // qui dit où en est le téléchargement. Si la demande n'a même pas pu
+        // démarrer (rien d'embarqué, adresse inconnue, interpréteur absent),
+        // la RAISON RÉELLE est annoncée ici, au lieu d'un faux « lancé ».
+        if (
+          res !== "alreadyRunning" &&
+          state &&
+          state.present !== true &&
+          state.downloading !== true &&
+          state.reason
+        ) {
+          const { text, kind } = layaModelStateMessage(state);
+          showToast(text, kind);
+        }
       } catch (e) {
         showToast("Téléchargement du modèle : " + e, "error");
       }

@@ -5,6 +5,21 @@
 //
 // Usage : node scripts/prepare-laya.js   (ou npm run prepare:laya)
 //
+// GARDE-FOU : par défaut, une pièce MANQUANTE ou VIDE (0 octet) fait ÉCHOUER la
+// construction. Un paquet publié sans Laya serait un paquet qui annonce une
+// fonction qu'il n'a pas : mieux vaut ne rien publier du tout. Un fichier de
+// zéro octet passerait un simple test d'existence et rendrait la version
+// inutilisable en silence — il est donc traité comme une pièce absente. Mode
+// tolérant explicite
+// (`--allow-missing` ou `LAYA_ALLOW_MISSING=1`, utilisé par le mode dev et par
+// la seule cible macOS Intel — le moteur n'existe pas pour elle) : avertissement
+// puis sortie 0, dossier cible laissé vide, la version livrée le DIT à l'écran.
+//
+// Cible d'embarquement : `LAYA_TARGET_PLATFORM` (`<os>/<arch>`, ex. `win32/x64`,
+// `darwin/arm64`, `linux/x64`) sinon la machine qui construit. La CI construit
+// macOS Intel sur un runner ARM : sans cette variable, le service embarqué
+// aurait le mauvais moteur natif.
+//
 // Pourquoi ce script existe : les fichiers de LayaPL ne sont JAMAIS versionnés
 // dans le dépôt Pilot (dépôt et licence distincts). Ils sont recopiés au moment
 // de la construction, depuis un dossier source hors dépôt.
@@ -30,8 +45,7 @@
 //   laya-ts/node_modules/onnxruntime-common/...       l'API commune ONNX Runtime
 //   node/node(.exe)                                   l'interpréteur embarqué
 //
-// Le binaire natif embarqué est celui du système qui construit : Windows
-// aujourd'hui, Linux et macOS plus tard (aucun autre n'est copié, donc la version
+// Seul le binaire natif de la CIBLE est copié (aucun autre, donc la version
 // livrée ne pèse que ce qu'elle utilise). Les DLL propres à DirectML
 // (DirectML.dll, dxcompiler.dll, dxil.dll) sont écartées : le service demande le
 // fournisseur CPU (vérifié par une exécution réelle).
@@ -51,19 +65,32 @@ const SRC = path.resolve(
   process.env.LAYA_SOURCE_DIR || path.join(ROOT, "..", "LayaPL")
 );
 
-// Dossier du binaire natif du moteur d'inférence : un seul système embarqué.
+// Cible d'embarquement (`<os>/<arch>`) : celle du PAQUET construit, jamais
+// forcément celle de la machine qui le construit.
+const TARGET = String(
+  process.env.LAYA_TARGET_PLATFORM || `${process.platform}/${process.arch}`
+).trim();
+
+// Mode tolérant : pièce manquante = avertissement au lieu d'échec.
+const ALLOW_MISSING =
+  process.argv.includes("--allow-missing") ||
+  ["1", "true", "yes"].includes(
+    String(process.env.LAYA_ALLOW_MISSING || "").toLowerCase()
+  );
+
+// Dossier du binaire natif du moteur d'inférence : une seule cible embarquée.
 const PLATFORM_DIR = path.posix.join(
   "laya-ts/node_modules/onnxruntime-node/bin/napi-v6",
-  process.platform,
-  process.arch
+  TARGET
 );
 
 // DLL utiles au seul fournisseur DirectML : le service demande le fournisseur
 // CPU, donc elles ne sont pas embarquées (vérifié par une exécution réelle).
 const DML_ONLY = ["DirectML.dll", "dxcompiler.dll", "dxil.dll"];
 
-// Entrées dont l'absence dans un dossier source PRÉSENT est une erreur : mieux
-// vaut échouer que livrer une copie incomplète en silence.
+// Entrées dont l'absence OU la taille NULLE dans un dossier source PRÉSENT est
+// une erreur : mieux vaut échouer que livrer une copie incomplète (ou vide) en
+// silence.
 const REQUIRED = [
   "laya-service.mjs",
   "laya-fetch.mjs",
@@ -119,7 +146,22 @@ function mo(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + " Mo";
 }
 
-/** Taille récursive d'un chemin (0 si absent). */
+/**
+ * Classe une pièce requise. PURE.
+ *   `null`    : utilisable (présente et non vide) ;
+ *   "missing" : absente ;
+ *   "empty"   : présente mais de taille NULLE (0 octet).
+ *
+ * Un fichier présent mais vide est traité EXACTEMENT comme une pièce absente :
+ * c'est le symptôme qui a livré une version inutilisable en silence (0.4.19).
+ */
+function pieceProblem(exists, bytes) {
+  if (!exists) return "missing";
+  if (bytes === 0) return "empty";
+  return null;
+}
+
+/** Taille récursive d'un chemin (0 si absent ou vide). */
 function sizeOf(target) {
   let st;
   try {
@@ -152,50 +194,104 @@ function fail(message) {
   process.exit(1);
 }
 
-// ── 1. Dossier cible toujours vidé puis recréé (idempotence stricte) ──
-fs.rmSync(DEST, { recursive: true, force: true });
-fs.mkdirSync(DEST, { recursive: true });
-
-// ── 2. Dossier source absent : message clair, construction qui continue ──
-// Le dossier cible existe quand même (un `bundle.resources` pointant sur un
-// dossier inexistant ferait échouer la construction). Le paquet obtenu ne
-// embarque simplement pas Laya : Pilot le DIT alors clairement à l'écran, au
-// lieu d'échouer en silence.
-if (!fs.existsSync(SRC) || !fs.statSync(SRC).isDirectory()) {
+/// Avertissement de mode tolérant : la construction CONTINUE sans Laya.
+function warnMissing(lines) {
+  console.warn(lines.join("\n"));
   console.warn(
-    [
-      "",
-      "⚠️  Service Laya NON embarqué dans ce paquet.",
-      `    Dossier source introuvable : ${SRC}`,
-      "",
-      "    Pour l'embarquer : placez le dossier de LayaPL à côté du dépôt Pilot",
-      "    (…/LayaPL), ou indiquez son emplacement :",
-      "        LAYA_SOURCE_DIR=/chemin/vers/LayaPL npm run prepare:laya",
-      "",
-      "    Conséquence sur la version construite : elle ne peut pas démarrer le",
-      "    service Laya par elle-même. Le réglage « Programme du service »",
-      "    (chemin indiqué à la main) reste utilisable, sans changement.",
-      "",
-      "    Rien d'autre n'est affecté : la construction se poursuit.",
-      "",
-    ].join("\n")
+    `[prepare-laya] ⚠️  Aucune ressource embarquée : ${DEST} reste vide.\n` +
+      "[prepare-laya]     La version obtenue ne peut pas démarrer le service " +
+      "Laya par elle-même ; l'écran le dira clairement.\n"
   );
   process.exit(0);
 }
 
-// ── 3. Dossier source présent : tout ce qui manque est une erreur ──
-const missing = REQUIRED.filter((rel) => !fs.existsSync(path.join(SRC, rel)));
-if (missing.length > 0) {
+// ── 1. Dossier cible toujours vidé puis recréé (idempotence stricte) ──
+fs.rmSync(DEST, { recursive: true, force: true });
+fs.mkdirSync(DEST, { recursive: true });
+
+// Le format de la cible est validé AVANT tout `path.join`.
+if (!/^[a-z0-9]+\/[a-z0-9]+$/i.test(TARGET)) {
+  fail(
+    `❌ LAYA_TARGET_PLATFORM invalide : « ${TARGET} ».\n` +
+      "   Format attendu : <os>/<arch>, par exemple win32/x64, darwin/arm64, linux/x64."
+  );
+}
+
+// ── 2. Dossier source absent ──
+// Le dossier cible existe quand même (un `bundle.resources` pointant sur un
+// dossier inexistant ferait échouer la construction). En mode STRICT (défaut,
+// c'est le cas de toute construction destinée à publication), l'absence de la
+// source ARRÊTE la fabrication : un paquet livré sans Laya annoncerait une
+// fonction qu'il n'a pas. En mode tolérant, on continue sans rien embarquer et
+// la version le dit à l'écran.
+if (!fs.existsSync(SRC) || !fs.statSync(SRC).isDirectory()) {
+  const lines = [
+    "",
+    "⚠️  Source de LayaPL introuvable : rien à embarquer.",
+    `    Dossier source : ${SRC}`,
+    "",
+    "    Pour l'embarquer : placez le dossier de LayaPL à côté du dépôt Pilot",
+    "    (…/LayaPL), ou indiquez son emplacement :",
+    "        LAYA_SOURCE_DIR=/chemin/vers/LayaPL npm run prepare:laya",
+    `    Cible demandée : ${TARGET}`,
+    "",
+  ];
+  if (ALLOW_MISSING) {
+    lines.push("    Mode tolérant : la construction se poursuit SANS Laya.", "");
+    warnMissing(lines);
+  }
   fail(
     [
+      ...lines,
+      "    La version livrée serait incomplète : fabrication ARRÊTÉE.",
+      "    (Mode tolérant pour un build de développement : --allow-missing)",
       "",
-      `❌ Dossier source de LayaPL incomplet : ${SRC}`,
-      "   Élément(s) manquant(s) :",
-      ...missing.map((rel) => `     - ${rel}`),
-      "",
-      "   La version livrée serait incomplète : rien n'a été copié.",
-      "   Reconstruisez LayaPL (npm install + npm run build dans laya-ts),",
-      "   ou corrigez LAYA_SOURCE_DIR, puis relancez ce script.",
+    ].join("\n")
+  );
+}
+
+// ── 3. Dossier source présent : ce qui manque OU ce qui est vide est une erreur ──
+// Un simple test d'existence laisserait passer un fichier de 0 octet : présent,
+// mais inutilisable — exactement le défaut constaté sur 0.4.19. La taille nulle
+// est donc traitée comme une absence, et le message dit LEQUEL est vide.
+const problems = REQUIRED.map((rel) => {
+  const abs = path.join(SRC, rel);
+  const exists = fs.existsSync(abs);
+  return { rel, problem: pieceProblem(exists, exists ? sizeOf(abs) : 0) };
+}).filter((p) => p.problem !== null);
+if (problems.length > 0) {
+  const missing = problems.filter((p) => p.problem === "missing");
+  const empty = problems.filter((p) => p.problem === "empty");
+  const lines = [
+    "",
+    `❌ Pièce(s) problématique(s) dans la source LayaPL : ${SRC}`,
+    ...missing.map((p) => `     - MANQUANTE      : ${p.rel}`),
+    ...empty.map((p) => `     - VIDE (0 octet) : ${p.rel}`),
+    `   Cible demandée : ${TARGET}`,
+    "",
+    ...(empty.length > 0
+      ? [
+          "   Une pièce VIDE (0 octet) est traitée comme une pièce absente : la",
+          "   livrer rendrait le service inutilisable sans le dire. Remplissez-la",
+          "   (source LayaPL incomplète) puis relancez.",
+          "",
+        ]
+      : []),
+    "   Cas fréquents :",
+    "     - LayaPL pas encore installé/compilé → npm ci puis npm run build dans laya-ts ;",
+    "     - moteur natif absent pour CETTE cible (ex. darwin/x64) → cette plateforme",
+    "       n'est pas supportée par la version d'onnxruntime-node utilisée.",
+    "     - LAYA_SOURCE_DIR pointe sur le mauvais dossier.",
+    "",
+  ];
+  if (ALLOW_MISSING) {
+    lines.push("    Mode tolérant : la construction se poursuit SANS Laya.", "");
+    warnMissing(lines);
+  }
+  fail(
+    [
+      ...lines,
+      "   La version livrée serait incomplète : rien n'a été copié, fabrication ARRÊTÉE.",
       "",
     ].join("\n")
   );
@@ -227,6 +323,20 @@ if (process.env.LAYA_EMBED_NODE === "0") {
       "la version livrée utilisera le Node.js du système."
   );
 } else {
+  // L'interpréteur embarqué est celui de la MACHINE qui construit : il n'est
+  // valable que si sa plateforme et son architecture sont celles de la cible.
+  // Embarquer l'interpréteur d'une autre architecture donnerait un paquet qui
+  // ne démarre pas — mieux vaut s'arrêter ici, en le disant.
+  const hostTarget = `${process.platform}/${process.arch}`;
+  if (hostTarget !== TARGET) {
+    fail(
+      `❌ Interpréteur embarqué impossible : celui de cette machine est ${hostTarget},\n` +
+        `   alors que la cible demandée est ${TARGET}.\n` +
+        "   Construisez sur une machine de la même cible, ou utilisez\n" +
+        "   LAYA_EMBED_NODE=0 (la version livrée utilisera alors le Node.js du\n" +
+        "   système, s'il est installé)."
+    );
+  }
   const nodeName = path.basename(process.execPath);
   const rel = path.join("node", nodeName);
   const dst = path.join(DEST, rel);
@@ -245,6 +355,6 @@ for (const e of copied.sort((a, b) => b.bytes - a.bytes)) {
 }
 console.log(
   `[prepare-laya] Embarqué : ${copied.length} entrées, ${mo(total)} ` +
-    `(système : ${process.platform}/${process.arch})` +
+    `(cible : ${TARGET})` +
     (nodeEntry ? "" : " — sans interpréteur embarqué")
 );

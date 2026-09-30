@@ -42,7 +42,7 @@ export function layaStatusMessage(status) {
     // ne peut le faire apparaître, le dire clairement.
     if (s.embedded === false) {
       return {
-        text: "Cette version de Pilot n'embarque pas le service Laya. Indiquez un programme de service et un dossier de modèle pour en utiliser un.",
+        text: "Cette version de Pilot n'embarque pas le service Laya. Indiquez un programme de service et un dossier de modèle (réglages avancés ci-dessous) pour en utiliser un.",
         kind: "warning",
       };
     }
@@ -161,7 +161,7 @@ export function layaModelStateMessage(state) {
       };
     case "addressMissing":
       return {
-        text: "Le modèle n'est pas encore téléchargeable : aucune adresse d'hébergement n'est renseignée.",
+        text: "Le modèle n'est pas encore téléchargeable : l'adresse d'hébergement de ses fichiers n'est pas connue de cette version de Pilot.",
         kind: "warning",
       };
     case "diskFull":
@@ -176,7 +176,7 @@ export function layaModelStateMessage(state) {
       };
     case "fetchMissing":
       return {
-        text: "Le programme de téléchargement est introuvable. Indiquez le fichier de téléchargement du modèle.",
+        text: "Le programme de téléchargement du modèle est introuvable : il n'est pas livré avec cette version de Pilot. Installez une version qui embarque le service Laya, ou indiquez le programme dans les réglages avancés.",
         kind: "warning",
       };
     case "serverRefused":

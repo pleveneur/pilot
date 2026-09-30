@@ -227,9 +227,16 @@ fn finish(reason: FetchReason) {
     });
 }
 
-/// Cœur non pur : vérifie l'adresse, lance `<interpréteur> <laya-fetch.mjs>
-/// <manifeste> <dossier> [--base <adresse>]`, draine la sortie, publie la
-/// progression, attend la fin et traduit le code de sortie.
+/// Cœur non pur : vérifie le TÉLÉCHARGEUR puis l'adresse, lance
+/// `<interpréteur> <laya-fetch.mjs> <manifeste> <dossier> [--base <adresse>]`,
+/// draine la sortie, publie la progression, attend la fin et traduit le code de
+/// sortie.
+///
+/// Ordre voulu : l'absence du TÉLÉCHARGEUR est vérifiée EN PREMIER. Sans lui,
+/// rien n'est possible, et c'est la cause réelle — pas l'absence d'adresse, qui
+/// n'est alors qu'une conséquence. (Un paquet livré sans le service Laya n'a ni
+/// l'un ni l'autre : annoncer « adresse manquante » ferait chercher une cause
+/// qui n'existe pas.)
 ///
 /// `node` : interpréteur effectif (`None` = `node` du système). La même règle de
 /// priorité que le service (réglé à la main → embarqué → système) est appliquée
@@ -247,15 +254,16 @@ fn run(
     let meta = laya_model::read_manifest(manifest);
     begin(&meta.files);
 
-    // Adresse : le réglage explicite gagne, sinon celle du manifeste. Tant
+    // 1. Téléchargeur : sans lui, rien ne peut démarrer — cause RÉELLE.
+    if !fetch.is_file() {
+        return FetchReason::FetchMissing;
+    }
+    // 2. Adresse : le réglage explicite gagne, sinon celle du manifeste. Tant
     // qu'aucune adresse n'est renseignée, on ne lance RIEN et l'état est clair
     // (« adresse non renseignée »), jamais un plantage.
     let effective = laya_model::effective_base_url(base_url, meta.base_url.as_deref());
     if laya_model::is_placeholder_base(&effective) {
         return FetchReason::AddressMissing;
-    }
-    if !fetch.is_file() {
-        return FetchReason::FetchMissing;
     }
 
     let node_exe = node
@@ -615,6 +623,18 @@ await new Promise((r) => setTimeout(r, 5000));
                 download_blocking(None, &fetch, &manifest, &root.join("model-ml"), "", None, None);
             assert_eq!(reason, FetchReason::AddressMissing);
             assert!(!root.join("model-ml").exists(), "aucun dossier créé sans adresse");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+
+        // --- 6. Téléchargeur absent + adresse vide : la cause RÉELLE est le
+        // téléchargeur (paquet sans Laya), jamais « adresse manquante ».
+        {
+            let root = temp_root("nofetch");
+            let fetch = root.join("laya-fetch.mjs"); // volontairement absent
+            let manifest = write_manifest(&root, "A_CHOISIR");
+            let reason =
+                download_blocking(None, &fetch, &manifest, &root.join("model-ml"), "", None, None);
+            assert_eq!(reason, FetchReason::FetchMissing);
             let _ = std::fs::remove_dir_all(&root);
         }
     }

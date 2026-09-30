@@ -2208,9 +2208,10 @@ Réglages disponibles dans **Paramètres → Service Laya** :
   utiliser le dossier habituel (dans les données de Pilot si le service est
   livré, sinon `model-ml` à côté du service).
 
-Ces trois champs sont **facultatifs** : les remplir sert uniquement à utiliser
-un service ou un interpréteur installé à la main, ailleurs. Dans ce cas, c'est
-votre réglage qui l'emporte.
+Ces champs sont **facultatifs** et rangés dans **« Réglages avancés »**,
+replié par défaut en bas de la page (ouvrez-le pour les voir) : les remplir sert
+uniquement à utiliser un service ou un interpréteur installé à la main, ailleurs.
+Dans ce cas, c'est votre réglage qui l'emporte.
 
 - **Démarrer le service maintenant** : lance le service tout de suite, sans
   fermer puis rouvrir Pilot. L'écran indique ensuite ce qui s'est **réellement**
@@ -2232,26 +2233,34 @@ que vous ayez de commande à taper.
   même hors démarrage. Une barre indique l'avancement.
 - **Interrompre** : arrête le téléchargement en cours. La reprise continuera au
   même endroit plus tard (aucun octet déjà récupéré n'est perdu).
-- **Adresse d'hébergement des fichiers du modèle** : l'adresse où les fichiers
-  sont publiés. Laissez vide pour utiliser l'adresse indiquée par le modèle —
-  c'est le cas normal. La renseigner **force** une autre adresse (hébergement
-  personnel, miroir).
-- **Programme de téléchargement du modèle** : le fichier `laya-fetch.mjs`.
-  Laissez vide pour qu'il soit cherché à côté du service.
+- **Adresse d'hébergement des fichiers du modèle** (avancé) : l'adresse où les
+  fichiers sont publiés. Laissez vide : c'est le cas normal, Pilot utilise
+  l'adresse livrée avec lui. La renseigner **force** une autre adresse
+  (hébergement personnel, miroir).
+- **Programme de téléchargement du modèle** (avancé) : le fichier
+  `laya-fetch.mjs`. Laissez vide pour utiliser celui livré avec Pilot (sinon il
+  est cherché à côté du service).
+
+**Lancer un téléchargement** : le bouton **Télécharger le modèle maintenant**
+lance la récupération, et la ligne d'état ci-dessous dit ensuite ce qui se passe
+**réellement** — jamais un message de réussite lancé à l'aveugle. Si la demande
+n'a pas pu démarrer, la cause exacte est annoncée tout de suite.
 
 **Lire l'indicateur d'état** : sous ces champs, une ligne vous dit où en est le
 service — « arrêté », « en cours de chargement du modèle… », « prêt », « modèle
-pas encore téléchargé », ou « cette version de Pilot n'embarque pas le service
-Laya » (paquet construit sans lui). Un service lancé à la main n'est jamais
-arrêté par Pilot ; seul le service que Pilot a démarré est refermé à la
-fermeture.
+pas encore téléchargé », ou « n'embarque pas le service Laya » (uniquement sur
+les versions où le service n'a pas pu être livré, p. ex. macOS Intel : l'écran le
+dit alors franchement). Un service lancé à la main n'est jamais arrêté par
+Pilot ; seul le service que Pilot a démarré est refermé à la fermeture.
 
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse
-manquante »… Tous ces messages sont en langage courant (jamais de chemin ni de
-nom de fichier technique). **Un échec dit toujours sa cause réelle** : « le
-serveur d'hébergement a refusé la demande » (surcharge, quota) n'est jamais
-présenté comme une absence de connexion Internet, et inversement.
+inconnue »… Tous ces messages sont en langage courant (jamais de chemin ni de
+nom de fichier technique). **Un échec dit toujours sa cause réelle** : le refus
+du serveur d'hébergement (surcharge, quota) n'est jamais présenté comme une
+absence de connexion Internet, et inversement ; et si le programme de
+téléchargement n'est pas livré, c'est bien **cette** cause qui est annoncée, pas
+une adresse manquante.
 
 Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
 Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.

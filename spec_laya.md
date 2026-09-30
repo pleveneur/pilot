@@ -56,9 +56,10 @@ Réglages disponibles dans **Paramètres → Service Laya** :
   utiliser le dossier habituel (dans les données de Pilot si le service est
   livré, sinon `model-ml` à côté du service).
 
-Ces trois champs sont **facultatifs** : les remplir sert uniquement à utiliser
-un service ou un interpréteur installé à la main, ailleurs. Dans ce cas, c'est
-votre réglage qui l'emporte.
+Ces champs sont **facultatifs** et rangés dans **« Réglages avancés »**,
+replié par défaut en bas de la page (ouvrez-le pour les voir) : les remplir sert
+uniquement à utiliser un service ou un interpréteur installé à la main, ailleurs.
+Dans ce cas, c'est votre réglage qui l'emporte.
 
 - **Démarrer le service maintenant** : lance le service tout de suite, sans
   fermer puis rouvrir Pilot. L'écran indique ensuite ce qui s'est **réellement**
@@ -80,26 +81,34 @@ que vous ayez de commande à taper.
   même hors démarrage. Une barre indique l'avancement.
 - **Interrompre** : arrête le téléchargement en cours. La reprise continuera au
   même endroit plus tard (aucun octet déjà récupéré n'est perdu).
-- **Adresse d'hébergement des fichiers du modèle** : l'adresse où les fichiers
-  sont publiés. Laissez vide pour utiliser l'adresse indiquée par le modèle —
-  c'est le cas normal. La renseigner **force** une autre adresse (hébergement
-  personnel, miroir).
-- **Programme de téléchargement du modèle** : le fichier `laya-fetch.mjs`.
-  Laissez vide pour qu'il soit cherché à côté du service.
+- **Adresse d'hébergement des fichiers du modèle** (avancé) : l'adresse où les
+  fichiers sont publiés. Laissez vide : c'est le cas normal, Pilot utilise
+  l'adresse livrée avec lui. La renseigner **force** une autre adresse
+  (hébergement personnel, miroir).
+- **Programme de téléchargement du modèle** (avancé) : le fichier
+  `laya-fetch.mjs`. Laissez vide pour utiliser celui livré avec Pilot (sinon il
+  est cherché à côté du service).
+
+**Lancer un téléchargement** : le bouton **Télécharger le modèle maintenant**
+lance la récupération, et la ligne d'état ci-dessous dit ensuite ce qui se passe
+**réellement** — jamais un message de réussite lancé à l'aveugle. Si la demande
+n'a pas pu démarrer, la cause exacte est annoncée tout de suite.
 
 **Lire l'indicateur d'état** : sous ces champs, une ligne vous dit où en est le
 service — « arrêté », « en cours de chargement du modèle… », « prêt », « modèle
-pas encore téléchargé », ou « cette version de Pilot n'embarque pas le service
-Laya » (paquet construit sans lui). Un service lancé à la main n'est jamais
-arrêté par Pilot ; seul le service que Pilot a démarré est refermé à la
-fermeture.
+pas encore téléchargé », ou « n'embarque pas le service Laya » (uniquement sur
+les versions où le service n'a pas pu être livré, p. ex. macOS Intel : l'écran le
+dit alors franchement). Un service lancé à la main n'est jamais arrêté par
+Pilot ; seul le service que Pilot a démarré est refermé à la fermeture.
 
 Sous les réglages du modèle, une autre ligne indique l'état du **modèle** :
 « prêt », « absent », « téléchargement… n % », « interrompu », « adresse
-manquante »… Tous ces messages sont en langage courant (jamais de chemin ni de
-nom de fichier technique). **Un échec dit toujours sa cause réelle** : « le
-serveur d'hébergement a refusé la demande » (surcharge, quota) n'est jamais
-présenté comme une absence de connexion Internet, et inversement.
+inconnue »… Tous ces messages sont en langage courant (jamais de chemin ni de
+nom de fichier technique). **Un échec dit toujours sa cause réelle** : le refus
+du serveur d'hébergement (surcharge, quota) n'est jamais présenté comme une
+absence de connexion Internet, et inversement ; et si le programme de
+téléchargement n'est pas livré, c'est bien **cette** cause qui est annoncée, pas
+une adresse manquante.
 
 Enregistrez vos réglages avec le bouton **Enregistrer** de la fenêtre des
 Paramètres. Les valeurs sont conservées d'une ouverture à l'autre.
@@ -265,9 +274,9 @@ l'application (drapeau global) ; un second appel est refusé poliment
 
 ## 5. Preuve par les tests
 
-`cargo test --manifest-path src-tauri/Cargo.toml --lib laya` : **34 tests** des
-modules `laya`, `laya_model` et `laya_download` (28 en marche 4, +6 en marche 5).
-Tests **réels** notables :
+`cargo test --manifest-path src-tauri/Cargo.toml --lib laya` : **51 tests** des
+modules `laya`, `laya_model` et `laya_download` (marches 2 à 6, plus le cas
+ci-dessous). Tests **réels** notables :
 
 - `real_launch_trace_already_running_and_clean_stop` (marche 2) : écrit un vrai
   service de test, le lance par `node`, vérifie la réponse HTTP, lit la trace,
@@ -275,9 +284,11 @@ Tests **réels** notables :
 - `real_download_orchestration_without_network_or_real_model` (marche 4) :
   orchestration **complète** du téléchargement avec de **faux programmes de
   téléchargement** écrits dans un dossier temporaire — aucun accès réseau,
-  aucun vrai modèle. Cinq cas couverts : succès, intégrité en échec (code 4),
+  aucun vrai modèle. Six cas couverts : succès, intégrité en échec (code 4),
   interruption qui **conserve** le `.part`, refus du double lancement, refus
-  « adresse non renseignée ».
+  « adresse non renseignée », et **cause réelle** : téléchargeur absent annoncé
+  comme tel, jamais comme une « adresse manquante » (l'absence du téléchargeur
+  est vérifiée **avant** l'adresse).
 - `model_state_reports_missing_files_without_final_file` : un `.part` n'est
   jamais compté comme fichier final.
 
@@ -294,7 +305,8 @@ Marche 5 — décisions **pures** couvertes par des tests qui ne lancent rien :
 dossier de **données**, jamais le dossier livré). Côté interface,
 `src/js/laya-utils.test.js` : service livré pas encore exploitable → message
 « livré avec Pilot », paquet **sans** Laya → message « n'embarque pas »,
-service livré et prêt → succès.
+service livré et prêt → succès, et **téléchargeur absent** → message qui nomme
+la vraie cause (« n'est pas livré »), jamais une fausse adresse manquante.
 
 ## 6. Interface (marche 3, étendue en marche 4)
 
@@ -311,7 +323,12 @@ Avatar (PLface) :
   `setting-laya-model-auto-download`, champ `setting-laya-model-base-url`,
   champ `setting-laya-fetch-path` + `btn-laya-fetch-browse`, boutons
   `btn-laya-model-download` / `btn-laya-model-cancel`, barre `laya-model-bar`,
-  indicateur `laya-model-state`, message `laya-model-message`.
+  indicateur `laya-model-state`, message `laya-model-message`. Les champs de
+  chemin (service, interpréteur, dossier du modèle) et les deux champs avancés
+  (adresse d'hébergement, programme de téléchargement) sont regroupés dans un
+  bloc **« Réglages avancés » replié par défaut** (`<details
+  class="settings-advanced">`) : la page ne montre d'abord que l'essentiel
+  (démarrage automatique, état, boutons de téléchargement).
 - `src/js/laya-utils.js` — fonctions pures `layaStatusMessage(status)`,
   `layaOutcomeMessage(outcome)`, `layaModelStateMessage(state)` (rend
   `{text, kind}`) et `layaModelProgressPercent(state)` (borné 0..100), plus la
@@ -392,7 +409,10 @@ de fonctionner exactement comme avant.
 
 Préparés par `scripts/prepare-laya.js` (`npm run prepare:laya`) dans
 `src-tauri/laya/`, déclaré dans `bundle.resources` sous la clé `"laya": "laya"`
-(résolu en `$RESOURCE/laya/`) :
+(résolu en `$RESOURCE/laya/`). La **cible** embarquée (`<os>/<arch>`, ex.
+`win32/x64`, `darwin/arm64`, `linux/x64`) est celle du paquet construit :
+`LAYA_TARGET_PLATFORM` sinon la machine qui construit — indispensable en CI, qui
+construit macOS Intel sur un runner ARM.
 
 | Élément | Rôle | Windows x64 |
 |---|---|---|
@@ -413,11 +433,35 @@ copie préparée, pas par supposition : `DirectML.dll`, `dxcompiler.dll` et
 
 Le dossier source (`LAYA_SOURCE_DIR`, défaut `<dépôt>/../LayaPL`) est **hors
 dépôt** : `src-tauri/laya/` est dans `.gitignore`, aucun fichier de LayaPL n'est
-versionné. Dossier source absent → avertissement explicite et **sortie 0** (le
-paquet n'embarque pas Laya, Pilot le dit à l'écran) ; dossier présent mais
-incomplet → **sortie 1** (mieux vaut échouer que livrer une copie incomplète).
-Le dossier cible est vidé puis reconstruit : deux exécutions donnent un résultat
-identique.
+versionné. Le dossier cible est vidé puis reconstruit : deux exécutions donnent un
+résultat identique.
+
+**Garde-fou (fail-closed) — le point le plus important du dispositif.**
+Une pièce manquante **ou de taille NULLE (0 octet)** **arrête la fabrication**
+(`exit 1`) : un paquet publié qui annonce une fonction qu'il n'a pas est pire
+qu'un paquet non publié, et un fichier présent mais vide passerait un simple
+test d'existence tout en rendant le service inutilisable en silence (défaut
+constaté sur la 0.4.19). Sont donc fatales : source absente, `laya-ts/dist` non
+compilé, moteur natif absent ou vide pour la cible, `LAYA_SOURCE_DIR` erroné —
+chaque cas avec un message qui **nomme la pièce concernée** (et distingue
+« MANQUANTE » de « VIDE (0 octet) ») et la cible demandée. Un mode tolérant
+existe, et **seulement** sur
+demande explicite (`--allow-missing` ou `LAYA_ALLOW_MISSING=1`) : avertissement,
+dossier cible laissé **vide**, sortie 0. Il sert au **mode dev**
+(`beforeDevCommand`) — on n'embarque pas 110 Mo pour coder — et à la **seule
+cible macOS Intel**, où le moteur ONNX n'existe plus (`onnxruntime-node` ne livre
+plus que `darwin/arm64`). Aucune autre cible ne l'utilise : le mode publication
+demeure strict.
+
+**CI** (`.github/workflows/release.yml`) : la source LayaPL est **clonée**
+(`https://github.com/pleveneur/LayaPL.git`, dépôt public, à côté du dépôt Pilot),
+ses paquets npm installés (`npm ci --omit=dev` dans `laya-ts`, qui fournit
+`onnxruntime-node`), puis `npm run prepare:laya` s'exécute en **étape visible**
+avant le build — un manque fait donc échouer la publication au lieu de produire
+un installeur vide. `LAYA_TARGET_PLATFORM` est fourni par la matrice, et
+`x86_64-apple-darwin` reçoit `LAYA_ALLOW_MISSING=1` (moteur inexistant ; l'écran
+dit alors franchement que la version n'embarque pas Laya). `beforeBuildCommand`
+relance le script avec les mêmes entrées : idempotent.
 
 `bundle.resources` est résolu par le **script de construction Tauri** (`tauri-build`)
 au moment de la compilation : sans le dossier, `cargo build`/`cargo test` échouaient
@@ -458,6 +502,22 @@ par défaut (`#[serde(default = "default_true")]` **et** `impl Default`) : un
 reste `false`. Un champ absent de l'objet enregistré par les Réglages reste le
 piège connu : tous les champs `laya_*`, y compris le nouveau `laya_node_path`,
 sont transmis à `save_config`.
+
+### 8.5 Messages : dire la cause réelle, jamais en inventer une
+
+Quatre messages trompeurs ont été corrigés, pour qu'un paquet **sans** Laya ne
+fasse jamais chercher une cause qui n'existe pas :
+
+| Endroit | Avant (faux) | Après (réel) |
+|---|---|---|
+| `laya_download.rs::run` | adresse vérifiée en premier → `AddressMissing` alors que rien n'est embarqué | **téléchargeur vérifié en premier** → `FetchMissing` : la cause réelle (ordre qui porte le diagnostic) |
+| `laya-utils.js` `addressMissing` | « aucune adresse d'hébergement n'est renseignée » (alors que le réglage n'est même pas en cause) | « l'adresse … n'est pas connue de cette version de Pilot » |
+| `laya-utils.js` `fetchMissing` | « Indiquez le fichier de téléchargement » (sans dire qu'il devrait être livré) | « il n'est pas livré avec cette version de Pilot » + marche à suivre |
+| `settings.js` (bouton de téléchargement) | toast inconditionnel « Téléchargement lancé en arrière-plan » (même quand rien ne démarre) | plus de succès à l'aveugle : la **ligne d'état** dit où ça en est ; si la demande n'a pas pu démarrer, la raison réelle est annoncée |
+
+Même règle pour l'aide (bloc `<!-- HELP:laya -->`) et le texte d'aide de la page
+(cf. §6) : ils décrivent désormais le comportement **fail-closed** de la
+fabrication et rangent les réglages de chemin dans les « Réglages avancés ».
 
 ## 9. Marche 13 — Laya par Pilot lui-même, et par les agents
 
