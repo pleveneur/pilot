@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-28 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-09-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1065,6 +1065,9 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
   (il peut le consulter pour le contexte, sans le modifier).
 - L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
   agent du projet cible.
+- **Si le projet cible travaille déjà** : la tâche est **déposée mais pas lancée**
+  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/` ; il
+  sera à traiter quand le projet sera libre.
 
 ---
 

@@ -40,6 +40,12 @@ le modifier). La base du mécanisme est le **dépôt d'une tâche inter-projets*
   3. **lance/reprend l'agent** de la cible (`rpc::do_start_agent_session`) ;
   4. envoie à cet agent un **prompt** lui ordonnant de lire et traiter le fichier.
 
+- **Si le projet cible travaille déjà** (un agent y tourne réellement), le backend
+  **écrit le fichier** mais **ne lance pas l'agent** : le dépôt est **différé**
+  (réponse `deferred: true`), avec un message honnête « déposé mais non lancé »
+  affiché en avertissement — pas de faux succès, pas d'écrasement de la mission en
+  cours. Le fichier reste à traiter quand le projet sera libre.
+
 ## 3. Architecture backend (Rust)
 
 ### Module `src-tauri/src/interproject.rs` (nouveau)
@@ -74,16 +80,13 @@ le modifier). La base du mécanisme est le **dépôt d'une tâche inter-projets*
 - L'agent de la cible traite le handoff de façon **asynchrone** : l'utilisateur peut
   consulter la discussion dans l'onglet agent de la cible après le dépôt.
 - Les liens orphelins (projets supprimés) sont filtrés à la lecture.
-- **Limite : le dépôt de tâche inter-projets contourne le verrou par projet**
-  (même classe que le mode distant, cf. `idees_evolutions.md` § 30). Le handoff est
-  envoyé **côté Rust** (`src-tauri/src/interproject.rs:151`, `do_send_agent_prompt`)
-  après avoir parké la session active et rendu la cible active : il ne passe par
-  aucun bus JS, donc la politique d'admission (lecture partagée / modification
-  exclusive) n'y est pas évaluée. Un handoff peut donc lancer une modification sur
-  la cible pendant qu'une mission y tourne (ex. run `run_agents` de l'Assistant qui
-  n'existe que dans le bus JS). Correctif à écrire en **Rust** (interroger
-  l'occupation réelle par projet côté AgentService) — **tracé**, non corrigé à ce
-  stade (`idees_evolutions.md` § 31).
+- **Verrou par projet respecté (corrigé 2026-09)** : le handoff passe bien **côté
+  Rust** (aucun bus JS), mais une **porte** y vérifie désormais l'occupation réelle
+  de la cible (`anomaly::project_has_working_agent`) avant tout lancement. Si un
+  agent travaille déjà sur la cible, le dépôt est **différé** (fichier écrit,
+  message honnête, aucune exécution) au lieu d'écraser la mission en cours.
+  Reste ouvert, lui : le **mode distant web** (`idees_evolutions.md` § 30), qui
+  envoie un prompt sans passer par cette porte.
 
 ---
 
@@ -106,4 +109,7 @@ tâche** à un autre projet, dont l'agent est lancé pour la traiter.
   (il peut le consulter pour le contexte, sans le modifier).
 - L'agent cible traite la tâche **en arrière-plan** ; suis le résultat dans l'onglet
   agent du projet cible.
+- **Si le projet cible travaille déjà** : la tâche est **déposée mais pas lancée**
+  (message d'avertissement). Le fichier reste dans `cible/.pilot/handoffs/` ; il
+  sera à traiter quand le projet sera libre.
 <!-- /HELP:interprojets -->

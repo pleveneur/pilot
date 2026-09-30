@@ -937,12 +937,16 @@ la session web (jamais un silence).
 
 ---
 
-## 31. Dépôt de tâche inter-projets — le verrou par projet ne s'y applique pas (à traiter)
+## 31. Dépôt de tâche inter-projets — verrou par projet (CORRIGÉ 2026-09)
 
-> **Tâche tracée** (même chantier « fermer les contournements du verrou par
-> projet » que § 30 ; point G). Limite documentée dans `spec_interproject.md` § 5.
+> **Corrigé** (commit `4ab8489`, branche `verrou-par-projet`) : une porte Rust
+> (`anomaly::project_has_working_agent` dans `interproject_handoff`) vérifie
+> l'occupation réelle de la cible ; si un agent y travaille, le handoff est
+> **déposé mais non lancé** (réponse `deferred`, message honnête — jamais de faux
+> succès). Voir `spec_interproject.md` § 5 et `spec_multiprojects.md` § 7. Seul le
+> mode distant web (§ 30) reste ouvert.
 
-**Constat** : le **dépôt d'une tâche inter-projets** envoie le prompt de handoff
+**Constat (historique)** : le **dépôt d'une tâche inter-projets** envoyait le prompt de handoff
 **côté Rust** (`src-tauri/src/interproject.rs:151`, `do_send_agent_prompt`), sans
 passer par le bus JS : la politique d'admission (lecture partagée / modification
 exclusive) n'y est donc pas évaluée. Le chemin parke bien la session *active* et

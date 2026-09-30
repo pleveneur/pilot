@@ -293,6 +293,52 @@ struct AppState {
      le `start_agent_session` du projet suivant, tuer la session parkée venue d'être
      reprise).
 
+## 7. Verrou par projet (lecture partagée / modification exclusive)
+
+Règle de coordination des missions sur un **même projet** — **jamais un verrou
+global** : des projets différents ne se bloquent pas. Sur un même projet, les
+missions de **lecture** peuvent tourner ensemble ; toute mission qui **modifie**
+est **exclusive** (elle ne démarre pas tant que quelque chose tourne sur ce projet,
+et rien ne démarre pendant qu'elle tourne). La nature se lit dans le drapeau
+`readonly` du registre des agents (`run-policy.js` : `missionNature`,
+`canStartMission`) ; le cadrage par projet est fait par l'appelant (`agents-bus.js`,
+file d'exclusivité `exclusivity-queue.js`). Ce chantier a fermé les
+**contournements** du verrou :
+
+- **Porte Rust (prompts directs)** : `agents::ensure_agent_not_busy`
+  (`AgentService::agent_process_busy`) refuse un prompt envoyé **directement** à
+  une session `AgentProcess` vivante et occupée (`do_send_agent_process_prompt`),
+  avec un **refus nommé et visible** (« l'agent … est déjà en train de travailler »)
+  au lieu d'une seconde exécution concurrente. Les relances légitimes du bus
+  (après `agent_end`, correction de boucle, reprise de troncature) passent : `busy`
+  est retombé à `false` **avant** l'émission de l'événement au frontend. Un `busy`
+  périmé (process figé au-delà de la grâce busy-stale) n'est pas exclusif.
+- **Dépôt inter-projets différé (honnête)** : si le projet **cible** a déjà un
+  agent qui travaille réellement (`anomaly::project_has_working_agent`, chemins
+  brut et normalisé testés), `interproject_handoff` **écrit quand même** le fichier
+  de handoff (jamais perdu) mais **ne lance aucune exécution** : la réponse porte
+  `deferred: true` + un message explicite, affiché en **avertissement** (« tâche
+  déposée mais non lancée ») au lieu d'un faux succès. Le fichier reste à traiter
+  quand le projet sera libre.
+- **Rejeu périodique de la file (demande jamais perdue)** : à chaque mise en file
+  d'une demande de délégation (`super-agent.js`), un déclencheur de rejeu est armé
+  (`armDelegationQueueReplay`, sonde périodique 15 s).
+  `replayDelegationQueueForProject` sonde l'**activité réelle** de l'agent cible
+  (`isRunStillActive`, pas l'état local `busy` qui peut être périmé) et transmet la
+  tête de file seulement si l'agent est réellement libre ; sonde en échec →
+  **fail-closed**, la demande reste en file et le rejeu se réarme tant que la file
+  n'est pas vide. Une demande mise en file a donc toujours un déclencheur de rejeu,
+  même si l'`agent_end` attendu n'arrive pas (prompt distant, session figée) :
+  jamais de blocage silencieux durable.
+- **Fin de run (ne jamais annoncer une fin qui peut reprendre)** : `agent_end`
+  n'est pas forcément terminal. `shouldFinalizeOnAgentEnd` (`agent-hardening.js`)
+  n'accepte de clôturer le suivi d'un agent délégué que si l'événement est terminal
+  (`isTerminal` ≠ false) **et** sans relance (`willRetry !== true`) ; sinon les
+  buffers sont réarmés et le suivi attend le prochain `agent_end` ou l'`agent_settled`
+  final (run totalement terminée — filet « zéro perte », idempotent). Sans cette
+  règle, un faux « terminé » était annoncé pendant que l'agent relançait (erreur
+  transitoire, troncature, compaction, continuation).
+
 ---
 
 <!-- HELP:multiprojets -->
