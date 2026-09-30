@@ -416,6 +416,24 @@ pub(crate) fn busy_entry_is_exclusive(
     entry.busy && !should_release_stale_busy(entry, grace_minutes, now)
 }
 
+/// Verrou par PROJET côté Rust (portes hors bus JS, ex. dépôt inter-projets) :
+/// indique si AU MOINS UN agent (toutes spécialités confondues, session
+/// principale comprise) TRAVAILLE RÉELLEMENT sur `project`. Un `busy` périmé
+/// (process figé) n'est pas compté — même politique que `busy_entry_is_exclusive`.
+/// `project` doit être testé sous ses formes brute ET normalisée par l'appelant
+/// (la clé d'anomalie reprend le chemin tel que fourni au démarrage de session).
+/// Pure et testable.
+pub(crate) fn project_has_working_agent(
+    map: &HashMap<String, AgentAnomalyState>,
+    project: &str,
+    grace_minutes: u32,
+    now: Instant,
+) -> bool {
+    let needle = format!("{}\u{1f}", project);
+    map.iter()
+        .any(|(k, e)| k.starts_with(&needle) && busy_entry_is_exclusive(e, grace_minutes, now))
+}
+
 /// Bug #81 : route l'arrêt auto d'une entrée non-super busy sans progression
 /// vers la bonne cible. Retourne :
 ///  - `"agent_process"` : agent délégué (run_agents, mode `AgentProcess`) vivant ;
@@ -1523,6 +1541,42 @@ mod tests {
         assert!(busy_entry_is_exclusive(&state_at(26 * 60, true, true), 25, now));
         // settled (busy=false) → non exclusif, réutilisable.
         assert!(!busy_entry_is_exclusive(&state_at(10, false, false), 25, now));
+    }
+
+    /// Porte inter-projets : `project_has_working_agent` ne voit que les agents
+    /// du projet DEMANDÉ, et seulement ceux qui travaillent réellement (busy
+    /// frais). Sert de garde au dépôt inter-projets : on ne lance pas une
+    /// seconde exécution sur un projet déjà occupé.
+    #[test]
+    fn project_has_working_agent_scopes_project_and_freshness() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state_at = |idle_secs: u64, busy: bool| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "agent_start".to_string(),
+            busy,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: false,
+            tool_in_progress: false,
+            produced_output: false,
+        };
+        let mut map: HashMap<String, AgentAnomalyState> = HashMap::new();
+        assert!(!project_has_working_agent(&map, "/p/A", 25, now));
+        // Agent d'un AUTRE projet → ignoré.
+        map.insert("/p/B\u{1f}codeur".to_string(), state_at(0, true));
+        assert!(!project_has_working_agent(&map, "/p/A", 25, now));
+        // Agent du projet A, busy frais → occupé.
+        map.insert("/p/A\u{1f}codeur".to_string(), state_at(0, true));
+        assert!(project_has_working_agent(&map, "/p/A", 25, now));
+        // busy périmé (process figé) → pas un travail en cours.
+        map.insert("/p/A\u{1f}codeur".to_string(), state_at(26 * 60, true));
+        assert!(!project_has_working_agent(&map, "/p/A", 25, now));
+        // Préfixe distinct (A2 ≠ A) → pas de faux positif.
+        map.clear();
+        map.insert("/p/A2\u{1f}codeur".to_string(), state_at(0, true));
+        assert!(!project_has_working_agent(&map, "/p/A", 25, now));
     }
 
     /// Bug « question sans réponse > seuil » : une question interactive

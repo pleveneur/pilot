@@ -4,7 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
-import { toastSuccess, toastError } from "./toast.js";
+import { toastSuccess, toastError, toastWarning } from "./toast.js";
 import { animateModalOpen } from "./modal-anim.js";
 
 let modal, linksEl, openListEl, targetSel, contentEl, resultEl;
@@ -158,6 +158,14 @@ async function sendHandoff() {
       target,
       content,
     });
+    if (res.deferred) {
+      // Verrou par projet : la cible travaille déjà — dépôt honnête, sans
+      // lancement d'une seconde exécution ni écrasement de la mission en cours.
+      toastWarning(res.message);
+      resultEl.textContent = res.message + " Fichier : " + res.handoff_path;
+      contentEl.value = "";
+      return;
+    }
     toastSuccess("Tâche déposée dans " + res.target_name + " — son agent a été lancé pour la traiter.");
     resultEl.textContent =
       "Tâche déposée dans « " +

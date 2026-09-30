@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
-use crate::{rpc, AppState, do_set_active_project, normalize_project_path, open_project_shared, save_config_disk};
-
+use crate::{anomaly, rpc, AppState, do_set_active_project, normalize_project_path, open_project_shared, save_config_disk};
 /// Issue #15 : liste les projets liés à `project` (chemins normalisés).
 #[tauri::command]
 pub fn get_project_links(state: State<AppState>, project: String) -> Vec<String> {
@@ -123,6 +122,35 @@ pub fn interproject_handoff(
         format!("Impossible d'écrire le handoff {} : {}", handoff_path.display(), e)
     })?;
     let handoff_str = handoff_path.to_string_lossy().to_string();
+
+    // Garde du verrou par projet (porte inter-projets, mission « portes du
+    // verrou ») : si le projet cible a DÉJÀ un agent qui travaille, on ne lance
+    // PAS de seconde exécution et on n'écrase pas la mission en cours. Le
+    // handoff est déposé (fichier déjà écrit, jamais perdu) et l'utilisateur
+    // reçoit un message HONNÊTE (« déposé mais non lancé ») au lieu d'un faux
+    // succès. Le chemin est testé brut et normalisé : la clé d'anomalie reprend
+    // le chemin tel que fourni au démarrage de la session.
+    let target_busy = {
+        let m = state.agent_anomaly.lock().unwrap();
+        let grace = crate::default_stale_busy_grace_minutes();
+        let now = std::time::Instant::now();
+        anomaly::project_has_working_agent(&m, &target, grace, now)
+            || anomaly::project_has_working_agent(&m, &normalize_project_path(&target), grace, now)
+    };
+    if target_busy {
+        return Ok(json!({
+            "handoff_path": handoff_str,
+            "target": target,
+            "target_name": target_name,
+            "source": source,
+            "source_name": source_name,
+            "deferred": true,
+            "message": format!(
+                "Tâche déposée dans « {} », mais AUCUNE exécution n'a été lancée : un agent y travaille déjà. Le fichier de handoff reste disponible, à traiter quand le projet sera libre.",
+                target_name
+            ),
+        }));
+    }
 
     // 2. Garantir que la cible est ouverte et active.
     //    Avant de basculer, parker l'éventuelle session active du projet source
