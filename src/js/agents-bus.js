@@ -63,6 +63,20 @@ const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des o
 // `activeAgents`) tout en récupérant un verrou orphelin en ~1 min.
 const QUEUED_ORPHAN_GRACE_MS = 60 * 1000;
 
+// Prudence (mission « libération abusive du verrou de run ») : les portes
+// AMBIGUËS (agents déclarés actifs mais silencieux, travail en file sans
+// porteur) ne libèrent le verrou que si DEUX mesures espacées du même écart
+// donnent le même verdict. Une mesure unique pouvait tirer pendant la fenêtre où
+// l'agent n'est pas encore réellement enregistré côté Rust → libération à tort.
+// L'écart reste dans la fourchette demandée (5–10 s). Mutable uniquement via le
+// point d'entrée de test `__setWatchdogConfirmDelayForTest`.
+let watchdogConfirmDelayMs = 7 * 1000;
+
+/** Réservé aux TESTS : ajuste l'écart exigé entre les deux mesures du watchdog. */
+export function __setWatchdogConfirmDelayForTest(ms) {
+  watchdogConfirmDelayMs = typeof ms === "number" && ms >= 0 ? ms : 7 * 1000;
+}
+
 // Watchdog — instrumentation (mission « libération abusive du verrou de run ») :
 // les QUATRE portes de libération (noActive, residualParallel, ghosts,
 // orphanQueue) émettaient le MÊME message, ce qui rendait la cause invisible et
@@ -107,6 +121,35 @@ export function buildWatchdogReleaseMessage(info = {}) {
 function pendingExclusivityCount(ctx) {
   const queue = (ctx && ctx.exclusivityQueue) || {};
   return Object.keys(queue).reduce((n, k) => n + ((queue[k] || []).length), 0);
+}
+
+/**
+ * Livre la libération d'un verrou par le watchdog (message instrumenté) et
+ * retourne le message émis. Si du TRAVAIL a été produit avant l'arrêt, la
+ * mission reçoit un rapport « run interrompue, résultat partiel » (kind "done")
+ * au lieu d'un échec mensonger ; sinon un échec honnête (kind "error").
+ * @param {object} ctx - contexte de run
+ * @param {string} door - porte qui a tiré
+ * @param {number|null} idleSince - repère d'inactivité (ms epoch)
+ * @returns {string} message instrumenté
+ */
+function settleWatchdogRelease(ctx, door, idleSince) {
+  const message = buildWatchdogReleaseMessage({
+    door,
+    agents: Array.from(ctx.activeAgents),
+    idleMs: idleSince ? Date.now() - idleSince : null,
+    queued: pendingExclusivityCount(ctx),
+  });
+  const partial = (ctx.producedText || "").trim();
+  if (partial) {
+    // Message honnête : du travail a été produit → run interrompue, partiel.
+    settleMission(ctx.runKey, "done", {
+      text: `${message}\n\n⚠️ Run interrompue : du travail a été produit avant l'arrêt, voici le résultat partiel.\n\n${partial}`,
+    });
+  } else {
+    settleMission(ctx.runKey, "error", { message });
+  }
+  return message;
 }
 
 // Issue #37 : détection de boucle dans la réflexion des sous-agents.
@@ -203,6 +246,14 @@ function newRunCtx(key, project) {
     budgetTotal: DEFAULT_TOTAL_BUDGET,
     budgetByAgent: {},
     timeoutId: null,
+    // Prudence watchdog : instant de la 1re mesure « verrou bloqué » (porte
+    // ambiguë) + identifiant de la revérification automatique. Deux mesures
+    // espacées concordantes sont exigées avant toute libération.
+    watchdogStuckAt: null,
+    watchdogRecheckId: null,
+    // Travail réellement produit dans la run (texte final des agents) : sert à
+    // rendre le message de libération HONNÊTE (travail partiel ≠ échec).
+    producedText: "",
     currentAgentId: null,
     // H2 V2 parallèle : ensemble des agents en train de streamer + buffers par agent.
     activeAgents: new Set(),
@@ -364,6 +415,7 @@ export function endRun(project, generation) {
     const ctx = busState.runs[key];
     if (ctx) {
       if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+      if (ctx.watchdogRecheckId) clearTimeout(ctx.watchdogRecheckId);
       delete busState.runs[key];
     }
     return;
@@ -375,6 +427,7 @@ export function endRun(project, generation) {
     const ctx = busState.runs[key];
     if (ctx && ctx.generation === generation) {
       if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+      if (ctx.watchdogRecheckId) clearTimeout(ctx.watchdogRecheckId);
       delete busState.runs[key];
       return;
     }
@@ -388,6 +441,7 @@ function clearAllRuns() {
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
     if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
+    if (ctx.watchdogRecheckId) clearTimeout(ctx.watchdogRecheckId);
   }
   busState.runs = {};
 }
@@ -484,15 +538,7 @@ async function releaseStuckRunLockForKey(key) {
         resetTimeout(ctx);
         return;
       }
-      const idleMs = idleSince ? Date.now() - idleSince : null;
-      const message = buildWatchdogReleaseMessage({
-        door: "timeGuard",
-        agents: Array.from(ctx.activeAgents),
-        idleMs,
-        queued: pendingExclusivityCount(ctx),
-      });
-      console.warn("[agents-bus] watchdog :", message);
-      settleMission(ctx.runKey, "error", { message });
+      console.warn("[agents-bus] watchdog :", settleWatchdogRelease(ctx, "timeGuard", idleSince));
       endRun(key, ctx.generation);
     }
     return;
@@ -517,20 +563,49 @@ async function releaseStuckRunLockForKey(key) {
     return;
   }
 
+  // La file ne doit JAMAIS être abandonnée : si des demandes restent en file
+  // (échec de lancement, sonde indisponible), on CONSERVE le verrou au lieu de
+  // libérer — une libération les perdrait avec le contexte.
+  if (pendingExclusivityCount(ctx) > 0) {
+    console.warn("[agents-bus] watchdog : demandes encore en file → verrou conservé (reprise garantie).");
+    resetTimeout(ctx);
+    return;
+  }
+
+  // Prudence : les portes AMBIGUËS exigent DEUX mesures espacées concordantes.
+  // La 1re mesure arme une revérification automatique et NE libère pas ; si
+  // l'état a changé entre-temps (agent finalement enregistré/en travail), le
+  // second verdict n'est plus « bloqué » et le verrou est conservé.
+  if (door === "ghosts" || door === "orphanQueue") {
+    const now = Date.now();
+    const prev = ctx.watchdogStuckAt;
+    if (!prev || now - prev < watchdogConfirmDelayMs) {
+      ctx.watchdogStuckAt = now;
+      if (!ctx.watchdogRecheckId) {
+        ctx.watchdogRecheckId = setTimeout(() => {
+          ctx.watchdogRecheckId = null;
+          if (busState.runs[key] === ctx) releaseStuckRunLockForKey(key).catch(() => {});
+        }, watchdogConfirmDelayMs + 50);
+      }
+      console.warn(
+        "[agents-bus] watchdog : verdict « %s » non confirmé (1re mesure) — revérification dans %s s.",
+        door,
+        Math.round(watchdogConfirmDelayMs / 1000),
+      );
+      return;
+    }
+  }
+  ctx.watchdogStuckAt = null;
+
   // Rien en file : libérer réellement le verrou (la vraie run est terminée).
   // Livraison fiable : une run libérée par le watchdog (bloquée) doit aussi
   // résoudre SON sink, sinon la mission attendrait un rapport qui n'arrivera
   // jamais. Le message NOMME la porte qui a tiré, les agents concernés et
   // l'inactivité mesurée (instrumentation — cause enfin visible).
-  const idleSince = ctx.lastActivityAt || ctx.startedAt || null;
-  const message = buildWatchdogReleaseMessage({
-    door,
-    agents: Array.from(ctx.activeAgents),
-    idleMs: idleSince ? Date.now() - idleSince : null,
-    queued: pendingExclusivityCount(ctx),
-  });
-  console.warn("[agents-bus] watchdog :", message);
-  settleMission(ctx.runKey, "error", { message });
+  console.warn(
+    "[agents-bus] watchdog :",
+    settleWatchdogRelease(ctx, door, ctx.lastActivityAt || ctx.startedAt || null),
+  );
   endRun(key, ctx.generation);
 }
 
@@ -570,11 +645,11 @@ async function drainExclusivityQueues(ctx, runKeyValue) {
 // c'est elle qui maintenait à tort le verrou fantôme « Une run est déjà en
 // cours sur ce projet ». Utilisée par releaseStuckRunLock pour distinguer une
 // session fantôme/inactive d'un agent qui travaille encore.
-// Fail-open (sens anti-verrou) : en cas d'erreur de sonde ou de donnée
-// manquante, on retourne false → le watchdog considère le système LIBRE
-// (jamais de faux verrou ; le risque inverse — libérer une run réellement
-// active — reste couvert côté exécution par busy=true de la session et par
-// l'exclusivité Rust (clé composite) + la file d'attente T5).
+// Fail-CLOSED (mission « libération abusive ») : en cas d'erreur de sonde, on
+// retourne true → le watchdog CONSERVE le verrou (jamais de libération sur
+// incertitude). Les données manquantes (session vivante sans busy ni dernière
+// activité) restent, elles, traitées comme non-travailleuses (filet du verrou
+// fantôme conservé).
 async function anyActiveAgentWorking(project) {
   const key = runKey(project);
   const ctx = busState.runs[key];
@@ -584,7 +659,7 @@ async function anyActiveAgentWorking(project) {
     const sessions = (res && res.sessions) || [];
     return isAnyAgentWorking(sessions, Array.from(ctx.activeAgents), (id) => ctx.agentProject[id] || null, Date.now());
   } catch (e) {
-    return false;
+    return true;
   }
 }
 
@@ -1505,6 +1580,12 @@ async function cleanupReservationsForAgent(agentId, project) {
 
 async function finishAgentTurn(agentId, ctx) {
   const text = ctx.streamingTextByAgent[agentId] || "";
+  // Travail réellement produit : alimente le message HONNÊTE du watchdog
+  // (« run interrompue, travail partiel » ≠ « échec »). Borné pour ne pas
+  // gonfler la mémoire d'une run longue.
+  if (text && text.trim()) {
+    ctx.producedText = ((ctx.producedText || "") + "\n\n" + text).slice(-8000);
+  }
   ctx.pendingErrorByAgent[agentId] = undefined;
   ctx.streamingTextByAgent[agentId] = "";
   ctx.toolCallsByAgent[agentId] = [];

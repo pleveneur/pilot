@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -230,11 +230,18 @@ describe("stopAgentsRun — purge des réservations (T6-fix, fuite 1)", () => {
 // doit libérer le verrou quand aucun agent n'est VRAIMENT en activité, et le
 // maintenir quand un agent travaille réellement (busy ou activité récente).
 describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
+  /** Protocole de prudence : DEUX mesures concordantes exigées (écart nul en test). */
+  const releaseConfirmed = async (project = "projetA") => {
+    await releaseStuckRunLock(project);
+    await releaseStuckRunLock(project);
+  };
   beforeEach(() => {
+    __setWatchdogConfirmDelayForTest(0);
     endRun("projetA");
     vi.mocked(invoke).mockClear();
   });
   afterEach(() => {
+    __setWatchdogConfirmDelayForTest();
     endRun("projetA");
     // Restaurer l'implémentation par défaut du mock (mockReset réinitialise
     // l'implémentation d'origine passée à vi.fn dans la factory du mock).
@@ -258,9 +265,14 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     { agent: "magnus", project: "projetA", mode: "agent_process", alive: true, ...extra }
   );
 
-  it("scénario du bug : agent vivant mais inactif (parké) → verrou libéré, la délégation passe", async () => {
+  it("scénario du bug : agent vivant mais inactif (parké) → verrou libéré APRÈS deux mesures concordantes", async () => {
     beginRunWithAgent();
     mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })]);
+    // Prudence (mission « libération abusive ») : la 1re mesure NE libère PAS
+    // (l'agent peut n'être pas encore enregistré côté Rust).
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("running");
+    // 2e mesure concordante → libération.
     await releaseStuckRunLock("projetA");
     // Le système se détache de la session fantôme : le verrou est libéré →
     // la prochaine demande n'est plus rejetée « Une run est déjà en cours ».
@@ -294,27 +306,29 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(getRunState("projetA")).toBe("running");
   });
 
-  it("données manquantes (sans busy ni lastActivity) → JAMAIS de verrou (fail-open)", async () => {
+  it("données manquantes (sans busy ni lastActivity) → aucune session travailleuse → verrou libéré (après confirmation)", async () => {
     beginRunWithAgent();
     mockSessions([session()]); // vivante, sans busy ni lastActivity
-    await releaseStuckRunLock("projetA");
+    await releaseConfirmed();
     expect(getRunState("projetA")).toBe("idle");
   });
 
-  it("sonde de sessions en erreur → verrou libéré (fail-open, jamais de faux verrou)", async () => {
+  it("sonde de sessions en erreur → verrou MAINTENU (fail-closed : jamais de libération sur incertitude)", async () => {
     beginRunWithAgent();
     vi.mocked(invoke).mockImplementation(async (cmd) => {
       if (cmd === "list_agent_sessions") throw new Error("sonde indisponible");
       return undefined;
     });
-    await releaseStuckRunLock("projetA");
-    expect(getRunState("projetA")).toBe("idle");
+    // AVANT : fail-open → libération (et donc risque de double run).
+    // MAINTENANT : fail-closed → le verrou est conservé.
+    await releaseConfirmed();
+    expect(getRunState("projetA")).toBe("running");
   });
 
   it("session morte (alive=false avec busy résiduel) → verrou libéré", async () => {
     beginRunWithAgent();
     mockSessions([session({ alive: false, busy: true })]);
-    await releaseStuckRunLock("projetA");
+    await releaseConfirmed();
     expect(getRunState("projetA")).toBe("idle");
   });
 
@@ -324,7 +338,7 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     // considère non-travailleur → aucun agent réellement actif → verrou libéré.
     beginRunWithAgent();
     mockSessions([session({ busy: true, lastActivity: new Date(Date.now() - 26 * 60 * 1000).toISOString() })]);
-    await releaseStuckRunLock("projetA");
+    await releaseConfirmed();
     expect(getRunState("projetA")).toBe("idle");
   });
 
@@ -334,12 +348,26 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })]);
     let msg = "";
     attachMissionSink(ctx.runKey, { onDone: () => {}, onError: (e) => (msg = e.message) });
-    await releaseStuckRunLock("projetA");
+    await releaseConfirmed();
     // Avant : les quatre portes émettaient le même message. Maintenant la cause
     // est visible : porte + agents + inactivité réellement mesurée.
     expect(msg).toContain("agents déclarés actifs");
     expect(msg).toContain("magnus");
     expect(msg).toContain("10 min");
+  });
+
+  it("message HONNÊTE : du travail produit avant l'arrêt → « run interrompue, partiel », jamais « échec »", async () => {
+    const ctx = beginRunWithAgent();
+    ctx.producedText = "Analyse partielle : le module X dépend de Y.";
+    ctx.lastActivityAt = Date.now() - 10 * 60 * 1000;
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })]);
+    let done = null;
+    let err = null;
+    attachMissionSink(ctx.runKey, { onDone: (t) => (done = t), onError: (e) => (err = e) });
+    await releaseConfirmed();
+    expect(err).toBeNull();
+    expect(done).toContain("Run interrompue");
+    expect(done).toContain("Analyse partielle");
   });
 
   it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
@@ -378,11 +406,18 @@ describe("buildWatchdogReleaseMessage — instrumentation des portes du watchdog
 // suivantes étaient mises en file en silence, sans jamais démarrer, jusqu'au
 // redémarrage de Pilot (la variante de casse du chemin contournait le verrou).
 describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur (issue #87)", () => {
+  /** Protocole de prudence : DEUX mesures concordantes exigées (écart nul en test). */
+  const releaseConfirmed = async (project = "projetA") => {
+    await releaseStuckRunLock(project);
+    await releaseStuckRunLock(project);
+  };
   beforeEach(() => {
+    __setWatchdogConfirmDelayForTest(0);
     endRun("projetA");
     vi.mocked(invoke).mockClear();
   });
   afterEach(() => {
+    __setWatchdogConfirmDelayForTest();
     endRun("projetA");
     vi.mocked(invoke).mockReset();
   });
@@ -409,8 +444,21 @@ describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur
   it("travail en file, aucun agent porteur, file vide → verrou LIBÉRÉ (jamais de blocage permanent)", async () => {
     beginOrphanRun();
     mockSessions([]); // aucun processus vivant sur le projet
-    await releaseStuckRunLock("projetA");
+    await releaseConfirmed();
     expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("file NON drainable (clé invalide) → verrou CONSERVÉ : aucune mission abandonnée", async () => {
+    const ctx = beginOrphanRun();
+    // Clé sans séparateur → `drainExclusivityQueues` ne peut pas la lancer : la
+    // demande resterait en file. Libérer le verrou la perdrait définitivement.
+    ctx.exclusivityQueue["cle-invalide"] = [
+      { agentId: "magnus", brief: "travail en attente", project: "projetA" },
+    ];
+    mockSessions([]);
+    await releaseConfirmed();
+    expect(getRunState("projetA")).toBe("running");
+    expect(ctx.exclusivityQueue["cle-invalide"].length).toBe(1);
   });
 
   it("demande en file derrière un agent fantôme → la demande est RELANCÉE (le verrou est conservé)", async () => {
@@ -461,6 +509,10 @@ describe("releaseStuckRunLock — verrou orphelin : travail en file sans porteur
     ctx.startedAt = Date.now() - (11 * 60 * 1000); // > timeoutMs (10 min)
     ctx.lastActivityAt = null; // aucun événement d'agent jamais reçu
     mockSessions([{ agent: "magnus", project: "projetA", mode: "agent_process", alive: true }]);
+    await releaseStuckRunLock("projetA");
+    expect(getRunState("projetA")).toBe("running");
+    // 2e mesure : l'agent ne travaille toujours pas → la garde de temps libère.
+    ctx.lastActivityAt = null;
     await releaseStuckRunLock("projetA");
     expect(getRunState("projetA")).toBe("idle");
   });
