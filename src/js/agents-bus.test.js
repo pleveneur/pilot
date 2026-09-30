@@ -370,6 +370,39 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(done).toContain("Analyse partielle");
   });
 
+  it("objectif 5 : fin NORMALE d'une mission → statut de l'agent remis au repos (Paused, busy=false)", async () => {
+    beginRunWithAgent();
+    const calls = [];
+    vi.mocked(invoke).mockImplementation(async (cmd, args) => {
+      calls.push([cmd, args]);
+      return undefined;
+    });
+    const ev = (type, event = {}) => ({
+      payload: { project: "projetA", agent_id: "magnus", event: { type, ...event } },
+    });
+    handleAgentEvent({
+      payload: {
+        project: "projetA",
+        agent_id: "magnus",
+        event: { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "mission terminée" } },
+      },
+    });
+    handleAgentEvent(ev("agent_start"));
+    handleAgentEvent(ev("agent_end", { willRetry: false }));
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    // AVANT : proc_state restait « Running » (agent affiché en cours à vie) —
+    // l'observateur Rust ne remettait à zéro que sa map d'activité en mémoire.
+    const call = calls.find(([c]) => c === "set_agent_state");
+    expect(call).toBeTruthy();
+    expect(call[1]).toMatchObject({
+      agentId: "magnus",
+      projectPath: "projetA",
+      loaded: true,
+      busy: false,
+      procState: "Paused",
+    });
+  });
+
   it("run orpheline sans agent actif → libération immédiate (cas 1 inchangé)", async () => {
     beginRun("projetA");
     await releaseStuckRunLock("projetA");

@@ -688,6 +688,37 @@ function emit(event, data) {
   if (cb) cb(data);
 }
 
+/**
+ * Objectif 5 (mission « libération abusive du verrou de run ») : à la fin
+ * NORMALE d'une mission, l'état logique de l'agent restait « Running » en base
+ * — l'observateur d'anomalie ne remettait à zéro que la map d'activité en
+ * mémoire, jamais `proc_state` → l'agent était affiché « en cours » alors que
+ * son processus ne travaillait plus. On repose l'état au repos (session
+ * chargée : `Paused`), exactement comme l'arrêt manuel. Fail-open : un échec
+ * d'écriture d'état ne doit JAMAIS casser la fin d'une run.
+ * @param {string[]} agentIds - agents dont la mission vient de se terminer
+ * @param {string} project - projet réel (une clé de run `projet#read:N` est
+ *   ramenée à son projet).
+ */
+async function resetAgentsProcState(agentIds, project) {
+  const realProject = projectOfRunKey(project);
+  if (!realProject) return;
+  for (const agentId of agentIds || []) {
+    if (!agentId) continue;
+    try {
+      await invoke("set_agent_state", {
+        agentId,
+        projectPath: realProject,
+        loaded: true,
+        busy: false,
+        procState: "Paused",
+      });
+    } catch (_) {
+      // fail-open : jamais de régression sur la fin de run.
+    }
+  }
+}
+
 // ── Livraison du rapport PAR MISSION ───────────────────────────────────────
 // Un sink est enregistré sous la clé de run de SA mission ; la fin de la run
 // résout ce sink. Deux missions parallèles ne partagent donc plus aucune
@@ -1677,6 +1708,8 @@ async function finishAgentTurn(agentId, ctx) {
   } else {
     // Fin de la run : coordinateur a répondu. endRun (projet-scopé) ne libère
     // QUE la run de ce projet, sans toucher aux runs d'autres projets (T4).
+    // Objectif 5 : la mission de cet agent est terminée → statut au repos.
+    await resetAgentsProcState([agentId], ctx.project);
     if (!text || !text.trim()) {
       emit("error", { message: `L'agent ${agentId} n'a produit aucune réponse textuelle. Il a peut-être utilisé des outils sans générer de texte final. Réessayez en reformulant votre demande.` });
       endRun(ctx.project, ctx.generation);
@@ -1746,6 +1779,9 @@ async function failAgentTurn(agentId, reason, ctx) {
   } else {
     emit("error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
     settleMission(ctx.runKey, "error", { message: `Erreur de l'agent ${agentId} : ${reason}` });
+    // Fin de mission : l'agent ne travaille plus, son statut ne doit pas rester
+    // « Running » (objectif 5, même en cas d'échec).
+    await resetAgentsProcState([agentId], ctx.project);
     endRun(ctx.project, ctx.generation);
   }
 }
@@ -1826,6 +1862,9 @@ export async function startParallelRun(assignments, projectContext = "", options
       // Livraison du rapport à LA mission qui a lancé cette run (sink par run).
       // Appelé avant endRun (le contexte disparaît avec lui).
       settleMission(ctx.runKey, "done", { text: aggregated });
+      // Objectif 5 : les agents lancés (run_agents) ont fini leur mission —
+      // remettre leur statut au repos (sinon « Running » à vie).
+      await resetAgentsProcState(assignments.map((a) => a.agentId), runProject);
       // Bug #9 + T4 : libérer le verrou de run de CE PROJET à la fin normale (ou
       // erreur agrégée) de la run parallèle, sans toucher aux autres projets.
       // Protection par génération : un onComplete TARDIF (run abandonnée) ne
