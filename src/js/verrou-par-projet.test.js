@@ -178,6 +178,60 @@ describe("PREUVE (h) — deux missions, un projet : la lecture survit, se termin
   });
 });
 
+describe("C1 — une demande mise en file dans une run de LECTURE repart quand l'agent bloqueur se libère", () => {
+  const runsOf = (p) => Object.values(globalThis.__agentBusState.runs).filter((c) => c.project === p);
+  const flushAsync = async () => {
+    for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
+  };
+
+  afterEach(() => {
+    for (const key of Object.keys(globalThis.__agentBusState.runs)) delete globalThis.__agentBusState.runs[key];
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+  });
+
+  it("le créneau libéré par la run A draine la file d'exclusivité de la run B (lecture)", async () => {
+    const p = "preuve-c1";
+    let busy = false;
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agents") {
+        return { agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }] };
+      }
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agent_sessions") {
+        return busy
+          ? { sessions: [{ agent: "lecteur", project: p, mode: "agent_process", alive: true, busy: true, lastActivity: new Date().toISOString() }] }
+          : { sessions: [] };
+      }
+      return undefined;
+    });
+    await initAgentsBus({});
+
+    // Run A : lecture, l'agent « lecteur » devient actif dans SA clé de run.
+    await startParallelRun([{ agentId: "lecteur", project: p, brief: "A" }], "", {});
+    const runA = runsOf(p).find((c) => c.readonly && c.activeAgents.has("lecteur"));
+    expect(runA).toBeTruthy();
+    busy = true; // l'agent travaille → la demande suivante sera mise en file
+
+    // Run B : seconde lecture sur le MÊME agent → affectation mise en file dans
+    // le contexte propre de la run B.
+    await startParallelRun([{ agentId: "lecteur", project: p, brief: "B" }], "", {});
+    const runB = runsOf(p).find((c) => c !== runA);
+    expect(runB, "la run de lecture B doit exister").toBeTruthy();
+    const qk = `${p}\u{1f}lecteur`;
+    expect(runB.exclusivityQueue[qk] && runB.exclusivityQueue[qk].length, "la demande B doit être en file").toBe(1);
+
+    // La run A se termine réellement (agent_start → agent_end).
+    handleAgentEvent({ payload: { project: p, agent_id: "lecteur", event: { type: "agent_start" } } });
+    handleAgentEvent({ payload: { project: p, agent_id: "lecteur", event: { type: "agent_end" } } });
+    await flushAsync();
+
+    // La file de la run B a dû être drainée et son agent relancé.
+    expect(runB.exclusivityQueue[qk], "la file de la run B doit être vidée").toBeUndefined();
+    expect(runB.activeAgents.has("lecteur"), "l'agent de la run B doit être relancé").toBe(true);
+  });
+});
+
 describe("PREUVE (b) — modification exclusive par projet, autres projets indépendants", () => {
   it("(b) une MODIFICATION attend toute run; une LECTURE attend une MODIFICATION; un autre projet n'attend pas", () => {
     const proj = "preuve-b";

@@ -886,6 +886,35 @@ export function setBusNotifyCallback(fn) {
  * file, donc la run ne se termine pas avant que la demande en attente ne se soit
  * réellement exécutée.
  */
+/**
+ * C1 (relecture verrou-par-projet) : après libération du créneau
+ * (project, agentId), lance AU PLUS UNE demande en file, en cherchant dans
+ * TOUTES les runs du projet — pas seulement celle qui vient de finir. Sans ce
+ * balayage, une demande mise en file dans une run de LECTURE (clé
+ * `projet#read:<n>`) restait coincée, `launchNextQueued(agentId, project,
+ * ctx.runKey)` ne regardant que la file de la run appelante.
+ * `ownRunKey` (la run qui vient de libérer son tour) est essayé en premier ;
+ * une seule demande est lancée pour préserver l'exclusivité du couple.
+ * Reste volontairement en l'état : si l'agent bloquant n'émet ni `agent_end`
+ * ni `agent_settled`, la récupération dépend encore d'un événement extérieur
+ * (watchdog Assistant ≤ 5 min, ou lancement d'une nouvelle run) pour un run
+ * parallèle manuel — cf. `.pilot/rapports/correction-verrou-portes-20260930.md`.
+ */
+async function launchNextQueuedForProject(agentId, project, ownRunKey) {
+  const keys = [];
+  if (ownRunKey) keys.push(ownRunKey);
+  for (const k of runKeysOfProject(project)) if (!keys.includes(k)) keys.push(k);
+  const qk = `${project}\u{1f}${agentId}`;
+  for (const key of keys) {
+    const c = busState.runs[key];
+    const q = c && c.exclusivityQueue && c.exclusivityQueue[qk];
+    if (q && q.length > 0) {
+      await launchNextQueued(agentId, project, key);
+      return;
+    }
+  }
+}
+
 async function launchNextQueued(agentId, project, runKeyOverride) {
   // `project` = projet RÉEL (clé de la file d'exclusivité) ; `runKeyOverride` =
   // clé de run propriétaire de la file (différente du projet pour une lecture).
@@ -1627,8 +1656,9 @@ async function finishAgentTurn(agentId, ctx) {
   ctx.activeAgents.delete(agentId);
   delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
-  // de la file d'attente, s'il y en a une.
-  if (project) await launchNextQueued(agentId, project, ctx.runKey);
+  // de la file d'attente, s'il y en a une. C1 : balayage de TOUTES les runs du
+  // projet (une file portée par une run de LECTURE doit aussi repartir).
+  if (project) await launchNextQueuedForProject(agentId, project, ctx.runKey);
 
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
@@ -1757,8 +1787,8 @@ async function failAgentTurn(agentId, reason, ctx) {
   ctx.activeAgents.delete(agentId);
   delete ctx.agentProject[agentId];
   // T5 : le créneau (project, agent_id) est libéré → lancer la demande suivante
-  // de la file d'attente, s'il y en a une.
-  if (project) await launchNextQueued(agentId, project, ctx.runKey);
+  // de la file d'attente, s'il y en a une (C1 : balayage de toutes les runs).
+  if (project) await launchNextQueuedForProject(agentId, project, ctx.runKey);
   // H2 V2 parallèle : si l'agent fait partie d'un groupe parallèle, on enregistre
   // l'erreur et on agrège quand tous les agents ont terminé (ou échoué).
   if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
