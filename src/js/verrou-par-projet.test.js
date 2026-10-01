@@ -635,6 +635,30 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
     }
   });
 
+  // Défaut : mission acceptée (« mise en file ») mais jamais démarrée, sans un
+  // mot. Un verrou de run FANTÔME (état « running », aucun agent actif) bloquait
+  // la sonde d'admission du rejeu — qui ne libérait jamais ce verrou (contraire-
+  // ment aux chemins de LANCEMENT, qui appellent `releaseStuckRunLock` avant de
+  // sonder). La mission restait en file pour toujours. ÉCHOUE avant le correctif
+  // (reason "busy", la mission ne démarre pas), PASSE après.
+  it("un verrou fantôme ne bloque pas éternellement le rejeu (verrou inactif libéré par la sonde)", async () => {
+    const p = "point-g-verrou-fantome";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    beginRun(p, { readOnly: false }); // verrou « running », aucun agent actif
+    try {
+      expect(isRunInProgress(p)).toBe(true);
+      // Sonde d'admission par DÉFAUT (celle du produit, non injectée).
+      const r = await replayQueuedMissionForProject(p);
+      expect(r, "la mission en file doit RÉELLEMENT démarrer").toEqual({ replayed: true, reason: "launched" });
+      expect(launched).toBe(1);
+      expect(isRunInProgress(p), "le verrou fantôme est libéré").toBe(false);
+    } finally {
+      delete runAgentsQueueByProject[p];
+      endRun(p);
+    }
+  });
+
   it("une sonde d'admission en échec ne perd pas la mission (fail-closed, on réessaie)", async () => {
     const p = "point-g-sonde-ko";
     let launched = 0;

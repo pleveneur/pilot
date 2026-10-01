@@ -477,6 +477,15 @@ const RUN_AGENTS_QUEUE_REPLAY_MS = 15 * 1000;
  * @returns {Promise<boolean>}
  */
 async function isRunStillActive(runProject) {
+  // Verrou « running » FANTÔME (aucun agent ne travaille) : la sonde bloquerait
+  // POUR TOUJOURS. Le rejeu de la file de missions et celui de la file de
+  // délégations sondent l'admission AVANT de lancer, donc sans jamais appeler
+  // `releaseStuckRunLock` : une mission acceptée (« mise en file ») ne démarrait
+  // jamais et RIEN ne disait pourquoi. Les chemins de LANCEMENT libèrent d'abord
+  // ce verrou (`launchOrQueue`, `startRun`, watchdog) : on applique le même
+  // ordre ici, au seul point de sonde partagé par les deux files. Idempotent :
+  // ne libère qu'un verrou réellement inactif.
+  await releaseStuckRunLock(runProject);
   if (isRunInProgress(runProject)) return true;
   try {
     const res = await invoke("list_agent_sessions");

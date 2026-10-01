@@ -69,6 +69,15 @@
   file**, tandis que le `plan-maker` — jamais nommé pour cette mission — en
   avait exécuté le texte à sa place (aucun fichier, aucun commit). Preuve :
   `verrou-par-projet.test.js` (POINT I).
+  **Rejeu et verrou fantôme (correctif « mission acceptée, jamais démarrée »)** :
+  le rejeu des files (missions `replayQueuedMissionForProject`, délégations
+  `replayDelegationQueueForProject`) sonde l'admission via `isRunStillActive`.
+  Cette sonde **libère d'abord un verrou fantôme** (`releaseStuckRunLock` : verrou
+  `running` sans aucun agent actif) avant de conclure « occupé », comme le font
+  déjà les chemins de lancement : sans cela, un verrou fantôme bloquait la sonde
+  À CHAQUE passe (toutes les 15 s) pour toujours — la mission restait en file
+  sans démarrer et sans autre message que celui de la mise en file. Preuve :
+  `verrou-par-projet.test.js` (POINT G, « verrou fantôme »).
 >
 > **Hors périmètre Phase 0** : notification (T7), visibilité,
 > streaming des réflexions.
