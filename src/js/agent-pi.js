@@ -21,6 +21,7 @@ import {
   commandsFromUpdate,
   buildPromptPayload,
 } from "./agent-hardening.js";
+import { shouldFollowBottom, updateFollowBottomFlag } from "./agent-scroll.js";
 import { getTabsManager } from "./tabs.js";
 
 /**
@@ -262,6 +263,16 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   messagesEl.className = "agent-chat-messages";
   wrapper.appendChild(messagesEl);
   resumeMessagesEl = messagesEl;
+  // Suivi du bas : l'intention « l'utilisateur était en bas » est mémorisée sur
+  // le conteneur et ré-armée par le listener `scroll` (cf. agent-scroll.js).
+  // Elle survit à l'ajout d'un gros bloc de contenu ET à un onglet masqué
+  // (display:none), et sert à reprendre le suivi à la réouverture de l'onglet.
+  messagesEl._agentAtBottom = true;
+  messagesEl.addEventListener(
+    "scroll",
+    () => updateFollowBottomFlag(messagesEl),
+    { passive: true }
+  );
 
   // ── Barre d'outils ──
   const toolbar = document.createElement("div");
@@ -4990,7 +5001,15 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 export function activateAgentTab(elements) {
   if (!elements) return;
   if (elements.state) window.__agentState = elements.state;
-  if (elements.messagesEl) resumeMessagesEl = elements.messagesEl;
+  if (elements.messagesEl) {
+    resumeMessagesEl = elements.messagesEl;
+    // Onglet masqué pendant que l'agent écrivait (display:none) : le scroll
+    // n'avait pas pu être appliqué (hauteur nulle). On reprend le suivi du bas
+    // à la réouverture si l'utilisateur y était déjà (intention mémorisée).
+    if (shouldFollowBottom(elements.messagesEl)) {
+      elements.messagesEl.scrollTop = elements.messagesEl.scrollHeight;
+    }
+  }
   if (elements.inputEl) acInputEl = elements.inputEl;
   if (elements.autocompleteEl) acPopupEl = elements.autocompleteEl;
   if (elements.resumePopup) resumePopupEl = elements.resumePopup;
@@ -8746,15 +8765,11 @@ function appendCompactionSummary(parent, summary) {
   return block;
 }
 
-// Seuil (px) : on ne force le scroll en bas que si l'utilisateur est déjà en
-// bas (ou proche), pour ne pas l'empêcher de remonter pendant que l'agent écrit
-// (issue #60).
-const SCROLL_BOTTOM_THRESHOLD = 60;
-
 function scrollToBottom(container) {
   if (!container) return;
-  // Ne forcer le scroll que si l'utilisateur est déjà en bas (ou proche).
-  if (container.scrollTop + container.clientHeight >= container.scrollHeight - SCROLL_BOTTOM_THRESHOLD) {
-    container.scrollTop = container.scrollHeight;
-  }
+  // Ne forcer le scroll que si l'utilisateur suit le bas (décision mémorisée
+  // par `agent-scroll.js` : un gros bloc de contenu ne coupe plus le suivi, et
+  // l'utilisateur qui a remonté pour relire n'est pas arraché de sa lecture).
+  if (!shouldFollowBottom(container)) return;
+  container.scrollTop = container.scrollHeight;
 }
