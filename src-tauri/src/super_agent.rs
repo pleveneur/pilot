@@ -1764,7 +1764,14 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
     let conn = open_db(&app)?;
+    kanban_tasks(&conn)
+}
 
+/// Requête du volet Kanban, séparée de la commande pour rester testable sur une
+/// connexion en mémoire (`init_db` + `Connection::open_in_memory`), comme les
+/// autres helpers de suivi prenant `&Connection`. Aucun changement de
+/// comportement : la commande se contente de lui passer la connexion ouverte.
+fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
     let mut stmt = conn
         .prepare(
             "SELECT c.name, p.name, p.path, t.id, t.title, t.description, \
@@ -4101,7 +4108,7 @@ mod tests_inner_helper {
 mod tests {
     use super::{
         build_capped_injection_message, build_project_context, deliver_one_summary,
-        enqueue_session_summary, init_db,
+        enqueue_session_summary, init_db, kanban_tasks,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
@@ -4223,6 +4230,37 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         conn
+    }
+
+    // Volet « Tâches » du panneau de la cloche (commit 5818b55) : la date
+    // d'échéance d'une tâche DOIT ressortir du résultat de la requête Kanban qui
+    // alimente `get_super_agent_kanban`. Ce test échoue si `deadline` disparaît
+    // de la requête (le défaut latent corrigé : la colonne n'était ni lue ni
+    // renvoyée) — la clé serait absente du JSON et le signalement des tâches en
+    // retard deviendrait silencieusement faux.
+    #[test]
+    fn kanban_tasks_exposes_task_deadline() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'A', 1);\
+             INSERT INTO tasks (project_id, title, status, deadline) VALUES (1, 'Tâche datée', 'demande', '2026-12-31');\
+             INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche sans échéance');",
+        )
+        .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        // Échéance lue depuis la base et renvoyée telle quelle (non convertie).
+        let dated = tasks.iter().find(|t| t["title"] == "Tâche datée").unwrap();
+        assert_eq!(dated["deadline"], "2026-12-31");
+        // Une tâche sans échéance reste explicitement `null` (clé présente).
+        let undated = tasks
+            .iter()
+            .find(|t| t["title"] == "Tâche sans échéance")
+            .unwrap();
+        assert!(undated["deadline"].is_null());
     }
 
     #[test]
