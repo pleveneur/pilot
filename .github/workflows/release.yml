@@ -27,6 +27,9 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Plafond de durée : un job bloqué reste sinon suspendu jusqu'au maximum GitHub
+    # (blocage sans aucune erreur constaté le 2026-10-01 sur la cible Linux).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Migration bytes must be LF (stable sqlx checksums)
@@ -137,6 +140,13 @@ jobs:
             laya_platform: linux/x64
 
     runs-on: ${{ matrix.platform }}
+    # Plafond de durée : un job bloqué reste sinon suspendu jusqu'au maximum GitHub
+    # (blocage sans aucune erreur constaté le 2026-10-01 sur la cible Linux).
+    timeout-minutes: 45
+    # Cible Linux tolérée : son blocage/échec ne fait plus échouer la publication et
+    # ne retarde plus latest.json — scripts/gen-latest-json.js n'exige qu'UNE seule
+    # plateforme signée, Linux n'est donc pas requis pour la mise à jour automatique.
+    continue-on-error: ${{ matrix.platform == 'ubuntu-22.04' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -245,6 +255,13 @@ jobs:
   # (releases/latest/download/latest.json).
   # ─────────────────────────────────────────────────────────────────────
   latest-json:
+    # Plafond de durée : un job bloqué reste sinon suspendu jusqu'au maximum GitHub
+    # (blocage sans aucune erreur constaté le 2026-10-01 sur la cible Linux).
+    timeout-minutes: 20
+    # Doit tourner même si la cible Linux a échoué ou expiré (continue-on-error côté
+    # build), sinon latest.json — donc la mise à jour automatique — ne serait jamais
+    # déposé.
+    if: always()
     needs: build
     runs-on: ubuntu-latest
     steps:
