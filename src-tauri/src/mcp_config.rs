@@ -395,12 +395,51 @@ pub fn initialize_body() -> Value {
     })
 }
 
-/// Construit la requête HTTP POST du test d'un serveur distant. Fonction PURE
-/// (aucune I/O) : `secret` est posé en EN-TÊTE `Authorization: Bearer`, jamais
-/// dans l'URL (une URL fuit facilement dans les traces du client HTTP).
-pub fn build_remote_test_request(
+/// Corps JSON-RPC `tools/list` : le handshake seul ne dit pas ce que le serveur
+/// sait faire — l'utilisateur devait le deviner (tâche 309). Fonction pure.
+fn tools_list_body() -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {}
+    })
+}
+
+/// Extrait les outils annoncés par un serveur MCP (`result.tools`) sous la forme
+/// minimale montrée à l'utilisateur : `{ name, description }`. Fonction pure,
+/// testable.
+pub fn tools_from_result(v: &Value) -> Vec<Value> {
+    v["result"]["tools"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let name = t["name"].as_str().unwrap_or("").trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(serde_json::json!({
+                        "name": name,
+                        "description": t["description"].as_str().unwrap_or("").trim(),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Construit la requête HTTP POST d'un appel JSON-RPC d'un serveur distant.
+/// Fonction PURE (aucune I/O) : `secret` est posé en EN-TÊTE
+/// `Authorization: Bearer`, jamais dans l'URL (une URL fuit facilement dans les
+/// traces du client HTTP). `session_id` reprend l'identifiant de session rendu
+/// par le handshake quand le serveur en fournit un (MCP « Streamable HTTP ») —
+/// sans lui, `tools/list` est refusé.
+fn build_remote_request(
     url: &str,
     secret: Option<&str>,
+    session_id: Option<&str>,
+    body: &Value,
 ) -> Result<reqwest::blocking::Request, String> {
     let url = url.trim();
     if url.is_empty() {
@@ -414,13 +453,25 @@ pub fn build_remote_test_request(
         .post(url)
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
-        .json(&initialize_body());
+        .json(body);
     if let Some(secret) = secret.map(str::trim).filter(|s| !s.is_empty()) {
         builder = builder.header("authorization", format!("Bearer {}", secret));
+    }
+    if let Some(sid) = session_id.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.header("mcp-session-id", sid);
     }
     builder
         .build()
         .map_err(|e| format!("Adresse de serveur distant invalide : {}", e))
+}
+
+/// Requête du test de handshake d'un serveur distant (compatibilité : signature
+/// conservée pour les appelants et les tests existants).
+pub fn build_remote_test_request(
+    url: &str,
+    secret: Option<&str>,
+) -> Result<reqwest::blocking::Request, String> {
+    build_remote_request(url, secret, None, &initialize_body())
 }
 
 /// Lit la réponse d'un serveur MCP distant : soit un objet JSON direct (corps
@@ -511,6 +562,13 @@ fn test_remote_connection(
     match client.execute(request) {
         Ok(response) => {
             let status = response.status();
+            // Identifiant de session éventuel : nécessaire pour demander
+            // `tools/list` ensuite (MCP Streamable HTTP).
+            let session_id = response
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             let body = response.text().unwrap_or_default();
             let parsed = parse_remote_test_response(&body);
             let detail = if status.is_success() {
@@ -518,13 +576,65 @@ fn test_remote_connection(
             } else {
                 format!("le serveur a répondu avec le statut HTTP {}", status.as_u16())
             };
-            Ok(remote_test_result(label, parsed.as_ref(), &detail, secret))
+            let result = remote_test_result(label, parsed.as_ref(), &detail, secret);
+            // Découverte des outils (tâche 309) : le handshake seul ne dit pas
+            // ce que le serveur sait faire.
+            if result["ok"] != serde_json::json!(true) {
+                return Ok(result);
+            }
+            let (tools, tools_error) = match build_remote_request(
+                &server.url,
+                secret,
+                session_id.as_deref(),
+                &tools_list_body(),
+            ) {
+                Ok(req) => match client.execute(req) {
+                    Ok(resp) => {
+                        let text = resp.text().unwrap_or_default();
+                        match parse_remote_test_response(&text) {
+                            Some(v) if v.get("result").is_some() => {
+                                (tools_from_result(&v), String::new())
+                            }
+                            Some(v) => {
+                                let msg = v["error"]["message"]
+                                    .as_str()
+                                    .or_else(|| v["error"].as_str())
+                                    .unwrap_or("le serveur a refusé la liste des outils");
+                                (
+                                    Vec::new(),
+                                    redact_mcp_message(msg, secret.unwrap_or("")),
+                                )
+                            }
+                            None => (
+                                Vec::new(),
+                                "aucune réponse exploitable à la demande de liste des outils"
+                                    .to_string(),
+                            ),
+                        }
+                    }
+                    Err(e) => (
+                        Vec::new(),
+                        redact_mcp_message(
+                            &format!("connexion impossible pour la liste des outils : {}", e),
+                            secret.unwrap_or(""),
+                        ),
+                    ),
+                },
+                Err(e) => (Vec::new(), e),
+            };
+            let mut result = result;
+            result["tools"] = serde_json::json!(tools);
+            result["toolsError"] = serde_json::json!(tools_error);
+            Ok(result)
         }
         Err(e) => {
             // Le message peut citer l'URL mais jamais l'en-tête : masquage
             // appliqué par `remote_test_result` en défense en profondeur.
             let detail = format!("connexion impossible : {}", e);
-            Ok(remote_test_result(label, None, &detail, secret))
+            let mut result = remote_test_result(label, None, &detail, secret);
+            result["tools"] = serde_json::json!(Vec::<Value>::new());
+            result["toolsError"] = serde_json::json!("");
+            Ok(result)
         }
     }
 }
@@ -615,14 +725,14 @@ fn test_stdio_connection(
                         continue;
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        // Une réponse à notre id=1, ou notification sans id → candidat.
-                        if v.get("id").and_then(|i| i.as_i64()) == Some(1)
-                            || (v.get("method").is_none() && v.get("id").is_some())
+                        // Une réponse à nos id=1/id=2, ou notification sans id → candidat.
+                        // Ne pas sortir après la première : `tools/list` (tâche 309)
+                        // arrive après le handshake.
+                        if v.get("method").is_none()
+                            && v.get("id").is_some()
+                            && (v.get("result").is_some() || v.get("error").is_some())
                         {
-                            if v.get("result").is_some() || v.get("error").is_some() {
-                                let _ = tx.send(v);
-                                return;
-                            }
+                            let _ = tx.send(v);
                         }
                     }
                 }
@@ -632,6 +742,37 @@ fn test_stdio_connection(
     });
 
     let raw_response: Option<Value> = rx.recv_timeout(timeout).ok();
+
+    // Découverte des outils : le handshake seul ne dit pas ce que le serveur
+    // sait faire, l'utilisateur devait le deviner (tâche 309). Envoyée
+    // seulement si le handshake a réussi.
+    let (tools, tools_error) = if raw_response
+        .as_ref()
+        .map(|v| v.get("result").is_some())
+        .unwrap_or(false)
+    {
+        let line = serde_json::to_string(&tools_list_body()).unwrap_or_default();
+        let _ = writeln!(stdin, "{}", line);
+        let _ = stdin.flush();
+        match rx.recv_timeout(timeout).ok() {
+            Some(v) if v.get("error").is_some() => {
+                let msg = v["error"]["message"]
+                    .as_str()
+                    .unwrap_or("le serveur a refusé la liste des outils");
+                (Vec::new(), msg.to_string())
+            }
+            Some(v) => (tools_from_result(&v), String::new()),
+            None => (
+                Vec::new(),
+                format!(
+                    "aucune réponse à la demande de liste des outils (tools/list) en {}s — le serveur n'annonce donc aucun outil",
+                    timeout.as_secs_f32()
+                ),
+            ),
+        }
+    } else {
+        (Vec::new(), String::new())
+    };
 
     let mut child = child;
     let _ = child.kill();
@@ -654,11 +795,13 @@ fn test_stdio_connection(
             "ok": true,
             "server": label,
             "protocolVersion": v["result"]["protocolVersion"].as_str().unwrap_or(""),
-            "error": ""
+            "error": "",
+            "tools": tools.clone(),
+            "toolsError": tools_error
         })),
         Some(v) if v.get("error").is_some() => {
             let err = v["error"]["message"].as_str().unwrap_or("handshake error");
-            Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": err }))
+            Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": err, "tools": tools.clone(), "toolsError": "" }))
         }
         _ => {
             // Timeout ou aucune réponse JSON valide.
@@ -674,7 +817,7 @@ fn test_stdio_connection(
                     secs, collected_stderr
                 )
             };
-            Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": detail }))
+            Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": detail, "tools": tools, "toolsError": "" }))
         }
     }
 }
@@ -682,7 +825,9 @@ fn test_stdio_connection(
 /// Teste la connexion à un serveur MCP : distant (`http`/`https`) → POST
 /// `initialize` en HTTP ; local (`stdio`) → handshake du processus. Un transport
 /// réellement inconnu est refusé avec un message clair. Retourne
-/// `{ ok, server, protocolVersion, error }` (la clé n'y apparaît jamais).
+/// `{ ok, server, protocolVersion, tools, toolsError, error }` — `tools` liste
+/// les outils annoncés (`{ name, description }`, tâche 309) ; la clé n'y
+/// apparaît jamais.
 #[tauri::command]
 pub async fn mcp_test_connection(
     state: State<'_, crate::AppState>,
@@ -820,6 +965,57 @@ mod tests {
         .expect("le test doit aboutir");
         assert_eq!(out["ok"], serde_json::json!(true));
         assert_eq!(out["protocolVersion"], serde_json::json!("2024-11-05"));
+        // Le serveur ne répond pas à `tools/list` (tâche 309) : le test le dit
+        // au lieu de laisser croire que le serveur n'expose rien sans raison.
+        assert_eq!(out["tools"], serde_json::json!([]));
+        assert!(out["toolsError"]
+            .as_str()
+            .unwrap()
+            .contains("aucune réponse à la demande de liste des outils"));
+    }
+
+    /// Serveur qui expose des outils (tâche 309) : il répond au handshake PUIS à
+    /// `tools/list`. Le test de connexion doit rendre la liste visible, sinon
+    /// l'utilisateur doit deviner ce que le serveur sait faire.
+    fn tools_reply_command() -> (String, Vec<String>) {
+        (
+            "node".to_string(),
+            vec![
+                "-e".to_string(),
+                r#"const rl=require("readline").createInterface({input:process.stdin});rl.on("line",(l)=>{const m=JSON.parse(l);const r=m.method==="initialize"?{protocolVersion:"2024-11-05"}:{tools:[{name:"echo",description:"Repete le texte recu"},{name:"ping",description:""}]};process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:m.id,result:r})+"\n");});"#
+                    .to_string(),
+            ],
+        )
+    }
+
+    #[test]
+    fn stdio_server_exposes_its_tool_list() {
+        let (command, args) = tools_reply_command();
+        let server = McpServer {
+            id: "tools".to_string(),
+            name: "Tools".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            command,
+            args,
+            ..Default::default()
+        };
+        let out = test_stdio_connection(
+            server,
+            "Tools".to_string(),
+            std::time::Duration::from_secs(8),
+        )
+        .expect("le test doit aboutir");
+        assert_eq!(out["ok"], serde_json::json!(true));
+        let tools = out["tools"].as_array().expect("liste d'outils attendue");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["name"], serde_json::json!("echo"));
+        assert_eq!(
+            tools[0]["description"],
+            serde_json::json!("Repete le texte recu")
+        );
+        assert_eq!(tools[1]["name"], serde_json::json!("ping"));
+        assert_eq!(out["toolsError"], serde_json::json!(""));
     }
 
     /// Serveur qui recopie dans sa réponse la valeur d'une variable
@@ -1465,6 +1661,10 @@ mod tests {
         // 1) Réponse JSON directe, avec une clé FICTIVE → succès.
         let (json_thread, sent) =
             serve_once(listener.try_clone().unwrap(), "application/json", ok_json);
+        // Le test enchaîne désormais DEUX requêtes (handshake puis `tools/list`,
+        // tâche 309) : le faux serveur local doit en servir deux.
+        let (tools_thread, _tools_sent) =
+            serve_once(listener.try_clone().unwrap(), "application/json", ok_json);
         let res = test_remote_connection(&server, "Distant", Some(FICTIONAL_KEY)).unwrap();
         assert_eq!(res["ok"], true, "résultat: {}", res);
         assert_eq!(res["protocolVersion"], "2024-11-05");
@@ -1490,9 +1690,12 @@ mod tests {
         );
         assert!(request.contains("\"method\":\"initialize\""), "requête: {}", request);
         json_thread.join().expect("serveur local JSON terminé");
+        tools_thread.join().expect("serveur local JSON (outils) terminé");
 
         // 2) Même test avec une réponse en FLUX D'ÉVÉNEMENTS, SANS clé → succès.
         let (sse_thread, sent) =
+            serve_once(listener.try_clone().unwrap(), "text/event-stream", ok_json);
+        let (sse_tools_thread, _tools_sent) =
             serve_once(listener.try_clone().unwrap(), "text/event-stream", ok_json);
         let res = test_remote_connection(&server, "Distant", None).unwrap();
         assert_eq!(res["ok"], true, "résultat: {}", res);
@@ -1509,6 +1712,9 @@ mod tests {
 
         // 3) Serveur injoignable → échec propre, message masqué, aucune panique.
         sse_thread.join().expect("serveur local SSE terminé");
+        sse_tools_thread
+            .join()
+            .expect("serveur local SSE (outils) terminé");
         let dead_url = format!("http://127.0.0.1:{}/mcp", listener.local_addr().unwrap().port());
         // Le listener est fermé : la connexion échoue immédiatement.
         drop(listener);

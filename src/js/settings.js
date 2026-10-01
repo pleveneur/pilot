@@ -647,8 +647,33 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       const res = await invoke("mcp_test_connection", { server: s });
       const r = testResult(res);
       if (r.ok) {
-        setMcpStatus(`✓ Connexion au serveur « ${label} » réussie.`, "var(--success,#4ade80)");
-        showToast(`MCP : connexion OK (${label})`, "success", 4000);
+        // Tâche 309 : montrer ce que le serveur sait faire, au lieu de laisser
+        // l'utilisateur le deviner. `tools` est la liste annoncée par le serveur
+        // (nom + description courte) ; `toolsError` explique une découverte
+        // impossible (le serveur n'a pas répondu à `tools/list`).
+        const tools = Array.isArray(res && res.tools) ? res.tools : [];
+        const lines = [`✓ Connexion au serveur « ${label} » réussie.`];
+        if (tools.length) {
+          lines.push(`${tools.length} outil(s) exposé(s) :`);
+          for (const t of tools) {
+            const desc = String((t && t.description) || "").trim();
+            const short = desc.length > 120 ? desc.slice(0, 117) + "…" : desc;
+            lines.push(`  • ${t.name}${short ? ` — ${short}` : ""}`);
+          }
+        } else if (res && res.toolsError) {
+          lines.push(`Aucun outil listé : ${res.toolsError}`);
+        } else {
+          lines.push("Ce serveur n'expose aucun outil.");
+        }
+        // Statut multi-ligne (le span est inline : sans cela les sauts de ligne
+        // seraient écrasés et la liste serait illisible).
+        if (mcpStatus) mcpStatus.style.whiteSpace = "pre-line";
+        setMcpStatus(lines.join("\n"), "var(--success,#4ade80)");
+        showToast(
+          `MCP : connexion OK (${label}) — ${tools.length} outil(s)`,
+          "success",
+          4000,
+        );
       } else {
         setMcpStatus(`❌ ${r.error || `Échec de connexion au serveur « ${label} ».`}`, "var(--danger,#f87171)");
       }
