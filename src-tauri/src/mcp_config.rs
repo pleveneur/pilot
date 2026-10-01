@@ -30,6 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -59,6 +60,10 @@ pub struct McpServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Variables d'environnement transmises au serveur au lancement (tâche 308),
+    /// sous forme `NOM` → valeur. Vide par défaut ; ignoré pour un serveur distant.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     /// Adresse du serveur distant (vide pour un serveur local).
     pub url: String,
     /// Référence vers une entrée du coffre — JAMAIS la clé elle-même.
@@ -74,6 +79,7 @@ impl Default for McpServer {
             enabled: false,
             command: String::new(),
             args: Vec::new(),
+            env: BTreeMap::new(),
             url: String::new(),
             secret_ref: None,
         }
@@ -539,6 +545,10 @@ fn test_stdio_connection(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Variables d'environnement déclarées pour ce serveur (tâche 308) : sans
+    // elles, un serveur maison qui exige un réglage (jeton, chemin…) refuse de
+    // démarrer, et l'utilisateur n'a aucun endroit où le saisir.
+    cmd.envs(server.env.iter());
     #[cfg(windows)]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -654,9 +664,15 @@ fn test_stdio_connection(
             // Timeout ou aucune réponse JSON valide.
             let secs = timeout.as_secs_f32();
             let detail = if collected_stderr.is_empty() {
-                format!("timeout : aucune réponse handshake MCP (initialize) en {}s", secs)
+                format!(
+                    "timeout : aucune réponse handshake MCP (initialize) en {}s — réglages du serveur (commande, arguments, variables d'environnement) : Paramètres → Serveurs MCP",
+                    secs
+                )
             } else {
-                format!("aucune réponse handshake MCP (initialize) en {}s — serveur: {}", secs, collected_stderr)
+                format!(
+                    "aucune réponse handshake MCP (initialize) en {}s — serveur: {} — réglages du serveur (commande, arguments, variables d'environnement) : Paramètres → Serveurs MCP",
+                    secs, collected_stderr
+                )
             };
             Ok(serde_json::json!({ "ok": false, "server": label, "protocolVersion": "", "error": detail }))
         }
@@ -806,6 +822,45 @@ mod tests {
         assert_eq!(out["protocolVersion"], serde_json::json!("2024-11-05"));
     }
 
+    /// Serveur qui recopie dans sa réponse la valeur d'une variable
+    /// d'environnement (tâche 308) : prouve que les réglages déclarés pour le
+    /// serveur lui sont réellement transmis au lancement.
+    fn env_reply_command() -> (String, Vec<String>) {
+        (
+            "node".to_string(),
+            vec![
+                "-e".to_string(),
+                "process.stdout.write(JSON.stringify({jsonrpc:\"2.0\",id:1,result:{protocolVersion:process.env.PILOT_TEST_ENV||\"\"}})+\"\\n\")"
+                    .to_string(),
+            ],
+        )
+    }
+
+    #[test]
+    fn stdio_server_receives_declared_env() {
+        let (command, args) = env_reply_command();
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("PILOT_TEST_ENV".to_string(), "reglages-mcp".to_string());
+        let server = McpServer {
+            id: "env".to_string(),
+            name: "Env".to_string(),
+            transport: "stdio".to_string(),
+            enabled: true,
+            command,
+            args,
+            env,
+            ..Default::default()
+        };
+        let out = test_stdio_connection(
+            server,
+            "Env".to_string(),
+            std::time::Duration::from_secs(5),
+        )
+        .expect("le test doit aboutir");
+        assert_eq!(out["ok"], serde_json::json!(true));
+        assert_eq!(out["protocolVersion"], serde_json::json!("reglages-mcp"));
+    }
+
     #[test]
     fn serialization_round_trip() {
         let cfg = McpConfig {
@@ -867,13 +922,15 @@ mod tests {
                 enabled: true,
                 command: "node".to_string(),
                 args: vec!["scripts/mcp-test-server.js".to_string()],
+                env: Default::default(),
                 url: String::new(),
                 secret_ref: None,
             }
         );
-        // Les deux nouveaux champs sont vides sans être exigés par le fichier.
+        // Les champs nouveaux sont vides sans être exigés par le fichier.
         assert_eq!(s.url, String::new());
         assert!(s.secret_ref.is_none());
+        assert!(s.env.is_empty());
         // Le transport local reste "stdio".
         assert_eq!(s.transport, "stdio");
         assert_eq!(s.transport_kind(), TransportKind::Stdio);

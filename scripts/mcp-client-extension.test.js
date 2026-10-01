@@ -36,7 +36,13 @@ describe("extension MCP — second transport (E3)", () => {
     // distant = adresse réseau ; local = programme (comportement inchangé).
     expect(src).toMatch(/transportName === "http" \|\| transportName === "https"/);
     expect(src).toMatch(/new URL\(url\)/);
-    expect(src).toMatch(/new StdioClientTransport\(\{\s*command: server\.command,\s*args: server\.args \?\? \[\],\s*\}\)/);
+    expect(src).toMatch(/new StdioClientTransport\(\{\s*command: server\.command,\s*args: server\.args \?\? \[\],/);
+  });
+
+  it("transmet les variables d'environnement déclarées au serveur local (tâche 308)", () => {
+    // Sans cette transmission, un serveur maison qui exige un réglage (jeton,
+    // chemin…) refuse de démarrer et l'agent ne voit aucun outil.
+    expect(src).toMatch(/env: \{ \.\.\.process\.env, \.\.\.\(server\.env \?\? \{\}\) \}/);
   });
 
   it("présente la clé en EN-TÊTE, jamais dans l'adresse", () => {

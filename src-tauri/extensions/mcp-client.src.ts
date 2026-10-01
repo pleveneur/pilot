@@ -50,6 +50,7 @@ interface McpServerConfig {
   enabled?: boolean;
   command?: string;
   args?: string[];
+  env?: Record<string, string>;
   url?: string;
 }
 
@@ -118,6 +119,10 @@ export default async function (api: ExtensionAPI): Promise<void> {
       transport = new StdioClientTransport({
         command: server.command,
         args: server.args ?? [],
+        // Variables d'environnement déclarées pour ce serveur (tâche 308) :
+        // l'environnement du process pi est conservé, les valeurs déclarées
+        // écrasent les homonymes.
+        env: { ...process.env, ...(server.env ?? {}) } as Record<string, string>,
       });
     }
   } catch {

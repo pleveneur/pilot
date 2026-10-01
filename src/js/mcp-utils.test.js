@@ -7,6 +7,8 @@ import {
   isRemoteTransport,
   parseArgs,
   formatArgs,
+  parseEnv,
+  formatEnv,
   validateServer,
   newServerId,
   testResult,
@@ -148,9 +150,18 @@ describe("buildServer", () => {
       enabled: true,
       command: "node",
       args: ["a", "b"],
+      env: {},
       url: "",
       secret_ref: null,
     });
+  });
+
+  it("reprend les variables d'environnement déclarées pour un serveur local", () => {
+    const s = buildServer("mcp-1b", { name: "Env", command: "node", envText: "MON_JETON=abc\nAUTRE=2" });
+    expect(s.env).toEqual({ MON_JETON: "abc", AUTRE: "2" });
+    // Un serveur distant ne lance aucun programme : pas de variables.
+    const distant = buildServer("mcp-1c", { name: "R", transport: "http", url: "https://exemple.invalid/mcp", envText: "MON_JETON=abc" });
+    expect(distant.env).toEqual({});
   });
 
   it("construit un serveur distant : type, adresse et référence de clé, jamais de commande", () => {
@@ -169,6 +180,7 @@ describe("buildServer", () => {
       enabled: true,
       command: "",
       args: [],
+      env: {},
       url: "https://exemple.invalid/mcp",
       secret_ref: "vault:mon-entree",
     });
@@ -191,5 +203,30 @@ describe("buildServer", () => {
     expect(s.name).toBe("N");
     expect(s.command).toBe("c");
     expect(s.args).toEqual([]);
+  });
+});
+
+describe("variables d'environnement d'un serveur MCP (tâche 308)", () => {
+  it("parseEnv lit une déclaration NOM=valeur par ligne", () => {
+    expect(parseEnv("A=1\nB= deux ")).toEqual({ A: "1", B: "deux" });
+  });
+
+  it("parseEnv ignore les lignes vides, les commentaires et les lignes sans nom", () => {
+    expect(parseEnv("\n# commentaire\n\nSANS_EGAL\n=vide\nOK=1")).toEqual({ OK: "1" });
+  });
+
+  it("parseEnv conserve les `=` de la valeur et accepte l'absence de texte", () => {
+    expect(parseEnv("URL=http://exemple.invalid/a?b=c")).toEqual({
+      URL: "http://exemple.invalid/a?b=c",
+    });
+    expect(parseEnv("")).toEqual({});
+    expect(parseEnv(null)).toEqual({});
+  });
+
+  it("formatEnv sérialise en texte relu par parseEnv (aller-retour)", () => {
+    const env = { A: "1", B: "deux mots" };
+    expect(parseEnv(formatEnv(env))).toEqual(env);
+    expect(formatEnv(undefined)).toBe("");
+    expect(formatEnv({})).toBe("");
   });
 });

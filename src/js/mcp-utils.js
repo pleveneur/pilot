@@ -60,6 +60,40 @@ export function formatArgs(args) {
 }
 
 /**
+ * Découpe un texte de variables d'environnement (une déclaration « NOM=valeur »
+ * par ligne) en objet. Les lignes vides et les commentaires `#` sont ignorés,
+ * comme les lignes sans `=` ou sans nom. Fonction pure.
+ * @param {string} text
+ * @returns {Record<string,string>}
+ */
+export function parseEnv(text) {
+  const out = {};
+  for (const line of String(text || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const i = trimmed.indexOf("=");
+    if (i < 1) continue;
+    const name = trimmed.slice(0, i).trim();
+    if (!name) continue;
+    out[name] = trimmed.slice(i + 1).trim();
+  }
+  return out;
+}
+
+/**
+ * Série un objet de variables d'environnement en texte « NOM=valeur », une
+ * déclaration par ligne (inverse de `parseEnv`). Fonction pure.
+ * @param {Record<string,string>|undefined} env
+ * @returns {string}
+ */
+export function formatEnv(env) {
+  if (!env || typeof env !== "object") return "";
+  return Object.entries(env)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+}
+
+/**
  * Valide un serveur MCP avant sauvegarde, PAR TYPE : un serveur distant exige
  * une adresse, un serveur local une commande. Retourne une chaîne d'erreur, ou
  * null si le serveur est valide.
@@ -104,14 +138,16 @@ export function testResult(payload) {
 
 /**
  * Construit l'objet serveur MCP (format
- * {id,name,transport,enabled,command,args,url,secret_ref}) à partir du
+ * {id,name,transport,enabled,command,args,env,url,secret_ref}) à partir du
  * formulaire. Le transport est `stdio` (local) par défaut : un formulaire sans
  * type reste donc rétrocompatible avec la configuration existante.
  * La référence de clé (`secret_ref`) n'est jamais la clé elle-même, seulement
- * l'entrée du coffre ; elle n'est conservée que pour un serveur distant.
+ * l'entrée du coffre ; elle n'est conservée que pour un serveur distant. Les
+ * variables d'environnement ne concernent que le serveur local (elles sont
+ * transmises au programme lancé).
  * @param {string} id
- * @param {{name?: string, transport?: string, command?: string, argsText?: string, url?: string, secretRef?: string, enabled?: boolean}|any} form
- * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[],url:string,secret_ref:string|null}}
+ * @param {{name?: string, transport?: string, command?: string, argsText?: string, envText?: string, url?: string, secretRef?: string, enabled?: boolean}|any} form
+ * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[],env:Record<string,string>,url:string,secret_ref:string|null}}
  */
 export function buildServer(id, form) {
   const f = form || {};
@@ -126,6 +162,9 @@ export function buildServer(id, form) {
     // Serveur local : commande + arguments ; serveur distant : vides.
     command: remote ? "" : String(f.command || "").trim(),
     args: remote ? [] : parseArgs(f.argsText || ""),
+    // Variables d'environnement : seulement pour un serveur local (transmises
+    // au programme lancé par Pilot/pi).
+    env: remote ? {} : parseEnv(f.envText || ""),
     // Serveur distant : adresse + référence de coffre (jamais la clé).
     url: remote ? String(f.url || "").trim() : "",
     secret_ref: remote ? String(f.secretRef || "").trim() || null : null,

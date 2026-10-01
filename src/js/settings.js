@@ -10,7 +10,7 @@ import { showToast } from "./toast.js";
 import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
-import { MCP_TRANSPORT_STDIO, formatArgs, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
+import { MCP_TRANSPORT_STDIO, formatArgs, formatEnv, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
 import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 import { listen } from "@tauri-apps/api/event";
@@ -481,6 +481,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   const mcpFRemoteFields = document.getElementById("mcp-fields-remote");
   const mcpFCommand = document.getElementById("mcp-f-command");
   const mcpFArgs = document.getElementById("mcp-f-args");
+  const mcpFEnv = document.getElementById("mcp-f-env");
   const mcpFUrl = document.getElementById("mcp-f-url");
   const mcpFSecretRef = document.getElementById("mcp-f-secret-ref");
   const mcpFEnabled = document.getElementById("mcp-f-enabled");
@@ -576,6 +577,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     mcpFName.value = s ? (s.name || "") : "";
     mcpFCommand.value = s ? (s.command || "") : "";
     mcpFArgs.value = s ? formatArgs(s.args || []) : "";
+    if (mcpFEnv) mcpFEnv.value = s ? formatEnv(s.env) : "";
     if (mcpFUrl) mcpFUrl.value = s ? (s.url || "") : "";
     if (mcpFSecretRef) mcpFSecretRef.value = s ? (s.secret_ref || "") : "";
     mcpFEnabled.checked = s ? !!s.enabled : true;
@@ -595,6 +597,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       transport,
       command: mcpFCommand.value,
       argsText: mcpFArgs.value,
+      envText: mcpFEnv ? mcpFEnv.value : "",
       url: mcpFUrl ? mcpFUrl.value : "",
       secretRef: mcpFSecretRef ? mcpFSecretRef.value : "",
       enabled: mcpFEnabled.checked,
