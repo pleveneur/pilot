@@ -157,9 +157,10 @@ export default async function (api: ExtensionAPI): Promise<void> {
         promptGuidelines: [
           `Use ${registeredName} to call the MCP tool \`${toolName}\` on the "${serverId}" server. Pass the arguments expected by the MCP tool (as an object of properties). Results are returned as text (JSON where applicable).`,
         ],
-        // Schéma dynamique inconnu à la compilation : on accepte n'importe quel
-        // objet de propriétés (TypeBox externe, résolu par pi au runtime).
-        parameters: Type.Record(Type.String(), Type.Unknown()),
+        // Schéma RÉEL déclaré par le serveur MCP (`tools/list` → `inputSchema`) :
+        // sans lui, l'agent ne voit ni les noms des paramètres ni leurs types et
+        // appelle l'outil au hasard.
+        parameters: toolParametersSchema(tool.inputSchema),
         executionMode: "sequential",
         async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
           return runTool(client, toolName, params as Record<string, unknown>, secret);
@@ -177,6 +178,23 @@ export default async function (api: ExtensionAPI): Promise<void> {
 }
 
 // ── Utilitaires ──
+
+/// Schéma TypeBox des paramètres d'un outil MCP, construit depuis le JSON Schema
+/// `inputSchema` annoncé par le serveur (`tools/list`). Le schéma est transmis
+/// tel quel (`Type.Unsafe`) : le modèle voit alors les vrais noms de paramètres
+/// et leurs types. Un schéma absent ou non-objet retombe sur le schéma générique
+/// historique (fail-open : l'outil reste appelable).
+function toolParametersSchema(inputSchema: unknown) {
+  const schema = inputSchema as { type?: string } | null;
+  if (schema && typeof schema === "object" && schema.type === "object") {
+    try {
+      return Type.Unsafe(schema as never);
+    } catch {
+      // TypeBox indisponible/incompatible → repli générique ci-dessous.
+    }
+  }
+  return Type.Record(Type.String(), Type.Unknown());
+}
 
 async function runTool(
   client: Client,
