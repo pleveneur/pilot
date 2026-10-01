@@ -489,6 +489,7 @@ async fn agent_prompt(
     let images = body.images;
     let res = tokio::task::spawn_blocking(move || {
         let st = app.state::<AppState>();
+        ensure_web_project_not_busy(st.inner())?;
         do_send_agent_prompt(st.inner(), message, images)
     })
     .await
@@ -502,6 +503,44 @@ async fn agent_prompt(
         ok,
     );
     ok_result(res.and_then(|r| r))
+}
+
+/// Porte du verrou par PROJET pour les prompts distants (navigateur).
+///
+/// Le frontend desktop tient la politique d'admission dans `agents-bus.js` /
+/// `run-policy.js` ; le client web n'a PAS cet étage (l'interface web ne charge
+/// pas le bus d'agents), donc un prompt distant pouvait lancer une seconde
+/// exécution concurrente sur un projet où un agent travaillait déjà, et écraser
+/// le travail en cours. La décision est prise ici avec le mécanisme DÉJÀ
+/// partagé `anomaly::project_has_working_agent` (mêmes politique busy-stale et
+/// test des chemins brut/normalisé que le dépôt inter-projets), jamais un second
+/// verrou parallèle. Refus honnête et visible pour l'utilisateur distant.
+fn ensure_web_project_not_busy(state: &AppState) -> Result<(), String> {
+    let project = state.active_project.lock().unwrap().clone().unwrap_or_default();
+    if project.is_empty() {
+        // Pas de projet actif : `do_send_agent_prompt` refusera déjà (« Aucun
+        // projet ouvert »).
+        return Ok(());
+    }
+    let busy = {
+        let m = state.agent_anomaly.lock().unwrap();
+        let grace = crate::default_stale_busy_grace_minutes();
+        let now = std::time::Instant::now();
+        crate::anomaly::project_has_working_agent(&m, &project, grace, now)
+            || crate::anomaly::project_has_working_agent(
+                &m,
+                &crate::normalize_project_path(&project),
+                grace,
+                now,
+            )
+    };
+    if busy {
+        return Err(
+            "Un agent travaille déjà sur ce projet : le prompt n'a pas été envoyé (un projet n'accepte qu'une modification à la fois — relancez quand le projet est libre)."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// Route web « mode assistant » (évolution 2) : envoie un prompt au super-agent

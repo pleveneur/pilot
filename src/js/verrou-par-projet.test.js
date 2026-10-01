@@ -727,6 +727,29 @@ describe("POINT C — rejeu garanti de la file de DÉLÉGATIONS (issue #66)", ()
     expect(route).not.toContain("send_agent_command_to");
   });
 
+  // Verrou par projet côté DISTANT : le client web ne charge pas le bus
+  // d'agents du desktop (`agents-bus.js`), donc la route `agent_prompt` doit
+  // refuser un prompt arrivant sur un projet déjà occupé, AVANT d'écrire dans la
+  // session, et avec le MÊME mécanisme que le dépôt inter-projets
+  // (`project_has_working_agent`) — jamais un second verrou parallèle. Ce test
+  // ÉCHOUE si la garde disparaît ou passe après l'envoi.
+  it("le prompt distant passe par la porte du verrou par projet avant l'envoi", () => {
+    const rust = readFileSync(new URL("../../src-tauri/src/web_server.rs", import.meta.url), "utf8");
+    const start = rust.indexOf("async fn agent_prompt(");
+    const end = rust.indexOf("async fn superagent_prompt(", start);
+    const route = rust.slice(start, end);
+    const guardIdx = route.indexOf("ensure_web_project_not_busy(st.inner())");
+    const sendIdx = route.indexOf("do_send_agent_prompt(st.inner(), message, images)");
+    expect(guardIdx, "garde du verrou par projet absente de la route distante").toBeGreaterThan(-1);
+    expect(sendIdx, "envoi distant absent").toBeGreaterThan(-1);
+    expect(guardIdx, "la garde doit précéder l'envoi").toBeLessThan(sendIdx);
+    // MÊME mécanisme que les autres chemins (pas un second verrou parallèle).
+    const helperIdx = rust.indexOf("fn ensure_web_project_not_busy(");
+    expect(helperIdx, "porte du verrou absente").toBeGreaterThan(-1);
+    const helper = rust.slice(helperIdx, rust.indexOf("async fn superagent_prompt(", helperIdx));
+    expect(helper).toContain("project_has_working_agent");
+  });
+
   // R1 : même garantie de réarmement que la file de missions, sur la file de
   // délégations. Le gestionnaire d'onglets est volontairement absent : `flush`
   // ne peut pas vider la file, donc la passe « réussit » sans rien consommer —
