@@ -39,7 +39,7 @@ import {
   filterOpenTasksByClient,
   formatTaskDeadline,
 } from "./super-agent-kanban.js";
-import { captureProjectBadgeNames, extendBadgesWithText, pathTailName } from "./super-agent-badges.js";
+import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
@@ -688,9 +688,10 @@ let currentFlow = null;      // sous-élément `.agent-stream-flow`
 // instant + projets explicitement nommés dans le texte (module pur
 // super-agent-badges.js). Les bulles du tour (réponse incluse) héritent du
 // snapshot, qui est FIGÉ pour toujours : changer le projet actif ne modifie
-// plus jamais les badges déjà affichés. Null = aucun tour utilisateur en
-// cours (les bulles créées hors envoi — question relais, widget — retombent
-// sur le projet actif, comme avant : fail-open).
+// plus jamais les badges déjà affichés. Null = aucun tour en cours. Les bulles
+// créées hors tour (question relais, widget) n'inventent plus de nom : elles
+// portent des badges EXPLICITES quand leur appelant connaît le projet, sinon
+// aucun badge (voir `resolveBubbleBadgeNames`).
 let currentTurnProjectBadges = null;
 let currentTextSection = null; // section texte non fermée
 let currentThinkingBlock = null; // bloc pensée courant
@@ -978,19 +979,20 @@ function refreshSuperRenderOptions() {
  * nouvelle bulle à chaque `message_end` intermédiaire, seulement à `agent_end`
  * ou la fin du tour. La bulle porte la couleur du projet (Règle 3 : hash du
  * nom → palette). */
-function createSuperAgentBlock(messagesEl) {
+export function createSuperAgentBlock(messagesEl, explicitBadges = null) {
   const el = document.createElement("div");
   el.className = "agent-message agent-message-assistant";
   const bubble = document.createElement("div");
   bubble.className = "agent-bubble agent-bubble-assistant";
   // Badges projet (snapshot) : la bulle de réponse hérite des badges de la
-  // demande qui l'a déclenchée (projet actif à l'envoi + projets nommés).
+  // demande qui l'a déclenchée (projet actif à l'envoi + projets nommés), ou de
+  // badges explicites quand l'appelant connaît le projet (relais d'un agent).
   // Figés pour toujours : aucun recalcul ni rafraîchissement rétrospectif.
-  // Création hors envoi utilisateur (question relais, widget…) : fallback sur
-  // le projet actif (comportement historique, sans rétro-écriture ensuite).
-  const badgeNames = (currentTurnProjectBadges && currentTurnProjectBadges.length)
-    ? currentTurnProjectBadges
-    : (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();
+  // Information inconnue → AUCUN badge : on ne retombe plus sur le projet
+  // sélectionné à l'écran, qui pouvait être un projet sans rapport avec
+  // l'échange (nom faux = l'utilisateur croit à un travail sur le mauvais
+  // projet).
+  const badgeNames = resolveBubbleBadgeNames(explicitBadges, currentTurnProjectBadges);
   const color = projectColor(badgeNames[0]);
   renderProjectBadgesInto(bubble, badgeNames);
   if (color) {
@@ -5169,8 +5171,11 @@ function relayAgentChoiceRequest(payload, agentId, projectPath, messagesEl, stat
   const responder = (value, cancelled) =>
     respondAgentRelay(projectPath, agentId, id, value, cancelled);
 
-  // Bloc dédié (distinct du flux de l'assistant) : en-tête + widget.
-  const block = createSuperAgentBlock(messagesEl);
+  // Bloc dédié (distinct du flux de l'assistant) : en-tête + widget. Badges
+  // EXPLICITES : la question vient de l'agent de CE projet (projectPath), et
+  // non du projet actuellement sélectionné à l'écran (défaut corrigé).
+  const relayProjectName = pathTailName(projectPath);
+  const block = createSuperAgentBlock(messagesEl, relayProjectName ? [relayProjectName] : null);
   const target = block.querySelector(".agent-stream-flow") || block;
   const label = agentId === "default" ? "par défaut" : agentId;
   const header = document.createElement("div");
@@ -5474,6 +5479,15 @@ async function sendSuperAgentReport(entry, opts = {}) {
     defer: !!opts.defer,
   });
   warnInjectionFailure(res && res.status, res && res.detail, entry.category || "session");
+  // Compte rendu remis IMMÉDIATEMENT (statut « delivered ») : c'est ce prompt qui
+  // déclenche le tour suivant, et le projet concerné est celui du compte rendu
+  // (connu ici) — sans quoi la réponse de l'Assistant retomberait sur le projet
+  // affiché à l'écran, souvent sans rapport avec la tâche dont il rend compte.
+  // Consommé par la première bulle du tour, remis à null en fin de tour (onEnd).
+  if (!opts.defer && res && res.status === "delivered") {
+    const reportProjectName = pathTailName(entry.projectPath);
+    currentTurnProjectBadges = reportProjectName ? [reportProjectName] : null;
+  }
   return res;
 }
 

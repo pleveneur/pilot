@@ -165,6 +165,44 @@ export function captureProjectBadgeNames(text, activeProjectName, projects) {
  * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
  * @returns {string[]} badges étendus (base en tête, dédupliqués).
  */
+/**
+ * Choix des badges d'une bulle de l'Assistant (pur, testable) — PRIORITÉ, et
+ * JAMAIS d'invention de nom :
+ *   1. `explicitBadges` : fournis par l'appelant qui connaît le projet de
+ *      l'échange (ex: relais d'une question → projet de CET agent) ;
+ *   2. `turnBadges` : snapshot figé du tour en cours (demande de l'utilisateur
+ *      ou compte rendu injecté qui a déclenché la réponse) ;
+ *   3. sinon liste VIDE : l'information est inconnue, la bulle n'affiche AUCUN
+ *      badge. On ne retombe JAMAIS sur le projet simplement sélectionné à
+ *      l'écran : une bulle parlant d'un autre projet afficherait alors un nom
+ *      FAUX (défaut corrigé — un nom faux fait croire à un travail sur le
+ *      mauvais projet, pire que pas de nom).
+ * Fail-open : arguments invalides → liste vide.
+ *
+ * @param {string[]|null} explicitBadges - badges connus de l'appelant.
+ * @param {string[]|null} turnBadges - snapshot du tour en cours.
+ * @returns {string[]}
+ */
+export function resolveBubbleBadgeNames(explicitBadges, turnBadges) {
+  if (Array.isArray(explicitBadges) && explicitBadges.length) return explicitBadges;
+  if (Array.isArray(turnBadges) && turnBadges.length) return turnBadges;
+  return [];
+}
+
+/**
+ * Étend une liste de badges existants avec les projets nommés dans un texte
+ * (pur, testable). Utilisé pour la bulle de RÉPONSE (chantier #15) : on part
+ * des badges de la demande (projet actif + projets nommés) et on y ajoute les
+ * projets évoqués dans le texte de la réponse de l'assistant. Les badges de
+ * base restent en tête (ordre préservé) ; les nouveaux suivent dans l'ordre de
+ * la liste des projets. Dédupliqués (insensible à la casse). Fail-open :
+ * base/text/projets invalides → jamais d'exception, jamais de doublon.
+ *
+ * @param {string[]} baseBadges - badges déjà capturés (ex: snapshot de la demande).
+ * @param {string} text - texte supplémentaire à scanner (ex: réponse de l'assistant).
+ * @param {Array<{path?:string, name?:string}>} projects - projets connus/ouverts.
+ * @returns {string[]} badges étendus (base en tête, dédupliqués).
+ */
 export function extendBadgesWithText(baseBadges, text, projects) {
   const out = [];
   const seen = new Set();
