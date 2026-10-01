@@ -73,6 +73,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay } from "./super-agent.js";
+import { estimateAndReserve } from "./reservations.js";
 
 // POINT I — DÉTOUR DE ROUTAGE : une mission confiée à un agent PRÉCIS était
 // exécutée par un AUTRE agent (le planificateur), sans aucun fichier ni commit.
@@ -910,6 +911,79 @@ describe("POINT G — le bouton « Refaire » (dialogue de boucle) est gardé", 
     expect(guardIdx, "la garde doit précéder la nouvelle session").toBeLessThan(newSessionIdx);
     // Le test « aucun prompt » est AVANT la garde (message exact, pas un faux refus).
     expect(body.indexOf("Aucun prompt à relancer")).toBeLessThan(guardIdx);
+  });
+});
+
+// T6 — DÉFAUT « le codeur NOMMÉ ne démarre jamais » : chaîne COMPLÈTE depuis la
+// préparation T6 (`estimateAndReserve`, reservations.js) jusqu'au démarrage réel
+// du codeur nommé. Une mission nommant un codeur lance d'abord l'estimation
+// plan-maker (run de LECTURE) SUR LE TEXTE MÊME DE LA MISSION ; à sa livraison le
+// verrou de lecture devait donc être DÉJÀ libéré, sinon `launchWithEstimate` →
+// `launchOrQueue` (super-agent.js) refuse l'admission d'ÉCRITURE et met la
+// mission EN FILE au lieu de démarrer le codeur (aucune session, aucun fichier,
+// aucun message d'erreur — l'accusé annonçait pourtant « lancé »).
+// Ce test ÉCHOUE avant `dffec24` (verrou de lecture encore pris à la livraison →
+// l'admission d'écriture est refusée) et PASSE après.
+describe("T6 — le codeur NOMMÉ démarre après l'estimation plan-maker", () => {
+  const P = "preuve-t6-codeur-nomme";
+  const registry = {
+    agents: [
+      { id: "plan-maker", name: "Plan", readonly: true, keep_context: false, models: {}, max_calls_per_run: 3, call_depth: 1 },
+      { id: "coder", name: "Codeur", readonly: false, keep_context: false, models: {}, max_calls_per_run: 3, call_depth: 1 },
+    ],
+  };
+  afterEach(() => {
+    globalThis._pilotProjectPath = "";
+    for (const key of Object.keys(globalThis.__agentBusState.runs)) delete globalThis.__agentBusState.runs[key];
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+  });
+
+  it("après l'estimation, l'admission d'écriture est libre et le codeur démarre", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agents") return registry;
+      return undefined;
+    });
+    globalThis._pilotProjectPath = P;
+    await initAgentsBus({});
+
+    // Préparation T6 réelle : le plan-maker (LECTURE) estime les fichiers sur le
+    // texte même de la mission du codeur. On mesure l'admission d'écriture AU
+    // MOMENT où la mission d'estimation reçoit son résultat (le point exact du
+    // défaut : la livraison doit avoir lieu APRÈS la libération du verrou).
+    let writableAtDelivery = null;
+    await estimateAndReserve(P, "corrige le fichier X", ["coder"], {
+      runAgentsForAssistant: async (assignments) => {
+        const r = await runAgentsForAssistant(assignments);
+        writableAtDelivery = !isRunInProgress(P, { nature: "write" });
+        return r;
+      },
+      loadAgentRegistry: async () => registry,
+      releaseStuckRunLock,
+      isRunInProgress,
+      forceEndRun: endRun,
+    }, ["coder"]);
+
+    // INVARIANT (point du défaut) : à la livraison du résultat d'estimation, le
+    // projet est DÉJÀ libre pour une ÉCRITURE. Sinon `launchOrQueue` met la
+    // mission du codeur en file : il ne démarre jamais.
+    expect(writableAtDelivery, "projet encore verrouillé à la livraison de l'estimation").toBe(true);
+
+    // INVARIANT : à la fin de l'estimation, le projet est LIBRE pour une
+    // ÉCRITURE. Sinon `launchOrQueue` met la mission en file : le codeur ne
+    // démarre jamais (défaut observé).
+    expect(isRunInProgress(P, { nature: "write" }), "projet encore verrouillé après l'estimation").toBe(false);
+
+    // Lancement RÉEL du codeur NOMMÉ : l'admission d'écriture est franchie
+    // (aucune levée « Une run est déjà en cours ») et un démarrage est signalé.
+    let started = false;
+    await startParallelRun(
+      [{ agentId: "coder", brief: "corrige le fichier X", project: P }],
+      "",
+      { onStart: () => { started = true; } },
+    );
+    expect(started, "le codeur nommé n'a pas démarré").toBe(true);
   });
 });
 
