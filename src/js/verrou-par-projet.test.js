@@ -70,9 +70,75 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock } from "./agents-bus.js";
+import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay } from "./super-agent.js";
+
+// POINT I — DÉTOUR DE ROUTAGE : une mission confiée à un agent PRÉCIS était
+// exécutée par un AUTRE agent (le planificateur), sans aucun fichier ni commit.
+//
+// FAIT (code) : `startParallelRun` livrait le résultat de la mission
+// (`settleMission`) AVANT de libérer le verrou de run (`endRun`, précédé d'un
+// `await resetAgentsProcState`). L'appelant était donc réveillé alors que sa run
+// de LECTURE était encore `running` : la garde d'admission de la mission
+// suivante — `isRunInProgress(projet, { nature: "write" })` (run-policy : une
+// modification est EXCLUSIVE) — la refusait et la mettait EN FILE. Dans le
+// chemin T6 (`reservations.js` : estimation plan-maker puis lancement du codeur
+// NOMMÉ), le texte de la mission avait alors été exécuté par le plan-maker
+// (agent non nommé, lecture seule → 0 fichier, 0 commit) et le codeur nommé
+// n'était pas lancé.
+//
+// INVARIANT EXIGÉ : quand une mission reçoit son résultat, le verrou qu'elle
+// occupait est DÉJÀ libéré — le projet est libre pour l'agent nommé par la
+// mission suivante. Ce test ÉCHOUE avant le correctif (verrou encore pris à la
+// livraison → `false`) et PASSE après.
+describe("POINT I — le verrou est libéré AVANT la livraison du résultat de mission", () => {
+  it("une mission de LECTURE rend le projet libre pour une ÉCRITURE dès la livraison de son résultat", async () => {
+    const p = "preuve-i-detour-routage";
+    globalThis._pilotProjectPath = p;
+    // Registre : un agent de LECTURE (readonly), SANS modèle configuré → son tour
+    // échoue tout de suite (`failAgentTurn`, chemin déterministe, sans réseau ni
+    // process pi) et la run parallèle se termine réellement.
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agents") {
+        return {
+          agents: [
+            {
+              id: "plan-maker",
+              name: "Plan Maker",
+              icon: "📋",
+              role: "planificateur",
+              readonly: true,
+              keep_context: false,
+              max_calls_per_run: 3,
+              call_depth: 1,
+              models: {},
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    await initAgentsBus({});
+
+    // Verrou occupé pendant la mission de lecture (preuve que le test mesure
+    // bien quelque chose) : une écriture est refusée à ce moment-là.
+    let delivered = false;
+    let writableAtDelivery = null;
+    await runAgentsForAssistant([{ agentId: "plan-maker", brief: "mission", project: p }]).then(() => {
+      delivered = true;
+      writableAtDelivery = !isRunInProgress(p, { nature: "write" });
+    });
+
+    expect(delivered).toBe(true);
+    // AVANT le correctif : false (la run de lecture était encore « running »,
+    // donc l'agent NOMMÉ pour la suite était mis en file et le planificateur
+    // avait exécuté la mission à sa place).
+    expect(writableAtDelivery).toBe(true);
+    expect(isRunInProgress(p)).toBe(false);
+  });
+});
 
 describe("PREUVE (a) — deux missions de LECTURE tournent en parallèle sur le même projet", () => {
   it("(a) deux lectures coexistuent (clés distinctes), sans être bloquées ni s'écraser", () => {

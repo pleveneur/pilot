@@ -58,6 +58,17 @@
   libérées à la fin du tour du codeur (propriétaire) via `finishAgentTurn` /
   `failAgentTurn` dans `agents-bus.js` (`cleanupReservationsForAgent` →
   `deleteReservations`), et effacées à l'arrêt/annulation d'un agent.
+  **Ordre de libération du verrou (correctif « détour de routage »)** : la run
+  d'estimation du `plan-maker` est une run de LECTURE (`projet#read:N`) ; elle
+  occupe donc le verrou d'admission du projet (une modification est exclusive,
+  `run-policy.js`). `startParallelRun` (`agents-bus.js`) **libère la run
+  (`endRun`) AVANT de livrer son résultat à la mission** (`settleMission`) :
+  sans cet ordre, l'appelant (estimation → lancement du codeur) était réveillé
+  alors que la lecture était encore `running`, la mission du **codeur nommé**
+  était refusée par `isRunInProgress(projet, { nature: "write" })` et **mise en
+  file**, tandis que le `plan-maker` — jamais nommé pour cette mission — en
+  avait exécuté le texte à sa place (aucun fichier, aucun commit). Preuve :
+  `verrou-par-projet.test.js` (POINT I).
 >
 > **Hors périmètre Phase 0** : notification (T7), visibilité,
 > streaming des réflexions.

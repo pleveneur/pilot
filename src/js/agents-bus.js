@@ -1893,9 +1893,6 @@ export async function startParallelRun(assignments, projectContext = "", options
       const aggregated = aggregateParallelResults(results);
       emit("parallelDone", { results });
       emit("done", { agentId: "parallel", text: aggregated });
-      // Livraison du rapport à LA mission qui a lancé cette run (sink par run).
-      // Appelé avant endRun (le contexte disparaît avec lui).
-      settleMission(ctx.runKey, "done", { text: aggregated });
       // Objectif 5 : les agents lancés (run_agents) ont fini leur mission —
       // remettre leur statut au repos (sinon « Running » à vie).
       await resetAgentsProcState(assignments.map((a) => a.agentId), runProject);
@@ -1904,11 +1901,24 @@ export async function startParallelRun(assignments, projectContext = "", options
       // Protection par génération : un onComplete TARDIF (run abandonnée) ne
       // supprime pas le contexte d'une run plus récente (ctx.generation).
       endRun(runProject, ctx.generation);
+      // Livraison du rapport à LA mission qui a lancé cette run (sink par run),
+      // APRÈS la libération du verrou. Le sink vit dans `missionSinks` (clé de
+      // run) : il survit à endRun, qui ne supprime que `busState.runs[key]`.
+      // Ordre CRITIQUE (détour de routage) : livrer le résultat AVANT endRun
+      // réveillait l'appelant alors que la run de LECTURE était encore
+      // « running ». Sa mission suivante (nommant un agent précis) était alors
+      // refusée par la garde d'admission `isRunInProgress(projet,
+      // {nature:"write"})` et mise en file — tandis que l'agent de l'estimation
+      // (le planificateur, JAMAIS nommé pour cette mission) en avait exécuté le
+      // texte à sa place : aucun fichier, aucun commit.
+      settleMission(ctx.runKey, "done", { text: aggregated });
     }, options, runProject, ctx);
   } catch (e) {
-    // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou.
-    settleMission(ctx.runKey, "error", { message: e && e.message ? e.message : String(e) });
+    // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou
+    // AVANT de livrer l'échec à la mission (même ordre que le chemin normal,
+    // sinon une mission suivante nommant un agent est mise en file à tort).
     endRun(runProject, ctx.generation);
+    settleMission(ctx.runKey, "error", { message: e && e.message ? e.message : String(e) });
     throw e;
   }
 }
