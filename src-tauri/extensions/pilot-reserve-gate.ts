@@ -24,13 +24,73 @@
 // allowed to run — the gate must never crash pi.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync, appendFileSync, unlinkSync } from "node:fs";
 import { isAbsolute, resolve, relative } from "node:path";
 
 const RESERVATIONS_FILE = ".pilot/reservations.json";
+// Trace des libérations (une ligne par réservation périmée reprise) : la
+// libération n'est jamais silencieuse, elle est écrite ici et notifiée à l'UI.
+const RELEASED_LOG_FILE = ".pilot/reservations-released.log";
+// Péremption : le frontend renouvelle le fichier (`renewedAt`) tant que la run
+// est vivante ; au-delà de ce délai sans renouvellement, le détenteur n'existe
+// plus (app fermée, webview rechargée, run avortée) → la réservation ne doit
+// pas bloquer indéfiniment.
+const RESERVATION_TTL_MS = 10 * 60 * 1000;
 
 function normalize(p: string): string {
   return p.replace(/\\/g, "/");
+}
+
+/**
+ * Date de dernier renouvellement de la réservation (ms epoch). `renewedAt`
+ * (battement de cœur du frontend) prioritaire, `createdAt` en secours, et
+ * mtime du fichier en dernier recours (fichiers écrits avant ce champ).
+ */
+function reservationAnchorMs(
+  reservations: { createdAt?: string; renewedAt?: string },
+  fileMtimeMs: number,
+): number {
+  for (const raw of [reservations.renewedAt, reservations.createdAt]) {
+    if (typeof raw === "string") {
+      const t = Date.parse(raw);
+      if (!Number.isNaN(t)) return t;
+    }
+  }
+  return fileMtimeMs;
+}
+
+function describeAge(ageMs: number): string {
+  const min = Math.max(0, Math.round(ageMs / 60000));
+  if (min < 60) return `il y a ${min} min`;
+  return `il y a ${Math.round(min / 60)} h`;
+}
+
+/**
+ * Libère une réservation périmée : trace écrite (log + notification) PUIS
+ * suppression du fichier, pour que les écritures suivantes ne soient plus
+ * bloquées par un détenteur disparu. Jamais silencieux.
+ */
+function releaseStaleReservation(
+  ctx: { cwd: string; ui: { notify: (msg: string, level?: string) => void } },
+  holder: string,
+  rel: string,
+  ageMs: number,
+): void {
+  const line = `${new Date().toISOString()}\tlibération automatique (péremption)\tdétenteur=${holder || "inconnu"}\tfichier=${rel}\tdernier renouvellement=${describeAge(ageMs)}\n`;
+  try {
+    appendFileSync(resolve(ctx.cwd, RELEASED_LOG_FILE), line, "utf8");
+  } catch {
+    // fail-open : la trace ne doit pas empêcher la reprise du travail.
+  }
+  try {
+    unlinkSync(resolve(ctx.cwd, RESERVATIONS_FILE));
+  } catch {
+    // fail-open : si le fichier a déjà disparu, l'écriture reste autorisée.
+  }
+  ctx.ui.notify(
+    `🧹 Réservation périmée (agent « ${holder || "inconnu"} », ${describeAge(ageMs)}) libérée : "${rel}" redevient modifiable. Trace : ${RELEASED_LOG_FILE}`,
+    "warning",
+  );
 }
 
 /**
@@ -58,9 +118,12 @@ export default function (pi: ExtensionAPI) {
 
       // Réservations du projet (si absentes → aucun blocage).
       let reservations: { coder?: string; agents?: string[]; files?: string[] } | null = null;
+      let fileMtimeMs = 0;
       try {
-        const raw = readFileSync(resolve(ctx.cwd, RESERVATIONS_FILE), "utf8");
+        const file = resolve(ctx.cwd, RESERVATIONS_FILE);
+        const raw = readFileSync(file, "utf8");
         reservations = JSON.parse(raw);
+        fileMtimeMs = statSync(file).mtimeMs;
       } catch {
         reservations = null;
       }
@@ -83,9 +146,27 @@ export default function (pi: ExtensionAPI) {
       const hit = reserved.some((f) => f === rel || rel.startsWith(f + "/"));
       if (!hit) return; // fichier non réservé → autoriser
 
+      const holder = reservations.coder || (reservations.agents || [])[0] || "";
+      const ageMs = Date.now() - reservationAnchorMs(reservations, fileMtimeMs);
+
+      // Détenteur disparu : plus aucun renouvellement depuis plus de TTL (run
+      // terminée, session fermée, webview rechargée). On ne bloque pas
+      // indéfiniment : la réservation est libérée explicitement (trace + avis)
+      // et le chemin est repris par l'agent qui écrit.
+      if (ageMs > RESERVATION_TTL_MS) {
+        releaseStaleReservation(ctx, holder, rel, ageMs);
+        return;
+      }
+
       return {
         block: true,
-        reason: `Fichier réservé au codeur : ${rel}. Ce fichier est réservé à l'agent principal (codeur). Écris dans un autre répertoire (ex: tests/, docs/) ou demande au codeur de le modifier.`,
+        reason:
+          `Fichier réservé : ${rel}. Réservé à l'agent « ${holder || "inconnu"} » ` +
+          `(réservation renouvelée ${describeAge(ageMs)}). Ce chemin est protégé pour ` +
+          `éviter deux écritures simultanées : la réservation se libère à la fin de la ` +
+          `run de « ${holder || "inconnu"} », et expire automatiquement ${Math.round(RESERVATION_TTL_MS / 60000)} min après ` +
+          `son dernier renouvellement si ce détenteur n'existe plus. D'ici là, écris dans ` +
+          `un autre répertoire (ex: tests/, docs/) ou demande à « ${holder || "inconnu"} » de déposer la modification.`,
       };
     } catch (err) {
       // Ne jamais faire planter pi : en cas d'erreur, autoriser l'outil (fail-open).

@@ -124,7 +124,13 @@ describe("writeReservations / deleteReservations (I/O simulées, fail-open)", ()
     const ok = await writeReservations("/proj/", "codeur1", ["src/lib.rs"], ["codeur1", "spec1"]);
     expect(ok).toBe(true);
     const payload = JSON.parse(store.get(reservationsPath("/proj/")));
-    expect(payload).toEqual({ coder: "codeur1", files: ["src/lib.rs"], agents: ["codeur1", "spec1"] });
+    expect(payload).toEqual({
+      coder: "codeur1",
+      files: ["src/lib.rs"],
+      agents: ["codeur1", "spec1"],
+      createdAt: expect.any(String),
+      renewedAt: expect.any(String),
+    });
     expect(isProjectReserved("/proj/")).toBe(true);
   });
 

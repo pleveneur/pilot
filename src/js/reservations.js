@@ -14,7 +14,12 @@
 // PAS le lancement du codeur.
 //
 // Format écrit (compatible pilot-reserve-gate.ts, T3) :
-//   { "coder": "<agent_id>", "files": ["src/lib.rs", ...], "agents": ["<agent_id>", ...] }
+//   { "coder": "<agent_id>", "files": ["src/lib.rs", ...], "agents": ["<agent_id>", ...],
+//     "createdAt": "<ISO>", "renewedAt": "<ISO>" }
+// `createdAt` / `renewedAt` (horodatage de dernier renouvellement) permettent à
+// la gate de détecter un détenteur disparu : sans renouvellement depuis 10 min,
+// la réservation est périmée et libérée (avec trace) au lieu de bloquer
+// indéfiniment. Le renouvellement est assuré par un battement de cœur ci-dessous.
 // `coder` = premier codeur de la run (propriétaire du nettoyage), `agents` = ids
 // de TOUS les participants de la run (codeurs et spécialistes) : la gate exempte
 // tout participant (fail-open — on ne bloque jamais un agent légitime de la
@@ -133,12 +138,41 @@ export function buildReservations(coderId, files, participantIds = []) {
 // libérer les réservations que lorsque le bon codeur termine (pas un autre).
 const reservedProjects = new Map(); // project → coderId
 
+// Battement de cœur des réservations : tant que l'app est ouverte et la run
+// active, le fichier est réécrit (`renewedAt`) toutes les 60 s. La porte
+// pré-écriture s'en sert pour distinguer un détenteur vivant d'un détenteur
+// disparu (app fermée, webview rechargée, run avortée) : sans renouvellement
+// depuis 10 min, la réservation est périmée et libérée avec trace.
+const RESERVATION_HEARTBEAT_MS = 60000;
+const reservationHeartbeats = new Map(); // project → intervalId
+
+function stopReservationHeartbeat(project) {
+  const id = reservationHeartbeats.get(project);
+  if (id) {
+    clearInterval(id);
+    reservationHeartbeats.delete(project);
+  }
+}
+
+function startReservationHeartbeat(project, buildPayload) {
+  stopReservationHeartbeat(project);
+  const id = setInterval(() => {
+    // Fail-open : un renouvellement raté ne doit jamais casser l'app.
+    invoke("write_file_content", { path: reservationsPath(project), content: buildPayload() }).catch(() => {});
+  }, RESERVATION_HEARTBEAT_MS);
+  id?.unref?.(); // ne pas maintenir le process Node en vie (tests)
+  reservationHeartbeats.set(project, id);
+}
+
 export function markProjectReserved(project, coderId) {
   if (project) reservedProjects.set(project, String(coderId || ""));
 }
 
 export function unmarkProjectReserved(project) {
-  if (project) reservedProjects.delete(project);
+  if (project) {
+    reservedProjects.delete(project);
+    stopReservationHeartbeat(project);
+  }
 }
 
 /** Indique si le projet a des réservations écrites par l'estimation T6. */
@@ -171,9 +205,16 @@ export function reservationsPath(project) {
 export async function writeReservations(project, coderId, files, participantIds = []) {
   if (!project) return false;
   try {
-    const payload = JSON.stringify(buildReservations(coderId, files, participantIds), null, 2);
-    await invoke("write_file_content", { path: reservationsPath(project), content: payload });
+    const createdAt = new Date().toISOString();
+    const buildPayload = () =>
+      JSON.stringify(
+        { ...buildReservations(coderId, files, participantIds), createdAt, renewedAt: new Date().toISOString() },
+        null,
+        2,
+      );
+    await invoke("write_file_content", { path: reservationsPath(project), content: buildPayload() });
     markProjectReserved(project, coderId);
+    startReservationHeartbeat(project, buildPayload);
     return true;
   } catch (e) {
     console.warn("[reservations] échec écriture reservations.json :", e);
