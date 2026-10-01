@@ -62,6 +62,15 @@ fn should_block_start(active_id: Option<&str>, agent_id: &str, active_alive: boo
 /// `rpc-event-<hash>-<agentid>` pour que chaque agent émette sur son propre
 /// canal et que les chats ne se polluent pas.
 pub(crate) fn agent_event_channel(path: &str, agent_id: &str) -> String {
+    // Tâche #140 : agents d'assistant (aucun projet). Ils tournent sous la clé
+    // réservée ASSISTANT_SPACE et émettent TOUS sur le canal unifié fixe
+    // `rpc-event-agents`, chaque événement enveloppé `{ agent_id, event }`
+    // (voir agent_service::start_assistant_agent → rpc_manager::spawn_and_start).
+    // Sans ce cas, l'onglet d'un agent d'assistant écouterait un canal que
+    // personne n'alimente (onglet vide).
+    if path == crate::agent_service::ASSISTANT_SPACE {
+        return "rpc-event-agents".to_string();
+    }
     let base = project_event_channel(path);
     if agent_id == DEFAULT_AGENT_ID {
         base
@@ -1046,9 +1055,22 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_result_ok, count_rpc_messages, extract_model_from_state, kind_from_version_output,
-        should_block_start, COMMAND_DISCOVERY_ORDER,
+        agent_event_channel, command_result_ok, count_rpc_messages, extract_model_from_state,
+        kind_from_version_output, should_block_start, COMMAND_DISCOVERY_ORDER,
     };
+
+    #[test]
+    fn agent_event_channel_of_an_assistant_agent_is_the_unified_channel() {
+        // Tâche #140 : un agent d'assistant (espace réservé, aucun projet) doit
+        // écouter le canal unifié `rpc-event-agents` — celui sur lequel
+        // agent_service émet ses événements enveloppés (sinon onglet vide).
+        assert_eq!(
+            agent_event_channel(crate::agent_service::ASSISTANT_SPACE, "analyseur"),
+            "rpc-event-agents"
+        );
+        // Les agents de projet gardent leur canal scopé par projet (inchangé).
+        assert_ne!(agent_event_channel("C:/proj", "analyseur"), "rpc-event-agents");
+    }
 
     #[test]
     fn command_discovery_order_starts_with_the_name_pi_uses() {

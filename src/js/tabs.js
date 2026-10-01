@@ -30,6 +30,30 @@ import { scheduleSave } from "./session-persistence.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { findAgentTab } from "./tab-scoping.js";
 
+// Tâche #140 : espace réservé des agents d'assistant (aucun projet rattaché),
+// identique à `ASSISTANT_SPACE` (agents-bus.js / agent-activity.js) et à la
+// constante Rust `agent_service::ASSISTANT_SPACE`. Un onglet d'agent portant
+// cet espace n'appartient à aucun projet : il ne doit jamais retomber sur le
+// projet actif.
+const ASSISTANT_SPACE = "__assistant__";
+
+/**
+ * Tâche #140 : rend VISIBLE l'échec d'ouverture d'un onglet d'agent au lieu de
+ * l'avaler (l'onglet restait muet). Affiche l'erreur dans le conteneur de
+ * l'onglet et la journalise.
+ */
+function showAgentOpenError(tab, err) {
+  console.error("Erreur ouverture onglet agent:", err);
+  if (!tab || !tab.wrapper) return;
+  tab.wrapper.style.display = "flex";
+  tab.wrapper.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:24px;text-align:center;color:var(--danger);">
+      <div style="font-size:36px;margin-bottom:12px;">π</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;">Impossible d'ouvrir l'agent</div>
+      <div style="font-size:12px;opacity:.85;">${err}</div>
+    </div>`;
+}
+
 const statusCursor = document.getElementById("status-cursor");
 const statusFiletype = document.getElementById("status-filetype");
 const statusStats = document.getElementById("status-stats");
@@ -488,7 +512,15 @@ export class TabsManager {
   async _openAgent(label, agentId = "default", runDefault = false, switchTo = true, projectPath = null) {
     // Multi-projets : l'onglet agent est SCOPÉ par projet. `projectPath` explicite
     // (restauration multi-projets T4) sinon le projet actif.
-    const projPath = projectPath || window._pilotProjectPath || null;
+    // Tâche #140 : `"__assistant__"` = agent SANS projet (espace assistant).
+    // Il n'appartient à aucun projet : on ne doit JAMAIS retomber sur le projet
+    // actif (sinon l'onglet ouvre l'agent homonyme du projet affiché).
+    const isAssistantSpace = projectPath === ASSISTANT_SPACE;
+    const projPath = isAssistantSpace
+      ? ASSISTANT_SPACE
+      : (projectPath || window._pilotProjectPath || null);
+    // Agents d'assistant : clé GLOBALE en base (project_path NULL côté Rust).
+    const lookupPath = isAssistantSpace ? null : projPath;
 
     // 3.2.1 : résoudre l'agent depuis la base. L'état logique (loaded/state)
     // vit sur l'objet, pas sur l'onglet. Si l'objet n'existe pas encore en base
@@ -496,7 +528,7 @@ export class TabsManager {
     // session sera démarrée au besoin, sans vue d'erreur.
     let agentLoaded = false;
     try {
-      const agent = await invoke("get_agent", { agentId, projectPath: projPath });
+      const agent = await invoke("get_agent", { agentId, projectPath: lookupPath });
       if (agent) agentLoaded = !!agent.loaded;
     } catch (_) {
       // get_agent peut échouer (agent introuvable) → considéré non chargé.
@@ -516,11 +548,11 @@ export class TabsManager {
       // n'est plus chargé (loaded=false après arrêt) : start_agent_session est
       // idempotent (reprend si vivante, relance si morte).
       if (!agentLoaded) {
-        try { await invoke("start_agent_session", { agentId, projectPath: projPath }); } catch (_) {}
+        try { await this._startAgentSession(agentId, projPath, isAssistantSpace); } catch (e) { showAgentOpenError(existing, e); }
       }
       // 3.2 : on ne démarre/parke rien — l'AgentService gère l'idempotence. On
       // pose simplement visible=1 sur l'objet et on reprend la vue.
-      try { await invoke("set_agent_visible", { agentId, projectPath: projPath, visible: true }); } catch (_) {}
+      try { await invoke("set_agent_visible", { agentId, projectPath: lookupPath, visible: true }); } catch (_) {}
       if (switchTo) {
         this.switchTab(existing.id);
       } else {
@@ -555,7 +587,9 @@ export class TabsManager {
     // l'onglet agent ne déclenchait aucune sauvegarde et la vue n'était mise à
     // jour que si une autre sauvegarde survenait avant de quitter le projet →
     // un projet quitté après avoir ouvert l'agent perdait son onglet au retour.
-    this._scheduleSave(projPath);
+    // Tâche #140 : un onglet d'agent d'assistant n'appartient à AUCUN projet →
+    // pas de vue à persister dans les `agent_views` d'un projet.
+    if (!isAssistantSpace) this._scheduleSave(projPath);
 
     // ── E4 : health check de l'agent avant de tenter start_agent_session ──
     // Si l'exécutable configuré (pi/plh) est absent ou ne répond pas, on affiche
@@ -603,7 +637,7 @@ export class TabsManager {
       // Retourne true si la session a été reprise, false si nouvelle.
       let resumed = false;
       if (shouldStart) {
-        resumed = await invoke("start_agent_session", { agentId, projectPath: projPath });
+        resumed = await this._startAgentSession(agentId, projPath, isAssistantSpace);
       }
 
       // Créer l'interface de chat (vue). Si l'objet était déjà chargé, la
@@ -624,12 +658,15 @@ export class TabsManager {
       if (switchTo) activateAgentTab(result.elements);
 
       // 3.2 : rendre l'objet visible (visible=1) après création de la vue.
-      try { await invoke("set_agent_visible", { agentId, projectPath: projPath, visible: true }); } catch (_) {}
+      try { await invoke("set_agent_visible", { agentId, projectPath: lookupPath, visible: true }); } catch (_) {}
 
       // Re-rendre l'historique de la session du projet (multi-projets). pi reprend
       // sa session par répertoire projet ; on attend que pi soit prêt (poll court)
       // puis on recharge les messages de la discussion en cours.
-      const msgContainer = result.wrapper.querySelector(".agent-chat-messages");
+      // Tâche #140 : pour un agent d'assistant (aucun projet), l'historique
+      // projet-scopé (get_agent_messages) afficherait la discussion d'un AUTRE
+      // agent → on ne recharge rien, l'onglet affiche le flux d'événements.
+      const msgContainer = isAssistantSpace ? null : result.wrapper.querySelector(".agent-chat-messages");
       if (msgContainer) {
         for (let i = 0; i < 10; i++) {
           const n = await renderMessageHistory(msgContainer);
@@ -665,6 +702,27 @@ export class TabsManager {
    * @param {string} [agentId] — id de l'agent (défaut "default").
    * @param {string|null} [projectPath] — chemin du projet cible (défaut : projet actif).
    */
+  /**
+   * Tâche #140 : démarre (ou reprend) la session d'un agent selon son espace.
+   * Agent d'assistant (sans projet) : commandes IPC dédiées, clé réservée
+   * `__assistant__` — jamais le fallback sur le projet actif. L'échec remonte
+   * à l'appelant (plus d'erreur avalée).
+   */
+  async _startAgentSession(agentId, projPath, isAssistantSpace) {
+    if (!isAssistantSpace) {
+      return await invoke("start_agent_session", { agentId, projectPath: projPath });
+    }
+    const cfg = await invoke("get_config").catch(() => ({}));
+    await invoke("start_assistant_agent_process", {
+      agentId,
+      cwd: ASSISTANT_SPACE,
+      piPath: (cfg && cfg.rpc_pi_path) || "",
+      noSession: !!(cfg && cfg.rpc_no_session),
+      mcpServer: null,
+    });
+    return false;
+  }
+
   async startAgentInvisible(agentId = "default", projectPath = null) {
     const target = projectPath || window._pilotProjectPath || null;
     // 3.3 : rendre l'objet invisible AVANT de démarrer (visible=0).
@@ -2113,6 +2171,12 @@ export class TabsManager {
    * avant l'invoke, donc le listener project_changed (main.js) l'ignore.
    */
   async _activateTab(tab) {
+    // Tâche #140 : un onglet d'agent d'assistant (sans projet) ne bascule
+    // JAMAIS le projet actif (son `projectPath` est l'espace réservé).
+    if (tab.mode === "agent" && tab.projectPath === ASSISTANT_SPACE) {
+      this.switchTab(tab.id);
+      return;
+    }
     if (tab.mode === "agent" && tab.projectPath && tab.projectPath !== (window._pilotProjectPath || "")) {
       const sidebar = window._pilotGetSidebar ? window._pilotGetSidebar() : null;
       if (sidebar) {

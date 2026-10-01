@@ -112,7 +112,11 @@ export function flattenAgents(supervision, lastActivityMap) {
         rawId,
         label,
         project: projectName,
-        projectPath: isSuper || isAssistant ? "" : project,
+        // Tâche #140 : un agent d'assistant (sans projet) porte l'espace réservé
+        // `__assistant__` (et non "") : l'ouverture de son onglet doit pouvoir
+        // distinguer « aucun projet » de « projet vide » pour ne JAMAIS retomber
+        // sur le projet actif.
+        projectPath: isAssistant ? ASSISTANT_SPACE : (isSuper ? "" : project),
         state,
         busy,
         lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
@@ -371,9 +375,10 @@ export function initAgentActivity(tabs) {
       tabs.openFile(agent.label, "superagent");
     } else if (agent.kind === "assistant") {
       // Agent d'assistant SANS projet : il tourne dans l'espace réservé
-      // ~/.pilot/assistant, aucun projet réel à activer. On ouvre simplement
-      // son onglet via son id brut.
-      tabs._openAgent(agent.label, agent.rawId);
+      // ~/.pilot/assistant, aucun projet réel à activer. On ouvre son onglet via
+      // son id brut ET l'espace réservé (5ᵉ argument) pour que le gestionnaire
+      // d'onglets ne retombe pas sur le projet actif (tâche #140).
+      tabs._openAgent(agent.label, agent.rawId, false, true, ASSISTANT_SPACE);
     } else {
       // L'onglet d'un agent est lié au PROJET actif (_openAgent utilise
       // window._pilotProjectPath). Si l'agent cliqué appartient à un autre

@@ -24,6 +24,12 @@ import {
 import { shouldFollowBottom, updateFollowBottomFlag } from "./agent-scroll.js";
 import { getTabsManager } from "./tabs.js";
 
+// Tâche #140 : espace réservé des agents d'assistant (aucun projet rattaché),
+// identique à la constante Rust `agent_service::ASSISTANT_SPACE`. Ces agents
+// émettent sur le canal unifié `rpc-event-agents` (événements enveloppés) et
+// leurs onglets sont en lecture seule (aucune commande projet-scopée).
+const ASSISTANT_SPACE = "__assistant__";
+
 /**
  * Multi-projets : retourne le canal d'événements Tauri de la session agent du
  * projet actif (rpc-event-<hash>). Chaque projet émet sur son propre canal, on
@@ -616,17 +622,35 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   const inputEl = wrapper.querySelector("#agent-input");
   const sendBtn = wrapper.querySelector(".agent-send-btn");
 
+  // Tâche #140 : un onglet d'agent d'assistant (aucun projet) est en LECTURE
+  // SEULE. Ses voies d'envoi (`send_agent_prompt`, `send_rpc_command`) visent le
+  // projet ACTIF côté Rust : autoriser la saisie enverrait le message au mauvais
+  // agent. On neutralise la saisie plutôt que de risquer cette fuite.
+  const assistantReadOnly = projectPath === ASSISTANT_SPACE;
+
   // Issue #59 : désactive/active visuellement la saisie de l'agent selon que
   // l'option est activée ET que l'onglet 🧭 Assistant est ouvert.
   function updateAgentInputBlockedState() {
-    const blocked = isAgentInputBlocked();
+    const blocked = isAgentInputBlocked() || assistantReadOnly;
     if (inputEl) inputEl.disabled = blocked;
     if (sendBtn) sendBtn.disabled = blocked;
-    if (inputEl) inputEl.placeholder = blocked
-      ? "Saisie désactivée : l'onglet 🧭 Assistant est ouvert (paramètre ⚙️ → Assistant)"
-      : "Écrire un message... (Entrée pour envoyer, Shift+Entrée pour nouvelle ligne, / pour les commandes)";
+    if (inputEl) inputEl.placeholder = assistantReadOnly
+      ? "Lecture seule : agent sans projet (saisie impossible ici)"
+      : (blocked
+        ? "Saisie désactivée : l'onglet 🧭 Assistant est ouvert (paramètre ⚙️ → Assistant)"
+        : "Écrire un message... (Entrée pour envoyer, Shift+Entrée pour nouvelle ligne, / pour les commandes)");
   }
   updateAgentInputBlockedState();
+  if (assistantReadOnly) {
+    // La barre d'outils adresse elle aussi le projet actif (abort, compact,
+    // modèle, orchestration…) : neutralisée en lecture seule. Seuls les exports
+    // de conversation (sans effet sur un agent) restent disponibles.
+    wrapper.querySelectorAll(".agent-chat-toolbar button").forEach((b) => {
+      const a = b.dataset ? b.dataset.action : null;
+      if (a !== "export-md" && a !== "export-html") b.disabled = true;
+    });
+    wrapper.querySelectorAll(".agent-chat-toolbar select").forEach((s) => { s.disabled = true; });
+  }
   // Réagir à l'ouverture/fermeture de l'onglet 🧭 Assistant (event émis par
   // super-agent.js) et aux changements de config.
   window.addEventListener("pilot-superagent-open-changed", updateAgentInputBlockedState);
@@ -697,7 +721,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
         : "Projet non sensible (cliquez pour activer le mode local-first)";
     }
   }
-  refreshSensitiveBadge();
+  if (!assistantReadOnly) refreshSensitiveBadge();
 
   // Rafraîchit le badge 🔒 à chaque changement de projet.
   document.addEventListener("pilot-project-sensitivity", () => {
@@ -2112,7 +2136,18 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     if (unlistenRpc) { try { unlistenRpc(); } catch (_) {} unlistenRpc = null; }
     const rpcChannel = await getAgentEventChannel(agentId, projPath);
     unlistenRpc = await listen(rpcChannel, (event) => {
-      const payload = event.payload;
+      let payload = event.payload;
+      // Tâche #140 : les agents d'assistant (sans projet) émettent tous sur le
+      // canal unifié `rpc-event-agents`, chaque événement enveloppé
+      // `{ agent_id, project, event }` (rpc_manager::spawn_and_start). On filtre
+      // sur l'agent de CET onglet et on déballe l'événement (sinon un onglet
+      // d'assistant afficherait les événements des autres agents).
+      if (rpcChannel === "rpc-event-agents") {
+        if (payload && payload.agent_id !== undefined && payload.agent_id !== null) {
+          if (payload.agent_id !== agentId) return;
+          payload = payload.event;
+        }
+      }
       try {
         handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanResponse, orchFns);
       } catch (err) {
@@ -2135,7 +2170,7 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   // ── Démarrer une nouvelle session (uniquement si ce n'est pas une reprise) ──
   // Multi-projets : si la session a été reprise depuis un « parking » (pi déjà
   // vivant en arrière-plan), on NE reset PAS l'historique avec new_session.
-  if (!resumed) {
+  if (!resumed && !assistantReadOnly) {
     try {
       await invoke("send_rpc_command", { command: JSON.stringify({ type: "new_session" }) });
     } catch (e) {
