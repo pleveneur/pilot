@@ -16,6 +16,16 @@ const SOURCE = resolve(here, "../src-tauri/extensions/mcp-client.src.ts");
 const src = readFileSync(SOURCE, "utf8");
 const secretLines = src.split("\n").filter((l) => l.includes("secret"));
 
+/// Extrait le texte de la source entre deux marqueurs (test chirurgical : on ne
+/// dépend que des noms de fonctions, pas des numéros de ligne).
+function slice(from, to) {
+  const start = src.indexOf(from);
+  const end = src.indexOf(to);
+  expect(start, `marqueur absent : ${from}`).toBeGreaterThanOrEqual(0);
+  expect(end, `marqueur absent : ${to}`).toBeGreaterThan(start);
+  return src.slice(start, end);
+}
+
 describe("extension MCP — second transport (E3)", () => {
   it("importe et construit le transport HTTP distant du SDK (sans nouvelle dépendance)", () => {
     expect(src).toContain('from "@modelcontextprotocol/sdk/client/streamableHttp.js"');
@@ -53,6 +63,29 @@ describe("extension MCP — second transport (E3)", () => {
       }
     }
     expect(secretLines.length).toBeGreaterThan(0); // le contrôle porte bien sur quelque chose
+  });
+
+  it("remonte le drapeau d'erreur d'un outil MCP à l'agent (tâche 306)", () => {
+    // Un outil MCP signale son échec DANS le résultat (`isError: true`), pas par
+    // une erreur de protocole : sans propagation de ce drapeau, un refus
+    // (« je ne peux pas faire ça ») arrive à l'agent comme une réussite.
+    const formatBody = slice("function formatMcpResult(", "async function readFileText(");
+    const errorBody = slice("function errorText(", "function formatMcpResult(");
+    const runBody = slice("async function runTool(", "// Retire toute occurrence de la clé");
+
+    // 1. La réponse d'erreur locale (client absent, exception) est une erreur.
+    expect(errorBody).toMatch(/isError:\s*true/);
+
+    // 2. Tous les retours du formatage MCP portent le drapeau, lu sur le résultat.
+    expect(formatBody).toMatch(/\.isError === true/);
+    const returns = formatBody.match(/return \{[\s\S]*?\};/g) ?? [];
+    expect(returns.length).toBeGreaterThanOrEqual(2);
+    for (const r of returns) {
+      expect(r, `retour sans isError : ${r}`).toMatch(/isError/);
+    }
+
+    // 3. Le chemin d'appel annonce le drapeau dans son type de retour.
+    expect(runBody).toMatch(/isError/);
   });
 
   it("conserve le fail-open et le garde-fou de timeout", () => {

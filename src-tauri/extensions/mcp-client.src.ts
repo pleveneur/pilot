@@ -183,7 +183,7 @@ async function runTool(
   toolName: string,
   params: Record<string, unknown>,
   secret: string
-): Promise<{ content: { type: "text"; text: string }[] }> {
+): Promise<{ content: { type: "text"; text: string }[]; isError: boolean }> {
   if (!client) {
     return errorText("Client MCP non connecté.");
   }
@@ -209,13 +209,23 @@ function redactSecret(text: string, secret: string): string {
   return text.split(secret).join("[clé masquée]");
 }
 
-function errorText(msg: string): { content: { type: "text"; text: string }[] } {
-  return { content: [{ type: "text", text: msg }] };
+// Une erreur locale de l'outil MCP (client absent, exception, échec de
+// callTool) est toujours signalée comme telle à l'agent (`isError`).
+function errorText(msg: string): {
+  content: { type: "text"; text: string }[];
+  isError: boolean;
+} {
+  return { content: [{ type: "text", text: msg }], isError: true };
 }
 
 function formatMcpResult(res: unknown): {
   content: { type: "text"; text: string }[];
+  isError: boolean;
 } {
+  // Un outil MCP signale son échec DANS le résultat (`isError: true`), pas par
+  // une erreur de protocole : sans propagation de ce drapeau, un refus arrive à
+  // l'agent comme une réussite.
+  const isError = (res as { isError?: unknown } | null)?.isError === true;
   try {
     const r = res as {
       content?: Array<{ type?: string; text?: string; [k: string]: unknown }>;
@@ -239,9 +249,9 @@ function formatMcpResult(res: unknown): {
     if (parts.length === 0) {
       parts.push(JSON.stringify(res));
     }
-    return { content: [{ type: "text", text: parts.join("\n") }] };
+    return { content: [{ type: "text", text: parts.join("\n") }], isError };
   } catch {
-    return { content: [{ type: "text", text: JSON.stringify(res) }] };
+    return { content: [{ type: "text", text: JSON.stringify(res) }], isError };
   }
 }
 
