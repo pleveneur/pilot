@@ -164,6 +164,27 @@ export function isAgentInputBlocked() {
   return blockAgentInputWhenSuperOpen && window._pilotSuperAgentOpen === true;
 }
 
+/**
+ * Retire des écouteurs globaux (fenêtre/document) enregistrés par un onglet
+ * agent. `listeners` est un tableau de triplets `[cible, type, handler]`
+ * collectés par `onGlobal` dans `createAgentPi`.
+ *
+ * Sans ce retrait, chaque onglet agent fermé laisse ses écouteurs globaux en
+ * place : les handlers s'accumulent (un jeu par onglet fermé) et s'exécutent sur
+ * un onglet détruit à chaque `pilot-config-changed` (émis notamment par l'onglet
+ * Assistant quand il enregistre ses réglages), `pilot-models-changed`,
+ * `pilot-superagent-open-changed` (ouverture/fermeture de l'onglet Assistant) ou
+ * `pilot-project-sensitivity` — rafales d'appels IPC redondants et écritures dans
+ * des éléments détachés.
+ */
+export function detachGlobalListeners(listeners) {
+  for (const [target, type, handler] of listeners || []) {
+    try {
+      target.removeEventListener(type, handler);
+    } catch (_) { /* cible détruite : rien à faire */ }
+  }
+}
+
 const md = markdownit({
   html: false,
   linkify: true,
@@ -319,6 +340,19 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   }
   refreshQualityGate();
 
+  // ── Écouteurs globaux de l'onglet agent (fenêtre/document) ──
+  // Chaque onglet agent réagit aux changements de config, de modèles, de projet
+  // et à l'ouverture/fermeture de l'onglet Assistant. Ces écouteurs DOIVENT être
+  // retirés à la fermeture de l'onglet (voir unlisten) : sinon ils s'accumulent,
+  // un jeu par onglet fermé, et leurs handlers s'exécutent sur des onglets
+  // détruits. `onGlobal` mémorise la paire (cible, type, handler) pour que
+  // `unlisten` la retire via `detachGlobalListeners`.
+  const globalListeners = [];
+  const onGlobal = (target, type, handler) => {
+    target.addEventListener(type, handler);
+    globalListeners.push([target, type, handler]);
+  };
+
   // ── Diff Review (A4 V2) : porte pré-écriture — charger le paramètre global ──
   // Tient compte de la capacité du backend : si le backend (ex: plh) ne supporte
   // pas `--extension`, l'option est ignorée (state.confirmFileEdits = false) même
@@ -335,9 +369,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   }
   refreshConfirmFileEdits();
   // Recharger quand les paramètres sont sauvegardés (event custom émis par main.js)
-  window.addEventListener("pilot-config-changed", refreshConfirmFileEdits);
+  onGlobal(window, "pilot-config-changed", refreshConfirmFileEdits);
   // Issue #59 : recharger l'option de blocage de la saisie agent à chaud.
-  window.addEventListener("pilot-config-changed", refreshBlockAgentInput);
+  onGlobal(window, "pilot-config-changed", refreshBlockAgentInput);
 
   // ── Auto-test post-modification (E2) : recharger la config à chaud ──
   async function refreshOrchestrationTestConfig() {
@@ -375,15 +409,16 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     } catch (_) { /* get_config non disponible */ }
   }
   refreshOrchestrationTestConfig();
-  window.addEventListener("pilot-config-changed", refreshOrchestrationTestConfig);
+  onGlobal(window, "pilot-config-changed", refreshOrchestrationTestConfig);
   // Rafraîchir le sélecteur de modèle quand le registre models.json a été
   // édité depuis l'onglet Fournisseurs (models-config.js).
-  window.addEventListener("pilot-models-changed", () => {
+  const onModelsChanged = () => {
     // Issue #16 : préférer la source fichier (fraîche) pour refléter les modèles
     // ajoutés/retirés dans l'onglet Fournisseurs, la liste RPC étant en cache.
     loadModels(state, false, true);
     loadModelAliases();
-  });
+  };
+  onGlobal(window, "pilot-models-changed", onModelsChanged);
 
   // ── Panneau d'orchestration ──
   const orchestrationPanel = document.createElement("div");
@@ -653,8 +688,8 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   }
   // Réagir à l'ouverture/fermeture de l'onglet 🧭 Assistant (event émis par
   // super-agent.js) et aux changements de config.
-  window.addEventListener("pilot-superagent-open-changed", updateAgentInputBlockedState);
-  window.addEventListener("pilot-config-changed", updateAgentInputBlockedState);
+  onGlobal(window, "pilot-superagent-open-changed", updateAgentInputBlockedState);
+  onGlobal(window, "pilot-config-changed", updateAgentInputBlockedState);
 
   // ── Context Engine (H1) : helpers pour construire le contexte projet ──
   /** Retourne l'onglet d'édition actif { path, content } pour l'injection de contexte. */
@@ -724,9 +759,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   if (!assistantReadOnly) refreshSensitiveBadge();
 
   // Rafraîchit le badge 🔒 à chaque changement de projet.
-  document.addEventListener("pilot-project-sensitivity", () => {
+  const onProjectSensitivity = () => {
     refreshSensitiveBadge();
-  });
+  };
+  onGlobal(document, "pilot-project-sensitivity", onProjectSensitivity);
 
   // Toggle du mode sensible : clic sur le badge 🔒.
   if (lockBadge) {
@@ -5002,6 +5038,10 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
       try { unlistenReviewer(); } catch (_) {}
       try { unlistenRagDone(); } catch (_) {}
       try { unlistenAutoStop(); } catch (_) {}
+      // Retirer les écouteurs globaux (config, modèles, projet, onglet
+      // Assistant) : sans cela ils s'accumulent d'un onglet agent à l'autre et
+      // s'exécutent sur un onglet détruit.
+      detachGlobalListeners(globalListeners);
       window.removeEventListener("pilot-agent-restart-needed", onRestartNeeded);
       window.removeEventListener("pilot:rag-building", showRagBuilding);
       // Chantier 5/5 : libérer l'entrée du registre de states de cet onglet
