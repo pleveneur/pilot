@@ -456,12 +456,26 @@ d'un hébergement externe type GitHub.
   à faire.
 - **Ajouter un projet depuis le GDS** : dans le menu **Projet**, les entrées
   « Ajouter ou créer un projet » et « Ajouter un projet depuis le GDS »
-  permettent de rajouter une source. Cette dernière ouvre la **liste des dépôts
-  du GDS** avec deux actions : **ouvrir un nouveau projet local** (clone du
-  dépôt GDS dans votre dossier local, ouverture + connexion automatique au GDS)
-  ou, si un clonage local existe déjà, **l'ouvrir normalement puis le
-  synchroniser** automatiquement. Si le GDS n'est pas (encore) connecté pour le
-  projet courant, un message clair vous oriente vers l'onglet 🌐 GDS.
+  permettent de rajouter une source. La seconde ouvre une fenêtre qui commence par
+  le **choix du serveur** : une liste déroulante des **serveurs mémorisés** de ce
+  poste (les mêmes fiches que « GDS — paramétrage » → **Serveurs GDS**, jamais de
+  mot de passe affiché). **Aucun projet n'a besoin d'être ouvert.** Dès qu'un
+  serveur est choisi, la fenêtre affiche **les projets de ce serveur**, une ligne
+  par projet :
+  - **copie déjà présente sur ce poste** : la ligne reste **visible mais grisée**
+    (« déjà sur ce poste » / « déjà récupéré ») avec le bouton **« Ouvrir le
+    projet local »** — rien n'est récupéré, déplacé ni remplacé ;
+  - **copie absente** : **« Récupérer une copie »** copie le projet du serveur
+    dans votre dossier local habituel, puis l'ouvre (un dossier existant qui
+    n'est pas un dépôt de travail fait **refuser** la récupération : rien n'est
+    jamais écrasé) ;
+  - **dans tous les cas** : **« J'ai déjà ce projet ailleurs »** rattache au
+    serveur une copie **rangée ailleurs** (dossier renommé ou déplacé), sans en
+    récupérer une seconde.
+  Pilot ne fait que **lire et récupérer une copie** : le serveur n'est jamais
+  modifié. Si aucune fiche serveur n'est utilisable, la fenêtre le dit clairement
+  et vous oriente vers **« ⚙️ GDS — paramétrage » → Serveurs GDS** (ajouter la
+  fiche, puis tester la connexion).
 - **Obtenir un compte** : un compte ne se crée **pas tout seul** —
   l'**administrateur** le crée dans l'écran « 🖥️ GDS Serveur — administration »
   (bloc **Comptes** : e-mail, rôle `standard`/`dev`/`admin`, mot de passe initial).

@@ -693,8 +693,11 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
 - **Action b — Ouvrir normalement un déjà en local** : si `local_exists` est vrai
   (et sans projet de travail en parallèle), ouvre le clonage local (`local_path`)
   puis **propose une synchronisation** automatique (`gds_sync_project`).
-- **GDS non provisionné / non connecté** : la modale s'affiche en **lecture** avec
-  un message clair (orientation vers l'onglet 🌐 GDS) — jamais de crash.
+- **GDS non provisionné / non connecté** : la modale **ne s'arrête plus** — elle
+  affiche les **projets du serveur choisi** (§3.5). Une **erreur de lecture** sur
+  un projet connecté affiche un message clair (nom de l'erreur + rappel de
+  vérifier la fiche dans « GDS — paramétrage » → « Serveurs GDS ») — jamais de
+  crash.
 - **Modules** : `gds.rs` (`gds_clone_repo`, `gds_connect_existing`,
   `gds_remove_dup_worktree`, `connect_dir_to_gds`, `gds_list_git_repos`),
   `gds_client.rs` (`sync_project`), `gds_db.rs` (`list_git_repos` + join `projects`
@@ -703,6 +706,52 @@ audit_gds(ts, ip, subject, action, detail, ok)    -- étend web_audit
   local (clone + connexion auto + remote `gds`) ; connecter un dossier de travail
   existant ; supprimer une copie redondante avec confirmation ; ré-ouvrir un dépôt
   déjà cloné localement avec synchro optionnelle — toujours un seul dossier local.
+
+### 3.5 Ajouter un projet depuis un serveur choisi (étapes 1 à 5, implémenté)
+
+- **Objectif** : ajouter un projet GDS **sans dépendre d'un projet déjà ouvert et
+  connecté**. Le **serveur n'est plus déduit** du projet courant : il est **choisi**
+  par l'utilisateur, puis ses projets sont listés.
+- **Parcours** : l'entrée « Ajouter un projet depuis le GDS » ouvre la fenêtre sur
+  le **choix du serveur** (liste déroulante des fiches serveur du poste,
+  `gds_list_saved_servers`), puis affiche **les projets de ce serveur**
+  (`gds_server_projects` + `gds_server_git_repos`, lectures seules via la session
+  du compte GDS de la fiche). Une action par ligne :
+  - **copie déjà présente sur ce poste** (`work_exists` ou `local_exists`) → ligne
+    **visible mais grisée** (« déjà sur ce poste » / « déjà récupéré ») + bouton
+    « **Ouvrir le projet local** » (aucune seconde récupération) ;
+  - **copie absente, dépôt connu** → « **Récupérer une copie** »
+    (`gds_clone_repo_from_server` : clone dans le dossier local habituel, lien GDS
+    écrit dans la copie, projet enregistré **localement** dans Pilot) ;
+  - **toujours** → « **J'ai déjà ce projet ailleurs** » (`gds_connect_existing` sur
+    un dossier choisi par l'utilisateur : rattrape une copie renommée ou rangée
+    ailleurs, sans en récupérer une seconde).
+- **Fiche serveur utilisable** : compte GDS reconnu (`identity`), fiche validée par
+  un test de connexion réussi et valeurs d'accès complètes (hôte, port du service,
+  e-mail). Sans fiche utilisable, la fenêtre affiche une **explication claire**
+  (`gdsNoServerHint`), jamais une erreur brute. Aucun **secret** n'entre dans la
+  liste ni dans l'affichage (chaque ligne est rebâtie champ par champ).
+- **Parcours « projet ouvert ET connecté » inchangé** : la liste des dépôts du
+  projet et ses actions (Connecter / Synchroniser / Ramener en local / Supprimer la
+  copie redondante) restent celles de §3.4 ; le sélecteur de serveur s'affiche en
+  plus, sans rien changer au reste.
+- **GDS en lecture seule vu de Pilot** : ce parcours ne fait que **lire** et
+  **récupérer une copie**. Aucune création de projet côté serveur, aucun `push`
+  GitHub ni `gds`. La seule écriture serveur est l'enregistrement de la **clef SSH
+  du poste** (`POST /api/gds/ssh-keys`, idempotent), déjà présent dans le clone
+  existant — sans elle, le clone SSH échoue.
+- **Fonctions pures et exportées** (`src/js/gds-menu.js`, testées) :
+  `gdsServerChoices`, `gdsServerSelectorHtml`, `gdsNoServerHint`,
+  `gdsServerProjectRows`, `gdsServerProjectsHtml`.
+- **Modules** : `src-tauri/src/gds_service.rs` (`ServiceSession::get`,
+  `pick_identity_for_server`, `list_projects_on`, `list_git_repos_on`,
+  `gds_server_projects`, `gds_server_git_repos`), `src-tauri/src/gds.rs`
+  (`saved_server_for_identity`, `cfg_from_server_fiche`, `clone_dir_for`,
+  `fetch_or_clone`, `enrich_local_state`, `gds_clone_repo_from_server`),
+  `src/js/gds-menu.js`, `src/css/style.css` (`.gds-menu-item-greyed`).
+- **Critère de fin** : depuis le menu projet, **sans projet ouvert**, choisir un
+  serveur, voir ses projets, récupérer une copie absente, ouvrir une copie déjà
+  présente, rattacher une copie rangée ailleurs — le serveur n'est jamais modifié.
 
 ---
 

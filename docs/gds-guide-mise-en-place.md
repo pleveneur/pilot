@@ -777,13 +777,34 @@ local de clonage**, cliquez sur **« Enregistrer la configuration »**, puis
 ### 2.7 — Récupérer un projet qui n'existe pas encore chez soi 🅰
 
 - **Dans Pilot, vous faites :** menu des **projets** → **« Ajouter un projet
-  depuis le GDS »** → dans la liste, choisissez le dépôt → **« Ramener en
-  local »** (le clone), ou **« Connecter ce dossier au GDS »** si le dossier
-  existe déjà sur ce poste.
-- **Vous voyez :** le projet local s'ouvre, **déjà connecté**.
-- **Si ce n'est pas ça :** « Le GDS n'est pas connecté pour ce projet » → le
-  projet courant doit d'abord être activé (**2.6**) ; « Aucun dépôt enregistré
-  sur le serveur GDS » → aucun projet n'a encore été ajouté (**2.6.e**).
+  depuis le GDS »**. La fenêtre ne demande **aucun projet ouvert** : elle
+  commence par le **choix du serveur** — une liste déroulante des **serveurs
+  mémorisés** (ceux de **2.5** ; le mot de passe n'est **jamais** affiché).
+  Choisissez votre serveur : la fenêtre affiche **les projets de ce serveur**,
+  une ligne par projet. Sur la ligne du projet voulu :
+  - **« Récupérer une copie »** : le projet est copié du serveur dans votre
+    **dossier local habituel**, puis ouvert. Si le dossier existe déjà mais n'est
+    pas un dépôt de travail, la récupération est **refusée** : rien n'est écrasé.
+  - la ligne est **grise** (« déjà sur ce poste » / « déjà récupéré ») si une
+    copie est déjà là → **« Ouvrir le projet local »** : la copie s'ouvre telle
+    quelle, **sans** en récupérer une seconde.
+  - **« J'ai déjà ce projet ailleurs »** : si votre copie est **rangée
+    ailleurs** (dossier **renommé** ou **déplacé**), choisissez son dossier et
+    Pilot la **rattache** au serveur, **sans** en récupérer une seconde.
+- **Vous voyez :** le projet local s'ouvre. Après « Récupérer une copie », il
+  arrive **déjà relié** au serveur.
+- **Point à retenir :** Pilot ne fait que **lire le serveur** et **récupérer une
+  copie** : le serveur n'est **jamais** modifié par ce parcours. Si un projet est
+  **déjà ouvert et connecté**, la même fenêtre affiche aussi ses dépôts avec les
+  actions habituelles (**2.6**).
+- **Si ce n'est pas ça :** « Aucun serveur GDS utilisable n'est enregistré sur ce
+  poste… » → mémorisez d'abord le serveur (**2.5**) et **testez la connexion**
+  (une fiche non testée n'apparaît pas dans la liste). « Aucun projet n'est
+  enregistré sur ce serveur GDS » → aucun projet n'a encore été ajouté au serveur
+  (**2.6.e**). « Rattachement impossible : … — ouvrez d'abord le projet concerné
+  dans Pilot, puis réessayez. » → le dossier choisi ne porte pas encore son lien
+  GDS : ouvrez le projet correspondant dans Pilot (ou la copie déplacée, si son
+  lien a voyagé avec elle), puis refaites le rattachement.
 
 ### 2.8 — Le travail quotidien : synchroniser, publier
 
