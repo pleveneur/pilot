@@ -3518,6 +3518,13 @@ pub fn run() {
             // commandes d'attribution (l'appartenance n'est plus un droit).
             gds_admin::gds_admin_projects,
             gds_admin::gds_admin_git_repos,
+            // ── GDS : lire les projets / dépôts d'un serveur CHOISI à partir de
+            // sa FICHE ENREGISTRÉE (aucun projet ouvert requis, aucun mot de
+            // passe demandé à l'interface) — « ajouter un projet depuis le GDS ».
+            // Lecture seule, tout rôle : la session du compte est ouverte par
+            // `gds_service` (le mot de passe ne quitte jamais le poste).
+            gds_service::gds_server_projects,
+            gds_service::gds_server_git_repos,
             gds_admin::gds_admin_project_remove,
             // ── GDS (refonte, L4.5) : espace utilisé, journal, clefs SSH ──
             // L'état serveur donne l'espace occupé (dépôts + base) ; le journal

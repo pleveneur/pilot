@@ -170,6 +170,40 @@ pub(crate) fn resolve_identity_for_host(host: &str, email: &str) -> Option<Servi
     pick_identity(&saved_identities(), &host_only_cfg(host, email))
 }
 
+/// Identité du compte GDS d'une **fiche serveur** désignée par (hôte, port de
+/// service, e-mail) : parcours « ajouter un projet depuis le GDS », où aucun
+/// projet n'est ouvert — la fiche est la seule source. La règle de choix reste
+/// celle de `pick_identity` (identité complète, même hôte, jamais le compte
+/// d'un autre) ; le port affiché par l'interface prime (port non secret) pour
+/// rester cohérent avec la fiche montrée à l'utilisateur. Le mot de passe vient
+/// de la fiche, jamais de l'appelant. `None` = aucune fiche utilisable. Pure.
+pub(crate) fn pick_identity_for_server(
+    fiches: &[SavedIdentity],
+    host: &str,
+    http_port: &str,
+    email: &str,
+) -> Option<ServiceIdentity> {
+    let mut ident = pick_identity(fiches, &host_only_cfg(host, email))?;
+    if !http_port.trim().is_empty() {
+        ident.http_port = http_port.trim().to_string();
+    }
+    Some(ident)
+}
+
+/// Même résolution, depuis les fiches mémorisées. `Err` = message lisible
+/// (aucun secret) : l'utilisateur doit d'abord enregistrer la fiche du serveur
+/// et tester sa connexion (« GDS — paramétrage » → « Serveurs GDS »).
+fn identity_on_server(
+    host: &str,
+    http_port: &str,
+    email: &str,
+) -> Result<ServiceIdentity, String> {
+    pick_identity_for_server(&saved_identities(), host, http_port, email).ok_or_else(|| {
+        "Aucun compte GDS enregistré pour ce serveur : ajoutez-le dans « GDS — paramétrage » → « Serveurs GDS », puis testez sa connexion."
+            .to_string()
+    })
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Session de service (jeton du compte)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +318,72 @@ impl ServiceSession {
         )?;
         self.value(reply)
     }
+
+    /// Lecture authentifiée (`GET`) : même jeton, même traitement des erreurs.
+    fn get(&self, path: &str) -> Result<Value, String> {
+        let client = http_client()?;
+        let reply = send_get(
+            &client,
+            &format!("{}{}", self.base, path),
+            Some(&self.token()?),
+        )?;
+        self.value(reply)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Opération 0 — Lire les projets d'un serveur CHOISI (« ajouter un projet
+// depuis le GDS ») : aucun projet ouvert n'est requis, le serveur est désigné
+// par sa FICHE ENREGISTRÉE, jamais par la configuration d'un projet. Lecture
+// seule : rien n'est écrit sur le GDS. Le mot de passe reste dans
+// `~/.pilot/gds_secrets.json` et n'est jamais renvoyé ni journalisé.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Projets d'un serveur (`GET /api/gds/projects`) : lecture ouverte à tout
+/// compte authentifié (le serveur ne restreint plus la visibilité au projet
+/// attribué). Un échec remonte tel quel, sans secret.
+pub(crate) async fn list_projects_on(ident: &ServiceIdentity) -> Result<Value, String> {
+    let ident = ident.clone();
+    blocking(move || ServiceSession::open(&ident)?.get("/api/gds/projects")).await
+}
+
+/// Dépôts git d'un serveur (`GET /api/gds/git-repos`) — même session, même
+/// lecture seule : sert à savoir ce qui est déjà récupérable en local.
+pub(crate) async fn list_git_repos_on(ident: &ServiceIdentity) -> Result<Value, String> {
+    let ident = ident.clone();
+    blocking(move || ServiceSession::open(&ident)?.get("/api/gds/git-repos")).await
+}
+
+/// Commande Tauri : projets d'un **serveur GDS choisi**, à partir de sa fiche
+/// enregistrée. Réponse `{ ok, projects:[…] }` — jamais un secret.
+#[tauri::command]
+pub async fn gds_server_projects(
+    host: String,
+    http_port: String,
+    email: String,
+) -> Result<Value, String> {
+    let ident = identity_on_server(&host, &http_port, &email)?;
+    let v = list_projects_on(&ident).await?;
+    Ok(json!({
+        "ok": true,
+        "projects": v.get("projects").cloned().unwrap_or_else(|| json!([])),
+    }))
+}
+
+/// Commande Tauri : dépôts git d'un **serveur GDS choisi** (même fiche, même
+/// lecture seule). Réponse `{ ok, git_repos:[…] }` — jamais un secret.
+#[tauri::command]
+pub async fn gds_server_git_repos(
+    host: String,
+    http_port: String,
+    email: String,
+) -> Result<Value, String> {
+    let ident = identity_on_server(&host, &http_port, &email)?;
+    let v = list_git_repos_on(&ident).await?;
+    Ok(json!({
+        "ok": true,
+        "git_repos": v.get("git_repos").cloned().unwrap_or_else(|| json!([])),
+    }))
 }
 
 /// Exécute une opération du service hors du thread principal (appels HTTP
@@ -571,6 +671,92 @@ mod tests {
     }
 
     #[test]
+    fn pick_identity_for_server_takes_the_port_shown_by_the_interface() {
+        let fiches = [fiche("127.0.0.1", "8080", "dev@x", "pw")];
+        // Aucun projet ouvert : la fiche est la seule source.
+        let picked = pick_identity_for_server(&fiches, "127.0.0.1", "", "dev@x")
+            .expect("fiche du compte GDS attendue");
+        assert_eq!(picked.http_port, "8080");
+        // Le port affiché par l'interface prime (port non secret).
+        let picked = pick_identity_for_server(&fiches, "127.0.0.1", "9090", "dev@x")
+            .expect("fiche du compte GDS attendue");
+        assert_eq!(picked.http_port, "9090");
+        // Serveur inconnu, compte d'un autre, ou fiche sans identité : rien.
+        assert!(pick_identity_for_server(&fiches, "10.0.0.9", "8080", "dev@x").is_none());
+        assert!(pick_identity_for_server(&fiches, "127.0.0.1", "8080", "autre@x").is_none());
+        assert!(
+            pick_identity_for_server(&[fiche("127.0.0.1", "", "", "")], "127.0.0.1", "8080", "")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_projects_on_reads_the_server_with_the_account_token() {
+        let (base, log) = fake_service(vec![
+            (
+                "/api/gds/users/login",
+                "{\"ok\":true,\"role\":\"standard\",\"token\":\"tok-std\"}",
+            ),
+            ("/api/gds/projects", "{\"projects\":[{\"id\":1,\"name\":\"p\"}]}"),
+        ]);
+        let ident = ident_of(&base, "std@x", "pw-secret");
+        let v = list_projects_on(&ident).await.expect("liste lue");
+        assert_eq!(v["projects"][0]["name"], json!("p"));
+        let text = v.to_string();
+        assert!(!text.contains("pw-secret"), "mot de passe exposé: {}", text);
+        assert!(!text.contains("tok-std"), "jeton exposé: {}", text);
+        let calls = log.lock().unwrap().join("\n");
+        // Lecture seule : un GET porteur du jeton, jamais une écriture.
+        assert!(calls.contains("GET /api/gds/projects"), "lecture GET attendue: {}", calls);
+        assert!(calls.contains("auth=bearer tok-std"), "jeton non employé: {}", calls);
+        assert!(
+            !calls.contains("POST /api/gds/projects"),
+            "aucune écriture attendue: {}",
+            calls
+        );
+    }
+
+    #[tokio::test]
+    async fn list_git_repos_on_reads_the_server_with_the_account_token() {
+        let (base, log) = fake_service(vec![
+            (
+                "/api/gds/users/login",
+                "{\"ok\":true,\"role\":\"dev\",\"token\":\"tok-dev\"}",
+            ),
+            (
+                "/api/gds/git-repos",
+                "{\"git_repos\":[{\"project_id\":1,\"path_on_server\":\"/srv/git/repos/p.git\"}]}",
+            ),
+        ]);
+        let ident = ident_of(&base, "dev@x", "pw-secret");
+        let v = list_git_repos_on(&ident).await.expect("dépôts lus");
+        assert_eq!(v["git_repos"][0]["project_id"], json!(1));
+        let text = v.to_string();
+        assert!(!text.contains("pw-secret"), "mot de passe exposé: {}", text);
+        let calls = log.lock().unwrap().join("\n");
+        assert!(calls.contains("GET /api/gds/git-repos"), "lecture GET attendue: {}", calls);
+        assert!(calls.contains("auth=bearer tok-dev"), "jeton non employé: {}", calls);
+    }
+
+    /// Le serveur refuse (route absente) : l'échec remonte et ne reprend ni
+    /// le mot de passe ni le jeton de la session.
+    #[tokio::test]
+    async fn list_projects_on_reports_a_refusal_without_any_secret() {
+        let (base, _log) = fake_service(vec![(
+            "/api/gds/users/login",
+            "{\"ok\":true,\"role\":\"dev\",\"token\":\"tok-dev\"}",
+        )]);
+        let ident = ident_of(&base, "dev@x", "pw-secret");
+        let err = list_projects_on(&ident).await.expect_err("lecture refusée");
+        assert!(err.contains("refusé"), "message: {}", err);
+        assert!(
+            !err.contains("pw-secret") && !err.contains("tok-dev"),
+            "secret dans l'erreur: {}",
+            err
+        );
+    }
+
+    #[test]
     fn project_payloads_resolve_the_client_id_by_name() {
         let projects = vec![
             LocalProject {
@@ -632,9 +818,11 @@ mod tests {
                 if content_length > 0 {
                     let _ = reader.read_exact(&mut body);
                 }
+                let method = first.split_whitespace().next().unwrap_or("-").to_string();
                 let path = first.split_whitespace().nth(1).unwrap_or("/").to_string();
                 shared.lock().unwrap().push(format!(
-                    "{} auth={} body={}",
+                    "{} {} auth={} body={}",
+                    method,
                     path,
                     auth,
                     String::from_utf8_lossy(&body)
