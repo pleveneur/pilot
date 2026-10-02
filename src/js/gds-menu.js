@@ -24,7 +24,14 @@
 // alimentent une liste déroulante (`gdsServerChoices`) — un projet déjà ouvert
 // n'est plus exigé. Aucune fiche utilisable → message clair (`gdsNoServerHint`),
 // jamais de crash. Quand un projet ouvert est connecté, sa liste de dépôts
-// s'affiche comme avant ; sinon la fenêtre s'arrête au choix du serveur.
+// s'affiche comme avant ; sinon la fenêtre affiche les PROJETS DU SERVEUR CHOISI
+// (`gds_server_projects` + `gds_server_git_repos`) et, par ligne :
+//   - déjà sur ce poste → ligne VISIBLE mais GRISÉE + « Ouvrir le projet local »
+//     (jamais de seconde récupération) ;
+//   - sinon → « Récupérer une copie » (`gds_clone_repo_from_server`) et
+//     « J'ai déjà ce projet ailleurs » (rattachement, `gds_connect_existing`).
+// Le calcul de ces lignes (`gdsServerProjectRows`) et leur rendu
+// (`gdsServerProjectsHtml`) sont PURS et exportés.
 // Aucun champ sensible n'entre dans la liste ni dans l'affichage.
 
 import { invoke } from "@tauri-apps/api/core";
@@ -112,6 +119,121 @@ export function gdsServerSelectorHtml(choices, selected = "") {
 }
 
 /**
+ * Lignes affichables de la fenêtre « Ajouter un projet depuis le GDS », pour le
+ * serveur CHOISI : état de chaque projet + libellés + actions. Pure — testable
+ * séparément (même modèle que `gdsServerChoices`).
+ *
+ * `projects` : liste du serveur (`gds_server_projects`) ; `repos` : dépôts du
+ * même serveur, déjà enrichis de l'état local (`gds_server_git_repos`). Le
+ * rapprochement se fait par le NOM du projet (unique côté serveur ; c'est aussi
+ * le nom de dépôt utilisé partout ailleurs).
+ *
+ * Chaque ligne est REBÂTIE champ par champ : ni e-mail, ni chemin serveur, ni
+ * mot de passe ne sort d'ici (seul le chemin LOCAL, utile au bouton d'ouverture,
+ * et seulement pour un projet réellement présent sur le poste).
+ *
+ * @returns {Array<{name: string, hasRepo: boolean, alreadyLocal: boolean,
+ *   openPath: string, greyed: boolean, chip: string,
+ *   actions: Array<{act: string, label: string, icon: string, title: string}>}>}
+ */
+export function gdsServerProjectRows(projects, repos) {
+  const byName = new Map();
+  for (const r of Array.isArray(repos) ? repos : []) {
+    const n = r && String(r.name || "").trim();
+    if (n && !byName.has(n)) byName.set(n, r);
+  }
+  const rows = [];
+  for (const p of Array.isArray(projects) ? projects : []) {
+    const name = String((p && (p.name || p.repo_name)) || "").trim();
+    if (!name) continue;
+    const repo = byName.get(name) || null;
+    const workExists = !!(repo && repo.work_exists);
+    const localExists = !!(repo && repo.local_exists);
+    const alreadyLocal = workExists || localExists;
+    const openPath = alreadyLocal
+      ? String((workExists ? repo.work_path : repo.local_path) || "").trim()
+      : "";
+    const hasRepo = !!repo;
+    const actions = [];
+    if (alreadyLocal) {
+      // La copie est là : on l'ouvre, on ne récupère jamais une seconde copie.
+      actions.push({
+        act: "open",
+        label: "Ouvrir le projet local",
+        icon: "folder-open",
+        title:
+          "Une copie de ce projet est déjà sur ce poste : l'ouvrir telle quelle (rien n'est récupéré, déplacé ni remplacé).",
+      });
+    } else if (hasRepo) {
+      actions.push({
+        act: "get",
+        label: "Récupérer une copie",
+        icon: "download",
+        title:
+          "Copier ce projet du serveur dans votre dossier local habituel, puis l'ouvrir. Un dossier existant n'est jamais écrasé : la récupération est refusée si le dossier n'est pas un dépôt de travail.",
+      });
+    }
+    // Toujours proposé : la copie peut être rangée ailleurs que là où le poste
+    // la cherche (dossier renommé ou déplacé), et le dossier détecté peut n'être
+    // qu'un reste — il ne doit jamais y avoir d'impasse.
+    actions.push({
+      act: "attach",
+      label: "J'ai déjà ce projet ailleurs",
+      icon: "link",
+      title:
+        "Rattacher au serveur une copie rangée ailleurs (dossier renommé ou déplacé), sans en récupérer une seconde.",
+    });
+    rows.push({
+      name,
+      hasRepo,
+      alreadyLocal,
+      openPath,
+      greyed: alreadyLocal,
+      chip: alreadyLocal
+        ? workExists
+          ? "déjà sur ce poste"
+          : "déjà récupéré"
+        : hasRepo
+          ? ""
+          : "aucun dépôt sur le serveur",
+      actions,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Rend les lignes de `gdsServerProjectRows` (HTML échappé) ; liste vide →
+ * message clair, jamais une liste muette. Pure — testable, aucun secret
+ * (seuls le nom, l'étiquette et les libellés d'action sont écrits).
+ */
+export function gdsServerProjectsHtml(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    return (
+      '<div class="gds-empty">Aucun projet n\'est enregistré sur ce serveur GDS. ' +
+      "Vérifiez que vous avez choisi le bon serveur ; sinon, ajoutez un projet au serveur " +
+      "depuis un projet ouvert dans Pilot (« Ajouter ce projet au GDS »).</div>"
+    );
+  }
+  return list
+    .map((row) => {
+      const chip = row.chip ? ` <span class="gds-chip">${esc(row.chip)}</span>` : "";
+      const actions = (row.actions || [])
+        .map(
+          (a) =>
+            `<button class="web-btn" data-act="${esc(a.act)}" title="${esc(a.title)}"><i data-lucide="${esc(a.icon)}" class="icon-sm"></i> ${esc(a.label)}</button>`,
+        )
+        .join("");
+      return `\n    <div class="gds-menu-item${row.greyed ? " gds-menu-item-greyed" : ""}" data-project="${esc(row.name)}">
+      <div class="gds-menu-item-name">${esc(row.name)}${chip}</div>
+      <div class="gds-menu-item-actions">${actions}</div>
+    </div>`;
+    })
+    .join("");
+}
+
+/**
  * Ouvre la modale « Ajouter un projet depuis le GDS ».
  * @param {object} sidebar Instance Sidebar (fournit openProjectByPath).
  */
@@ -170,16 +292,164 @@ export async function openProjectFromGds(sidebar) {
   }
 
   if (!project || status !== "connected") {
-    // Aucun projet ouvert (ou projet non connecté au GDS) : la fenêtre reste
-    // utile — on y choisit le serveur.
-    dlg.innerHTML = `
-      <div class="gds-menu-title"><i data-lucide="git-branch" class="icon-sm"></i> Ajouter un projet depuis le GDS</div>
-      ${selectorHtml}
-      <div class="gds-menu-state">Serveur GDS choisi. La liste des projets de ce serveur n'est pas encore affichée dans cette fenêtre.</div>
-      <div class="gds-menu-actions"><button class="web-btn" data-act="close">Fermer</button></div>`;
-    refreshIcons(overlay);
-    dlg.querySelector('[data-act="close"]').addEventListener("click", close);
+    // Aucun projet ouvert (ou projet non connecté au GDS) : la fenêtre liste les
+    // PROJETS DU SERVEUR CHOISI. Deux lectures seule du serveur, depuis la fiche
+    // seule : les projets, puis les dépôts (qui portent l'état « déjà sur ce
+    // poste »). Aucun mot de passe ne remonte ici.
+    let chosenValue = choices[0].value;
+    const choiceFor = (value) => choices.find((c) => c.value === value) || choices[0];
+
+    // Redessine la fenêtre avec le sélecteur (sélection courante conservée) et
+    // re-branche le changement de serveur : le contenu dépend du serveur choisi.
+    const drawChosenProjects = (stateHtml) => {
+      dlg.innerHTML = `
+        <div class="gds-menu-title"><i data-lucide="git-branch" class="icon-sm"></i> Ajouter un projet depuis le GDS</div>
+        ${gdsServerSelectorHtml(choices, chosenValue)}
+        <div class="gds-menu-sub">Projets enregistrés sur le serveur choisi. Une copie déjà présente sur ce poste n'est jamais récupérée une seconde fois : elle s'ouvre depuis son dossier.</div>
+        <div class="gds-menu-list" id="gds-menu-list">${stateHtml}</div>
+        <div class="gds-menu-actions"><button class="web-btn" data-act="close">Fermer</button></div>`;
+      refreshIcons(overlay);
+      dlg.querySelector('[data-act="close"]').addEventListener("click", close);
+      const sel = dlg.querySelector("#gds-menu-server");
+      if (sel) {
+        sel.addEventListener("change", () => {
+          chosenValue = sel.value;
+          loadChosenProjects();
+        });
+      }
+    };
+
+    // Un seul chargement à la fois : le jeton écarte une réponse devenue obsolète
+    // (l'utilisateur a changé de serveur entre-temps).
+    let loadToken = 0;
+    const loadChosenProjects = async () => {
+      const token = ++loadToken;
+      const chosen = choiceFor(chosenValue);
+      drawChosenProjects('<div class="gds-empty">Chargement des projets du serveur…</div>');
+      let projects = [];
+      try {
+        const res = await invoke("gds_server_projects", {
+          host: chosen.host, httpPort: chosen.httpPort, email: chosen.email,
+        });
+        projects = (res && res.projects) || [];
+      } catch (e) {
+        if (token !== loadToken) return;
+        drawChosenProjects(
+          `<div class="gds-empty">⚠️ Impossible de lire les projets de ce serveur : ${esc(String(e))}<br>Vérifiez la fiche dans « GDS — paramétrage » → « Serveurs GDS » (test de connexion), puis réessayez.</div>`,
+        );
+        return;
+      }
+      // Les dépôts apportent l'état « déjà sur ce poste ». Un échec ne bloque pas
+      // la liste : au pire une copie locale n'est pas vue et la récupération est
+      // proposée — elle refuse tout dossier qui n'est pas un dépôt de travail,
+      // donc rien n'est jamais écrasé.
+      let repos = [];
+      try {
+        const res = await invoke("gds_server_git_repos", {
+          host: chosen.host, httpPort: chosen.httpPort, email: chosen.email,
+        });
+        repos = (res && res.git_repos) || [];
+      } catch (_e) {
+        repos = [];
+      }
+      if (token !== loadToken) return;
+      const rows = gdsServerProjectRows(projects, repos);
+      drawChosenProjects(gdsServerProjectsHtml(rows));
+      bindChosenRowActions(rows, chosen);
+    };
+
+    // Une action par ligne. « Ouvrir » n'agit que sur le dossier local ;
+    // « Récupérer » passe par la commande de l'étape 3 (garde de refus incluse) ;
+    // « J'ai déjà ce projet ailleurs » rattache un dossier choisi par l'utilisateur
+    // via la commande de rattachement existante (aucune écriture côté serveur).
+    const bindChosenRowActions = (rows, chosen) => {
+      const listEl = dlg.querySelector("#gds-menu-list");
+      if (!listEl) return;
+      const items = Array.from(listEl.querySelectorAll(".gds-menu-item"));
+      rows.forEach((row, i) => {
+        const item = items[i];
+        if (!item) return;
+        const btn = (act) => item.querySelector(`[data-act="${act}"]`);
+
+        const openBtn = btn("open");
+        if (openBtn) {
+          openBtn.addEventListener("click", async () => {
+            if (!row.openPath) return;
+            close();
+            try {
+              await sidebar.openProjectByPath(row.openPath);
+              toastSuccess("Projet ouvert : " + row.name);
+            } catch (e) {
+              toastError("Impossible d'ouvrir la copie locale : " + String(e));
+            }
+          });
+        }
+
+        const getBtn = btn("get");
+        if (getBtn) {
+          getBtn.addEventListener("click", async () => {
+            close();
+            showLoading("Récupération du projet " + row.name + " depuis le GDS…");
+            try {
+              const res = await invoke("gds_clone_repo_from_server", {
+                host: chosen.host,
+                httpPort: chosen.httpPort,
+                email: chosen.email,
+                repoName: row.name,
+              });
+              hideLoading();
+              await sidebar.openProjectByPath(res.path);
+              toastSuccess(
+                res.already_existed
+                  ? "Copie déjà présente, ouverte : " + row.name
+                  : "Projet récupéré depuis le GDS : " + row.name,
+              );
+            } catch (e) {
+              hideLoading();
+              toastError("Échec de la récupération : " + String(e));
+            }
+          });
+        }
+
+        const attachBtn = btn("attach");
+        if (attachBtn) {
+          attachBtn.addEventListener("click", async () => {
+            let folder;
+            try {
+              const { open } = await import("@tauri-apps/plugin-dialog");
+              folder = await open({ directory: true, multiple: false });
+            } catch (e) {
+              toastError("Choix du dossier impossible : " + String(e));
+              return;
+            }
+            if (!folder) return;
+            close();
+            showLoading("Rattachement de la copie au GDS…");
+            try {
+              // Le dossier choisi sert de référence s'il porte déjà son lien GDS
+              // (copie déplacée ou renommée : le fichier de lien voyage avec elle) ;
+              // sinon le projet ouvert fournit le serveur et l'identité.
+              const res = await invoke("gds_connect_existing", {
+                project: project || folder,
+                targetDir: folder,
+              });
+              hideLoading();
+              await sidebar.openProjectByPath(res.path || folder);
+              toastSuccess("Copie rattachée au GDS : " + row.name);
+            } catch (e) {
+              hideLoading();
+              toastError(
+                "Rattachement impossible : " + String(e) +
+                  " — ouvrez d'abord le projet concerné dans Pilot, puis réessayez.",
+              );
+            }
+          });
+        }
+      });
+    };
+
     closeOnBackground();
+    await loadChosenProjects();
     return;
   }
 

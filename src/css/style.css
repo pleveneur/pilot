@@ -896,6 +896,15 @@ body.theme-light.theme-tokyo-day {
   font-size: 14px;
   font-weight: 600;
 }
+/* Projet déjà présent sur le poste : ligne VISIBLE mais grisée (jamais masquée),
+   avec le seul bouton « Ouvrir le projet local » — aucune récupération possible. */
+.gds-menu-item-greyed {
+  opacity: 0.6;
+  background: var(--surface-1, #16181d);
+}
+.gds-menu-item-greyed .gds-menu-item-name {
+  color: var(--text-secondary, #a0a6b4);
+}
 .gds-menu-item-actions {
   display: flex;
   gap: 8px;
