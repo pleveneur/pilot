@@ -8137,6 +8137,15 @@ body.pilot-loading *::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.vault-row-ref {
+  font-family: var(--mono-font, monospace);
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
 .vault-row-pw {
   font-family: var(--mono-font, monospace);
   font-size: 13px;

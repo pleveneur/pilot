@@ -1346,8 +1346,10 @@ uniquement un bloc d'instructions dans le prompt système.
   l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
   bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
 - Dans l'onglet Kanban, les tâches sont affichées **par client**, chacune
-  classée dans l'une des **4 colonnes** « À faire / En cours / À valider /
-  Terminé ».
+  classée dans l'une des **5 colonnes** « À faire / En cours / À valider /
+  Terminé / À qualifier ». La colonne « À qualifier » recueille les statuts que
+  la règle unique ne sait pas trancher : rien ne disparaît en silence, mais une
+  tâche close en texte libre ne compte jamais comme ouverte.
 - Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
   extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.
@@ -1374,12 +1376,21 @@ uniquement un bloc d'instructions dans le prompt système.
   (aucun aller-retour réseau pour Événements) ; le volet Tâches est **rechargé à
   chaque activation** via la commande existante `get_super_agent_kanban` (aucune
   nouvelle commande Rust).
-- Le volet Tâches n'affiche que les tâches **ouvertes** (statuts normalisés
-  ≠ `done`/`cancelled` — logique pure `isOpenTaskStatus` /
-  `filterOpenTasksByClient` dans `super-agent-kanban.js`), groupées **par
-  client**, avec **statut** (`taskStatusLabel`) et **échéance**
+- Le volet Tâches n'affiche que les tâches **ouvertes** (logique pure
+  `isOpenTaskStatus` / `filterOpenTasksByClient` dans `super-agent-kanban.js`),
+  groupées **par client**, avec **statut** (`taskStatusLabel`) et **échéance**
   (`formatTaskDeadline`, retard signalé). La liste **défile** (même hauteur
   maximale que celle des événements).
+- **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
+  `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
+  **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
+  fichiers… », `fermee_github`, « livree - … », « decidee - … », `livre_a_tester`).
+  Un statut vraiment inconnu est isolé dans la case **« À qualifier »**
+  (`filterUnqualifiedTasksByClient` / colonne Kanban) et n'est **jamais** compté
+  « à faire ». Les compteurs du cœur (`super_agent_tracking`,
+  `super_agent_project_overview`, timeline, santé projet) appliquent la même
+  règle. À la création d'une tâche, le statut canonique `demande` est écrit
+  explicitement (plus de texte libre implicite).
 - **Clic (ou Entrée/Espace) sur une tâche** : son **détail** est ajouté comme
   **bulle de l'Assistant dans la conversation** (`showSuperTaskDetail`, jamais
   une fenêtre ni un onglet), puis le panneau se referme pour ne pas masquer la
@@ -1939,10 +1950,16 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Paramètres → Serveurs MCP**, choisissez le type
-  *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et une
-  **référence de clé** de votre coffre (la clé elle-même n'est jamais
-  enregistrée dans la configuration ni affichée). Le bouton **Tester la
-  connexion** interroge le serveur distant pour vérifier l'adresse et la clé.
+  *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et la
+  **clé d'accès** : le champ propose **la liste des entrées de votre coffre 🔐**
+  (par leur description) ; seule la **référence** de l'entrée choisie est
+  enregistrée, jamais le mot de passe (qui n'est jamais affiché non plus).
+  Cette référence s'affiche sous le login de l'entrée dans l'onglet 🔐 (clic =
+  copie) et se saisit aussi à la main en cas de besoin. **Déverrouillez le coffre
+  avant de lancer l'agent** : sinon la clé n'est pas lue et le serveur distant est
+  appelé sans elle (authentification refusée possible), sans bloquer le
+  démarrage. Le bouton **Tester la connexion** interroge le serveur distant pour
+  vérifier l'adresse et la clé.
 
 ---
 
@@ -2047,6 +2064,9 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 - Chaque entrée = **description** (ex: « Serveur OVH ») + **login** + **mot de passe**.
 - **Portée** : choisissez à la création/édition si l'entrée est **🌐 globale**
   (visible dans tous les projets) ou **📁 spécifique au projet actif**.
+- **Référence** : chaque entrée affiche sa référence technique (`vault:…`) sous
+  son login — cliquer dessus la copie. C'est cette référence qu'attend le champ
+  « Clé » de Paramètres → Serveurs MCP (elle y est aussi proposée en liste).
 - **Copier** : boutons de copie pour le **login** et pour le **mot de passe**
   (copie dans le presse-papiers).
 - **Masqué par défaut** : les mots de passe sont affichés en `••••••••` ; le

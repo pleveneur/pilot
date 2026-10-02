@@ -1411,10 +1411,16 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
 - L'agent standard du projet garde son comportement historique (1er serveur
   activé au démarrage, local ou distant).
 - **Serveur distant** : dans **Paramètres → Serveurs MCP**, choisissez le type
-  *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et une
-  **référence de clé** de votre coffre (la clé elle-même n'est jamais
-  enregistrée dans la configuration ni affichée). Le bouton **Tester la
-  connexion** interroge le serveur distant pour vérifier l'adresse et la clé.
+  *Distant (adresse)*, renseignez l'adresse réseau (`http`/`https`) et la
+  **clé d'accès** : le champ propose **la liste des entrées de votre coffre 🔐**
+  (par leur description) ; seule la **référence** de l'entrée choisie est
+  enregistrée, jamais le mot de passe (qui n'est jamais affiché non plus).
+  Cette référence s'affiche sous le login de l'entrée dans l'onglet 🔐 (clic =
+  copie) et se saisit aussi à la main en cas de besoin. **Déverrouillez le coffre
+  avant de lancer l'agent** : sinon la clé n'est pas lue et le serveur distant est
+  appelé sans elle (authentification refusée possible), sans bloquer le
+  démarrage. Le bouton **Tester la connexion** interroge le serveur distant pour
+  vérifier l'adresse et la clé.
 <!-- /HELP:super-agent-mcp -->
 
 ## 9. Perspective — lien futur avec un serveur de sources

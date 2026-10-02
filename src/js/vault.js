@@ -189,6 +189,18 @@ export function createVault(container) {
       login.textContent = e.login || "";
       info.appendChild(desc);
       info.appendChild(login);
+      // Référence de l'entrée : c'est elle (et non la description) qu'attend le
+      // champ « Clé » de Paramètres → Serveurs MCP. Sans elle, le champ était
+      // impossible à remplir. Cliquer dessus la copie.
+      const ref = document.createElement("div");
+      ref.className = "vault-row-ref";
+      ref.textContent = "vault:" + e.id;
+      ref.title = "Référence de cette entrée, à choisir dans Paramètres › Serveurs MCP. Cliquer pour copier.";
+      ref.addEventListener("click", async () => {
+        await navigator.clipboard.writeText("vault:" + e.id);
+        flash(ref, "✓ référence copiée");
+      });
+      info.appendChild(ref);
 
       const pw = document.createElement("div");
       pw.className = "vault-row-pw";

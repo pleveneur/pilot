@@ -3437,6 +3437,7 @@ pub fn run() {
             vault::vault_lock,
             vault::vault_set_master_password,
             vault::vault_list,
+            vault::vault_list_refs,
             vault::vault_add,
             vault::vault_update,
             vault::vault_delete,

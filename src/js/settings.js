@@ -484,6 +484,8 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   const mcpFEnv = document.getElementById("mcp-f-env");
   const mcpFUrl = document.getElementById("mcp-f-url");
   const mcpFSecretRef = document.getElementById("mcp-f-secret-ref");
+  const mcpSecretRefList = document.getElementById("mcp-secret-ref-list");
+  const mcpSecretRefStatus = document.getElementById("mcp-f-secret-ref-status");
   const mcpFEnabled = document.getElementById("mcp-f-enabled");
   const mcpFStatus = document.getElementById("mcp-f-status");
   const btnMcpSave = document.getElementById("btn-mcp-save");
@@ -571,6 +573,41 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     });
   }
 
+  // Propose les entrées du coffre dans le champ « Clé » (liste déroulante du
+  // champ, saisie libre conservée). `vault_list_refs` ne renvoie que la
+  // référence, la description et la portée : jamais le mot de passe.
+  // Le coffre doit être déverrouillé ; sinon on guide vers l'onglet 🔐 au lieu
+  // d'une liste vide muette. Point de décision UNIQUE : `openMcpEditor`.
+  async function fillMcpSecretRefOptions() {
+    if (!mcpSecretRefList) return;
+    mcpSecretRefList.innerHTML = "";
+    const setStatus = (text) => {
+      if (mcpSecretRefStatus) mcpSecretRefStatus.textContent = text;
+    };
+    let refs = [];
+    try {
+      refs = await invoke("vault_list_refs");
+    } catch (e) {
+      setStatus("Coffre 🔐 verrouillé ou inaccessible : déverrouillez-le (onglet 🔐) pour choisir une entrée ici. (" + e + ")");
+      return;
+    }
+    refs = Array.isArray(refs) ? refs : [];
+    refs.forEach((e) => {
+      const reference = "vault:" + e.id;
+      const label = e.description || "(sans description)";
+      const opt = document.createElement("option");
+      opt.value = reference;
+      opt.label = label;
+      opt.textContent = label + " · " + reference;
+      mcpSecretRefList.appendChild(opt);
+    });
+    setStatus(
+      refs.length === 0
+        ? "Le coffre 🔐 ne contient aucune entrée : ajoutez-en une (description + mot de passe), puis choisissez-la ici."
+        : refs.length + " entrée(s) du coffre 🔐 disponible(s) dans la liste du champ."
+    );
+  }
+
   function openMcpEditor(s) {
     mcpEditingId = s ? s.id : null;
     if (mcpFTransport) mcpFTransport.value = (s && isRemoteTransport(s.transport)) ? "http" : MCP_TRANSPORT_STDIO;
@@ -580,6 +617,9 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     if (mcpFEnv) mcpFEnv.value = s ? formatEnv(s.env) : "";
     if (mcpFUrl) mcpFUrl.value = s ? (s.url || "") : "";
     if (mcpFSecretRef) mcpFSecretRef.value = s ? (s.secret_ref || "") : "";
+    // Une référence déjà enregistrée reste affichée telle quelle, même si elle
+    // n'est plus (ou pas encore) dans la liste : on n'écrase rien.
+    fillMcpSecretRefOptions();
     mcpFEnabled.checked = s ? !!s.enabled : true;
     applyMcpTransportVisibility();
     mcpFStatus.textContent = "";

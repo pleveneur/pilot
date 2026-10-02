@@ -29,6 +29,9 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 - Chaque entrée = **description** (ex: « Serveur OVH ») + **login** + **mot de passe**.
 - **Portée** : choisissez à la création/édition si l'entrée est **🌐 globale**
   (visible dans tous les projets) ou **📁 spécifique au projet actif**.
+- **Référence** : chaque entrée affiche sa référence technique (`vault:…`) sous
+  son login — cliquer dessus la copie. C'est cette référence qu'attend le champ
+  « Clé » de Paramètres → Serveurs MCP (elle y est aussi proposée en liste).
 - **Copier** : boutons de copie pour le **login** et pour le **mot de passe**
   (copie dans le presse-papiers).
 - **Masqué par défaut** : les mots de passe sont affichés en `••••••••` ; le
@@ -72,6 +75,7 @@ passe de façon **chiffrée**, dans un fichier situé **hors de vos projets**
 | `vault_lock` | Verrouille (efface la clé) |
 | `vault_set_master_password(master_password)` | Initialise ou change le mot de passe maître |
 | `vault_list` | Liste les entrées (déverrouillé requis) |
+| `vault_list_refs` | Idem **sans les mots de passe** (`id`/`description`/`scope`) — pour les écrans de configuration (sélecteur de référence MCP) |
 | `vault_add(entry)` | Ajoute une entrée |
 | `vault_update(entry)` | Met à jour une entrée |
 | `vault_delete(id)` | Supprime une entrée |

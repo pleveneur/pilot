@@ -39,6 +39,31 @@ pub struct VaultEntry {
     pub updated_at: u64,
 }
 
+/// Vue PUBLIQUE d'une entrée du coffre : de quoi la reconnaître et la
+/// référencer, jamais de quoi la déchiffrer. Sert au sélecteur « Clé » de
+/// l'écran Paramètres → Serveurs MCP.
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultRef {
+    pub id: String,
+    pub description: String,
+    pub scope: String,
+}
+
+/// Projette des entrées vers leur vue publique (aucun secret).
+/// Point de décision UNIQUE du retrait des mots de passe : tout ce qui sort du
+/// coffre vers l'interface doit passer par ici.
+pub fn vault_refs(entries: Vec<VaultEntry>) -> Vec<VaultRef> {
+    entries
+        .into_iter()
+        .map(|e| VaultRef {
+            id: e.id,
+            description: e.description,
+            scope: e.scope,
+        })
+        .collect()
+}
+
 /// Structure chiffrée persistée sur disque.
 #[derive(Debug, Serialize, Deserialize)]
 struct VaultFile {
@@ -314,6 +339,16 @@ pub fn vault_list(state: State<AppState>) -> Result<Vec<VaultEntry>, String> {
     read_entries_with_key(&path, &key)
 }
 
+/// Liste les entrées SANS leur mot de passe (coffre déverrouillé requis).
+/// Variante de `vault_list` réservée aux écrans de configuration (sélecteur de
+/// référence MCP) : la valeur d'un secret n'a aucune raison d'atteindre le DOM.
+#[tauri::command]
+pub fn vault_list_refs(state: State<AppState>) -> Result<Vec<VaultRef>, String> {
+    let key = get_key(&state)?;
+    let path = vault_path()?;
+    Ok(vault_refs(read_entries_with_key(&path, &key)?))
+}
+
 /// Ajoute une entrée.
 #[tauri::command]
 pub fn vault_add(
@@ -466,5 +501,31 @@ mod tests {
         assert!(!err.contains("cle-fictive-987"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Non-régression (défaut : champ « Clé » impossible à remplir) : la liste
+    // exposée à l'interface pour choisir une référence ne doit contenir QUE
+    // de quoi identifier l'entrée. Ce test échoue dès qu'un mot de passe
+    // repart vers l'interface via `vault_refs`.
+    #[test]
+    fn vault_refs_ne_laisse_jamais_fuir_un_secret() {
+        let entries = vec![VaultEntry {
+            id: "entree-fictive".into(),
+            description: "Serveur de test".into(),
+            login: "utilisateur-fictif".into(),
+            password: "cle-fictive-987".into(),
+            scope: "global".into(),
+            project_path: None,
+            created_at: 0,
+            updated_at: 0,
+        }];
+        let json = serde_json::to_string(&vault_refs(entries)).unwrap();
+        // La référence et le libellé sont là (le sélecteur en a besoin)…
+        assert!(json.contains("entree-fictive"));
+        assert!(json.contains("Serveur de test"));
+        // …le secret et le login n'en font pas partie.
+        assert!(!json.contains("cle-fictive-987"));
+        assert!(!json.contains("utilisateur-fictif"));
+        assert!(!json.contains("password"));
     }
 }

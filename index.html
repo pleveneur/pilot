@@ -1078,11 +1078,15 @@
                   <input type="text" id="mcp-f-url" placeholder="https://exemple.invalid/mcp"/>
                 </div>
                 <div class="field-row">
-                  <label for="mcp-f-secret-ref" title="Référence d'une entrée du coffre fort (onglet 🔐), jamais la clé elle-même. Ex: vault:mon-entree">Clé (référence de coffre) :</label>
-                  <input type="text" id="mcp-f-secret-ref" placeholder="vault:mon-entree"/>
+                  <label for="mcp-f-secret-ref" title="Entrée du coffre fort (onglet 🔐) dont le mot de passe sera envoyé à ce serveur. Choisissez-la dans la liste (elle affiche sa description) ou saisissez sa référence « vault:... » à la main.">Clé (entrée du coffre fort) :</label>
+                  <input type="text" id="mcp-f-secret-ref" list="mcp-secret-ref-list" placeholder="(aucune) : choisir dans la liste"/>
+                  <datalist id="mcp-secret-ref-list"></datalist>
                 </div>
                 <div class="field-row">
-                  <small class="muted">Seule la <strong>référence</strong> de l'entrée du coffre est enregistrée ; la valeur de la clé n'est <strong>jamais affichée</strong>. Le coffre doit être déverrouillé au lancement de l'agent pour qu'elle soit lue.</small>
+                  <small class="muted">Seule la <strong>référence</strong> de l'entrée du coffre est enregistrée ; la valeur du mot de passe n'est <strong>jamais affichée</strong>. Si le coffre est <strong>verrouillé au lancement de l'agent</strong>, la clé n'est pas lue : l'agent démarre quand même et le serveur distant est appelé <strong>sans</strong> la clé (authentification refusée possible) → déverrouillez le coffre 🔐 avant de lancer l'agent.</small>
+                </div>
+                <div class="field-row">
+                  <small class="muted" id="mcp-f-secret-ref-status"></small>
                 </div>
               </div>
               <div class="field-row">
