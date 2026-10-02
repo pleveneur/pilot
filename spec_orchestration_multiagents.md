@@ -58,6 +58,18 @@
   libérées à la fin du tour du codeur (propriétaire) via `finishAgentTurn` /
   `failAgentTurn` dans `agents-bus.js` (`cleanupReservationsForAgent` →
   `deleteReservations`), et effacées à l'arrêt/annulation d'un agent.
+  **Bail conditionné à la run (correctif « réservation abandonnée bloquante »)** :
+  le battement de cœur (`reservations.js`, 60 s) ne renouvelle plus à l'aveugle —
+  il interroge la vivacité de la run détentrice
+  (`isRunInProgress(projet, { nature: "write" })`, sonde injectée par le bus) et,
+  si elle a disparu, arrête son minuteur et libère la réservation
+  (`deleteReservations`, ciblé sur le projet, silencieux et fail-open). Sans ce
+  contrôle, un minuteur survivant à sa run (lancement avorté, mission mise en file
+  jamais rejouée, nettoyage manqué) maintenait `renewedAt` frais indéfiniment : la
+  péremption à 10 min de la porte `pilot-reserve-gate.ts` ne se déclenchait JAMAIS
+  et les fichiers restaient bloqués pour tous les agents. Preuve :
+  `reservations.test.js` (« run détentrice DISPARUE → libérée », « run VIVANTE →
+  renouvelée »).
   **Ordre de libération du verrou (correctif « détour de routage »)** : la run
   d'estimation du `plan-maker` est une run de LECTURE (`projet#read:N`) ; elle
   occupe donc le verrou d'admission du projet (une modification est exclusive,

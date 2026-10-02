@@ -134,6 +134,63 @@ describe("writeReservations / deleteReservations (I/O simulées, fail-open)", ()
     expect(isProjectReserved("/proj/")).toBe(true);
   });
 
+  it("battement de cœur : run détentrice DISPARUE → réservation libérée (plus de renouvellement)", async () => {
+    vi.useFakeTimers();
+    try {
+      const isRunAlive = vi.fn(() => false);
+      const path = reservationsPath("/proj/");
+      await writeReservations("/proj/", "codeur1", ["src/lib.rs"], ["codeur1"], isRunAlive);
+      expect(store.has(path)).toBe(true);
+      const writesBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "write_file_content").length;
+
+      await vi.advanceTimersByTimeAsync(60000);
+
+      // La sonde a été interrogée et le fichier a été libéré, pas renouvelé.
+      expect(isRunAlive).toHaveBeenCalled();
+      expect(store.has(path)).toBe(false);
+      expect(isProjectReserved("/proj/")).toBe(false);
+      const writesAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "write_file_content").length;
+      expect(writesAfter).toBe(writesBefore);
+
+      // Le minuteur est bel et bien arrêté : rien ne réapparaît ensuite.
+      await vi.advanceTimersByTimeAsync(300000);
+      expect(store.has(path)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("battement de cœur : run VIVANTE → réservation renouvelée (protection maintenue)", async () => {
+    vi.useFakeTimers();
+    try {
+      const isRunAlive = vi.fn(() => true);
+      const path = reservationsPath("/proj/");
+      await writeReservations("/proj/", "codeur1", ["src/lib.rs"], ["codeur1"], isRunAlive);
+      const writesBefore = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "write_file_content").length;
+
+      await vi.advanceTimersByTimeAsync(60000);
+
+      expect(store.has(path)).toBe(true);
+      expect(isProjectReserved("/proj/")).toBe(true);
+      const writesAfter = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "write_file_content").length;
+      expect(writesAfter).toBe(writesBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("writeReservations sans sonde : renouvelle comme avant (rétro-compat)", async () => {
+    vi.useFakeTimers();
+    try {
+      const path = reservationsPath("/proj/");
+      await writeReservations("/proj/", "codeur1", ["src/lib.rs"], ["codeur1"]);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(store.has(path)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("deleteReservations supprime le fichier et démarque le projet", async () => {
     await writeReservations("/proj/", "codeur1", ["src/lib.rs"]);
     expect(store.has(reservationsPath("/proj/"))).toBe(true);
@@ -291,6 +348,24 @@ describe("estimateAndReserve (flux d'estimation préalable)", () => {
     const r = await estimateAndReserve("/proj/", "tâche", ["codeur1"], deps, ["codeur1"]);
     expect(r.reserved).toBe(false);
     expect(store.has(reservationsPath("/proj/"))).toBe(false);
+  });
+
+  it("la sonde de vivacité est branchée sur isRunInProgress(projet, {nature:'write'}) et libère la réservation", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = baseDeps();
+      const isRunInProgress = vi.fn(() => false);
+      const path = reservationsPath("/proj/");
+      await estimateAndReserve("/proj/", "tâche", ["codeur1"], { ...deps, isRunInProgress }, ["codeur1"]);
+      expect(store.has(path)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(60000);
+
+      expect(isRunInProgress).toHaveBeenCalledWith("/proj/", { nature: "write" });
+      expect(store.has(path)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sans projet ni codeur → retour empty sans I/O", async () => {

@@ -19,7 +19,9 @@
 // `createdAt` / `renewedAt` (horodatage de dernier renouvellement) permettent à
 // la gate de détecter un détenteur disparu : sans renouvellement depuis 10 min,
 // la réservation est périmée et libérée (avec trace) au lieu de bloquer
-// indéfiniment. Le renouvellement est assuré par un battement de cœur ci-dessous.
+// indéfiniment. Le renouvellement est assuré par un battement de cœur ci-dessous,
+// lui-même arrêté (et la réservation libérée) dès que la run détentrice n'existe
+// plus : une réservation abandonnée ne peut donc plus rester fraîche à jamais.
 // `coder` = premier codeur de la run (propriétaire du nettoyage), `agents` = ids
 // de TOUS les participants de la run (codeurs et spécialistes) : la gate exempte
 // tout participant (fail-open — on ne bloque jamais un agent légitime de la
@@ -138,11 +140,17 @@ export function buildReservations(coderId, files, participantIds = []) {
 // libérer les réservations que lorsque le bon codeur termine (pas un autre).
 const reservedProjects = new Map(); // project → coderId
 
-// Battement de cœur des réservations : tant que l'app est ouverte et la run
-// active, le fichier est réécrit (`renewedAt`) toutes les 60 s. La porte
-// pré-écriture s'en sert pour distinguer un détenteur vivant d'un détenteur
-// disparu (app fermée, webview rechargée, run avortée) : sans renouvellement
-// depuis 10 min, la réservation est périmée et libérée avec trace.
+// Battement de cœur des réservations : tant que la run détentrice vit, le
+// fichier est réécrit (`renewedAt`) toutes les 60 s. La porte pré-écriture s'en
+// sert pour distinguer un détenteur vivant d'un détenteur disparu : sans
+// renouvellement depuis 10 min, la réservation est périmée et libérée avec trace.
+//
+// Le renouvellement est CONDITIONNÉ à la vivacité de la run (`isRunAlive`,
+// sonde injectée par l'appelant). Sans ce contrôle, le minuteur survivait à sa
+// run (lancement avorté, mission mise en file jamais rejouée, nettoyage manqué)
+// et renouvelait indéfiniment une réservation dont l'agent n'existe plus : la
+// porte ne pouvait alors JAMAIS libérer les fichiers (défaut constaté). Run
+// disparue → minuteur arrêté et réservation libérée immédiatement.
 const RESERVATION_HEARTBEAT_MS = 60000;
 const reservationHeartbeats = new Map(); // project → intervalId
 
@@ -154,9 +162,21 @@ function stopReservationHeartbeat(project) {
   }
 }
 
-function startReservationHeartbeat(project, buildPayload) {
+// Libération d'une réservation ABANDONNÉE (run détentrice disparue). Ciblée sur
+// le seul projet concerné (jamais les autres réservations), silencieuse et
+// fail-open : ne rejette jamais.
+function releaseAbandonedReservation(project) {
+  console.warn("[reservations] run détentrice disparue : réservation libérée pour", project);
+  deleteReservations(project).catch(() => {});
+}
+
+function startReservationHeartbeat(project, buildPayload, isRunAlive) {
   stopReservationHeartbeat(project);
   const id = setInterval(() => {
+    if (typeof isRunAlive === "function" && !isRunAlive()) {
+      releaseAbandonedReservation(project);
+      return;
+    }
     // Fail-open : un renouvellement raté ne doit jamais casser l'app.
     invoke("write_file_content", { path: reservationsPath(project), content: buildPayload() }).catch(() => {});
   }, RESERVATION_HEARTBEAT_MS);
@@ -200,9 +220,12 @@ export function reservationsPath(project) {
  * @param {string} project - chemin absolu du projet
  * @param {string} coderId
  * @param {string[]} files
+ * @param {string[]} [participantIds] - ids de tous les agents de la run
+ * @param {(() => boolean)|null} [isRunAlive] - sonde de vivacité de la run
+ *   détentrice (renouvellement arrêté + libération dès qu'elle est disparue)
  * @returns {Promise<boolean>}
  */
-export async function writeReservations(project, coderId, files, participantIds = []) {
+export async function writeReservations(project, coderId, files, participantIds = [], isRunAlive = null) {
   if (!project) return false;
   try {
     const createdAt = new Date().toISOString();
@@ -214,7 +237,7 @@ export async function writeReservations(project, coderId, files, participantIds 
       );
     await invoke("write_file_content", { path: reservationsPath(project), content: buildPayload() });
     markProjectReserved(project, coderId);
-    startReservationHeartbeat(project, buildPayload);
+    startReservationHeartbeat(project, buildPayload, isRunAlive);
     return true;
   } catch (e) {
     console.warn("[reservations] échec écriture reservations.json :", e);
@@ -355,7 +378,11 @@ export async function estimateAndReserve(project, task, coderIds, deps, particip
     ]);
     const files = parsePlanFiles(result);
     if (files.length === 0) return empty;
-    const ok = await writeReservations(project, firstCoder, files, participantIds);
+    // Sonde de vivacité de la run détentrice (fournie par le bus) : plus aucune
+    // mission d'écriture sur le projet → la réservation est abandonnée.
+    const isRunAlive =
+      typeof isRunInProgress === "function" ? () => isRunInProgress(project, { nature: "write" }) : null;
+    const ok = await writeReservations(project, firstCoder, files, participantIds, isRunAlive);
     return { reserved: ok, coderId: firstCoder, files };
   } catch (e) {
     if (timedOut) {
