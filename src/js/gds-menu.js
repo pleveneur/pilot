@@ -20,8 +20,12 @@
 // `gds_remove_dup_worktree` existants.
 // Réutilise le look de l'écran GDS (classes gds-panel / gds-*) et les helpers
 // globaux (toastSuccess/toastError, showLoading/hideLoading, refreshIcons).
-// GDS non provisionné / non connecté → modale en lecture avec message clair,
-// jamais de crash.
+// Entrée par le CHOIX DU SERVEUR : les fiches GDS enregistrées sur le poste
+// alimentent une liste déroulante (`gdsServerChoices`) — un projet déjà ouvert
+// n'est plus exigé. Aucune fiche utilisable → message clair (`gdsNoServerHint`),
+// jamais de crash. Quand un projet ouvert est connecté, sa liste de dépôts
+// s'affiche comme avant ; sinon la fenêtre s'arrête au choix du serveur.
+// Aucun champ sensible n'entre dans la liste ni dans l'affichage.
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
@@ -34,6 +38,77 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
   }[c]));
+}
+
+/**
+ * Explication affichée quand aucune fiche serveur utilisable n'est enregistrée
+ * sur le poste (pure, testable). Mots simples, aucune erreur brute à l'écran.
+ */
+export function gdsNoServerHint() {
+  return (
+    "Aucun serveur GDS utilisable n'est enregistré sur ce poste. " +
+    "Ajoutez votre compte GDS dans l'onglet « ⚙️ GDS — paramétrage » → " +
+    "« Serveurs GDS », puis testez la connexion de la fiche."
+  );
+}
+
+/**
+ * Choix de serveur GDS de la fenêtre « Ajouter un projet depuis le GDS »,
+ * calculés depuis les fiches mémorisées du poste (`gds_list_saved_servers`).
+ * Pure — testable séparément.
+ *
+ * Ne retient que les fiches RÉELLEMENT utilisables : compte GDS reconnu
+ * (`identity`), fiche validée par un test de connexion réussi, et les trois
+ * valeurs que la lecture du serveur exige (hôte, port du service, e-mail).
+ * Une fiche incomplète ne produirait qu'un échec : elle est écartée, jamais
+ * proposée.
+ *
+ * Chaque choix est REBÂTI champ par champ, jamais recopié de la fiche : seuls
+ * le nom, l'e-mail, l'hôte et le port sortent d'ici — aucun mot de passe, clef
+ * ni champ sensible ne peut donc être affiché par mégarde.
+ *
+ * @param {Array} servers fiches de `gds_list_saved_servers`
+ * @returns {Array<{value: string, label: string, name: string, email: string, host: string, httpPort: string}>}
+ */
+export function gdsServerChoices(servers) {
+  const out = [];
+  for (const s of Array.isArray(servers) ? servers : []) {
+    if (!s || s.validated === false || s.identity !== true) continue;
+    const host = String(s.host || "").trim();
+    const email = String(s.gds_email || "").trim();
+    const httpPort = String(s.http_port || "").trim();
+    if (!host || !email || !httpPort) continue;
+    const name = String(s.name || "").trim();
+    out.push({
+      value: `${host}|${httpPort}|${email}`,
+      label: `${name ? name + " — " : ""}${email} (${host}:${httpPort})`,
+      name: name || host,
+      email,
+      host,
+      httpPort,
+    });
+  }
+  return out;
+}
+
+/**
+ * Rend la liste déroulante des serveurs GDS de la fenêtre « Ajouter un projet
+ * depuis le GDS ». Chaîne vide si aucun choix : la fenêtre affiche alors
+ * `gdsNoServerHint()`. Pure — testable, aucun secret (mêmes libellés que ceux
+ * validés par le propriétaire sur la fiche du serveur).
+ */
+export function gdsServerSelectorHtml(choices, selected = "") {
+  const list = (Array.isArray(choices) ? choices : []).filter((c) => c && c.value);
+  if (!list.length) return "";
+  const current = list.some((c) => c.value === selected) ? selected : list[0].value;
+  return `
+    <div class="gds-menu-sub">Serveur GDS :
+      <select id="gds-menu-server" class="gds-admin-select">
+        ${list
+          .map((c) => `<option value="${esc(c.value)}"${c.value === current ? " selected" : ""}>${esc(c.label)}</option>`)
+          .join("")}
+      </select>
+    </div>`;
 }
 
 /**
@@ -52,15 +127,6 @@ export async function openProjectFromGds(sidebar) {
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
 
-  // Vérifier l'état GDS du projet courant avant d'afficher les dépôts : un GDS
-  // non provisionné / non connecté ne peut pas lister les dépôts (pool absent).
-  let status = "";
-  try {
-    status = (await invoke("gds_connection_status", { project })).status || "";
-  } catch (_e) {
-    status = "";
-  }
-
   const renderState = (html) => {
     dlg.innerHTML = `
       <div class="gds-menu-title"><i data-lucide="git-branch" class="icon-sm"></i> Ajouter un projet depuis le GDS</div>
@@ -69,14 +135,51 @@ export async function openProjectFromGds(sidebar) {
     refreshIcons(overlay);
     dlg.querySelector('[data-act="close"]').addEventListener("click", close);
   };
-
-  if (status !== "connected") {
-    renderState(
-      "Le GDS n'est pas connecté pour ce projet.<br><br>" +
-      "Provisionnez / activez le GDS dans l'onglet <b>🌐 GDS</b> " +
-      "(section « Connecter un serveur GDS ») avant d'ajouter un projet depuis le GDS."
-    );
+  const closeOnBackground = () =>
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  // Entrée de la fenêtre : le CHOIX DU SERVEUR, à partir des fiches GDS
+  // enregistrées sur le poste — un projet déjà ouvert n'est plus exigé. Les
+  // fiches inutilisables sont écartées et aucun champ sensible n'en sort (voir
+  // `gdsServerChoices`).
+  let servers = [];
+  try {
+    servers = await invoke("gds_list_saved_servers");
+  } catch (_e) {
+    servers = [];
+  }
+  const choices = gdsServerChoices(servers);
+  if (!choices.length) {
+    renderState(esc(gdsNoServerHint()));
+    closeOnBackground();
+    return;
+  }
+  const selectorHtml = gdsServerSelectorHtml(choices);
+
+  // État GDS du projet ouvert, s'il y en a un : lui seul fournit encore la
+  // liste des dépôts (un GDS non provisionné / non connecté ne peut pas la
+  // lister : pool absent). Un GDS non connecté ne bloque plus la fenêtre, qui
+  // sert désormais au choix du serveur.
+  let status = "";
+  if (project) {
+    try {
+      status = (await invoke("gds_connection_status", { project })).status || "";
+    } catch (_e) {
+      status = "";
+    }
+  }
+
+  if (!project || status !== "connected") {
+    // Aucun projet ouvert (ou projet non connecté au GDS) : la fenêtre reste
+    // utile — on y choisit le serveur.
+    dlg.innerHTML = `
+      <div class="gds-menu-title"><i data-lucide="git-branch" class="icon-sm"></i> Ajouter un projet depuis le GDS</div>
+      ${selectorHtml}
+      <div class="gds-menu-state">Serveur GDS choisi. La liste des projets de ce serveur n'est pas encore affichée dans cette fenêtre.</div>
+      <div class="gds-menu-actions"><button class="web-btn" data-act="close">Fermer</button></div>`;
+    refreshIcons(overlay);
+    dlg.querySelector('[data-act="close"]').addEventListener("click", close);
+    closeOnBackground();
     return;
   }
 
@@ -98,6 +201,7 @@ export async function openProjectFromGds(sidebar) {
   // Construire la liste des dépôts + deux actions par dépôt.
   dlg.innerHTML = `
     <div class="gds-menu-title"><i data-lucide="git-branch" class="icon-sm"></i> Ajouter un projet depuis le GDS</div>
+    ${selectorHtml}
     <div class="gds-menu-sub">Choisissez un dépôt du GDS à ouvrir localement (${esc(String(repos.length))} dépôt(s)).</div>
     <div class="gds-menu-list" id="gds-menu-list"></div>
     <div class="gds-menu-actions"><button class="web-btn" data-act="close">Fermer</button></div>`;
