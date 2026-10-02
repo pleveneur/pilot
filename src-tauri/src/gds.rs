@@ -414,13 +414,18 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
         // effectif réussi (marqué validé à l'enregistrement).
         .filter(|(_, c)| c.validated)
         .map(|(key, c)| {
-            let (key_user, key_host) = match key.split_once('@') {
-                Some((u, h)) => (u.to_string(), h.to_string()),
-                None => (key.clone(), String::new()),
+            let key_user = match key.split_once('@') {
+                Some((u, _)) => u.to_string(),
+                None => key.clone(),
             };
             let user = if c.key_user.is_empty() { key_user } else { c.key_user.clone() };
-            let host = if c.host.is_empty() { key_host } else { c.host.clone() };
-            let identity = !c.gds_email.trim().is_empty();
+            let host = fiche_host(key, c);
+            // Identité EFFECTIVE de la fiche : celle qu'elle porte, complétée par
+            // la connexion GDS déjà éprouvée sur le même hôte (voir
+            // `identity_fields`) — la même valeur que celle employée pour ouvrir
+            // une session, donc le même état sur tous les écrans.
+            let (gds_email, http_port, _secret) = identity_fields(&secrets, &host, c);
+            let identity = !gds_email.trim().is_empty();
             json!({
                 "host": host,
                 "port": if c.db_port.is_empty() { "5432" } else { &c.db_port },
@@ -438,8 +443,8 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
                 // Fiche « identité utilisateur » (lot 1) : l'adresse GDS, le
                 // port de l'API HTTP et le rôle reconnu. Jamais de mot de passe.
                 "identity": identity,
-                "http_port": c.http_port,
-                "gds_email": c.gds_email,
+                "http_port": http_port,
+                "gds_email": gds_email,
                 "gds_role": c.gds_role,
                 // Booléen (pas un secret) : la fiche porte-t-elle encore le
                 // compte technique de la base ? Depuis le lot 4, une fiche
@@ -450,6 +455,93 @@ pub(crate) fn list_saved_servers() -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// Hôte d'une fiche serveur : le champ `host` quand la fiche le mémorise (fiches
+/// au format « identité utilisateur », dont la clé contient un `@` d'e-mail),
+/// sinon la partie hôte de la clé `user@host` (fiches écrites avant ce lot).
+/// Aucune fiche n'est perdue ni transformée. Pure.
+pub(crate) fn fiche_host(key: &str, c: &ServerCredentials) -> String {
+    if !c.host.trim().is_empty() {
+        return c.host.trim().to_string();
+    }
+    // `rsplit_once` : quand l'utilisateur de la clé est lui-même une adresse
+    // e-mail, seul le DERNIER `@` sépare l'hôte.
+    match key.rsplit_once('@') {
+        Some((_, h)) => h.trim().to_string(),
+        None => String::new(),
+    }
+}
+
+/// Carte d'administration d'un hôte (`admin_servers`) : celle du compte `email`
+/// quand il est connu, sinon la première de cet hôte. `None` = aucune connexion
+/// GDS éprouvée sur cet hôte. Pure (le mot de passe reste un secret, il ne
+/// quitte pas ce module).
+fn pick_admin_credentials<'a>(
+    secrets: &'a GdsSecrets,
+    host: &str,
+    email: &str,
+) -> Option<&'a AdminServerCredentials> {
+    let on_host: Vec<&AdminServerCredentials> = secrets
+        .admin_servers
+        .values()
+        .filter(|a| crate::gds_service::same_host(&a.host, host))
+        .collect();
+    let wanted = email.trim();
+    on_host
+        .iter()
+        .find(|a| !wanted.is_empty() && a.admin_email.trim().eq_ignore_ascii_case(wanted))
+        .or_else(|| on_host.first())
+        .copied()
+}
+
+/// Mot de passe de la connexion GDS déjà éprouvée sur un hôte (carte
+/// d'administration). Sert de repli aux parcours qui n'ont pas de mot de passe à
+/// ressaisir : la connexion a DÉJÀ abouti avec ces identifiants, il n'y a donc
+/// rien à redemander. SECRET : ne sort jamais de ce module.
+pub(crate) fn admin_password_for_host(host: &str, email: &str) -> Option<String> {
+    let secrets = read_gds_secrets().ok()?;
+    pick_admin_credentials(&secrets, host, email)
+        .and_then(|a| a.admin_password.clone())
+        .filter(|p| !p.is_empty())
+}
+
+/// Champs d'identité EFFECTIFS d'une fiche serveur : `(adresse GDS, port du
+/// service, mot de passe GDS)`.
+///
+/// La fiche prime : rien de ce qu'elle porte n'est écrasé. Ce qui lui manque est
+/// complété par la **connexion GDS déjà éprouvée sur le même hôte** (carte
+/// d'administration) : une fiche héritée (compte technique de la base, sans
+/// adresse GDS) était sinon écartée partout — « aucun serveur GDS utilisable » —
+/// alors qu'une connexion GDS fonctionne sur ce poste pour ce serveur. Une fiche
+/// n'est jamais créée ni transformée : seule sa LECTURE est complétée (le
+/// commentaire de `admin_servers` reste vrai — aucune carte d'administration
+/// n'apparaît comme serveur de projet). Le port absent reçoit le port par défaut
+/// du service (8080), celui qu'`admin_base_url` applique : c'est bien le port de
+/// la connexion effectivement éprouvée. Pure.
+pub(crate) fn identity_fields(
+    secrets: &GdsSecrets,
+    host: &str,
+    c: &ServerCredentials,
+) -> (String, String, String) {
+    let mut email = c.gds_email.trim().to_string();
+    let mut http_port = c.http_port.trim().to_string();
+    let mut password = c.gds_password.clone().unwrap_or_default();
+    if email.is_empty() || http_port.is_empty() || password.is_empty() {
+        if let Some(a) = pick_admin_credentials(secrets, host, &email) {
+            if email.is_empty() {
+                email = a.admin_email.trim().to_string();
+            }
+            if http_port.is_empty() {
+                let p = a.http_port.trim();
+                http_port = if p.is_empty() { "8080" } else { p }.to_string();
+            }
+            if password.is_empty() {
+                password = a.admin_password.clone().unwrap_or_default();
+            }
+        }
+    }
+    (email, http_port, password)
 }
 
 // ── Écran d'administration transverse (refonte GDS, L4.2) ──
@@ -4090,6 +4182,110 @@ mod tests {
         assert_eq!(entry["identity"], true);
         assert_eq!(entry["has_db_password"], true);
         assert_eq!(entry["gds_email"], "dev@exemple.com");
+    }
+
+    #[test]
+    fn fiche_host_reads_the_field_and_falls_back_to_the_key() {
+        // Fiche au format « identité utilisateur » : l'hôte est mémorisé.
+        let mut c = ServerCredentials {
+            host: " 127.0.0.1 ".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(fiche_host("moi@exemple.fr@127.0.0.1", &c), "127.0.0.1");
+        // Fiche héritée : repli sur la clé `user@host` (dernier `@`).
+        c.host = String::new();
+        assert_eq!(fiche_host("pilot@10.0.0.1", &c), "10.0.0.1");
+        assert_eq!(fiche_host("moi@exemple.fr@10.0.0.1", &c), "10.0.0.1");
+        assert_eq!(fiche_host("sansArobase", &c), "");
+    }
+
+    #[test]
+    fn identity_fields_never_overrides_what_the_fiche_already_carries() {
+        // Fiche COMPLÈTE : la carte d'administration du même hôte ne change rien
+        // (aucun écrasement, aucun secret repris d'un autre compte).
+        let mut secrets = GdsSecrets::default();
+        secrets.admin_servers.insert(
+            admin_server_key("h", "autre@x"),
+            AdminServerCredentials {
+                host: "h".to_string(),
+                http_port: "8090".to_string(),
+                admin_email: "autre@x".to_string(),
+                admin_password: Some("adm".to_string()),
+            },
+        );
+        let complete = ServerCredentials {
+            host: "h".to_string(),
+            gds_email: "moi@x".to_string(),
+            http_port: "8080".to_string(),
+            gds_password: Some("pw-fiche".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            identity_fields(&secrets, "h", &complete),
+            (
+                "moi@x".to_string(),
+                "8080".to_string(),
+                "pw-fiche".to_string()
+            )
+        );
+        // Carte d'un AUTRE serveur : jamais employée (même hôte exigé).
+        let heritagee = ServerCredentials {
+            host: "10.0.0.9".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            identity_fields(&secrets, "10.0.0.9", &heritagee),
+            (String::new(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn legacy_fiche_becomes_usable_with_the_admin_connection_of_the_same_host() {
+        // Défaut signalé : une fiche héritée (compte technique, ni e-mail GDS ni
+        // port de service) était écartée partout — « aucun serveur GDS
+        // utilisable » — alors qu'une connexion GDS ÉPROUVÉE existe sur ce poste
+        // pour le même hôte (écran « GDS Serveur »). Elle est désormais vue comme
+        // utilisable, sans double saisie.
+        let _guard = TestGdsSecretsGuard::new();
+        let host = "10.9.9.1";
+        save_server_credentials(host, "5432", "pilot", "dbpw", "admpw").unwrap();
+        save_admin_credentials(host, "8090", "root@exemple.com", "adm-secret").unwrap();
+        let entry = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == host)
+            .expect("fiche listée");
+        assert_eq!(entry["identity"], true);
+        assert_eq!(entry["gds_email"], "root@exemple.com");
+        assert_eq!(entry["http_port"], "8090");
+        // Port absent sur la carte admin → port par défaut du service (celui
+        // qu'`admin_base_url` applique, donc celui de la connexion éprouvée).
+        save_admin_credentials("10.9.9.2", "", "root@exemple.com", "adm").unwrap();
+        save_server_credentials("10.9.9.2", "5432", "pilot", "dbpw", "admpw").unwrap();
+        let entry = list_saved_servers()
+            .into_iter()
+            .find(|v| v["host"] == "10.9.9.2")
+            .unwrap();
+        assert_eq!(entry["http_port"], "8080");
+        // LECTURE seule : la fiche n'est ni créée ni transformée sur le disque,
+        // et aucun mot de passe ne remonte (ni celui de la carte, ni celui de la
+        // base).
+        let secrets = read_gds_secrets().unwrap();
+        let c = secrets.servers.get("pilot@10.9.9.1").unwrap();
+        assert!(c.gds_email.is_empty() && c.http_port.is_empty() && c.gds_password.is_none());
+        let serialized = serde_json::to_string(&list_saved_servers()).unwrap();
+        assert!(!serialized.contains("adm-secret"));
+        assert!(!serialized.contains("admpw"));
+        assert!(!serialized.contains("dbpw"));
+        // Le repli de mot de passe ne sort que du module Rust (jamais d'ici).
+        assert_eq!(
+            admin_password_for_host("10.9.9.1", "root@exemple.com").as_deref(),
+            Some("adm-secret")
+        );
+        assert_eq!(
+            admin_password_for_host("10.9.9.1", "autre@x").as_deref(),
+            Some("adm-secret")
+        );
+        assert!(admin_password_for_host("10.0.0.9", "").is_none());
     }
 
     #[test]

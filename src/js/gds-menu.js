@@ -50,13 +50,41 @@ function esc(s) {
 /**
  * Explication affichée quand aucune fiche serveur utilisable n'est enregistrée
  * sur le poste (pure, testable). Mots simples, aucune erreur brute à l'écran.
+ *
+ * `servers` (facultatif) = fiches de `gds_list_saved_servers`. Quand des fiches
+ * existent mais qu'aucune n'est utilisable, le message NOMME ce qui manque et
+ * l'action de réparation : il ne laisse plus croire qu'aucun serveur n'existe
+ * alors qu'une connexion GDS aboutit déjà sur ce poste (une connexion réussie à
+ * l'écran « GDS Serveur » complète la fiche, sans rien ressaisir).
  */
-export function gdsNoServerHint() {
-  return (
-    "Aucun serveur GDS utilisable n'est enregistré sur ce poste. " +
-    "Ajoutez votre compte GDS dans l'onglet « ⚙️ GDS — paramétrage » → " +
-    "« Serveurs GDS », puis testez la connexion de la fiche."
+export function gdsNoServerHint(servers = []) {
+  const list = (Array.isArray(servers) ? servers : []).filter(
+    (s) => s && typeof s === "object"
   );
+  if (!list.length) {
+    return (
+      "Aucun serveur GDS utilisable n'est enregistré sur ce poste. " +
+      "Ajoutez votre compte GDS dans l'onglet « ⚙️ GDS — paramétrage » → " +
+      "« Serveurs GDS », puis testez la connexion de la fiche."
+    );
+  }
+  const missing = [];
+  if (list.some((s) => !String(s.gds_email || "").trim()))
+    missing.push("l'adresse e-mail de votre compte GDS");
+  if (list.some((s) => !String(s.http_port || "").trim()))
+    missing.push("le port du service GDS (8080 en général)");
+  const n =
+    list.length === 1
+      ? "1 serveur GDS est enregistré"
+      : `${list.length} serveurs GDS sont enregistrés`;
+  const tail =
+    "Connectez-vous à ce serveur dans « 🖥️ GDS Serveur » → « Connexion " +
+    "serveur » : la fiche devient utilisable, sans rien ressaisir.";
+  if (!missing.length)
+    return `${n} sur ce poste, mais aucun n'a encore de connexion GDS valide. ${tail}`;
+  return `${n} sur ce poste, mais aucun n'est encore utilisable : il manque ${missing.join(
+    " et "
+  )}. ${tail}`;
 }
 
 /**
@@ -272,7 +300,7 @@ export async function openProjectFromGds(sidebar) {
   }
   const choices = gdsServerChoices(servers);
   if (!choices.length) {
-    renderState(esc(gdsNoServerHint()));
+    renderState(esc(gdsNoServerHint(servers)));
     closeOnBackground();
     return;
   }

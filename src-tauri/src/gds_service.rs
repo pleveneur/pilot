@@ -121,16 +121,27 @@ pub(crate) fn pick_identity(fiches: &[SavedIdentity], cfg: &GdsConfig) -> Option
 /// Fiches serveur mémorisées, vues comme identités candidates. Lit
 /// `~/.pilot/gds_secrets.json` ; aucun secret ne sort d'ici (le mot de passe GDS
 /// ne quitte pas le module).
+///
+/// Chaque fiche est vue par son identité **EFFECTIVE** (voir
+/// `gds::identity_fields`) : la fiche prime, ce qui lui manque est complété par
+/// la connexion GDS déjà éprouvée sur le même hôte (écran d'administration).
+/// Une fiche héritée (compte technique de la base, sans adresse GDS) redevient
+/// donc utilisable dès qu'une connexion GDS fonctionne sur ce serveur — sans
+/// double saisie et sans créer la moindre fiche.
 fn saved_identities() -> Vec<SavedIdentity> {
     match crate::gds::read_gds_secrets() {
         Ok(secrets) => secrets
             .servers
-            .values()
-            .map(|c| SavedIdentity {
-                host: c.host.clone(),
-                http_port: c.http_port.clone(),
-                email: c.gds_email.clone(),
-                password: c.gds_password.clone().unwrap_or_default(),
+            .iter()
+            .map(|(key, c)| {
+                let host = crate::gds::fiche_host(key, c);
+                let (email, http_port, password) = crate::gds::identity_fields(&secrets, &host, c);
+                SavedIdentity {
+                    host,
+                    http_port,
+                    email,
+                    password,
+                }
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -682,6 +693,38 @@ mod tests {
         // Jamais la session d'un autre compte, ni celle d'un autre serveur.
         assert!(pick_identity(&fiches, &host_only_cfg("127.0.0.1", "autre@x")).is_none());
         assert!(pick_identity(&fiches, &host_only_cfg("10.0.0.9", "dev@x")).is_none());
+    }
+
+    #[test]
+    fn a_legacy_fiche_is_read_with_the_admin_connection_of_the_same_host() {
+        // Défaut signalé : la fiche héritée d'un serveur (compte technique, ni
+        // adresse GDS ni port de service) était écartée partout alors qu'une
+        // connexion GDS ÉPROUVÉE existe sur ce poste pour le même hôte (écran
+        // « GDS Serveur »). Sa LECTURE est désormais complétée — aucune écriture,
+        // aucune fiche créée, aucun secret recopié.
+        let _guard = crate::gds::TestGdsSecretsGuard::new();
+        crate::gds::save_server_credentials("gds.local", "5432", "pilot", "dbpw", "admpw")
+            .unwrap();
+        assert!(
+            resolve_identity_for_host("gds.local", "").is_none(),
+            "sans connexion GDS éprouvée : repli historique inchangé"
+        );
+        crate::gds::save_admin_credentials("gds.local", "8080", "dev@x", "pw-gds").unwrap();
+        let picked =
+            resolve_identity_for_host("gds.local", "").expect("fiche redevient utilisable");
+        assert_eq!(picked.email, "dev@x");
+        assert_eq!(picked.http_port, "8080");
+        assert_eq!(picked.password, "pw-gds");
+        // La fiche mémorisée reste intacte (lecture seule).
+        let secrets = crate::gds::read_gds_secrets().unwrap();
+        let c = secrets.servers.get("pilot@gds.local").unwrap();
+        assert!(c.gds_email.is_empty() && c.gds_password.is_none());
+        // Une fiche qui porte sa propre identité garde la priorité.
+        crate::gds::save_gds_identity("gds.local", "pilot", "9090", "moi@x", "pw-fiche", "dev")
+            .unwrap();
+        let picked = resolve_identity_for_host("gds.local", "moi@x").unwrap();
+        assert_eq!(picked.http_port, "9090");
+        assert_eq!(picked.password, "pw-fiche");
     }
 
     #[test]

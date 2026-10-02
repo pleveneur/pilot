@@ -116,6 +116,37 @@ describe("gdsServerSelectorHtml (pure — étape 4)", () => {
     expect(hint).not.toMatch(/undefined|Error|error/);
   });
 
+  // Défaut signalé : une fiche existait (et une connexion GDS aboutissait sur ce
+  // poste) mais la fenêtre annonçait « aucun serveur » sans dire ce qui manquait.
+  it("serveur enregistré mais incomplet : nomme ce qui manque et l'action de réparation", () => {
+    const hint = gdsNoServerHint([{ host: "127.0.0.1", gds_email: "", http_port: "" }]);
+    expect(hint).toContain("1 serveur GDS est enregistré");
+    expect(hint).toContain("e-mail de votre compte GDS");
+    expect(hint).toContain("port du service GDS");
+    expect(hint).toContain("GDS Serveur");
+    expect(hint).not.toMatch(/undefined|Error|error/);
+  });
+
+  it("plusieurs serveurs ou fiche sans port : le message reste exact", () => {
+    const hint = gdsNoServerHint([
+      { host: "127.0.0.1", gds_email: "moi@exemple.fr", http_port: "" },
+      { host: "10.0.0.9", gds_email: "autre@exemple.fr", http_port: "8080" },
+    ]);
+    expect(hint).toContain("2 serveurs GDS sont enregistrés");
+    expect(hint).toContain("port du service GDS");
+    expect(hint).not.toContain("e-mail de votre compte GDS");
+  });
+
+  it("fiches complètes mais aucune connexion valide : le message ne parle plus d'e-mail manquant", () => {
+    const hint = gdsNoServerHint([
+      { host: "127.0.0.1", gds_email: "moi@exemple.fr", http_port: "8080", validated: false },
+    ]);
+    expect(hint).toContain("aucun n'a encore de connexion GDS valide");
+    expect(hint).not.toContain("il manque");
+    // Entrée inattendue (non-liste) : jamais de crash, message générique.
+    expect(gdsNoServerHint("pas une liste")).toContain("Aucun serveur GDS");
+  });
+
   it("échappe les valeurs (jamais de HTML injecté)", () => {
     const html = gdsServerSelectorHtml(gdsServerChoices([{ ...fiche, name: "<b>h</b>" }]));
     expect(html).not.toContain("<b>h</b>");

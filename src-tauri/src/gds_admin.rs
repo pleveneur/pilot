@@ -607,12 +607,15 @@ pub(crate) fn perform_identity_login(
     }
     // 2. Identité : mot de passe saisi, sinon celui mémorisé sous la clé donnée
     // (`user_key` = partie utilisateur de la fiche, qui n'est pas toujours
-    // l'adresse pour une fiche héritée du compte technique).
+    // l'adresse pour une fiche héritée du compte technique), sinon celui de la
+    // connexion GDS DÉJÀ ÉPROUVÉE sur le même hôte (écran d'administration) —
+    // sans double saisie, et jamais renvoyé à l'appelant.
     let pw = if !password.is_empty() {
         password.to_string()
     } else {
         gds::stored_gds_password(host, user_key)
             .or_else(|| gds::stored_gds_password(host, email))
+            .or_else(|| gds::admin_password_for_host(host, email))
             .unwrap_or_default()
     };
     if pw.is_empty() {
