@@ -142,6 +142,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     # Plafond de durée : un job bloqué reste sinon suspendu jusqu'au maximum GitHub
     # (blocage sans aucune erreur constaté le 2026-10-01 sur la cible Linux).
+    # 45 min VOLONTAIREMENT inchangé : le relever retarderait `latest-json`, donc
+    # la mise à jour automatique des 3 cibles qui fonctionnent, de tout le
+    # dépassement. L'étape « Compilation release (cible Linux uniquement) »
+    # ci-dessous sépare désormais le temps de compilation du temps d'empaquetage.
     timeout-minutes: 45
     # Cible Linux tolérée : son blocage/échec ne fait plus échouer la publication et
     # ne retarde plus latest.json — scripts/gen-latest-json.js n'exige qu'UNE seule
@@ -171,6 +175,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
+
+      - name: Cache Rust (compilation à froid)
+        # Réduit la compilation à froid sur les 4 cibles. Les entrées par défaut
+        # conviennent : le workspace Cargo vit à la RACINE du dépôt (`Cargo.toml`
+        # + `Cargo.lock` + `target/`, membres `src-tauri`, `gds-core`,
+        # `gds-server`) → `workspaces` par défaut = ". -> target".
+        # `key` est NÉCESSAIRE ici : la clé automatique contient l'id de job et
+        # l'hôte rustc, PAS les valeurs de la matrice — les deux entrées macOS
+        # partagent donc le même runner (macos-latest, hôte arm64) et se
+        # remplaceraient mutuellement la même entrée de cache.
+        # `cache-on-failure` : une cible Linux qui expire doit tout de même
+        # enregistrer ses dépendances compilées, sinon le run suivant repaye le
+        # même temps de calcul (les étapes « post » tournent après annulation).
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust_target }}
+          cache-on-failure: "true"
 
       - name: Switch apt mirror (azure → archive)
         # Même correctif que dans la job `test` : éviter le blocage de
@@ -219,6 +240,19 @@ jobs:
           LAYA_TARGET_PLATFORM: ${{ matrix.laya_platform }}
           LAYA_ALLOW_MISSING: ${{ matrix.laya_allow_missing }}
         run: npm run prepare:laya
+
+      - name: Compilation release (cible Linux uniquement)
+        # But : rendre le temps LISIBLE. Si le job Linux expire encore, la
+        # chronologie des étapes dira si le temps part dans la compilation Rust
+        # (cette étape) ou dans l'empaquetage (étape suivante).
+        # `npm run build` est OBLIGATOIRE avant toute compilation Rust ici : les
+        # assets du frontend sont embarqués à la compilation par
+        # `generate_context!` (tauri-codegen), qui PANIQUE si `frontendDist` n'a
+        # pas été généré. `beforeBuildCommand` refait ensuite ce build (identique).
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          npm run build
+          cargo build --release --target ${{ matrix.rust_target }} --manifest-path src-tauri/Cargo.toml
 
       - name: Build and sign Tauri app
         uses: tauri-apps/tauri-action@v0
