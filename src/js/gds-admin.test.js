@@ -1354,3 +1354,69 @@ describe("gds-admin.js — tout élément câblé existe, tout gestionnaire appe
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Régression #« Administrer » une ligne de la liste : le test de connexion doit
+// viser le serveur CLIQUÉ. `runConnectionTest` commence par `readFields()`, qui
+// relit les champs AFFICHÉS : l'état écrit depuis la ligne doit donc être
+// REDESSINÉ sans relire le formulaire avant toute lecture, sinon c'est le serveur
+// encore affiché qui est testé. `GDS_ADMIN_SRC` permet de rejouer ces
+// vérifications contre une copie (preuve négative sur l'ancien code).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("gds-admin.js — « Administrer » cible la ligne cliquée, pas le formulaire", () => {
+  const SRC = readFileSync(
+    process.env.GDS_ADMIN_SRC
+      ? resolve(process.cwd(), process.env.GDS_ADMIN_SRC)
+      : resolve(dirname(fileURLToPath(import.meta.url)), "gds-admin.js"),
+    "utf8"
+  );
+
+  /** Corps d'une fonction : le `{` d'ouverture est le DERNIER de sa ligne d'en-tête. */
+  function corpsDe(headerLine) {
+    const start = SRC.indexOf(headerLine);
+    expect(start, `${headerLine} introuvable`).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = start + headerLine.lastIndexOf("{"); i < SRC.length; i += 1) {
+      if (SRC[i] === "{") depth += 1;
+      else if (SRC[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return SRC.slice(start, i + 1);
+      }
+    }
+    throw new Error(`${headerLine} non refermé`);
+  }
+
+  /** Redessin SANS relire le formulaire (le drapeau qui rend le clic fiable). */
+  const KEEP = "draw({ keepConnectionFields: true })";
+
+  it("`draw` ne relit le formulaire que par défaut (drapeau opt-in)", () => {
+    expect(SRC).toContain("function draw({ keepConnectionFields = false } = {}) {");
+    expect(SRC).toContain("if (!keepConnectionFields) readFields();");
+  });
+
+  it("`runConnectionTest` relit les champs affichés (c'est la raison de la règle)", () => {
+    expect(corpsDe("  async function runConnectionTest(memorize) {")).toContain("readFields();");
+  });
+
+  it("le test de connexion part APRÈS le redessin de la fiche cliquée", () => {
+    const body = corpsDe("  function onAdminServerRow(btn) {");
+    const drawIdx = body.indexOf(KEEP);
+    expect(
+      drawIdx,
+      "la fiche de la ligne cliquée n'est pas redessinée : readFields écraserait ses valeurs"
+    ).toBeGreaterThan(-1);
+    const testIdx = body.indexOf("runConnectionTest(");
+    expect(testIdx, "« Administrer » ne lance plus le test de connexion").toBeGreaterThan(-1);
+    expect(drawIdx, "le test partirait sur le formulaire affiché, pas sur la ligne cliquée").toBeLessThan(testIdx);
+  });
+
+  it("« Administrer » sur une ligne sans mot de passe affiche AUSSI la bonne fiche", () => {
+    const body = corpsDe("  function onAdminServerRow(btn) {");
+    // Les deux branches (mot de passe mémorisé / non) doivent redessiner la ligne.
+    expect(body.split(KEEP).length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  it("le pré-remplissage initial depuis la liste n'est pas annulé par son redessin", () => {
+    expect(corpsDe("  async function prefillSaved({ silent = false } = {}) {")).toContain(KEEP);
+  });
+});

@@ -1418,8 +1418,16 @@ export function createGdsAdmin(container) {
     }
   }
 
-  function draw() {
-    readFields();
+  /**
+   * Redessine l'écran. `keepConnectionFields` : NE PAS relire le formulaire de
+   * connexion avant de rendre. Indispensable quand l'appelant vient d'écrire
+   * dans `state` les valeurs d'un serveur CHOISI (« Administrer » sur une ligne
+   * de la liste, pré-remplissage initial) : sans ce drapeau, `readFields()`
+   * relirait les champs encore affichés et écraserait ce choix par le serveur
+   * du dessus.
+   */
+  function draw({ keepConnectionFields = false } = {}) {
+    if (!keepConnectionFields) readFields();
     captureAccountForm();
     readProjectFields();
     readStorageFields();
@@ -2281,11 +2289,16 @@ export function createGdsAdmin(container) {
     state.port = String(found.http_port || "").trim() || DEFAULT_HTTP_PORT;
     state.email = String(found.email || "").trim();
     state.hasPassword = !!found.has_password;
+    // La fiche de la ligne cliquée est rendue AVANT tout test : `runConnectionTest`
+    // commence par `readFields()`, qui relit les champs affichés. Redessiner
+    // d'abord garantit que ces champs portent bien CE serveur (sinon le test
+    // partirait sur le serveur encore affiché, pas sur celui qu'on a cliqué).
+    draw({ keepConnectionFields: true });
     if (state.hasPassword) return runConnectionTest(true);
     state.ok = false;
     state.server = null;
     state.error = "Renseignez le mot de passe de ce serveur, puis « Se connecter ».";
-    draw();
+    draw({ keepConnectionFields: true });
   }
 
   /**
@@ -2307,7 +2320,9 @@ export function createGdsAdmin(container) {
         state.email = p.email;
         state.hasPassword = p.hasPassword;
       }
-      draw();
+      // Le pré-remplissage vient d'écrire `state` depuis la liste : le redessin
+      // ne doit PAS relire les champs affichés (il les annulerait).
+      draw({ keepConnectionFields: true });
     } catch {
       // Silencieux : sans liste (ou hors Tauri), le formulaire reste vide.
     }
