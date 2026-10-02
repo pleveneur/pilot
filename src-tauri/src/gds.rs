@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 // L1.8b/L1.10 : la « préparation de la base » (`provision_db`) vit dans le socle
 // partagé (`gds_core::db`) — le serveur autonome en a besoin. Consommée
@@ -328,6 +328,70 @@ pub(crate) fn get_saved_server(
         .get(&server_key(host, user))
         .cloned()
         .filter(|c| !c.db_password.as_deref().unwrap_or("").is_empty()))
+}
+
+/// Fiche serveur mémorisée pour une IDENTITÉ GDS (hôte + e-mail du compte) :
+/// source des valeurs TECHNIQUES (port SSH, racine des dépôts) quand aucun
+/// projet n'est ouvert — parcours « ajouter un projet depuis le GDS ». Le
+/// mot de passe n'est jamais renvoyé. `None` = aucune fiche pour ce compte.
+/// (Contrairement à `get_saved_server`, aucun mot de passe de base n'est exigé :
+/// une fiche « compte GDS » n'en a pas.) Pure (lecture du fichier de secrets).
+pub(crate) fn saved_server_for_identity(
+    host: &str,
+    email: &str,
+) -> Result<Option<ServerCredentials>, String> {
+    let host = host.trim().to_lowercase();
+    let email = email.trim().to_lowercase();
+    let secrets = read_gds_secrets()?;
+    Ok(secrets.servers.iter().find_map(|(key, c)| {
+        // Fiches héritées : l'hôte n'est mémorisé que dans la clé `user@host`.
+        let fiche_host = if c.host.trim().is_empty() {
+            key.split_once('@').map(|(_, h)| h.to_string()).unwrap_or_default()
+        } else {
+            c.host.clone()
+        };
+        let same_host = fiche_host.trim().to_lowercase() == host;
+        let same_email = c.gds_email.trim().to_lowercase() == email;
+        (same_host && same_email).then(|| ServerCredentials {
+            host: fiche_host.trim().to_string(),
+            ..c.clone()
+        })
+    }))
+}
+
+/// Configuration GDS construite depuis une FICHE SERVEUR seule (aucun projet
+/// ouvert) : hôte, port SSH et racine des dépôts viennent de la fiche (valeurs
+/// TECHNIQUES du serveur), l'identité e-mail du compte GDS remplace l'ancien
+/// compte technique, et le dossier local est celui du clonage. Aucun secret
+/// n'y figure. `normalize()` dérive l'hôte SSH depuis l'hôte et le port.
+/// Pure — testable.
+pub(crate) fn cfg_from_server_fiche(
+    host: &str,
+    ssh_port: &str,
+    gds_server_repos: &str,
+    email: &str,
+    local_dir: &str,
+) -> GdsConfig {
+    let repos = gds_server_repos.trim();
+    let mut cfg = GdsConfig {
+        enabled: true,
+        db_host: host.trim().to_string(),
+        db_port: String::new(),
+        db_user: String::new(),
+        identity_email: email.trim().to_string(),
+        server_url: String::new(),
+        gds_local_dir: Some(local_dir.to_string()),
+        ssh_port: ssh_port
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p > 0)
+            .unwrap_or(22),
+        gds_server_repos: if repos.is_empty() { None } else { Some(repos.to_string()) },
+        ssh_host: String::new(),
+    };
+    cfg.normalize();
+    cfg
 }
 
 /// Liste les serveurs mémorisés SANS les mots de passe (pour l'UI) :
@@ -2120,6 +2184,18 @@ pub(crate) fn known_work_projects(state: &AppState) -> Vec<String> {
     work_projects
 }
 
+/// Dossier local d'un dépôt GDS : `<local_dir>/<nom>`. Une seule définition,
+/// partagée par l'état « déjà en local » (`enrich_local_state`), le clone d'un
+/// projet ouvert (`gds_clone_repo`) et le clone depuis une fiche serveur
+/// (`gds_clone_repo_from_server`) : les trois désignent forcément le MÊME
+/// dossier. Pure — testable.
+pub(crate) fn clone_dir_for(local_dir: &str, name: &str) -> String {
+    std::path::Path::new(local_dir)
+        .join(name)
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Enrichissement « déjà en local » d'une liste de dépôts GDS — extrait TEL QUEL
 /// de `gds_list_git_repos` (aucune règle changée). Ajoute à chaque ligne :
 /// - `local_exists` / `local_path` : un clonage `<local_dir>/<nom>` existe-t-il ?
@@ -2131,10 +2207,7 @@ pub(crate) fn known_work_projects(state: &AppState) -> Vec<String> {
 pub(crate) fn enrich_local_state(repos: &mut [Value], local_dir: &str, work_projects: &[String]) {
     for r in repos.iter_mut() {
         let name = r["name"].as_str().unwrap_or("").to_string();
-        let local_path = std::path::Path::new(local_dir)
-            .join(&name)
-            .to_string_lossy()
-            .to_string();
+        let local_path = clone_dir_for(local_dir, &name);
         let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
         r["local_exists"] = json!(local_exists);
         r["local_path"] = json!(local_path);
@@ -2392,6 +2465,32 @@ pub async fn gds_remove_dup_worktree(
     Ok(json!({ "removed": removed, "path": dup_dir }))
 }
 
+/// Récupère en local la copie d'un dépôt GDS — cœur PARTAGÉ de la récupération
+/// (projet ouvert comme fiche serveur seule) :
+///  - dossier ABSENT → clone ;
+///  - dossier PRÉSENT qui n'est PAS un dépôt Git → REFUS (jamais d'écrasement,
+///    jamais de suppression) : c'est la garde de la récupération actuelle ;
+///  - dépôt Git déjà présent → réutilisé tel quel ;
+///  - le remote dédié `gds` est garanti sur l'URL du serveur (`git clone` laisse
+///    `origin` sur cette MÊME URL) : aucun autre lien n'est créé.
+/// Renvoie `already_existed`. Bloquant (appels Git) → hors thread principal.
+pub(crate) fn fetch_or_clone(dest: &str, url: &str) -> Result<bool, String> {
+    let existed = std::path::Path::new(dest).exists();
+    if !existed {
+        git_clone(url, dest)?;
+    } else if !git_is_repo(dest) {
+        return Err(format!(
+            "Le dossier local « {} » existe mais n'est pas un dépôt Git — utilisez l'action « Ouvrir normalement un déjà en local » ou retirez-le manuellement.",
+            dest
+        ));
+    }
+    // Le remote dédié `gds` est garanti (le clone crée `origin`).
+    if !git_has_remote(dest, "gds") {
+        git_remote_add(dest, "gds", url)?;
+    }
+    Ok(existed)
+}
+
 /// Commande Tauri : clone un dépôt GDS en local, l'ouvre comme projet et le
 /// connecte automatiquement au GDS. `project` = projet courant de travail
 /// (fournit l'identité email + `gds_local_dir`) ; `repo_name` = dépôt GDS à
@@ -2426,8 +2525,7 @@ pub async fn gds_clone_repo(
         .filter(|d| !d.trim().is_empty())
         .or_else(|| cfg.gds_local_dir.clone())
         .unwrap_or_else(default_gds_local_dir);
-    let dest = std::path::Path::new(&local_dir).join(&name);
-    let dest_str = dest.to_string_lossy().to_string();
+    let dest_str = clone_dir_for(&local_dir, &name);
     let url = gds_remote_url(&cfg, &name);
 
     // Pool : repli sur restore_pool_for_project si le pool AppState est vide.
@@ -2442,24 +2540,9 @@ pub async fn gds_clone_repo(
     // Opérations git bloquantes (clone / remote add) → spawn_blocking.
     let url2 = url.clone();
     let dest2 = dest_str.clone();
-    let already_existed = tokio::task::spawn_blocking(move || {
-        let existed = std::path::Path::new(&dest2).exists();
-        if !existed {
-            git_clone(&url2, &dest2)?;
-        } else if !git_is_repo(&dest2) {
-            let msg = "Le dossier local « ".to_string()
-                + &dest2
-                + " » existe mais n'est pas un dépôt Git — utilisez l'action « Ouvrir normalement un déjà en local » ou retirez-le manuellement.";
-            return Err(msg);
-        }
-        // Le remote dédié `gds` est garanti (le clone crée `origin`).
-        if !git_has_remote(&dest2, "gds") {
-            git_remote_add(&dest2, "gds", &url2)?;
-        }
-        Ok::<_, String>(existed)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let already_existed = tokio::task::spawn_blocking(move || fetch_or_clone(&dest2, &url2))
+        .await
+        .map_err(|e| e.to_string())??;
 
     // Connecter le clone au GDS (helper partagé) : lui écrire son `.pilot/gds.json`
     // + clef du poste + enregistrement serveur (idempotent, fail-open). Le remote
@@ -2469,6 +2552,90 @@ pub async fn gds_clone_repo(
 
     Ok(json!({
         "path": dest_str,
+        "already_existed": already_existed,
+    }))
+}
+
+/// Commande Tauri : récupère en local un dépôt d'un serveur GDS à partir de la
+/// SEULE fiche enregistrée de ce serveur — AUCUN projet n'a besoin d'être ouvert
+/// dans Pilot. Étapes : (1) fiche serveur (valeurs techniques + identité du
+/// compte GDS) ; (2) configuration construite depuis cette fiche ; (3) clef du
+/// poste enregistrée (seule écriture serveur, idempotente — sans elle le clone
+/// SSH échoue) ; (4) copie dans le dossier local habituel ; (5) lien vers le
+/// serveur posé dans la copie (`.pilot/gds.json`).
+///
+/// GDS en LECTURE SEULE : rien n'est créé, associé ni publié côté serveur,
+/// aucun push n'est fait (le remote `gds` est seulement DÉCLARÉ). Prudent : le
+/// dossier de destination est REFUSÉ s'il existe sans être un dépôt Git (même
+/// garde que `gds_clone_repo`), jamais écrasé, jamais supprimé. La copie est
+/// enregistrée côté Pilot (projets récents) mais reste FERMÉE : son ouverture
+/// (onglet, watcher) relève de l'interface.
+#[tauri::command]
+pub async fn gds_clone_repo_from_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    host: String,
+    http_port: String,
+    email: String,
+    repo_name: String,
+    local_dir_override: Option<String>,
+) -> Result<Value, String> {
+    let name = gds_git::validate_project_name(&repo_name)?;
+    // La fiche est la seule source : valeurs techniques + compte GDS. Une fiche
+    // héritée (compte technique, sans identité) n'ouvre pas ce parcours.
+    let fiche = saved_server_for_identity(&host, &email)?
+        .filter(|f| f.validated && !f.gds_email.trim().is_empty())
+        .ok_or_else(|| {
+            "Aucun compte GDS enregistré pour ce serveur : ajoutez-le dans « GDS — paramétrage » → « Serveurs GDS », puis testez sa connexion."
+                .to_string()
+        })?;
+    // Port de service : celui affiché par l'interface prime (port non secret),
+    // repli sur celui de la fiche.
+    let http_port = if http_port.trim().is_empty() {
+        fiche.http_port.clone()
+    } else {
+        http_port
+    };
+    let local_dir = local_dir_override
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(default_gds_local_dir);
+    let cfg = cfg_from_server_fiche(
+        &fiche.host,
+        &fiche.ssh_port,
+        &fiche.gds_server_repos,
+        &fiche.gds_email,
+        &local_dir,
+    );
+    let email = cfg.identity_email.clone();
+    let dest = clone_dir_for(&local_dir, &name);
+    let url = gds_remote_url(&cfg, &name);
+
+    // Clef du poste : seule écriture sur le serveur (idempotente), indispensable
+    // au clone SSH. Tout compte actif y a droit.
+    let ident = gds_service::identity_on_server(&fiche.host, &http_port, &email)?;
+    gds_service::register_poste_key(&ident).await?;
+
+    // Copie locale (Git bloquant → hors thread principal).
+    let (dest2, url2) = (dest.clone(), url.clone());
+    let already_existed = tokio::task::spawn_blocking(move || fetch_or_clone(&dest2, &url2))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    // Lien vers le serveur DANS LA COPIE — uniquement si elle n'en porte pas
+    // déjà un : ne jamais remplacer le rattachement d'une copie existante.
+    if !gds_config_path(&dest).exists() {
+        write_gds_config(&dest, &cfg)?;
+    }
+
+    // Enregistrer le projet côté Pilot (projets récents). Fail-open : une config
+    // indisponible ne fait pas échouer une copie déjà réussie.
+    if let Ok(mut config) = state.config.lock() {
+        config.add_recent(&dest);
+        crate::save_config_disk(&app, &config)?;
+    }
+
+    Ok(json!({
+        "path": dest,
         "already_existed": already_existed,
     }))
 }
@@ -4159,6 +4326,152 @@ mod tests {
             got, expected,
             "la fonction extraite doit rendre le même résultat que la boucle d'origine"
         );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ── Étape 3 : récupérer un projet depuis la SEULE fiche du serveur ────────
+
+    /// La destination de la copie est `<dossier local>/<nom>`, exactement le
+    /// dossier que la détection « déjà en local » examine (source unique) : un
+    /// clone réussi est donc immédiatement vu « déjà en local ».
+    #[test]
+    fn clone_destination_is_the_local_dir_plus_the_repo_name() {
+        let base = tmp_dir("etape3-dest");
+        let local_dir = base.to_string_lossy().to_string();
+        let dest = clone_dir_for(&local_dir, "Kodali");
+        assert_eq!(dest, base.join("Kodali").to_string_lossy().to_string());
+        let mut rows = vec![repo_row("Kodali")];
+        enrich_local_state(&mut rows, &local_dir, &[]);
+        assert_eq!(rows[0]["local_path"].as_str().unwrap(), dest);
+        assert_eq!(rows[0]["local_exists"], json!(false));
+        // Le lien vers le serveur vit dans CE fichier précis : la garde de la
+        // commande (« ne pas écraser un lien existant ») porte bien sur lui.
+        assert_eq!(
+            gds_config_path(&dest),
+            std::path::Path::new(&dest).join(".pilot").join("gds.json")
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// L'URL du dépôt se construit depuis la FICHE SEULE (aucun projet ouvert) :
+    /// hôte, port SSH et racine des dépôts viennent de la fiche, le compte GDS
+    /// aussi. Aucun mot de passe n'entre dans la configuration ni dans l'URL.
+    #[test]
+    fn server_fiche_alone_builds_the_repository_url() {
+        let _guard = TestGdsSecretsGuard::new();
+        save_gds_identity(
+            "gds.exemple.net",
+            "moi@exemple.net",
+            "8080",
+            "moi@exemple.net",
+            "mot-de-passe-de-test",
+            "dev",
+        )
+        .unwrap();
+        set_server_technical("gds.exemple.net", "moi@exemple.net", "2222", "/srv/git/repos")
+            .unwrap();
+
+        let fiche = saved_server_for_identity("gds.exemple.net", "moi@exemple.net")
+            .unwrap()
+            .expect("fiche du compte GDS attendue");
+        assert_eq!(fiche.host, "gds.exemple.net");
+        assert_eq!(fiche.ssh_port, "2222");
+        assert_eq!(fiche.gds_server_repos, "/srv/git/repos");
+
+        let cfg = cfg_from_server_fiche(
+            &fiche.host,
+            &fiche.ssh_port,
+            &fiche.gds_server_repos,
+            &fiche.gds_email,
+            "/tmp/copies",
+        );
+        assert_eq!(cfg.identity_email, "moi@exemple.net");
+        assert_eq!(cfg.gds_local_dir.as_deref(), Some("/tmp/copies"));
+        assert_eq!(
+            gds_remote_url(&cfg, "Kodali"),
+            "ssh://git@gds.exemple.net:2222/srv/git/repos/Kodali.git"
+        );
+        assert!(!serde_json::to_string(&cfg).unwrap().contains("mot-de-passe"));
+
+        // Fiche héritée (ni port SSH ni racine) : forme historique conservée.
+        let legacy = cfg_from_server_fiche("10.0.0.9", "", "", "a@b.net", "/tmp/copies");
+        assert_eq!(gds_remote_url(&legacy, "Kodali"), "ssh://git@10.0.0.9:22/Kodali.git");
+
+        // Aucune fiche pour un autre compte ou un autre serveur.
+        assert!(saved_server_for_identity("gds.exemple.net", "autre@exemple.net")
+            .unwrap()
+            .is_none());
+        assert!(saved_server_for_identity("10.0.0.9", "moi@exemple.net")
+            .unwrap()
+            .is_none());
+    }
+
+    /// Copie d'un dépôt : le SEUL lien vers un dépôt distant est celui du serveur
+    /// GDS (remote `gds`), et `origin` porte la MÊME adresse. Une copie déjà
+    /// présente est réutilisée telle quelle (aucun second clone, aucun lien en
+    /// plus). Le dépôt distant de test est un dossier local — aucun réseau.
+    #[test]
+    fn fetch_or_clone_declares_only_the_server_remote() {
+        let _iso = crate::git::test_helpers::IsolatedGitConfig::new(
+            "[user]\n name = Pilot Test\n email = pilot-test@example.com\n",
+        );
+        let base = tmp_dir("etape3-clone");
+        let src = base.join("depot-serveur");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
+        let src = src.to_string_lossy().to_string();
+        ensure_git_repo_with_initial_commit(&src).unwrap();
+
+        let dest = base
+            .join("copies")
+            .join("Kodali")
+            .to_string_lossy()
+            .to_string();
+        assert!(!fetch_or_clone(&dest, &src).unwrap(), "dossier absent → clone");
+        assert!(crate::git::git_is_repo(&dest));
+
+        let remotes = crate::run_captured("git", &["-C", &dest, "remote", "-v"], Duration::from_secs(3));
+        let names: Vec<String> = remotes
+            .lines()
+            .filter_map(|l| l.split_whitespace().next().map(str::to_string))
+            .collect();
+        let urls: Vec<String> = remotes
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+            .collect();
+        assert!(names.contains(&"gds".to_string()), "remote du serveur : {:?}", names);
+        assert!(
+            names.iter().all(|n| n == "origin" || n == "gds"),
+            "aucun autre lien que le serveur GDS : {:?}",
+            names
+        );
+        assert!(
+            urls.iter().all(|u| *u == src),
+            "toutes les adresses sont celles du serveur GDS : {:?}",
+            urls
+        );
+
+        // Seconde récupération : dossier déjà présent → réutilisé, rien en plus.
+        assert!(fetch_or_clone(&dest, &src).unwrap(), "dossier présent → réutilisé");
+        let after = crate::run_captured("git", &["-C", &dest, "remote", "-v"], Duration::from_secs(3));
+        assert_eq!(after, remotes, "aucun lien ajouté au second passage");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Garde de refus : un dossier de destination qui existe SANS être un dépôt
+    /// Git n'est jamais écrasé ni supprimé — son contenu reste intact.
+    #[test]
+    fn fetch_or_clone_refuses_a_non_repo_folder_and_preserves_it() {
+        let base = tmp_dir("etape3-refus");
+        let dest = base.join("Kodali").to_string_lossy().to_string();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(std::path::Path::new(&dest).join("important.txt"), "a ne pas perdre").unwrap();
+
+        let err = fetch_or_clone(&dest, "ssh://git@gds.exemple.net:2222/srv/git/repos/Kodali.git")
+            .unwrap_err();
+        assert!(err.contains("n'est pas un dépôt Git"), "refus explicite : {}", err);
+        assert!(std::path::Path::new(&dest).join("important.txt").exists());
+        assert!(std::path::Path::new(&dest).is_dir());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

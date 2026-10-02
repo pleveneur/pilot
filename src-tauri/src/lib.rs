@@ -3525,6 +3525,12 @@ pub fn run() {
             // `gds_service` (le mot de passe ne quitte jamais le poste).
             gds_service::gds_server_projects,
             gds_service::gds_server_git_repos,
+            // ── GDS : récupérer un projet depuis un serveur CHOISI à partir de
+            // sa seule FICHE ENREGISTRÉE (aucun projet ouvert) : configuration
+            // construite depuis la fiche, clef du poste enregistrée, copie dans
+            // le dossier local habituel, lien vers le serveur dans la copie.
+            // GDS en lecture seule (aucune création, aucune publication).
+            gds::gds_clone_repo_from_server,
             gds_admin::gds_admin_project_remove,
             // ── GDS (refonte, L4.5) : espace utilisé, journal, clefs SSH ──
             // L'état serveur donne l'espace occupé (dépôts + base) ; le journal

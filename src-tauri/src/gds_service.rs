@@ -195,7 +195,7 @@ pub(crate) fn pick_identity_for_server(
 /// Même résolution, depuis les fiches mémorisées. `Err` = message lisible
 /// (aucun secret) : l'utilisateur doit d'abord enregistrer la fiche du serveur
 /// et tester sa connexion (« GDS — paramétrage » → « Serveurs GDS »).
-fn identity_on_server(
+pub(crate) fn identity_on_server(
     host: &str,
     http_port: &str,
     email: &str,
