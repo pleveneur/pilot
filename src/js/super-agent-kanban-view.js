@@ -89,6 +89,7 @@ export function createSuperKanban(container) {
                   ["progress", "En cours"],
                   ["review", "À valider"],
                   ["done", "Terminé"],
+                  ["unqualified", "À qualifier"],
                   ["cancelled", "Annulée"],
                 ]
                   .map(([k, l]) => `<option value="${k}" ${k === selKey ? "selected" : ""}>${l}</option>`)
@@ -181,6 +182,7 @@ export function createSuperKanban(container) {
       ["progress", "En cours"],
       ["review", "À valider"],
       ["done", "Terminé"],
+      ["unqualified", "À qualifier"],
       ["cancelled", "Annulée"],
     ]
       .map(([k, l]) =>

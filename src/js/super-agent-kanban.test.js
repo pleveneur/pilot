@@ -12,16 +12,18 @@ import {
   isOpenTaskStatus,
   taskStatusLabel,
   filterOpenTasksByClient,
+  filterUnqualifiedTasksByClient,
   formatTaskDeadline,
 } from "./super-agent-kanban.js";
 
 describe("KANBAN_COLUMNS", () => {
-  it("définit exactement les 4 colonnes dans l'ordre attendu", () => {
+  it("définit les colonnes dans l'ordre attendu (dont « À qualifier »)", () => {
     expect(KANBAN_COLUMNS.map((c) => c.key)).toEqual([
       "todo",
       "progress",
       "review",
       "done",
+      "unqualified",
     ]);
   });
 });
@@ -50,11 +52,24 @@ describe("normalizeTaskStatus", () => {
     expect(normalizeTaskStatus("cancelled")).toBe("cancelled");
   });
 
-  it("reste conservateur : statut inconnu ou vide → 'todo'", () => {
-    expect(normalizeTaskStatus("blablabla")).toBe("todo");
-    expect(normalizeTaskStatus("")).toBe("todo");
-    expect(normalizeTaskStatus(undefined)).toBe("todo");
-    expect(normalizeTaskStatus(null)).toBe("todo");
+  it("reste conservateur : statut inconnu ou vide → 'unqualified'", () => {
+    expect(normalizeTaskStatus("blablabla")).toBe("unqualified");
+    expect(normalizeTaskStatus("")).toBe("unqualified");
+    expect(normalizeTaskStatus(undefined)).toBe("unqualified");
+    expect(normalizeTaskStatus(null)).toBe("unqualified");
+  });
+
+  it("reconnaît un marqueur de fin suivi d'un texte libre (statuts réels de la base)", () => {
+    expect(
+      normalizeTaskStatus(
+        "terminee - verifie par les fichiers (commits f676020, de5db3c ; rapport verdict pret)"
+      )
+    ).toBe("done");
+    expect(normalizeTaskStatus("diagnostic terminee - cause identifiee")).toBe("done");
+    expect(normalizeTaskStatus("decidee - on n embarque pas le modele")).toBe("done");
+    expect(normalizeTaskStatus("livree - v0.4.11 publiee")).toBe("done");
+    expect(normalizeTaskStatus("fermee_github")).toBe("done");
+    expect(normalizeTaskStatus("livre_a_tester")).toBe("done");
   });
 });
 
@@ -64,6 +79,7 @@ describe("columnToStatus", () => {
     expect(columnToStatus("progress")).toBe("en_cours");
     expect(columnToStatus("review")).toBe("a_valider");
     expect(columnToStatus("done")).toBe("terminee");
+    expect(columnToStatus("unqualified")).toBe("a_qualifier");
     expect(columnToStatus("cancelled")).toBe("annulee");
   });
 
@@ -92,7 +108,7 @@ describe("buildKanbanColumns", () => {
       { id: 5, status: "terminee" },
     ];
     const cols = buildKanbanColumns(tasks);
-    expect(cols.map((c) => c.key)).toEqual(["todo", "progress", "review", "done"]);
+    expect(cols.map((c) => c.key)).toEqual(["todo", "progress", "review", "done", "unqualified"]);
     expect(cols.find((c) => c.key === "todo").cards.map((t) => t.id)).toEqual([3]);
     expect(cols.find((c) => c.key === "progress").cards.map((t) => t.id)).toEqual([1]);
     expect(cols.find((c) => c.key === "review").cards.map((t) => t.id)).toEqual([4]);
@@ -122,7 +138,7 @@ describe("countByColumn", () => {
       { id: 2, status: "done" },
       { id: 3, status: "progress" },
     ]);
-    expect(countByColumn(cols)).toEqual({ todo: 0, progress: 1, review: 0, done: 2 });
+    expect(countByColumn(cols)).toEqual({ todo: 0, progress: 1, review: 0, done: 2, unqualified: 0 });
   });
 });
 
@@ -167,14 +183,32 @@ describe("isOpenTaskStatus", () => {
     expect(isOpenTaskStatus("demande")).toBe(true);
     expect(isOpenTaskStatus("en_cours")).toBe(true);
     expect(isOpenTaskStatus("a_valider")).toBe(true);
-    expect(isOpenTaskStatus("blablabla")).toBe(true);
   });
 
-  it("exclut les tâches terminées et annulées", () => {
+  it("exclut les tâches terminées, annulées et à qualifier (statut inconnu)", () => {
     expect(isOpenTaskStatus("terminee")).toBe(false);
     expect(isOpenTaskStatus("livree")).toBe(false);
     expect(isOpenTaskStatus("annulee")).toBe(false);
     expect(isOpenTaskStatus("abandonne")).toBe(false);
+    expect(isOpenTaskStatus("blablabla")).toBe(false);
+    expect(isOpenTaskStatus("redaction_specs")).toBe(false);
+  });
+
+  // Non-régression : une tâche close par un statut en texte libre NE DOIT PAS
+  // se remettre à compter comme « à faire » (libellés réels de la base Pilot).
+  it("ne compte pas comme à faire les tâches closes en texte libre", () => {
+    const libelles = [
+      "terminee - verifie par les fichiers (commits f676020, de5db3c ; 1202 tests interface)",
+      "terminee - corrige et verifie",
+      "diagnostic terminee - cause identifiee (marquage livre optimiste)",
+      "decidee - on n embarque pas le modele",
+      "livree - v0.4.11 publiee et installateurs disponibles",
+      "livre_a_tester",
+      "fermee_github",
+    ];
+    for (const s of libelles) {
+      expect(isOpenTaskStatus(s)).toBe(false);
+    }
   });
 });
 
@@ -186,9 +220,9 @@ describe("taskStatusLabel", () => {
     expect(taskStatusLabel("demande")).toBe("À faire");
   });
 
-  it("rend « Annulée » pour un statut annulé, « À faire » pour un statut inconnu", () => {
+  it("rend « Annulée » pour un statut annulé, « À qualifier » pour un statut inconnu", () => {
     expect(taskStatusLabel("annulee")).toBe("Annulée");
-    expect(taskStatusLabel("blablabla")).toBe("À faire");
+    expect(taskStatusLabel("blablabla")).toBe("À qualifier");
   });
 });
 
@@ -214,6 +248,31 @@ describe("filterOpenTasksByClient", () => {
   it("gère une entrée vide ou null", () => {
     expect(filterOpenTasksByClient([])).toEqual([]);
     expect(filterOpenTasksByClient(null)).toEqual([]);
+  });
+});
+
+describe("filterUnqualifiedTasksByClient", () => {
+  it("isole les statuts inconnus dans une case distincte (jamais « à faire »)", () => {
+    const clients = [
+      {
+        name: "Pilot",
+        tasks: [
+          { id: 1, status: "demande" },
+          { id: 2, status: "terminee - verifie par les fichiers" },
+          { id: 25, status: "redaction_specs" },
+        ],
+      },
+    ];
+    const out = filterUnqualifiedTasksByClient(clients);
+    expect(out).toHaveLength(1);
+    expect(out[0].tasks.map((t) => t.id)).toEqual([25]);
+    // et il ne figure pas dans la liste « à faire »
+    expect(filterOpenTasksByClient(clients)[0].tasks.map((t) => t.id)).toEqual([1]);
+  });
+
+  it("gère une entrée vide ou null", () => {
+    expect(filterUnqualifiedTasksByClient([])).toEqual([]);
+    expect(filterUnqualifiedTasksByClient(null)).toEqual([]);
   });
 });
 

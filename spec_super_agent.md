@@ -292,8 +292,10 @@ uniquement un bloc d'instructions dans le prompt système.
   l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
   bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
 - Dans l'onglet Kanban, les tâches sont affichées **par client**, chacune
-  classée dans l'une des **4 colonnes** « À faire / En cours / À valider /
-  Terminé ».
+  classée dans l'une des **5 colonnes** « À faire / En cours / À valider /
+  Terminé / À qualifier ». La colonne « À qualifier » recueille les statuts que
+  la règle unique ne sait pas trancher : rien ne disparaît en silence, mais une
+  tâche close en texte libre ne compte jamais comme ouverte.
 - Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
   extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.
@@ -320,12 +322,21 @@ uniquement un bloc d'instructions dans le prompt système.
   (aucun aller-retour réseau pour Événements) ; le volet Tâches est **rechargé à
   chaque activation** via la commande existante `get_super_agent_kanban` (aucune
   nouvelle commande Rust).
-- Le volet Tâches n'affiche que les tâches **ouvertes** (statuts normalisés
-  ≠ `done`/`cancelled` — logique pure `isOpenTaskStatus` /
-  `filterOpenTasksByClient` dans `super-agent-kanban.js`), groupées **par
-  client**, avec **statut** (`taskStatusLabel`) et **échéance**
+- Le volet Tâches n'affiche que les tâches **ouvertes** (logique pure
+  `isOpenTaskStatus` / `filterOpenTasksByClient` dans `super-agent-kanban.js`),
+  groupées **par client**, avec **statut** (`taskStatusLabel`) et **échéance**
   (`formatTaskDeadline`, retard signalé). La liste **défile** (même hauteur
   maximale que celle des événements).
+- **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
+  `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
+  **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
+  fichiers… », `fermee_github`, « livree - … », « decidee - … », `livre_a_tester`).
+  Un statut vraiment inconnu est isolé dans la case **« À qualifier »**
+  (`filterUnqualifiedTasksByClient` / colonne Kanban) et n'est **jamais** compté
+  « à faire ». Les compteurs du cœur (`super_agent_tracking`,
+  `super_agent_project_overview`, timeline, santé projet) appliquent la même
+  règle. À la création d'une tâche, le statut canonique `demande` est écrit
+  explicitement (plus de texte libre implicite).
 - **Clic (ou Entrée/Espace) sur une tâche** : son **détail** est ajouté comme
   **bulle de l'Assistant dans la conversation** (`showSuperTaskDetail`, jamais
   une fenêtre ni un onglet), puis le panneau se referme pour ne pas masquer la

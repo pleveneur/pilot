@@ -1640,6 +1640,193 @@ pub fn list_super_agent_projects(state: State<AppState>, app: AppHandle) -> Resu
     Ok(serde_json::json!({"projects": projects}))
 }
 
+// ── Règle unique « ouverte ou close » d'un statut de tâche de suivi ──
+//
+// Miroir Rust de `normalizeTaskStatus` (src/js/super-agent-kanban.js) : une
+// seule règle, partagée par l'interface et les compteurs du cœur. Un statut en
+// texte libre portant un marqueur de fin (« terminee - verifie par les fichiers
+// … », « fermee_github », « decidee - … ») est reconnu comme terminé ; un statut
+// vraiment inconnu retombe dans « à qualifier » et n'est jamais compté comme
+// « à faire ». Ne pas dupliquer cette liste ailleurs : les requêtes SQL passent
+// par `classify_task_status` / `is_task_open` / `task_counts`.
+const TASK_DONE_KEYWORDS: &[&str] = &[
+    "terminee",
+    "termine",
+    "finie",
+    "fini",
+    "livree",
+    "livre",
+    "achevee",
+    "acheve",
+    "validee",
+    "valide",
+    "atteinte",
+    "atteint",
+    "fermee",
+    "ferme",
+    "cloturee",
+    "cloture",
+    "resolue",
+    "resolu",
+    "decidee",
+    "fermeegithub",
+    "done",
+    "closed",
+];
+const TASK_CANCELLED_KEYWORDS: &[&str] = &[
+    "annule",
+    "annulee",
+    "abandonne",
+    "abandonnee",
+    "cancelled",
+    "ignoree",
+];
+const TASK_PROGRESS_STATUSES: &[&str] = &[
+    "en_cours",
+    "encours",
+    "en_travail",
+    "entravail",
+    "travail",
+    "actif",
+    "active",
+    "started",
+    "progress",
+    "doing",
+    "entamee",
+    "entame",
+];
+const TASK_REVIEW_STATUSES: &[&str] = &[
+    "a_valider",
+    "avalider",
+    "a_tester",
+    "atester",
+    "en_validation",
+    "envalidation",
+    "validation",
+    "en_attente",
+    "enattente",
+    "attente",
+    "waiting",
+    "review",
+    "qa",
+    "test",
+];
+const TASK_TODO_STATUSES: &[&str] = &[
+    "demande",
+    "planifie",
+    "planifiee",
+    "propos",
+    "proposee",
+    "nouveau",
+    "nouvelle",
+    "a_faire",
+    "afaire",
+    "todo",
+    "backlog",
+    "prioritaire",
+];
+
+/// Replie un caractère vers sa forme normalisée (minuscule, sans accent), ou
+/// `None` s'il doit servir de séparateur. Miroir de la normalisation JS.
+fn fold_task_char(c: char) -> Option<char> {
+    let lc = c.to_lowercase().next().unwrap_or(c);
+    if lc.is_ascii_alphanumeric() {
+        return Some(lc);
+    }
+    let base = match lc {
+        'à' | 'â' | 'ä' | 'á' | 'ã' | 'å' => 'a',
+        'ç' => 'c',
+        'è' | 'é' | 'ê' | 'ë' => 'e',
+        'ì' | 'í' | 'î' | 'ï' => 'i',
+        'ñ' => 'n',
+        'ò' | 'ó' | 'ô' | 'ö' | 'õ' => 'o',
+        'ù' | 'ú' | 'û' | 'ü' => 'u',
+        'ý' | 'ÿ' => 'y',
+        _ => return None,
+    };
+    Some(base)
+}
+
+/// Découpe un statut libre en jetons normalisés (minuscules, sans accents).
+fn task_status_tokens(status: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for c in status.chars() {
+        match fold_task_char(c) {
+            Some(f) => current.push(f),
+            None => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Classe un statut de tâche en : "todo" | "progress" | "review" | "done" |
+/// "cancelled" | "unqualified". Règle unique, miroir de `normalizeTaskStatus`.
+pub fn classify_task_status(status: &str) -> &'static str {
+    let tokens = task_status_tokens(status);
+    if tokens.is_empty() {
+        return "unqualified";
+    }
+    let joined = tokens.concat();
+    if joined == "aqualifier" {
+        return "unqualified";
+    }
+    if TASK_CANCELLED_KEYWORDS.contains(&joined.as_str())
+        || tokens.iter().any(|t| TASK_CANCELLED_KEYWORDS.contains(&t.as_str()))
+    {
+        return "cancelled";
+    }
+    if TASK_DONE_KEYWORDS.contains(&joined.as_str())
+        || tokens.iter().any(|t| TASK_DONE_KEYWORDS.contains(&t.as_str()))
+    {
+        return "done";
+    }
+    if TASK_PROGRESS_STATUSES.contains(&joined.as_str()) {
+        return "progress";
+    }
+    if TASK_REVIEW_STATUSES.contains(&joined.as_str()) {
+        return "review";
+    }
+    if TASK_TODO_STATUSES.contains(&joined.as_str()) {
+        return "todo";
+    }
+    "unqualified"
+}
+
+/// Une tâche est ouverte si son statut est « à faire », « en cours » ou
+/// « à valider » (règle unique `classify_task_status`).
+fn is_task_open(status: &str) -> bool {
+    matches!(classify_task_status(status), "todo" | "progress" | "review")
+}
+
+/// Compte les tâches d'un projet : (ouvertes, terminées) selon la règle unique
+/// `classify_task_status`. Les statuts annulés et « à qualifier » ne sont ni
+/// l'un ni l'autre.
+fn task_counts(conn: &Connection, project_id: i64) -> (i64, i64) {
+    let mut open = 0i64;
+    let mut done = 0i64;
+    if let Ok(mut stmt) = conn.prepare("SELECT status FROM tasks WHERE project_id = ?1") {
+        if let Ok(rows) = stmt.query_map(rusqlite::params![project_id], |r| r.get::<_, String>(0))
+        {
+            for status in rows.flatten() {
+                match classify_task_status(&status) {
+                    "done" => done += 1,
+                    "todo" | "progress" | "review" => open += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    (open, done)
+}
+
 // ── Tableau de bord de suivi multi-projets ──
 
 /// Renvoie un tableau de bord structuré de suivi multi-projets : clients,
@@ -1678,20 +1865,7 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
         let mut projects: Vec<Value> = Vec::new();
         for row in project_rows {
             if let Ok((pid, pname, ppath)) = row {
-                let tasks_en_cours: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('terminee','livree','annulee')",
-                        rusqlite::params![pid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let tasks_terminees: i64 = conn
-                    .query_row(
-                        "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status IN ('terminee','livree')",
-                        rusqlite::params![pid],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                let (tasks_en_cours, tasks_terminees) = task_counts(&conn, pid);
                 projects.push(serde_json::json!({
                     "name": pname,
                     "path": ppath,
@@ -2336,7 +2510,7 @@ pub fn super_agent_create_task(
     let conn = open_db(&app)?;
     let project_id = resolve_project_id(&conn, &project_path)?;
     conn.execute(
-        "INSERT INTO tasks (project_id, title, description, deadline) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO tasks (project_id, title, description, deadline, status) VALUES (?1, ?2, ?3, ?4, 'demande')",
         rusqlite::params![project_id, title, description.unwrap_or_default(), deadline],
     )
     .map_err(|e| format!("Erreur création tâche: {}", e))?;
@@ -2585,9 +2759,12 @@ pub fn super_agent_get_project_timeline(
 
     let mut tasks = Vec::new();
     {
+        let today: String = conn
+            .query_row("SELECT date('now')", [], |r| r.get(0))
+            .unwrap_or_default();
         let mut stmt = conn
             .prepare(
-                "SELECT id, title, status, deadline, blocker_reason,\n                       (deadline < date('now') AND status NOT IN ('terminee','livree','annulee')) AS overdue\n                 FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL ORDER BY deadline ASC",
+                "SELECT id, title, status, deadline, blocker_reason\n                 FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL ORDER BY deadline ASC",
             )
             .map_err(|e| format!("Erreur lecture tâches: {}", e))?;
         let rows = stmt
@@ -2598,15 +2775,15 @@ pub fn super_agent_get_project_timeline(
                     r.get::<_, String>(2)?,
                     r.get::<_, String>(3)?,
                     r.get::<_, Option<String>>(4)?,
-                    r.get::<_, i64>(5)?,
                 ))
             })
             .map_err(|e| format!("Erreur lecture tâches: {}", e))?;
         for row in rows {
-            if let Ok((id, title, status, deadline, blocker_reason, overdue)) = row {
+            if let Ok((id, title, status, deadline, blocker_reason)) = row {
+                let overdue = is_task_open(&status) && deadline.as_str() < today.as_str();
                 tasks.push(serde_json::json!({
                     "id": id, "title": title, "status": status, "deadline": deadline,
-                    "blocker_reason": blocker_reason, "overdue": overdue != 0
+                    "blocker_reason": blocker_reason, "overdue": overdue
                 }));
             }
         }
@@ -2639,7 +2816,7 @@ pub fn super_agent_handoff_to_project(
         .map_err(|e| format!("Tâche source {} introuvable: {}", task_id, e))?;
     let target_project_id = resolve_project_id(&conn, &target_path)?;
     conn.execute(
-        "INSERT INTO tasks (project_id, title, description, deadline, source_task_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO tasks (project_id, title, description, deadline, source_task_id, status) VALUES (?1, ?2, ?3, ?4, ?5, 'demande')",
         rusqlite::params![target_project_id, title, description, deadline, task_id],
     )
     .map_err(|e| format!("Erreur handoff: {}", e))?;
@@ -2735,20 +2912,7 @@ pub fn super_agent_project_overview(app: AppHandle) -> Result<Value, String> {
                         .map_err(|e| format!("Erreur lecture projets: {}", e))?;
                     for prow in prows {
                         if let Ok((pid, ppath, pname)) = prow {
-                            let open: i64 = conn
-                                .query_row(
-                                    "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status NOT IN ('terminee','livree','annulee')",
-                                    rusqlite::params![pid],
-                                    |r| r.get(0),
-                                )
-                                .unwrap_or(0);
-                            let done: i64 = conn
-                                .query_row(
-                                    "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND status IN ('terminee','livree')",
-                                    rusqlite::params![pid],
-                                    |r| r.get(0),
-                                )
-                                .unwrap_or(0);
+                            let (open, done) = task_counts(&conn, pid);
                             projects.push(serde_json::json!({
                                 "id": pid, "path": ppath, "name": pname,
                                 "tasks_open": open, "tasks_done": done,
@@ -2883,19 +3047,24 @@ pub fn super_agent_check_project_health(
 
     let mut overdue = Vec::new();
     {
+        let today: String = conn
+            .query_row("SELECT date('now')", [], |r| r.get(0))
+            .unwrap_or_default();
         let mut stmt = conn
             .prepare(
-                "SELECT id, title, deadline FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL AND deadline < date('now') AND status NOT IN ('terminee','livree','annulee')",
+                "SELECT id, title, status, deadline FROM tasks WHERE project_id = ?1 AND deadline IS NOT NULL ORDER BY deadline ASC",
             )
             .map_err(|e| format!("Erreur lecture tâches en retard: {}", e))?;
         let rows = stmt
             .query_map(rusqlite::params![project_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
             })
             .map_err(|e| format!("Erreur lecture tâches en retard: {}", e))?;
         for row in rows {
-            if let Ok((id, title, deadline)) = row {
-                overdue.push(serde_json::json!({"id": id, "title": title, "deadline": deadline}));
+            if let Ok((id, title, status, deadline)) = row {
+                if is_task_open(&status) && deadline.as_str() < today.as_str() {
+                    overdue.push(serde_json::json!({"id": id, "title": title, "deadline": deadline}));
+                }
             }
         }
     }
@@ -4107,14 +4276,15 @@ mod tests_inner_helper {
 }
 mod tests {
     use super::{
-        build_capped_injection_message, build_project_context, deliver_one_summary,
-        enqueue_session_summary, init_db, kanban_tasks,
+        build_capped_injection_message, build_project_context, classify_task_status,
+        deliver_one_summary, enqueue_session_summary, init_db, is_task_open, kanban_tasks,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
-        take_trash_entry, trash_entry_preview, validate_export_json, list_memory_trash_entries,
+        task_counts, take_trash_entry, trash_entry_preview, validate_export_json,
+        list_memory_trash_entries,
         memory_removal_result, parse_model_spec, resolve_super_agent_model, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
@@ -4261,6 +4431,51 @@ mod tests {
             .find(|t| t["title"] == "Tâche sans échéance")
             .unwrap();
         assert!(undated["deadline"].is_null());
+    }
+
+    // Règle unique « ouverte ou close » (miroir de la non-régression JS) : une
+    // tâche close par un statut en texte libre NE DOIT PAS compter comme « à
+    // faire ». Libellés réels de la base Pilot. Ce test échoue si la règle
+    // retombe sur un « à faire » générique pour ces statuts.
+    #[test]
+    fn classify_task_status_recognizes_free_text_closures() {
+        for s in [
+            "terminee - verifie par les fichiers (commits f676020, de5db3c ; 1202 tests interface)",
+            "terminee - corrige et verifie",
+            "diagnostic terminee - cause identifiee (marquage livre optimiste)",
+            "decidee - on n embarque pas le modele",
+            "livree - v0.4.11 publiee et installateurs disponibles",
+            "livre_a_tester",
+            "fermee_github",
+        ] {
+            assert_eq!(classify_task_status(s), "done", "statut libre non reconnu: {}", s);
+            assert!(!is_task_open(s), "tâche close comptée ouverte: {}", s);
+        }
+        // Un statut inconnu n'est ni « à faire » ni masqué : il est « à qualifier ».
+        assert_eq!(classify_task_status("redaction_specs"), "unqualified");
+        assert!(!is_task_open("redaction_specs"));
+        assert_eq!(classify_task_status("demande"), "todo");
+        assert!(is_task_open("en_cours"));
+    }
+
+    #[test]
+    fn task_counts_ignores_finished_and_unknown_tasks() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO projects (path, name) VALUES ('/p/a', 'A');\
+             INSERT INTO tasks (project_id, title, status) VALUES \
+               (1, 'à faire', 'demande'),\
+               (1, 'en cours', 'en_cours'),\
+               (1, 'à valider', 'a_valider'),\
+               (1, 'fini texte libre', 'terminee - verifie par les fichiers'),\
+               (1, 'github fermé', 'fermee_github'),\
+               (1, 'annulée', 'annulee'),\
+               (1, 'inconnu', 'redaction_specs');",
+        )
+        .unwrap();
+        // 3 ouvertes (demande, en_cours, a_valider), 2 terminées (texte libre,
+        // fermee_github) ; annulée et inconnue hors des deux compteurs.
+        assert_eq!(task_counts(&conn, 1), (3, 2));
     }
 
     #[test]

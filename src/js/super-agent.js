@@ -37,6 +37,7 @@ import {
   normalizeTaskStatus,
   taskStatusLabel,
   filterOpenTasksByClient,
+  filterUnqualifiedTasksByClient,
   formatTaskDeadline,
 } from "./super-agent-kanban.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
@@ -1488,27 +1489,38 @@ async function loadSuperTasks() {
     return;
   }
   const open = filterOpenTasksByClient(clients);
+  const unqualified = filterUnqualifiedTasksByClient(clients);
   superTasksById.clear();
-  if (!open.length) {
+  if (!open.length && !unqualified.length) {
     superTasksList.innerHTML =
       `<div class="dash-muted">Aucune tâche ouverte : rien à faire pour l'instant.</div>`;
     return;
   }
-  let html = "";
-  for (const client of open) {
-    html += `<div class="sa-task-client">${escapeHtmlForSuper(client.name)} <span class="dash-muted">${client.tasks.length}</span></div>`;
-    for (const t of client.tasks) {
-      superTasksById.set(t.id, t);
-      const dl = formatTaskDeadline(t.deadline);
-      const meta = [escapeHtmlForSuper(t.project_name || "")];
-      if (dl) meta.push(`échéance ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
-      html += `<div class="sa-task-item" data-task-id="${escapeAttrForSuper(String(t.id))}" role="button" tabindex="0" title="Afficher le détail dans la conversation">
+  const itemHtml = (t) => {
+    superTasksById.set(t.id, t);
+    const dl = formatTaskDeadline(t.deadline);
+    const meta = [escapeHtmlForSuper(t.project_name || "")];
+    if (dl) meta.push(`échéance ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
+    return `<div class="sa-task-item" data-task-id="${escapeAttrForSuper(String(t.id))}" role="button" tabindex="0" title="Afficher le détail dans la conversation">
         <div class="sa-task-head">
           <span class="sa-task-title">${escapeHtmlForSuper(t.title || "Sans titre")}</span>
           <span class="sa-task-status tone-${normalizeTaskStatus(t.status)}">${escapeHtmlForSuper(taskStatusLabel(t.status))}</span>
         </div>
         <div class="sa-task-meta">${meta.filter(Boolean).join(" · ")}</div>
       </div>`;
+  };
+  let html = "";
+  for (const client of open) {
+    html += `<div class="sa-task-client">${escapeHtmlForSuper(client.name)} <span class="dash-muted">${client.tasks.length}</span></div>`;
+    for (const t of client.tasks) html += itemHtml(t);
+  }
+  // Case distincte « À qualifier » : un statut inconnu reste visible mais ne
+  // compte jamais comme « à faire » (constraint 2 — rien ne disparaît en silence).
+  if (unqualified.length) {
+    const n = unqualified.reduce((sum, c) => sum + c.tasks.length, 0);
+    html += `<div class="sa-task-client">À qualifier <span class="dash-muted">${n}</span></div>`;
+    for (const client of unqualified) {
+      for (const t of client.tasks) html += itemHtml(t);
     }
   }
   superTasksList.innerHTML = html;

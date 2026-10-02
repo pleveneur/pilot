@@ -4102,6 +4102,7 @@ body.zen-mode #project-footer {
 .sa-task-status.tone-progress { --kanban-tone: #60a5fa; }
 .sa-task-status.tone-review { --kanban-tone: #c084fc; }
 .sa-task-status.tone-done { --kanban-tone: #4ade80; }
+.sa-task-status.tone-unqualified { --kanban-tone: #94a3b8; }
 .sa-task-meta {
   margin-top: 2px;
   font-size: var(--font-xs);
@@ -7397,6 +7398,7 @@ body.pilot-loading *::after {
 .super-kanban-col.tone-progress { --kanban-tone: #60a5fa; }
 .super-kanban-col.tone-review { --kanban-tone: #c084fc; }
 .super-kanban-col.tone-done { --kanban-tone: #4ade80; }
+.super-kanban-col.tone-unqualified { --kanban-tone: #94a3b8; }
 .super-kanban-col-count {
   margin-left: auto;
   background: var(--surface-2, #1e2128);

@@ -20,6 +20,9 @@ export const KANBAN_COLUMNS = [
   { key: "progress", label: "En cours", icon: "loader", tone: "progress" },
   { key: "review", label: "À valider", icon: "eye", tone: "review" },
   { key: "done", label: "Terminé", icon: "check-circle-2", tone: "done" },
+  // Statut vraiment inconnu : ni « à faire » ni masqué, isolé dans sa propre
+  // case pour qu'il reste visible et qualifiable par le propriétaire.
+  { key: "unqualified", label: "À qualifier", icon: "help-circle", tone: "unqualified" },
 ];
 
 // Statuts « non affichés » dans les 4 colonnes (annulés / abandonnés).
@@ -42,6 +45,7 @@ const TODO_STATUSES = new Set([
   "nouveau",
   "nouvelle",
   "a_faire",
+  "afaire",
   "todo",
   "backlog",
   "prioritaire",
@@ -52,6 +56,7 @@ const PROGRESS_STATUSES = new Set([
   "en_cours",
   "encours",
   "en_travail",
+  "entravail",
   "travail",
   "actif",
   "active",
@@ -67,9 +72,12 @@ const REVIEW_STATUSES = new Set([
   "a_valider",
   "avalider",
   "a_tester",
+  "atester",
   "en_validation",
+  "envalidation",
   "validation",
   "en_attente",
+  "enattente",
   "attente",
   "waiting",
   "review",
@@ -77,7 +85,10 @@ const REVIEW_STATUSES = new Set([
   "test",
 ]);
 
-// Statuts → colonne « Terminé » (réalisé / livré / validé / résolu).
+// Statuts → colonne « Terminé » (réalisé / livré / validé / résolu). Ces
+// mots-clés servent AUSSI de marqueurs de FIN reconnus dans un statut en texte
+// libre (voir `normalizeTaskStatus`) : « terminee - verifie par les fichiers … »
+// ou « fermee_github » comptent donc comme terminé.
 const DONE_STATUSES = new Set([
   "terminee",
   "termine",
@@ -94,36 +105,57 @@ const DONE_STATUSES = new Set([
   "fermee",
   "ferme",
   "cloturee",
+  "cloture",
   "resolue",
   "resolu",
+  "decidee",
+  "fermeegithub",
   "done",
   "closed",
 ]);
 
-/** Réduit un statut à sa forme normalisée (minuscules, sans accents/espaces). */
-function normalizeStatusToken(status) {
+/**
+ * Découpe un statut libre en jetons normalisés (minuscules, sans accents,
+ * séparés sur tout caractère non alphanumérique). « terminee - verifie … » →
+ * ["terminee", "verifie", …]. Pur.
+ */
+function statusTokens(status) {
   return String(status || "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]/g, "")
-    .trim();
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
 }
 
 /**
  * Normalise un statut libre vers une colonne Kanban : todo | progress | review
- * | done | "cancelled" (hors colonnes). Toute valeur inconnue/vide → "todo".
+ * | done | "cancelled" | "unqualified". La décision « ouverte ou close » est
+ * PRISE ICI, en un seul endroit, côté interface (miroir Rust :
+ * `classify_task_status` dans `super_agent.rs`) :
+ *  - annulé/abandonné → "cancelled" (hors colonnes) ;
+ *  - un marqueur de fin (terminee, livree, fermee, decidee, …) reconnu comme
+ *    jeton du statut → "done", même suivi d'un texte libre ;
+ *  - sinon exactement l'un des statuts connus → sa colonne ;
+ *  - statut vide ou vraiment inconnu → "unqualified" (jamais « À faire »).
  */
 export function normalizeTaskStatus(status) {
-  const token = normalizeStatusToken(status);
-  if (!token) return "todo";
-  if (CANCELLED_STATUSES.has(token)) return "cancelled";
-  if (PROGRESS_STATUSES.has(token)) return "progress";
-  if (REVIEW_STATUSES.has(token)) return "review";
-  if (DONE_STATUSES.has(token)) return "done";
-  if (TODO_STATUSES.has(token)) return "todo";
-  // Défaut conservateur : une tâche demandée et non catégorisée → À faire.
-  return "todo";
+  const tokens = statusTokens(status);
+  if (!tokens.length) return "unqualified";
+  const joined = tokens.join("");
+  if (joined === "aqualifier") return "unqualified";
+  if (CANCELLED_STATUSES.has(joined) || tokens.some((t) => CANCELLED_STATUSES.has(t))) {
+    return "cancelled";
+  }
+  if (DONE_STATUSES.has(joined) || tokens.some((t) => DONE_STATUSES.has(t))) {
+    return "done";
+  }
+  if (PROGRESS_STATUSES.has(joined)) return "progress";
+  if (REVIEW_STATUSES.has(joined)) return "review";
+  if (TODO_STATUSES.has(joined)) return "todo";
+  // Un statut vraiment inconnu n'est PAS « à faire » : il reste visible dans
+  // la case distincte « À qualifier ».
+  return "unqualified";
 }
 
 /**
@@ -143,6 +175,8 @@ export function columnToStatus(key) {
       return "a_valider";
     case "done":
       return "terminee";
+    case "unqualified":
+      return "a_qualifier";
     case "cancelled":
       return "annulee";
     default:
@@ -193,16 +227,16 @@ export function buildKanbanByClient(clients) {
 }
 
 /**
- * Une tâche est-elle OUVERTE ? Une tâche terminée ou annulée/abandonnée ne
- * l'est pas : l'onglet « Tâches » du panneau cloche ne montre que ce qu'il
- * reste à faire, pas l'historique. Toute autre valeur (y compris un statut
- * inconnu, classé « À faire ») est ouverte. Pur et testable.
+ * Une tâche est-elle OUVERTE ? L'onglet « Tâches » du panneau cloche ne montre
+ * que le travail qui reste à faire. Une tâche terminée, annulée/abandonnée OU
+ * à qualifier (statut inconnu) n'est pas « ouverte » : elle ne doit pas
+ * gonfler la liste « à faire ». Pur et testable.
  * @param {string} status statut brut en base
  * @returns {boolean}
  */
 export function isOpenTaskStatus(status) {
   const key = normalizeTaskStatus(status);
-  return key !== "done" && key !== "cancelled";
+  return key === "todo" || key === "progress" || key === "review";
 }
 
 /**
@@ -232,6 +266,26 @@ export function filterOpenTasksByClient(clients) {
   for (const client of clients || []) {
     if (!client) continue;
     const tasks = (client.tasks || []).filter((t) => isOpenTaskStatus(t && t.status));
+    if (tasks.length) out.push({ name: client.name || "Sans client", tasks });
+  }
+  return out;
+}
+
+/**
+ * Miroir de `filterOpenTasksByClient` pour la case distincte « À qualifier » :
+ * conserve les tâches au statut inconnu (ni ouverte ni close), par client, afin
+ * qu'elles restent VISIBLES et qualifiables au lieu d'être comptées « à faire ».
+ * Pur.
+ * @param {Array<{name?: string, tasks?: Array}>} clients
+ * @returns {Array<{name: string, tasks: Array}>}
+ */
+export function filterUnqualifiedTasksByClient(clients) {
+  const out = [];
+  for (const client of clients || []) {
+    if (!client) continue;
+    const tasks = (client.tasks || []).filter(
+      (t) => normalizeTaskStatus(t && t.status) === "unqualified"
+    );
     if (tasks.length) out.push({ name: client.name || "Sans client", tasks });
   }
   return out;
