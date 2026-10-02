@@ -8786,6 +8786,45 @@ body.pilot-loading *::after {
   background: color-mix(in srgb, var(--text-muted, #6b7280) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-muted, #6b7280) 35%, transparent);
 }
+.gds-admin-badge.error {
+  color: var(--danger, #f87171);
+  background: color-mix(in srgb, var(--danger, #f87171) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger, #f87171) 35%, transparent);
+}
+/* LISTE des serveurs enregistrés (une ligne par serveur) : remplace l'ancien
+   sélecteur déroulant. Chaque ligne porte son état et l'action « Administrer ». */
+.gds-admin-server-list-title {
+  font-size: 12px;
+  color: var(--text-secondary, #a0a6b4);
+  margin: 0 0 4px;
+}
+.gds-admin-server-list {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.gds-admin-server-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.gds-admin-server-row:last-child { border-bottom: none; }
+.gds-admin-server-main { flex: 1; min-width: 0; }
+.gds-admin-server-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* Fenêtre superposée « Ajouter un serveur » : champs à largeur modérée (le
+   dialogue est borné à 520 px, la grille `1fr 120px` des champs reste celle de
+   la section « Connexion serveur »). */
+.gds-admin-overlay-content { width: 520px; }
+/* Section « Connexion serveur » : les champs restent à largeur modérée au lieu
+   de s'étirer sur toute la largeur de l'écran. Ciblé sur cette section : les
+   autres grilles (création de compte, formulaires des dépôts) gardent la leur. */
+[data-section-id="connection"] .gds-admin-form { max-width: 560px; }
 .gds-admin-reset {
   background: var(--surface-2, #1e2127);
   border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));

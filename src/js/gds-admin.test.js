@@ -41,13 +41,17 @@ import {
   nextStatusToggle,
   pickPrefill,
   adminServerOptionValue,
-  renderAdminServerSelectorHtml,
+  adminServerRowState,
+  adminVisibleTabs,
   renderAccountsSectionHtml,
   renderAccountsStatusHtml,
   renderAccountsTableHtml,
+  renderAdminAddServerDialogHtml,
   renderAdminSectionHtml,
+  renderAdminServerListHtml,
   renderAdminShellHtml,
   renderAuditTableHtml,
+  renderConnectionFieldsHtml,
   renderConnectionSectionHtml,
   renderConnectionStatusHtml,
   renderProjectRemoveConfirmHtml,
@@ -274,7 +278,7 @@ describe("pickPrefill (pure)", () => {
   });
 });
 
-describe("adminServerOptionValue / renderAdminServerSelectorHtml (pure, lot 4)", () => {
+describe("adminServerOptionValue / adminServerRowState (liste des serveurs, pur)", () => {
   const servers = [
     { host: " 10.0.0.1 ", http_port: "8090", email: " a@b ", has_password: true },
     { host: "10.0.0.2", email: "c@d" },
@@ -285,25 +289,134 @@ describe("adminServerOptionValue / renderAdminServerSelectorHtml (pure, lot 4)",
     expect(adminServerOptionValue({})).toBe("|");
   });
 
-  it("aucun serveur : aucun sélecteur (pas de bruit inutile)", () => {
-    expect(renderAdminServerSelectorHtml([])).toBe("");
-    expect(renderAdminServerSelectorHtml([{ host: "", email: "a@b" }])).toBe("");
+  it("état d'une ligne : connecté, échec, à compléter, enregistré", () => {
+    const cur = { host: "10.0.0.2", email: "c@d" };
+    expect(adminServerRowState(servers[0], cur)).toEqual({ kind: "off", text: "Enregistré" });
+    expect(adminServerRowState(servers[1], cur)).toEqual({ kind: "ok", text: "Connecté" });
+    expect(adminServerRowState(servers[1], {}, { "10.0.0.2|c@d": true })).toEqual({
+      kind: "error",
+      text: "Échec de connexion",
+    });
+    // Serveur mémorisé sans mot de passe sur ce poste : utilisable, mais à
+    // compléter — on ne prétend pas qu'il est prêt à l'emploi.
+    expect(adminServerRowState({ host: "h", email: "a@b" }, {})).toEqual({
+      kind: "warn",
+      text: "À compléter (mot de passe)",
+    });
+    // Le serveur courant prime sur un échec de la même session.
+    expect(adminServerRowState(servers[1], cur, { "10.0.0.2|c@d": true }).kind).toBe("ok");
+  });
+});
+
+describe("adminVisibleTabs (pure) — les autres sous-onglets n'apparaissent qu'après connexion", () => {
+  it("aucune connexion aboutie : seul « Connexion serveur » est proposé", () => {
+    expect(adminVisibleTabs(false).map((t) => t.id)).toEqual(["connection"]);
+    expect(adminVisibleTabs(undefined).map((t) => t.id)).toEqual(["connection"]);
   });
 
-  it("liste les serveurs, sélectionne le courant, sans jamais de secret", () => {
-    const html = renderAdminServerSelectorHtml(servers, { host: "10.0.0.2", email: "c@d" });
-    expect(html).toContain('id="gds-admin-server-select"');
-    expect(html).toContain('value="10.0.0.1|a@b"');
-    expect(html).toContain('value="10.0.0.2|c@d" selected');
-    expect(html).toContain("— saisie manuelle —");
+  it("connexion réussie : les cinq sous-onglets sont proposés", () => {
+    expect(adminVisibleTabs(true).map((t) => t.id)).toEqual(ADMIN_TABS.map((t) => t.id));
+    expect(adminVisibleTabs(true)).toHaveLength(5);
+  });
+});
+
+describe("renderAdminServerListHtml (pure) — liste des serveurs, action « Administrer »", () => {
+  const servers = [
+    { host: " 10.0.0.1 ", http_port: "8090", email: " a@b ", has_password: true },
+    { host: "10.0.0.2", email: "c@d" },
+  ];
+
+  it("liste vide (ou inexploitable) : aucun bloc, pas de bruit inutile", () => {
+    expect(renderAdminServerListHtml([])).toBe("");
+    expect(renderAdminServerListHtml([{ host: "", email: "a@b" }])).toBe("");
+  });
+
+  it("une ligne par serveur : hôte, identité, port, état et bouton « Administrer »", () => {
+    const html = renderAdminServerListHtml(servers, { host: "10.0.0.2", email: "c@d" });
+    expect(html.match(/class="gds-admin-server-row"/g)).toHaveLength(2);
+    expect(html.match(/data-admin-server=/g)).toHaveLength(2);
+    expect(html).toContain('data-admin-server="10.0.0.1|a@b"');
+    expect(html).toContain('data-admin-server="10.0.0.2|c@d"');
+    expect(html).toContain("Administrer");
+    expect(html).toContain("Port 8090");
+    // Port absent → port par défaut affiché (jamais une ligne muette).
+    expect(html).toContain(`Port ${DEFAULT_HTTP_PORT}`);
+    expect(html).toContain("Connecté");
+    expect(html).toContain("Enregistré");
+    // C'est une LISTE affichée, pas un menu déroulant.
+    expect(html).not.toContain("<select");
+  });
+
+  it("PREUVE : aucun secret dans la liste, même si l'entrée en porte un", () => {
+    const html = renderAdminServerListHtml([
+      { host: "h", email: "a@b", has_password: true, password: "S3CR3T-PW", token: "TOKEN-PW" },
+    ]);
+    expect(html).not.toContain("S3CR3T-PW");
+    expect(html).not.toContain("TOKEN-PW");
     expect(html).not.toContain("has_password");
-    expect(html).not.toContain("password");
   });
 
   it("échappe les valeurs (jamais de HTML injecté)", () => {
-    const html = renderAdminServerSelectorHtml([{ host: "<b>h</b>", email: "x@y" }]);
+    const html = renderAdminServerListHtml([{ host: "<b>h</b>", email: "x@y" }]);
     expect(html).not.toContain("<b>h</b>");
     expect(html).toContain("&lt;b&gt;h&lt;/b&gt;");
+  });
+});
+
+describe("fenêtre superposée « Ajouter un serveur » (pure)", () => {
+  it("rendu partagé : mêmes champs, `id` préfixés pour la fenêtre superposée", () => {
+    const dlg = renderAdminAddServerDialogHtml(initialConnectionState());
+    for (const id of ["host", "port", "email", "password"]) {
+      expect(dlg).toContain(`id="gds-admin-add-${id}"`);
+    }
+    expect(dlg).toContain('id="gds-admin-add-overlay"');
+    expect(dlg).toContain('id="gds-admin-add-cancel"');
+    expect(dlg).toContain('id="gds-admin-add-save"');
+    expect(dlg).toContain("Se connecter et ajouter");
+    // Aucun `id` en double avec la section : les deux rendus cohabitent.
+    expect(dlg).not.toContain('id="gds-admin-host"');
+    expect(renderConnectionFieldsHtml(initialConnectionState(), "gds-admin-")).toContain(
+      'id="gds-admin-password"',
+    );
+  });
+
+  it("n'annonce l'enregistrement qu'après une connexion réussie", () => {
+    expect(renderAdminAddServerDialogHtml(initialConnectionState())).toContain(
+      "Aucun serveur n'est enregistré avant une connexion réussie",
+    );
+    expect(renderAdminAddServerDialogHtml({ addBusy: true })).toContain("Connexion au serveur en cours");
+    expect(renderAdminAddServerDialogHtml({ addError: "Connexion refusée : <b>401</b>" })).toContain(
+      "Connexion refusée",
+    );
+  });
+
+  it("champs pré-remplis, mot de passe mémorisé jamais révélé", () => {
+    const html = renderConnectionFieldsHtml({
+      ...initialConnectionState(),
+      host: "192.168.1.10",
+      port: "8090",
+      email: "admin@x",
+      hasPassword: true,
+    });
+    expect(html).toContain('value="192.168.1.10"');
+    expect(html).toContain('value="8090"');
+    expect(html).toContain('value="admin@x"');
+    expect(html).toContain("•••••••• (mémorisé)");
+  });
+
+  it("PREUVE : aucun champ mot de passe n'a de valeur, même si l'état en porte une", () => {
+    const st = { ...initialConnectionState(), password: "S3CR3T-PW", token: "TOKEN-PW" };
+    for (const html of [
+      renderConnectionFieldsHtml(st, "gds-admin-"),
+      renderConnectionFieldsHtml(st, "gds-admin-add-"),
+      renderAdminAddServerDialogHtml(st),
+    ]) {
+      const input = html.match(/<input id="[^"]*password"[^>]*>/);
+      expect(input).not.toBeNull();
+      expect(input[0]).not.toContain("value=");
+      expect(html).not.toContain("S3CR3T-PW");
+      expect(html).not.toContain("TOKEN-PW");
+    }
   });
 });
 
@@ -374,6 +487,24 @@ describe("renderConnectionSectionHtml (pure) — secrets", () => {
     expect(html).toContain("Tester la connexion");
     expect(html).toContain("Se connecter");
     expect(html).toContain("À connecter — L4.2");
+    // LISTE + bouton d'ajout (aucun menu déroulant).
+    expect(html).toContain('id="gds-admin-srv-add"');
+    expect(html).toContain("Ajouter un serveur");
+    expect(html).not.toContain("<select");
+  });
+
+  it("affiche la liste des serveurs enregistrés, et explique l'ajout quand il n'y en a aucun", () => {
+    const empty = renderConnectionSectionHtml(initialConnectionState());
+    expect(empty).not.toContain("gds-admin-server-list");
+    expect(empty).toContain("Aucun serveur GDS n'est encore enregistré sur ce poste");
+    const html = renderConnectionSectionHtml({
+      ...initialConnectionState(),
+      savedServers: [{ host: "10.0.0.1", http_port: "8090", email: "a@b", has_password: true }],
+    });
+    expect(html).toContain("gds-admin-server-list");
+    expect(html).toContain('data-admin-server="10.0.0.1|a@b"');
+    expect(html).toContain("Administrer");
+    expect(html).not.toContain("Aucun serveur GDS n'est encore enregistré");
   });
 
   it("pré-remplit adresse/port/email et signale un mot de passe mémorisé sans le révéler", () => {
@@ -1169,5 +1300,57 @@ describe("L4.6 — Contrôle du service (rendus purs, garde de rôle, double con
   it("expose une description de section non vide", () => {
     expect(SERVICE_DESC.length).toBeGreaterThan(20);
     expect(SERVICE_DESC).toContain("PostgreSQL");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Garde-fou anti-régression : branchements oubliés dans `bind()` / `bindAddDialog()`
+// (un `q("#…")` ou un gestionnaire appelé mais inexistant ne se voit pas à la
+// relecture d'un diff — il se voit au premier clic en production.)
+// ─────────────────────────────────────────────────────────────────────────────
+describe("gds-admin.js — tout élément câblé existe, tout gestionnaire appelé existe", () => {
+  const SRC = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "gds-admin.js"), "utf8");
+
+  // `id` émis par un gabarit à préfixe variable (section ↔ fenêtre superposée).
+  const IDS_A_PREFIXE = ["gds-admin-password", "gds-admin-add-password"];
+
+  /** Corps d'une fonction (accolades équilibrées), pour n'analyser que le câblage. */
+  function bodyOf(header) {
+    const start = SRC.indexOf(header);
+    expect(start, `${header} introuvable`).toBeGreaterThan(-1);
+    let depth = 0;
+    for (let i = SRC.indexOf("{", start); i < SRC.length; i += 1) {
+      if (SRC[i] === "{") depth += 1;
+      else if (SRC[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return SRC.slice(start, i + 1);
+      }
+    }
+    throw new Error(`${header} non refermé`);
+  }
+
+  const CABLAGE = ["  function bind() {", "  function bindAddDialog() {"]
+    .map(bodyOf)
+    .join("\n");
+
+  it("chaque sélecteur `q(\"#…\")` du câblage correspond à un `id` réellement rendu", () => {
+    const ids = [...CABLAGE.matchAll(/q\("#([a-z0-9-]+)"\)/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(5);
+    for (const id of ids) {
+      if (IDS_A_PREFIXE.includes(id)) continue;
+      expect(SRC.includes(`id="${id}"`), `id="${id}" câblé mais jamais rendu`).toBe(true);
+    }
+  });
+
+  it("chaque gestionnaire appelé depuis le câblage est bien défini dans le fichier", () => {
+    const calls = [...CABLAGE.matchAll(/=> ([a-zA-Z_$][\w$]*)\(/g)].map((m) => m[1]);
+    expect(calls.length).toBeGreaterThan(5);
+    for (const fn of new Set(calls)) {
+      const defined =
+        SRC.includes(`function ${fn}(`) ||
+        SRC.includes(`const ${fn} =`) ||
+        SRC.includes(`let ${fn} =`);
+      expect(defined, `${fn}() appelé mais jamais défini`).toBe(true);
+    }
   });
 });

@@ -390,12 +390,22 @@ d'un hébergement externe type GitHub.
   paramétrage (infobulle *« GDS — paramétrage utilisateur (onglet transverse,
   hors projet) »*) ; l'onglet **« 🌐 GDS »**, lui, reste **dans le projet**
   (panneau **Vues**) :
-  - **« 🖥️ GDS Serveur — administration »** : connexion au serveur (**sélecteur
-    explicite** des serveurs d'administration mémorisés, ou saisie manuelle),
-    **Comptes** (créer, changer le rôle, activer/désactiver, réinitialiser un
-    mot de passe), **Dépôts / projets** (retrait avec purge),
-    **Espace utilisé + journal des connexions**, et **Contrôle du service**
-    (redémarrer le service GDS ou le conteneur) ;
+  - **« 🖥️ GDS Serveur — administration »** : écran à **sous-onglets** —
+    **Connexion serveur**, **Comptes** (créer, changer le rôle,
+    activer/désactiver, réinitialiser un mot de passe), **Dépôts / projets**
+    (retrait avec purge), **Espace utilisé + journal des connexions**, **Contrôle
+    du service** (redémarrer le service GDS ou le conteneur). La page **Connexion
+    serveur** liste les **serveurs déjà paramétrés** : une ligne par serveur,
+    avec son **état** (« Connecté », « Enregistré », « Échec de connexion », « À
+    compléter (mot de passe) ») et le bouton **« Administrer »** qui ouvre
+    l'administration de **ce** serveur. Juste en dessous, **« Ajouter un
+    serveur »** ouvre une petite fenêtre **par-dessus** l'écran (adresse, port,
+    e-mail administrateur, mot de passe GDS) : la fiche n'est **ajoutée à la
+    liste que si la connexion aboutit** — sinon le message d'erreur s'affiche
+    dans cette fenêtre et **rien n'est enregistré**. Les champs de saisie
+    restent à largeur modérée. Les quatre autres sous-onglets n'apparaissent
+    qu'**après la première connexion réussie**, et restent fermés tant que les
+    identifiants d'administration ne sont pas saisis et validés ;
   - **« ⚙️ GDS — paramétrage »** : **Serveurs GDS** mémorisés portant un **nom**
     (obligatoire) et une **description** (facultative). Une fiche décrit votre
     **compte GDS** sur ce serveur : **adresse**, **port du service** (8080 par

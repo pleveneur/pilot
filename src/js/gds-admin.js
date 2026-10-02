@@ -84,6 +84,16 @@ export const ADMIN_TABS = [
   { id: "service", label: "Service" },
 ];
 
+/**
+ * Sous-onglets VISIBLES de l'écran d'administration (pure, testable). Tant
+ * qu'aucune connexion n'a abouti — codes administrateur saisis et validés —
+ * SEUL le premier sous-onglet (« Connexion serveur ») est proposé ; les autres
+ * n'apparaissent qu'après une connexion réussie.
+ */
+export function adminVisibleTabs(connected) {
+  return connected ? ADMIN_TABS : ADMIN_TABS.slice(0, 1);
+}
+
 /** Échappe le HTML pour injection sûre dans innerHTML. */
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -178,6 +188,14 @@ export function initialConnectionState() {
     ok: false,
     error: "",
     server: null,
+    /** Serveurs d'administration mémorisés sur ce poste (LISTE, une par ligne). */
+    savedServers: [],
+    /** Échecs de connexion de cette session, par clé de serveur (`host|email`). */
+    failed: {},
+    /** Petite fenêtre superposée « Ajouter un serveur » ouverte. */
+    adding: false,
+    addBusy: false,
+    addError: "",
   };
 }
 
@@ -208,30 +226,54 @@ export function adminServerOptionValue(s) {
 }
 
 /**
- * Rend le SÉLECTEUR de serveur mémorisé de l'écran d'administration (lot 4) :
- * choisir explicitement parmi les serveurs mémorisés au lieu d'un
- * pré-remplissage silencieux par le premier de la liste. Chaîne vide si aucune
- * entrée : aucun sélecteur inutile. Pure — testable, aucun secret.
+ * État affiché d'une ligne de serveur mémorisé (pure, testable) :
+ *   `ok`    = serveur COURANT de la session (connexion réussie sur cet écran) ;
+ *   `error` = connexion tentée et refusée dans cette session ;
+ *   `warn`  = identifiants incomplets (aucun mot de passe mémorisé sur ce poste) ;
+ *   `off`   = enregistré, pas encore connecté depuis cet écran.
  */
-export function renderAdminServerSelectorHtml(savedServers, current = {}) {
+export function adminServerRowState(server, current = {}, failed = {}) {
+  const sv = server || {};
+  const key = adminServerOptionValue(sv);
+  if (key === adminServerOptionValue(current)) return { kind: "ok", text: "Connecté" };
+  if (failed && failed[key] === true) return { kind: "error", text: "Échec de connexion" };
+  if (!sv.has_password) return { kind: "warn", text: "À compléter (mot de passe)" };
+  return { kind: "off", text: "Enregistré" };
+}
+
+/**
+ * Rend la LISTE des serveurs d'administration déjà paramétrés sur ce poste —
+ * une ligne par serveur (hôte, identité, port, état) et une action
+ * « Administrer » qui ouvre l'administration de CE serveur. Chaîne vide si la
+ * liste est vide : l'appelant affiche alors l'explication d'ajout. Pure —
+ * testable, aucun secret (la liste ne porte qu'un booléen `has_password`).
+ */
+export function renderAdminServerListHtml(savedServers, current = {}, failed = {}) {
   const list = (Array.isArray(savedServers) ? savedServers : []).filter(
     (s) => s && String(s.host || "").trim(),
   );
   if (!list.length) return "";
-  const cur = adminServerOptionValue(current);
+  const rows = list
+    .map((s) => {
+      const host = String(s.host || "").trim();
+      const email = String(s.email || "").trim();
+      const port = String(s.http_port || "").trim() || DEFAULT_HTTP_PORT;
+      const st = adminServerRowState(s, current, failed);
+      return `
+            <div class="gds-admin-server-row">
+              <div class="gds-admin-server-main">
+                <div class="gds-admin-server-title">${esc(host)} <span class="gds-admin-muted">${esc(email)}</span></div>
+                <div class="gds-admin-muted">Port ${esc(port)}</div>
+              </div>
+              <span class="gds-admin-badge ${esc(st.kind)}">${esc(st.text)}</span>
+              <button class="gds-admin-btn" data-admin-server="${esc(adminServerOptionValue(s))}"><i data-lucide="settings" class="icon-sm"></i> Administrer</button>
+            </div>`;
+    })
+    .join("");
   return `
-          <label class="gds-admin-field"><span>Serveur mémorisé</span>
-            <select id="gds-admin-server-select" class="gds-admin-select">
-              <option value="">— saisie manuelle —</option>
-              ${list
-                .map((s) => {
-                  const v = adminServerOptionValue(s);
-                  const label = `${String(s.host || "").trim()} — ${String(s.email || "").trim()}`;
-                  return `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(label)}</option>`;
-                })
-                .join("")}
-            </select>
-          </label>`;
+        <div class="gds-admin-server-list-title">Serveurs enregistrés sur ce poste</div>
+        <div class="gds-admin-server-list">${rows}
+        </div>`;
 }
 
 /**
@@ -288,9 +330,65 @@ export function renderConnectionStatusHtml(state = {}) {
 }
 
 /**
- * Rend la section « Connexion serveur » complète (pure, testable).
- * Le champ mot de passe est TOUJOURS rendu vide (aucun `value`) : le mot de
- * passe n'est jamais réinjecté dans le HTML, même après un test réussi.
+ * Rend les QUATRE champs de connexion (adresse, port, email, mot de passe) —
+ * rendu PUR unique, partagé par la section « Connexion serveur » et par la
+ * petite fenêtre superposée d'ajout : aucune duplication de formulaire.
+ * `prefix` préfixe les `id` (défaut `gds-admin-` ; la fenêtre superposée utilise
+ * `gds-admin-add-`). Le champ mot de passe est TOUJOURS rendu vide (aucun
+ * `value`) : le mot de passe n'est jamais réinjecté dans le HTML.
+ */
+export function renderConnectionFieldsHtml(state = {}, prefix = "gds-admin-") {
+  const s = { ...initialConnectionState(), ...state };
+  const pwPlaceholder = s.hasPassword ? "•••••••• (mémorisé)" : "mot de passe administrateur";
+  return `
+          <label class="gds-admin-field"><span>Adresse du serveur</span>
+            <input id="${prefix}host" type="text" placeholder="192.168.1.10 ou https://gds.exemple.com" value="${esc(s.host)}">
+          </label>
+          <label class="gds-admin-field gds-admin-field-narrow"><span>Port HTTP</span>
+            <input id="${prefix}port" type="text" inputmode="numeric" placeholder="${esc(DEFAULT_HTTP_PORT)}" value="${esc(s.port)}">
+          </label>
+          <label class="gds-admin-field"><span>Email administrateur</span>
+            <input id="${prefix}email" type="text" autocomplete="off" placeholder="admin@exemple.com" value="${esc(s.email)}">
+          </label>
+          <label class="gds-admin-field"><span>Mot de passe administrateur</span>
+            <input id="${prefix}password" type="password" autocomplete="new-password" placeholder="${esc(pwPlaceholder)}">
+          </label>`;
+}
+
+/**
+ * Rend la PETITE FENÊTRE SUPERPOSÉE « Ajouter un serveur » (pure, testable) :
+ * mêmes champs que la section (« rendu partagé »), même motif de fenêtre que la
+ * modale du menu GDS. La fiche n'est enregistrée qu'après une connexion
+ * réussie ; sinon l'erreur s'affiche ICI et rien n'est mémorisé.
+ */
+export function renderAdminAddServerDialogHtml(state = {}) {
+  const s = { ...initialConnectionState(), ...state };
+  const status = s.addBusy
+    ? `<div class="gds-admin-status loading">Connexion au serveur en cours…</div>`
+    : s.addError
+      ? `<div class="gds-admin-status error">⚠️ ${esc(s.addError)}</div>`
+      : `<div class="gds-admin-status idle">Aucun serveur n'est enregistré avant une connexion réussie.</div>`;
+  return `
+    <div class="gds-menu-overlay" id="gds-admin-add-overlay">
+      <div class="gds-menu-content gds-admin-overlay-content">
+        <div class="gds-menu-title"><i data-lucide="server" class="icon-sm"></i> Ajouter un serveur GDS</div>
+        <div class="gds-menu-sub">Compte administrateur de ce serveur. La fiche n'est enregistrée que si la connexion aboutit.</div>
+        <div class="gds-admin-form">${renderConnectionFieldsHtml(s, "gds-admin-add-")}
+        </div>
+        <div id="gds-admin-add-status" class="gds-admin-status-area">${status}</div>
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn" id="gds-admin-add-cancel">Annuler</button>
+          <button class="gds-admin-btn primary" id="gds-admin-add-save"${s.addBusy ? " disabled" : ""}><i data-lucide="log-in" class="icon-sm"></i> Se connecter et ajouter</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/**
+ * Rend la section « Connexion serveur » complète (pure, testable) : la LISTE
+ * des serveurs déjà paramétrés (une ligne par serveur, avec son état et
+ * l'action « Administrer »), puis le bouton d'ajout (fenêtre superposée), puis
+ * la saisie manuelle (repli).
  * @param {Object} state état du formulaire (voir `initialConnectionState`)
  */
 export function renderConnectionSectionHtml(state = {}) {
@@ -298,7 +396,10 @@ export function renderConnectionSectionHtml(state = {}) {
   const badge = s.ok
     ? `<span class="gds-admin-badge ok">● Connecté</span>`
     : `<span class="gds-admin-todo">À connecter — L4.2</span>`;
-  const pwPlaceholder = s.hasPassword ? "•••••••• (mémorisé)" : "mot de passe administrateur";
+  const list = renderAdminServerListHtml(s.savedServers, s, s.failed);
+  const empty = list
+    ? ""
+    : `<div class="gds-admin-status idle">Aucun serveur GDS n'est encore enregistré sur ce poste : ajoutez-en un ci-dessous.</div>`;
   return `
       <section class="gds-admin-section" data-section-id="connection">
         <div class="gds-admin-section-head">
@@ -306,26 +407,19 @@ export function renderConnectionSectionHtml(state = {}) {
           ${badge}
         </div>
         <div class="gds-admin-section-desc">${esc(CONNECTION_DESC)}</div>
-        <div class="gds-admin-form">${renderAdminServerSelectorHtml(s.savedServers, s)}
-          <label class="gds-admin-field"><span>Adresse du serveur</span>
-            <input id="gds-admin-host" type="text" placeholder="192.168.1.10 ou https://gds.exemple.com" value="${esc(s.host)}">
-          </label>
-          <label class="gds-admin-field gds-admin-field-narrow"><span>Port HTTP</span>
-            <input id="gds-admin-port" type="text" inputmode="numeric" placeholder="${esc(DEFAULT_HTTP_PORT)}" value="${esc(s.port)}">
-          </label>
-          <label class="gds-admin-field"><span>Email administrateur</span>
-            <input id="gds-admin-email" type="text" autocomplete="off" placeholder="admin@exemple.com" value="${esc(s.email)}">
-          </label>
-          <label class="gds-admin-field"><span>Mot de passe administrateur</span>
-            <input id="gds-admin-password" type="password" autocomplete="new-password" placeholder="${esc(pwPlaceholder)}">
-          </label>
+        ${list}
+        ${empty}
+        <div class="gds-admin-actions">
+          <button class="gds-admin-btn primary" id="gds-admin-srv-add"><i data-lucide="plus" class="icon-sm"></i> Ajouter un serveur</button>
+        </div>
+        <div class="gds-admin-form">${renderConnectionFieldsHtml(s)}
         </div>
         <div class="gds-admin-actions">
           <button class="gds-admin-btn" id="gds-admin-test"><i data-lucide="plug-zap" class="icon-sm"></i> Tester la connexion</button>
           <button class="gds-admin-btn primary" id="gds-admin-connect"><i data-lucide="log-in" class="icon-sm"></i> Se connecter</button>
         </div>
         <div id="gds-admin-connection-status" class="gds-admin-status-area">${renderConnectionStatusHtml(s)}</div>
-        <div class="gds-admin-hint">Le mot de passe n'est jamais renvoyé à l'interface : il sert seulement à ouvrir une session sur le serveur, puis est mémorisé par le poste (fichier de secrets en lecture seule, 0600) après un test réussi. L'identifiant d'administration est mémorisé à part de l'identité utilisée pour les projets.</div>
+        <div class="gds-admin-hint">Le mot de passe n'est jamais renvoyé à l'interface : il sert seulement à ouvrir une session sur le serveur, puis est mémorisé par le poste (fichier de secrets en lecture seule, 0600) après un test réussi. L'identifiant d'administration est mémorisé à part de l'identité utilisée pour les projets. Un serveur n'est ajouté à la liste ci-dessus qu'après une connexion réussie.</div>
       </section>`;
 }
 
@@ -1276,9 +1370,13 @@ export function createGdsAdmin(container) {
   /** Récupère la saisie AVANT tout redessin (hors mot de passe, qui n'est lu
    *  qu'au moment de l'envoi puis oublié). */
   function readFields() {
-    const host = q("#gds-admin-host");
-    const port = q("#gds-admin-port");
-    const email = q("#gds-admin-email");
+    // La fenêtre superposée d'ajout écrit dans les MÊMES champs d'état : quand
+    // elle est ouverte, c'est SA saisie qui fait foi (sinon le formulaire de la
+    // section, laissé en arrière-plan, écraserait ce que l'utilisateur tape).
+    const p = state.adding ? "#gds-admin-add-" : "#gds-admin-";
+    const host = q(`${p}host`);
+    const port = q(`${p}port`);
+    const email = q(`${p}email`);
     if (host) state.host = host.value;
     if (port) state.port = port.value;
     if (email) state.email = email.value;
@@ -1340,11 +1438,21 @@ export function createGdsAdmin(container) {
         storage: renderStorageSectionHtml(storage),
         service: renderServiceSectionHtml(service),
       },
-      tabs: ADMIN_TABS,
+      // Tant qu'aucune connexion n'a abouti, SEUL le premier sous-onglet est
+      // visible : les autres n'apparaissent qu'après une connexion réussie
+      // (codes administrateur saisis et validés).
+      tabs: adminVisibleTabs(state.ok),
       activeTab,
     });
     refreshIcons(container);
     bind();
+    // Petite fenêtre superposée d'ajout : ajoutée À LA FIN (donc au-dessus) et
+    // refermée par tout redessin dès que `state.adding` repasse à faux.
+    if (state.adding) {
+      container.insertAdjacentHTML("beforeend", renderAdminAddServerDialogHtml(state));
+      refreshIcons(container);
+      bindAddDialog();
+    }
   }
 
   function bind() {
@@ -1363,8 +1471,13 @@ export function createGdsAdmin(container) {
     const c = q("#gds-admin-connect");
     if (t) t.addEventListener("click", () => runConnectionTest(false));
     if (c) c.addEventListener("click", () => runConnectionTest(true));
-    const srvSel = q("#gds-admin-server-select");
-    if (srvSel) srvSel.addEventListener("change", () => onServerSelectChange(srvSel));
+    // LISTE des serveurs enregistrés : chaque ligne ouvre l'administration de
+    // CE serveur, et le bouton sous la liste ouvre la fenêtre d'ajout.
+    for (const btn of container.querySelectorAll("[data-admin-server]")) {
+      btn.addEventListener("click", () => onAdminServerRow(btn));
+    }
+    const srvAdd = q("#gds-admin-srv-add");
+    if (srvAdd) srvAdd.addEventListener("click", () => openAddServerDialog());
     const refresh = q("#gds-admin-acc-refresh");
     if (refresh) refresh.addEventListener("click", () => loadAccounts());
     const create = q("#gds-admin-acc-create");
@@ -1973,7 +2086,11 @@ export function createGdsAdmin(container) {
 
   async function runConnectionTest(memorize) {
     readFields();
-    const connPwEl = q("#gds-admin-password");
+    // Le mot de passe est lu sur LE champ réellement affiché : celui de la
+    // section, ou celui de la fenêtre superposée d'ajout quand elle est ouverte
+    // (même préfixe que `readFields`, sinon le test de connexion partirait sans
+    // mot de passe alors que l'utilisateur vient de le saisir).
+    const connPwEl = q(`${state.adding ? "#gds-admin-add-" : "#gds-admin-"}password`);
     state.password = connPwEl ? connPwEl.value : "";
     if (!String(state.host).trim()) {
       state.loading = false;
@@ -2012,6 +2129,9 @@ export function createGdsAdmin(container) {
         state.server = res;
         state.error = "";
         if (memorize && hadPassword) state.hasPassword = true;
+        markRowFailure(false);
+        // Une connexion mémorisée ajoute (ou complète) une ligne de la LISTE.
+        if (memorize) prefillSaved({ silent: true });
         // Identité admin utilisable pour les opérations sur les comptes : les
         // commandes s'appuient sur le mot de passe mémorisé (jamais renvoyé ni
         // conservé ici).
@@ -2035,24 +2155,151 @@ export function createGdsAdmin(container) {
       state.ok = false;
       state.server = null;
       state.error = (res && res.error) || "Échec du test de connexion.";
+      markRowFailure(true);
     } catch (e) {
       if (disposed) return;
       state.loading = false;
       state.ok = false;
       state.server = null;
       state.error = String((e && e.message) || e || "Erreur inattendue");
+      markRowFailure(true);
     }
     draw();
   }
 
-  /** Pré-remplit le formulaire depuis un serveur d'administration mémorisé. */
-  async function prefillSaved() {
+  /** Marque (ou efface) l'échec de connexion d'une ligne de la LISTE (session). */
+  function markRowFailure(failedNow) {
+    const key = adminServerOptionValue({ host: state.host, email: state.email });
+    if (!(state.savedServers || []).some((s) => adminServerOptionValue(s) === key)) return;
+    const next = { ...(state.failed || {}) };
+    if (failedNow) next[key] = true;
+    else delete next[key];
+    state.failed = next;
+  }
+
+  /** Ouvre la petite fenêtre superposée d'ajout d'un serveur (mêmes champs). */
+  function openAddServerDialog() {
+    readFields();
+    state.adding = true;
+    state.addBusy = false;
+    state.addError = "";
+    draw();
+  }
+
+  /** Câble la fenêtre superposée (elle est réinsérée à chaque redessin). */
+  function bindAddDialog() {
+    const overlay = q("#gds-admin-add-overlay");
+    if (overlay) {
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeAddServerDialog();
+      });
+    }
+    const cancel = q("#gds-admin-add-cancel");
+    if (cancel) cancel.addEventListener("click", () => closeAddServerDialog());
+    const save = q("#gds-admin-add-save");
+    if (save) save.addEventListener("click", () => addServer());
+  }
+
+  function closeAddServerDialog() {
+    state.adding = false;
+    state.addBusy = false;
+    state.addError = "";
+    draw();
+  }
+
+  /**
+   * Ajoute un serveur depuis la fenêtre superposée. La fiche n'est créée
+   * QU'APRÈS une connexion réussie (`gds_admin_connect` n'écrit les identifiants
+   * qu'en cas de succès) : sinon l'erreur s'affiche ici et rien n'est mémorisé.
+   */
+  async function addServer() {
+    readFields();
+    const pwEl = q("#gds-admin-add-password");
+    const password = pwEl ? pwEl.value : "";
+    const host = String(state.host || "").trim();
+    const email = String(state.email || "").trim();
+    const port = String(state.port || "").trim();
+    if (!host) {
+      state.addError = "Adresse du serveur requise.";
+      return draw();
+    }
+    if (!email) {
+      state.addError = "Email administrateur requis.";
+      return draw();
+    }
+    state.addBusy = true;
+    state.addError = "";
+    draw();
+    try {
+      const res = await invoke("gds_admin_connect", { host, httpPort: port, email, password });
+      if (disposed) return;
+      state.addBusy = false;
+      if (!res || !res.ok) {
+        // Échec : la fenêtre RESTE ouverte avec l'erreur, et rien n'est ajouté.
+        state.addError = (res && res.error) || "Connexion refusée par le serveur.";
+        return draw();
+      }
+      state.adding = false;
+      state.ok = true;
+      state.server = res;
+      state.error = "";
+      state.hasPassword = true;
+      state.failed = { ...(state.failed || {}), [adminServerOptionValue({ host, email })]: false };
+      adminConn = { host, httpPort: port, email };
+      accounts.error = "";
+      accounts.notice = "";
+      service = initialServiceState();
+      service.role = String((res && res.role) || "");
+      // Ajout réussi : on bascule sur l'administration de CE serveur (la liste
+      // le montre désormais, et les autres sous-onglets deviennent visibles).
+      activeTab = ADMIN_TABS[0].id;
+      await prefillSaved({ silent: true });
+      loadAccounts({ silent: true });
+      loadProjects({ silent: true });
+      loadStorage({ silent: true });
+      loadServiceStatus({ silent: true });
+    } catch (e) {
+      if (disposed) return;
+      state.addBusy = false;
+      state.addError = String((e && e.message) || e || "Erreur inattendue");
+      draw();
+    }
+  }
+
+  /**
+   * « Administrer » une ligne de la LISTE : pré-remplit la fiche de ce serveur
+   * et ouvre DIRECTEMENT son administration. Le mot de passe est laissé vide
+   * (jamais réinjecté) : la connexion se fait avec celui déjà mémorisé par le
+   * poste ; sans mot de passe mémorisé, on se contente de pré-remplir.
+   */
+  function onAdminServerRow(btn) {
+    const key = String(btn.getAttribute("data-admin-server") || "");
+    const found = (state.savedServers || []).find((s) => adminServerOptionValue(s) === key);
+    if (!found) return;
+    state.adding = false;
+    state.host = String(found.host || "").trim();
+    state.port = String(found.http_port || "").trim() || DEFAULT_HTTP_PORT;
+    state.email = String(found.email || "").trim();
+    state.hasPassword = !!found.has_password;
+    if (state.hasPassword) return runConnectionTest(true);
+    state.ok = false;
+    state.server = null;
+    state.error = "Renseignez le mot de passe de ce serveur, puis « Se connecter ».";
+    draw();
+  }
+
+  /**
+   * Charge la LISTE des serveurs d'administration mémorisés. Sans `silent`,
+   * elle sert aussi de pré-remplissage initial du formulaire (premier serveur
+   * exploitable) ; `silent` ne rafraîchit QUE la liste, sans toucher à la
+   * saisie en cours.
+   */
+  async function prefillSaved({ silent = false } = {}) {
     try {
       const list = await invoke("gds_admin_saved_servers");
       if (disposed) return;
-      // Lot 4 : la liste alimente le SÉLECTEUR (choix explicite) ; le premier
-      // serveur exploitable reste le pré-remplissage initial par défaut.
       state.savedServers = Array.isArray(list) ? list : [];
+      if (silent) return draw();
       const p = pickPrefill(state.savedServers);
       if (p) {
         state.host = p.host;
@@ -2064,30 +2311,6 @@ export function createGdsAdmin(container) {
     } catch {
       // Silencieux : sans liste (ou hors Tauri), le formulaire reste vide.
     }
-  }
-
-  /**
-   * Sélection explicite d'un serveur mémorisé (lot 4) : pré-remplit les trois
-   * champs non sensibles. Le mot de passe reste vide (jamais réinjecté) ; il est
-   * réutilisé depuis le fichier de secrets si `hasPassword` est vrai.
-   */
-  function onServerSelectChange(sel) {
-    const value = String((sel && sel.value) || "");
-    if (!value) {
-      state.host = "";
-      state.port = DEFAULT_HTTP_PORT;
-      state.email = "";
-      state.hasPassword = false;
-      draw();
-      return;
-    }
-    const found = (state.savedServers || []).find((s) => adminServerOptionValue(s) === value);
-    if (!found) return;
-    state.host = String(found.host || "").trim();
-    state.port = String(found.http_port || "").trim() || DEFAULT_HTTP_PORT;
-    state.email = String(found.email || "").trim();
-    state.hasPassword = !!found.has_password;
-    draw();
   }
 
   draw();

@@ -156,8 +156,14 @@
 > passe). « Appliquer » **conserve** le port SSH et la racine des dépôts déjà
 > configurés dans le projet visé et permet de **choisir le projet cible dans une
 > liste** ; « Détacher » est **explicite** (travail conservé côté serveur par
-> défaut, retrait serveur proposé en option) ; l'écran d'administration propose
-> un **sélecteur** de serveur mémorisé au lieu d'un pré-remplissage silencieux.
+> défaut, retrait serveur proposé en option) ; l'écran d'administration affiche
+> les serveurs mémorisés sous forme de **liste** (une ligne par serveur, état et
+> action « Administrer ») et **ajoute une fiche après une connexion réussie
+> seulement** — pas de pré-remplissage silencieux, pas de menu déroulant. Un
+> serveur dont la connexion aboutit est **utilisable sans double saisie** :
+> l'identité d'administration et le mot de passe mémorisés sur le poste
+> servent au test comme aux opérations d'administration, et une fiche projet
+> du même hôte est complétée depuis cette carte (`identity_fields`).
 >
 > **Fiche « compte GDS » (lot 1 de la refonte « mon compte remplace le compte
 > technique », implémenté)** — la fiche serveur de « ⚙️ GDS — paramétrage »
@@ -430,10 +436,24 @@ Le serveur est livré comme **un seul conteneur** (dossier `gds-server/` :
   commande hôte (`docker compose`).
 - **Écrans transverses** (ouverts SANS projet, contrairement à l'onglet
   « 🌐 GDS » qui est par projet) :
-  - « 🖥️ GDS Serveur — administration » (`src/js/gds-admin.js`) : connexion
-    serveur (**sélecteur** des serveurs d'administration mémorisés, ou saisie
-    manuelle), comptes, dépôts/projets, espace utilisé + journal, contrôle du
-    service ;
+  - « 🖥️ GDS Serveur — administration » (`src/js/gds-admin.js`) : sous-onglets
+    « Connexion serveur », comptes, dépôts/projets, espace utilisé + journal,
+    contrôle du service. **« Connexion serveur » n'affiche pas de menu
+    déroulant** : les serveurs déjà paramétrés sur ce poste forment une **liste
+    affichée** (une ligne par serveur : hôte, identité, port, état — connecté /
+    échec de connexion / à compléter / enregistré) et chaque ligne porte
+    l'action **« Administrer »** qui ouvre l'administration de CE serveur. Sous
+    la liste, **« Ajouter un serveur »** ouvre une **petite fenêtre superposée**
+    (adresse, port, email administrateur, mot de passe GDS — champs à largeur
+    modérée, jamais toute la largeur) ; **la fiche n'est ajoutée à la liste
+    qu'après une connexion réussie** (`gds_admin_connect` n'écrit les
+    identifiants qu'en cas de succès) — sinon l'erreur s'affiche dans la fenêtre
+    et **rien n'est enregistré**. Tant qu'aucune connexion n'a abouti, **seul ce
+    sous-onglet est visible** : les autres n'apparaissent qu'après connexion
+    réussie, puis restent fermés jusqu'à la saisie/validation des codes
+    administrateur (le test d'une connexion réussie vaut connexion, il ouvre les
+    sous-onglets sans mémoriser d'identifiants). Un champ mot de passe n'est
+    **jamais** réémis avec une valeur ;
   - « ⚙️ GDS — paramétrage » (`src/js/gds-params.js`) : serveurs mémorisés
     (**nom** obligatoire + **description** optionnelle, état **joignable /
     injoignable / jamais testé** avec date du dernier test, application à un
