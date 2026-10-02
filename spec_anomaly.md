@@ -31,13 +31,20 @@ l'Assistant ne sont **jamais** arrêtés automatiquement.
 **Opération longue en cours** (un outil démarré qui tourne encore : longue
 construction, longue série de tests, longue analyse) : tant qu'un outil
 s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
-automatique (T2) ne le coupe pas**. Attention : cela ne protège pas une opération
-**totalement silencieuse** (aucun événement pendant plus de **10 minutes**) du
-délai d'inactivité côté interface, qui met fin à la run **sans tuer l'agent** ;
-et au bout de **25 minutes** d'absence d'activité, le filet « occupé périmé »
-(ci-dessous) libère le créneau **sans tuer l'agent**. Seul un agent
-**réellement figé** (aucun outil en cours, plus aucune progression) est arrêté
-par T2.
+automatique (T2) ne le coupe pas**, et son créneau de run n'est pas libéré non
+plus. Attention : cette protection est **bornée à 25 minutes** d'absence totale
+d'activité (au-delà, le process est considéré comme figé ; le délai d'inactivité
+côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
+agent **réellement figé** (aucun outil en cours, plus aucune progression) est
+arrêté par T2.
+
+**Une mission n'est jamais annoncée en échec sans vérification** : quand une run
+est interrompue (inactivité, verrou libéré par le chien de garde), Pilot vérifie
+l'état du projet **sur le disque** (commit tombé pendant la run, ou fichiers
+modifiés pour une mission d'écriture). Si du travail est présent, le rapport
+indique « travail présent sur le disque, pas un échec » au lieu d'un échec — la
+mission n'est donc pas relancée inutilement. Un échec n'est annoncé que lorsque
+le disque ne montre aucun travail nouveau.
 
 **Question posée à l'utilisateur** : quand un agent attend votre réponse (choix,
 confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique
@@ -300,6 +307,33 @@ est conservé, la demande en file continue d'attendre). Si des demandes sont en
 file, elles sont **relancées** (le verrou est conservé) au lieu d'attendre un
 fantôme ; sinon le verrou est libéré.
 
+### 2.4 ter Fausse annonce d'échec du watchdog (mission 310)
+
+Deux voies livraient une mission `run_agents` en **échec alors qu'elle était
+réalisée** (traces du 01/10 : 11 libérations « Run libérée par le watchdog »,
+inactivité mesurée de **27 s à 25 min**, alors que du travail était écrit et
+committé pendant la fenêtre). Le verdict reposait sur la seule horloge
+d'événements, avec deux angles morts :
+
+1. **Aucun signal « outil en cours »** : un build/test long est silencieux et
+   `busy` peut être faux (fin de tour pi, relance en attente). `tool_in_progress`
+   (déjà maintenu par l'observateur Rust et déjà exempté par l'arrêt auto T2)
+   n'était pas exposé par `list_agent_sessions` ; `isSessionWorking` concluait
+   donc « plus aucun agent ne travaille » au milieu du travail. Le champ est
+   désormais exposé (`toolInProgress`) et traité comme du travail, **borné** par
+   la fenêtre busy-stale (25 min : process figé).
+2. **Aucune vérification du disque avant l'échec** : la porte `ghosts` est scopée
+   aux agents **déclarés** dans la run ; un agent inconnu de la sonde (id/projet
+   non concordant) la faisait tirer alors qu'une session du **projet** produisait
+   encore. Elle consulte maintenant aussi la sonde projet-large
+   (`projectHasWorkingSession`, comme `orphanQueue`), et
+   `settleWatchdogRelease` (ainsi que le timeout d'inactivité) **vérifie le
+   disque** (`git_status_project` → `head_ts`/`pending`, fonction pure
+   `provesWorkOnDisk`) : commit tombé pendant la run, ou fichiers modifiés pour
+   une mission d'écriture → rapport « travail présent sur le disque, pas un
+   échec » au lieu d'un échec mensonger (qui relançait une mission déjà faite).
+   Le message d'échec mentionne explicitement l'absence de travail nouveau.
+
 ### 2.5 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 
 Commande Tauri : lance un processus agent dédié (`diagnostic`, canal
@@ -333,10 +367,12 @@ callback de notification du bus (message ⏱️).
 |---|---|
 | `src-tauri/src/anomaly.rs` | Observateur combiné, moniteur, arrêt auto, commande diagnostic, tests |
 | `src-tauri/src/lib.rs` | `mod anomaly`, config (`anomaly_detection_enabled`, `anomaly_timeout_minutes`, `agent_auto_stop_enabled`, `agent_auto_stop_minutes`), état `agent_anomaly`, setup, commande |
-| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) + `purge_ghost_running_states` (issue #87) + purge de la marque `busy` sur **tous** les chemins d'arrêt (`purge_anomaly_busy_for_key`, R2) |
+| `src-tauri/src/agent_service.rs` | Observateur branché sur les 4 spawn ; `stop` réel + `agent_process_alive` (scope T2) + `main_session_alive` (bug #81) + `purge_ghost_running_states` (issue #87) + purge de la marque `busy` sur **tous** les chemins d'arrêt (`purge_anomaly_busy_for_key`, R2) + `toolInProgress` dans `list_agent_sessions` (§2.4 ter) |
+| `src-tauri/src/git.rs` | `git_status_project` : `head`/`head_ts` (preuve de travail sur disque, §2.4 ter) |
 | `src-tauri/src/rpc.rs` | Suppression de l'ancien `make_project_activity_observer` (remplacé par l'observateur combiné) |
 | `src/js/anomaly.js` | Bandeau d'alerte, notification, arrêt auto (événement `agent-auto-stopped`), modale de diagnostic |
-| `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) + `releaseStuckRunLock` : verrou orphelin « travail en file sans porteur » (issue #87) |
+| `src/js/agents-bus.js` | Libération du créneau d'exclusivité à l'arrêt auto (T5) + `releaseStuckRunLock` : verrou orphelin « travail en file sans porteur » (issue #87) + sonde projet-large et preuve disque avant tout échec (§2.4 ter) |
+| `src/js/exclusivity-queue.js` | `isSessionWorking`/`isAnyAgentWorking`/`isProjectWorking` (pures) : `busy` non busy-stale, activité récente, `toolInProgress` (§2.4 ter) |
 | `src/js/super-agent.js` | Notification assistant (message ⏱️ d'arrêt auto) |
 | `src/js/desktop-notify.js` | `notifyAnomaly` |
 | `src/js/main.js` | `initAnomalyDetection` |

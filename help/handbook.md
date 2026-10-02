@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-09-30 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-02 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -2077,13 +2077,20 @@ l'Assistant ne sont **jamais** arrêtés automatiquement.
 **Opération longue en cours** (un outil démarré qui tourne encore : longue
 construction, longue série de tests, longue analyse) : tant qu'un outil
 s'exécute, l'agent est considéré comme en train de travailler et **l'arrêt
-automatique (T2) ne le coupe pas**. Attention : cela ne protège pas une opération
-**totalement silencieuse** (aucun événement pendant plus de **10 minutes**) du
-délai d'inactivité côté interface, qui met fin à la run **sans tuer l'agent** ;
-et au bout de **25 minutes** d'absence d'activité, le filet « occupé périmé »
-(ci-dessous) libère le créneau **sans tuer l'agent**. Seul un agent
-**réellement figé** (aucun outil en cours, plus aucune progression) est arrêté
-par T2.
+automatique (T2) ne le coupe pas**, et son créneau de run n'est pas libéré non
+plus. Attention : cette protection est **bornée à 25 minutes** d'absence totale
+d'activité (au-delà, le process est considéré comme figé ; le délai d'inactivité
+côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
+agent **réellement figé** (aucun outil en cours, plus aucune progression) est
+arrêté par T2.
+
+**Une mission n'est jamais annoncée en échec sans vérification** : quand une run
+est interrompue (inactivité, verrou libéré par le chien de garde), Pilot vérifie
+l'état du projet **sur le disque** (commit tombé pendant la run, ou fichiers
+modifiés pour une mission d'écriture). Si du travail est présent, le rapport
+indique « travail présent sur le disque, pas un échec » au lieu d'un échec — la
+mission n'est donc pas relancée inutilement. Un échec n'est annoncé que lorsque
+le disque ne montre aucun travail nouveau.
 
 **Question posée à l'utilisateur** : quand un agent attend votre réponse (choix,
 confirmation, saisie), cette attente n'est pas un blocage. L'arrêt automatique

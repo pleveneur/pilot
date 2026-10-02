@@ -173,6 +173,30 @@ describe("isSessionWorking — « vraiment en activité » (chantier 6/6)", () =
     expect(isSessionWorking(atLimit, NOW)).toBe(false);
   });
 
+  it("mission 310 : OUTIL en cours (toolInProgress) et busy=false → travail réel", () => {
+    // Un build/test/installation long est SILENCIEUX (aucun événement pendant
+    // plusieurs minutes) et `busy` peut être faux (fin de tour pi, relance en
+    // attente). Sans ce signal, la sonde concluait « plus aucun agent ne
+    // travaille » et libérait la run en échec au milieu du travail.
+    const running = { alive: true, busy: false, toolInProgress: true, lastActivity: iso(10 * 60_000) };
+    expect(isSessionWorking(running, NOW)).toBe(true);
+  });
+
+  it("mission 310 : outil « en cours » depuis plus de la fenêtre busy-stale → PAS de verrou (process figé)", () => {
+    const frozen = { alive: true, busy: false, toolInProgress: true, lastActivity: iso(STALE_BUSY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(frozen, NOW)).toBe(false);
+  });
+
+  it("mission 310 : champ toolInProgress absent (backend antérieur) → comportement inchangé", () => {
+    const parked = { alive: true, busy: false, lastActivity: iso(RECENT_ACTIVITY_WINDOW_MS + 60_000) };
+    expect(isSessionWorking(parked, NOW)).toBe(false);
+  });
+
+  it("mission 310 : session morte avec toolInProgress résiduel → PAS de verrou", () => {
+    const dead = { alive: false, busy: false, toolInProgress: true };
+    expect(isSessionWorking(dead, NOW)).toBe(false);
+  });
+
 describe("isBusyStale — un busy VIEUX n'est plus un travail (verrou fantôme)", () => {
   const NOW = 1700000000000;
   const iso = (msBeforeNow) => new Date(NOW - msBeforeNow).toISOString();

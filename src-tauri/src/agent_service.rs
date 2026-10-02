@@ -1338,14 +1338,14 @@ impl AgentService {
                     .unwrap_or(false)
             };
             // Dernière activité depuis la map d'anomalie (champs optionnels).
-            let (last_activity, last_activity_relative, last_event, busy) = {
+            let (last_activity, last_activity_relative, last_event, busy, tool_in_progress) = {
                 let m = anomaly_map.lock().unwrap();
                 match m.get(&format!("{}\u{1f}{}", project, agent_id)) {
                     Some(a) => {
                         let (iso, rel) = anomaly::last_activity_info(a);
-                        (iso, rel, Some(a.last_event.clone()), Some(a.busy))
+                        (iso, rel, Some(a.last_event.clone()), Some(a.busy), Some(a.tool_in_progress))
                     }
-                    None => (None, None, None, None),
+                    None => (None, None, None, None, None),
                 }
             };
             let mut entry = serde_json::json!({
@@ -1373,6 +1373,16 @@ impl AgentService {
             // pour l'exclusivité des spécialités (run_agents).
             if let Some(b) = busy {
                 entry["busy"] = serde_json::Value::Bool(b);
+            }
+            // toolInProgress : un OUTIL est en cours d'exécution (tool_execution_start
+            // → true, tool_execution_end/settled → false). Distinct de `busy` : pendant
+            // un outil long et SILENCIEUX (build, tests, installation) aucun événement
+            // n'est émis, et `busy` peut être faux (fin de tour pi, relance en attente)
+            // alors que l'agent travaille réellement. Sans ce champ, la sonde de
+            // vivacité du frontend (isSessionWorking) concluait « plus aucun agent ne
+            // travaille » et libérait la run en ÉCHEC au milieu du travail.
+            if let Some(t) = tool_in_progress {
+                entry["toolInProgress"] = serde_json::Value::Bool(t);
             }
             // sessionId (chantier restitution fin-de-run) : identifiant de session
             // pi, exposé pour que l'assistant puisse cibler get_delegation_result

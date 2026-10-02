@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -368,6 +368,75 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(err).toBeNull();
     expect(done).toContain("Run interrompue");
     expect(done).toContain("Analyse partielle");
+  });
+
+  it("mission 310 : travail COMMITTÉ pendant la run → la mission n'est PAS annoncée en échec", async () => {
+    // Cas réel (2026-10-01 14:46) : run libérée par la porte `ghosts` avec
+    // « inactivité mesurée : 14 min 4 s » alors que du travail a été écrit et
+    // committé pendant cette fenêtre, et que l'agent déclaré n'avait AUCUNE
+    // session visible par la sonde. Sans vérification du disque, la mission
+    // était annoncée en échec (et donc relancée alors qu'elle était faite).
+    const ctx = beginRunWithAgent();
+    ctx.startedAt = Date.now() - 14 * 60 * 1000;
+    ctx.lastActivityAt = ctx.startedAt;
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agent_sessions") return { sessions: [] };
+      if (cmd === "git_status_project") {
+        // Commit tombé 4 min APRÈS le démarrage de la run.
+        return { is_repo: true, head_ts: Math.round((ctx.startedAt + 4 * 60 * 1000) / 1000), pending: 0 };
+      }
+      return undefined;
+    });
+    let done = null;
+    let err = null;
+    attachMissionSink(ctx.runKey, { onDone: (t) => (done = t), onError: (e) => (err = e) });
+    await releaseConfirmed();
+    expect(err).toBeNull();
+    expect(done).toContain("PRÉSENT sur le disque");
+    expect(done).toContain("PAS un échec");
+  });
+
+  it("mission 310 : aucun travail sur le disque (commit antérieur, rien de modifié) → échec honnête conservé", async () => {
+    const ctx = beginRunWithAgent();
+    ctx.lastActivityAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agent_sessions") {
+        return { sessions: [session({ busy: false, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() })] };
+      }
+      if (cmd === "git_status_project") {
+        return { is_repo: true, head_ts: Math.round((ctx.startedAt - 60 * 60 * 1000) / 1000), pending: 0 };
+      }
+      return undefined;
+    });
+    let done = null;
+    let msg = "";
+    attachMissionSink(ctx.runKey, { onDone: (t) => (done = t), onError: (e) => (msg = e.message) });
+    await releaseConfirmed();
+    expect(done).toBeNull();
+    expect(msg).toContain("Aucun travail nouveau détecté sur le disque");
+  });
+
+  it("mission 310 : outil en cours (toolInProgress) alors que busy est faux → run MAINTENUE", async () => {
+    beginRunWithAgent();
+    // Aucun événement depuis 10 min (outil long silencieux : build, tests) et pi
+    // a déjà émis un agent_end (busy=false) : seul toolInProgress témoigne du
+    // travail encore en cours. Le libérer coupait l'agent au milieu du travail.
+    mockSessions([
+      session({ busy: false, toolInProgress: true, lastActivity: new Date(Date.now() - 10 * 60 * 1000).toISOString() }),
+    ]);
+    await releaseConfirmed();
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("mission 310 : une AUTRE session du projet produit encore → run MAINTENUE (agent déclaré sans session)", async () => {
+    beginRunWithAgent();
+    // L'agent déclaré (« magnus ») n'a aucune session : la porte `ghosts`
+    // concluait « plus aucun agent ne travaille » alors que le projet produit.
+    mockSessions([
+      { agent: "autre-agent", project: "projetA", mode: "main", alive: true, busy: true },
+    ]);
+    await releaseConfirmed();
+    expect(getRunState("projetA")).toBe("running");
   });
 
   it("objectif 5 : fin NORMALE d'une mission → statut de l'agent remis au repos (Paused, busy=false)", async () => {
@@ -755,6 +824,41 @@ describe("livraison du rapport par mission (sink par clé de run)", () => {
 
   it("settleMission sans sink (run hors assistant) est un no-op", () => {
     expect(settleMission("projetSansSink", "done", { text: "x" })).toBe(false);
+  });
+});
+
+describe("provesWorkOnDisk — preuve disque avant d'annoncer un échec (mission 310)", () => {
+  const start = Date.parse("2026-10-01T14:32:17Z");
+  const tsAt = (deltaMs) => Math.round((start + deltaMs) / 1000);
+
+  it("commit tombé PENDANT la run → travail prouvé (mission pas en échec)", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: tsAt(4 * 60 * 1000), pending: 0 }, start, false)).toBe(true);
+  });
+
+  it("commit ANTÉRIEUR à la run → aucune preuve (échec honnête conservé)", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: tsAt(-60 * 60 * 1000), pending: 0 }, start, false)).toBe(false);
+  });
+
+  it("commit dans la même seconde que le démarrage (granularité git) → toléré", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: tsAt(0), pending: 0 }, start, false)).toBe(true);
+  });
+
+  it("mission d'ÉCRITURE avec des fichiers modifiés non committés → travail présent", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: 0, pending: 3 }, start, false)).toBe(true);
+  });
+
+  it("mission de LECTURE : des fichiers modifiés par ailleurs ne prouvent rien", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head_ts: 0, pending: 3 }, start, true)).toBe(false);
+  });
+
+  it("pas un dépôt git / sonde indisponible → aucune preuve (fail-safe)", () => {
+    expect(provesWorkOnDisk({ is_repo: false }, start, false)).toBe(false);
+    expect(provesWorkOnDisk(null, start, false)).toBe(false);
+    expect(provesWorkOnDisk(undefined, start, false)).toBe(false);
+  });
+
+  it("dépôt sans aucun commit (head_ts 0) → aucune preuve", () => {
+    expect(provesWorkOnDisk({ is_repo: true, head: "", head_ts: 0, pending: 0 }, start, false)).toBe(false);
   });
 });
 

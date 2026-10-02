@@ -967,6 +967,9 @@ pub fn git_diff_file(state: State<AppState>, path: String) -> Result<GitFileDiff
 /// absolu. Retourne la branche, les fichiers modifiés/ajoutés/supprimés et le
 /// nombre d'éléments en attente (staged). Réutilise `run_captured` (helper
 /// process partagé) et le format porcelain v1 de `git status`.
+/// `head` / `head_ts` (hash et date de committage du commit courant, en secondes
+/// epoch) servent au watchdog de run : avant d'annoncer l'échec d'une mission, le
+/// frontend vérifie qu'aucun commit n'est tombé PENDANT la run (mission 310).
 #[tauri::command]
 pub fn git_status_project(project: String) -> Result<Value, String> {
     use std::time::Duration;
@@ -980,6 +983,14 @@ pub fn git_status_project(project: String) -> Result<Value, String> {
     }
     let branch = run_captured("git", &["-C", &project, "rev-parse", "--abbrev-ref", "HEAD"], Duration::from_secs(3));
     let branch = branch.trim().to_string();
+    // Commit courant + date de committage (epoch secondes). Dépôt sans commit :
+    // sortie vide → head vide et head_ts 0 (aucun travail "nouveau" à prouver).
+    let head_info = run_captured("git", &["-C", &project, "log", "-1", "--format=%H|%ct"], Duration::from_secs(3));
+    let (head, head_ts) = head_info
+        .trim()
+        .split_once('|')
+        .map(|(h, t)| (h.trim().to_string(), t.trim().parse::<i64>().unwrap_or(0)))
+        .unwrap_or((String::new(), 0));
     let out = run_captured(
         "git",
         &["-C", &project, "status", "--porcelain", "-uall", "--no-renames"],
@@ -1026,6 +1037,8 @@ pub fn git_status_project(project: String) -> Result<Value, String> {
     Ok(serde_json::json!({
         "is_repo": true,
         "branch": branch,
+        "head": head,
+        "head_ts": head_ts,
         "modified": modified,
         "added": added,
         "deleted": deleted,

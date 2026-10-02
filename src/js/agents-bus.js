@@ -123,17 +123,71 @@ function pendingExclusivityCount(ctx) {
   return Object.keys(queue).reduce((n, k) => n + ((queue[k] || []).length), 0);
 }
 
+/** Marge (ms) tolérée entre l'horodatage d'un commit (précision à la seconde)
+ * et le démarrage de la run : évite de rater un commit fait dans la même
+ * seconde que le démarrage. */
+const DISK_CLOCK_SLACK_MS = 2000;
+
+/**
+ * Pure (testable) : le travail d'une run est-il PROUVÉ présent sur le disque ?
+ * Sert à ne JAMAIS annoncer l'échec d'une mission sans vérifier les fichiers :
+ * un agent peut avoir écrit et committé son travail sans qu'aucun événement ne
+ * soit parvenu au frontend (build/tests longs et silencieux, événement perdu,
+ * relance pi). Conclure à l'échec ferait alors relancer une mission DÉJÀ FAITE
+ * (mission 310). Deux preuves suffisent :
+ *  - un commit tombé PENDANT la run (HEAD committé après `startedAt`) ;
+ *  - pour une mission d'ÉCRITURE (`readonly !== true`), des fichiers modifiés
+ *    ou nouveaux non committés (`pending > 0`) : le travail est là, même sans
+ *    commit.
+ * @param {object|null} status - sortie de `git_status_project`
+ * @param {number} startedAt - démarrage de la run (ms epoch)
+ * @param {boolean} readonly - mission de lecture (aucune écriture attendue)
+ * @returns {boolean}
+ */
+export function provesWorkOnDisk(status, startedAt, readonly) {
+  if (!status || status.is_repo !== true) return false;
+  const start = Number(startedAt) || 0;
+  const headTs = Number(status.head_ts) || 0;
+  if (start > 0 && headTs > 0 && headTs * 1000 >= start - DISK_CLOCK_SLACK_MS) return true;
+  if (readonly !== true && Number(status.pending) > 0) return true;
+  return false;
+}
+
+/**
+ * Vérification DISQUE avant toute conclusion d'échec (mission 310) : le verdict
+ * du watchdog ne doit jamais reposer sur le seul silence des événements. Lit
+ * l'état Git du projet (lecture seule) et applique `provesWorkOnDisk`.
+ * Fail-safe : si la sonde échoue, on retourne false (l'échec est annoncé comme
+ * avant) — jamais de « réussite » inventée sans preuve.
+ * @param {object} ctx - contexte de run
+ * @returns {Promise<boolean>}
+ */
+async function workOnDiskDuringRun(ctx) {
+  const project = projectOfRunKey(ctx.project || ctx.runKey);
+  if (!project) return false;
+  try {
+    const status = await invoke("git_status_project", { project });
+    return provesWorkOnDisk(status, ctx.startedAt, ctx.readonly);
+  } catch (e) {
+    console.warn("[agents-bus] watchdog : vérification du disque impossible :", e);
+    return false;
+  }
+}
+
 /**
  * Livre la libération d'un verrou par le watchdog (message instrumenté) et
  * retourne le message émis. Si du TRAVAIL a été produit avant l'arrêt, la
  * mission reçoit un rapport « run interrompue, résultat partiel » (kind "done")
  * au lieu d'un échec mensonger ; sinon un échec honnête (kind "error").
+ * Mission 310 : le travail peut aussi être prouvé PAR LE DISQUE (commit ou
+ * fichiers modifiés pendant la run) quand aucun texte final n'a été reçu —
+ * l'échec n'est annoncé qu'après cette vérification.
  * @param {object} ctx - contexte de run
  * @param {string} door - porte qui a tiré
  * @param {number|null} idleSince - repère d'inactivité (ms epoch)
- * @returns {string} message instrumenté
+ * @returns {Promise<string>} message instrumenté
  */
-function settleWatchdogRelease(ctx, door, idleSince) {
+async function settleWatchdogRelease(ctx, door, idleSince) {
   const message = buildWatchdogReleaseMessage({
     door,
     agents: Array.from(ctx.activeAgents),
@@ -146,8 +200,14 @@ function settleWatchdogRelease(ctx, door, idleSince) {
     settleMission(ctx.runKey, "done", {
       text: `${message}\n\n⚠️ Run interrompue : du travail a été produit avant l'arrêt, voici le résultat partiel.\n\n${partial}`,
     });
+  } else if (await workOnDiskDuringRun(ctx)) {
+    // Message honnête : le travail est SUR LE DISQUE → la mission n'est pas un
+    // échec, même si aucun texte final n'a été reçu.
+    settleMission(ctx.runKey, "done", {
+      text: `${message}\n\n⚠️ Run interrompue, mais du travail est PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec. Vérifiez le résultat produit au lieu de relancer la mission.`,
+    });
   } else {
-    settleMission(ctx.runKey, "error", { message });
+    settleMission(ctx.runKey, "error", { message: `${message} Aucun travail nouveau détecté sur le disque.` });
   }
   return message;
 }
@@ -489,7 +549,13 @@ async function releaseStuckRunLockForKey(key) {
   let ghosts = false;
   if (!noActive) {
     const working = await anyActiveAgentWorking(key);
-    ghosts = !working;
+    // Mission 310 : ne pas conclure « fantôme » tant qu'UNE session du projet
+    // produit encore. La sonde ci-dessus est scopée aux agents DÉCLARÉS dans la
+    // run : si l'agent déclaré n'a pas de session correspondante (id ou projet
+    // non concordant) alors que le travail continue réellement (outil long
+    // silencieux, commit en cours), la run était libérée en ÉCHEC au milieu du
+    // travail. Même règle que la porte `orphanQueue` (sonde projet-large).
+    ghosts = !working && !(await projectHasWorkingSession(key));
   }
 
   // 3 bis (issue #87) : DEMANDE EN FILE SANS PORTEUR. Groupe parallèle avec du
@@ -538,7 +604,7 @@ async function releaseStuckRunLockForKey(key) {
         resetTimeout(ctx);
         return;
       }
-      console.warn("[agents-bus] watchdog :", settleWatchdogRelease(ctx, "timeGuard", idleSince));
+      console.warn("[agents-bus] watchdog :", await settleWatchdogRelease(ctx, "timeGuard", idleSince));
       endRun(key, ctx.generation);
     }
     return;
@@ -604,7 +670,7 @@ async function releaseStuckRunLockForKey(key) {
   // l'inactivité mesurée (instrumentation — cause enfin visible).
   console.warn(
     "[agents-bus] watchdog :",
-    settleWatchdogRelease(ctx, door, ctx.lastActivityAt || ctx.startedAt || null),
+    await settleWatchdogRelease(ctx, door, ctx.lastActivityAt || ctx.startedAt || null),
   );
   endRun(key, ctx.generation);
 }
@@ -944,7 +1010,7 @@ function resetTimeout(ctx) {
   ctx.lastActivityAt = Date.now();
   if (ctx.timeoutId) clearTimeout(ctx.timeoutId);
   if (ctx.runState !== "running") return;
-  ctx.timeoutId = setTimeout(() => {
+  ctx.timeoutId = setTimeout(async () => {
     // Timeout d'inactivité : on signale l'erreur puis on arrête la run SANS
     // émettre l'événement "stop" (sinon l'UI afficherait « Run arrêtée par
     // l'utilisateur. » alors que l'utilisateur n'a rien fait — issue #10).
@@ -952,8 +1018,17 @@ function resetTimeout(ctx) {
     const msg = `Timeout d'inactivité pour ${agentId}. Augmentez le timeout dans Paramètres (agent_timeout_ms).`;
     emit("error", { message: msg });
     // Livraison du rapport : la mission qui a lancé la run doit recevoir cette
-    // erreur, même si la relance ensuite par stopAgentsRun.
-    settleMission(ctx.runKey, "error", { message: msg });
+    // erreur, même si la relance ensuite par stopAgentsRun. Mission 310 : avant
+    // d'annoncer l'échec, vérifier le DISQUE — un agent peut avoir écrit son
+    // travail sans émettre d'événement pendant `agent_timeout_ms` (outil long
+    // silencieux) ; l'annoncer en échec ferait relancer une mission réalisée.
+    if (await workOnDiskDuringRun(ctx)) {
+      settleMission(ctx.runKey, "done", {
+        text: `${msg}\n\n⚠️ Run interrompue, mais du travail est PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec. Vérifiez le résultat produit au lieu de relancer la mission.`,
+      });
+    } else {
+      settleMission(ctx.runKey, "error", { message: `${msg} Aucun travail nouveau détecté sur le disque.` });
+    }
     // P7 : notification desktop à l'arrêt auto (réutilise desktop-notify.js).
     notifyAgentDone({
       title: "Pilot — Agent en timeout",

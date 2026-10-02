@@ -130,6 +130,12 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  *  - busy === true (agent_start reçu, aucun agent_settled depuis) ET non
  *    busy-stale (une session busy VIEILLE de plus de `staleWindowMs` sans
  *    activité récente n'est plus un travail : process pi figé), OU
+ *  - toolInProgress === true : un OUTIL est en cours d'exécution. Un build, des
+ *    tests ou une installation longue sont SILENCIEUX (aucun événement pendant
+ *    plusieurs minutes) et `busy` peut être faux (fin de tour pi, relance en
+ *    attente) : sans ce signal, la sonde concluait « plus aucun agent ne
+ *    travaille » et libérait la run en ÉCHEC au milieu du travail (mission 310).
+ *    Borné par la même fenêtre busy-stale (process figé), OU
  *  - sa dernière activité (lastActivity ISO) date de moins de `windowMs`.
  * Une session « vivante mais inactive » (parkée après agent_settled, oubliée)
  * ne compte PAS : un processus vivant ≠ travail en cours.
@@ -139,7 +145,7 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  * verrou ; il ne faut pas créer l'inverse, un verrou oublié). Pour busy-stale,
  * le fail-open est inversé : busy SANS lastActivity exploitable → true (on ne
  * peut pas prouver la staleness, donc pas de faux verrou libéré).
- * @param {{alive?:boolean, busy?:boolean, lastActivity?:string}|null} session
+ * @param {{alive?:boolean, busy?:boolean, toolInProgress?:boolean, lastActivity?:string}|null} session
  * @param {number} [now] - timestamp de référence (ms)
  * @param {number} [windowMs] - fenêtre de grâce (défaut 2 min)
  * @param {number} [staleWindowMs] - fenêtre busy-stale (défaut 25 min)
@@ -147,11 +153,11 @@ export function isBusyStale(session, now = Date.now(), staleWindowMs = STALE_BUS
  */
 export function isSessionWorking(session, now = Date.now(), windowMs = RECENT_ACTIVITY_WINDOW_MS, staleWindowMs = STALE_BUSY_WINDOW_MS) {
   if (!session || session.alive !== true) return false;
-  if (session.busy === true) {
+  if (session.busy === true || session.toolInProgress === true) {
     // busy-stale : un busy VIEUX de plus de la fenêtre n'est plus un travail.
     // Fail-open : sans lastActivity exploitable, on ne peut pas prouver la
     // staleness → on retombe sur l'historique (busy === vrai travail).
-    if (isBusyStale(session, now, staleWindowMs)) return false;
+    if (isBusyStale({ ...session, busy: true }, now, staleWindowMs)) return false;
     return true;
   }
   if (!session.lastActivity) return false;
