@@ -2108,6 +2108,63 @@ pub async fn gds_list_projects(state: State<'_, AppState>) -> Result<Vec<Value>,
     gds_db::list_projects(&pool).await
 }
 
+/// Projets de travail connus du poste (ouverts + récents, `AppConfig`) : source
+/// de la détection `work_*` de `enrich_local_state`. Fail-open : un verrou
+/// empoisonné laisse la liste vide (détection inerte, jamais de panique).
+pub(crate) fn known_work_projects(state: &AppState) -> Vec<String> {
+    let mut work_projects: Vec<String> = Vec::new();
+    if let Ok(cfg) = state.config.lock() {
+        work_projects.extend(cfg.open_projects.iter().cloned());
+        work_projects.extend(cfg.recent_projects.iter().cloned());
+    }
+    work_projects
+}
+
+/// Enrichissement « déjà en local » d'une liste de dépôts GDS — extrait TEL QUEL
+/// de `gds_list_git_repos` (aucune règle changée). Ajoute à chaque ligne :
+/// - `local_exists` / `local_path` : un clonage `<local_dir>/<nom>` existe-t-il ?
+/// - `work_exists` / `work_path` : un projet ouvert/récent porte un NOM DE DOSSIER
+///   identique (casse ignorée) au dépôt, à un chemin DIFFÉRENT du clone. Le clone
+///   lui-même est ignoré (`work_exists = false`, c'est le cas `local_exists`).
+/// Pure (seul effet de bord : `Path::exists`), donc réutilisable par la lecture
+/// d'un serveur choisi (sans projet ouvert) comme par `gds_list_git_repos`.
+pub(crate) fn enrich_local_state(repos: &mut [Value], local_dir: &str, work_projects: &[String]) {
+    for r in repos.iter_mut() {
+        let name = r["name"].as_str().unwrap_or("").to_string();
+        let local_path = std::path::Path::new(local_dir)
+            .join(&name)
+            .to_string_lossy()
+            .to_string();
+        let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
+        r["local_exists"] = json!(local_exists);
+        r["local_path"] = json!(local_path);
+        // Détection « existe comme projet de travail » : un projet ouvert/récent
+        // dont le NOM DE DOSSIER (que le chemin) correspond au dépôt GDS, à un
+        // chemin DIFFÉRENT du clone GDS (`local_path`). On prend le premier match
+        // (projets ouverts privilégiés car ajoutés en premier).
+        let mut work_exists = false;
+        let mut work_path = String::new();
+        if !name.is_empty() && !work_projects.is_empty() {
+            let name_lower = name.to_lowercase();
+            let clone_norm = crate::normalize_project_path(&local_path);
+            for wp in work_projects.iter() {
+                let wp_norm = crate::normalize_project_path(wp);
+                if wp_norm == clone_norm {
+                    continue; // c'est le clone GDS lui-même (cas local_exists).
+                }
+                let folder = wp_norm.rsplit('/').next().unwrap_or("");
+                if !folder.is_empty() && folder.to_lowercase() == name_lower {
+                    work_exists = true;
+                    work_path = wp.clone();
+                    break;
+                }
+            }
+        }
+        r["work_exists"] = json!(work_exists);
+        r["work_path"] = json!(work_path);
+    }
+}
+
 /// Commande Tauri : liste les dépôts git (bare) enregistrés sur le serveur GDS.
 /// Retour ADDITIF : en plus de id/project_id/path_on_server/bare_path, remonte
 /// `name` (nom lisible via join `projects`), `email` (identité du membre),
@@ -2147,47 +2204,11 @@ pub async fn gds_list_git_repos(
     // Projets de travail connus (ouverts + récents) pour éviter de re-cloner un
     // projet déjà présent comme projet de travail à un AUTRE chemin que le clone
     // GDS (issue doublon GDS : ex. `G:\IA_PL\Kodali` + `C:\GDS\Kodali`).
-    // Fail-open : toute erreur de lecture laisse `work_projects` vide — la
-    // détection est alors inerte (pas de crash de la liste des dépôts).
-    let mut work_projects: Vec<String> = Vec::new();
-    if let Ok(cfg) = state.config.lock() {
-        work_projects.extend(cfg.open_projects.iter().cloned());
-        work_projects.extend(cfg.recent_projects.iter().cloned());
-    }
+    let work_projects = known_work_projects(&state);
     let mut repos = gds_db::list_git_repos(&pool).await?;
+    // Enrichissement partagé (même règle qu'avant : simple extraction).
+    enrich_local_state(&mut repos, &local_dir, &work_projects);
     for r in repos.iter_mut() {
-        let name = r["name"].as_str().unwrap_or("").to_string();
-        let local_path = std::path::Path::new(&local_dir)
-            .join(&name)
-            .to_string_lossy()
-            .to_string();
-        let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
-        r["local_exists"] = json!(local_exists);
-        r["local_path"] = json!(local_path);
-        // Détection « existe comme projet de travail » : un projet ouvert/récent
-        // dont le NOM DE DOSSIER (que le chemin) correspond au dépôt GDS, à un
-        // chemin DIFFÉRENT du clone GDS (`local_path`). On prend le premier match
-        // (projets ouverts privilégiés car ajoutés en premier).
-        let mut work_exists = false;
-        let mut work_path = String::new();
-        if !name.is_empty() && !work_projects.is_empty() {
-            let name_lower = name.to_lowercase();
-            let clone_norm = crate::normalize_project_path(&local_path);
-            for wp in work_projects.iter() {
-                let wp_norm = crate::normalize_project_path(wp);
-                if wp_norm == clone_norm {
-                    continue; // c'est le clone GDS lui-même (cas local_exists).
-                }
-                let folder = wp_norm.rsplit('/').next().unwrap_or("");
-                if !folder.is_empty() && folder.to_lowercase() == name_lower {
-                    work_exists = true;
-                    work_path = wp.clone();
-                    break;
-                }
-            }
-        }
-        r["work_exists"] = json!(work_exists);
-        r["work_path"] = json!(work_path);
         if r["email"].as_str().unwrap_or("").is_empty() && !cfg_email.is_empty() {
             r["email"] = json!(cfg_email);
         }
@@ -3972,5 +3993,172 @@ mod tests {
         assert_eq!(after.ssh_host, "10.9.3.1:2222");
         assert_eq!(after.gds_local_dir.as_deref(), Some("/tmp/clones"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Étape 2 : enrichissement « déjà en local » (fonction pure partagée) ────
+
+    /// Une ligne de dépôt GDS telle que la rend `gds_db::list_git_repos`.
+    fn repo_row(name: &str) -> Value {
+        json!({
+            "project_id": 1,
+            "name": name,
+            "path_on_server": "/srv/git/repos",
+            "bare_path": "/srv/git/repos/x.git",
+            "email": "",
+        })
+    }
+
+    /// Dossier temporaire vierge, isolé par test (aucun dossier réel du poste).
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pilot-gds-etape2-{}-{}",
+            tag,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Réplique EXACTE de la boucle historiquement embarquée dans
+    /// `gds_list_git_repos` (avant extraction) : témoin permettant de prouver que
+    /// la fonction partagée rend le MÊME résultat. Aucun réseau, aucun secret.
+    fn reference_local_state(repos: &mut [Value], local_dir: &str, work_projects: &[String]) {
+        for r in repos.iter_mut() {
+            let name = r["name"].as_str().unwrap_or("").to_string();
+            let local_path = std::path::Path::new(&local_dir)
+                .join(&name)
+                .to_string_lossy()
+                .to_string();
+            let local_exists = !name.is_empty() && std::path::Path::new(&local_path).exists();
+            r["local_exists"] = json!(local_exists);
+            r["local_path"] = json!(local_path);
+            let mut work_exists = false;
+            let mut work_path = String::new();
+            if !name.is_empty() && !work_projects.is_empty() {
+                let name_lower = name.to_lowercase();
+                let clone_norm = crate::normalize_project_path(&local_path);
+                for wp in work_projects.iter() {
+                    let wp_norm = crate::normalize_project_path(wp);
+                    if wp_norm == clone_norm {
+                        continue;
+                    }
+                    let folder = wp_norm.rsplit('/').next().unwrap_or("");
+                    if !folder.is_empty() && folder.to_lowercase() == name_lower {
+                        work_exists = true;
+                        work_path = wp.clone();
+                        break;
+                    }
+                }
+            }
+            r["work_exists"] = json!(work_exists);
+            r["work_path"] = json!(work_path);
+        }
+    }
+
+    /// Dossier de clonage PRÉSENT : `local_exists` vrai, `local_path` = clone.
+    #[test]
+    fn local_state_finds_an_existing_clone() {
+        let base = tmp_dir("clone-present");
+        std::fs::create_dir_all(base.join("Kodali")).unwrap();
+        let mut repos = vec![repo_row("Kodali")];
+        enrich_local_state(&mut repos, &base.to_string_lossy(), &[]);
+        assert_eq!(repos[0]["local_exists"], json!(true));
+        assert_eq!(
+            repos[0]["local_path"].as_str().unwrap(),
+            base.join("Kodali").to_string_lossy()
+        );
+        assert_eq!(repos[0]["work_exists"], json!(false));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Dossier absent : rien n'existe (ni clone, ni projet de travail), et un
+    /// nom de dossier différent n'est pas confondu.
+    #[test]
+    fn local_state_reports_a_missing_clone() {
+        let base = tmp_dir("clone-absent");
+        let autre = base.join("Autre").to_string_lossy().to_string();
+        let mut repos = vec![repo_row("Absent")];
+        enrich_local_state(&mut repos, &base.to_string_lossy(), &[autre]);
+        assert_eq!(repos[0]["local_exists"], json!(false));
+        assert_eq!(repos[0]["work_exists"], json!(false));
+        assert_eq!(repos[0]["work_path"], json!(""));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Projet de travail RENOMMÉ (nom de dossier différent du dépôt) : la
+    /// détection par nom ne le voit pas — limite connue, traitée plus tard.
+    #[test]
+    fn local_state_ignores_a_renamed_work_project() {
+        let base = tmp_dir("renomme");
+        let ailleurs = base.join("ailleurs");
+        let renomme = ailleurs.join("Kodali-v2").to_string_lossy().to_string();
+        let mut repos = vec![repo_row("Kodali")];
+        enrich_local_state(&mut repos, &base.to_string_lossy(), &[renomme]);
+        assert_eq!(repos[0]["local_exists"], json!(false));
+        assert_eq!(repos[0]["work_exists"], json!(false));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Même nom, CASSE différente : reconnu (comparaison insensible à la casse).
+    #[test]
+    fn local_state_matches_a_work_project_ignoring_case() {
+        let base = tmp_dir("casse");
+        let ailleurs = base.join("ailleurs");
+        let different = ailleurs.join("KODALI").to_string_lossy().to_string();
+        let mut repos = vec![repo_row("Kodali")];
+        enrich_local_state(&mut repos, &base.to_string_lossy(), &[different]);
+        assert_eq!(repos[0]["work_exists"], json!(true));
+        assert_eq!(
+            repos[0]["work_path"].as_str().unwrap(),
+            ailleurs.join("KODALI").to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Le « projet de travail » EST le clone GDS lui-même : `work_exists` reste
+    /// faux (c'est le cas `local_exists`, pas un doublon à signaler).
+    #[test]
+    fn local_state_does_not_flag_the_clone_as_a_work_project() {
+        let base = tmp_dir("clone-est-le-projet");
+        std::fs::create_dir_all(base.join("Kodali")).unwrap();
+        let clone = base.join("Kodali").to_string_lossy().to_string();
+        let mut repos = vec![repo_row("Kodali")];
+        enrich_local_state(&mut repos, &base.to_string_lossy(), &[clone]);
+        assert_eq!(repos[0]["local_exists"], json!(true));
+        assert_eq!(repos[0]["work_exists"], json!(false));
+        assert_eq!(repos[0]["work_path"], json!(""));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// PREUVE anti-régression : sur un jeu de lignes varié (clone présent, absent,
+    /// nom vide, ligne sans `name`, casse différente, clone confondu avec le
+    /// projet de travail), la fonction extraite rend EXACTEMENT le même résultat
+    /// que la boucle d'origine (témoin ci-dessus).
+    #[test]
+    fn local_state_matches_the_original_inline_loop() {
+        let base = tmp_dir("temoin");
+        std::fs::create_dir_all(base.join("Present")).unwrap();
+        let rows = vec![
+            repo_row("Present"),
+            repo_row("Absent"),
+            repo_row(""),
+            json!({ "project_id": 2, "path_on_server": "/x" }),
+            repo_row("PRESENT"),
+        ];
+        let work_projects = vec![
+            base.join("ailleurs").join("PRESENT").to_string_lossy().to_string(),
+            base.join("Present").to_string_lossy().to_string(),
+            String::new(),
+        ];
+        let mut got = rows.clone();
+        let mut expected = rows.clone();
+        enrich_local_state(&mut got, &base.to_string_lossy(), &work_projects);
+        reference_local_state(&mut expected, &base.to_string_lossy(), &work_projects);
+        assert_eq!(
+            got, expected,
+            "la fonction extraite doit rendre le même résultat que la boucle d'origine"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -28,9 +28,11 @@ use crate::gds_admin::{
     admin_base_url, cached_token, drop_token, http_client, send_get, send_post_json, store_token,
     token_key, Reply,
 };
-use gds_core::config::GdsConfig;
+use crate::AppState;
+use gds_core::config::{default_gds_local_dir, GdsConfig};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use tauri::State;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Identité du compte GDS d'un projet
@@ -371,18 +373,30 @@ pub async fn gds_server_projects(
 }
 
 /// Commande Tauri : dépôts git d'un **serveur GDS choisi** (même fiche, même
-/// lecture seule). Réponse `{ ok, git_repos:[…] }` — jamais un secret.
+/// lecture seule). Réponse `{ ok, git_repos:[…] }` — jamais un secret. Chaque
+/// dépôt est enrichi du même état « déjà en local » que `gds_list_git_repos`
+/// (fonction pure `gds::enrich_local_state`) : aucun projet n'étant ouvert ici,
+/// le dossier de clonage par défaut et les projets connus du poste servent de
+/// référence.
 #[tauri::command]
 pub async fn gds_server_git_repos(
+    state: State<'_, AppState>,
     host: String,
     http_port: String,
     email: String,
 ) -> Result<Value, String> {
     let ident = identity_on_server(&host, &http_port, &email)?;
     let v = list_git_repos_on(&ident).await?;
+    let mut repos = v
+        .get("git_repos")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let work_projects = crate::gds::known_work_projects(&state);
+    crate::gds::enrich_local_state(&mut repos, &default_gds_local_dir(), &work_projects);
     Ok(json!({
         "ok": true,
-        "git_repos": v.get("git_repos").cloned().unwrap_or_else(|| json!([])),
+        "git_repos": repos,
     }))
 }
 
