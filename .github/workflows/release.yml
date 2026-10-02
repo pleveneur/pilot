@@ -245,14 +245,18 @@ jobs:
         # But : rendre le temps LISIBLE. Si le job Linux expire encore, la
         # chronologie des étapes dira si le temps part dans la compilation Rust
         # (cette étape) ou dans l'empaquetage (étape suivante).
-        # `npm run build` est OBLIGATOIRE avant toute compilation Rust ici : les
-        # assets du frontend sont embarqués à la compilation par
-        # `generate_context!` (tauri-codegen), qui PANIQUE si `frontendDist` n'a
-        # pas été généré. `beforeBuildCommand` refait ensuite ce build (identique).
+        # `--features tauri/custom-protocol` est NÉCESSAIRE ici : c'est cette
+        # feature (que `tauri build`/tauri-cli ajoute lui aussi, cf.
+        # `Rust::build_options`) qui fait basculer `context_codegen` sur la
+        # branche non-dev, laquelle exige `frontendDist` : `npm run build`
+        # (dossier `dist/`) est donc obligatoire avant ce `cargo build`, sinon
+        # `generate_context!` panique. Sans cette feature, la compilation
+        # prendrait la branche dev/devUrl ET produirait une empreinte Cargo
+        # différente de celle de tauri-action — qui recompilerait alors la crate.
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           npm run build
-          cargo build --release --target ${{ matrix.rust_target }} --manifest-path src-tauri/Cargo.toml
+          cargo build --release --target ${{ matrix.rust_target }} --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol
 
       - name: Build and sign Tauri app
         uses: tauri-apps/tauri-action@v0
