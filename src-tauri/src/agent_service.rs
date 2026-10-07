@@ -2483,16 +2483,14 @@ impl AgentService {
         // Compétences de CET agent (bibliothèque commune `~/.pilot/skills`) :
         // `--skill` additif + `PILOT_AGENT_SKILLS` (filtrage strict côté pi, lu
         // par pilot-skills.ts). Les agents multi-rôles / délégations de
-        // l'assistant sont enregistrés au périmètre GLOBAL (project_path NULL) :
-        // on regarde d'abord la row du projet, puis la globale (comme le seed de
-        // `start`). Même logique que `spawn_session` — sans elle, un agent lancé
-        // par l'assistant ne voyait jamais ses compétences.
-        let agent = state
-            .agent_service
-            .get_agent(app, agent_id, Some(project))
-            .ok()
-            .flatten()
-            .or_else(|| state.agent_service.get_agent(app, agent_id, None).ok().flatten());
+        // l'assistant sont enregistrés au périmètre GLOBAL (project_path NULL).
+        // Les deux lignes candidates sont résolues par la MÊME fonction pure que
+        // `spawn_session` : sans elle, une ligne projet vide (« husk ») écrasait
+        // silencieusement la ligne globale et toute compétence cochée restait
+        // sans effet.
+        let project_row = state.agent_service.get_agent(app, agent_id, Some(project)).ok().flatten();
+        let global_row = state.agent_service.get_agent(app, agent_id, None).ok().flatten();
+        let agent = resolve_agent_for_skills(project_row.as_ref(), global_row.as_ref());
         let skill_paths = agent_skill_paths(agent.as_ref());
         let env_vars = merge_env_vars(mcp_env_vars, agent_skills_env(agent.as_ref()));
         let session = rpc_manager::spawn_and_start(
@@ -2659,11 +2657,12 @@ impl AgentService {
 
         let channel = agent_event_channel(project, agent_id);
         // Compétences de cet agent (bibliothèque commune) + filtrage strict.
-        let agent = state
-            .agent_service
-            .get_agent(app, agent_id, Some(project))
-            .ok()
-            .flatten();
+        // Même résolution que `spawn_agent_process` : la ligne projet gagne
+        // quand elle est renseignée, sinon la ligne globale (agents H2 V2
+        // enregistrés au périmètre global). Une husk projet ne gagne jamais.
+        let project_row = state.agent_service.get_agent(app, agent_id, Some(project)).ok().flatten();
+        let global_row = state.agent_service.get_agent(app, agent_id, None).ok().flatten();
+        let agent = resolve_agent_for_skills(project_row.as_ref(), global_row.as_ref());
         let mut skill_paths: Vec<String> = Vec::new();
         if let Some(sp) = skill_path {
             skill_paths.push(sp);
@@ -2917,6 +2916,25 @@ fn common_skill_path(name: &str) -> Option<String> {
 /// Chemins `--skill` à injecter pour un agent : compétences de sa liste
 /// présentes dans la bibliothèque commune. (Le quality-gate est ajouté à part
 /// par l'appelant, selon l'option de configuration.)
+/// Résout la ligne d'agent à utiliser pour les compétences, à partir des deux
+/// lignes candidates (projet et globale). Fonction **pure**, partagée par les
+/// DEUX points de spawn.
+///
+/// Le seed crée, au premier spawn, une copie **projet** vide de chaque agent
+/// (`role` vide, `skills` vide). Cette « husk » gagnait la résolution et la
+/// ligne globale était ignorée : toute compétence cochée sur un agent global
+/// restait sans effet dans le projet. Une husk ne gagne donc jamais ; on retombe
+/// alors sur la ligne globale (agent H2 V2 / agent lancé par l'assistant).
+fn resolve_agent_for_skills(project_row: Option<&Agent>, global_row: Option<&Agent>) -> Option<Agent> {
+    fn is_husk(a: &Agent) -> bool {
+        a.role.trim().is_empty() && a.skills.is_empty()
+    }
+    match project_row {
+        Some(p) if !is_husk(p) => Some(p.clone()),
+        _ => global_row.cloned(),
+    }
+}
+
 fn agent_skill_paths(agent: Option<&Agent>) -> Vec<String> {
     agent
         .map(|a| a.skills.iter().filter_map(|n| common_skill_path(n)).collect())
@@ -3186,6 +3204,38 @@ mod tests {
         ];
         assert!(agent_skill_paths(Some(&agent)).is_empty());
         assert!(agent_skill_paths(None).is_empty());
+    }
+
+    /// T1 : la ligne projet gagne quand elle est renseignée ; une ligne projet
+    /// vide (« husk ») ne doit JAMAIS écraser la ligne globale, sinon toute
+    /// compétence cochée sur un agent global resterait sans effet dans le projet.
+    #[test]
+    fn resolve_agent_for_skills_prefers_global_when_project_row_is_empty_husk() {
+        let mut project_husk = sample_agent("codeur");
+        project_husk.role = String::new();
+        project_husk.skills = Vec::new();
+        project_husk.description = "husk projet".to_string();
+
+        let mut global = sample_agent("codeur");
+        global.role = "Tu codes.".to_string();
+        global.skills = vec!["rust".to_string()];
+
+        // 1. husk projet + ligne globale renseignée → la globale gagne.
+        let resolved = resolve_agent_for_skills(Some(&project_husk), Some(&global)).expect("agent résolu");
+        assert_eq!(resolved.skills, vec!["rust".to_string()]);
+
+        // 2. ligne projet renseignée → elle gagne (comportement inchangé).
+        let mut project_full = sample_agent("codeur");
+        project_full.role = "Tu codes ici.".to_string();
+        project_full.skills = vec!["tests".to_string()];
+        let resolved = resolve_agent_for_skills(Some(&project_full), Some(&global)).expect("agent résolu");
+        assert_eq!(resolved.skills, vec!["tests".to_string()]);
+
+        // 3. husk projet + globale absente → None (aucune compétence, pas de panique).
+        assert!(resolve_agent_for_skills(Some(&project_husk), None).is_none());
+        // 4. projet absent → la globale.
+        let resolved = resolve_agent_for_skills(None, Some(&global)).expect("agent résolu");
+        assert_eq!(resolved.skills, vec!["rust".to_string()]);
     }
 
     /// `PILOT_AGENT_SKILLS` est TOUJOURS posée pour une session d'agent, même
