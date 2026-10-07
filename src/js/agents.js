@@ -13,10 +13,24 @@ export async function loadAgentRegistry() {
   return await invoke("list_agents");
 }
 
-/** Sauvegarde le registre d'agents global (remplace les agents globaux en base). */
+/**
+ * ⚠️ NE PAS RÉUTILISER depuis l'écran 🎭 (T2, agent_service::delete_agent) :
+ * `replace_agents` supprime TOUT le scope puis réinsère la liste fournie, ce qui
+ * efface les lignes absentes de la liste (agents masqués, `last_active_at`,
+ * `proc_state`). Conservé pour la compatibilité et le test d'idempotence.
+ * Pour une édition : `upsertAgent` ; pour une suppression : `deleteAgent`.
+ */
 export async function saveAgentRegistry(registry) {
   const agents = Array.isArray(registry.agents) ? registry.agents : [];
   return await invoke("replace_agents", { agents });
+}
+
+/**
+ * Supprime UN agent du registre (global par défaut, ou d'un projet).
+ * Écriture ciblée : ne réécrit pas le scope entier comme `replace_agents`.
+ */
+export async function deleteAgent(agentId, projectPath = null) {
+  return await invoke("delete_agent", { agentId, projectPath });
 }
 
 /**
@@ -70,6 +84,22 @@ export function normalizeAgent(agent) {
     max_calls_per_run: typeof agent.max_calls_per_run === "number" ? agent.max_calls_per_run : 5,
     call_depth: typeof agent.call_depth === "number" ? agent.call_depth : 1,
   };
+}
+
+/**
+ * Fusionne les champs édités dans la ligne RÉELLE du registre (T2).
+ *
+ * L'éditeur 🎭 ne connaît pas `visible`, `last_active_at`, `proc_state`,
+ * `loaded`, `busy` : `normalizeAgent` les jette. Repartir de la ligne brute
+ * garantit qu'une simple édition ne « ressuscite » pas un agent masqué
+ * (`visible=0` repasserait à 1, la valeur par défaut serde).
+ *
+ * @param {object|undefined} existing ligne brute issue de `list_agents`
+ * @param {object} edited champs saisis dans l'éditeur
+ */
+export function mergeEditedAgent(existing, edited) {
+  const base = existing && typeof existing === "object" ? existing : {};
+  return { ...base, ...edited };
 }
 
 /** Résout le modèle d'un agent selon le backend actif. */

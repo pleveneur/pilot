@@ -1,6 +1,41 @@
 // Tests unitaires — agents.js (classification codeur/spécialiste + prompt enrichi)
 import { describe, it, expect } from "vitest";
-import { classifyAgent, buildAgentPrompt } from "./agents.js";
+import { classifyAgent, buildAgentPrompt, mergeEditedAgent } from "./agents.js";
+
+describe("mergeEditedAgent — édition ciblée non destructive (T2)", () => {
+  const ligne = {
+    id: "diag-1",
+    name: "Diag",
+    role: "Tu diagnostiques.",
+    visible: false,
+    last_active_at: "2026-10-01T10:00:00Z",
+    state: "Paused",
+    loaded: true,
+    busy: true,
+    project_path: null,
+  };
+
+  it("conserve visible=0 lors d'une édition (pas de résurrection)", () => {
+    const merged = mergeEditedAgent(ligne, { name: "Diag v2" });
+    expect(merged.visible).toBe(false);
+    expect(merged.last_active_at).toBe("2026-10-01T10:00:00Z");
+    expect(merged.state).toBe("Paused");
+    expect(merged.loaded).toBe(true);
+    expect(merged.busy).toBe(true);
+    expect(merged.project_path).toBeNull();
+  });
+
+  it("applique les champs saisis par-dessus la ligne réelle", () => {
+    const merged = mergeEditedAgent(ligne, { name: "Diag v2", description: "Nouveau" });
+    expect(merged.name).toBe("Diag v2");
+    expect(merged.description).toBe("Nouveau");
+    expect(merged.role).toBe("Tu diagnostiques.");
+  });
+
+  it("agent nouveau (aucune ligne) : retourne l'édition telle quelle", () => {
+    expect(mergeEditedAgent(undefined, { id: "neuf", name: "Neuf" })).toEqual({ id: "neuf", name: "Neuf" });
+  });
+});
 
 describe("classifyAgent", () => {
   it("codeur : write + readonly=false", () => {

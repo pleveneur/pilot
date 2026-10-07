@@ -604,6 +604,15 @@ impl AgentService {
         Ok(())
     }
 
+    /// Supprime UN SEUL agent d'un scope (global par défaut). Remplace le
+    /// `DELETE` de tout le scope de `replace_agents` : une édition ou une
+    /// suppression unitaire ne doit plus réécrire les 50 lignes globales (ce qui
+    /// ressuscitait les agents masqués et perdait `last_active_at`/`proc_state`).
+    pub fn delete_agent(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>) -> Result<(), String> {
+        let conn = db::open_conn(app)?;
+        delete_agent_conn(&conn, agent_id, project_path)
+    }
+
     /// Liste les vues d'onglets d'un projet (table `agent_views`) — reconstruit
     /// la barre d'onglets agents à l'identique (cahier §5.2).
     pub fn list_agent_views(&self, app: &AppHandle, project_path: &str) -> Result<Vec<AgentView>, String> {
@@ -2877,6 +2886,23 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
     Ok(())
 }
 
+/// Supprime une ligne `agents` précise (id + scope). Retourne une erreur
+/// explicite si aucune ligne n'a été supprimée (agent absent), comme
+/// `set_visible`/`set_state` : un échec silencieux laisserait une ligne fantôme.
+fn delete_agent_conn(conn: &rusqlite::Connection, agent_id: &str, project_path: Option<&str>) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "DELETE FROM agents
+             WHERE id = ?1 AND ((?2 IS NULL AND project_path IS NULL) OR (?2 IS NOT NULL AND project_path = ?2))",
+            params![agent_id, project_path],
+        )
+        .map_err(|e| format!("Erreur suppression agent: {}", e))?;
+    if changed == 0 {
+        return Err(format!("Agent {} introuvable (delete_agent)", agent_id));
+    }
+    Ok(())
+}
+
 /// Dossier utilisateur Pilot (`~/.pilot`). Utilisé pour le dossier de session
 /// des agents multi-rôles H2 V2 quand le chemin de config n'est pas résoluble.
 pub(crate) fn pilot_user_dir() -> Result<std::path::PathBuf, String> {
@@ -3043,6 +3069,15 @@ pub fn replace_agents(state: State<AppState>, app: AppHandle, project_path: Opti
         list.push(agent_from_value(&v)?);
     }
     state.agent_service.replace_agents(&app, proj.as_deref(), &list)
+}
+
+/// Supprime un agent (global par défaut, ou d'un projet si `project_path` est fourni).
+///
+/// Édition unitaire du registre : ne remplace pas le scope comme `replace_agents`.
+#[tauri::command]
+pub fn delete_agent(state: State<AppState>, app: AppHandle, agent_id: String, project_path: Option<String>) -> Result<(), String> {
+    let proj = project_path.filter(|p| !p.trim().is_empty());
+    state.agent_service.delete_agent(&app, &agent_id, proj.as_deref())
 }
 
 /// Pose la visibilité d'un agent (0 = invisible, 1 = vue ouverte).
@@ -3776,6 +3811,53 @@ mod tests {
             )
             .expect("name");
         assert_eq!(name, "Analyseur v2", "le second upsert a bien mis à jour la ligne");
+    }
+
+    /// T2 : `delete_agent_conn` ne supprime QUE la ligne visée (même id dans un
+    /// autre scope, ou même scope avec un autre id, conservés). Sans erreur
+    /// silencieuse : un agent absent est signalé.
+    #[test]
+    fn delete_agent_removes_only_target_row() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
+        conn.execute_batch(
+            "CREATE TABLE agents (
+                id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
+                icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
+                models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
+                capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
+                readonly INTEGER DEFAULT 0,
+                keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
+                call_depth INTEGER DEFAULT 1, loaded INTEGER DEFAULT 0, busy INTEGER DEFAULT 0,
+                proc_state TEXT DEFAULT 'Unloaded', visible INTEGER DEFAULT 1, last_active_at TEXT,
+                UNIQUE (id, project_path)
+            );",
+        )
+        .expect("création table");
+
+        let mut global = sample_agent("diag-1");
+        global.visible = false;
+        upsert_agent_conn(&conn, &global).expect("global");
+        let mut kept = sample_agent("analyseur");
+        upsert_agent_conn(&conn, &kept).expect("global conservé");
+        kept.project_path = Some("G:/IA_PL/pilot".to_string());
+        upsert_agent_conn(&conn, &kept).expect("ligne projet même id");
+
+        delete_agent_conn(&conn, "diag-1", None).expect("suppression ciblée");
+
+        let global_kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agents WHERE id = ?1 AND project_path IS NULL", params!["analyseur"], |r| r.get(0))
+            .expect("count global");
+        let project_kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agents WHERE id = ?1 AND project_path IS NOT NULL", params!["analyseur"], |r| r.get(0))
+            .expect("count projet");
+        let gone: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agents WHERE id = ?1", params!["diag-1"], |r| r.get(0))
+            .expect("count supprimé");
+        assert_eq!(global_kept, 1, "l'autre agent global est conservé");
+        assert_eq!(project_kept, 1, "la ligne projet du même id est conservée");
+        assert_eq!(gone, 0, "la ligne visée est supprimée");
+        // Agent absent → erreur explicite (pas de fantôme silencieux).
+        assert!(delete_agent_conn(&conn, "diag-1", None).is_err());
     }
 
     /// `agent_alive` distingue une session vivante d'une session absente ou

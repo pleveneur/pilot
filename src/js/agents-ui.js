@@ -12,8 +12,10 @@ import { refreshIcons } from "./icons.js";
 import { toastError, toastSuccess } from "./toast.js";
 import {
   loadAgentRegistry,
-  saveAgentRegistry,
+  upsertAgent,
+  deleteAgent,
   normalizeAgent,
+  mergeEditedAgent,
   validateAgentId,
   buildDefaultCoordinator,
   registryAfterReset,
@@ -295,8 +297,7 @@ export async function createAgents(container) {
         ? `Supprimer « ${agentName(id)} » ?\n\nCet agent fait partie des agents fournis d'origine : il sera restauré avec sa configuration par défaut lors d'une réinitialisation.`
         : `Supprimer l'agent « ${agentName(id)} » ?`;
       if (!confirm(msg)) return;
-      registry.agents = registry.agents.filter((a) => a.id !== id);
-      await persistRegistry();
+      await deleteAgentTargeted(id);
     }
   });
 
@@ -386,7 +387,7 @@ export async function createAgents(container) {
         return;
       }
 
-      const updated = {
+      const updated = mergeEditedAgent(existing, {
         id: newId,
         name,
         icon: modal.querySelector("#ae-icon").value.trim(),
@@ -402,7 +403,7 @@ export async function createAgents(container) {
         keep_context: modal.querySelector("#ae-keep").checked,
         max_calls_per_run: parseInt(modal.querySelector("#ae-max-calls").value, 10) || 5,
         call_depth: parseInt(modal.querySelector("#ae-depth").value, 10) || 1,
-      };
+      });
 
       if (existing) {
         const idx = registry.agents.findIndex((x) => x.id === id);
@@ -410,8 +411,7 @@ export async function createAgents(container) {
       } else {
         registry.agents.push(updated);
       }
-      await persistRegistry();
-      closeModal();
+      if (await saveAgentTargeted(updated)) closeModal();
     });
   }
 
@@ -470,15 +470,33 @@ export async function createAgents(container) {
     }
   }
 
-  async function persistRegistry() {
+  // ── Persistance CIBLÉE (T2) ───────────────────────────────────────────────
+  // L'écran 🎭 n'écrit plus le registre complet (`replace_agents`) : chaque
+  // édition passe par `upsert_agent` (une seule ligne), chaque suppression par
+  // `delete_agent`. Un `replace_agents` réécrivait les 50 lignes globales et
+  // ressuscitait les agents masqués (les champs `visible`/`last_active_at`/
+  // `proc_state` jetés par `normalizeAgent` repartaient aux valeurs par défaut).
+  async function saveAgentTargeted(agent) {
     try {
-      await saveAgentRegistry(registry);
-      toastSuccess("Registre agents sauvegardé.");
+      await upsertAgent(agent);
+      toastSuccess("Agent enregistré.");
       await reloadRegistry();
-      // Recharger le bus avec le nouveau registre
+      await initAgentsBus(busCallbacks);
+      return true;
+    } catch (e) {
+      toastError("Erreur enregistrement de l'agent : " + e);
+      return false;
+    }
+  }
+
+  async function deleteAgentTargeted(id) {
+    try {
+      await deleteAgent(id);
+      toastSuccess("Agent supprimé.");
+      await reloadRegistry();
       await initAgentsBus(busCallbacks);
     } catch (e) {
-      toastError("Erreur sauvegarde agents : " + e);
+      toastError("Erreur suppression de l'agent : " + e);
     }
   }
 

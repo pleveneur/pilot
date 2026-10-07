@@ -3281,6 +3281,7 @@ pub fn run() {
             agent_service::list_agents,
             agent_service::get_agent,
             agent_service::upsert_agent,
+            agent_service::delete_agent,
             agent_service::replace_agents,
             agent_service::set_agent_visible,
             agent_service::set_agent_state,
