@@ -18,6 +18,8 @@ import {
   getAgentActivitySnapshot,
   mountCollapsibleAgentList,
   formatLastActivity,
+  shortMission,
+  buildRunningMissions,
 } from "./agent-activity.js";
 
 // Mocks Tauri : le store partagé démarre listen/poll à l'abonnement —
@@ -640,5 +642,116 @@ describe("mountCollapsibleAgentList — résumé repliable du mode assistant onl
   it("mountCollapsibleAgentList(null) reste inoffensif (désabonnement no-op)", () => {
     const unsub = mountCollapsibleAgentList(null);
     expect(() => unsub()).not.toThrow();
+  });
+});
+
+// ── Missions en cours (onglet « En cours » du panneau de la cloche) ──
+// Règle du propriétaire : seules les missions RÉELLEMENT en cours s'affichent ;
+// un agent au repos est masqué ; un agent occupé — même silencieux (outil long) —
+// ne disparaît jamais ; une mission en file est marquée « en attente ».
+describe("shortMission — texte de mission court et lisible", () => {
+  it("garde un texte court tel quel", () => {
+    expect(shortMission("Corriger la recherche globale")).toBe("Corriger la recherche globale");
+  });
+
+  it("tronque un texte long à 80 caractères avec « … »", () => {
+    const long = "x".repeat(200);
+    const got = shortMission(long);
+    expect(got).toBe("x".repeat(80) + "…");
+    expect(Array.from(got).length).toBe(81);
+  });
+
+  it("extrait le titre d'une ligne « Tâche : » (orchestration, y compris retries)", () => {
+    const text = [
+      "Tu es un codeur. Contexte : projet Pilot.",
+      "",
+      "Tâche : Corriger la recherche globale par dossier",
+      "",
+      "Fichiers : src/js/search.js",
+    ].join("\n");
+    expect(shortMission(text)).toBe("Corriger la recherche globale par dossier");
+  });
+
+  it("extrait aussi le titre d'une ligne « Tâche : » en gras markdown", () => {
+    expect(shortMission("**Tâche :** Réparer le diff inline")).toBe("Réparer le diff inline");
+  });
+
+  it("prend la première ligne significative en sautant fences et markdown", () => {
+    const text = ["```", "code ignoré", "```", "", "# Corriger le zoom", "suite"].join("\n");
+    expect(shortMission(text)).toBe("Corriger le zoom");
+    expect(shortMission("- Corriger le zoom")).toBe("Corriger le zoom");
+    expect(shortMission("> Corriger le zoom")).toBe("Corriger le zoom");
+  });
+
+  it("replie sur « (demande non précisée) » pour un texte vide ou inconnu", () => {
+    expect(shortMission("")).toBe("(demande non précisée)");
+    expect(shortMission("   \n  \n")).toBe("(demande non précisée)");
+    expect(shortMission(null)).toBe("(demande non précisée)");
+    expect(shortMission(undefined)).toBe("(demande non précisée)");
+  });
+});
+
+describe("buildRunningMissions — missions réellement en cours", () => {
+  const agent = (over) => ({
+    agentId: "codeur|/p/pilot",
+    label: "codeur",
+    project: "pilot",
+    busy: false,
+    toolInProgress: false,
+    prompt: "",
+    ...over,
+  });
+
+  it("masque un agent AU REPOS (idle/paused/stopped)", () => {
+    expect(buildRunningMissions([agent({ busy: false, state: "idle" })])).toEqual([]);
+    expect(buildRunningMissions([agent({ busy: false, state: "paused" })])).toEqual([]);
+  });
+
+  it("affiche un agent OCCUPÉ avec sa mission", () => {
+    const got = buildRunningMissions([agent({ busy: true, prompt: "Corriger la recherche globale" })]);
+    expect(got).toEqual([
+      { agent: "codeur", project: "pilot", mission: "Corriger la recherche globale", waiting: false },
+    ]);
+  });
+
+  it("n'affiche JAMAIS vide : repli explicite si la mission est introuvable", () => {
+    const got = buildRunningMissions([agent({ busy: true, prompt: "" })]);
+    expect(got[0].mission).toBe("(demande non précisée)");
+  });
+
+  it("garde un agent occupé SILENCIEUX (outil long : compilation, tests)", () => {
+    const got = buildRunningMissions([
+      agent({ busy: false, toolInProgress: true, prompt: "Lancer les tests" }),
+    ]);
+    expect(got).toHaveLength(1);
+    expect(got[0].mission).toBe("Lancer les tests");
+  });
+
+  it("affiche l'Assistant en travail, avec le projet « Assistant » par défaut", () => {
+    const got = buildRunningMissions([
+      { label: "Magnus", project: "", busy: true, toolInProgress: false, prompt: "Faire le point" },
+    ]);
+    expect(got).toEqual([
+      { agent: "Magnus", project: "Assistant", mission: "Faire le point", waiting: false },
+    ]);
+  });
+
+  it("ajoute les missions EN ATTENTE avec waiting=true", () => {
+    const got = buildRunningMissions(
+      [agent({ busy: true, prompt: "Tâche A" })],
+      [{ project: "pilot", mission: "Tâche B (en file)" }]
+    );
+    expect(got).toHaveLength(2);
+    expect(got[1]).toEqual({
+      agent: "",
+      project: "pilot",
+      mission: "Tâche B (en file)",
+      waiting: true,
+    });
+  });
+
+  it("tolère une liste absente ou vide", () => {
+    expect(buildRunningMissions(null, null)).toEqual([]);
+    expect(buildRunningMissions([], [])).toEqual([]);
   });
 });

@@ -1247,6 +1247,16 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         let mode = s.get("mode").and_then(|x| x.as_str()).unwrap_or("").to_string();
         let visible = s.get("visible").and_then(|x| x.as_bool()).unwrap_or(false);
         let active = s.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+        // Mission en cours (affichage « missions en cours » du panneau de la
+        // cloche) : DERNIER prompt réellement envoyé à la session (déjà tronqué
+        // par `AgentService::record_prompt`) et outil long éventuellement en
+        // cours. Champs purement ADDITIFS — les autres consommateurs de
+        // `get_agent_supervision` les ignorent.
+        let prompt = s.get("prompt").and_then(|x| x.as_str()).unwrap_or("");
+        let tool_in_progress = s
+            .get("toolInProgress")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
 
         let status = if !alive {
             "stopped"
@@ -1299,6 +1309,8 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             "alive": alive,
             "visible": visible,
             "active": active,
+            "prompt": prompt,
+            "toolInProgress": tool_in_progress,
         });
 
         if let Some((_, list)) = by_project.iter_mut().find(|(p, _)| *p == project) {

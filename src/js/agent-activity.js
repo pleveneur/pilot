@@ -22,9 +22,9 @@
 // (super-agent.js) — même source de données, même filtrage, aucun polling
 // dupliqué.
 //
-// Les fonctions pures (flattenAgents, anyBusy, renderDropdown, renderCard,
-// renderStaticAgentList, formatLastActivity) sont testées dans
-// agent-activity.test.js.
+// Les fonctions pures (flattenAgents, anyBusy, shortMission, buildRunningMissions,
+// renderDropdown, renderCard, renderStaticAgentList, formatLastActivity) sont
+// testées dans agent-activity.test.js.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -119,6 +119,13 @@ export function flattenAgents(supervision, lastActivityMap) {
         projectPath: isAssistant ? ASSISTANT_SPACE : (isSuper ? "" : project),
         state,
         busy,
+        // Mission en cours (affichage « missions en cours » du panneau de la
+        // cloche) : dernier prompt réellement envoyé à la session — déjà tronqué
+        // côté Rust — et outil long éventuellement en cours. Champs ADDITIFS :
+        // les consommateurs existants (indicateur d'activité, résumé immersif,
+        // onglet agent, assistant web) les ignorent.
+        prompt: typeof a.prompt === "string" ? a.prompt : "",
+        toolInProgress: a.toolInProgress === true,
         lastActivity: lastActivityMap ? formatLastActivity(lastActivityMap.get(rawId)) : null,
         kind: isSuper ? "superagent" : (isAssistant ? "assistant" : "agent"),
       });
@@ -130,6 +137,97 @@ export function flattenAgents(supervision, lastActivityMap) {
 /** true si au moins un agent est occupé (travail en cours). */
 export function anyBusy(list) {
   return list.some((a) => a.busy);
+}
+
+// ── Missions en cours (affichage du panneau de la cloche) ──
+
+/** Longueur maximale affichée du texte d'une mission. */
+export const MISSION_MAX_CHARS = 80;
+
+/** Tronque un texte à `MISSION_MAX_CHARS` caractères, suffixé « … » si coupé. */
+function clipMission(text) {
+  const chars = Array.from(text);
+  if (chars.length <= MISSION_MAX_CHARS) return text;
+  return chars.slice(0, MISSION_MAX_CHARS).join("") + "…";
+}
+
+/**
+ * Réduit le texte d'une demande d'agent à une ligne courte et LISIBLE pour
+ * l'affichage. Fonction PURE et déterministe :
+ *  1. si le texte contient une ligne `Tâche : <titre>` (prompts d'orchestration,
+ *     y compris retries) → ce `<titre>` ;
+ *  2. sinon la première ligne significative (fences de code et balises markdown
+ *     de tête retirées), coupée à `MISSION_MAX_CHARS` caractères avec « … » ;
+ *  3. si le texte est vide ou inconnu → « (demande non précisée) » : JAMAIS une
+ *     ligne vide, JAMAIS un texte inventé.
+ * @param {string} text — prompt brut (déjà tronqué côté Rust) ou valeur absente.
+ * @returns {string} libellé de mission, toujours non vide.
+ */
+export function shortMission(text) {
+  const raw = String(text == null ? "" : text);
+  const lines = raw.split(/\r?\n/);
+  // 1. Ligne « Tâche : … » (orchestration) — cherchée partout dans le texte.
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:[-*>]\s*)*(?:\*\*)?T[âa]che\s*:\s*(?:\*\*)?\s*(.+?)\s*(?:\*\*)?\s*$/);
+    if (m && m[1].trim()) return clipMission(m[1].trim());
+  }
+  // 2. Première ligne significative, hors fences de code et hors markdown de tête.
+  let inFence = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const clean = trimmed
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[\-*+]\s+/, "")
+      .replace(/^>\s?/, "")
+      .replace(/^\*{1,2}(.+?)\*{1,2}$/, "$1")
+      .trim();
+    if (clean) return clipMission(clean);
+  }
+  // 3. Repli explicite.
+  return "(demande non précisée)";
+}
+
+/**
+ * Construit la liste des missions RÉELLEMENT en cours à afficher (panneau de la
+ * cloche, onglet « En cours »). Fonction PURE.
+ *
+ * Règles (faux négatifs interdits) :
+ *  - un agent RETENU si `busy` OU `toolInProgress` : un outil long et SILENCIEUX
+ *    (compilation, tests) ne fait pas disparaître sa mission ;
+ *  - un agent AU REPOS (`idle` / `paused` / `stopped`) est MASQUÉ : pas de mission ;
+ *  - l'Assistant lui-même suit la même règle ;
+ *  - les missions EN ATTENTE (files d'attente de délégation / de run) sont
+ *    ajoutées avec `waiting: true` (mention « en attente » à l'affichage).
+ * @param {Array} list — liste aplatie (flattenAgents).
+ * @param {Array<{project: string, mission: string}>} [queued] — missions en file.
+ * @returns {Array<{agent: string, project: string, mission: string, waiting: boolean}>}
+ */
+export function buildRunningMissions(list, queued) {
+  const out = [];
+  for (const a of list || []) {
+    if (!a || (!a.busy && !a.toolInProgress)) continue;
+    out.push({
+      agent: a.label || "",
+      project: a.project || "Assistant",
+      mission: shortMission(a.prompt),
+      waiting: false,
+    });
+  }
+  for (const q of queued || []) {
+    if (!q) continue;
+    out.push({
+      agent: q.agent || "",
+      project: q.project || "Assistant",
+      mission: shortMission(q.mission),
+      waiting: true,
+    });
+  }
+  return out;
 }
 
 // ── Store partagé (supervision, plusieurs consommateurs) ──

@@ -207,6 +207,12 @@ pub struct AgentService {
     // récent), ce qui met les demandes suivantes en file d'attente au lieu de
     // les démarrer et maintient le faux verrou « Une run est déjà en cours ».
     anomaly_map: Mutex<Option<Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>>>,
+    // Mission en cours (affichage) : DERNIER prompt réellement envoyé à chaque
+    // session, clé composite identique à `sessions`, texte déjà tronqué
+    // (`PROMPT_SNAPSHOT_MAX_CHARS`). Alimenté au passage OBLIGÉ de l'envoi
+    // (`send` / `send_sync` / `send_sync_timeout`), lu par `list_agent_sessions`.
+    // Purement informatif : n'influence aucune décision du service.
+    last_prompts: Mutex<HashMap<String, String>>,
 }
 
 /// P0 (issue #84) diagnostic d'échec rapide du super-agent : si `.pi/extensions/`
@@ -237,6 +243,33 @@ fn project_extension_diag_hint(cwd: &str) -> Option<String> {
     )
 }
 
+/// Longueur maximale (en CARACTÈRES, jamais en octets) du texte de mission
+/// conservé par session pour l'affichage « missions en cours ».
+const PROMPT_SNAPSHOT_MAX_CHARS: usize = 80;
+
+/// Extrait de quoi afficher la mission en cours d'un envoi vers une session.
+/// Retourne `None` pour toute commande qui n'est PAS un prompt (`get_state`,
+/// `set_model`, …) : le dernier prompt connu n'est alors jamais écrasé.
+/// Un prompt à texte vide reste un prompt (chaîne vide) : l'affichage applique
+/// alors son repli explicite — jamais une ancienne mission conservée à tort.
+fn prompt_snapshot(command: &Value) -> Option<String> {
+    if command.get("type").and_then(|t| t.as_str()) != Some("prompt") {
+        return None;
+    }
+    // Formats acceptés : `message` (format pi RPC) ou `prompt` (repli).
+    let text = command
+        .get("message")
+        .and_then(|m| m.as_str())
+        .or_else(|| command.get("prompt").and_then(|m| m.as_str()))
+        .unwrap_or("")
+        .trim();
+    let mut out: String = text.chars().take(PROMPT_SNAPSHOT_MAX_CHARS).collect();
+    if text.chars().count() > PROMPT_SNAPSHOT_MAX_CHARS {
+        out.push('…');
+    }
+    Some(out)
+}
+
 /// Ajoute (si pertinent) l'avertissement d'extensions projet au message d'erreur.
 /// Fail-open : sans `.pi/extensions`, renvoie le message tel quel.
 fn append_ext_diag_hint(cwd: &str, msg: String) -> String {
@@ -260,6 +293,7 @@ impl AgentService {
             superagent_start_lock: Mutex::new(()),
             superagent_ext: Mutex::new(None),
             anomaly_map: Mutex::new(None),
+            last_prompts: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1002,24 +1036,49 @@ impl AgentService {
             .ok();
     }
 
+    /// Enregistre (si c'en est un) le prompt envoyé comme mission en cours de
+    /// la session. Purge volontairement absente : une session arrêtée n'est
+    /// jamais listée, l'entrée résiduelle coûte ~80 octets et son nombre est
+    /// borné par les couples (projet, agent) — `ponytail: pas de purge, à
+    /// reprendre seulement si la carte grossit anormalement`.
+    fn record_prompt(&self, key: String, snapshot: Option<String>) {
+        if let Some(s) = snapshot {
+            self.last_prompts.lock().unwrap().insert(key, s);
+        }
+    }
+
     /// Route une commande vers la session d'un agent (une seule indirection).
     pub fn send(&self, project: &str, agent_id: &str, command: Value) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
-        let mut sessions = self.sessions.lock().unwrap();
-        let entry = sessions
-            .get_mut(&key)
-            .ok_or_else(|| format!("Aucune session pour l'agent {} (projet {})", agent_id, project))?;
-        rpc_manager::send_command(&mut entry.session, &command)
+        let snapshot = prompt_snapshot(&command);
+        let res = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let entry = sessions.get_mut(&key).ok_or_else(|| {
+                format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
+            })?;
+            rpc_manager::send_command(&mut entry.session, &command)
+        };
+        if res.is_ok() {
+            self.record_prompt(key, snapshot);
+        }
+        res
     }
 
     /// Route une commande synchrone (attend la réponse) vers la session d'un agent.
     pub fn send_sync(&self, project: &str, agent_id: &str, command: Value) -> Result<Value, String> {
         let key = Self::session_key(project, agent_id);
-        let mut sessions = self.sessions.lock().unwrap();
-        let entry = sessions
-            .get_mut(&key)
-            .ok_or_else(|| format!("Aucune session pour l'agent {} (projet {})", agent_id, project))?;
-        rpc_manager::send_command_sync(&mut entry.session, command)
+        let snapshot = prompt_snapshot(&command);
+        let res = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let entry = sessions.get_mut(&key).ok_or_else(|| {
+                format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
+            })?;
+            rpc_manager::send_command_sync(&mut entry.session, command)
+        };
+        if res.is_ok() {
+            self.record_prompt(key, snapshot);
+        }
+        res
     }
 
     /// Route une commande synchrone avec timeout vers la session d'un agent.
@@ -1031,11 +1090,18 @@ impl AgentService {
         timeout_secs: u64,
     ) -> Result<Value, String> {
         let key = Self::session_key(project, agent_id);
-        let mut sessions = self.sessions.lock().unwrap();
-        let entry = sessions
-            .get_mut(&key)
-            .ok_or_else(|| format!("Aucune session pour l'agent {} (projet {})", agent_id, project))?;
-        rpc_manager::send_command_sync_timeout(&mut entry.session, command, timeout_secs)
+        let snapshot = prompt_snapshot(&command);
+        let res = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let entry = sessions.get_mut(&key).ok_or_else(|| {
+                format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
+            })?;
+            rpc_manager::send_command_sync_timeout(&mut entry.session, command, timeout_secs)
+        };
+        if res.is_ok() {
+            self.record_prompt(key, snapshot);
+        }
+        res
     }
 
     /// Accès (lecture) au registre de sessions pour un agent donné. Retourne le
@@ -1383,6 +1449,18 @@ impl AgentService {
             // travaille » et libérait la run en ÉCHEC au milieu du travail.
             if let Some(t) = tool_in_progress {
                 entry["toolInProgress"] = serde_json::Value::Bool(t);
+            }
+            // prompt : DERNIER prompt réellement envoyé à cette session, déjà
+            // tronqué (`record_prompt`). Sert à afficher les missions en cours
+            // (panneau de la cloche). Champ ADDITIF : absent tant qu'aucun prompt
+            // n'a été envoyé à la session.
+            if let Some(p) = self
+                .last_prompts
+                .lock()
+                .unwrap()
+                .get(&format!("{}\u{1f}{}", project, agent_id))
+            {
+                entry["prompt"] = serde_json::Value::String(p.clone());
             }
             // sessionId (chantier restitution fin-de-run) : identifiant de session
             // pi, exposé pour que l'assistant puisse cibler get_delegation_result
@@ -3506,6 +3584,79 @@ mod tests {
         assert_eq!(proc.3, "agent_process");
         assert!(proc.4, "processus vivant");
         assert!(!proc.5, "agent multi-rôles → jamais actif");
+    }
+
+    /// Mission en cours (affichage) : un envoi de prompt est mémorisé comme
+    /// dernier prompt de la session, tronqué ; une commande qui n'est PAS un
+    /// prompt ne l'écrase jamais.
+    #[test]
+    fn send_records_last_prompt_only_for_prompt_commands() {
+        let svc = AgentService::new();
+        let key = AgentService::session_key("/p/A", "default");
+        {
+            let mut sessions = svc.sessions.lock().unwrap();
+            sessions.insert(
+                key.clone(),
+                SessionEntry {
+                    session: fake_session(),
+                    project: "/p/A".to_string(),
+                    state: SessionState::Active,
+                    mode: SpawnMode::MainSession,
+                },
+            );
+        }
+        let last = |svc: &AgentService| svc.last_prompts.lock().unwrap().get(&key).cloned();
+
+        // Prompt court : conservé tel quel.
+        svc.send(
+            "/p/A",
+            "default",
+            serde_json::json!({ "type": "prompt", "message": "Corriger la recherche globale" }),
+        )
+        .unwrap();
+        assert_eq!(last(&svc).as_deref(), Some("Corriger la recherche globale"));
+
+        // Commande non-prompt : le dernier prompt connu est INCHANGÉ.
+        svc.send("/p/A", "default", serde_json::json!({ "type": "get_state" }))
+            .unwrap();
+        assert_eq!(last(&svc).as_deref(), Some("Corriger la recherche globale"));
+
+        // Prompt très long : tronqué à 80 caractères + « … » (par caractères).
+        let long = "é".repeat(200);
+        svc.send(
+            "/p/A",
+            "default",
+            serde_json::json!({ "type": "prompt", "message": long }),
+        )
+        .unwrap();
+        let got = last(&svc).expect("prompt long mémorisé");
+        assert_eq!(got.chars().count(), PROMPT_SNAPSHOT_MAX_CHARS + 1);
+        assert!(got.ends_with('…'), "troncature signalée par …");
+
+        // Prompt vide : reste un prompt (chaîne vide) — l'affichage applique son
+        // repli, jamais une ancienne mission conservée à tort.
+        svc.send(
+            "/p/A",
+            "default",
+            serde_json::json!({ "type": "prompt", "message": "   " }),
+        )
+        .unwrap();
+        assert_eq!(last(&svc).as_deref(), Some(""));
+    }
+
+    /// `prompt_snapshot` : extraction PURE du texte de mission d'une commande.
+    #[test]
+    fn prompt_snapshot_extracts_prompt_text() {
+        assert_eq!(prompt_snapshot(&serde_json::json!({ "type": "get_state" })), None);
+        assert_eq!(prompt_snapshot(&serde_json::json!({ "type": "set_model" })), None);
+        assert_eq!(
+            prompt_snapshot(&serde_json::json!({ "type": "prompt", "message": "  ok  " })),
+            Some("ok".to_string())
+        );
+        assert_eq!(
+            prompt_snapshot(&serde_json::json!({ "type": "prompt", "message": "" })),
+            Some(String::new())
+        );
     }
 
     /// P4 : `upsert_agent_conn` est idempotent pour un agent GLOBAL
