@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-02 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-07 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1184,16 +1184,18 @@ apprend et répond.
     (1-120 s, **5 s par défaut**). Le **dernier événement remplace** le
     précédent (jamais d'empilement) et le bandeau s'efface en douceur. Les
     **questions interactives** (choix, confirmations) ne sont **pas** concernées.
-- **Volet « Tâches » dans le panneau cloche** : en plus des **Événements**, le
-  panneau cloche propose un **second onglet « Tâches »** (**Paramètres ⚙️ →
-  onglet « Assistant » → « Onglet « Tâches » dans le panneau de la cloche »**,
-  **activé par défaut**). Il liste les **tâches ouvertes** de votre suivi
-  multi-projets (à faire, en cours, à valider), groupées par client, avec leur
-  statut et leur **échéance** (signalée en retard) ; les tâches **terminées ou
-  annulées** n'y figurent pas. **Cliquez une tâche** : son détail (statut,
-  projet, échéance, description) s'affiche **dans la conversation** de
-  l'Assistant. La liste est **rechargée à chaque ouverture** et **défile** si
-  elle est longue.
+- **Volet « En cours » dans le panneau cloche** : en plus des **Événements**, le
+  panneau cloche propose un **second onglet « En cours »** (**Paramètres ⚙️ →
+  onglet « Assistant » → « Onglet « En cours » dans le panneau de la cloche »**,
+  **activé par défaut**). Il liste les **missions réellement en cours** de vos
+  agents : pour chacune, le **nom de l'agent**, son **projet** et le **texte de la
+  demande** qu'il traite. Un agent **au repos** n'y figure **pas** ; un agent
+  **occupé** y figure **même s'il ne dit rien** (compilation, tests longs). Une
+  mission qui **attend** qu'un agent se libère apparaît avec la mention
+  **« en attente »**. La liste se **met à jour toute seule** tant qu'elle est
+  affichée (mêmes données que l'indicateur d'activité) et **défile** si elle est
+  longue. Les **tâches** de votre suivi multi-projets restent dans leur onglet
+  **Kanban** dédié (barre latérale).
 - **#31 — Pas de bulle vide** : un message d'info **vide** ou qui ne contient
   **qu'un chemin de projet** (sans libellé/contexte) n'est **pas affiché** —
   chaque bulle porte toujours un libellé utile (ex: « Projet ouvert : X »).
@@ -1374,6 +1376,13 @@ uniquement un bloc d'instructions dans le prompt système.
   Terminé / À qualifier ». La colonne « À qualifier » recueille les statuts que
   la règle unique ne sait pas trancher : rien ne disparaît en silence, mais une
   tâche close en texte libre ne compte jamais comme ouverte.
+- **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
+  `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
+  **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
+  fichiers… », `fermee_github`, « livree - … », « decidee - … », `livre_a_tester`).
+  Les compteurs du cœur (`super_agent_tracking`, `super_agent_project_overview`,
+  timeline, santé projet) appliquent la même règle. À la création d'une tâche, le
+  statut canonique `demande` est écrit explicitement (plus de texte libre implicite).
 - Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
   extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.
@@ -1393,41 +1402,47 @@ uniquement un bloc d'instructions dans le prompt système.
   fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
   la vue.
 
-### Volet « Tâches » du panneau cloche
+### Volet « En cours » du panneau cloche (missions des agents)
 - Le **panneau cloche** (#139, en bas à droite de l'onglet 🧭) porte désormais
   **deux onglets commutables** dans son en-tête : **« Événements »** (historique
-  en direct, inchangé) et **« Tâches »**. La commutation est purement visuelle
-  (aucun aller-retour réseau pour Événements) ; le volet Tâches est **rechargé à
-  chaque activation** via la commande existante `get_super_agent_kanban` (aucune
-  nouvelle commande Rust).
-- Le volet Tâches n'affiche que les tâches **ouvertes** (logique pure
-  `isOpenTaskStatus` / `filterOpenTasksByClient` dans `super-agent-kanban.js`),
-  groupées **par client**, avec **statut** (`taskStatusLabel`) et **échéance**
-  (`formatTaskDeadline`, retard signalé). La liste **défile** (même hauteur
-  maximale que celle des événements).
-- **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
-  `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
-  **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
-  fichiers… », `fermee_github`, « livree - … », « decidee - … », `livre_a_tester`).
-  Un statut vraiment inconnu est isolé dans la case **« À qualifier »**
-  (`filterUnqualifiedTasksByClient` / colonne Kanban) et n'est **jamais** compté
-  « à faire ». Les compteurs du cœur (`super_agent_tracking`,
-  `super_agent_project_overview`, timeline, santé projet) appliquent la même
-  règle. À la création d'une tâche, le statut canonique `demande` est écrit
-  explicitement (plus de texte libre implicite).
-- **Clic (ou Entrée/Espace) sur une tâche** : son **détail** est ajouté comme
-  **bulle de l'Assistant dans la conversation** (`showSuperTaskDetail`, jamais
-  une fenêtre ni un onglet), puis le panneau se referme pour ne pas masquer la
-  bulle.
-- **Réglage global** `super_agent_tasks_tab_enabled` (`AppConfig`, `default_true`
-  = **activé par défaut**, case **Paramètres ⚙️ → Assistant → « Onglet
-  « Tâches » dans le panneau de la cloche »**) : désactivé → panneau historique
-  (Événements seuls) et bouton d'onglet Tâches masqué. Le réglage est appliqué
-  **à chaud** à chaque `pilot-config-changed` (`applySuperEventsTabsVisibility`),
-  sans redémarrer. Fail-open : réglage illisible → on garde les deux onglets.
-- Le bouton **« tout effacer »** 🗑️ reste propre au volet Événements (masqué
-  dans le volet Tâches). Le **badge non-lus** et la **restauration de l'état
-  ouvert/fermé** (localStorage) restent inchangés pour le panneau entier.
+  en direct, inchangé) et **« En cours »** (missions des agents).
+- **Source unique** : le **store d'activité partagé** de l'application
+  (`agent-activity.js`, celui de l'indicateur d'activité des projets, du mode
+  immersif et de l'onglet agent) — **aucune** commande Rust nouvelle, **aucun**
+  appel supplémentaire au moteur. Le volet **s'abonne** à ce store tant qu'il est
+  affiché (et se **désabonne** à la fermeture du panneau ou au retour sur
+  Événements), donc il se **met à jour en direct** avec le rafraîchissement léger
+  existant. La commutation d'onglet reste purement visuelle.
+- **Contenu** : pour chaque agent **retenu** → `{ agent, projet, mission }`.
+  Filtre et mise en forme sont des **fonctions pures** (`buildRunningMissions`,
+  `shortMission` dans `agent-activity.js`, testées) :
+  - agent **retenu** si `busy` **ou** `toolInProgress` → un agent engagé dans un
+    **outil long et silencieux** (compilation, tests) **ne disparaît jamais**
+    (faux négatif interdit) ;
+  - agent **au repos** (`idle`, `paused`, `stopped`) → **masqué** (une absence de
+    travail n'est pas une mission) ;
+  - **texte de mission** : ligne « **Tâche : …** » si le prompt en contient une
+    (prompts d'orchestration), sinon la **première ligne significative** (fences
+    de code et préfixes Markdown retirés), **coupé à 80 caractères** (suffixe
+    « … ») ; si le texte est introuvable → **« (demande non précisée) »**, jamais
+    une ligne vide ni un texte inventé ;
+  - **missions en attente** : les demandes mises en file (délégations
+    inter-projets et files de `run_agents` / assistant) sont ajoutées avec la
+    mention **« en attente »** ; leur projet est affiché par son nom de dossier.
+- **Alimentation du texte de mission (Rust)** : `AgentService` mémorise, **au
+  passage obligé de l'envoi d'un prompt** (`send` / `send_sync` /
+  `send_sync_timeout`, donc `rpc_manager`), le **dernier prompt réellement
+  envoyé** à chaque session, **déjà tronqué** à 80 caractères
+  (`prompt_snapshot`, `PROMPT_SNAPSHOT_MAX_CHARS`). Une commande qui **n'est pas**
+  un prompt (`get_state`, `set_model`, …) **n'écrase jamais** la mission en cours.
+  L'information remonte par les champs **additifs** `prompt` (et
+  `toolInProgress`) de `list_agent_sessions` puis `get_agent_supervision` : les
+  consommateurs existants les ignorent.
+- **Cliquer sur une mission** referme le panneau. Les **tâches** du suivi
+  multi-projets (`get_super_agent_kanban`, statuts ouverts, groupées par client,
+  statut, échéance, case « À qualifier ») restent affichées **dans l'onglet Kanban
+  dédié**, ouvert par le bouton Kanban de la barre latérale — ce volet ne les
+  duplique plus.
 
 ### Espace d'écriture dédié (fichiers de suivi)
 - L'Assistant dispose d'un **dossier de travail dédié** `~/.pilot/assistant/`

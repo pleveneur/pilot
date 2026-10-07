@@ -30,16 +30,9 @@ import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
-import { mountCollapsibleAgentList } from "./agent-activity.js";
+import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
-import {
-  normalizeTaskStatus,
-  taskStatusLabel,
-  filterOpenTasksByClient,
-  filterUnqualifiedTasksByClient,
-  formatTaskDeadline,
-} from "./super-agent-kanban.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
@@ -165,8 +158,8 @@ let superEventsTabEventsBtn = null; // bouton d'onglet « Événements »
 let superEventsTabTasksBtn = null;  // bouton d'onglet « Tâches »
 let superEventsPaneEvents = null;   // volet Événements
 let superEventsPaneTasks = null;    // volet Tâches
-let superTasksList = null;          // liste .sa-tasks-list
-let superTasksById = new Map();     // cache des tâches affichées (id → tâche) pour le détail
+let superTasksList = null;          // liste .sa-tasks-list (« En cours » : missions)
+let superMissionsUnsub = null;      // désabonnement du store d'activité (volet ouvert) pour le détail
 let superEventsActiveTab = "events"; // onglet actif du panneau
 
 // ── Overlay plein écran des événements (tâche #160) ──
@@ -1240,11 +1233,6 @@ function escapeHtmlForSuper(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Échappe une valeur pour un attribut HTML (guillemets inclus). */
-function escapeAttrForSuper(s) {
-  return escapeHtmlForSuper(s).replace(/"/g, "&quot;");
-}
-
 /**
  * Résume la mémoire de session (reprise) en une courte phrase pour le message
  * système « 🔁 Reprise de session — … ». Le résumé est un objet JSON structuré
@@ -1414,15 +1402,17 @@ function openSuperEvents() {
   if (superEventsPanel) superEventsPanel.classList.remove("hidden");
   if (superEventsBtn) superEventsBtn.classList.remove("agent-pulse");
   localStorage.setItem(SUPER_EVENTS_KEY, "1");
-  // Onglet « Tâches » : rafraîchir la liste à l'ouverture (état réel, pas une
-  // photo périmée). L'onglet « Événements » reste alimenté en direct par le
-  // tampon mémoire existant (inchangé).
-  if (superEventsActiveTab === "tasks") loadSuperTasks();
+  // Onglet « En cours » : la liste est alimentée en direct par le store
+  // d'activité tant qu'elle est affichée (abonnement posé par loadSuperMissions).
+  // L'onglet « Événements » reste alimenté en direct par le tampon mémoire
+  // existant (inchangé).
+  if (superEventsActiveTab === "tasks") loadSuperMissions();
 }
 
 /** Ferme le panneau des événements. */
 function closeSuperEvents() {
   superEventsOpen = false;
+  stopSuperMissionsWatch();
   if (superEventsPanel) superEventsPanel.classList.add("hidden");
   localStorage.setItem(SUPER_EVENTS_KEY, "0");
 }
@@ -1434,11 +1424,11 @@ function toggleSuperEvents() {
 }
 
 /**
- * Active un onglet du panneau cloche (« Événements » | « Tâches »). Le volet
- * Tâches est RAFRAÎCHI à chaque activation (état réel de la base, jamais une
- * photo périmée) ; la commutation est purement visuelle (aucun aller-retour
- * réseau pour Événements). L'onglet Tâches n'est sélectionnable que s'il est
- * affiché (réglage global activé).
+ * Active un onglet du panneau cloche (« Événements » | « En cours »). Le volet
+ * « En cours » est mis à jour EN DIRECT tant qu'il est affiché (abonnement au
+ * store d'activité partagé) ; la commutation est purement visuelle (aucun
+ * aller-retour réseau pour Événements). L'onglet « En cours » n'est sélectionnable
+ * que s'il est affiché (réglage global activé).
  * @param {"events"|"tasks"} tab
  */
 function switchSuperEventTab(tab) {
@@ -1454,12 +1444,13 @@ function switchSuperEventTab(tab) {
     const clearBtn = superEventsPanel.querySelector(".sa-events-clear");
     if (clearBtn) clearBtn.hidden = isTasks;
   }
-  if (isTasks) loadSuperTasks();
+  if (isTasks) loadSuperMissions();
+  else stopSuperMissionsWatch();
 }
 
 /**
  * Applique le réglage global `super_agent_tasks_tab_enabled` (ACTIVÉ PAR DÉFAUT)
- * au panneau cloche : activé → deux onglets (Événements + Tâches) ; désactivé →
+ * au panneau cloche : activé → deux onglets (Événements + En cours) ; désactivé →
  * panneau historique inchangé (Événements seuls). Fail-open : réglage illisible
  * → on garde les deux onglets. Appelée à la construction du panneau ET à chaque
  * changement de configuration (bascule à chaud sans rouvrir l'onglet).
@@ -1471,82 +1462,84 @@ function applySuperEventsTabsVisibility() {
 }
 
 /**
- * Rend la liste des tâches OUVERTES du suivi de l'assistant (commande existante
- * `get_super_agent_kanban`, filtrée sur les statuts ouverts — aucune nouvelle
- * commande). Fail-open : une erreur de lecture affiche un message explicite,
- * jamais une liste vide trompeuse.
+ * Rendu du volet « En cours » : les MISSIONS RÉELLEMENT en cours de chaque agent
+ * (source : store d'activité partagé, mêmes données que l'indicateur d'activité
+ * du haut d'écran — aucun appel supplémentaire au moteur), plus les missions en
+ * file d'attente (mention « en attente »). Un agent au repos n'y figure pas ;
+ * un agent occupé silencieusement (outil long) y reste. Aucune mission → message
+ * explicite, jamais une liste vide trompeuse.
  */
-async function loadSuperTasks() {
+function renderSuperMissions() {
   if (!superTasksList) return;
-  superTasksList.innerHTML = `<div class="dash-loading">Chargement des tâches…</div>`;
-  let clients = [];
-  try {
-    const data = await invoke("get_super_agent_kanban");
-    clients = (data && data.clients) || [];
-  } catch (e) {
-    console.error("get_super_agent_kanban:", e);
-    superTasksList.innerHTML = `<div class="dash-muted">⚠️ Impossible de lire les tâches.</div>`;
+  const snapshot = getAgentActivitySnapshot();
+  const missions = buildRunningMissions(snapshot.list, collectQueuedMissions());
+  if (!missions.length) {
+    superTasksList.innerHTML = `<div class="dash-muted">Aucune mission en cours.</div>`;
     return;
   }
-  const open = filterOpenTasksByClient(clients);
-  const unqualified = filterUnqualifiedTasksByClient(clients);
-  superTasksById.clear();
-  if (!open.length && !unqualified.length) {
-    superTasksList.innerHTML =
-      `<div class="dash-muted">Aucune tâche ouverte : rien à faire pour l'instant.</div>`;
-    return;
-  }
-  const itemHtml = (t) => {
-    superTasksById.set(t.id, t);
-    const dl = formatTaskDeadline(t.deadline);
-    const meta = [escapeHtmlForSuper(t.project_name || "")];
-    if (dl) meta.push(`échéance ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
-    return `<div class="sa-task-item" data-task-id="${escapeAttrForSuper(String(t.id))}" role="button" tabindex="0" title="Afficher le détail dans la conversation">
+  superTasksList.innerHTML = missions
+    .map(
+      (m) => `<div class="sa-task-item">
         <div class="sa-task-head">
-          <span class="sa-task-title">${escapeHtmlForSuper(t.title || "Sans titre")}</span>
-          <span class="sa-task-status tone-${normalizeTaskStatus(t.status)}">${escapeHtmlForSuper(taskStatusLabel(t.status))}</span>
+          <span class="sa-task-title">${escapeHtmlForSuper(m.agent || `Projet ${m.project}`)}</span>
+          ${m.waiting ? `<span class="sa-task-status tone-unqualified">en attente</span>` : ""}
         </div>
-        <div class="sa-task-meta">${meta.filter(Boolean).join(" · ")}</div>
-      </div>`;
-  };
-  let html = "";
-  for (const client of open) {
-    html += `<div class="sa-task-client">${escapeHtmlForSuper(client.name)} <span class="dash-muted">${client.tasks.length}</span></div>`;
-    for (const t of client.tasks) html += itemHtml(t);
-  }
-  // Case distincte « À qualifier » : un statut inconnu reste visible mais ne
-  // compte jamais comme « à faire » (constraint 2 — rien ne disparaît en silence).
-  if (unqualified.length) {
-    const n = unqualified.reduce((sum, c) => sum + c.tasks.length, 0);
-    html += `<div class="sa-task-client">À qualifier <span class="dash-muted">${n}</span></div>`;
-    for (const client of unqualified) {
-      for (const t of client.tasks) html += itemHtml(t);
-    }
-  }
-  superTasksList.innerHTML = html;
+        <div class="sa-task-meta">${escapeHtmlForSuper(
+          m.agent ? `Projet ${m.project} · ${m.mission}` : m.mission
+        )}</div>
+      </div>`
+    )
+    .join("");
   refreshIcons(superTasksList);
 }
 
-/**
- * Affiche le détail d'une tâche DANS la conversation de l'Assistant (fil de
- * discussion), jamais dans une fenêtre ni un onglet : bulle assistant au format
- * Markdown, avec statut, projet, échéance (signalée en retard) et description.
- * @param {string|number} taskId
- */
-function showSuperTaskDetail(taskId) {
-  const t = superTasksById.get(Number(taskId));
-  if (!t || !superMessagesEl) return;
-  const lines = [`### 📋 ${t.title || "Sans titre"}`, ""];
-  lines.push(`- **Statut** : ${taskStatusLabel(t.status)}`);
-  if (t.project_name) lines.push(`- **Projet** : ${t.project_name}`);
-  const dl = formatTaskDeadline(t.deadline);
-  if (dl) lines.push(`- **Échéance** : ${dl.text}${dl.overdue ? " ⚠️ en retard" : ""}`);
-  const desc = String(t.description || "").trim();
-  if (desc) {
-    lines.push("");
-    lines.push(desc);
+/** Libellé lisible d'un projet (« Assistant » pour les espaces réservés). */
+function missionProjectLabel(project) {
+  if (!project || project === ASSISTANT_SPACE) return "Assistant";
+  return pathTailName(project) || project;
+}
+
+/** Missions EN ATTENTE, tous projets (files de délégation et de runs). */
+function collectQueuedMissions() {
+  const out = [];
+  for (const [project, st] of delegationStates) {
+    for (const q of st.queue || []) {
+      out.push({ project: missionProjectLabel(project), mission: q.request || "" });
+    }
   }
-  appendMessage(superMessagesEl, "assistant", lines.join("\n"));
+  for (const [project, queue] of Object.entries(runAgentsQueueByProject)) {
+    for (const item of queue || []) {
+      out.push({ project: missionProjectLabel(project), mission: item.label || "" });
+    }
+  }
+  return out;
+}
+
+/**
+ * Active la surveillance des missions tant que le volet est affiché (store
+ * partagé : aucun polling propre, l'affichage suit le rafraîchissement existant).
+ */
+function startSuperMissionsWatch() {
+  if (!superMissionsUnsub) superMissionsUnsub = subscribeAgentActivity(renderSuperMissions);
+  renderSuperMissions();
+}
+
+/** Coupe la surveillance des missions (volet fermé ou onglet Événements). */
+function stopSuperMissionsWatch() {
+  if (superMissionsUnsub) {
+    superMissionsUnsub();
+    superMissionsUnsub = null;
+  }
+}
+
+/**
+ * Affiche le volet « En cours » : missions des agents en travail (store
+ * partagé) + missions en file d'attente, marquées « en attente ».
+ */
+function loadSuperMissions() {
+  if (!superTasksList) return;
+  superTasksList.innerHTML = `<div class="dash-loading">Chargement des missions…</div>`;
+  startSuperMissionsWatch();
 }
 
 /**
@@ -1752,13 +1745,16 @@ export async function createSuperAgent(container) {
   eventsPanel.id = "superagent-events-panel";
   eventsPanel.className = "sa-events-panel hidden";
   // Le panneau porte DEUX onglets commutables : « Événements » (historique,
-  // inchangé) et « Tâches » (tâches OUVERTES du suivi, ajouté quand le réglage
-  // global `super_agent_tasks_tab_enabled` est actif — il l'est par défaut).
+  // inchangé) et « En cours » (missions RÉELLEMENT en cours des agents, source :
+  // store d'activité partagé — ajouté quand le réglage global
+  // `super_agent_tasks_tab_enabled` est actif — il l'est par défaut). Les tâches
+  // du suivi (kanban) restent dans leur onglet dédié, ouvert par le bouton Kanban
+  // de la barre latérale.
   eventsPanel.innerHTML = `
     <div class="sa-events-header">
       <div class="sa-events-tabs" role="tablist">
         <button class="sa-events-tab active" role="tab" data-sa-tab="events">Événements</button>
-        <button class="sa-events-tab" role="tab" data-sa-tab="tasks" hidden>Tâches</button>
+        <button class="sa-events-tab" role="tab" data-sa-tab="tasks" hidden>En cours</button>
       </div>
       <div class="sa-events-header-actions">
         <button class="agent-btn sa-events-clear" title="Tout effacer" aria-label="Tout effacer"><i data-lucide="trash-2" class="icon-sm"></i></button>
@@ -1790,24 +1786,14 @@ export async function createSuperAgent(container) {
   eventsPanel.querySelector(".sa-events-clear").addEventListener("click", () => {
     if (superEventsList) superEventsList.innerHTML = "";
   });
-  // Commutation des onglets (le volet Tâches est rechargé à chaque activation).
+  // Commutation des onglets (le volet « En cours » est suivi en direct pendant
+  // son affichage, cf. startSuperMissionsWatch).
   superEventsTabEventsBtn.addEventListener("click", () => switchSuperEventTab("events"));
   superEventsTabTasksBtn.addEventListener("click", () => switchSuperEventTab("tasks"));
-  // Clic (ou Entrée/Espace, la carte est focusable) sur une tâche → son détail
-  // s'affiche DANS LA CONVERSATION, puis le panneau se referme pour ne pas
-  // masquer la bulle qui vient d'être ajoutée au fil.
-  const onTaskActivate = (e) => {
-    const item = e.target.closest(".sa-task-item");
-    if (!item) return;
-    showSuperTaskDetail(item.dataset.taskId);
-    closeSuperEvents();
-  };
-  superTasksList.addEventListener("click", onTaskActivate);
-  superTasksList.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    e.preventDefault();
-    onTaskActivate(e);
-  });
+  // Le volet « En cours » liste les missions des agents en travail. Un clic sur
+  // une mission referme le panneau (pas de détail de tâche ici : le kanban garde
+  // son onglet dédié, ouvert par le bouton Kanban de la barre latérale).
+  superTasksList.addEventListener("click", () => closeSuperEvents());
   // Réglage global : panneau historique (Événements seuls) si désactivé.
   applySuperEventsTabsVisibility();
   // Restaurer l'état ouvert/fermé mémorisé (localStorage).
@@ -2743,6 +2729,8 @@ export async function createSuperAgent(container) {
       superMessagesEl = null;
       // Tâche #139 : libérer les références du panneau des événements (l'onglet
       // est fermé ; les prochains événements seront ignorés jusqu'à la réouverture).
+      stopSuperMissionsWatch();
+      superTasksList = null;
       superEventsPanel = null;
       superEventsBtn = null;
       superEventsBadge = null;
@@ -3788,6 +3776,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             if (wd) { clearTimeout(wd); delete runAgentsWatchdogByProject[target]; }
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            // `label` = texte de la demande : affiché « en attente » dans le volet
+            // « En cours ». Posé APRÈS le push pour ne pas modifier la ligne de mise
+            // en file (invariant vérifié par les tests d'accusé de lancement #87).
+            runAgentsQueueByProject[target].at(-1).label = task;
             // POINT G : la mise en file n'est plus confiée au seul `settleRun`. On
             // arme le déclencheur de rejeu du projet (sonde d'admission réelle),
             // sinon une mission mise en file derrière une commande MANUELLE (que le
@@ -3888,6 +3880,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           if (blockedByFlag || blockedByBus) {
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: launchWithEstimate });
+            runAgentsQueueByProject[target].at(-1).label = task;
             // POINT G : même garantie que dans `launchOrQueue` — déclencheur de
             // rejeu armé sur le projet (voir `armQueueReplay`).
             armQueueReplay(target);
@@ -4032,6 +4025,7 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // jamais pousser dans une file → mission perdue en silence.
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
             runAgentsQueueByProject[target].push({ launch: () => { startRun(); } });
+            runAgentsQueueByProject[target].at(-1).label = task;
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une
             // demande pouvait rester en vol sans suite).
