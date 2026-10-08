@@ -30,6 +30,14 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+// Périmètre de la clé du coffre (tâche 399, cœur PUR partagé avec le frontend) :
+// un serveur ne garde la clé héritée que s'il la déclare lui-même ; refus
+// explicite et message de lancement sont décidés par le module testé en unitaire.
+import {
+  declaresSecret,
+  parseSecretStrict,
+  scopeMcpSecret,
+} from "../../src/js/mcp-secret-scope.js";
 // Garde-fous du contrôle de l'écran (cœur PUR, partagé avec le frontend) :
 // bundlé par esbuild dans le fichier généré. Ils décident, POUR CHAQUE action,
 // si elle est refusée, soumise à confirmation ou simulée, et tiennent le journal.
@@ -80,6 +88,9 @@ interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /// Référence d'une entrée du coffre (jamais la clé) : déclarée par le serveur
+  /// LUI-MÊME. Sans elle, aucune clé (héritée ou non) ne lui est transmise.
+  secret_ref?: string;
   /// Serveur de contrôle de l'écran (capture, clavier, souris) : ses outils
   /// passent par les garde-fous (confirmation, simulation, journal).
   screen?: boolean;
@@ -90,6 +101,34 @@ interface McpConfig {
 }
 
 export default async function (api: ExtensionAPI): Promise<void> {
+  // ── 0. Messages différés vers l'interface ──
+  // La factory ne reçoit AUCUN `ctx` UI (fourni seulement dans les gestionnaires
+  // d'événements) : les messages décidés ici (refus de clé, lancement sans clé)
+  // sont mis en attente et délivrés au `session_start`. Aucun ne contient une
+  // valeur de clé.
+  const pendingNotices: Array<{ text: string; level: string }> = [];
+  let sessionCtx: ExtensionContext | null = null;
+  const flushNotices = (): void => {
+    const ui = sessionCtx && sessionCtx.ui;
+    if (!ui || typeof ui.notify !== "function") return;
+    while (pendingNotices.length) {
+      const notice = pendingNotices.shift()!;
+      try {
+        ui.notify(notice.text, notice.level as never);
+      } catch {
+        /* fail-open : un message manqué ne bloque jamais pi. */
+      }
+    }
+  };
+  const notifyUser = (text: string, level: string): void => {
+    pendingNotices.push({ text, level });
+    flushNotices();
+  };
+  api.on("session_start", (_event, ctx) => {
+    sessionCtx = ctx;
+    flushNotices();
+  });
+
   // ── 1. Lecture de la config MCP via la variable d'environnement ──
   const configPath = process.env.PILOT_MCP_CONFIG;
   if (!configPath) {
@@ -130,15 +169,32 @@ export default async function (api: ExtensionAPI): Promise<void> {
     return; // Contrôle de l'écran coupé — fail-closed (rien ne part).
   }
 
+  // ── 2 ter. Clé du coffre : périmètre PAR SERVEUR (tâche 399) ──
+  // L'environnement hérité du process de l'agent ne transmet la clé qu'au
+  // serveur qui la déclare LUI-MÊME (référence d'entrée du coffre). Sinon la
+  // variable est retirée avant de lancer le serveur : plus de fuite par
+  // héritage. Le mode non strict (réglage Pilot) conserve l'ancien comportement.
+  const strict = await readMcpSecretStrict(configPath);
+  const keyScope = scopeMcpSecret(process.env, { declared: declaresSecret(server), strict });
+  if (keyScope.blocked) {
+    // Référence déclarée introuvable (décision de Rust en mode strict) : ce
+    // serveur n'est PAS lancé et aucun de ses outils n'est enregistré.
+    notifyUser(keyScope.reason, "warning");
+    return;
+  }
+  if (keyScope.notice) {
+    notifyUser(keyScope.notice, "warning");
+  }
+
   // ── 2. Choix du transport selon le type du serveur (E3) ──
   // `http` / `https` = serveur distant joignable par le réseau ; toute autre
   // valeur reste un serveur local (programme), comportement du POC inchangé.
   const transportName = (server.transport ?? "").trim().toLowerCase();
   const isRemote = transportName === "http" || transportName === "https";
-  // Clé d'accès du serveur distant (posée par Pilot, E2). Elle est présentée
-  // dans un EN-TÊTE d'authentification : JAMAIS dans l'adresse, jamais
-  // journalisée, jamais renvoyée au modèle (cf. redactSecret).
-  const secret = (process.env.PILOT_MCP_SECRET || "").trim();
+  // Clé d'accès du serveur (décidée par `scopeMcpSecret`, posée par Pilot E2).
+  // Elle est présentée dans un EN-TÊTE d'authentification : JAMAIS dans
+  // l'adresse, jamais journalisée, jamais renvoyée au modèle (cf. redactSecret).
+  const secret = keyScope.secret;
 
   let transport: Transport;
   try {
@@ -160,9 +216,10 @@ export default async function (api: ExtensionAPI): Promise<void> {
         command: server.command,
         args: server.args ?? [],
         // Variables d'environnement déclarées pour ce serveur (tâche 308) :
-        // l'environnement du process pi est conservé, les valeurs déclarées
-        // écrasent les homonymes.
-        env: { ...process.env, ...(server.env ?? {}) } as Record<string, string>,
+        // l'environnement hérité du process pi est transmis SANS la clé du
+        // coffre quand ce serveur ne la déclare pas (tâche 399) ; les valeurs
+        // déclarées écrasent les homonymes.
+        env: { ...keyScope.env, ...(server.env ?? {}) } as Record<string, string>,
       });
     }
   } catch {
@@ -410,6 +467,20 @@ function dirOf(filePath: string): string {
 function pathIn(base: string, relative: string): string {
   const b = String(base || "").replace(/[\\/]+$/, "");
   return b ? `${b}/${relative}` : "";
+}
+
+/// Mode STRICT de la clé du coffre, relu depuis `config.json` (même dossier que
+/// `mcp.json`). Fichier absent ou illisible → `true` (défaut sûr de Pilot).
+async function readMcpSecretStrict(configPath: string): Promise<boolean> {
+  const dir = dirOf(configPath);
+  if (!dir) {
+    return parseSecretStrict("");
+  }
+  try {
+    return parseSecretStrict(await readFileText(pathIn(dir, "config.json")));
+  } catch {
+    return parseSecretStrict("");
+  }
 }
 
 /// Réglages du contrôle de l'écran, relus en DIRECT depuis `config.json`

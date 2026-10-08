@@ -142,9 +142,10 @@ export function testResult(payload) {
  * formulaire. Le transport est `stdio` (local) par défaut : un formulaire sans
  * type reste donc rétrocompatible avec la configuration existante.
  * La référence de clé (`secret_ref`) n'est jamais la clé elle-même, seulement
- * l'entrée du coffre ; elle n'est conservée que pour un serveur distant. Les
- * variables d'environnement ne concernent que le serveur local (elles sont
- * transmises au programme lancé).
+ * l'entrée du coffre ; elle vaut pour les DEUX types de serveur (tâche 399 :
+ * un serveur local reçoit la clé dans son environnement, un serveur distant en
+ * en-tête). Les variables d'environnement ne concernent que le serveur local
+ * (elles sont transmises au programme lancé).
  * `screen` désigne un serveur de contrôle de l'écran : ses outils sont soumis
  * aux garde-fous (confirmation, simulation, journal).
  * @param {string} id
@@ -167,9 +168,11 @@ export function buildServer(id, form) {
     // Variables d'environnement : seulement pour un serveur local (transmises
     // au programme lancé par Pilot/pi).
     env: remote ? {} : parseEnv(f.envText || ""),
-    // Serveur distant : adresse + référence de coffre (jamais la clé).
+    // Adresse du serveur distant (vide pour un serveur local).
     url: remote ? String(f.url || "").trim() : "",
-    secret_ref: remote ? String(f.secretRef || "").trim() || null : null,
+    // Référence de coffre demandée par CE serveur (jamais la clé), valable pour
+    // les deux transports : un serveur qui ne déclare rien ne reçoit rien.
+    secret_ref: String(f.secretRef || "").trim() || null,
     // Serveur de contrôle de l'écran : uniquement pour un serveur local (un
     // serveur tiers distant ne pilote pas cette machine).
     screen: remote ? false : f.screen === true,

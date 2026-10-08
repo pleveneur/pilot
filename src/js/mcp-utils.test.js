@@ -205,9 +205,13 @@ describe("buildServer", () => {
     expect(distant.screen).toBe(false);
   });
 
-  it("ne conserve la référence de clé que pour un serveur distant", () => {
+  it("conserve la référence de clé pour les DEUX types, rien si elle est vide", () => {
+    // Tâche 399 : un serveur local peut lui aussi demander une entrée du coffre
+    // (sa clé arrive par son environnement) — c'est ce qui l'autorise à la recevoir.
     const local = buildServer("mcp-3", { name: "L", transport: "stdio", command: "node", secretRef: "vault:x" });
-    expect(local.secret_ref).toBeNull();
+    expect(local.secret_ref).toBe("vault:x");
+    const localSansCle = buildServer("mcp-9", { name: "L2", transport: "stdio", command: "node" });
+    expect(localSansCle.secret_ref).toBeNull();
     const remoteSansCle = buildServer("mcp-4", { name: "R", transport: "http", url: "https://exemple.invalid/mcp", secretRef: "  " });
     expect(remoteSansCle.secret_ref).toBeNull();
   });

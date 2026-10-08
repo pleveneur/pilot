@@ -5,6 +5,7 @@
 // test ne touche à aucun coffre) ; un refus clair quand la clé manque ; le mode
 // non strict rend l'ancien comportement. Les tests n'écrivent, n'affichent et
 // ne journalisent JAMAIS une valeur réelle de clé.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   MCP_SECRET_BLOCK_VAR,
@@ -119,5 +120,31 @@ describe("secretStatusLabel", () => {
     expect(secretStatusLabel("locked")).toContain("verrouillé");
     expect(secretStatusLabel("autre")).toContain("inconnu");
     expect(secretStatusLabel("")).toContain("inconnu");
+  });
+});
+
+// Garde anti-régression côté extension MCP (source lue, jamais le bundle
+// généré) : la fuite par héritage ne doit pas pouvoir revenir sans casser ici.
+describe("extension MCP — branchement du périmètre de clé", () => {
+  const src = readFileSync(
+    new URL("../../src-tauri/extensions/mcp-client.src.ts", import.meta.url),
+    "utf8",
+  );
+
+  it("décide l'environnement par serveur et applique le refus", () => {
+    expect(src).toContain("scopeMcpSecret(process.env");
+    expect(src).toContain("declaresSecret(server)");
+    expect(src).toContain("if (keyScope.blocked)");
+    expect(src).toContain("notifyUser(keyScope.reason");
+  });
+
+  it("relit le mode strict dans config.json (même dossier que mcp.json)", () => {
+    expect(src).toContain("readMcpSecretStrict(configPath)");
+    expect(src).toContain('pathIn(dir, "config.json")');
+  });
+
+  it("ne transmet plus l'environnement du process tel quel au serveur", () => {
+    expect(src).toContain("env: { ...keyScope.env, ...(server.env ?? {}) }");
+    expect(src).not.toContain("env: { ...process.env");
   });
 });

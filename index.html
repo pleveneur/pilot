@@ -1035,6 +1035,10 @@
               <input type="checkbox" id="setting-mcp-agent-confirm" />
               <label for="setting-mcp-agent-confirm" title="Quand activé (défaut), l'Assistant demande une confirmation à l'utilisateur avant de lancer un agent sur un serveur MCP. Désactivé = l'Assistant choisit et lance automatiquement.">Demander une confirmation utilisateur avant qu'un agent utilise un serveur MCP</label>
             </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-mcp-secret-strict" />
+              <label for="setting-mcp-secret-strict" title="Quand activé (défaut), la clé du coffre n'est transmise qu'au serveur qui la déclare lui-même (champ « Clé demandée » de sa fiche). Un serveur qui ne demande rien ne la reçoit jamais, et une référence introuvable refuse le lancement de ce serveur. Désactivé = ancien comportement (la clé de l'agent peut être transmise par héritage, aucun refus).">Restreindre la clé du coffre au serveur qui la demande (recommandé)</label>
+            </div>
             <hr class="settings-sep" />
             <h4 class="settings-section-title"><i data-lucide="monitor" class="icon-sm"></i> Contrôle de l'écran par les agents</h4>
             <p class="muted">Autorise un serveur MCP <strong>de contrôle de l'écran</strong> (capture d'écran, clavier, souris) à agir sur <strong>cet ordinateur</strong>. Même autorisé, <strong>chaque action</strong> demande votre accord : rien ne part sans réponse de votre part. Chaque action est inscrite dans un <strong>journal</strong> (projet → <code>.pilot/screen-actions.log</code>).</p>
@@ -1099,13 +1103,15 @@
                   <label for="mcp-f-url" title="Adresse du serveur distant (ex: https://exemple.invalid/mcp).">Adresse :</label>
                   <input type="text" id="mcp-f-url" placeholder="https://exemple.invalid/mcp"/>
                 </div>
+              </div>
+              <div id="mcp-fields-secret">
                 <div class="field-row">
-                  <label for="mcp-f-secret-ref" title="Entrée du coffre fort (onglet 🔐) dont le mot de passe sera envoyé à ce serveur. Choisissez-la dans la liste (elle affiche sa description) ou saisissez sa référence « vault:... » à la main.">Clé (entrée du coffre fort) :</label>
+                  <label for="mcp-f-secret-ref" title="Entrée du coffre fort (onglet 🔐) dont le mot de passe sera transmis à CE serveur (local ou distant). Choisissez-la dans la liste (elle affiche sa description) ou saisissez sa référence « vault:... » à la main. Sans référence ici, aucune clé n'est transmise à ce serveur.">Clé demandée (entrée du coffre fort) :</label>
                   <input type="text" id="mcp-f-secret-ref" list="mcp-secret-ref-list" placeholder="(aucune) : choisir dans la liste"/>
                   <datalist id="mcp-secret-ref-list"></datalist>
                 </div>
                 <div class="field-row">
-                  <small class="muted">Seule la <strong>référence</strong> de l'entrée du coffre est enregistrée ; la valeur du mot de passe n'est <strong>jamais affichée</strong>. Si le coffre est <strong>verrouillé au lancement de l'agent</strong>, la clé n'est pas lue : l'agent démarre quand même et le serveur distant est appelé <strong>sans</strong> la clé (authentification refusée possible) → déverrouillez le coffre 🔐 avant de lancer l'agent.</small>
+                  <small class="muted">Seule la <strong>référence</strong> de l'entrée du coffre est enregistrée ; la valeur du mot de passe n'est <strong>jamais affichée</strong>. La clé n'est transmise qu'au serveur qui la <strong>déclare ici</strong> (en mode strict, une référence introuvable <strong>refuse le lancement</strong> de ce serveur). Si le coffre est <strong>verrouillé au lancement de l'agent</strong>, la clé n'est pas lue : l'agent démarre quand même et ce serveur est appelé <strong>sans</strong> la clé (authentification refusée possible) → déverrouillez le coffre 🔐 avant de lancer l'agent.</small>
                 </div>
                 <div class="field-row">
                   <small class="muted" id="mcp-f-secret-ref-status"></small>

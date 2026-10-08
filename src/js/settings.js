@@ -11,6 +11,9 @@ import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT_STDIO, formatArgs, formatEnv, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
+// Périmètre de la clé du coffre (tâche 399) : libellés d'état partagés avec
+// l'extension MCP — jamais une valeur de clé.
+import { secretStatusLabel } from "./mcp-secret-scope.js";
 // Contrôle de l'écran : journal lisible (relecture) — logique pure partagée avec
 // l'extension MCP qui l'écrit.
 import { SCREEN_JOURNAL_RELATIVE_PATH, parseScreenJournal } from "./screen-guard.js";
@@ -474,6 +477,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   // ── Serveurs MCP (POC) — onglet dédié dans les Paramètres ──
   const chkMcpEnabled = document.getElementById("setting-mcp-enabled");
   const chkMcpAgentConfirm = document.getElementById("setting-mcp-agent-confirm");
+  const chkMcpSecretStrict = document.getElementById("setting-mcp-secret-strict");
   const mcpServersList = document.getElementById("mcp-servers-list");
   const btnMcpAdd = document.getElementById("btn-mcp-add");
   const btnMcpReload = document.getElementById("btn-mcp-reload");
@@ -609,6 +613,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     }
     chkMcpEnabled.checked = !!(currentConfig && currentConfig.mcp_enabled);
     chkMcpAgentConfirm.checked = !!(currentConfig && currentConfig.mcp_agent_confirm);
+    // Mode strict de la clé du coffre : ACTIVÉ par défaut (y compris pour une
+    // configuration antérieure au réglage). Désactivé = ancien comportement.
+    if (chkMcpSecretStrict) {
+      chkMcpSecretStrict.checked = !(currentConfig && currentConfig.mcp_secret_strict === false);
+    }
     syncScreenGuardControls();
     setMcpStatus("");
     renderMcpServers();
@@ -646,9 +655,12 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       // + commande. La référence de coffre peut être affichée, JAMAIS la clé.
       const remote = isRemoteTransport(s.transport);
       if (remote) {
-        meta.textContent = "distant · " + (s.url || "—") + (s.secret_ref ? " · clé : " + s.secret_ref : "");
+        meta.textContent = "distant · " + (s.url || "—") + (s.secret_ref ? " · clé demandée : " + s.secret_ref : " · aucune clé");
       } else {
-        meta.textContent = ((s.transport || "stdio") + " · " + ((s.command || "") + " " + formatArgs(s.args || [])).trim()) || "—";
+        // La clé d'un serveur LOCAL est elle aussi possible depuis la tâche 399
+        // (référence de coffre transmise dans son environnement).
+        meta.textContent = (((s.transport || "stdio") + " · " + ((s.command || "") + " " + formatArgs(s.args || [])).trim()) || "—") +
+          (s.secret_ref ? " · clé demandée : " + s.secret_ref : " · aucune clé");
       }
       info.appendChild(title);
       info.appendChild(meta);
@@ -806,6 +818,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
           lines.push(`Aucun outil listé : ${res.toolsError}`);
         } else {
           lines.push("Ce serveur n'expose aucun outil.");
+        }
+        // État de la clé du coffre pour CE serveur (tâche 399) : dit toujours
+        // si le serveur tourne avec ou sans clé — jamais une valeur.
+        if (res && res.secretStatus) {
+          lines.push(`Clé du coffre : ${secretStatusLabel(res.secretStatus)}.`);
         }
         // Statut multi-ligne (le span est inline : sans cela les sauts de ligne
         // seraient écrasés et la liste serait illisible).
@@ -1740,6 +1757,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
         // flag via mcp_set_enabled ; relire currentConfig (instantané pris à
         // l'ouverture de la modale) écraserait par une valeur périmée.
         mcp_enabled: chkMcpEnabled ? chkMcpEnabled.checked : (currentConfig?.mcp_enabled || false),
+        // Mode strict de la clé du coffre (tâche 399) : lu sur la case vivante ;
+        // absent du DOM → configuration courante, défaut strict.
+        mcp_secret_strict: chkMcpSecretStrict
+          ? chkMcpSecretStrict.checked
+          : currentConfig?.mcp_secret_strict !== false,
         // Contrôle de l'écran par les agents : `save_config` RÉÉCRIT toute la
         // configuration, donc les champs absents retomberaient sur leurs
         // défauts. On relit les cases vivantes (l'onglet MCP les persiste déjà)

@@ -41,8 +41,10 @@ describe("extension MCP — second transport (E3)", () => {
 
   it("transmet les variables d'environnement déclarées au serveur local (tâche 308)", () => {
     // Sans cette transmission, un serveur maison qui exige un réglage (jeton,
-    // chemin…) refuse de démarrer et l'agent ne voit aucun outil.
-    expect(src).toMatch(/env: \{ \.\.\.process\.env, \.\.\.\(server\.env \?\? \{\}\) \}/);
+    // chemin…) refuse de démarrer et l'agent ne voit aucun outil. Depuis la
+    // tâche 399 l'environnement hérité passe d'abord par le périmètre de clé
+    // (`keyScope.env`) : les valeurs déclarées écrasent toujours les homonymes.
+    expect(src).toMatch(/env: \{ \.\.\.keyScope\.env, \.\.\.\(server\.env \?\? \{\}\) \}/);
   });
 
   it("présente la clé en EN-TÊTE, jamais dans l'adresse", () => {

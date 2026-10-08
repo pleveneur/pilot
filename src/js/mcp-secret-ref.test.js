@@ -23,6 +23,28 @@ describe("Paramètres — champ « Clé » d'un serveur MCP", () => {
     expect(html).toContain("verrouillé au lancement de l'agent");
   });
 
+  it("rend la clé demandée disponible pour les DEUX types de serveur (tâche 399)", () => {
+    // Le champ vit dans un bloc propre, hors du bloc « distant » : un serveur
+    // local peut lui aussi déclarer l'entrée du coffre qu'il demande.
+    const secretBlock = html.indexOf('id="mcp-fields-secret"');
+    const remoteBlock = html.indexOf('id="mcp-fields-remote"');
+    expect(remoteBlock).toBeGreaterThan(-1);
+    expect(secretBlock).toBeGreaterThan(remoteBlock);
+    expect(html.slice(remoteBlock, secretBlock)).not.toContain("mcp-f-secret-ref");
+    expect(html).toContain("Clé demandée");
+  });
+
+  it("expose le réglage du mode strict et l'enregistre avec la configuration", () => {
+    expect(html).toContain('id="setting-mcp-secret-strict"');
+    expect(settings).toContain("chkMcpSecretStrict");
+    expect(settings).toContain("mcp_secret_strict");
+  });
+
+  it("annonce l'état de la clé dans le résultat du test de connexion", () => {
+    expect(settings).toContain("secretStatusLabel(res.secretStatus)");
+    expect(settings).toContain("Clé du coffre :");
+  });
+
   it("remplit la liste depuis le coffre et gère le coffre verrouillé / vide", () => {
     expect(settings).toContain("fillMcpSecretRefOptions()");
     expect(settings).toContain('invoke("vault_list_refs")');
