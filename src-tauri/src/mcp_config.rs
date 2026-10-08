@@ -236,63 +236,177 @@ pub fn redact_mcp_message(message: &str, secret: &str) -> String {
     crate::telegram::redact_token(message, secret)
 }
 
+/// État de la clé du coffre pour UN serveur MCP donné.
+///
+/// Décidé par serveur (et non globalement) : un serveur qui ne demande rien ne
+/// reçoit rien. La variante `Ready` porte la valeur du secret — elle ne doit
+/// JAMAIS être journalisée ni renvoyée à l'interface ; `Debug` est donc
+/// volontairement absent de cet enum.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ServerKeyState {
+    /// Aucune référence déclarée : aucune clé, aucun refus, aucun message d'erreur.
+    NotRequested,
+    /// Référence déclarée mais vide (blancs).
+    EmptyRef,
+    /// Référence résolue dans le coffre (la valeur y reste).
+    Ready(String),
+    /// Référence déclarée introuvable dans le coffre.
+    UnknownRef(String),
+    /// Coffre verrouillé (aucune clé de déchiffrement en mémoire).
+    Locked(String),
+}
+
+impl ServerKeyState {
+    /// Code stable de l'état, exposé à l'interface (test de connexion) et, en
+    /// incrément 2, à l'extension MCP. Jamais une valeur de clé.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ServerKeyState::NotRequested => "not_requested",
+            ServerKeyState::EmptyRef => "empty_ref",
+            ServerKeyState::Ready(_) => "ready",
+            ServerKeyState::UnknownRef(_) => "unknown_ref",
+            ServerKeyState::Locked(_) => "locked",
+        }
+    }
+}
+
+impl std::fmt::Debug for ServerKeyState {
+    /// `Debug` est écrit à la main : seule la variante est exposée, jamais la
+    /// valeur du secret (aucune valeur de clé ne doit pouvoir être journalisée).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.code())
+    }
+}
+
+/// Classe la clé du coffre pour un serveur donné, sans I/O hors du coffre
+/// fourni (`vault_file`). Fonction pure du point de vue de la configuration.
+///
+/// Ne renvoie jamais la valeur hors de `Ready` et ne la journalise jamais.
+pub fn server_key_state(
+    server: &McpServer,
+    vault_key: Option<&[u8]>,
+    vault_file: &Path,
+) -> ServerKeyState {
+    let Some(reference) = server.secret_ref.as_deref().map(str::trim) else {
+        return ServerKeyState::NotRequested;
+    };
+    if reference.is_empty() {
+        return ServerKeyState::EmptyRef;
+    }
+    let id = vault_ref_id(reference);
+    let Some(key) = vault_key else {
+        return ServerKeyState::Locked(id.to_string());
+    };
+    match crate::vault::resolve_secret_at(vault_file, Some(key), id) {
+        Ok(secret) => ServerKeyState::Ready(secret),
+        Err(_) => ServerKeyState::UnknownRef(id.to_string()),
+    }
+}
+
+/// Message d'état de la clé, en français simple. Il nomme la **référence**
+/// manquante et le serveur — JAMAIS une valeur de clé. `blocked` précise qu'une
+/// référence inconnue a fait refuser le lancement du serveur (mode strict).
+pub fn server_key_message(label: &str, state: &ServerKeyState, blocked: bool) -> String {
+    match state {
+        ServerKeyState::NotRequested => format!(
+            "MCP: serveur « {} » sans clé demandée — lancement sans clé",
+            label
+        ),
+        ServerKeyState::EmptyRef => format!(
+            "MCP: serveur « {} » : référence de clé vide — lancement sans clé",
+            label
+        ),
+        ServerKeyState::Ready(secret) => redact_mcp_message(
+            &format!("MCP: clé du serveur « {} » résolue et transmise", label),
+            secret,
+        ),
+        ServerKeyState::UnknownRef(reference) if blocked => format!(
+            "MCP: serveur « {} » : référence de clé « {} » indisponible (inconnue du coffre) — lancement de ce serveur refusé en mode strict",
+            label, reference
+        ),
+        ServerKeyState::UnknownRef(reference) => format!(
+            "MCP: serveur « {} » : référence de clé « {} » indisponible (inconnue du coffre) — lancement sans clé",
+            label, reference
+        ),
+        ServerKeyState::Locked(reference) => format!(
+            "MCP: serveur « {} » : coffre verrouillé, référence « {} » non résolue — lancement sans clé",
+            label, reference
+        ),
+    }
+}
+
+/// Résultat de la chaîne du secret (E2) pour le lancement d'une session : état
+/// décidé par serveur, message déjà masqué, et indication de refus. Aucune
+/// valeur de clé n'y est exposée (le message est masqué, `ServerKeyState`
+/// n'implémente pas `Debug`).
+pub struct McpSecretAttachment {
+    pub state: ServerKeyState,
+    pub message: String,
+    /// Mode strict + référence inconnue : le lancement de CE serveur est refusé
+    /// (signal `PILOT_MCP_SECRET_BLOCK`, consommé par l'extension MCP).
+    pub blocked: bool,
+}
+
 /// Chaîne du secret (E2) : complète `vars` avec `PILOT_MCP_SECRET` si le
 /// serveur de la session (cible sinon premier activé) possède une référence
-/// résoluble dans le coffre, et retourne une ligne de diagnostic DÉJÀ MASQUÉE.
+/// RÉSOLUBLE dans le coffre, et retourne l'état + une ligne de diagnostic DÉJÀ
+/// MASQUÉE.
 ///
-/// Ne bloque jamais et ne journalise jamais la clé :
-///   - aucun serveur activé / serveur sans référence → aucune variable ;
-///   - clé résolue → `PILOT_MCP_SECRET` posée, diagnostic sans la valeur ;
-///   - coffre verrouillé ou référence inconnue → aucune variable, message clair
-///     sans secret (la session démarre quand même, sans ce serveur).
+/// `strict` (mode par défaut) décide du sort de la clé :
+///   - aucune référence déclarée → aucune variable, aucun refus, aucun message
+///     d'erreur (le serveur démarre simplement sans clé) ;
+///   - référence vide → aucune variable, message nommant la référence ;
+///   - référence inconnue → lancement de CE serveur refusé, en la nommant
+///     (variable `PILOT_MCP_SECRET_BLOCK`, jamais une valeur) ;
+///   - coffre verrouillé → aucune variable, avertissement clair ;
+///   - clé résolue → `PILOT_MCP_SECRET` posée.
+///
+/// En mode strict, `attach_mcp_secret` retire d'abord toute valeur héritée de
+/// `PILOT_MCP_SECRET` : une clé ne peut donc plus être transmise par héritage à
+/// un serveur qui ne l'a pas demandée. Le mode NON strict conserve le
+/// comportement antérieur (aucun retrait, aucun refus).
 pub fn attach_mcp_secret(
     vars: &mut Vec<(String, String)>,
     config_path: &Path,
     vault_key: Option<&[u8]>,
     vault_file: &Path,
     target: Option<&str>,
-) -> String {
+    strict: bool,
+) -> McpSecretAttachment {
+    if strict {
+        vars.retain(|(k, _)| k != "PILOT_MCP_SECRET");
+    }
     let cfg = read_mcp_config_at(config_path);
     let Some(server) = select_session_server(&cfg, target) else {
-        return redact_mcp_message("MCP: aucun serveur activé — aucune clé transmise", "");
+        return McpSecretAttachment {
+            state: ServerKeyState::NotRequested,
+            message: redact_mcp_message("MCP: aucun serveur activé — aucune clé transmise", ""),
+            blocked: false,
+        };
     };
     let label = if server.name.trim().is_empty() {
         server.id.as_str()
     } else {
         server.name.trim()
     };
-    let Some(reference) = server
-        .secret_ref
-        .as_deref()
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-    else {
-        return redact_mcp_message(
-            &format!("MCP: serveur « {} » sans clé (aucune référence)", label),
-            "",
-        );
-    };
-    let id = vault_ref_id(reference);
-    match crate::vault::resolve_secret_at(vault_file, vault_key, id) {
-        Ok(secret) => {
-            vars.push(("PILOT_MCP_SECRET".to_string(), secret.clone()));
-            // Le diagnostic ne doit jamais contenir la valeur : masquage appliqué
-            // même si le message ne cite que l'identifiant de la référence.
-            redact_mcp_message(
-                &format!(
-                    "MCP: clé du serveur « {} » résolue et transmise (réf. {})",
-                    label, id
-                ),
-                &secret,
-            )
+    let state = server_key_state(server, vault_key, vault_file);
+    if let ServerKeyState::Ready(secret) = &state {
+        vars.push(("PILOT_MCP_SECRET".to_string(), secret.clone()));
+    }
+    // Mode strict : une référence inconnue refuse le lancement de ce serveur.
+    // Le refus est porté par une variable d'environnement nommant la référence
+    // (jamais une valeur) ; l'extension MCP le consomme (incrément 2).
+    let blocked = strict && matches!(state, ServerKeyState::UnknownRef(_));
+    if blocked {
+        if let ServerKeyState::UnknownRef(reference) = &state {
+            vars.push(("PILOT_MCP_SECRET_BLOCK".to_string(), reference.clone()));
         }
-        Err(reason) => redact_mcp_message(
-            &format!(
-                "MCP: clé du serveur « {} » indisponible ({}) — session démarrée sans ce serveur",
-                label, reason
-            ),
-            "",
-        ),
+    }
+    let message = server_key_message(label, &state, blocked);
+    McpSecretAttachment {
+        state,
+        message,
+        blocked,
     }
 }
 
@@ -338,6 +452,22 @@ pub fn mcp_set_agent_confirm(app: AppHandle, enabled: bool) -> Result<bool, Stri
     let saved = {
         let mut config = state.config.lock().unwrap();
         config.mcp_agent_confirm = enabled;
+        crate::save_config_disk(&app, &config)
+    };
+    Ok(saved.is_ok())
+}
+
+/// Active/désactive le mode STRICT de la clé du coffre pour les serveurs MCP
+/// (AppConfig.mcp_secret_strict, défaut ON). En mode strict, la clé n'est posée
+/// dans l'environnement du process pi que pour le serveur qui la déclare, et
+/// une référence inconnue refuse le lancement de ce serveur. Le mode non strict
+/// restaure le comportement antérieur (jamais de refus).
+#[tauri::command]
+pub fn mcp_set_secret_strict(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let state = app.state::<crate::AppState>();
+    let saved = {
+        let mut config = state.config.lock().unwrap();
+        config.mcp_secret_strict = enabled;
         crate::save_config_disk(&app, &config)
     };
     Ok(saved.is_ok())
@@ -412,18 +542,24 @@ pub fn mcp_get_state(app: AppHandle) -> Result<serde_json::Value, String> {
 
 // ── Test de connexion (local stdio et distant HTTP) ──
 
-/// Résout la clé éventuelle du serveur depuis le coffre (chaîne E2). La valeur
-/// ne sort jamais d'ici : elle ne sert qu'à remplir l'en-tête d'authentification
-/// du test distant, n'est JAMAIS renvoyée à l'UI ni journalisée. `None` si le
-/// serveur n'a pas de référence, si le coffre est verrouillé ou si la référence
-/// est absente — le test continue alors sans authentification.
-fn resolve_server_secret(server: &McpServer, vault_key: Option<&[u8]>) -> Option<String> {
-    let reference = server.secret_ref.as_deref()?.trim();
-    if reference.is_empty() {
-        return None;
+/// Résout la clé éventuelle du serveur depuis le coffre (chaîne E2) ET renvoie
+/// le code d'état (`secretStatus`). La valeur ne sort jamais d'ici : elle ne
+/// sert qu'à remplir l'en-tête d'authentification du test distant, n'est JAMAIS
+/// renvoyée à l'UI ni journalisée. Sans clé, `None` — le test continue sans
+/// authentification, et l'état le dit (l'imprécision corrigée : le test
+/// distingue « non demandée », « référence vide », « inconnue » et « coffre
+/// verrouillé »).
+fn resolve_server_secret_state(
+    server: &McpServer,
+    vault_key: Option<&[u8]>,
+) -> (Option<String>, &'static str) {
+    let Ok(path) = crate::vault::vault_file_path() else {
+        return (None, "locked");
+    };
+    match server_key_state(server, vault_key, &path) {
+        ServerKeyState::Ready(secret) => (Some(secret), "ready"),
+        other => (None, other.code()),
     }
-    let path = crate::vault::vault_file_path().ok()?;
-    crate::vault::resolve_secret_at(&path, vault_key, vault_ref_id(reference)).ok()
 }
 
 /// Corps JSON-RPC `initialize` de la handshake de test (commun aux deux
@@ -885,16 +1021,20 @@ pub async fn mcp_test_connection(
         server.name.clone()
     };
 
-    match server.transport_kind() {
+    // État de la clé, décidé par serveur : indiqué dans TOUS les résultats
+    // (`secretStatus`), sans jamais exposer une valeur.
+    let (secret, secret_status) = {
+        let vault_key = state.vault_key.lock().unwrap().clone();
+        resolve_server_secret_state(&server, vault_key.as_deref())
+    };
+    let mut result = match server.transport_kind() {
         TransportKind::Http => {
             // Clé résolue côté Rust (coffre) : jamais renvoyée à l'UI.
-            let vault_key = state.vault_key.lock().unwrap().clone();
-            let secret = resolve_server_secret(&server, vault_key.as_deref());
             tokio::task::spawn_blocking(move || {
                 test_remote_connection(&server, &label, secret.as_deref())
             })
             .await
-            .map_err(|e| format!("Test de connexion interrompu : {}", e))?
+            .map_err(|e| format!("Test de connexion interrompu : {}", e))??
         }
         TransportKind::Stdio => {
             // Transport réellement inconnu (ni stdio ni http) : refus explicite.
@@ -905,9 +1045,11 @@ pub async fn mcp_test_connection(
                 test_stdio_connection(server, label, std::time::Duration::from_secs(8))
             })
                 .await
-                .map_err(|e| format!("Test de connexion interrompu : {}", e))?
+                .map_err(|e| format!("Test de connexion interrompu : {}", e))??
         }
-    }
+    };
+    result["secretStatus"] = serde_json::json!(secret_status);
+    Ok(result)
 }
 
 // ── Tests unitaires (parsing / sérialisation mcp.json, flag mcp_enabled) ──
@@ -1368,7 +1510,8 @@ mod tests {
             "PILOT_MCP_CONFIG".to_string(),
             config_file.to_string_lossy().into_owned(),
         )];
-        let diag = attach_mcp_secret(&mut vars, &config_file, Some(&key), &vault_file, None);
+        let diag =
+            attach_mcp_secret(&mut vars, &config_file, Some(&key), &vault_file, None, false).message;
         assert_eq!(
             vars.iter().find(|(k, _)| k == "PILOT_MCP_SECRET").map(|(_, v)| v.as_str()),
             Some(FICTIONAL_KEY)
@@ -1392,14 +1535,16 @@ mod tests {
         )
         .unwrap();
         let mut vars = Vec::new();
-        let diag = attach_mcp_secret(&mut vars, &config_missing, Some(&key), &vault_file, None);
+        let diag =
+            attach_mcp_secret(&mut vars, &config_missing, Some(&key), &vault_file, None, false).message;
         assert!(vars.is_empty(), "aucune clé ne doit être transmise");
         assert!(!diag.contains(FICTIONAL_KEY));
         assert!(diag.contains("indisponible"), "diagnostic: {}", diag);
 
         // 3) Coffre VERROUILLÉ → idem, aucune clé, aucun blocage.
         let mut vars = Vec::new();
-        let diag = attach_mcp_secret(&mut vars, &config_file, None, &vault_file, None);
+        let diag =
+            attach_mcp_secret(&mut vars, &config_file, None, &vault_file, None, false).message;
         assert!(vars.is_empty());
         assert!(!diag.contains(FICTIONAL_KEY));
         assert!(diag.contains("verrouillé"), "diagnostic: {}", diag);
@@ -1416,7 +1561,8 @@ mod tests {
         let config_plain = dir.join("mcp-plain.json");
         std::fs::write(&config_plain, serde_json::to_string(&plain).unwrap()).unwrap();
         let mut vars = Vec::new();
-        let diag = attach_mcp_secret(&mut vars, &config_plain, None, &vault_file, None);
+        let diag =
+            attach_mcp_secret(&mut vars, &config_plain, None, &vault_file, None, false).message;
         assert!(vars.is_empty());
         assert!(diag.contains("sans clé"), "diagnostic: {}", diag);
 
@@ -1863,10 +2009,10 @@ mod tests {
             }],
         );
         let mut vars_ok = Vec::new();
-        let diag_ok = attach_mcp_secret(&mut vars_ok, &config_file, Some(&key), &vault_file, None);
+        let diag_ok = attach_mcp_secret(&mut vars_ok, &config_file, Some(&key), &vault_file, None, true).message;
         let mut vars_locked = Vec::new();
         let diag_locked =
-            attach_mcp_secret(&mut vars_locked, &config_file, None, &vault_file, None);
+            attach_mcp_secret(&mut vars_locked, &config_file, None, &vault_file, None, true).message;
         let config_plain = dir.join("mcp-plain.json");
         std::fs::write(
             &config_plain,
@@ -1875,7 +2021,7 @@ mod tests {
         .unwrap();
         let mut vars_plain = Vec::new();
         let diag_plain =
-            attach_mcp_secret(&mut vars_plain, &config_plain, None, &vault_file, None);
+            attach_mcp_secret(&mut vars_plain, &config_plain, None, &vault_file, None, true).message;
         for diag in [&diag_ok, &diag_locked, &diag_plain] {
             outputs.push(Value::String(diag.clone()));
         }
@@ -2031,5 +2177,281 @@ mod tests {
         assert!(old.screen_control_enabled);
         assert!(old.screen_control_simulation);
         assert!(!old.screen_control_emergency_stop);
+        // Mode strict de la clé du coffre (tâche 399) : défaut ON, y compris
+        // pour une configuration ancienne qui ne connaît pas ce champ.
+        assert_eq!(value["mcp_secret_strict"], serde_json::json!(true));
+        assert!(old.mcp_secret_strict);
+    }
+
+    // ── Tâche 399 (incrément 1) : état de la clé PAR SERVEUR + mode strict ──
+
+    /// Coffre de test déverrouillé (une entrée FICTIVE) : renvoie le chemin du
+    /// coffre et sa clé de déchiffrement. Aucune valeur réelle n'est touchée.
+    fn test_vault(dir: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
+        let vault_file = dir.join("vault.json");
+        let key = crate::vault::write_test_vault(
+            &vault_file,
+            "mot-de-passe-fictif",
+            &[crate::vault::VaultEntry {
+                id: "entree-fictive".to_string(),
+                description: "clé de test".to_string(),
+                login: String::new(),
+                password: FICTIONAL_KEY.to_string(),
+                scope: "global".to_string(),
+                project_path: None,
+                created_at: 0,
+                updated_at: 0,
+            }],
+        );
+        (vault_file, key)
+    }
+
+    fn write_config(path: &std::path::Path, server: McpServer) {
+        std::fs::write(
+            path,
+            serde_json::to_string(&McpConfig {
+                servers: vec![server],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Les cinq états sont décidés PAR SERVEUR (aucune valeur de clé exposée).
+    #[test]
+    fn server_key_state_covers_the_five_cases() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_399state_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (vault_file, key) = test_vault(&dir);
+        let code_of =
+            |server: &McpServer, k: Option<&[u8]>| server_key_state(server, k, &vault_file).code();
+        // Aucune référence déclarée.
+        assert_eq!(code_of(&McpServer::default(), Some(&key)), "not_requested");
+        // Référence déclarée mais vide.
+        assert_eq!(
+            code_of(
+                &McpServer {
+                    secret_ref: Some("   ".to_string()),
+                    ..Default::default()
+                },
+                Some(&key),
+            ),
+            "empty_ref"
+        );
+        // Référence résolue (coffre déverrouillé).
+        let ok = McpServer {
+            secret_ref: Some("vault:entree-fictive".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(code_of(&ok, Some(&key)), "ready");
+        // Référence absente du coffre.
+        let missing = McpServer {
+            secret_ref: Some("vault:entree-absente".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(code_of(&missing, Some(&key)), "unknown_ref");
+        // Coffre verrouillé.
+        assert_eq!(code_of(&ok, None), "locked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cas 1 : un serveur qui ne demande aucune clé ne reçoit RIEN — ni clé, ni
+    /// refus, ni erreur — et une clé héritée est retirée en mode strict.
+    #[test]
+    fn strict_mode_sets_no_key_for_a_server_without_a_reference() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_399a_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("mcp.json");
+        write_config(
+            &cfg,
+            McpServer {
+                id: "local".to_string(),
+                name: "Local".to_string(),
+                transport: "stdio".to_string(),
+                enabled: true,
+                command: "node".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut vars = vec![
+            (
+                "PILOT_MCP_CONFIG".to_string(),
+                cfg.to_string_lossy().into_owned(),
+            ),
+            // Clé héritée : elle ne doit pas passer à ce serveur.
+            (
+                "PILOT_MCP_SECRET".to_string(),
+                "cle-heritee-inventee".to_string(),
+            ),
+        ];
+        let out = attach_mcp_secret(&mut vars, &cfg, None, &dir.join("vault.json"), None, true);
+        assert_eq!(out.state, ServerKeyState::NotRequested);
+        assert!(!out.blocked, "aucun refus attendu sans demande");
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET"));
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET_BLOCK"));
+        assert!(
+            out.message.contains("sans clé demandée"),
+            "message: {}",
+            out.message
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cas 2 : une référence déclarée mais VIDE est signalée, sans bloquer.
+    #[test]
+    fn empty_reference_is_reported_without_blocking() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_399b_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("mcp.json");
+        write_config(
+            &cfg,
+            McpServer {
+                id: "vide".to_string(),
+                name: "Vide".to_string(),
+                transport: "stdio".to_string(),
+                enabled: true,
+                command: "node".to_string(),
+                secret_ref: Some("   ".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut vars = Vec::new();
+        let out = attach_mcp_secret(&mut vars, &cfg, None, &dir.join("vault.json"), None, true);
+        assert_eq!(out.state, ServerKeyState::EmptyRef);
+        assert!(!out.blocked);
+        assert!(vars.is_empty(), "aucune clé ne doit être transmise");
+        assert!(out.message.contains("référence") && out.message.contains("vide"));
+        assert!(out.message.contains("Vide"), "message: {}", out.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cas 3 : une référence INCONNUE fait refuser le lancement de ce serveur en
+    /// la nommant — le signal ne porte jamais une valeur.
+    #[test]
+    fn strict_mode_refuses_a_server_whose_reference_is_unknown() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_399c_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (vault_file, key) = test_vault(&dir);
+        let cfg = dir.join("mcp.json");
+        write_config(
+            &cfg,
+            McpServer {
+                id: "absent".to_string(),
+                name: "Absent".to_string(),
+                transport: "http".to_string(),
+                enabled: true,
+                url: "https://exemple.invalid/mcp".to_string(),
+                secret_ref: Some("vault:entree-absente".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut vars = vec![(
+            "PILOT_MCP_CONFIG".to_string(),
+            cfg.to_string_lossy().into_owned(),
+        )];
+        let out = attach_mcp_secret(&mut vars, &cfg, Some(&key), &vault_file, None, true);
+        assert_eq!(
+            out.state,
+            ServerKeyState::UnknownRef("entree-absente".to_string())
+        );
+        assert!(out.blocked, "le lancement de ce serveur doit être refusé");
+        assert_eq!(
+            vars.iter()
+                .find(|(k, _)| k == "PILOT_MCP_SECRET_BLOCK")
+                .map(|(_, v)| v.as_str()),
+            Some("entree-absente"),
+            "le signal doit nommer la référence"
+        );
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET"));
+        assert!(out.message.contains("entree-absente"));
+        assert!(out.message.contains("refusé"), "message: {}", out.message);
+        assert!(!out.message.contains(FICTIONAL_KEY));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cas 4 : le mode NON strict conserve l'ancien comportement (aucun refus,
+    /// héritage laissé intact) et la clé reste posée pour une référence résoluble.
+    #[test]
+    fn non_strict_mode_keeps_the_former_behaviour() {
+        let dir = std::env::temp_dir().join(format!("pilot_mcp_399d_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (vault_file, key) = test_vault(&dir);
+
+        // 1) Référence inconnue, mode non strict : ni clé, ni refus, ni signal.
+        let cfg_missing = dir.join("mcp-missing.json");
+        write_config(
+            &cfg_missing,
+            McpServer {
+                id: "absent".to_string(),
+                name: "Absent".to_string(),
+                transport: "http".to_string(),
+                enabled: true,
+                url: "https://exemple.invalid/mcp".to_string(),
+                secret_ref: Some("vault:entree-absente".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut vars = vec![(
+            "PILOT_MCP_CONFIG".to_string(),
+            cfg_missing.to_string_lossy().into_owned(),
+        )];
+        let out = attach_mcp_secret(&mut vars, &cfg_missing, Some(&key), &vault_file, None, false);
+        assert_eq!(
+            out.state,
+            ServerKeyState::UnknownRef("entree-absente".to_string())
+        );
+        assert!(!out.blocked, "le mode non strict ne refuse jamais");
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET"));
+        assert!(vars.iter().all(|(k, _)| k != "PILOT_MCP_SECRET_BLOCK"));
+        assert!(out.message.contains("indisponible"), "message: {}", out.message);
+
+        // 2) Serveur sans référence, mode non strict : l'héritage reste permis.
+        let cfg_plain = dir.join("mcp-plain.json");
+        write_config(
+            &cfg_plain,
+            McpServer {
+                id: "local".to_string(),
+                enabled: true,
+                command: "node".to_string(),
+                ..Default::default()
+            },
+        );
+        let mut vars = vec![(
+            "PILOT_MCP_SECRET".to_string(),
+            "cle-heritee-inventee".to_string(),
+        )];
+        let out = attach_mcp_secret(&mut vars, &cfg_plain, None, &vault_file, None, false);
+        assert!(!out.blocked);
+        assert!(
+            vars.iter()
+                .any(|(k, v)| k == "PILOT_MCP_SECRET" && v == "cle-heritee-inventee"),
+            "l'héritage reste intact en mode non strict"
+        );
+
+        // 3) Référence résoluble, mode non strict : clé posée comme avant.
+        let cfg_ok = dir.join("mcp-ok.json");
+        write_config(
+            &cfg_ok,
+            McpServer {
+                id: "distant".to_string(),
+                transport: "http".to_string(),
+                enabled: true,
+                url: "https://exemple.invalid/mcp".to_string(),
+                secret_ref: Some("vault:entree-fictive".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut vars = Vec::new();
+        let out = attach_mcp_secret(&mut vars, &cfg_ok, Some(&key), &vault_file, None, false);
+        assert_eq!(out.state, ServerKeyState::Ready(FICTIONAL_KEY.to_string()));
+        assert!(!out.blocked);
+        assert_eq!(
+            vars.iter()
+                .find(|(k, _)| k == "PILOT_MCP_SECRET")
+                .map(|(_, v)| v.as_str()),
+            Some(FICTIONAL_KEY)
+        );
+        assert!(!out.message.contains(FICTIONAL_KEY), "message: {}", out.message);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

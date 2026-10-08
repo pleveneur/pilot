@@ -321,6 +321,13 @@ struct AppConfig {
     // (ask_confirm). Si false, l'assistant choisit et lance seul.
     #[serde(default = "default_true")]
     mcp_agent_confirm: bool,
+    // MCP : mode STRICT de la clé du coffre (défaut ON). En mode strict, la clé
+    // n'est posée dans l'environnement du process pi que pour le serveur qui la
+    // déclare (une référence du coffre), et une référence inconnue refuse le
+    // lancement de ce serveur. Le mode non strict restaure le comportement
+    // antérieur (aucun retrait par héritage, jamais de refus).
+    #[serde(default = "default_true")]
+    mcp_secret_strict: bool,
     // Contrôle de l'ÉCRAN par les agents (serveur MCP « écran » : capture,
     // clavier, souris). ACTIVÉ PAR DÉFAUT, mais chaque action reste soumise à
     // une confirmation explicite de l'utilisateur (rien ne part sans accord).
@@ -993,6 +1000,7 @@ impl Default for AppConfig {
             quality_gate_enabled: false,
             mcp_enabled: false,
             mcp_agent_confirm: true,
+            mcp_secret_strict: true,
             screen_control_enabled: true,
             screen_control_simulation: true,
             screen_control_emergency_stop: false,
@@ -3446,6 +3454,7 @@ pub fn run() {
             mcp_config::mcp_save_servers,
             mcp_config::mcp_set_enabled,
             mcp_config::mcp_set_agent_confirm,
+            mcp_config::mcp_set_secret_strict,
             mcp_config::mcp_set_screen_guard,
             mcp_config::mcp_get_state,
             mcp_config::mcp_test_connection,

@@ -2119,14 +2119,19 @@ impl AgentService {
             return;
         };
         let vault_key = app.state::<AppState>().vault_key.lock().unwrap().clone();
-        let diag = crate::mcp_config::attach_mcp_secret(
+        // Mode strict de la clé du coffre (défaut ON) : une clé n'est posée que
+        // pour le serveur qui la déclare ; le mode non strict conserve le
+        // comportement antérieur.
+        let strict = app.state::<AppState>().config_snapshot().mcp_secret_strict;
+        let attachment = crate::mcp_config::attach_mcp_secret(
             vars,
             &dir.join("mcp.json"),
             vault_key.as_deref(),
             &vault_file,
             target,
+            strict,
         );
-        eprintln!("[mcp-secret] {}", diag);
+        eprintln!("[mcp-secret] {}", attachment.message);
     }
 
     /// Lance un nouveau processus pi --mode rpc pour un agent d'assistant.
