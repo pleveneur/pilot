@@ -30,6 +30,14 @@ jobs:
     # Plafond de durée : un job bloqué reste sinon suspendu jusqu'au maximum GitHub
     # (blocage sans aucune erreur constaté le 2026-10-01 sur la cible Linux).
     timeout-minutes: 30
+    # TOLÉRÉ sur macOS : `build` déclare `needs: [create-release, test]`, donc une
+    # machine macOS indisponible (pénurie de runners arm64 — incident ayant publié
+    # v0.4.26 SANS aucun installateur, job « not acquired by Runner of type
+    # hosted ») faisait échouer TOUTE la fabrication, y compris Windows et Linux.
+    # Un échec/machine manquante côté macOS est désormais signalé mais non
+    # bloquant ; les tests macOS tournent toujours quand un runner est obtenu.
+    # Même mécanisme que le job `build` pour la cible Linux ci-dessous.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Migration bytes must be LF (stable sqlx checksums)

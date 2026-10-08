@@ -274,6 +274,17 @@ function platformFromBinaryName(name) {
   return null;
 }
 
+// Les cibles que la matrice de build du workflow release prévoit (4 cibles :
+// Windows x64, macOS arm64, macOS x64, Linux x64). Sert UNIQUEMENT à SIGNALER
+// une livraison incomplète : un artefact absent n'empêche jamais l'attachement
+// des installateurs déjà produits ni la publication de latest.json.
+const EXPECTED_PLATFORMS = [
+  "windows-x86_64",
+  "darwin-aarch64",
+  "darwin-x86_64",
+  "linux-x86_64",
+];
+
 (async () => {
   // Génère le changelog depuis les commits et met à jour le body de la
   // release GitHub (visible sur la page release). On utilise ce même
@@ -326,6 +337,21 @@ function platformFromBinaryName(name) {
         "Vérifiez que bundle.createUpdaterArtifacts=true et TAURI_SIGNING_PRIVATE_KEY sont définis."
     );
     process.exit(2);
+  }
+
+  // Livraison incomplète : le dire FORT (annotation visible dans le résumé du
+  // run GitHub) sans rien supprimer — les installateurs déjà attachés à la
+  // release restent en place et latest.json est publié en l'état.
+  const missing = EXPECTED_PLATFORMS.filter((k) => !platforms[k]);
+  if (missing.length) {
+    const msg =
+      `Livraison INCOMPLÈTE : ${missing.length}/${EXPECTED_PLATFORMS.length} cible(s) ` +
+      `sans artefact signé (${missing.join(", ")}). Les installateurs déjà produits ` +
+      "sont conservés et latest.json est publié en l'état.";
+    console.warn(`⚠ ${msg}`);
+    if (process.env.GITHUB_ACTIONS) console.log(`::warning::${msg}`);
+  } else {
+    console.log(`✓ Les ${EXPECTED_PLATFORMS.length} cibles attendues sont présentes.`);
   }
 
   // Changelog de la release : on utilise le body généré depuis les commits
