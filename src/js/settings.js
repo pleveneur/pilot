@@ -872,6 +872,18 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       alert("Erreur : " + e);
     }
   });
+  // Restriction de la clé du coffre au serveur qui la demande (tâche 399) :
+  // persistée immédiatement (l'extension relit `config.json` à chaque spawn),
+  // revert visuel si le backend échoue. Désactiver = ancien comportement.
+  chkMcpSecretStrict?.addEventListener("change", async () => {
+    if (!chkMcpSecretStrict) return;
+    try {
+      await invoke("mcp_set_secret_strict", { enabled: chkMcpSecretStrict.checked });
+    } catch (e) {
+      chkMcpSecretStrict.checked = !chkMcpSecretStrict.checked;
+      alert("Erreur : " + e);
+    }
+  });
 
   // Contrôle de l'écran : chaque case est persistée immédiatement (effet sans
   // redémarrer l'agent, qui relit la configuration à chaque action).

@@ -38,6 +38,9 @@ describe("Paramètres — champ « Clé » d'un serveur MCP", () => {
     expect(html).toContain('id="setting-mcp-secret-strict"');
     expect(settings).toContain("chkMcpSecretStrict");
     expect(settings).toContain("mcp_secret_strict");
+    // Revenir à l'ancien comportement passe par le réglage de l'incrément 1,
+    // persisté immédiatement (aucun changement de code nécessaire).
+    expect(settings).toContain('invoke("mcp_set_secret_strict", { enabled: chkMcpSecretStrict.checked })');
   });
 
   it("annonce l'état de la clé dans le résultat du test de connexion", () => {
