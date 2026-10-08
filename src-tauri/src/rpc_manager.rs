@@ -149,7 +149,21 @@ pub fn spawn_and_start(cwd: &str, pi_path: &str, no_session: bool, session_dir: 
     let channel_stdout = event_channel.to_string();
     let broadcast_channel_owned = broadcast_channel;
     std::thread::spawn(move || {
-        let involuntary = read_jsonl_loop(Box::new(stdout), app_clone, running_clone, pending_clone, event_tx, &channel_stdout, agent_id_owned.as_deref(), project_owned.as_deref(), observer_stdout, broadcast_channel_owned);
+        // L'émission vers le frontend passe par un callback : cela rend
+        // `read_jsonl_loop` testable sans AppHandle (cf. tests en bas de fichier).
+        let involuntary = read_jsonl_loop(
+            Box::new(stdout),
+            &|v: &Value| {
+                let _ = app_clone.emit(&channel_stdout, v);
+            },
+            running_clone,
+            pending_clone,
+            event_tx,
+            agent_id_owned.as_deref(),
+            project_owned.as_deref(),
+            observer_stdout,
+            broadcast_channel_owned,
+        );
         // Ne signaler un process_exit que pour une fin involontaire (pi mort/crash),
         // signalé par read_jsonl_loop (EOF/erreur alors que running était encore
         // true). Un arrêt volontaire (stop_session a passé running=false, ex.
@@ -258,11 +272,10 @@ pub fn stop_session(session: &mut RpcSession) {
 /// (os error 232).
 fn read_jsonl_loop(
     mut reader: Box<dyn Read + Send>,
-    app_handle: AppHandle,
+    emit: &dyn Fn(&Value),
     running: Arc<AtomicBool>,
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
     event_tx: tokio::sync::broadcast::Sender<Value>,
-    event_channel: &str,
     agent_id: Option<&str>,
     project: Option<&str>,
     observer: Option<EventObserver>,
@@ -333,7 +346,7 @@ fn read_jsonl_loop(
                             } else {
                                 value.clone()
                             };
-                            app_handle.emit(event_channel, &emit_value).ok();
+                            emit(&emit_value);
                             // Fan-out parallèle vers les WebSockets distants (décision 13.3).
                             // Sender::send n'est pas async → appel valide depuis ce thread std.
                             // Une erreur (pas de receiver / lent) est ignorée : le client web
@@ -369,6 +382,18 @@ fn read_jsonl_loop(
                 }
                 break;
             }
+        }
+    }
+    // Mort involontaire du processus (EOF / erreur de lecture alors que
+    // `running` était encore vrai) : notifier l'observateur d'un `process_exit`,
+    // exactement comme un arrêt explicite. Sans cela, `agent_activity[projet].busy`
+    // reste posé à vie et toutes les missions d'écriture restent en file
+    // d'attente (tâche 314). Un arrêt volontaire (stop_session a passé
+    // `running=false`) ne passe pas ici : aucun reset n'est émis, donc pi peut
+    // être redémarré sans afficher un « Déconnecté » injustifié.
+    if involuntary_exit {
+        if let Some(obs) = &observer {
+            obs(&serde_json::json!({ "type": "process_exit" }));
         }
     }
     involuntary_exit
@@ -596,5 +621,93 @@ pub fn convert_text_with_pi(
         }
     } else {
         Ok(collected_text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anomaly::{make_observer, AgentAnomalyState};
+    use crate::SessionActivity;
+
+    type ActivityMap = Arc<Mutex<HashMap<String, SessionActivity>>>;
+    type AnomalyMap = Arc<Mutex<HashMap<String, AgentAnomalyState>>>;
+
+    const PROJECT: &str = "/proj";
+
+    fn activity_maps() -> (ActivityMap, AnomalyMap, EventObserver) {
+        let activity: ActivityMap = Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: AnomalyMap = Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, PROJECT, "/proj\u{1f}agent");
+        (activity, anomaly, obs)
+    }
+
+    fn project_busy(activity: &ActivityMap) -> bool {
+        activity.lock().unwrap().get(PROJECT).map(|a| a.busy).unwrap_or(false)
+    }
+
+    fn drive_reader(
+        content: &[u8],
+        running_flag: bool,
+        observer: Option<EventObserver>,
+    ) -> (bool, Arc<AtomicBool>) {
+        let running = Arc::new(AtomicBool::new(running_flag));
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (event_tx, _rx) = tokio::sync::broadcast::channel(8);
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(content.to_vec()));
+        let involuntary = read_jsonl_loop(
+            reader,
+            &|_v: &Value| {},
+            running.clone(),
+            pending,
+            event_tx,
+            None,
+            Some(PROJECT),
+            observer,
+            None,
+        );
+        (involuntary, running)
+    }
+
+    /// Tâche 314 : la mort involontaire de pi doit libérer l'activité du projet,
+    /// sinon toutes les missions d'écriture restent en file d'attente à vie.
+    /// Échoue sans le correctif (l'observateur n'était jamais notifié sur EOF).
+    #[test]
+    fn involuntary_exit_releases_project_activity() {
+        let (activity, _anomaly, obs) = activity_maps();
+        // L'agent démarre → le projet est marqué occupé (même clé que
+        // `get_project_agent_states`, qui bloque la file).
+        obs(&serde_json::json!({ "type": "agent_start" }));
+        assert!(project_busy(&activity), "agent_start doit marquer le projet occupé");
+
+        // pi meurt sans `agent_settled` : le flux stdout se ferme.
+        let (involuntary, running) = drive_reader(b"", true, Some(obs));
+
+        assert!(involuntary, "une fermeture inattendue doit être signalée");
+        assert!(!running.load(Ordering::Relaxed), "running doit retomber à false");
+        assert!(
+            !project_busy(&activity),
+            "la mort involontaire de pi doit libérer l'activité du projet"
+        );
+    }
+
+    /// L'arrêt volontaire (running=false) ne doit pas émettre de reset : pi est
+    /// redémarré juste après (changement de projet distant) et l'interface ne
+    /// doit pas afficher « Déconnecté ». Le correctif ne concerne que la mort
+    /// involontaire.
+    #[test]
+    fn voluntary_stop_does_not_reset_project_activity() {
+        let (activity, _anomaly, obs) = activity_maps();
+        obs(&serde_json::json!({ "type": "agent_start" }));
+        assert!(project_busy(&activity));
+
+        // running déjà passé à false par stop_session → pas de fin involontaire.
+        let (involuntary, _running) = drive_reader(b"{\"type\":\"agent_start\"}\n", false, Some(obs));
+
+        assert!(!involuntary, "un arrêt volontaire ne doit pas être signalé");
+        assert!(
+            project_busy(&activity),
+            "un arrêt volontaire ne doit PAS réémettre de reset (pas de faux « Déconnecté »)"
+        );
     }
 }
