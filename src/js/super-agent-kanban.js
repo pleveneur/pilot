@@ -226,6 +226,98 @@ export function buildKanbanByClient(clients) {
   }));
 }
 
+// ── Clôture EN LOT (sélection multiple) ─────────────────────────────────────
+// Le propriétaire peut cocher plusieurs tâches de la vue Kanban et les clôturer
+// d'un coup. Aucune écriture nouvelle n'est introduite : la clôture passe par la
+// MÊME route que la clôture unitaire (`super_agent_update_task_status`, via
+// `columnToStatus("done")`), une fois par tâche cochée. Ces fonctions pures
+// isolent les décisions (sélection, activation du bouton, confirmation,
+// réversibilité) pour les tester sans DOM.
+
+/** Statut écrit par la clôture en lot : la colonne « Terminé ». */
+export const BULK_CLOSE_STATUS = columnToStatus("done");
+
+/**
+ * Ouvre (checked=true) ou ferme (checked=false) la sélection d'une tâche.
+ * Retourne un NOUVEL ensemble — l'état précédent n'est jamais modifié. Pur.
+ * @param {Set<number>|null} selection
+ * @param {number} taskId
+ * @param {boolean} checked
+ * @returns {Set<number>}
+ */
+export function toggleSelection(selection, taskId, checked) {
+  const next = new Set(selection || []);
+  if (checked) next.add(taskId);
+  else next.delete(taskId);
+  return next;
+}
+
+/** Nombre de tâches sélectionnées (0 pour un ensemble vide ou absent). Pur. */
+export function selectionCount(selection) {
+  return selection ? selection.size : 0;
+}
+
+/**
+ * Le bouton « Clôturer la sélection » doit-il être visible et actif ? Oui
+ * seulement si au moins une tâche est cochée. Pur.
+ */
+export function canCloseSelection(selection) {
+  return selectionCount(selection) > 0;
+}
+
+/** Texte de la confirmation obligatoire : nombre de tâches + réversibilité. Pur. */
+export function bulkCloseConfirmMessage(count) {
+  const n = Number(count) || 0;
+  return (
+    `Clôturer ${n} tâche${n > 1 ? "s" : ""} ? Leur statut passera à « Terminé » et elles ` +
+    `quitteront leur colonne. Rien n'est supprimé : l'opération est réversible ` +
+    `(bouton « Annuler » juste après).`
+  );
+}
+
+/**
+ * Prépare les changements d'une clôture en lot SANS rien écrire : chaque
+ * changement vaut `{ id, from, to }`. Une tâche cochée absente de la liste est
+ * ignorée (jamais inventée). Pur.
+ * @param {Array<{id:number,status:string}>} tasks
+ * @param {Set<number>|null} selection
+ * @returns {Array<{id:number,from:string,to:string}>}
+ */
+export function buildBulkClosePlan(tasks, selection) {
+  const ids = selection || new Set();
+  const changes = [];
+  for (const t of tasks || []) {
+    if (!t || t.id == null) continue;
+    if (!ids.has(t.id)) continue;
+    changes.push({ id: t.id, from: String(t.status || ""), to: BULK_CLOSE_STATUS });
+  }
+  return changes;
+}
+
+/**
+ * Décide de l'application de la clôture en lot : c'est le SEUL endroit où l'on
+ * décide si quelque chose est écrit. `confirmed === false` (confirmation
+ * refusée) → aucun changement, rien ne bouge. Pur.
+ * @returns {{applied: boolean, changes: Array<{id:number,from:string,to:string}>}}
+ */
+export function planBulkClose(tasks, selection, confirmed) {
+  if (!confirmed) return { applied: false, changes: [] };
+  return { applied: true, changes: buildBulkClosePlan(tasks, selection) };
+}
+
+/**
+ * Plan inverse, pour le bouton « Annuler » : rétablit le statut précédent de
+ * chaque tâche clôturée. Ne contient que des changements de statut — jamais une
+ * suppression. Pur.
+ * @param {Array<{id:number,from:string,to:string}>} changes
+ * @returns {Array<{id:number,status:string}>}
+ */
+export function buildBulkUndoPlan(changes) {
+  return (changes || [])
+    .filter((c) => c && c.id != null)
+    .map((c) => ({ id: c.id, status: c.from }));
+}
+
 /**
  * Une tâche est-elle OUVERTE ? L'onglet « Tâches » du panneau cloche ne montre
  * que le travail qui reste à faire. Une tâche terminée, annulée/abandonnée OU

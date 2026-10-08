@@ -17,7 +17,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
-import { buildKanbanByClient, normalizeTaskStatus, columnToStatus } from "./super-agent-kanban.js";
+import { buildKanbanByClient, normalizeTaskStatus, columnToStatus,
+  toggleSelection, selectionCount, canCloseSelection, bulkCloseConfirmMessage,
+  planBulkClose, buildBulkUndoPlan } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -48,6 +50,121 @@ export function createSuperKanban(container) {
   let kanbanTasksById = new Map();
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
+  // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
+  // perdre la sélection pendant un rafraîchissement de la vue) et dernier lot
+  // clôturé (pour le bouton « Annuler » de la confirmation de résultat).
+  let selectedTaskIds = new Set();
+  let lastBulkClose = null; // { changes: [{ id, from, to }] } | null
+
+  /** Tâches actuellement connues (dernier chargement), dans l'ordre de la base. */
+  const currentTasks = () => Array.from(kanbanTasksById.values());
+
+  /** Reflète l'état de la sélection dans la barre du haut (sans re-rendu :
+   *  la position de défilement et la mise en page restent intactes). */
+  function syncBulkUi() {
+    const bar = container.querySelector(".kanban-bulk-bar");
+    if (!bar) return;
+    const n = selectionCount(selectedTaskIds);
+    bar.querySelector(".kanban-bulk-count").textContent =
+      n === 0 ? "Aucune tâche sélectionnée" : `${n} tâche${n > 1 ? "s" : ""} sélectionnée${n > 1 ? "s" : ""}`;
+    bar.querySelector(".kanban-bulk-close-btn").hidden = !canCloseSelection(selectedTaskIds);
+    bar.querySelector(".kanban-bulk-clear-btn").hidden = !canCloseSelection(selectedTaskIds);
+    const undo = bar.querySelector(".kanban-bulk-undo");
+    const closed = (lastBulkClose && lastBulkClose.changes.length) || 0;
+    undo.hidden = closed === 0;
+    if (closed) {
+      undo.querySelector(".kanban-bulk-undo-text").textContent =
+        `${closed} tâche${closed > 1 ? "s" : ""} clôturée${closed > 1 ? "s" : ""}.`;
+    }
+  }
+
+  /** Barre de sélection et de clôture en lot (sticky : reste visible au défilement). */
+  function bulkBarHtml() {
+    return `<div class="kanban-bulk-bar">
+      <span class="kanban-bulk-count">Aucune tâche sélectionnée</span>
+      <button type="button" class="kanban-bulk-clear-btn" hidden>Tout désélectionner</button>
+      <button type="button" class="kanban-bulk-close-btn" hidden>Clôturer la sélection</button>
+      <span class="kanban-bulk-undo" hidden>
+        <span class="kanban-bulk-undo-text"></span>
+        <button type="button" class="kanban-bulk-undo-btn">Annuler</button>
+      </span>
+    </div>`;
+  }
+
+  /**
+   * Clôture le lot sélectionné après confirmation explicite. Une confirmation
+   * refusée (annulée) n'écrit RIEN. Chaque tâche passe par la MÊME route que la
+   * clôture unitaire (`super_agent_update_task_status`), une fois par tâche —
+   * aucune suppression, aucune commande nouvelle.
+   */
+  async function confirmAndCloseSelection() {
+    const n = selectionCount(selectedTaskIds);
+    if (n === 0) return;
+    const confirmed = await openKanbanConfirm({
+      title: "Clôturer la sélection",
+      message: bulkCloseConfirmMessage(n),
+      confirmLabel: `Clôturer ${n} tâche${n > 1 ? "s" : ""}`,
+    });
+    const decision = planBulkClose(currentTasks(), selectedTaskIds, confirmed);
+    if (!decision.applied) return; // confirmation refusée → rien ne change
+    const applied = [];
+    for (const c of decision.changes) {
+      try {
+        await invoke("super_agent_update_task_status", { taskId: c.id, status: c.to });
+        applied.push(c);
+      } catch (err) {
+        console.error("Erreur clôture en lot:", err);
+      }
+    }
+    lastBulkClose = applied.length ? { changes: applied } : null;
+    selectedTaskIds = new Set();
+    loadSuperKanban();
+  }
+
+  /** Rétablit le statut précédent des tâches du dernier lot clôturé (réversible). */
+  async function undoBulkClose() {
+    const plan = buildBulkUndoPlan(lastBulkClose && lastBulkClose.changes);
+    for (const c of plan) {
+      try {
+        await invoke("super_agent_update_task_status", { taskId: c.id, status: c.status });
+      } catch (err) {
+        console.error("Erreur annulation clôture:", err);
+      }
+    }
+    lastBulkClose = null;
+    loadSuperKanban();
+  }
+
+  /**
+   * Boîte de confirmation minimale (même habillage que les modales existantes).
+   * Résout `true` si l'utilisateur confirme, `false` sinon (fermeture, Échap ou
+   * « Annuler »).
+   */
+  function openKanbanConfirm({ title, message, confirmLabel }) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal";
+      overlay.innerHTML = `<div class="modal-content kanban-modal-content">
+        <h2><i data-lucide="check-circle-2" class="icon-lg"></i> ${title}</h2>
+        <p class="kanban-confirm-msg">${message}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn kanban-cancel-btn">Annuler</button>
+          <button type="button" class="btn kanban-confirm-ok">${confirmLabel}</button>
+        </div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const done = (value) => {
+        overlay.remove();
+        resolve(value);
+      };
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) done(false);
+      });
+      overlay.querySelector(".kanban-cancel-btn").addEventListener("click", () => done(false));
+      overlay.querySelector(".kanban-confirm-ok").addEventListener("click", () => done(true));
+      refreshIcons(overlay);
+    });
+  }
   const clearDragOver = () =>
     container.querySelectorAll(".super-kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
 
@@ -95,7 +212,10 @@ export function createSuperKanban(container) {
                   .map(([k, l]) => `<option value="${k}" ${k === selKey ? "selected" : ""}>${l}</option>`)
                   .join("");
                 return `<div class="super-kanban-card" draggable="true" data-task-id="${t.id}">
-                  <div class="super-kanban-card-title">${title}</div>
+                  <div class="super-kanban-card-head">
+                    <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
+                    <div class="super-kanban-card-title">${title}</div>
+                  </div>
                   ${proj ? `<div class="super-kanban-card-proj"><i data-lucide="folder" class="icon-sm"></i> ${proj}</div>` : ""}
                   ${desc ? `<div class="super-kanban-card-desc">${desc}</div>` : ""}
                   <div class="super-kanban-card-tools">
@@ -123,8 +243,9 @@ export function createSuperKanban(container) {
           <div class="super-kanban-board">${cols}</div>
         </div>`;
       }
-      container.innerHTML = html;
+      container.innerHTML = bulkBarHtml() + html;
       refreshIcons(container);
+      syncBulkUi();
     } catch (err) {
       console.error("Erreur get_super_agent_kanban:", err);
       container.innerHTML =
@@ -293,6 +414,12 @@ export function createSuperKanban(container) {
     clearDragOver();
   });
   container.addEventListener("change", (e) => {
+    const cb = e.target.closest(".kanban-select-cb");
+    if (cb) {
+      selectedTaskIds = toggleSelection(selectedTaskIds, Number(cb.dataset.taskId), cb.checked);
+      syncBulkUi();
+      return;
+    }
     const sel = e.target.closest(".kanban-status-select");
     if (!sel) return;
     moveKanbanTask(Number(sel.dataset.taskId), columnToStatus(sel.value));
@@ -301,6 +428,17 @@ export function createSuperKanban(container) {
   container.addEventListener("click", (e) => {
     const newBtn = e.target.closest(".kanban-new-btn");
     if (newBtn) { openKanbanModal({ mode: "create" }); return; }
+    const clearSelBtn = e.target.closest(".kanban-bulk-clear-btn");
+    if (clearSelBtn) {
+      selectedTaskIds = new Set();
+      container.querySelectorAll(".kanban-select-cb").forEach((cb) => { cb.checked = false; });
+      syncBulkUi();
+      return;
+    }
+    const closeSelBtn = e.target.closest(".kanban-bulk-close-btn");
+    if (closeSelBtn) { confirmAndCloseSelection(); return; }
+    const undoBtn = e.target.closest(".kanban-bulk-undo-btn");
+    if (undoBtn) { undoBulkClose(); return; }
     const delBtn = e.target.closest(".kanban-del-btn");
     if (delBtn) {
       if (delBtn.dataset.armed === "1") {

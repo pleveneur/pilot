@@ -7548,6 +7548,87 @@ body.pilot-loading *::after {
   width: 460px;
   max-width: 92vw;
 }
+/* Clôture EN LOT : barre de sélection (colle en haut pour rester visible dans une
+   longue liste, sans casser la mise en page ni le défilement). */
+.kanban-bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.07));
+  border-radius: 8px;
+  background: var(--surface-1, #16181d);
+}
+.kanban-bulk-count {
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+}
+.kanban-bulk-close-btn {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-accent, #fff);
+  background: var(--accent, #6b8cff);
+  border: 1px solid var(--accent, #6b8cff);
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.kanban-bulk-close-btn:hover {
+  filter: brightness(1.08);
+}
+.kanban-bulk-clear-btn {
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+  background: transparent;
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+.kanban-bulk-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+}
+.kanban-bulk-undo[hidden],
+.kanban-bulk-close-btn[hidden],
+.kanban-bulk-clear-btn[hidden] {
+  display: none;
+}
+.kanban-bulk-undo-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #6b8cff);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent, #6b8cff) 40%, transparent);
+  border-radius: 8px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.kanban-confirm-msg {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary, #9aa0aa);
+  margin: 10px 0 0;
+}
+.super-kanban-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.super-kanban-card-head .kanban-select-cb {
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  cursor: pointer;
+}
 .kanban-task-form {
   display: flex;
   flex-direction: column;

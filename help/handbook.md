@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-07 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1397,6 +1397,20 @@ uniquement un bloc d'instructions dans le prompt système.
     canonique (`super-agent-kanban.js` : `columnToStatus`) ; le statut est
     normalisé en colonne au prochain rechargement.
   - Après chaque écriture, la vue se **recharge** automatiquement.
+- **Clôturer plusieurs tâches d'un coup** (clôture EN LOT, purement additive) :
+  - chaque carte porte une **case à cocher** ; une **barre en haut** de la vue
+    affiche le **nombre de tâches sélectionnées** et reste **visible au
+    défilement** (liste longue : la mise en page n'est pas cassée) ;
+  - le bouton **« Clôturer la sélection »** (et « Tout désélectionner ») n'est
+    **visible qu'à partir d'une tâche cochée** ;
+  - il demande une **confirmation** qui annonce le **nombre de tâches** et
+    rappelle que l'opération est **réversible** ; une confirmation **refusée
+    n'écrit rien** ;
+  - la clôture passe par la **même route que la clôture unitaire**
+    (`super_agent_update_task_status`, statut `terminee`) — **aucune commande
+    nouvelle**, **aucune suppression** : seul le **statut** change ;
+  - après la clôture, un bouton **« Annuler »** (confirmation de résultat)
+    **rétablit le statut précédent** de chaque tâche concernée.
 - **Toutes les écritures vont UNIQUEMENT dans la base de suivi de l'Assistant**
   (`~/.pilot/super-agent.db`) : l'Assistant reste **lecture seule** sur les
   fichiers projets. C'est l'utilisateur qui pilote ces cartes directement dans
