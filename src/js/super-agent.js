@@ -687,8 +687,8 @@ function projectColor(projectName) {
 let currentBody = null;      // élément `.agent-message-assistant` du tour courant
 let currentFlow = null;      // sous-élément `.agent-stream-flow`
 // Badges projet de la bulle courante (chantier « badge par bulle ») : snapshot
-// capturé au moment où l'utilisateur envoie sa demande = projet actif à cet
-// instant + projets explicitement nommés dans le texte (module pur
+// capturé au moment où l'utilisateur envoie sa demande = projets explicitement
+// nommés dans le texte, puis le projet actif à cet instant (module pur
 // super-agent-badges.js). Les bulles du tour (réponse incluse) héritent du
 // snapshot, qui est FIGÉ pour toujours : changer le projet actif ne modifie
 // plus jamais les badges déjà affichés. Null = aucun tour en cours. Les bulles
@@ -1097,7 +1097,7 @@ function stripGdsSuffix(name) {
  * ré-appliqués une seule fois sur le résultat.
  * @param {string} text - texte à scanner (demande ou réponse de l'assistant).
  * @param {string[]|null} [baseBadges] - badges de base (null → snapshot classique).
- * @returns {Promise<string[]>} noms de badges (actif en tête).
+ * @returns {Promise<string[]>} noms de badges (projet dont on parle en tête).
  */
 async function collectBubbleBadgeProjects(text, baseBadges = null) {
   const fallback = (() => { const n = getSuperActiveProjectName(); return n ? [n] : []; })();

@@ -21,6 +21,16 @@ const PROJECTS = [
   { path: "D:/Clients/Acme/site-vitrine", name: "Site Vitrine" },
 ];
 
+// Projets suivis EN BASE (list_super_agent_projects) mais non ouverts : leur
+// `name` est le chemin complet. Cas réel du défaut corrigé (étiquette de bulle
+// = projet dont la conversation parle).
+const TRACKED_FULLPATH = [
+  { path: "G:\\IA_PL\\PLh", name: "G:\\IA_PL\\PLh" },
+  { path: "G:/IA_PL/ExtractDoc", name: "G:/IA_PL/ExtractDoc" },
+  { path: "G:\\IA_PL\\PLface", name: "G:\\IA_PL\\PLface" },
+  { path: "D:\\Clients\\Acme\\MakeFilm", name: "D:\\Clients\\Acme\\MakeFilm" },
+];
+
 describe("pathTailName", () => {
   it("retourne le dernier segment", () => {
     expect(pathTailName("G:/IA_PL/PLh")).toBe("PLh");
@@ -99,17 +109,41 @@ describe("findNamedProjects (détection sans IA)", () => {
     ];
     expect(findNamedProjects("pilot et pilot", list)).toEqual(["Pilot"]);
   });
+  it("nom court cité seul (projet suivi non ouvert) → reconnu", () => {
+    expect(findNamedProjects("ou en est PLh ?", TRACKED_FULLPATH)).toEqual(["PLh"]);
+  });
+  it("chemin Windows en fin de phrase → nom court", () => {
+    expect(findNamedProjects("regarde G:\\IA_PL\\PLh", TRACKED_FULLPATH)).toEqual(["PLh"]);
+  });
+  it("chemin slash en fin de phrase → nom court", () => {
+    expect(findNamedProjects("regarde G:/IA_PL/ExtractDoc", TRACKED_FULLPATH)).toEqual(["ExtractDoc"]);
+  });
+  it("chemin entre guillemets → nom court", () => {
+    expect(findNamedProjects('le dossier "G:\\IA_PL\\PLface" avance', TRACKED_FULLPATH)).toEqual(["PLface"]);
+  });
+  it("chemin inconnu → aucun badge", () => {
+    expect(findNamedProjects("dossier G:\\IA_PL\\Inconnu", TRACKED_FULLPATH)).toEqual([]);
+  });
+  it("le badge n'est JAMAIS un chemin", () => {
+    expect(findNamedProjects("le dossier IA_PL/PLh", TRACKED_FULLPATH).every((n) => !/[\\/]/.test(n))).toBe(true);
+  });
 });
 
 describe("captureProjectBadgeNames (snapshot d'un envoi)", () => {
   it("projet actif seul si aucun projet nommé", () => {
     expect(captureProjectBadgeNames("salut", "Pilot", PROJECTS)).toEqual(["Pilot"]);
   });
-  it("projet actif en tête + projet nommé ensuite", () => {
+  it("projets nommés d'abord + projet actif ensuite (projet dont on parle en tête)", () => {
     expect(captureProjectBadgeNames("compare PLh et Pilot", "PLh", PROJECTS)).toEqual([
-      "PLh",
       "Pilot",
+      "PLh",
     ]);
+  });
+  it("le projet dont on parle passe devant le projet actif", () => {
+    expect(captureProjectBadgeNames("et MakeFilm ?", "Kodali", TRACKED_FULLPATH)).toEqual(["MakeFilm", "Kodali"]);
+  });
+  it("aucun projet évoqué → projet actif seul (inchangé)", () => {
+    expect(captureProjectBadgeNames("salut", "Kodali", TRACKED_FULLPATH)).toEqual(["Kodali"]);
   });
   it("le projet actif n'est pas dupliqué s'il est aussi nommé", () => {
     expect(captureProjectBadgeNames("on parle de PLh", "PLh", PROJECTS)).toEqual(["PLh"]);

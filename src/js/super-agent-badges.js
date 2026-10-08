@@ -78,6 +78,9 @@ export function pathSearchSuffixes(path) {
 function candidateDisplayName(p) {
   if (!p || typeof p !== "object") return "";
   const name = typeof p.name === "string" ? p.name.trim() : "";
+  // Un `name` en base PEUT être le chemin complet (projet suivi non ouvert) :
+  // ne jamais afficher un chemin comme badge, on retombe sur le dernier segment.
+  if (name && /[\\/]/.test(name)) return pathTailName(name);
   return name || pathTailName(p.path) || "";
 }
 
@@ -110,6 +113,12 @@ export function findNamedProjects(text, projects) {
       // Le nom affiché est par construction le plus court candidat.
       candidates.push(display.toLowerCase());
     }
+    // Le DERNIER SEGMENT du chemin est un candidat à part entière : un projet
+    // suivi mais non ouvert peut n'être cité que par son nom court (« PLh »),
+    // alors que son `name` en base est le chemin complet. Les deux séparateurs
+    // (`\` et `/`) sont déjà normalisés par pathTailName.
+    const tail = pathTailName(path).toLowerCase();
+    if (tail) candidates.push(tail);
     for (const suffix of pathSearchSuffixes(path)) {
       candidates.push(suffix.toLowerCase());
     }
@@ -124,8 +133,9 @@ export function findNamedProjects(text, projects) {
 
 /**
  * Capture (pur, testable) des badges projet pour un envoi : projet actif à
- * cet instant + projets nommés détectés dans le texte, dédupliqués (le projet
- * actif reste en tête ; les autres suivent dans l'ordre de la liste).
+ * cet instant + projets nommés détectés dans le texte, dédupliqués (les
+ * projets nommés passent devant — c'est le projet dont la conversation parle ;
+ * le projet actif vient ensuite, dans l'ordre de la liste).
  * Fail-open : texte vide → projet actif seul ; aucun projet → liste vide
  * (jamais bloquant, jamais d'exception).
  *
@@ -143,11 +153,14 @@ export function captureProjectBadgeNames(text, activeProjectName, projects) {
     seen.add(key);
     out.push(String(name).trim());
   };
-  push(activeProjectName);
-  // Texte vide/non string : matching sauté (projet actif seul).
+  // L'étiquette du haut doit désigner le projet DONT LA CONVERSATION PARLE :
+  // les projets nommés dans le texte passent devant, le projet actif vient
+  // ensuite (défaut de la conversation). Aucun projet nommé → liste = projet
+  // actif seul, comportement historique conservé.
   if (typeof text === "string" && text.trim()) {
     for (const name of findNamedProjects(text, projects)) push(name);
   }
+  push(activeProjectName);
   return out;
 }
 
