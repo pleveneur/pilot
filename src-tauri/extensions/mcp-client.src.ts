@@ -28,8 +28,27 @@
 // fourni que dans les event handlers / tool execute). Ce POC reste donc MUET
 // (fail-open silencieux) pour ne dépendre d'aucune surface UI non garantie.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+// Garde-fous du contrôle de l'écran (cœur PUR, partagé avec le frontend) :
+// bundlé par esbuild dans le fichier généré. Ils décident, POUR CHAQUE action,
+// si elle est refusée, soumise à confirmation ou simulée, et tiennent le journal.
+import {
+  SCREEN_GATE_SENTINEL,
+  SCREEN_JOURNAL_ACCEPTED,
+  SCREEN_JOURNAL_REFUSED,
+  SCREEN_JOURNAL_RELATIVE_PATH,
+  SCREEN_JOURNAL_SIMULATED,
+  SCREEN_NO_UI_MESSAGE,
+  SCREEN_REFUSED_MESSAGE,
+  SCREEN_SIMULATION_MESSAGE,
+  formatScreenJournalLine,
+  isScreenServer,
+  isScreenTool,
+  parseScreenGuard,
+  screenGateOutcome,
+  summarizeScreenAction,
+} from "../../src/js/screen-guard.js";
 // Le SDK MCP est bundlé (external uniquement pour pi-coding-agent et typebox).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -41,6 +60,15 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 const CONNECT_TIMEOUT_MS = 8000;
 // Timeout d'un appel outil (callTool) une fois connecté.
 const CALL_TIMEOUT_MS = 60000;
+// Titre du dialogue de confirmation d'une action sur l'écran.
+const SCREEN_CONFIRM_TITLE = "Contrôle de l'écran par l'agent";
+
+// Réglages du contrôle de l'écran (miroir de AppConfig / screen-guard.js).
+interface ScreenGuard {
+  enabled: boolean;
+  simulation: boolean;
+  emergencyStop: boolean;
+}
 
 // Structure d'un serveur dans mcp.json (miroir de src-tauri/src/mcp_config.rs).
 interface McpServerConfig {
@@ -52,6 +80,9 @@ interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /// Serveur de contrôle de l'écran (capture, clavier, souris) : ses outils
+  /// passent par les garde-fous (confirmation, simulation, journal).
+  screen?: boolean;
 }
 
 interface McpConfig {
@@ -89,6 +120,15 @@ export default async function (api: ExtensionAPI): Promise<void> {
   }
 
   const serverId = server.id ?? server.name ?? "mcp";
+
+  // ── 2 bis. Garde-fous du contrôle de l'écran ──
+  // Un serveur « écran » peut piloter la machine : il n'est proposé à l'agent
+  // que si l'utilisateur l'a autorisé. Désactivé (ou arrêt d'urgence actif), le
+  // serveur n'est même pas lancé et AUCUN de ses outils n'est enregistré.
+  const isScreen = isScreenServer(server);
+  if (isScreen && !(await readScreenGuard(configPath)).enabled) {
+    return; // Contrôle de l'écran coupé — fail-closed (rien ne part).
+  }
 
   // ── 2. Choix du transport selon le type du serveur (E3) ──
   // `http` / `https` = serveur distant joignable par le réseau ; toute autre
@@ -174,6 +214,46 @@ export default async function (api: ExtensionAPI): Promise<void> {
     } catch {
       // Échec d'enregistrement (concurrence d'extensions) : fail-open.
     }
+  }
+
+  // ── 4. Garde-fous du contrôle de l'écran (porte pré-action) ──
+  // Pour un serveur « écran » : chaque action est relue en DIRECT, confirmée
+  // par l'utilisateur, et journalisée. Un refus (réglage coupé, arrêt
+  // d'urgence, réponse de l'utilisateur, mode simulation) BLOQUE l'action :
+  // rien n'est envoyé au serveur et l'agent reçoit la raison.
+  if (isScreen) {
+    api.on("tool_call", async (event, ctx) => {
+      if (!isScreenTool(event.toolName, serverId)) {
+        return; // Outil d'un autre serveur MCP : hors de cette porte.
+      }
+      // Réglages relus à CHAQUE action : l'arrêt d'urgence (ou une coupure du
+      // réglage) prend effet immédiatement, sans redémarrer la session.
+      const guard = await readScreenGuard(configPath);
+      const outcome = screenGateOutcome(guard);
+      if (outcome.action !== "confirm") {
+        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, outcome.reason);
+        return { block: true, reason: outcome.reason };
+      }
+      if (!ctx.hasUI) {
+        // Session autonome : aucune interface pour confirmer → refus.
+        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_NO_UI_MESSAGE);
+        return { block: true, reason: SCREEN_NO_UI_MESSAGE };
+      }
+      const input = (event.input ?? {}) as Record<string, unknown>;
+      const accepted = await askScreenConfirmation(ctx, event.toolName, input, outcome.simulated);
+      if (!accepted) {
+        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_REFUSED, SCREEN_REFUSED_MESSAGE);
+        return { block: true, reason: SCREEN_REFUSED_MESSAGE };
+      }
+      if (outcome.simulated) {
+        // Mode simulation : l'accord ne déclenche AUCUNE action réelle.
+        await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_SIMULATED, summarizeScreenAction(input));
+        return { block: true, reason: SCREEN_SIMULATION_MESSAGE };
+      }
+      // Action réelle autorisée cette fois-ci : journal, puis exécution.
+      await journalScreenAction(ctx, event.toolName, SCREEN_JOURNAL_ACCEPTED, summarizeScreenAction(input));
+      return;
+    });
   }
 
   // ── Nettoyage à la fin de session (fermeture du serveur local ou distant) ──
@@ -315,5 +395,85 @@ async function safeClose(
     await transport.close();
   } catch {
     /* ignore */
+  }
+}
+
+// ── Garde-fous du contrôle de l'écran ──
+
+/// Dossier d'un chemin de fichier (``G:\a\mcp.json`` → ``G:\a``), sans dépendre
+/// d'un module supplémentaire.
+function dirOf(filePath: string): string {
+  return String(filePath || "").replace(/[\\/][^\\/]*$/, "");
+}
+
+/// Chemin d'un fichier relatif à un dossier de base (vide si la base est vide).
+function pathIn(base: string, relative: string): string {
+  const b = String(base || "").replace(/[\\/]+$/, "");
+  return b ? `${b}/${relative}` : "";
+}
+
+/// Réglages du contrôle de l'écran, relus en DIRECT depuis `config.json`
+/// (même dossier que `mcp.json`). Un fichier illisible retombe sur les défauts
+/// sûrs (contrôle activé, mais en SIMULATION) : jamais une autorisation nue.
+/// Ne contient aucun contenu sensible (trois booléens).
+async function readScreenGuard(configPath: string): Promise<ScreenGuard> {
+  const dir = dirOf(configPath);
+  if (!dir) {
+    return parseScreenGuard("");
+  }
+  try {
+    return parseScreenGuard(await readFileText(pathIn(dir, "config.json")));
+  } catch {
+    return parseScreenGuard("");
+  }
+}
+
+/// Demande l'accord de l'utilisateur pour une action sur l'écran. La réponse
+/// attendue est un VRAI booléen : le contrat RPC `confirm` de pi lit une
+/// réponse sans champ `confirmed` comme un refus, d'où le sentinel reconnu par
+/// `src/js/agent-pi.js` (qui répond `{ confirmed, cancelled }`).
+/// Fail-closed : toute erreur (pas d'UI, dialogue impossible) vaut refus.
+async function askScreenConfirmation(
+  ctx: ExtensionContext,
+  toolName: string,
+  input: Record<string, unknown>,
+  simulated: boolean
+): Promise<boolean> {
+  const payload = {
+    tool: toolName,
+    args: summarizeScreenAction(input),
+    simulated,
+  };
+  try {
+    const answer = await ctx.ui.confirm(
+      SCREEN_CONFIRM_TITLE,
+      SCREEN_GATE_SENTINEL + JSON.stringify(payload)
+    );
+    return answer === true;
+  } catch {
+    return false;
+  }
+}
+
+/// Ajoute une ligne au journal des actions écran du projet
+/// (`.pilot/screen-actions.log`) : heure, outil, résultat, détail REDACTÉ (le
+/// texte saisi n'y figure jamais). Le journal ne bloque jamais une action.
+async function journalScreenAction(
+  ctx: ExtensionContext,
+  toolName: string,
+  outcome: string,
+  detail: string
+): Promise<void> {
+  try {
+    const path = pathIn(ctx.cwd, SCREEN_JOURNAL_RELATIVE_PATH);
+    if (!path) {
+      return;
+    }
+    const fs = await import("node:fs/promises");
+    await fs.mkdir(dirOf(path), { recursive: true });
+    const line = formatScreenJournalLine({ tool: toolName, outcome, detail }) + "\n";
+    await fs.appendFile(path, line, "utf8");
+  } catch {
+    /* Le journal est un garde-fou d'information, jamais un point de blocage. */
   }
 }

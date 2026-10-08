@@ -11,6 +11,9 @@ import { refreshIcons } from "./icons.js";
 import { saveProvidersIfDirty, cancelProvidersIfDirty } from "./models-config.js";
 import { animateModalOpen } from "./modal-anim.js";
 import { MCP_TRANSPORT_STDIO, formatArgs, formatEnv, isRemoteTransport, validateServer, newServerId, testResult, buildServer } from "./mcp-utils.js";
+// Contrôle de l'écran : journal lisible (relecture) — logique pure partagée avec
+// l'extension MCP qui l'écrit.
+import { SCREEN_JOURNAL_RELATIVE_PATH, parseScreenJournal } from "./screen-guard.js";
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
 import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 import { listen } from "@tauri-apps/api/event";
@@ -487,12 +490,108 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   const mcpSecretRefList = document.getElementById("mcp-secret-ref-list");
   const mcpSecretRefStatus = document.getElementById("mcp-f-secret-ref-status");
   const mcpFEnabled = document.getElementById("mcp-f-enabled");
+  const mcpFScreen = document.getElementById("mcp-f-screen");
   const mcpFStatus = document.getElementById("mcp-f-status");
   const btnMcpSave = document.getElementById("btn-mcp-save");
   const btnMcpCancel = document.getElementById("btn-mcp-cancel");
   const mcpStatus = document.getElementById("mcp-status");
+  // Contrôle de l'écran par les agents (serveurs MCP « écran »).
+  const chkMcpScreenEnabled = document.getElementById("setting-mcp-screen-enabled");
+  const chkMcpScreenSimulation = document.getElementById("setting-mcp-screen-simulation");
+  const btnMcpScreenStop = document.getElementById("btn-mcp-screen-stop");
+  const btnMcpScreenResume = document.getElementById("btn-mcp-screen-resume");
+  const btnMcpScreenLog = document.getElementById("btn-mcp-screen-log");
+  const mcpScreenStatus = document.getElementById("mcp-screen-status");
+  const mcpScreenLog = document.getElementById("mcp-screen-log");
   let mcpServers = []; // état éditable ([{id,name,transport,enabled,command,args}])
   let mcpEditingId = null; // id du serveur en cours d'édition (null = nouveau)
+
+  // ── Contrôle de l'écran par les agents ──
+  // Réglages miroir de `screen-guard.js` : le contrôle est ACTIVÉ par défaut,
+  // mais en SIMULATION (état sûr). L'arrêt d'urgence est un réglage PERSISTÉ :
+  // il survit au redémarrage, d'où l'écriture immédiate côté Rust.
+
+  /** Aligne les cases et le libellé d'état sur `currentConfig`. */
+  function syncScreenGuardControls() {
+    const enabled = !(currentConfig && currentConfig.screen_control_enabled === false);
+    const simulation = !(currentConfig && currentConfig.screen_control_simulation === false);
+    const emergency = !!(currentConfig && currentConfig.screen_control_emergency_stop === true);
+    if (chkMcpScreenEnabled) chkMcpScreenEnabled.checked = enabled;
+    if (chkMcpScreenSimulation) chkMcpScreenSimulation.checked = simulation;
+    setMcpScreenStatus(
+      emergency
+        ? "🛑 Arrêt d'urgence ACTIF : aucune action sur l'écran ne peut partir (même après redémarrage) tant que vous n'avez pas rétabli le contrôle."
+        : enabled
+          ? simulation
+            ? "Contrôle de l'écran autorisé, en simulation : votre accord est demandé, mais rien n'est réellement exécuté."
+            : "⚠️ Contrôle de l'écran autorisé en mode réel : une action autorisée s'exécute vraiment sur votre écran."
+          : "Contrôle de l'écran désactivé : les outils d'écran ne sont pas proposés à l'agent.",
+      emergency ? "var(--danger,#f87171)" : enabled && !simulation ? "var(--warning,#fbbf24)" : "var(--text-muted)",
+    );
+  }
+
+  function setMcpScreenStatus(text, color) {
+    if (!mcpScreenStatus) return;
+    mcpScreenStatus.style.whiteSpace = "pre-line";
+    mcpScreenStatus.textContent = text || "";
+    if (color) mcpScreenStatus.style.color = color;
+  }
+
+  /** Enregistre les trois réglages côté Rust. Le miroir local `currentConfig`
+   * est mis à jour AUSSI : `save_config` (modale Paramètres) réécrit toute la
+   * configuration, il doit porter les valeurs courantes et non les anciennes. */
+  function applyScreenGuardLocally(enabled, simulation, emergencyStop) {
+    if (currentConfig) {
+      currentConfig.screen_control_enabled = enabled;
+      currentConfig.screen_control_simulation = simulation;
+      currentConfig.screen_control_emergency_stop = emergencyStop;
+    }
+    syncScreenGuardControls();
+  }
+
+  async function saveScreenGuard(enabled, simulation, emergencyStop) {
+    try {
+      await invoke("mcp_set_screen_guard", { enabled, simulation, emergencyStop });
+      applyScreenGuardLocally(enabled, simulation, emergencyStop);
+      return true;
+    } catch (e) {
+      syncScreenGuardControls();
+      alert("Erreur : " + e);
+      return false;
+    }
+  }
+
+  /** Affiche/masque le journal des actions écran du projet ouvert (heure,
+   * action, résultat). Aucun contenu sensible n'y est inscrit. */
+  async function toggleMcpScreenLog() {
+    if (!mcpScreenLog) return;
+    if (mcpScreenLog.style.display !== "none") {
+      mcpScreenLog.style.display = "none";
+      return;
+    }
+    mcpScreenLog.style.display = "block";
+    const base = window._pilotProjectPath;
+    if (!base) {
+      mcpScreenLog.textContent =
+        "Aucun projet ouvert : le journal est propre à chaque projet.";
+      return;
+    }
+    mcpScreenLog.textContent = "Chargement…";
+    try {
+      const text = await invoke("read_file_content", {
+        path: `${String(base).replace(/[\\/]+$/, "")}/${SCREEN_JOURNAL_RELATIVE_PATH}`,
+      });
+      const entries = parseScreenJournal(text, 100);
+      mcpScreenLog.textContent = entries.length
+        ? entries
+            .map((x) => `${x.at}  ${x.tool}  ${x.outcome}${x.detail ? "  " + x.detail : ""}`)
+            .join("\n")
+        : "Journal vide : aucune action sur l'écran n'a encore été demandée dans ce projet.";
+    } catch (_) {
+      mcpScreenLog.textContent =
+        "Aucun journal pour ce projet : aucune action sur l'écran n'a encore été demandée.";
+    }
+  }
 
   function setMcpStatus(text, color) {
     if (!mcpStatus) return;
@@ -510,6 +609,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     }
     chkMcpEnabled.checked = !!(currentConfig && currentConfig.mcp_enabled);
     chkMcpAgentConfirm.checked = !!(currentConfig && currentConfig.mcp_agent_confirm);
+    syncScreenGuardControls();
     setMcpStatus("");
     renderMcpServers();
   }
@@ -620,7 +720,8 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     // Une référence déjà enregistrée reste affichée telle quelle, même si elle
     // n'est plus (ou pas encore) dans la liste : on n'écrase rien.
     fillMcpSecretRefOptions();
-    mcpFEnabled.checked = s ? !!s.enabled : true;
+    if (mcpFEnabled) mcpFEnabled.checked = s ? !!s.enabled : true;
+    if (mcpFScreen) mcpFScreen.checked = s ? !!s.screen : false;
     applyMcpTransportVisibility();
     mcpFStatus.textContent = "";
     mcpFStatus.style.color = "var(--text-muted)";
@@ -641,6 +742,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       url: mcpFUrl ? mcpFUrl.value : "",
       secretRef: mcpFSecretRef ? mcpFSecretRef.value : "",
       enabled: mcpFEnabled.checked,
+      screen: mcpFScreen ? mcpFScreen.checked : false,
     };
     const err = validateServer(form);
     if (err) { mcpFStatus.textContent = "⚠ " + err; mcpFStatus.style.color = "var(--danger,#f87171)"; return; }
@@ -753,6 +855,33 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       alert("Erreur : " + e);
     }
   });
+
+  // Contrôle de l'écran : chaque case est persistée immédiatement (effet sans
+  // redémarrer l'agent, qui relit la configuration à chaque action).
+  chkMcpScreenEnabled?.addEventListener("change", () => {
+    saveScreenGuard(
+      !!chkMcpScreenEnabled.checked,
+      !!(chkMcpScreenSimulation && chkMcpScreenSimulation.checked),
+      false,
+    );
+  });
+  chkMcpScreenSimulation?.addEventListener("change", () => {
+    saveScreenGuard(
+      !!(chkMcpScreenEnabled && chkMcpScreenEnabled.checked),
+      !!chkMcpScreenSimulation.checked,
+      false,
+    );
+  });
+  // Arrêt d'urgence : coupe l'autorisation ET refuse les actions en attente.
+  btnMcpScreenStop?.addEventListener("click", async () => {
+    await saveScreenGuard(false, false, true);
+    try {
+      window.dispatchEvent(new CustomEvent("pilot-screen-emergency-stop"));
+    } catch (_) {}
+  });
+  // Rétablissement : retour à un ÉTAT SÛR (autorisé, mais en simulation).
+  btnMcpScreenResume?.addEventListener("click", () => saveScreenGuard(true, true, false));
+  btnMcpScreenLog?.addEventListener("click", toggleMcpScreenLog);
 
   btnWebAudit.addEventListener("click", async (e) => {
     auditModal.classList.remove("hidden");
@@ -1611,6 +1740,17 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
         // flag via mcp_set_enabled ; relire currentConfig (instantané pris à
         // l'ouverture de la modale) écraserait par une valeur périmée.
         mcp_enabled: chkMcpEnabled ? chkMcpEnabled.checked : (currentConfig?.mcp_enabled || false),
+        // Contrôle de l'écran par les agents : `save_config` RÉÉCRIT toute la
+        // configuration, donc les champs absents retomberaient sur leurs
+        // défauts. On relit les cases vivantes (l'onglet MCP les persiste déjà)
+        // et l'arrêt d'urgence depuis la configuration courante.
+        screen_control_enabled: chkMcpScreenEnabled
+          ? chkMcpScreenEnabled.checked
+          : currentConfig?.screen_control_enabled !== false,
+        screen_control_simulation: chkMcpScreenSimulation
+          ? chkMcpScreenSimulation.checked
+          : currentConfig?.screen_control_simulation !== false,
+        screen_control_emergency_stop: currentConfig?.screen_control_emergency_stop === true,
         show_thinking: chkShowThinking.checked,
         show_tools: chkShowTools.checked,
         notify_agent_done: chkNotifyAgentDone ? chkNotifyAgentDone.checked : false,

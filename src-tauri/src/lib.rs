@@ -321,6 +321,19 @@ struct AppConfig {
     // (ask_confirm). Si false, l'assistant choisit et lance seul.
     #[serde(default = "default_true")]
     mcp_agent_confirm: bool,
+    // Contrôle de l'ÉCRAN par les agents (serveur MCP « écran » : capture,
+    // clavier, souris). ACTIVÉ PAR DÉFAUT, mais chaque action reste soumise à
+    // une confirmation explicite de l'utilisateur (rien ne part sans accord).
+    #[serde(default = "default_true")]
+    screen_control_enabled: bool,
+    // Mode SIMULATION (défaut ON = état sûr) : une action confirmée est
+    // journalisée puis BLOQUÉE sans être exécutée réellement sur l'écran.
+    #[serde(default = "default_true")]
+    screen_control_simulation: bool,
+    // Arrêt d'urgence du contrôle de l'écran : persiste au redémarrage. Actif,
+    // il coupe toute action (voir aussi `screen_control_enabled`).
+    #[serde(default)]
+    screen_control_emergency_stop: bool,
     #[serde(default = "default_true")]
     show_thinking: bool,
     #[serde(default)]
@@ -980,6 +993,9 @@ impl Default for AppConfig {
             quality_gate_enabled: false,
             mcp_enabled: false,
             mcp_agent_confirm: true,
+            screen_control_enabled: true,
+            screen_control_simulation: true,
+            screen_control_emergency_stop: false,
             show_thinking: true,
             show_tools: false,
             notify_agent_done: false,
@@ -3430,6 +3446,7 @@ pub fn run() {
             mcp_config::mcp_save_servers,
             mcp_config::mcp_set_enabled,
             mcp_config::mcp_set_agent_confirm,
+            mcp_config::mcp_set_screen_guard,
             mcp_config::mcp_get_state,
             mcp_config::mcp_test_connection,
             // ── Coffre fort de mots de passe (issue #52) ──

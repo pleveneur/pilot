@@ -138,16 +138,18 @@ export function testResult(payload) {
 
 /**
  * Construit l'objet serveur MCP (format
- * {id,name,transport,enabled,command,args,env,url,secret_ref}) à partir du
+ * {id,name,transport,enabled,command,args,env,url,secret_ref,screen}) à partir du
  * formulaire. Le transport est `stdio` (local) par défaut : un formulaire sans
  * type reste donc rétrocompatible avec la configuration existante.
  * La référence de clé (`secret_ref`) n'est jamais la clé elle-même, seulement
  * l'entrée du coffre ; elle n'est conservée que pour un serveur distant. Les
  * variables d'environnement ne concernent que le serveur local (elles sont
  * transmises au programme lancé).
+ * `screen` désigne un serveur de contrôle de l'écran : ses outils sont soumis
+ * aux garde-fous (confirmation, simulation, journal).
  * @param {string} id
- * @param {{name?: string, transport?: string, command?: string, argsText?: string, envText?: string, url?: string, secretRef?: string, enabled?: boolean}|any} form
- * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[],env:Record<string,string>,url:string,secret_ref:string|null}}
+ * @param {{name?: string, transport?: string, command?: string, argsText?: string, envText?: string, url?: string, secretRef?: string, enabled?: boolean, screen?: boolean}|any} form
+ * @returns {{id:string,name:string,transport:string,enabled:boolean,command:string,args:string[],env:Record<string,string>,url:string,secret_ref:string|null,screen:boolean}}
  */
 export function buildServer(id, form) {
   const f = form || {};
@@ -168,5 +170,8 @@ export function buildServer(id, form) {
     // Serveur distant : adresse + référence de coffre (jamais la clé).
     url: remote ? String(f.url || "").trim() : "",
     secret_ref: remote ? String(f.secretRef || "").trim() || null : null,
+    // Serveur de contrôle de l'écran : uniquement pour un serveur local (un
+    // serveur tiers distant ne pilote pas cette machine).
+    screen: remote ? false : f.screen === true,
   };
 }

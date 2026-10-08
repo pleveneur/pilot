@@ -153,6 +153,8 @@ describe("buildServer", () => {
       env: {},
       url: "",
       secret_ref: null,
+      // Serveur local ordinaire : pas un serveur de contrôle de l'écran.
+      screen: false,
     });
   });
 
@@ -183,7 +185,24 @@ describe("buildServer", () => {
       env: {},
       url: "https://exemple.invalid/mcp",
       secret_ref: "vault:mon-entree",
+      // Un serveur distant ne pilote pas cette machine : jamais « écran ».
+      screen: false,
     });
+  });
+
+  it("porte le drapeau « écran » d'un serveur local, et seulement du local", () => {
+    const ecran = buildServer("mcp-6", { name: "ScreenMCP", command: "screenmcp.exe", screen: true });
+    expect(ecran.screen).toBe(true);
+    // Absent → false (aucun changement pour les configurations existantes).
+    expect(buildServer("mcp-7", { name: "X", command: "x" }).screen).toBe(false);
+    // Un serveur distant ne peut pas être marqué comme serveur d'écran.
+    const distant = buildServer("mcp-8", {
+      name: "R",
+      transport: "http",
+      url: "https://exemple.invalid/mcp",
+      screen: true,
+    });
+    expect(distant.screen).toBe(false);
   });
 
   it("ne conserve la référence de clé que pour un serveur distant", () => {

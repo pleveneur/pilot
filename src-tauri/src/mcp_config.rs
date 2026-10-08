@@ -11,6 +11,9 @@
 //       mcp_list_servers      → liste des serveurs configurés
 //       mcp_save_servers      → remplace la liste des serveurs
 //       mcp_set_enabled       → active/désactive le POC MCP (flag global Pilot)
+//       mcp_set_agent_confirm → confirmation utilisateur avant un agent MCP
+//       mcp_set_screen_guard  → réglages du contrôle de l'écran (activation,
+//                               simulation, arrêt d'urgence)
 //       mcp_test_connection   → vérifie la handshake : serveur local (stdio)
 //                               ou serveur distant (POST HTTP `initialize`)
 //
@@ -68,6 +71,12 @@ pub struct McpServer {
     pub url: String,
     /// Référence vers une entrée du coffre — JAMAIS la clé elle-même.
     pub secret_ref: Option<String>,
+    /// Serveur de contrôle de l'ÉCRAN (capture, clavier, souris). Ses outils
+    /// passent par les garde-fous de Pilot : confirmation utilisateur par
+    /// action, mode simulation, journal (`.pilot/screen-actions.log`) et arrêt
+    /// d'urgence. Un serveur ordinaire (Github, …) reste inchangé.
+    #[serde(default)]
+    pub screen: bool,
 }
 
 impl Default for McpServer {
@@ -82,6 +91,7 @@ impl Default for McpServer {
             env: BTreeMap::new(),
             url: String::new(),
             secret_ref: None,
+            screen: false,
         }
     }
 }
@@ -328,6 +338,42 @@ pub fn mcp_set_agent_confirm(app: AppHandle, enabled: bool) -> Result<bool, Stri
     let saved = {
         let mut config = state.config.lock().unwrap();
         config.mcp_agent_confirm = enabled;
+        crate::save_config_disk(&app, &config)
+    };
+    Ok(saved.is_ok())
+}
+
+/// Applique les réglages du contrôle de l'écran à la configuration. Fonction
+/// PURE (aucune I/O) : elle sert à `mcp_set_screen_guard` et reste testable.
+pub fn apply_screen_guard(
+    config: &mut crate::AppConfig,
+    enabled: bool,
+    simulation: bool,
+    emergency_stop: bool,
+) {
+    config.screen_control_enabled = enabled;
+    config.screen_control_simulation = simulation;
+    config.screen_control_emergency_stop = emergency_stop;
+}
+
+/// Réglages du contrôle de l'écran par les agents (serveur MCP « écran »).
+///
+/// Enregistre immédiatement les trois réglages — y compris l'ARRÊT D'URGENCE,
+/// qui doit couper les actions tout de suite et survivre au redémarrage (le
+/// bouton d'arrêt n'est pas dans la modale des Paramètres, dont l'enregistrement
+/// réécrit toute la configuration). L'extension MCP relit ces valeurs en direct
+/// (`config.json`) à chaque action : aucun redémarrage d'agent n'est requis.
+#[tauri::command]
+pub fn mcp_set_screen_guard(
+    app: AppHandle,
+    enabled: bool,
+    simulation: bool,
+    emergency_stop: bool,
+) -> Result<bool, String> {
+    let state = app.state::<crate::AppState>();
+    let saved = {
+        let mut config = state.config.lock().unwrap();
+        apply_screen_guard(&mut config, enabled, simulation, emergency_stop);
         crate::save_config_disk(&app, &config)
     };
     Ok(saved.is_ok())
@@ -1121,12 +1167,14 @@ mod tests {
                 env: Default::default(),
                 url: String::new(),
                 secret_ref: None,
+                screen: false,
             }
         );
         // Les champs nouveaux sont vides sans être exigés par le fichier.
         assert_eq!(s.url, String::new());
         assert!(s.secret_ref.is_none());
         assert!(s.env.is_empty());
+        assert!(!s.screen);
         // Le transport local reste "stdio".
         assert_eq!(s.transport, "stdio");
         assert_eq!(s.transport_kind(), TransportKind::Stdio);
@@ -1915,5 +1963,73 @@ mod tests {
         assert_eq!(res["ok"], false, "résultat: {}", res);
         assert!(!res.to_string().contains(FICTIONAL_KEY), "résultat: {}", res);
         assert_eq!(res["error"], "le serveur a répondu avec le statut HTTP 500");
+    }
+
+    // ── Contrôle de l'écran : drapeau de serveur et réglages ──
+
+    /// Le drapeau `screen` est absent des `mcp.json` déjà écrits : il doit être
+    /// lu à `false` (serveur ordinaire) sans invalider la configuration.
+    #[test]
+    fn screen_flag_defaults_to_false_and_round_trips() {
+        let without: McpServer = serde_json::from_str(
+            r#"{"id":"mcp-1","name":"Github","transport":"http","enabled":true,"command":"","url":"https://x.invalid/mcp"}"#,
+        )
+        .expect("un mcp.json existant reste lisible");
+        assert!(!without.screen);
+
+        let with: McpServer =
+            serde_json::from_str(r#"{"id":"mcp-2","name":"ScreenMCP","screen":true}"#)
+                .expect("drapeau écran lisible");
+        assert!(with.screen);
+
+        // Le drapeau survit à un aller-retour d'écriture (mcp_save_servers).
+        let text = serde_json::to_string(&with).unwrap();
+        let back: McpServer = serde_json::from_str(&text).unwrap();
+        assert!(back.screen);
+    }
+
+    /// L'arrêt d'urgence et les autres réglages écrits par
+    /// `mcp_set_screen_guard` portent bien sur les trois champs, ensemble.
+    #[test]
+    fn apply_screen_guard_sets_all_three_settings() {
+        let mut config = crate::AppConfig::default();
+        // Défauts : contrôle activé, en simulation, pas d'arrêt d'urgence.
+        assert!(config.screen_control_enabled);
+        assert!(config.screen_control_simulation);
+        assert!(!config.screen_control_emergency_stop);
+
+        // Arrêt d'urgence : coupe l'autorisation ET pose le drapeau d'urgence.
+        apply_screen_guard(&mut config, false, false, true);
+        assert!(!config.screen_control_enabled);
+        assert!(!config.screen_control_simulation);
+        assert!(config.screen_control_emergency_stop);
+
+        // Rétablissement : retour à un état sûr (activé, mais en simulation).
+        apply_screen_guard(&mut config, true, true, false);
+        assert!(config.screen_control_enabled);
+        assert!(config.screen_control_simulation);
+        assert!(!config.screen_control_emergency_stop);
+    }
+
+    /// Les réglages relus depuis `config.json` (l'une des sources de
+    /// l'extension MCP) correspondent au contrat attendu par `screen-guard.js`.
+    /// Le fichier ne porte AUCUNE donnée sensible.
+    #[test]
+    fn screen_settings_serialize_under_expected_keys() {
+        let config = crate::AppConfig::default();
+        let text = serde_json::to_string(&config).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["screen_control_enabled"], serde_json::json!(true));
+        assert_eq!(value["screen_control_simulation"], serde_json::json!(true));
+        assert_eq!(
+            value["screen_control_emergency_stop"],
+            serde_json::json!(false)
+        );
+        // Une configuration ancienne (champs absents) reste lisible et repart
+        // sur les défauts sûrs.
+        let old: crate::AppConfig = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert!(old.screen_control_enabled);
+        assert!(old.screen_control_simulation);
+        assert!(!old.screen_control_emergency_stop);
     }
 }

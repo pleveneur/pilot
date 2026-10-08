@@ -100,3 +100,94 @@ describe("extension MCP — second transport (E3)", () => {
     expect(src).toContain("safeClose(transport, client)");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Garde-fous du contrôle de l'écran (paramètres → Serveurs MCP).
+//
+// Un serveur « écran » pilote la machine : la logique fine (décision, journal,
+// rédaction) est testée dans `src/js/screen-guard.test.js`. Ici on vérifie que
+// l'extension la BRANCHE : chaque action passe par la porte, un refus bloque
+// l'appel, les réglages sont relus en direct et le journal est écrit.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("extension MCP — garde-fous du contrôle de l'écran", () => {
+  const gateBody = slice('api.on("tool_call"', "// ── Nettoyage à la fin de session");
+  const guardBody = slice("async function readScreenGuard(", "/// Demande l'accord de l'utilisateur");
+  const askBody = slice("async function askScreenConfirmation(", "/// Ajoute une ligne au journal");
+  const journalBody = src.slice(src.indexOf("async function journalScreenAction("));
+
+  it("branche la logique partagée des garde-fous (source unique de vérité)", () => {
+    expect(src).toContain('from "../../src/js/screen-guard.js"');
+    expect(src).toContain("isScreenServer(server)");
+    expect(src).toContain("isScreenTool(event.toolName, serverId)");
+    expect(src).toContain("screenGateOutcome(guard)");
+  });
+
+  it("n'enregistre pas les outils du serveur écran quand le contrôle est coupé", () => {
+    // Contrôle désactivé / arrêt d'urgence : le serveur n'est même pas lancé.
+    expect(src).toMatch(
+      /if \(isScreen && !\(await readScreenGuard\(configPath\)\)\.enabled\) \{\s*return;/,
+    );
+  });
+
+  it("relit les réglages à CHAQUE action (arrêt d'urgence immédiat)", () => {
+    // Une valeur lue au démarrage ne suffirait pas : l'arrêt d'urgence doit
+    // prendre effet sans redémarrer la session.
+    expect(gateBody).toMatch(/const guard = await readScreenGuard\(configPath\);/);
+    expect(guardBody).toContain("config.json");
+    expect(guardBody).toContain('pathIn(dir, "config.json")');
+  });
+
+  it("refuse sans jamais appeler le serveur (blocage, pas filtrage)", () => {
+    expect(gateBody).toMatch(/return \{ block: true, reason: outcome\.reason \};/);
+    // Le refus utilisateur et l'absence d'interface bloquent aussi l'appel.
+    expect(gateBody).toMatch(/return \{ block: true, reason: SCREEN_REFUSED_MESSAGE \};/);
+    expect(gateBody).toMatch(/return \{ block: true, reason: SCREEN_NO_UI_MESSAGE \};/);
+    // La porte ne fait pas le travail elle-même : elle autorise ou bloque, et
+    // c'est `execute` (donc `runTool`) qui exécute l'action acceptée.
+    expect(gateBody).not.toContain("runTool(");
+  });
+
+  it("demande une confirmation à l'utilisateur, avec un refus par défaut", () => {
+    expect(askBody).toContain("ctx.ui.confirm(");
+    expect(askBody).toContain("SCREEN_GATE_SENTINEL");
+    // Fail-closed : une erreur de dialogue vaut refus, jamais accord.
+    expect(askBody).toMatch(/catch \{\s*return false;/);
+    expect(askBody).toMatch(/return answer === true;/);
+  });
+
+  it("mode simulation : accord donné mais aucune action réelle", () => {
+    expect(gateBody).toMatch(/if \(outcome\.simulated\) \{/);
+    expect(gateBody).toMatch(/return \{ block: true, reason: SCREEN_SIMULATION_MESSAGE \};/);
+    // L'exécution réelle n'est atteinte qu'après : refus, absence d'UI,
+    // simulation — dans cet ordre.
+    const iSim = gateBody.indexOf("outcome.simulated");
+    const iAccepted = gateBody.indexOf("SCREEN_JOURNAL_ACCEPTED");
+    expect(iSim).toBeGreaterThanOrEqual(0);
+    expect(iAccepted).toBeGreaterThan(iSim);
+  });
+
+  it("journalise chaque issue (heure, outil, résultat) dans le projet", () => {
+    expect(journalBody).toContain("formatScreenJournalLine");
+    expect(journalBody).toContain("appendFile");
+    expect(journalBody).toContain("SCREEN_JOURNAL_RELATIVE_PATH");
+    expect(journalBody).toContain("ctx.cwd");
+    expect(gateBody).toContain("SCREEN_JOURNAL_REFUSED");
+    expect(gateBody).toContain("SCREEN_JOURNAL_SIMULATED");
+    expect(gateBody).toContain("SCREEN_JOURNAL_ACCEPTED");
+    // Le journal ne doit jamais faire échouer une action (ni la bloquer).
+    expect(journalBody).toMatch(/catch \{\s*\/\*/);
+  });
+
+  it("n'écrit jamais les paramètres bruts ni de contenu sensible dans le journal", () => {
+    // Chaque écriture passe par le résumé rédacté.
+    const journalled = gateBody.match(/journalScreenAction\([^;]*\);/g) ?? [];
+    expect(journalled.length).toBeGreaterThanOrEqual(4);
+    for (const call of journalled) {
+      expect(call, `écriture non rédactée : ${call}`).toMatch(
+        /summarizeScreenAction\(input\)|SCREEN_[A-Z_]+/,
+      );
+      expect(call, `paramètres bruts journalisés : ${call}`).not.toMatch(/JSON\.stringify\(input\)/);
+    }
+  });
+});

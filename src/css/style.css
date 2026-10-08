@@ -6340,6 +6340,8 @@ body.pilot-loading *::after {
 #providers-status { margin-left: auto; }
 
 /* ── Serveurs MCP (POC) ── */
+/* Contrôle de l'écran : journal lisible des actions (settings.js). */
+.mcp-screen-log { max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border-color, #333); border-radius: 8px; background: var(--bg-elevated, #262626); }
 .mcp-server-card { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border-color, #333); border-radius: 8px; background: var(--bg-elevated, #262626); }
 .mcp-server-card .mcp-server-info { flex: 1; min-width: 0; }
 .mcp-server-card .mcp-server-title { font-size: 13px; font-weight: 600; }

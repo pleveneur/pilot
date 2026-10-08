@@ -1036,6 +1036,24 @@
               <label for="setting-mcp-agent-confirm" title="Quand activé (défaut), l'Assistant demande une confirmation à l'utilisateur avant de lancer un agent sur un serveur MCP. Désactivé = l'Assistant choisit et lance automatiquement.">Demander une confirmation utilisateur avant qu'un agent utilise un serveur MCP</label>
             </div>
             <hr class="settings-sep" />
+            <h4 class="settings-section-title"><i data-lucide="monitor" class="icon-sm"></i> Contrôle de l'écran par les agents</h4>
+            <p class="muted">Autorise un serveur MCP <strong>de contrôle de l'écran</strong> (capture d'écran, clavier, souris) à agir sur <strong>cet ordinateur</strong>. Même autorisé, <strong>chaque action</strong> demande votre accord : rien ne part sans réponse de votre part. Chaque action est inscrite dans un <strong>journal</strong> (projet → <code>.pilot/screen-actions.log</code>).</p>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-mcp-screen-enabled" />
+              <label for="setting-mcp-screen-enabled" title="Désactivé, les outils d'écran ne sont plus proposés à l'agent et aucune action ne peut partir (effet immédiat).">Autoriser les agents à contrôler l'écran (capture, clavier, souris)</label>
+            </div>
+            <div class="setting-row setting-row-checkbox">
+              <input type="checkbox" id="setting-mcp-screen-simulation" />
+              <label for="setting-mcp-screen-simulation" title="Activé (défaut), une action autorisée est tracée mais n'est PAS réellement exécutée. Désactivez ce mode uniquement si vous voulez que les actions s'exécutent vraiment.">Mode simulation : demander l'accord mais ne rien exécuter réellement (recommandé)</label>
+            </div>
+            <div class="providers-toolbar">
+              <button type="button" id="btn-mcp-screen-stop" class="pc-btn" title="Coupe immédiatement toute action sur l'écran et refuse celle qui est en attente. Le réglage est conservé après redémarrage.">🛑 Arrêt d'urgence</button>
+              <button type="button" id="btn-mcp-screen-resume" class="pc-btn" title="Rétablit le contrôle de l'écran, en mode simulation (aucune action réelle).">Rétablir (mode simulation)</button>
+              <button type="button" id="btn-mcp-screen-log" class="pc-btn" title="Affiche le journal des actions écran du projet ouvert (heure, action, accepté/refusé)."><i data-lucide="file-text" class="icon-sm"></i> Voir le journal</button>
+              <span id="mcp-screen-status" class="muted"></span>
+            </div>
+            <pre id="mcp-screen-log" class="mcp-screen-log" style="display:none"></pre>
+            <hr class="settings-sep" />
             <div class="setting-row">
               <small class="muted">La configuration est enregistrée dans <code>mcp.json</code> (dossier de données Pilot). Le serveur connecté au démarrage d'une session agent est le premier serveur activé de la liste (local ou distant).</small>
             </div>
@@ -1059,6 +1077,10 @@
                 </select>
               </div>
               <div id="mcp-fields-local">
+                <div class="field-row setting-row-checkbox">
+                  <input type="checkbox" id="mcp-f-screen" />
+                  <label for="mcp-f-screen" title="Cochez si ce serveur pilote l'écran (capture, clavier, souris) : ses outils passeront alors par la confirmation utilisateur, le mode simulation, le journal et l'arrêt d'urgence.">Serveur de contrôle de l'écran</label>
+                </div>
                 <div class="field-row">
                   <label for="mcp-f-command" title="Exécutable à lancer (ex: node, python).">Commande :</label>
                   <input type="text" id="mcp-f-command" placeholder="node"/>

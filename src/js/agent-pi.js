@@ -13,6 +13,8 @@ import { generateAgentsMd } from "./agents-md.js";
 import { showLoading, hideLoading } from "./loading.js";
 import { exportConversationMarkdown, copyConversationHtml } from "./conversation-export.js";
 import { renderEditGateDialog } from "./diff-view.js";
+// Contrôle de l'écran (serveurs MCP « écran ») : dialogue de confirmation dédié.
+import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
@@ -370,6 +372,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   refreshConfirmFileEdits();
   // Recharger quand les paramètres sont sauvegardés (event custom émis par main.js)
   onGlobal(window, "pilot-config-changed", refreshConfirmFileEdits);
+  // Contrôle de l'écran : l'arrêt d'urgence doit refuser l'action en attente
+  // dans CET onglet (l'événement est global, le bouton d'arrêt est unique).
+  onGlobal(window, "pilot-screen-emergency-stop", denyPendingScreenGates);
   // Issue #59 : recharger l'option de blocage de la saisie agent à chaud.
   onGlobal(window, "pilot-config-changed", refreshBlockAgentInput);
 
@@ -8248,6 +8253,9 @@ function isRelayableAgentChoice(payload) {
     const msg = payload.message || "";
     if (msg.startsWith("PILOT_EDIT_GATE::")) return false;
     if (msg.startsWith("PILOT_ASSISTANT_ACTION::")) return false;
+    // Contrôle de l'écran : la confirmation doit rester dans l'onglet de l'agent
+    // concerné (elle décide d'une action réelle sur la machine).
+    if (msg.startsWith(SCREEN_GATE_SENTINEL)) return false;
     return true;
   }
   return false;
@@ -8278,6 +8286,16 @@ async function handleExtensionUiRequest(payload, container, state) {
     const rawMsg = payload.message || "";
     if (rawMsg.startsWith(SENTINEL)) {
       await handleEditGateConfirm(id, rawMsg.slice(SENTINEL.length), container, state);
+      return;
+    }
+    // ── Contrôle de l'écran (serveurs MCP « écran ») ──
+    // L'extension MCP envoie un confirm avec un message sentinel + JSON
+    // ({tool, args, simulated}). L'action est BLOQUÉE côté extension tant que
+    // l'utilisateur n'a pas répondu : on affiche un dialogue dédié (Autoriser /
+    // Refuser / Arrêt d'urgence). Placé AVANT le mode orchestration : une
+    // session autonome ne peut pas autoriser une action sur la machine.
+    if (rawMsg.startsWith(SCREEN_GATE_SENTINEL)) {
+      await handleScreenGateConfirm(id, rawMsg.slice(SCREEN_GATE_SENTINEL.length), container, state);
       return;
     }
     // Mode Orchestration autonome : ne pas bloquer sur une saisie → auto-répondre.
@@ -8639,6 +8657,141 @@ async function handleEditGateConfirm(id, jsonStr, container, state) {
   });
   target.appendChild(dialog);
   scrollToBottom(container);
+}
+
+// ── Contrôle de l'écran par les agents (serveurs MCP « écran ») ──
+//
+// Un serveur d'écran (capture, clavier, souris) peut piloter la machine. Chaque
+// action est donc confirmée par l'utilisateur (étape 2) et journalisée
+// (`.pilot/screen-actions.log`, étape 3). Un ARRÊT D'URGENCE coupe tout
+// immédiatement, y compris l'action en attente de réponse (étape 4).
+
+/** Coupe le contrôle de l'écran EN DIRECT (persisté) : l'extension MCP relit la
+ * configuration à chaque action, l'effet est donc immédiat, sans redémarrer
+ * l'agent. Laisse le contrôle « rétabli mais en simulation » : état sûr. */
+function engageScreenEmergencyStop() {
+  invoke("mcp_set_screen_guard", {
+    enabled: false,
+    simulation: false,
+    emergencyStop: true,
+  }).catch(() => {});
+  // Prévenir les autres onglets d'agents (chaque onglet peut avoir une action
+  // en attente) — le bouton d'arrêt est unique, l'effet doit être global.
+  try {
+    window.dispatchEvent(new CustomEvent("pilot-screen-emergency-stop"));
+  } catch (_) {}
+}
+
+/** Refuse toutes les actions écran actuellement EN ATTENTE de réponse :
+ * l'utilisateur a demandé l'arrêt d'urgence, ces actions ne doivent pas partir.
+ * Réutilise le bouton « Refuser » du dialogue (aucun état supplémentaire). */
+export function denyPendingScreenGates() {
+  let denied = 0;
+  try {
+    for (const overlay of document.querySelectorAll("[data-screen-gate]")) {
+      const reject = overlay.querySelector(".agent-diff-btn-reject");
+      if (reject) {
+        reject.click();
+        denied++;
+      }
+    }
+  } catch (_) {}
+  return denied;
+}
+
+/** Dialogue de confirmation d'une action sur l'écran (Autoriser / Refuser /
+ * Arrêt d'urgence), compréhensible par un non-spécialiste. Le dialogue est
+ * marqué `data-screen-gate` pour que l'arrêt d'urgence puisse le refuser. */
+function domScreenConfirm(title, bodyHtml) {
+  const pending = _domDialog({
+    title,
+    bodyHtml,
+    okLabel: "Autoriser cette action",
+    cancelLabel: "Refuser",
+  });
+  // `_domDialog` crée la modale de façon SYNCHRONE avant de rendre la promesse.
+  const overlays = document.querySelectorAll(".agent-ext-dialog-overlay");
+  const overlay = overlays[overlays.length - 1];
+  if (!overlay) return pending;
+  overlay.setAttribute("data-screen-gate", "1");
+  const actions = overlay.querySelector(".agent-ext-dialog-actions");
+  if (actions) {
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "agent-diff-btn agent-diff-btn-reject";
+    stopBtn.textContent = "🛑 Arrêt d'urgence";
+    stopBtn.title = "Coupe le contrôle de l'écran et refuse cette action";
+    stopBtn.addEventListener("click", () => {
+      engageScreenEmergencyStop();
+      denyPendingScreenGates();
+    });
+    actions.appendChild(stopBtn);
+  }
+  return pending;
+}
+
+/** Confirmation d'une action sur l'écran demandée par l'extension MCP. */
+async function handleScreenGateConfirm(id, jsonStr, container, state) {
+  let info = {};
+  try {
+    info = JSON.parse(jsonStr) || {};
+  } catch (_) {
+    info = {};
+  }
+  const tool = String(info.tool || "action inconnue");
+  const args = String(info.args || "");
+  const simulated = info.simulated === true;
+
+  const answer = async (accepted) => {
+    // `confirmed` est OBLIGATOIRE : une réponse sans ce champ est lue comme un
+    // refus par pi (`cancelled` seul ne suffit pas).
+    await invoke("send_rpc_command", {
+      command: { type: "extension_ui_response", id, confirmed: !!accepted, cancelled: !accepted },
+    });
+  };
+
+  // Mode Orchestration autonome : personne ne peut cliquer → refus explicite.
+  // Un accord automatique (comme la porte pré-écriture) donnerait à un agent
+  // autonome la main sur la machine sans témoin.
+  if (state.orchestrationRunning) {
+    appendSystemMessage(
+      container,
+      `🖥️ Action « ${tool} » refusée : aucune réponse possible en mode orchestration autonome.`,
+    );
+    await answer(false);
+    return;
+  }
+
+  const lines = [
+    "L'agent demande à agir sur votre écran (capture, clavier ou souris).",
+    "",
+    `Action : ${tool}`,
+  ];
+  if (args) lines.push(`Détails : ${args}`);
+  lines.push("");
+  lines.push(
+    simulated
+      ? "⚠️ Mode simulation : l'action sera tracée mais RIEN ne sera réellement exécuté."
+      : "⚠️ Mode réel : en autorisant, cette action sera réellement exécutée.",
+  );
+  const bodyHtml = `<p style="margin:0;white-space:pre-wrap;word-break:break-word">${escapeHtmlText(
+    lines.join("\n"),
+  )}</p>`;
+
+  let accepted = false;
+  try {
+    accepted = (await domScreenConfirm("Action sur l'écran", bodyHtml)) === true;
+  } catch (_) {
+    accepted = false; // fail-closed : jamais d'action sans accord explicite.
+  }
+  await answer(accepted);
+  appendSystemMessage(
+    container,
+    accepted
+      ? simulated
+        ? `🖥️ Action « ${tool} » autorisée (simulation : rien n'a été exécuté).`
+        : `🖥️ Action « ${tool} » autorisée.`
+      : `🖥️ Action « ${tool} » refusée.`,
+  );
 }
 
 /**
