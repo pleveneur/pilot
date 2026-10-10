@@ -13,6 +13,17 @@ pub struct AgentModels {
     pub plh: String,
 }
 
+/// Niveaux de réflexion par backend (pi / plh) — miroir de `AgentModels` (T3).
+/// `""` = « non réglé » → repli sur le réglage général de Pilot puis sur le
+/// défaut du moteur (voir `thinking::resolve_thinking_level`). Valeurs admises :
+/// `off|minimal|low|medium|high|xhigh|max` (les mêmes chaînes que l'option
+/// `--thinking` de pi).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentThinking {
+    pub pi: String,
+    pub plh: String,
+}
+
 /// Machine à états du processus agent (cahier §4.5).
 ///
 /// - `Compacting` : distingue la compaction de l'arrêt (issue #54).
@@ -74,6 +85,11 @@ pub struct Agent {
 
     // ── Configuration ──
     pub models: AgentModels,
+    /// Niveaux de réflexion par backend (T3). `#[serde(default)]` OBLIGATOIRE :
+    /// `agent_from_value` désérialise les agents poussés par le frontend
+    /// (upsert_agent / replace_agents) qui peuvent omettre ce champ.
+    #[serde(default)]
+    pub thinking: AgentThinking,
     pub capabilities: Vec<String>,
     /// Compétences (skills) de la bibliothèque commune `~/.pilot/skills` que CET
     /// agent peut voir (noms de dossiers). Filtrage STRICT côté session pi : un
@@ -137,6 +153,8 @@ impl Agent {
     pub fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Agent> {
         let capabilities: String = row.get("capabilities")?;
         let skills: String = row.get("skills")?;
+        let thinking_pi: String = row.get("thinking_pi")?;
+        let thinking_plh: String = row.get("thinking_plh")?;
         let proc_state: String = row.get("proc_state")?;
         Ok(Agent {
             id: row.get("id")?,
@@ -147,6 +165,10 @@ impl Agent {
             models: AgentModels {
                 pi: row.get("models_pi")?,
                 plh: row.get("models_plh")?,
+            },
+            thinking: AgentThinking {
+                pi: thinking_pi,
+                plh: thinking_plh,
             },
             capabilities: serde_json::from_str(&capabilities).unwrap_or_default(),
             skills: serde_json::from_str(&skills).unwrap_or_default(),

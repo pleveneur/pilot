@@ -65,6 +65,7 @@ export function registryAfterReset(resetResult, realRegistry) {
 export function normalizeAgent(agent) {
   if (!agent || typeof agent !== "object") return null;
   const models = agent.models || {};
+  const thinking = agent.thinking || {};
   return {
     id: String(agent.id || "").trim(),
     name: String(agent.name || "").trim(),
@@ -74,6 +75,13 @@ export function normalizeAgent(agent) {
     models: {
       pi: String(models.pi || "").trim(),
       plh: String(models.plh || "").trim(),
+    },
+    // Niveaux de réflexion par backend (T3) : DOIT être préservé, sinon tout
+    // aller-retour registre → UI → registre écrasait le réglage (même piège que
+    // `skills`). `""` = non réglé → repli sur le réglage général de Pilot.
+    thinking: {
+      pi: String(thinking.pi || "").trim(),
+      plh: String(thinking.plh || "").trim(),
     },
     capabilities: Array.isArray(agent.capabilities) ? agent.capabilities.map(String) : [],
     // Compétences (bibliothèque commune `~/.pilot/skills`) : DOIT être préservé,
@@ -109,6 +117,19 @@ export function resolveAgentModel(agent, backend, fallbackModel = "") {
   const other = backend === "pi" ? "plh" : "pi";
   const picked = models[backend] || models[other] || fallbackModel;
   return picked || "";
+}
+
+/**
+ * Résout le niveau de réflexion d'un agent selon le backend actif (T3) —
+ * miroir de `resolveAgentModel`, avec repli croisé pi ↔ plh. `""` = non réglé
+ * (l'appelant poursuit alors la chaîne : réglage général de Pilot, puis défaut
+ * du moteur).
+ */
+export function resolveAgentThinking(agent, backend) {
+  const thinking = agent && agent.thinking;
+  if (!thinking || typeof thinking !== "object") return "";
+  const other = backend === "pi" ? "plh" : "pi";
+  return String(thinking[backend] || thinking[other] || "").trim();
 }
 
 /** Construit le manifeste des agents injecté dans le prompt coordinateur. */

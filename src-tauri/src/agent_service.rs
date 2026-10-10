@@ -777,10 +777,16 @@ impl AgentService {
             // au lieu de coder_model — sinon le modèle configuré de l'agent est
             // écrasé par le modèle par défaut du codeur (doublon projet-scopé
             // sans modèles). Fallback coder_model si aucun agent global.
-            let (models_pi, models_plh, inherited_skills) = match self.get_agent(app, agent_id, None)? {
-                Some(g) => (g.models.pi.clone(), g.models.plh.clone(), g.skills.clone()),
-                None => (coder_model.clone(), coder_model, Vec::new()),
-            };
+            let (models_pi, models_plh, inherited_skills, inherited_thinking) =
+                match self.get_agent(app, agent_id, None)? {
+                    Some(g) => (
+                        g.models.pi.clone(),
+                        g.models.plh.clone(),
+                        g.skills.clone(),
+                        g.thinking.clone(),
+                    ),
+                    None => (coder_model.clone(), coder_model, Vec::new(), Default::default()),
+                };
             let agent = Agent {
                 id: agent_id.to_string(),
                 name: default_agent_name(agent_id),
@@ -791,6 +797,7 @@ impl AgentService {
                     pi: models_pi,
                     plh: models_plh,
                 },
+                thinking: inherited_thinking,
                 capabilities: Vec::new(),
                 skills: inherited_skills,
                 readonly: false,
@@ -2831,13 +2838,15 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
         if exists {
             conn.execute(
                 "UPDATE agents SET name=?1, icon=?2, description=?3, role=?4,
-                 models_pi=?5, models_plh=?6, capabilities=?7, skills=?8, readonly=?9,
-                 keep_context=?10, max_calls_per_run=?11, call_depth=?12,
-                 loaded=?13, busy=?14, proc_state=?15, visible=?16, last_active_at=?17
-                 WHERE id=?18 AND project_path IS NULL",
+                 models_pi=?5, models_plh=?6, thinking_pi=?7, thinking_plh=?8,
+                 capabilities=?9, skills=?10, readonly=?11,
+                 keep_context=?12, max_calls_per_run=?13, call_depth=?14,
+                 loaded=?15, busy=?16, proc_state=?17, visible=?18, last_active_at=?19
+                 WHERE id=?20 AND project_path IS NULL",
                 params![
                     agent.name, agent.icon, agent.description, agent.role,
-                    agent.models.pi, agent.models.plh, capabilities, skills,
+                    agent.models.pi, agent.models.plh, agent.thinking.pi, agent.thinking.plh,
+                    capabilities, skills,
                     agent.readonly as i64, agent.keep_context as i64,
                     agent.max_calls_per_run as i64, agent.call_depth as i64,
                     agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -2849,12 +2858,14 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
             conn.execute(
                 "INSERT INTO agents (
                     id, project_path, name, icon, description, role,
-                    models_pi, models_plh, capabilities, skills, readonly, keep_context,
+                    models_pi, models_plh, thinking_pi, thinking_plh, capabilities, skills,
+                    readonly, keep_context,
                     max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-                 ) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                 ) VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 params![
                     agent.id, agent.name, agent.icon, agent.description, agent.role,
-                    agent.models.pi, agent.models.plh, capabilities, skills,
+                    agent.models.pi, agent.models.plh, agent.thinking.pi, agent.thinking.plh,
+                    capabilities, skills,
                     agent.readonly as i64, agent.keep_context as i64,
                     agent.max_calls_per_run as i64, agent.call_depth as i64,
                     agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -2867,19 +2878,22 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
         conn.execute(
             "INSERT INTO agents (
                 id, project_path, name, icon, description, role,
-                models_pi, models_plh, capabilities, skills, readonly, keep_context,
+                models_pi, models_plh, thinking_pi, thinking_plh, capabilities, skills,
+                readonly, keep_context,
                 max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(id, project_path) DO UPDATE SET
                 name=excluded.name, icon=excluded.icon, description=excluded.description,
                 role=excluded.role, models_pi=excluded.models_pi, models_plh=excluded.models_plh,
+                thinking_pi=excluded.thinking_pi, thinking_plh=excluded.thinking_plh,
                 capabilities=excluded.capabilities, skills=excluded.skills, readonly=excluded.readonly,
                 keep_context=excluded.keep_context, max_calls_per_run=excluded.max_calls_per_run,
                 call_depth=excluded.call_depth, loaded=excluded.loaded, busy=excluded.busy,
                 proc_state=excluded.proc_state, visible=excluded.visible, last_active_at=excluded.last_active_at",
             params![
                 agent.id, agent.project_path, agent.name, agent.icon, agent.description, agent.role,
-                agent.models.pi, agent.models.plh, capabilities, skills,
+                agent.models.pi, agent.models.plh, agent.thinking.pi, agent.thinking.plh,
+                capabilities, skills,
                 agent.readonly as i64, agent.keep_context as i64,
                 agent.max_calls_per_run as i64, agent.call_depth as i64,
                 agent.loaded as i64, agent.busy as i64, agent.state.as_str(),
@@ -3213,6 +3227,7 @@ mod tests {
             description: String::new(),
             role: String::new(),
             models: crate::agent::AgentModels { pi: String::new(), plh: String::new() },
+            thinking: crate::agent::AgentThinking::default(),
             capabilities: Vec::new(),
             skills: Vec::new(),
             readonly: false,
@@ -3762,6 +3777,7 @@ mod tests {
                 id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
                 icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
                 models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
+                thinking_pi TEXT NOT NULL DEFAULT '', thinking_plh TEXT NOT NULL DEFAULT '',
                 capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
                 readonly INTEGER DEFAULT 0,
                 keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
@@ -3779,6 +3795,7 @@ mod tests {
             description: "Analyse".to_string(),
             role: "Tu analyses.".to_string(),
             models: crate::agent::AgentModels { pi: String::new(), plh: String::new() },
+            thinking: crate::agent::AgentThinking::default(),
             capabilities: Vec::new(),
             skills: Vec::new(),
             readonly: true,
@@ -3829,6 +3846,7 @@ mod tests {
                 id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
                 icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
                 models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
+                thinking_pi TEXT NOT NULL DEFAULT '', thinking_plh TEXT NOT NULL DEFAULT '',
                 capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
                 readonly INTEGER DEFAULT 0,
                 keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,

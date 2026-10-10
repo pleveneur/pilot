@@ -1,6 +1,43 @@
 // Tests unitaires — agents.js (classification codeur/spécialiste + prompt enrichi)
 import { describe, it, expect } from "vitest";
-import { classifyAgent, buildAgentPrompt, mergeEditedAgent } from "./agents.js";
+import {
+  classifyAgent,
+  buildAgentPrompt,
+  mergeEditedAgent,
+  normalizeAgent,
+  resolveAgentThinking,
+  resolveAgentModel,
+} from "./agents.js";
+
+describe("normalizeAgent — niveaux de réflexion (T3)", () => {
+  it("porte thinking { pi, plh } après un aller-retour registre", () => {
+    const n = normalizeAgent({ id: "codeur", models: { pi: "a/b" }, thinking: { pi: "high", plh: "low" } });
+    expect(n.thinking).toEqual({ pi: "high", plh: "low" });
+  });
+
+  it("thinking absent → { pi: '', plh: '' } (compat ascendante)", () => {
+    const n = normalizeAgent({ id: "codeur" });
+    expect(n.thinking).toEqual({ pi: "", plh: "" });
+  });
+});
+
+describe("resolveAgentThinking — repli croisé pi ↔ plh", () => {
+  it("backend demandé renseigné", () => {
+    expect(resolveAgentThinking({ thinking: { pi: "high", plh: "low" } }, "pi")).toBe("high");
+  });
+  it("backend demandé vide → repli sur l'autre", () => {
+    expect(resolveAgentThinking({ thinking: { pi: "", plh: "low" } }, "pi")).toBe("low");
+  });
+  it("aucun réglage → chaîne vide", () => {
+    expect(resolveAgentThinking({ thinking: { pi: "", plh: "" } }, "pi")).toBe("");
+    expect(resolveAgentThinking({}, "pi")).toBe("");
+    expect(resolveAgentThinking(null, "pi")).toBe("");
+  });
+  it("miroir de resolveAgentModel", () => {
+    const a = { models: { pi: "", plh: "ollama/x" } };
+    expect(resolveAgentModel(a, "pi")).toBe("ollama/x");
+  });
+});
 
 describe("mergeEditedAgent — édition ciblée non destructive (T2)", () => {
   const ligne = {
