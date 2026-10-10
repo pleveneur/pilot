@@ -3,6 +3,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { estimateTokens } from "./orchestration.js";
+// Libellés français des niveaux de réflexion (socle pur partagé, T1/T7).
+import { thinkingLabel } from "./thinking-levels.js";
 
 const CALL_RE = /\[\[CALL:([a-z0-9_-]+)\]\]([\s\S]*?)\[\[\/CALL\]\]/i;
 const PARALLEL_RE = /\[\[PARALLEL\]\]([\s\S]*?)\[\[\/PARALLEL\]\]/i;
@@ -143,6 +145,31 @@ export function describeAgentModels(agent) {
     "Modèle DEMANDÉ pour ce backend (réglage du registre de l'agent) — pas le modèle réellement chargé.",
     "Au démarrage d'une session, Pilot applique le modèle du backend actif, sinon celui de l'autre backend (repli croisé), sinon le modèle par défaut du registre de modèles.",
     "Une session déjà lancée garde le modèle qu'elle utilise : le modifier ici ne la change pas.",
+  ].join(" ");
+  return { text, title };
+}
+
+/**
+ * Décrit les niveaux de réflexion **demandés** d'un agent, pour la carte de
+ * l'onglet 🎭 Agents (T7). Même esprit que `describeAgentModels` : le registre
+ * décrit une INTENTION ; le niveau réellement appliqué est ramené aux capacités
+ * du modèle au lancement de la session (clamp), donc jamais garanti ici.
+ *
+ * @param {object} agent agent normalisé
+ * @returns {{text: string, title: string}|null} `null` quand aucun niveau n'est
+ *   réglé (rien n'est alors affiché : les agents livrés par défaut restent sobres).
+ */
+export function describeAgentThinking(agent) {
+  const thinking =
+    agent && agent.thinking && typeof agent.thinking === "object" ? agent.thinking : {};
+  const pi = String(thinking.pi || "").trim();
+  const plh = String(thinking.plh || "").trim();
+  if (!pi && !plh) return null;
+  const text = `niveau de réflexion — π ${thinkingLabel(pi)} · ℓ ${thinkingLabel(plh)}`;
+  const title = [
+    "Niveau de réflexion DEMANDÉ pour ce backend (réglage du registre de l'agent).",
+    "Aucun niveau réglé signifie : suivre le niveau par défaut de Pilot, puis le défaut du modèle, puis celui du moteur.",
+    "Au lancement, le niveau est ramené aux capacités du modèle réellement utilisé : si le modèle ne propose pas ce palier, un palier inférieur est employé.",
   ].join(" ");
   return { text, title };
 }

@@ -491,6 +491,13 @@
               <input type="checkbox" id="setting-show-thinking" />
               <label for="setting-show-thinking">Afficher la pensée de l'agent</label>
             </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-default-thinking-level" title="Niveau de réflexion appliqué par défaut aux agents dont aucun niveau propre n'est réglé. Plus le niveau est élevé, plus le modèle réfléchit avant de répondre : réponses souvent meilleures, mais plus lentes et plus coûteuses. Chaque agent ajuste automatiquement le niveau aux capacités de son propre modèle.">Niveau de réflexion par défaut :</label>
+              <select id="setting-default-thinking-level">
+                <option value="">Non réglé (défaut du moteur)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent" id="setting-default-thinking-level-note" style="display:none;font-size:11px;color:var(--text-muted);"></div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-show-tools" />
               <label for="setting-show-tools">Afficher les tools utilisés</label>

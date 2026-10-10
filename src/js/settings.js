@@ -166,6 +166,32 @@ async function refreshAssistantThinkingLevels(currentConfig, selectEl, noteEl) {
   );
 }
 
+/**
+ * T7 — Niveaux du réglage **général** de Pilot : ce réglage s'applique aux agents
+ * dont aucun niveau propre n'est réglé. Il n'est pas lié à un modèle unique : la
+ * liste est donc peuplée d'après le **modèle par défaut** des agents
+ * (`defaultModel` du `model-switch.json`, celui que le bus utilise comme repli)
+ * puis chaque agent ramène le niveau aux capacités de son propre modèle
+ * (clamp, §5 du plan). Aucune liste n'est inventée ; registre illisible → état
+ * « indisponible » explicite (fail-open).
+ */
+async function refreshDefaultThinkingLevels(currentConfig, selectEl, noteEl) {
+  let modelSpec = "";
+  try {
+    const cfg = await invoke("read_model_aliases", { stem: "pi" });
+    if (cfg && typeof cfg.defaultModel === "string") modelSpec = cfg.defaultModel.trim();
+  } catch (e) {
+    console.warn("[settings] modèle par défaut illisible pour le niveau de réflexion", e);
+  }
+  await refreshThinkingLevelSelect(
+    selectEl,
+    noteEl,
+    modelSpec,
+    (currentConfig.default_thinking_level || "").trim(),
+    "Non réglé (défaut du moteur)",
+  );
+}
+
 export async function initSettings() {
   const modal = document.getElementById("settings-modal");
   const btnSettings = document.getElementById("btn-settings");
@@ -238,6 +264,9 @@ export async function initSettings() {
   const inputDashboardAutoRefreshSeconds = document.getElementById("setting-dashboard-auto-refresh-seconds");
   const inputSessionRetention = document.getElementById("setting-session-retention");
   const chkShowThinking = document.getElementById("setting-show-thinking");
+  // T7 — niveau de réflexion par défaut de Pilot (agents sans réglage propre).
+  const selectDefaultThinkingLevel = document.getElementById("setting-default-thinking-level");
+  const defaultThinkingLevelNote = document.getElementById("setting-default-thinking-level-note");
   const chkShowTools = document.getElementById("setting-show-tools");
   const chkNotifyAgentDone = document.getElementById("setting-notify-agent-done");
   // ── Détection d'anomalies (tâche 8) ──
@@ -1050,6 +1079,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     if (inputDashboardAutoRefreshSeconds) inputDashboardAutoRefreshSeconds.value = currentConfig.dashboard_auto_refresh_seconds ?? 120;
     if (inputSessionRetention) inputSessionRetention.value = currentConfig.session_retention_days ?? 15;
     chkShowThinking.checked = currentConfig.show_thinking !== false;
+    await refreshDefaultThinkingLevels(
+      currentConfig,
+      selectDefaultThinkingLevel,
+      defaultThinkingLevelNote,
+    );
     chkShowTools.checked = currentConfig.show_tools || false;
     if (chkNotifyAgentDone) chkNotifyAgentDone.checked = currentConfig.notify_agent_done === true;
     // ── Détection d'anomalies (tâche 8) ──
@@ -1861,6 +1895,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
           : currentConfig?.screen_control_simulation !== false,
         screen_control_emergency_stop: currentConfig?.screen_control_emergency_stop === true,
         show_thinking: chkShowThinking.checked,
+        // T7 — niveau de réflexion par défaut de Pilot. "" = non réglé (le moteur
+        // garde son propre défaut : aucun changement de comportement).
+        default_thinking_level: selectDefaultThinkingLevel
+          ? selectDefaultThinkingLevel.value.trim()
+          : (currentConfig?.default_thinking_level || ""),
         show_tools: chkShowTools.checked,
         notify_agent_done: chkNotifyAgentDone ? chkNotifyAgentDone.checked : false,
         // ── Détection d'anomalies (tâche 8) ──

@@ -16,12 +16,15 @@ import {
   deleteAgent,
   normalizeAgent,
   describeAgentModels,
+  describeAgentThinking,
   mergeEditedAgent,
   validateAgentId,
   buildDefaultCoordinator,
   registryAfterReset,
 } from "./agents.js";
 import { initAgentsBus, destroyAgentsBus, stopAgentsRun } from "./agents-bus.js";
+// Socle pur des niveaux de réflexion (T1) : contenu des sélecteurs (T7).
+import { thinkingLevelOptions, THINKING_LEVEL_HINT } from "./thinking-levels.js";
 
 export async function createAgents(container) {
   const wrapper = document.createElement("div");
@@ -250,6 +253,7 @@ export async function createAgents(container) {
     for (const raw of registry.agents) {
       const a = normalizeAgent(raw);
       const models = describeAgentModels(a);
+      const thinking = describeAgentThinking(a);
       const card = document.createElement("div");
       card.className = "agent-card" + (a.readonly ? " readonly" : "");
       card.dataset.id = a.id;
@@ -270,6 +274,7 @@ export async function createAgents(container) {
         </div>
         ${badges.length ? `<div class="agent-card-badges">${badges.join("")}</div>` : ""}
         <div class="agent-card-models muted" title="${escapeHtml(models.title)}">${escapeHtml(models.text)}</div>
+        ${thinking ? `<div class="agent-card-models muted" title="${escapeHtml(thinking.title)}">${escapeHtml(thinking.text)}</div>` : ""}
         <div class="agent-card-actions">
           <button class="agent-btn" data-action="edit" title="Modifier"><i data-lucide="pencil" class="icon-sm"></i></button>
           <button class="agent-btn" data-action="delete" title="Supprimer"><i data-lucide="trash-2" class="icon-sm"></i></button>
@@ -331,8 +336,14 @@ export async function createAgents(container) {
           <div class="agent-form-skills" id="ae-skills"></div>
           <label>Modèle π (pi)</label>
           <select id="ae-model-pi"><option value="">Modèle par défaut</option></select>
+          <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (π)</label>
+          <select id="ae-thinking-pi"><option value="">Non réglé (suit le réglage général)</option></select>
+          <div class="muted agent-form-note" id="ae-thinking-pi-note" style="display:none"></div>
           <label>Modèle ℓ (plh)</label>
           <select id="ae-model-plh"><option value="">Modèle par défaut</option></select>
+          <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (ℓ)</label>
+          <select id="ae-thinking-plh"><option value="">Non réglé (suit le réglage général)</option></select>
+          <div class="muted agent-form-note" id="ae-thinking-plh-note" style="display:none"></div>
           <div class="agent-form-checks">
             <label><input type="checkbox" id="ae-readonly" ${a.readonly ? "checked" : ""} /> Lecture seule</label>
             <label><input type="checkbox" id="ae-keep" ${a.keep_context ? "checked" : ""} /> Garder le contexte</label>
@@ -354,6 +365,8 @@ export async function createAgents(container) {
 
     populateSelect(modal.querySelector("#ae-model-pi"), a.models.pi);
     populateSelect(modal.querySelector("#ae-model-plh"), a.models.plh);
+    bindThinkingSelect(modal, "#ae-model-pi", "#ae-thinking-pi", "#ae-thinking-pi-note", a.thinking.pi, "pi");
+    bindThinkingSelect(modal, "#ae-model-plh", "#ae-thinking-plh", "#ae-thinking-plh-note", a.thinking.plh, "plh");
     renderSkillsPicker(modal.querySelector("#ae-skills"), a.skills);
     refreshIcons(modal);
 
@@ -396,6 +409,13 @@ export async function createAgents(container) {
         models: {
           pi: modal.querySelector("#ae-model-pi").value,
           plh: modal.querySelector("#ae-model-plh").value,
+        },
+        // Niveaux de réflexion (T7) : enregistrés tels quels, même quand le
+        // sélecteur est désactivé (modèle non raisonnant) — le contenu du
+        // sélecteur contient alors toujours la valeur enregistrée.
+        thinking: {
+          pi: modal.querySelector("#ae-thinking-pi").value,
+          plh: modal.querySelector("#ae-thinking-plh").value,
         },
         capabilities: a.capabilities,
         skills: Array.from(modal.querySelectorAll("#ae-skills input:checked")).map((cb) => cb.value),
@@ -467,6 +487,61 @@ export async function createAgents(container) {
       opt.textContent = m;
       if (m === current) opt.selected = true;
       select.appendChild(opt);
+    }
+  }
+
+  // ── T7 : sélecteurs de niveau de réflexion (π / ℓ) de l'éditeur d'agent ──
+  // Le contenu vient des niveaux RÉELLEMENT supportés par le modèle sélectionné
+  // (`available_thinking_levels_for_model`, lecture disque, aucune session) :
+  // aucune liste n'est inventée. Repeuplé à chaque changement de modèle, car les
+  // capacités dépendent du modèle. Modèle non renseigné → repli sur le modèle par
+  // défaut du backend (`defaultModel`), celui que le bus emploiera réellement.
+  // Un sélecteur désactivé (modèle non raisonnant) conserve TOUJOURS la valeur
+  // enregistrée dans ses options : enregistrer ne peut donc pas l'effacer.
+  function bindThinkingSelect(modal, modelSelId, selectId, noteId, current, stem) {
+    const modelSel = modal.querySelector(modelSelId);
+    const selectEl = modal.querySelector(selectId);
+    const noteEl = modal.querySelector(noteId);
+    if (!selectEl) return;
+    const refresh = async () => {
+      let modelSpec = modelSel ? modelSel.value.trim() : "";
+      if (!modelSpec) modelSpec = await readDefaultModelForBackend(stem);
+      const [provider, ...rest] = modelSpec.split("/");
+      const modelId = rest.join("/");
+      let levels = [];
+      if (provider && modelId) {
+        try {
+          const res = await invoke("available_thinking_levels_for_model", { provider, modelId });
+          levels = Array.isArray(res) ? res : [];
+        } catch (e) {
+          // Fail-open : le sélecteur reste utilisable, l'état « indisponible »
+          // est affiché par le socle pur (message explicite, §8).
+          console.warn("[agents-ui] niveaux de réflexion illisibles pour", modelSpec, e);
+        }
+      }
+      const res = thinkingLevelOptions(levels, { current, provider });
+      selectEl.innerHTML = "";
+      for (const opt of res.options) selectEl.appendChild(new Option(opt.label, opt.value));
+      selectEl.value = current || "";
+      selectEl.disabled = res.disabled;
+      selectEl.title = res.message || THINKING_LEVEL_HINT;
+      if (noteEl) {
+        noteEl.textContent = res.message;
+        noteEl.style.display = res.message ? "" : "none";
+      }
+    };
+    if (modelSel) modelSel.addEventListener("change", refresh);
+    void refresh();
+  }
+
+  /** `defaultModel` du `model-switch.json` d'un backend ("" si aucun / illisible). */
+  async function readDefaultModelForBackend(stem) {
+    try {
+      const cfg = await invoke("read_model_aliases", { stem });
+      return cfg && typeof cfg.defaultModel === "string" ? cfg.defaultModel.trim() : "";
+    } catch (e) {
+      console.warn("[agents-ui] modèle par défaut illisible pour", stem, e);
+      return "";
     }
   }
 
