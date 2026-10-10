@@ -9,15 +9,20 @@
 //
 // Round-trip JSON : on préserve les clés non gérées par l'UI (on charge l'objet
 // Value tel quel et on ne modifie que les champs exposés : baseUrl, api, apiKey,
-// compat.{supportsTools,supportsDeveloperRole,supportsReasoningEffort}, models[],
-// et par modèle id/contextWindow/maxTokens/maxTokensEnabled/input/systemPrompt).
+// compat.{supportsDeveloperRole,supportsReasoningEffort}, models[], et par modèle
+// id/contextWindow/maxTokens/maxTokensEnabled/input/systemPrompt).
+//
+// `compat.supportsTools` n'est PAS exposé : pi ne lit pas cette clé (vérifié dans
+// son bundle — seuls `supportsDeveloperRole` et `supportsReasoningEffort` sont
+// consommés), une case à cocher n'aurait donc aucun effet. Si le JSON en contient
+// déjà une, le round-trip la préserve telle quelle (aucune écriture destructive).
 
 import { invoke } from "@tauri-apps/api/core";
 import { refreshIcons } from "./icons.js";
 import { showToast } from "./toast.js";
 
 const TAB_KEY = "providers";
-const COMPAT_KEYS = ["supportsTools", "supportsDeveloperRole", "supportsReasoningEffort"];
+const COMPAT_KEYS = ["supportsDeveloperRole", "supportsReasoningEffort"];
 const INPUT_KINDS = ["text", "image"];
 
 const state = {
@@ -206,7 +211,6 @@ function renderProviderCard(name, prov) {
   const compatCheckboxes = COMPAT_KEYS.map((k) => {
     const checked = compat[k] !== false ? "checked" : "";
     const label = {
-      supportsTools: "Tools",
       supportsDeveloperRole: "Developer role",
       supportsReasoningEffort: "Reasoning effort",
     }[k];

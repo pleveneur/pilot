@@ -378,7 +378,11 @@ Permet d'éditer le registre des modèles (`models.json`) et les alias
   `list_agent_backends` (scanne `~/.{stem}/agent/models.json`). Le backend actif
   est pré-sélectionné via `get_backend_info`.
 - **Providers** : édition de `baseUrl`, `api`, `apiKey`, et `compat`
-  (`supportsTools`, `supportsDeveloperRole`, `supportsReasoningEffort`).
+  (`supportsDeveloperRole`, `supportsReasoningEffort`).
+  `compat.supportsTools` n'est **pas** exposé : pi ne lit pas cette clé (seuls
+  `supportsDeveloperRole` et `supportsReasoningEffort` sont consommés par son
+  bundle), une case à cocher serait donc sans effet. Une valeur déjà présente
+  dans `models.json` est préservée par le round-trip.
   Ajout / suppression / renommage d'un provider. Les clés JSON non gérées par
   l'UI sont préservées (round-trip `serde_json::Value`).
 - **Modèles** : par provider, édition de `id`, `contextWindow`, `maxTokens`
