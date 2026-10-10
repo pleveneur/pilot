@@ -676,6 +676,55 @@ describe("shortMission — texte de mission court et lisible", () => {
     expect(shortMission("**Tâche :** Réparer le diff inline")).toBe("Réparer le diff inline");
   });
 
+  it("ignore les en-têtes MÉCANIQUES d'un prompt de délégation (« ## Contexte »)", () => {
+    const text = [
+      "## Contexte",
+      "Pilot est un editeur de texte pour agents IA.",
+      "",
+      "## Objectif",
+      "Corriger la cloche.",
+    ].join("\n");
+    // Jamais « Contexte » (le titre de structure), mais la première ligne utile.
+    expect(shortMission(text)).toBe("Pilot est un editeur de texte pour agents IA.");
+  });
+
+  it("ignore aussi les en-têtes mécaniques en GRAS (## Contexte / **Objectif**)", () => {
+    const text = [
+      "**## Contexte**",
+      "Reprendre le panneau de la cloche.",
+      "",
+      "**Objectif**",
+      "Afficher la tache en cours.",
+      "",
+      "## Consignes",
+      "Ne pas toucher au CSS.",
+      "",
+      "## Ce qu'il ne faut PAS faire",
+      "Tout casser.",
+    ].join("\n");
+    expect(shortMission(text)).toBe("Reprendre le panneau de la cloche.");
+  });
+
+  it("garde « Tâche : » PRIORITAIRE même après des en-têtes mécaniques", () => {
+    const text = [
+      "## Contexte",
+      "On reprend le panneau de la cloche.",
+      "Tâche : Afficher la tache en cours sous l'agent",
+    ].join("\n");
+    expect(shortMission(text)).toBe("Afficher la tache en cours sous l'agent");
+  });
+
+  it("n'affiche JAMAIS le RÔLE d'un agent sans tâche : repli « en préparation »", () => {
+    const role =
+      "Tu es un planificateur logiciel. Tu recois une demande de modification et tu produis un PLAN STRUCTURE en JSON.";
+    expect(shortMission(role)).toBe("en préparation");
+    expect(shortMission("Vous etes une equipe de testeurs.")).toBe("en préparation");
+  });
+
+  it("après une ligne de RÔLE, prend la première ligne de tâche réelle", () => {
+    expect(shortMission("Tu es un codeur.\nCorriger la cloche")).toBe("Corriger la cloche");
+  });
+
   it("prend la première ligne significative en sautant fences et markdown", () => {
     const text = ["```", "code ignoré", "```", "", "# Corriger le zoom", "suite"].join("\n");
     expect(shortMission(text)).toBe("Corriger le zoom");

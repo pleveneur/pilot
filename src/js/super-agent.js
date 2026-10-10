@@ -1498,12 +1498,14 @@ function renderSuperMissions() {
     .map(
       (m) => `<div class="sa-task-item">
         <div class="sa-task-head">
-          <span class="sa-task-title">${escapeHtmlForSuper(m.agent || `Projet ${m.project}`)}</span>
+          <span class="sa-task-title">${escapeHtmlForSuper(
+            // Ligne 1 : identité — `<agent> - <projet court>` (le projet est déjà
+            // réduit à son nom court par flattenAgents / missionProjectLabel).
+            m.agent ? (m.project ? `${m.agent} - ${m.project}` : m.agent) : m.project
+          )}</span>
           ${m.waiting ? `<span class="sa-task-status tone-unqualified">en attente</span>` : ""}
         </div>
-        <div class="sa-task-meta">${escapeHtmlForSuper(
-          m.agent ? `Projet ${m.project} · ${m.mission}` : m.mission
-        )}</div>
+        <div class="sa-task-meta">${escapeHtmlForSuper(m.mission)}</div>
       </div>`
     )
     .join("");

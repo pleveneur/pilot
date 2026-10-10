@@ -152,13 +152,76 @@ function clipMission(text) {
 }
 
 /**
+ * Repli explicite affiché quand le texte enregistré est le RÔLE de l'agent
+ * (« Tu es un planificateur logiciel… ») et non une tâche : un rôle n'est JAMAIS
+ * une mission. Cas réel : un processus démarré sans tâche (ex. `plan-maker`).
+ */
+export const MISSION_ROLE_FALLBACK = "en préparation";
+
+// En-têtes MÉCANIQUES d'un prompt de délégation : ils décrivent la STRUCTURE du
+// prompt (« ## Contexte », « ## Objectif », « ## Consignes », « ## Ce qu'il ne
+// faut PAS faire »), pas la tâche. Les afficher n'apprend rien à l'utilisateur :
+// on les saute pour prendre la première ligne de CONTENU réel.
+const MECHANICAL_HEADERS = new Set([
+  "contexte",
+  "objectif",
+  "consignes",
+  "ce qu il ne faut pas faire",
+]);
+
+/** Normalise une ligne (minuscules, sans accents ni ponctuation) pour comparaison. */
+function normalizeHeading(line) {
+  return String(line == null ? "" : line)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** true si la ligne n'est qu'un en-tête mécanique de prompt (markdown compris). */
+export function isMechanicalHeader(line) {
+  return MECHANICAL_HEADERS.has(normalizeHeading(line));
+}
+
+/**
+ * true si la ligne est l'énoncé du RÔLE de l'agent (« Tu es un <métier> … »,
+ * « Vous êtes une … »), jamais une tâche à afficher.
+ */
+export function looksLikeAgentRole(line) {
+  const flat = String(line == null ? "" : line)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  return /^(?:tu es|vous etes|you are)\s+(?:un|une|le|la|the)\b/i.test(flat);
+}
+
+/** Retire les décorations markdown de tête (titre, liste, citation, gras). */
+function stripLeadingMarkdown(line) {
+  let s = String(line == null ? "" : line).trim();
+  for (let i = 0; i < 4; i++) {
+    const before = s;
+    s = s
+      .replace(/^>\s?/, "")
+      .replace(/^#{1,6}\s*/, "")
+      .replace(/^[-*+]\s+/, "")
+      .replace(/^\*{1,2}/, "")
+      .trim();
+    if (s === before) break;
+  }
+  return s.replace(/\*{1,2}$/, "").trim();
+}
+
+/**
  * Réduit le texte d'une demande d'agent à une ligne courte et LISIBLE pour
  * l'affichage. Fonction PURE et déterministe :
  *  1. si le texte contient une ligne `Tâche : <titre>` (prompts d'orchestration,
- *     y compris retries) → ce `<titre>` ;
- *  2. sinon la première ligne significative (fences de code et balises markdown
- *     de tête retirées), coupée à `MISSION_MAX_CHARS` caractères avec « … » ;
- *  3. si le texte est vide ou inconnu → « (demande non précisée) » : JAMAIS une
+ *     y compris retries) → ce `<titre>` (PRIORITAIRE) ;
+ *  2. sinon la première ligne de CONTENU réel : fences de code ignorées, en-têtes
+ *     mécaniques de délégation (« ## Contexte », « **Objectif** »…) sautés et
+ *     markdown de tête retiré ; coupée à `MISSION_MAX_CHARS` caractères avec « … » ;
+ *  3. si seule une ligne de RÔLE d'agent est trouvée (processus sans tâche) →
+ *     « en préparation » (repli explicite) : jamais le rôle ;
+ *  4. si le texte est vide ou inconnu → « (demande non précisée) » : JAMAIS une
  *     ligne vide, JAMAIS un texte inventé.
  * @param {string} text — prompt brut (déjà tronqué côté Rust) ou valeur absente.
  * @returns {string} libellé de mission, toujours non vide.
@@ -166,13 +229,15 @@ function clipMission(text) {
 export function shortMission(text) {
   const raw = String(text == null ? "" : text);
   const lines = raw.split(/\r?\n/);
-  // 1. Ligne « Tâche : … » (orchestration) — cherchée partout dans le texte.
+  // 1. Ligne « Tâche : … » (orchestration) — PRIORITAIRE, cherchée partout.
   for (const line of lines) {
     const m = line.match(/^\s*(?:[-*>]\s*)*(?:\*\*)?T[âa]che\s*:\s*(?:\*\*)?\s*(.+?)\s*(?:\*\*)?\s*$/);
     if (m && m[1].trim()) return clipMission(m[1].trim());
   }
-  // 2. Première ligne significative, hors fences de code et hors markdown de tête.
+  // 2. Première ligne de CONTENU réel, hors fences, hors en-têtes mécaniques et
+  //    hors markdown de tête. Un RÔLE est sauté (jamais affiché comme mission).
   let inFence = false;
+  let sawRoleLine = false;
   for (const line of lines) {
     const trimmed = line.trim();
     if (/^```/.test(trimmed)) {
@@ -180,15 +245,18 @@ export function shortMission(text) {
       continue;
     }
     if (inFence) continue;
-    const clean = trimmed
-      .replace(/^#{1,6}\s+/, "")
-      .replace(/^[\-*+]\s+/, "")
-      .replace(/^>\s?/, "")
-      .replace(/^\*{1,2}(.+?)\*{1,2}$/, "$1")
-      .trim();
-    if (clean) return clipMission(clean);
+    if (isMechanicalHeader(trimmed)) continue;
+    const clean = stripLeadingMarkdown(trimmed);
+    if (!clean) continue;
+    if (looksLikeAgentRole(clean)) {
+      sawRoleLine = true;
+      continue;
+    }
+    return clipMission(clean);
   }
-  // 3. Repli explicite.
+  // 3. Repli explicite : le rôle n'est JAMAIS affiché.
+  if (sawRoleLine) return MISSION_ROLE_FALLBACK;
+  // 4. Repli explicite (texte vide ou inconnu).
   return "(demande non précisée)";
 }
 
