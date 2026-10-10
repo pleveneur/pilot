@@ -657,6 +657,33 @@ pub(crate) fn available_model_specs(pi_path: &str) -> Result<Vec<String>, String
     Ok(result)
 }
 
+/// Niveaux de réflexion supportés par un modèle, lus **hors ligne** dans
+/// `~/.<stem>/agent/models-store.json` (même résolution de dossier que
+/// `available_model_specs`) : aucune session pi n'est requise. Sert à peupler
+/// les menus avant tout spawn ; une session vivante reste l'autorité.
+/// Fichier absent, JSON invalide ou modèle inconnu → liste vide (fail-open :
+/// l'appelant affiche « indisponible » plutôt qu'une liste inventée).
+#[tauri::command]
+pub fn available_thinking_levels_for_model(
+    state: State<AppState>,
+    provider: String,
+    model_id: String,
+) -> Vec<String> {
+    let pi_path = state.config_snapshot().rpc_pi_path.clone();
+    match resolve_agent_home(&pi_path) {
+        Ok(home) => {
+            let dir = home.join("agent");
+            crate::thinking::read_available_levels(
+                &dir.join("models-store.json"),
+                &dir.join("models.json"),
+                &provider,
+                &model_id,
+            )
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::creating_provided_agent_is_forbidden;

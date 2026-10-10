@@ -74,6 +74,7 @@ mod session_history;
 mod tabs;
 mod web_commands;
 mod agents;
+mod thinking;
 mod rpc;
 mod interproject;
 mod super_agent;
@@ -3261,6 +3262,7 @@ pub fn run() {
             code_check::lint_file,
             search::replace_in_files,
             agents::get_available_models_list,
+            agents::available_thinking_levels_for_model,
             interproject::get_project_links,
             interproject::set_project_links,
             interproject::remove_project_link,
