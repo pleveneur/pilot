@@ -1248,6 +1248,14 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
     // ci-dessous ; on garde une référence vers l'AppState pour accéder aux maps
     // d'observateur d'activité/anomalie (fix Assistant « Réfléchit… » permanent).
     let app_state = &state;
+    // Nom de l'assistant : RÉGLABLE (⚙️ → Assistant → Nom). Il n'est plus codé en
+    // dur (« Magnus » ici et dans le libellé par agent) : la supervision, le
+    // panneau d'activité et le tableau de bord affichent le nom réellement
+    // choisi par l'utilisateur (défaut « Assistant »).
+    let super_name = {
+        let n = state.config_snapshot().super_agent_name.trim().to_string();
+        if n.is_empty() { "Assistant".to_string() } else { n }
+    };
     let sessions = state.agent_service.list_agent_sessions(&app)?;
     let sessions = sessions
         .get("sessions")
@@ -1311,9 +1319,10 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
         };
 
         // L'assistant (super-agent) est enregistré sous l'id `superagent` avec
-        // un projet pseudo-global "" : on lui donne un libellé lisible.
+        // un projet pseudo-global "" : on lui donne le nom réglé par
+        // l'utilisateur (⚙️ → Assistant → Nom), et non un libellé codé en dur.
         let agent_label = if agent == SUPERAGENT_ID {
-            "Magnus".to_string()
+            super_name.clone()
         } else if agent == "default" {
             "Dossier".to_string()
         } else {
@@ -1355,7 +1364,7 @@ pub fn get_agent_supervision(state: State<AppState>, app: AppHandle) -> Result<V
             // Projet pseudo-global "" = assistant (super-agent) ; espace
             // réservé ASSISTANT_SPACE = agents d'assistant sans projet.
             let name = if project.is_empty() {
-                "Magnus".to_string()
+                super_name.clone()
             } else if project == ASSISTANT_SPACE {
                 "Assistant".to_string()
             } else {

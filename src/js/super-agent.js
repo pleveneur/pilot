@@ -2614,7 +2614,13 @@ export async function createSuperAgent(container) {
       const sup = await invoke("get_agent_supervision");
       if (!sup || !sup.projects) return;
       const proj = sup.projects.find((p) => !(p.path || ""));
-      const agent = proj && (proj.agents || []).find((a) => a.agent === "Magnus");
+      // Le libellé de l'assistant suit le nom réglé (⚙️ → Assistant → Nom) : on
+      // compare le libellé courant, avec repli sur l'ancien libellé codé en dur
+      // (compatibilité avec un cœur qui n'aurait pas encore la correction).
+      const superLabel = superAgentDisplayLabel();
+      const agent =
+        proj &&
+        (proj.agents || []).find((a) => a.agent === superLabel || a.agent === "Magnus");
       // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
       // processus super-agent est RÉELLEMENT en cours de génération (état
       // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté

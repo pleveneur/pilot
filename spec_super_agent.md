@@ -1316,9 +1316,12 @@ ancien sans avoir à annuler les plus récents.
   persisté dans la config globale, pas par projet).
 
 ### Paramètres ⚙️ → onglet « Assistant »
-- **Nom** de l'assistant.
+- **Nom** de l'assistant. Ce nom est **injecté partout** (titre d'onglet, prompt
+  système, supervision des agents, panneau d'activité, tableau de bord) : aucun
+  libellé n'est codé en dur, renommer l'Assistant le renomme réellement.
 - **Prompt système** personnalisé (préfixé à chaque tour).
-- **Liste des clients** (ajout / suppression / renommage).
+- **Liste des clients** (ajout / suppression / renommage) : lue depuis la **base
+  de suivi** (source de vérité), donc identique au Suivi et au Kanban.
 - Association **projet → client**.
 - **Notifications Telegram** (interrupteur « Envoyer les avis sur Telegram » +
   jeton du bot + identifiant de discussion) : le canal d'avis du propriétaire
