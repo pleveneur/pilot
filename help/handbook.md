@@ -1161,6 +1161,11 @@ apprend et répond.
 - Chaque projet suivi peut être **attaché à un client** : dans le panneau
   **🏢 (Projets & clients)**, choisissez le client de chaque projet dans le menu
   déroulant. L'association est enregistrée immédiatement.
+- **Une seule source de vérité** : clients et associations vivent dans la
+  **base de suivi locale** (`super-agent.db`), pas dans la config — c'est la même
+  liste que celle du **Suivi**, du **Kanban** et de l'Assistant lui-même. La
+  config n'en garde qu'un miroir relu depuis la base. Retirer un client
+  **détache** ses projets (aucun projet ni tâche n'est supprimé).
 
 ### Rendu de la conversation (harmonisé avec l'agent)
 - La conversation avec l'Assistant utilise **le même rendu que l'agent
@@ -1452,11 +1457,24 @@ uniquement un bloc d'instructions dans le prompt système.
     (faux négatif interdit) ;
   - agent **au repos** (`idle`, `paused`, `stopped`) → **masqué** (une absence de
     travail n'est pas une mission) ;
-  - **texte de mission** : ligne « **Tâche : …** » si le prompt en contient une
-    (prompts d'orchestration), sinon la **première ligne significative** (fences
-    de code et préfixes Markdown retirés), **coupé à 80 caractères** (suffixe
-    « … ») ; si le texte est introuvable → **« (demande non précisée) »**, jamais
-    une ligne vide ni un texte inventé ;
+  - **affichage de chaque mission** (deux lignes) : **ligne 1 = identité**
+    « **<agent> - <nom de projet>** » (le nom de projet est **court** : le nom du
+    dossier) ; pour une mission **en attente** (sans agent), c'est le **nom du
+    projet** seul. **Ligne 2 = description courte de la tâche en cours**,
+    **sans** préfixe redondant « Projet X · » ;
+  - **texte de la description** : c'est la **tâche réellement confiée** (le
+    dernier prompt réellement envoyé à la session) qui est lue —
+    1) la ligne « **Tâche : <titre>** » reste **prioritaire** (prompts
+    d'orchestration) ;
+    2) sinon la **première ligne de contenu réel** : fences de code et préfixes
+    Markdown retirés, et les **en-têtes mécaniques de délégation**
+    (« ## Contexte », « ## Objectif », « ## Consignes »,
+    « ## Ce qu'il ne faut PAS faire », y compris en gras) sont **sautés** ;
+    3) la phrase est **coupée à 80 caractères** (suffixe « … ») ;
+  - **replis explicites** : si le texte enregistré n'est que le **rôle** de
+    l'agent (« Tu es un … » — un rôle n'est jamais une tâche, cas d'un processus
+    démarré sans tâche) → **« en préparation »** ; si le texte est introuvable →
+    **« (demande non précisée) »** : jamais une ligne vide ni un texte inventé ;
   - **missions en attente** : les demandes mises en file (délégations
     inter-projets et files de `run_agents` / assistant) sont ajoutées avec la
     mention **« en attente »** ; leur projet est affiché par son nom de dossier.
