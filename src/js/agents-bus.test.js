@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -885,5 +885,97 @@ describe("clés de run — missions de LECTURE partagées (morceau 2)", () => {
     expect(isRunInProgress("projetMix", { nature: "write" })).toBe(true);
     expect(isRunInProgress("projetAutre", { nature: "write" })).toBe(false);
     endRun("projetMix", undefined);
+  });
+});
+
+describe("niveaux de réflexion — chaîne de priorité (T5)", () => {
+  it("l'agent prime sur le réglage général", () => {
+    expect(resolveWantedThinkingLevel({ thinking: { pi: "high", plh: "" } }, "pi", "low")).toBe("high");
+  });
+  it("repli croisé pi ↔ plh puis réglage général", () => {
+    expect(resolveWantedThinkingLevel({ thinking: { pi: "", plh: "low" } }, "pi", "medium")).toBe("low");
+    expect(resolveWantedThinkingLevel({ thinking: { pi: "", plh: "" } }, "pi", "medium")).toBe("medium");
+  });
+  it("aucun réglage → chaîne vide (le moteur garde son défaut)", () => {
+    expect(resolveWantedThinkingLevel({ thinking: { pi: "", plh: "" } }, "pi", "")).toBe("");
+    expect(resolveWantedThinkingLevel({}, "pi", undefined)).toBe("");
+    expect(resolveWantedThinkingLevel(null, "pi", null)).toBe("");
+  });
+});
+
+describe("applyAgentThinkingLevel — ramenage et fail-open (T5)", () => {
+  afterEach(() => {
+    invoke.mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+  });
+
+  it("aucun réglage → aucun appel RPC (zéro régression)", async () => {
+    invoke.mockClear();
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "", plh: "" } }, "pi", "/p", "");
+    expect(out).toEqual({ requested: "", level: null, available: [] });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("niveau supporté → posé tel quel", async () => {
+    const calls = [];
+    invoke.mockImplementation(async (cmd, args) => {
+      calls.push([cmd, args]);
+      if (cmd === "get_agent_process_thinking_levels") return ["off", "low", "medium", "high"];
+      return undefined;
+    });
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "high", plh: "" } }, "pi", "/p", "");
+    expect(out.level).toBe("high");
+    expect(calls.map((c) => c[0])).toEqual([
+      "get_agent_process_thinking_levels",
+      "set_agent_process_thinking_level",
+    ]);
+    expect(calls[1][1]).toEqual({ agentId: "codeur", level: "high", project: "/p" });
+  });
+
+  it("niveau au-dessus du maximum du modèle → ramené au palier inférieur", async () => {
+    invoke.mockImplementation(async (cmd) => (cmd === "get_agent_process_thinking_levels" ? ["off", "low", "medium"] : undefined));
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "max", plh: "" } }, "pi", "/p");
+    expect(out.level).toBe("medium");
+    expect(out.requested).toBe("max");
+  });
+
+  it("modèle non raisonnant → « off » seul et mémorisation dans le contexte de run", async () => {
+    invoke.mockImplementation(async (cmd) => (cmd === "get_agent_process_thinking_levels" ? ["off"] : undefined));
+    const ctx = {};
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "high", plh: "" } }, "pi", "/p", "", ctx);
+    expect(out.level).toBe("off");
+    expect(ctx).toEqual({ thinkingLevel: "off", thinkingLevelRequested: "high" });
+  });
+
+  it("liste vide (modèle inconnu du moteur) → rien n'est envoyé", async () => {
+    const calls = [];
+    invoke.mockImplementation(async (cmd) => {
+      calls.push(cmd);
+      return [];
+    });
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "high", plh: "" } }, "pi", "/p");
+    expect(out.level).toBeNull();
+    expect(calls).toEqual(["get_agent_process_thinking_levels"]);
+  });
+
+  it("backend sans la commande RPC → fail-open, aucune exception", async () => {
+    invoke.mockImplementation(async (cmd) => {
+      if (cmd === "get_agent_process_thinking_levels") throw new Error("unknown command");
+      return undefined;
+    });
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "high", plh: "" } }, "plh", "/p");
+    expect(out.level).toBeNull();
+    expect(out.error).toContain("unknown command");
+  });
+
+  it("refus du set_thinking_level → fail-open, niveau effectif non mémorisé", async () => {
+    invoke.mockImplementation(async (cmd) => {
+      if (cmd === "get_agent_process_thinking_levels") return ["off", "high"];
+      if (cmd === "set_agent_process_thinking_level") throw new Error("refusé");
+      return undefined;
+    });
+    const ctx = {};
+    const out = await applyAgentThinkingLevel({ id: "codeur", thinking: { pi: "high", plh: "" } }, "pi", "/p", "", ctx);
+    expect(out.level).toBeNull();
+    expect(ctx.thinkingLevel).toBeUndefined();
   });
 });

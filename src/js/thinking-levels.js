@@ -1,8 +1,9 @@
 // thinking-levels.js — socle pur du « niveau de réflexion » (T1).
 //
-// Module SANS effet sur le comportement actuel : rien ne l'importe encore.
-// Aucune dépendance, aucun import de l'environnement graphique (Tauri/DOM) :
-// il doit rester testable seul sous Node (voir thinking-levels.test.js).
+// Module SANS dépendance et SANS import de l'environnement graphique
+// (Tauri/DOM) : il doit rester testable seul sous Node (voir
+// thinking-levels.test.js). Il est branché par `agents-bus.js` (T5 : application
+// du niveau au lancement d'un agent) et par l'interface (T7).
 //
 // Les niveaux sont ceux du moteur pi (`--thinking off|minimal|low|medium|high|
 // xhigh|max`). Aucune liste n'est inventée : la liste réellement supportée est

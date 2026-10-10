@@ -18,10 +18,13 @@ import { buildProjectContext } from "./context-engine.js";
 import { canStartMission } from "./run-policy.js";
 import { buildMemoryBlock } from "./project-memory.js";
 import { buildGraphBlock } from "./code-graph.js";
+// Niveaux de réflexion (T5) : socle pur de ramenage (T1), miroir Rust de T4.
+import { clampThinkingLevel, pickThinkingLevel } from "./thinking-levels.js";
 import {
   loadAgentRegistry,
   normalizeAgent,
   resolveAgentModel,
+  resolveAgentThinking,
   buildCoordinatorManifest,
   buildAgentPrompt,
   buildResultPrompt,
@@ -1223,6 +1226,83 @@ export function resolveEffectiveModel(agent, backend, fallbackModel) {
 }
 
 /**
+ * T5 — niveau de réflexion voulu d'un agent, chaîne de priorité du plan :
+ *   1. niveau de l'agent du registre pour le backend actif (repli croisé pi ↔ plh) ;
+ *   2. réglage général de Pilot (`default_thinking_level`, T6) ;
+ *   3. "" → les étages suivants (défaut par modèle / défaut moteur de pi) ne sont
+ *      pas gérés par Pilot : on n'envoie rien et pi garde son défaut.
+ * PURE (testable) : aucun accès IPC.
+ * @returns {string} clé de niveau ou "" si aucun réglage.
+ */
+export function resolveWantedThinkingLevel(agent, backend, generalLevel) {
+  return (
+    pickThinkingLevel([
+      resolveAgentThinking(agent, backend),
+      typeof generalLevel === "string" ? generalLevel.trim() : "",
+    ]) || ""
+  );
+}
+
+/**
+ * T5 — applique le niveau de réflexion après le `set_model` d'un spawn (même
+ * séquence que côté Rust, T4 : get_available_thinking_levels → ramenage →
+ * set_thinking_level).
+ *
+ * La **session vivante est l'autorité** sur les niveaux supportés : la liste est
+ * toujours demandée au moteur, jamais codée en dur. Le réglage enregistré n'est
+ * jamais réécrit par un ramenage (§5.3 du plan) : seul le niveau *effectif* de la
+ * session change ; revenir à un modèle plus capable restitue le niveau voulu.
+ *
+ * Fail-open : toute erreur (backend sans la commande RPC, timeout, refus) est
+ * tracée et n'empêche jamais la suite du run.
+ * @returns {Promise<{requested: string, level: string|null, available: string[], error?: string}>}
+ */
+export async function applyAgentThinkingLevel(agent, backend, project, generalLevel = "", ctx = null) {
+  const requested = resolveWantedThinkingLevel(agent, backend, generalLevel);
+  const outcome = { requested, level: null, available: [] };
+  // Aucun réglage : ne rien envoyer (pi garde son propre défaut) — zéro régression.
+  if (!requested) return outcome;
+  let available;
+  try {
+    available = await invoke("get_agent_process_thinking_levels", { agentId: agent.id, project });
+  } catch (e) {
+    console.warn(`[agents-bus] niveaux de réflexion indisponibles pour ${agent.id} :`, e);
+    outcome.error = String(e);
+    return outcome;
+  }
+  outcome.available = Array.isArray(available) ? available : [];
+  const level = clampThinkingLevel(requested, outcome.available);
+  if (!level) {
+    console.warn(
+      `[agents-bus] aucun niveau applicable pour ${agent.id} (voulu : « ${requested} ») — le moteur garde son défaut.`,
+    );
+    outcome.error = "aucun niveau applicable";
+    return outcome;
+  }
+  try {
+    await invoke("set_agent_process_thinking_level", { agentId: agent.id, level, project });
+    outcome.level = level;
+  } catch (e) {
+    console.warn(`[agents-bus] set_thinking_level refusé pour ${agent.id} :`, e);
+    outcome.error = String(e);
+    return outcome;
+  }
+  // Mémoire de session (affichage + comparaison au prochain changement de modèle).
+  if (ctx && typeof ctx === "object") {
+    ctx.thinkingLevel = outcome.level;
+    ctx.thinkingLevelRequested = requested;
+  }
+  // Le ramenage est signalé à l'utilisateur : sans message, un niveau abaissé
+  // serait invisible donc incompréhensible (§5.4 du plan).
+  if (outcome.level !== requested) {
+    console.warn(
+      `[agents-bus] niveau de réflexion ajusté : « ${requested} » → « ${outcome.level} » (maximum du modèle ${agent.id}).`,
+    );
+  }
+  return outcome;
+}
+
+/**
  * Lit le `defaultModel` du model-switch.json du backend actif, puis de l'autre
  * backend en fallback. Fail-open : en cas d'erreur de lecture IPC, retourne "".
  * @returns {Promise<string>}
@@ -2367,6 +2447,10 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       modelId,
       project: cwd,
     });
+
+    // T5 : puis le niveau de réflexion (même ordre que côté Rust, T4). Fail-open
+    // intégral : le niveau n'est jamais une condition de bon fonctionnement du run.
+    await applyAgentThinkingLevel(agent, backend, cwd, cfg.default_thinking_level, ctx);
 
     if (isAssistant) {
       await sendPromptToAssistantAgent(agent.id, prompt);
