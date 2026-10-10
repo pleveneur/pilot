@@ -317,6 +317,7 @@ coche ✓ incluse. Applicable aussi aux choix relayés via l'assistant (tâche #
 
 - [ ] Modèle par défaut configurable dans les paramètres (sélecteur dans settings)
 - [x] Niveau de thinking configurable dans les paramètres ✅ (par agent, général et Assistant — § 4ter)
+- [ ] Réappliquer et clamper le niveau de réflexion après un **changement de modèle en cours de session** dans l'onglet π, avec message d'ajustement (reste de T8 : le moteur signale déjà ses changements via l'événement `thinking_level_change`, déjà affiché)
 - [ ] Éditeur intégré pour le dialogue `extension_ui_request` type `editor` (actuellement un simple prompt)
 - [ ] Export conversation (HTML/Markdown)
 - [ ] Tests multi-plateforme (macOS, Linux)
