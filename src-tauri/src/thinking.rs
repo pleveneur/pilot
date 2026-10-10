@@ -97,6 +97,41 @@ pub fn available_levels_from_models_store(
         .collect()
 }
 
+/// Niveau de réflexion du **registre** d'un agent pour le backend actif, avec
+/// repli croisé sur l'autre backend (miroir exact de `resolveAgentModel` /
+/// `resolve_initial_model`). `""` = aucun réglage → les étages suivants de la
+/// priorité (réglage général Pilot, défaut du moteur) décident.
+pub fn resolve_agent_thinking(pi: &str, plh: &str, stem: &str) -> String {
+    let (primary, secondary) = if stem == "plh" { (plh, pi) } else { (pi, plh) };
+    let primary = primary.trim();
+    if !primary.is_empty() {
+        return primary.to_string();
+    }
+    secondary.trim().to_string()
+}
+
+/// Niveaux supportés extraits de la réponse RPC `get_available_thinking_levels`
+/// (la **session vivante est l'autorité** : elle tient compte du modèle
+/// effectivement chargé). Tolérant sur l'emplacement (`data.levels` ou
+/// `levels`) ; réponse inexploitable → liste vide (fail-open : on n'envoie rien
+/// plutôt qu'un niveau inventé).
+pub fn levels_from_rpc_response(resp: &Value) -> Vec<String> {
+    let levels = resp
+        .get("data")
+        .and_then(|d| d.get("levels"))
+        .or_else(|| resp.get("levels"))
+        .and_then(|l| l.as_array());
+    match levels {
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 /// Un fournisseur qui déclare `compat.supportsReasoningEffort === false` dans
 /// `~/.<stem>/agent/models.json` (cas `llama-cpp`) ne propose aucun réglage de
 /// niveau : seul `off` a un sens. Ces modèles ne figurent pas dans
@@ -307,6 +342,42 @@ mod tests {
 
         let _ = std::fs::remove_file(&store_path);
         let _ = std::fs::remove_file(&models_path);
+    }
+
+    /// Repli croisé pi ↔ plh, miroir de `resolve_initial_model`.
+    #[test]
+    fn resolve_agent_thinking_falls_back_across_backends() {
+        assert_eq!(resolve_agent_thinking("high", "low", "pi"), "high");
+        assert_eq!(resolve_agent_thinking("high", "low", "plh"), "low");
+        // Backend demandé vide → repli sur l'autre.
+        assert_eq!(resolve_agent_thinking("", "low", "pi"), "low");
+        assert_eq!(resolve_agent_thinking("high", "", "plh"), "high");
+        // Aucun réglage → chaîne vide (les étages suivants décident).
+        assert_eq!(resolve_agent_thinking("", "", "pi"), "");
+        assert_eq!(resolve_agent_thinking("  ", " ", "plh"), "");
+    }
+
+    /// Extraction tolérante des niveaux depuis la réponse RPC.
+    #[test]
+    fn levels_from_rpc_response_is_tolerant() {
+        assert_eq!(
+            levels_from_rpc_response(&json!({
+                "type": "response", "success": true,
+                "data": { "levels": ["off", "low", "high"] }
+            })),
+            levels(&["off", "low", "high"])
+        );
+        // Forme plate acceptée.
+        assert_eq!(
+            levels_from_rpc_response(&json!({ "levels": ["off"] })),
+            levels(&["off"])
+        );
+        // Réponse d'un backend sans la commande → liste vide.
+        assert!(levels_from_rpc_response(&json!({
+            "type": "response", "success": false, "error": "unknown command"
+        }))
+        .is_empty());
+        assert!(levels_from_rpc_response(&json!({ "data": { "levels": [] } })).is_empty());
     }
 
     /// Fichier absent ou illisible → liste vide, jamais d'erreur.

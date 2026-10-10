@@ -443,6 +443,59 @@ pub async fn set_agent_process_model(state: State<'_, AppState>, agent_id: Strin
     .map_err(|e| format!("Erreur interne (join) set_agent_process_model: {}", e))?
 }
 
+/// Applique un **niveau de réflexion** (`off|minimal|low|medium|high|xhigh|max`)
+/// à l'agent multi-rôles.
+///
+/// Commande **async** : `set_thinking_level` est une commande RPC **synchrone**
+/// qui attend la réponse du processus pi ; comme `set_agent_process_model`, elle
+/// est déportée dans `spawn_blocking` pour ne pas geler l'UI, avec un délai court
+/// (12 s) car le chemin de démarrage ne doit jamais s'éterniser. Le **ramenage**
+/// aux capacités du modèle n'est PAS fait ici : l'appelant lit la liste réelle
+/// (`get_agent_process_thinking_levels`) et clampe avant d'appeler — le moteur
+/// reste seul juge d'un niveau qu'il refuse.
+#[tauri::command]
+pub async fn set_agent_process_thinking_level(state: State<'_, AppState>, agent_id: String, level: String, project: Option<String>) -> Result<(), String> {
+    let agent_service = state.inner().agent_service.clone();
+    let project = project
+        .or_else(|| state.inner().project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cmd = serde_json::json!({ "type": "set_thinking_level", "level": level });
+        let resp = agent_service.send_sync_timeout(&project, &agent_id, cmd, 12)?;
+        if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
+            let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("set_thinking_level a échoué").to_string();
+            return Err(format!("le moteur a refusé set_thinking_level (agent {}) : {}", agent_id, err));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) set_agent_process_thinking_level: {}", e))?
+}
+
+/// Niveaux de réflexion **réellement supportés** par le modèle actif de l'agent
+/// (RPC `get_available_thinking_levels` — la session vivante est l'autorité, elle
+/// tient compte du modèle effectivement chargé et de ses alias). Délai court
+/// (12 s) comme `list_agent_models`. Un backend dépourvu de la commande (plh, pi
+/// ancien) remonte une erreur que l'appelant traite en **fail-open**.
+#[tauri::command]
+pub fn get_agent_process_thinking_levels(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<Vec<String>, String> {
+    let project = project
+        .or_else(|| state.project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    let cmd = serde_json::json!({ "type": "get_available_thinking_levels" });
+    let resp = state.agent_service.send_sync_timeout(&project, &agent_id, cmd, 12)?;
+    let levels = crate::thinking::levels_from_rpc_response(&resp);
+    if levels.is_empty() {
+        // Trace utile : « aucun niveau » peut signifier « modèle non raisonnant »
+        // (état normal) ou « commande inconnue » (backend ancien) — l'appelant décide.
+        eprintln!(
+            "[agents] aucun niveau de réflexion rapporté pour l'agent {} (projet {})",
+            agent_id, project
+        );
+    }
+    Ok(levels)
+}
+
 pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
     state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}))

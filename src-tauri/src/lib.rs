@@ -3321,6 +3321,8 @@ pub fn run() {
             agents::send_agent_process_prompt,
             agents::new_agent_process_session,
             agents::set_agent_process_model,
+            agents::set_agent_process_thinking_level,
+            agents::get_agent_process_thinking_levels,
             agents::abort_agent_process,
             agents::send_agent_process_command,
             agents::get_agent_process_state,

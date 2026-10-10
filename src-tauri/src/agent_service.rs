@@ -880,7 +880,86 @@ impl AgentService {
         // reprise (retour anticipé plus haut) : un set_model tardif écraserait
         // un modèle posé explicitement (UI / bus JS) sur la session parkée.
         self.apply_initial_model(app, project, agent_id, pi_path);
+        // T4 : puis le niveau de réflexion (séquence stricte : set_model →
+        // get_available_thinking_levels → clamp → set_thinking_level).
+        self.apply_initial_thinking(app, project, agent_id, pi_path);
         Ok(false)
+    }
+
+    /// T4 : applique mécaniquement le **niveau de réflexion** à une session
+    /// fraîchement spawnée, APRÈS `set_model` (séquence stricte du plan :
+    /// set_model → get_available_thinking_levels → ramenage → set_thinking_level).
+    ///
+    /// Priorité (§3 du plan), chaque étage étant ramené aux capacités du modèle :
+    ///   1. niveau explicite de **session** : inexistant sur un processus neuf —
+    ///      on n'agit QUE sur un spawn neuf, jamais sur une session parkée
+    ///      reprise, exactement comme `apply_initial_model` ;
+    ///   2. niveau du **registre de l'agent** pour le backend actif (repli croisé
+    ///      pi ↔ plh, comme `resolve_initial_model`) ;
+    ///   3. **réglage général de Pilot** (`AppConfig::default_thinking_level`) :
+    ///      la chaîne l'accepte déjà, son branchement arrive en T6 ;
+    ///   4. défaut par modèle / défaut moteur de pi : on n'y touche pas. Faute
+    ///      d'étage renseigné, RIEN n'est envoyé et pi garde son propre défaut
+    ///      (comportement actuel : zéro régression).
+    ///
+    /// Fail-open : toute erreur (commande inconnue d'un pi ancien ou du backend
+    /// plh, timeout, refus) se traduit par une simple trace ; la session démarre
+    /// quand même avec le niveau par défaut du moteur.
+    fn apply_initial_thinking(
+        &self,
+        app: &AppHandle,
+        project: &str,
+        agent_id: &str,
+        pi_path: &str,
+    ) {
+        let stem = backend_stem(pi_path);
+        let (thinking_pi, thinking_plh) = match self.get_agent(app, agent_id, Some(project)) {
+            Ok(Some(a)) => (a.thinking.pi.clone(), a.thinking.plh.clone()),
+            _ => match self.get_agent(app, agent_id, None) {
+                Ok(Some(g)) => (g.thinking.pi.clone(), g.thinking.plh.clone()),
+                _ => (String::new(), String::new()),
+            },
+        };
+        let agent_level =
+            crate::thinking::resolve_agent_thinking(&thinking_pi, &thinking_plh, &stem);
+        // T6 branchera ici `AppConfig::default_thinking_level`.
+        let general_level = String::new();
+        if agent_level.is_empty() && general_level.is_empty() {
+            // Aucun réglage : ne rien envoyer (pi garde son défaut).
+            return;
+        }
+        // La session vivante est l'autorité sur les niveaux réellement supportés
+        // par le modèle effectivement chargé (alias compris).
+        let available = match self.send_sync_timeout(
+            project,
+            agent_id,
+            serde_json::json!({ "type": "get_available_thinking_levels" }),
+            12,
+        ) {
+            Ok(resp) => crate::thinking::levels_from_rpc_response(&resp),
+            Err(e) => {
+                eprintln!(
+                    "[agent-service] niveaux de réflexion indisponibles pour l'agent {} : {}",
+                    agent_id, e
+                );
+                return;
+            }
+        };
+        let candidates = [agent_level.as_str(), general_level.as_str()];
+        let Some(level) = crate::thinking::resolve_thinking_level(&candidates, &available) else {
+            return;
+        };
+        eprintln!(
+            "[agent-service] niveau de réflexion résolu pour l'agent {} : {} (voulu : {})",
+            agent_id, level, agent_level
+        );
+        let cmd = serde_json::json!({ "type": "set_thinking_level", "level": level });
+        if let Err(e) = self.send_sync_timeout(project, agent_id, cmd, 12) {
+            eprintln!(
+                "[agent-service] set_thinking_level initial non appliqué pour l'agent {} : {}",
+                agent_id, e
+            );
+        }
     }
 
     /// Tâche #167 : applique mécaniquement le modèle initial à une session
@@ -901,15 +980,7 @@ impl AgentService {
     /// interne de pi, comme avant ce correctif. Le set_model du bus JS reste
     /// en place (idempotent) : il repositionne la même valeur après le spawn.
     fn apply_initial_model(&self, app: &AppHandle, project: &str, agent_id: &str, pi_path: &str) {
-        let stem = if pi_path.is_empty() {
-            "pi".to_string()
-        } else {
-            std::path::Path::new(pi_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("pi")
-                .to_string()
-        };
+        let stem = backend_stem(pi_path);
         // Modèle du registre de l'agent (porté par le projet, comme le seed
         // de `start`). Lecture tolérante : agent absent → pas de modèle registre.
         // Bug connu : si l'agent projet-scopé n'existe pas (ou n'a pas de
@@ -2745,6 +2816,21 @@ fn split_model(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((provider.to_string(), model_id.to_string()))
+}
+
+/// Backend du moteur (`pi` ou `plh`) d'après le chemin du binaire. C'est lui qui
+/// choisit la colonne du registre (`models_pi`/`models_plh`,
+/// `thinking_pi`/`thinking_plh`) et la configuration à lire.
+pub(crate) fn backend_stem(pi_path: &str) -> String {
+    if pi_path.is_empty() {
+        "pi".to_string()
+    } else {
+        std::path::Path::new(pi_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("pi")
+            .to_string()
+    }
 }
 
 /// Tâche #167 : résout le modèle initial à poser sur une session spawnée
