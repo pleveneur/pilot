@@ -9,7 +9,8 @@ reproduits** : chemins relus, corrects ; les défauts voisins déjà corrigés d
 `8ae8551`), erreurs console de l'onglet (**aucune reproduite**).
 ✅ Corrigés (2026-10-11) : **association projet → client** (`0b0df74`, source de vérité
 unique : la base de suivi) et **nom de l'assistant** (`ff7b43f`, plus de « Magnus » codé
-en dur). Voir [`spec_super_agent.md`](spec_super_agent.md) § Gérer les clients / Paramètres.
+en dur ; `f15a25c` : la sonde de reconnexion compare elle aussi le nom réglé). Voir
+[`spec_super_agent.md`](spec_super_agent.md) § Gérer les clients / Paramètres.
 
 ## Statut global
 - Phases 1 à 10 : ✅ terminées. Prochaine étape hors GDS : **H4 (Plan Editor)**.
