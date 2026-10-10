@@ -108,7 +108,7 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 Le **niveau de réflexion** (thinking) dit combien le modèle réfléchit avant de répondre. Clés du moteur pi : `off|minimal|low|medium|high|xhigh|max` ; `""` = **non réglé**.
 
 - **Priorité** au lancement d'une session : session vivante → niveau de l'agent (`thinking_pi`/`thinking_plh`, repli croisé π ↔ ℓ) → réglage général `default_thinking_level` → défaut du modèle → défaut du moteur.
-- **Clamp** : le niveau demandé est ramené aux paliers **réellement supportés** par le modèle (jamais au-dessus, jamais inventé). Si aucun palier n'est connu, **aucun** `set_thinking_level` n'est envoyé.
+- **Clamp** : le niveau demandé est ramené aux paliers **réellement supportés** par le modèle (jamais au-dessus, jamais inventé). Si aucun palier n'est connu, **aucun** `set_thinking_level` n'est envoyé. Le ramenage est **réappliqué au changement de modèle en cours de session** dans l'onglet π (sélecteur ou alias `/…`) : la liste réelle est relue auprès de la session vivante, le niveau reposé, et un **message d'ajustement** s'affiche si la valeur a dû être abaissée.
 - **Où vivent les réglages** : par agent en base SQLite (`agents.thinking_pi` / `thinking_plh`, migration idempotente) ; général et Assistant dans `AppConfig`.
 - **D'où vient la liste** (jamais codée en dur) : la **session vivante** fait autorité (`get_available_thinking_levels`) ; sans session, `available_thinking_levels_for_model` lit `~/.<stem>/agent/models-store.json` (carte `thinkingLevelMap` du modèle, `reasoning: false` → `["off"]`) puis `~/.<stem>/agent/models.json` (`providers.<p>.compat.supportsReasoningEffort === false` → `["off"]`, cas `llama-cpp`). Ni l'un ni l'autre → état « Indisponible — lancez une session pour interroger le moteur ».
 - **Commandes RPC/Tauri** : `available_thinking_levels_for_model` (lecture disque, sans session), `set_agent_process_thinking_level`, `get_agent_process_thinking_levels`.
@@ -317,7 +317,7 @@ coche ✓ incluse. Applicable aussi aux choix relayés via l'assistant (tâche #
 
 - [ ] Modèle par défaut configurable dans les paramètres (sélecteur dans settings)
 - [x] Niveau de thinking configurable dans les paramètres ✅ (par agent, général et Assistant — § 4ter)
-- [ ] Réappliquer et clamper le niveau de réflexion après un **changement de modèle en cours de session** dans l'onglet π, avec message d'ajustement (reste de T8 : le moteur signale déjà ses changements via l'événement `thinking_level_change`, déjà affiché)
+- [x] Réappliquer et clamper le niveau de réflexion après un **changement de modèle en cours de session** dans l'onglet π, avec message d'ajustement ✅ (T8 : le sélecteur de modèle et les alias `/…` ramènent le niveau voulu aux paliers du nouveau modèle ; le moteur signale déjà ses changements via `thinking_level_change`, déjà affiché)
 - [ ] Éditeur intégré pour le dialogue `extension_ui_request` type `editor` (actuellement un simple prompt)
 - [ ] Export conversation (HTML/Markdown)
 - [ ] Tests multi-plateforme (macOS, Linux)
@@ -470,7 +470,9 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
   Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
   niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
-  être employé (message dans la conversation). Un modèle incapable de raisonner
+  être employé (message dans la conversation). Le réglage est **réappliqué quand
+  vous changez de modèle en cours de session** (sélecteur ou alias `/…`), avec un
+  message si le palier a dû être abaissé. Un modèle incapable de raisonner
   affiche un sélecteur désactivé qui en donne la raison.
 - **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
   sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur

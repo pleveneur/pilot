@@ -18,6 +18,10 @@ import { SCREEN_GATE_SENTINEL } from "./screen-guard.js";
 import { animateModalOpen, animatePanelOpen } from "./modal-anim.js";
 import { agentDisplayLabel, backendKind } from "./backend-info.js";
 import { agentSelectorIds, findModelSelect } from "./agent-model-selector.js";
+// Niveaux de réflexion (T8) : priorité du lancement (registre de l'agent, repli
+// croisé π ↔ ℓ) + réglage général, puis ramenage aux capacités du nouveau modèle.
+import { resolveAgentThinking } from "./agents.js";
+import { clampThinkingLevel, thinkingLabel } from "./thinking-levels.js";
 import {
   isTerminalAgentEnd,
   commandsFromUpdate,
@@ -2273,6 +2277,9 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     state.currentModel = value;
     appendSystemMessage(messagesEl, `🔄 Modèle changé : ${provider}/${modelId}`);
     updateStats();
+    // T8 : les paliers de réflexion supportés ont changé avec le modèle →
+    // réapplique le niveau voulu (ramené au nouveau modèle).
+    reapplyThinkingLevelAfterModelSwitch(state, messagesEl);
   });
 
   // ── Fonctions d'orchestration ──
@@ -5361,6 +5368,72 @@ async function setAgentModelSafe(st, provider, modelId, label) {
   }
 }
 
+/**
+ * T8 — réapplique et ramène le **niveau de réflexion** après un **changement de
+ * modèle en cours de session** dans l'onglet π (sélecteur ou alias `/…`).
+ *
+ * Le moteur vient de charger un autre modèle : les paliers de réflexion
+ * supportés changent, le niveau posé au lancement peut donc ne plus convenir.
+ * On relit la liste réelle auprès de la **session vivante** (autorité), on ramène
+ * le niveau voulu aux capacités du NOUVEAU modèle, puis on le repose — en
+ * l'annonçant si le ramenage a modifié la valeur (spec_rpc.md § 4ter).
+ *
+ * Niveau voulu : niveau du registre de l'agent pour le backend actif (repli
+ * croisé π ↔ ℓ), puis réglage général de Pilot — même chaîne de priorité qu'au
+ * lancement. Aucun réglage → RIEN n'est envoyé : le moteur garde son défaut.
+ *
+ * Fail-open : toute erreur (backend sans la commande, timeout, refus) est
+ * tracée et n'empêche jamais la suite.
+ */
+async function reapplyThinkingLevelAfterModelSwitch(st, messagesEl = null) {
+  const agentId = (st && st.agentId) || "default";
+  let wanted = "";
+  try {
+    // Périmètre projet d'abord (comme AgentService::apply_initial_thinking),
+    // puis périmètre global : le registre peut être global ou par projet.
+    const project = window._pilotProjectPath || null;
+    for (const scope of project ? [project, null] : [null]) {
+      try {
+        const agent = await invoke("get_agent", { agentId, projectPath: scope });
+        wanted = resolveAgentThinking(agent, backendKind());
+        if (wanted) break;
+      } catch (_) { /* agent absent de ce périmètre */ }
+    }
+    if (!wanted) {
+      const cfg = await invoke("get_config");
+      wanted = (cfg && cfg.default_thinking_level) || "";
+    }
+  } catch (e) {
+    console.warn("[agent-pi] niveau de réflexion voulu indéterminé après changement de modèle :", e);
+    return;
+  }
+  if (!wanted) return;
+  let available;
+  try {
+    available = await invoke("get_agent_process_thinking_levels", { agentId });
+  } catch (e) {
+    console.warn("[agent-pi] niveaux de réflexion indisponibles après changement de modèle :", e);
+    return;
+  }
+  const level = clampThinkingLevel(wanted, available);
+  if (!level) return;
+  try {
+    await invoke("set_agent_process_thinking_level", { agentId, level });
+  } catch (e) {
+    console.warn("[agent-pi] set_thinking_level refusé après changement de modèle :", e);
+    return;
+  }
+  if (level !== wanted) {
+    const target = messagesEl || document.querySelector(".agent-chat-messages");
+    if (target) {
+      appendSystemMessage(
+        target,
+        `🧠 Niveau de réflexion ajusté : ${thinkingLabel(wanted)} → ${thinkingLabel(level)} (maximum du modèle sélectionné).`,
+      );
+    }
+  }
+}
+
 async function applyModelAlias(cmd) {
   // Extraire le model depuis la description "→ provider/modelId"
   const modelValue = cmd.description.replace("→ ", "");
@@ -5413,6 +5486,8 @@ async function applyModelAlias(cmd) {
   if (messagesEl) {
     appendSystemMessage(messagesEl, `🔄 Modèle changé : ${modelValue} (via /${cmd.name})`);
   }
+  // T8 : même réapplication qu'au changement par le sélecteur.
+  reapplyThinkingLevelAfterModelSwitch(st, messagesEl);
 }
 
 function escapeHtmlText(str) {

@@ -92,6 +92,26 @@ describe("T7 — carte d'agent : niveau demandé", () => {
   });
 });
 
+describe("T8 — réapplication après changement de modèle en session (onglet π)", () => {
+  const js = read("src/js/agent-pi.js");
+
+  it("relit la liste réelle, ramène, puis repose le niveau — aux deux points de bascule", () => {
+    expect(js).toContain('invoke("get_agent_process_thinking_levels"');
+    expect(js).toContain("clampThinkingLevel(");
+    expect(js).toContain('invoke("set_agent_process_thinking_level"');
+    // 1 définition + 2 appels : sélecteur de modèle et alias `/…`.
+    const occurrences = js.split("reapplyThinkingLevelAfterModelSwitch").length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(3);
+  });
+
+  it("le niveau voulu suit la priorité du lancement puis le réglage général", () => {
+    expect(js).toContain("resolveAgentThinking");
+    expect(js).toMatch(/cfg\.default_thinking_level/);
+    // Le ramenage est annoncé à l'utilisateur (message d'ajustement).
+    expect(js).toContain("Niveau de réflexion ajusté");
+  });
+});
+
 describe("T7 — modèle non raisonnant : sélecteur désactivé, valeur conservée", () => {
   it("le socle pur garde toujours la valeur enregistrée sélectionnable", () => {
     const res = thinkingLevelOptions(["off"], { current: "high", provider: "llama-cpp" });

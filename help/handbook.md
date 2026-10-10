@@ -574,7 +574,9 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
   Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
   niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
-  être employé (message dans la conversation). Un modèle incapable de raisonner
+  être employé (message dans la conversation). Le réglage est **réappliqué quand
+  vous changez de modèle en cours de session** (sélecteur ou alias `/…`), avec un
+  message si le palier a dû être abaissé. Un modèle incapable de raisonner
   affiche un sélecteur désactivé qui en donne la raison.
 - **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
   sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur
