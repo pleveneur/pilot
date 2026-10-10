@@ -650,6 +650,23 @@ export function superAgentDisplayLabel() {
 }
 
 /**
+ * Sélectionne, dans la liste d'agents d'un projet pseudo-global de supervision, la
+ * session de l'assistant : le libellé suit le nom réglé (⚙️ → Assistant → Nom).
+ * La correspondance exacte est privilégiée ; on ne retombe sur l'ancien libellé codé
+ * en dur « Magnus » que s'il n'existe AUCUNE session au nom configuré (compatibilité
+ * avec un cœur plus ancien). Purement fonctionnel (aucune config ni DOM) : testable.
+ */
+export function findAssistantSessionAgent(agents, label) {
+  const list = agents || [];
+  const wanted = (label || "").trim();
+  if (wanted) {
+    const exact = list.find((a) => a && a.agent === wanted);
+    if (exact) return exact;
+  }
+  return list.find((a) => a && a.agent === "Magnus") || null;
+}
+
+/**
  * Issue #46 : bascule automatiquement sur l'onglet Assistant (🧭) une fois le
  * projet chargé, si l'onglet assistant est ouvert (l'assistant est « activé »
  * par l'utilisateur). Ne force rien si l'onglet n'existe pas (assistant non
@@ -2618,9 +2635,7 @@ export async function createSuperAgent(container) {
       // compare le libellé courant, avec repli sur l'ancien libellé codé en dur
       // (compatibilité avec un cœur qui n'aurait pas encore la correction).
       const superLabel = superAgentDisplayLabel();
-      const agent =
-        proj &&
-        (proj.agents || []).find((a) => a.agent === superLabel || a.agent === "Magnus");
+      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel);
       // Anti-blocage (bug démarrage) : ne verrouille « occupé » QUE si le
       // processus super-agent est RÉELLEMENT en cours de génération (état
       // running/compacting) ET vivant (`alive`). Un processus mort/déconnecté
@@ -3309,7 +3324,14 @@ function scheduleTransientDisconnect(messagesEl, statusEl, onFail) {
     try {
       const sup = await invoke("get_agent_supervision");
       const proj = sup && sup.projects && sup.projects.find((p) => !(p.path || ""));
-      const agent = proj && (proj.agents || []).find((a) => a.agent === "Magnus");
+      // Le libellé de la session d'assistant suit le nom réglé (⚙️ → Assistant →
+      // Nom) : on compare le libellé courant, avec repli sur l'ancien libellé codé
+      // en dur (compatibilité avec un cœur qui n'aurait pas encore la correction).
+      // Sinon, renommer l'assistant faisait échouer cette sonde de reconnexion
+      // (libellé « Magnus » introuvable) : un faux départ rattrapé était pris
+      // pour un vrai blocage au bout de la fenêtre de grâce.
+      const superLabel = superAgentDisplayLabel();
+      const agent = proj && findAssistantSessionAgent(proj.agents, superLabel);
       alive = !!(agent && agent.alive);
     } catch (_) { /* ignore, on garde alive=false et on test le délai */ }
     if (alive) {

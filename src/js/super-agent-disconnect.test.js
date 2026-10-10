@@ -31,7 +31,7 @@ vi.mock("./reservations.js", () => ({ estimateAndReserve: vi.fn() }));
 vi.mock("./structured-brief.js", () => ({ applyAssistantBriefEnvelope: vi.fn() }));
 vi.mock("./super-agent-schedule.js", () => ({ shouldScheduleTick: vi.fn(), parseScheduleEvery: vi.fn() }));
 
-const { buildSuperAgentDisconnectedMessage, superAgentStderrExtractFrom, SUPER_AGENT_GRACE_WINDOW_MS, isSuperAgentDisconnectedMessage, shouldClearDisconnectedMessage } = await import("./super-agent.js");
+const { buildSuperAgentDisconnectedMessage, superAgentStderrExtractFrom, SUPER_AGENT_GRACE_WINDOW_MS, isSuperAgentDisconnectedMessage, shouldClearDisconnectedMessage, findAssistantSessionAgent } = await import("./super-agent.js");
 
 describe("buildSuperAgentDisconnectedMessage (issue #84)", () => {
   it("sans stderr capturé, retourne le message générique seul (sans régression)", () => {
@@ -108,5 +108,25 @@ describe("shouldClearDisconnectedMessage (correctif V2 — retrait du message)",
   it("ne retire rien s'il n'y a pas de message", () => {
     expect(shouldClearDisconnectedMessage(true, false)).toBe(false);
     expect(shouldClearDisconnectedMessage(false, false)).toBe(false);
+  });
+});
+
+describe("findAssistantSessionAgent (libellé configuré, repli « Magnus »)", () => {
+  const sessions = [
+    { agent: "Magnus", alive: false },
+    { agent: "MonAssistant", alive: true },
+  ];
+
+  it("trouve la session d'assistant au nom configuré", () => {
+    expect(findAssistantSessionAgent(sessions, "MonAssistant")).toEqual({ agent: "MonAssistant", alive: true });
+  });
+
+  it("retombe sur l'ancien libellé « Magnus » pour un cœur plus ancien", () => {
+    expect(findAssistantSessionAgent(sessions, "AutreNom")).toEqual({ agent: "Magnus", alive: false });
+  });
+
+  it("tolère une liste absente ou vide", () => {
+    expect(findAssistantSessionAgent(null, "Assistant")).toBeNull();
+    expect(findAssistantSessionAgent([], "Assistant")).toBeNull();
   });
 });
