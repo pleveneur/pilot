@@ -11,6 +11,7 @@ use tauri::{AppHandle, State};
 
 use crate::agent_service::SpawnMode;
 use crate::rpc_manager;
+use crate::{anomaly, normalize_project_path, SessionActivity};
 
 /// Multi-projets (spec_multiprojects.md §3) : canal d'événements Tauri dédié à
 /// la session agent d'un projet donné (`rpc-event-<hash>`). Chaque projet émet
@@ -251,6 +252,32 @@ pub(crate) fn reset_project_activity(state: &AppState, project_key: &str) {
     }
 }
 
+/// Lecture de l'occupation d'un projet (issue #13 / tâche 335), PURE et
+/// testable.
+///
+/// Renvoie `true` si le projet doit être considéré « occupé » :
+///  - `busy` vrai ET **non périmé** : un processus pi FIGÉ (ni `agent_settled`
+///    ni `process_exit`) laisse `busy` à vrai sans jamais l'effacer. Sans borne,
+///    le projet restait « occupé » indéfiniment → toutes les missions suivantes
+///    étaient mises en file d'attente et JAMAIS relancées (constat du 10/10,
+///    cf. `rapport-file-attente-bloquee.md`) ;
+///  - ou une activité RPC dans la **fenêtre de grâce** (`grace`) : évite que la
+///    pastille oscille entre deux sous-tâches d'un plan d'orchestration encore
+///    en cours.
+///
+/// Même politique de péremption que `anomaly::should_release_stale_busy` (moteur)
+/// et `isBusyStale` (JS) : une seule vérité sur le vieillissement d'un `busy`.
+pub(crate) fn project_activity_is_busy(
+    activity: Option<&SessionActivity>,
+    grace: std::time::Duration,
+    stale_grace: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    let Some(a) = activity else { return false };
+    let age = now.duration_since(a.updated);
+    (a.busy && age <= stale_grace) || age < grace
+}
+
 /// Issue #13 : état d'activité des agents de TOUS les projets ouverts, sous forme
 /// de map `{ chemin_normalisé: { "busy": bool } }`. Permet à la barre « Projets
 /// en cours » d'afficher une pastille « travaille en arrière-plan » par projet,
@@ -265,15 +292,19 @@ pub fn get_project_agent_states(state: State<AppState>) -> Result<Value, String>
     let activity = state.agent_activity.lock().unwrap();
     let now = std::time::Instant::now();
     let grace = std::time::Duration::from_secs(ACTIVITY_GRACE_SECS);
+    // Borne de péremption alignée sur le reste du moteur (`should_release_stale_busy`)
+    // et sur le frontend (`isBusyStale`) : un `busy` plus vieux que cette fenêtre
+    // n'est plus un travail en cours (process figé) → le projet est « libre » et la
+    // file d'attente des missions peut repartir.
+    let stale_grace = std::time::Duration::from_secs(
+        crate::default_stale_busy_grace_minutes().max(1) as u64 * 60,
+    );
     let mut map = serde_json::Map::new();
     for k in keys {
-        // Un projet reste « occupé » tant que busy OU qu'une activité récente
-        // (fenêtre de grâce) : évite le flicker « prêt » entre deux sous-tâches
-        // d'un plan orchestration encore en cours.
-        let busy = activity
-            .get(&k)
-            .map(|a| a.busy || now.duration_since(a.updated) < grace)
-            .unwrap_or(false);
+        // Un projet reste « occupé » tant que busy (non périmé) OU qu'une activité
+        // récente (fenêtre de grâce) : évite le flicker « prêt » entre deux
+        // sous-tâches d'un plan orchestration encore en cours.
+        let busy = project_activity_is_busy(activity.get(&k), grace, stale_grace, now);
         map.insert(k, serde_json::json!({ "busy": busy }));
     }
     Ok(Value::Object(map))
@@ -403,6 +434,8 @@ pub fn park_agent_session(state: State<AppState>, agent_id: Option<String>) -> R
 /// A13 (assistant headless multi-projets) : un `project_path` explicite permet
 /// d'arrêter l'agent d'un projet NON actif (délégation headless). Sinon, on
 /// retombe sur le projet actif.
+/// Tâche 335 : libère aussi l'activité du projet (« libre ») dès que PLUS AUCUN
+/// agent n'y travaille — quel que soit l'agent arrêté (voir le détail plus bas).
 pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>, project_path: Option<&str>) {
     // None → arrêter l'agent actif (rétrocompat des appelants existants).
     let agent_id = match agent_id {
@@ -410,24 +443,46 @@ pub(crate) fn do_stop_agent_session(state: &AppState, agent_id: Option<&str>, pr
         None => state.agent_service.active_agent()
             .unwrap_or_else(|| DEFAULT_AGENT_ID.to_string()),
     };
-    let active = state.agent_service.active_agent();
     let project = match project_path.filter(|p| !p.trim().is_empty()) {
         Some(p) => Some(p.to_string()),
         None => state.project_path.lock().unwrap().clone(),
     };
-    if active.as_deref() == Some(agent_id.as_str()) {
-        // Issue #13 : remettre le projet actif à « libre » quand une session
-        // est réellement arrêtée (pas lors d'un parking, où le processus pi
-        // continue de travailler en arrière-plan).
-        if let Some(project) = &project {
+    // Issue #13 : remettre le projet à « libre » quand une session est réellement
+    // arrêtée (pas lors d'un parking, où le processus pi continue de travailler en
+    // arrière-plan). Tâche 335 : l'ORDRE et la CONDITION ont été corrigés.
+    //  - on arrête D'ABORD la session : `AgentService::stop` purge la marque
+    //    d'occupation de CET agent dans la carte d'anomalie, donc ce qui reste
+    //    dans la carte appartient forcément à un AUTRE agent ;
+    //  - on ne libère l'activité du projet que si PLUS AUCUN agent n'y travaille.
+    //    L'ancienne condition (« l'agent arrêté était le pointeur actif ») laissait
+    //    `agent_activity[projet].busy` vrai à jamais dès qu'on arrêtait un agent qui
+    //    n'était PAS le pointeur actif (agent délégué, onglet agent secondaire,
+    //    arrêt depuis la liste des agents) : la file d'attente des missions du
+    //    projet se bloquait alors définitivement, chaque relance automatique étant
+    //    re-mise en file (constat du 10/10, cf. `rapport-file-attente-bloquee.md`).
+    if let Some(project) = &project {
+        // La session (active ou parkée) vit dans le registre unique de
+        // l'AgentService (clé composite (projet, agent)). `stop` la retire et tue
+        // le processus pi ; no-op si aucune session pour (projet, agent).
+        let _ = state.agent_service.stop(project, &agent_id);
+        // Décision sur ce qui RESTE. Le chemin est testé brut ET normalisé : la clé
+        // d'anomalie reprend le chemin tel que fourni au démarrage de la session
+        // (même précaution que la porte inter-projets).
+        let still_working = {
+            let m = state.agent_anomaly.lock().unwrap();
+            let grace = crate::default_stale_busy_grace_minutes();
+            let now = std::time::Instant::now();
+            anomaly::project_has_working_agent(&m, project, grace, now)
+                || anomaly::project_has_working_agent(
+                    &m,
+                    &normalize_project_path(project),
+                    grace,
+                    now,
+                )
+        };
+        if !still_working {
             reset_project_activity(state, project);
         }
-    }
-    // La session (active ou parkée) vit dans le registre unique de
-    // l'AgentService (clé composite (projet, agent)). `stop` la retire et tue
-    // le processus pi ; no-op si aucune session pour (projet, agent).
-    if let Some(project) = project {
-        let _ = state.agent_service.stop(&project, &agent_id);
     }
     // Bug 4 : le reviewer (H2 V1) est INDÉPENDANT de la session principale ; il
     // ne doit PAS être tué à chaque arrêt de celle-ci. Son cycle de vie est lié
@@ -1056,8 +1111,76 @@ pub fn get_reviewer_state(state: State<AppState>) -> Result<Value, String> {
 mod tests {
     use super::{
         agent_event_channel, command_result_ok, count_rpc_messages, extract_model_from_state,
-        kind_from_version_output, should_block_start, COMMAND_DISCOVERY_ORDER,
+        kind_from_version_output, project_activity_is_busy, should_block_start,
+        COMMAND_DISCOVERY_ORDER,
     };
+    use crate::SessionActivity;
+    use std::time::{Duration, Instant};
+
+    /// Fabrique une entrée d'activité d'âge `age_secs` **et** l'instant de référence
+    /// correspondant. L'âge est obtenu en AVANÇANT l'instant de référence, jamais en
+    /// reculant depuis `Instant::now()` : sous Windows, `Instant` ne peut pas
+    /// représenter un temps antérieur au démarrage de la machine, si bien que
+    /// `now - 3 h` déclenchait un dépassement de capacité (test rouge en local,
+    /// uptime < 3 h). Avancer l'instant de référence produit exactement le même âge
+    /// sans dépendre de l'uptime.
+    fn activity(busy: bool, age_secs: u64) -> (SessionActivity, Instant) {
+        let updated = Instant::now();
+        let now = updated + Duration::from_secs(age_secs);
+        (SessionActivity { busy, updated }, now)
+    }
+
+    // Tâche 335 — lecture de l'occupation d'un projet : le `busy` DOIT être borné
+    // dans le temps. Sans borne, un processus pi figé (ni settled ni exit) laissait
+    // le projet « occupé » indéfiniment et la file d'attente des missions ne
+    // repartait plus jamais (notes du 10/10).
+    #[test]
+    fn project_activity_busy_fresh_is_busy() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+        // Agent en cours de travail : occupé.
+        let (a, now) = activity(true, 0);
+        assert!(project_activity_is_busy(Some(&a), grace, stale, now));
+        // Travail en cours mais dernière activité proche de la borne : occupé.
+        let (a, now) = activity(true, 24 * 60);
+        assert!(project_activity_is_busy(Some(&a), grace, stale, now));
+        let (a, now) = activity(true, 25 * 60);
+        assert!(project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    #[test]
+    fn project_activity_stale_busy_is_released() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+        // Busy périmé (process figé) : LIBRE, même si personne n'a jamais signalé
+        // la fin de la run — c'est le cœur du correctif.
+        let (a, now) = activity(true, 25 * 60 + 1);
+        assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+        let (a, now) = activity(true, 3 * 3600);
+        assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    #[test]
+    fn project_activity_grace_window_keeps_recent_settled_busy() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+        // `agent_settled` vient d'arriver (busy=false mais activité récente) : on
+        // reste « occupé » la fenêtre de grâce pour ne pas osciller entre deux
+        // sous-tâches d'un plan d'orchestration.
+        let (a, now) = activity(false, 5);
+        assert!(project_activity_is_busy(Some(&a), grace, stale, now));
+        // Au-delà de la grâce : libre.
+        let (a, now) = activity(false, 16);
+        assert!(!project_activity_is_busy(Some(&a), grace, stale, now));
+    }
+
+    #[test]
+    fn project_activity_unknown_project_is_free() {
+        let grace = Duration::from_secs(15);
+        let stale = Duration::from_secs(25 * 60);
+        // Aucune entrée d'activité (projet jamais utilisé) : libre.
+        assert!(!project_activity_is_busy(None, grace, stale, Instant::now()));
+    }
 
     #[test]
     fn agent_event_channel_of_an_assistant_agent_is_the_unified_channel() {
