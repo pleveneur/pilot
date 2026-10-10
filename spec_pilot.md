@@ -27,7 +27,7 @@ Trois zones : **Barre Latérale** (gauche), **Zone de Travail** (droite), **Pann
 - **Barre de statut** : mots / caractères / lignes + temps de lecture (~200 mots/min), encodage (UTF-8 / BOM / UTF-16), fin de ligne (LF/CRLF), indicateur d'auto-save configurable (défaut 3 s, sauvegarde tous les onglets dirty). **Divers** : images (drag & drop / `Ctrl+V` → copie dans `images/` + `![]()`), export PDF (HTML + `window.print()`, KaTeX inclus), notifications toast non bloquantes, sidebar redimensionnable (largeur persistée, double-clic = 280 px), onglets (sauvegarde auto, conflit → flash rouge, fermeture auto au changement de projet, confirmation avant de fermer l'onglet Agent).
 
 ### C. Panneau d'Actions
-- ⚙️ **Paramètres** : modale à onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant / Avatar / Serveurs MCP + écrans transverses GDS et service Laya). Thème dark/light + sous-thèmes (5 par mode, aperçu en direct), commande défaut, auto-load projet, terminal (intégré/externe), params RPC, word wrap.
+- ⚙️ **Paramètres** : modale à onglets verticaux (Général / Agent Pi / Modèles IA / Accès distant / Avatar / Serveurs MCP + écrans transverses GDS et service Laya). Thème dark/light + sous-thèmes (5 par mode, aperçu en direct), commande défaut, auto-load projet, terminal (intégré/externe), params RPC, word wrap, niveaux de réflexion (défaut global, par agent, Assistant — voir [`spec_rpc.md`](spec_rpc.md) § 4ter).
 - 📂 **Explorateur** (dossier projet dans l'OS) · 🖥️ **Terminal** · π **Agent Pi** · ▶ **Commandes du projet** (voir plus bas) · 🎭 **Agents** · 🔍 **Review** · 📜 **Sessions** · 📊 **Tableau de bord** · 🔐 **Coffre** · 💬 **Feedback** (accessible sans projet) · écrans GDS (« GDS Serveur », « GDS paramétrage »).
 
 ### E. Design system & icônes

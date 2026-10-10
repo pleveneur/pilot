@@ -95,11 +95,26 @@ Le mode **RPC** (Remote Procedure Call) de Pi est la voie privilégiée : il per
 | `rpc_no_session` | bool | Checkbox | Passe `--no-session` à pi (pas de persistance disque) |
 | `rpc_session_dir` | string | Champ texte | Dossier personnalisé pour les sessions (vide = `~/.{stem}/agent/sessions`, dérivé de `rpc_pi_path`) |
 | `show_thinking` | bool | Checkbox | Affiche les pensées (thinking) de l'agent dans le chat |
+| `default_thinking_level` | string | Sélecteur | **Niveau de réflexion par défaut** des agents (clé pi : `off…max` ; `""` = aucun réglage → défaut du modèle puis du moteur). Appliqué au lancement, puis **ramené** aux capacités du modèle (clamp, § 4ter). |
+| `super_agent_thinking_level` | string | Sélecteur | Niveau de réflexion **de l'Assistant** (`""` = suit le réglage général, § 4ter). |
 
 > **Résolution du config dir (programme compatible pi)** : Pilot ne code plus `~/.pi` en dur. Il déduit le répertoire de configuration du programme depuis `rpc_pi_path` : le stem de l'exécutable (ex. `plh.exe` → `~/.plh`, `pi` → `~/.pi`, vide → `~/.pi`). Cette convention est utilisée pour `models.json` (liste des modèles + support image) et le répertoire de sessions par défaut. Permet de brancher n'importe quel programme 100 % compatible pi en RPC (ex. plh) sans modifier le code. Voir `resolve_agent_home()` dans `lib.rs`.
 > **Fallback hybride pour la liste des modèles** : l'onglet agent et le mode orchestration utilisent `fetchAvailableModels()` qui interroge d'abord le programme actif via RPC (`list_agent_models` → `get_available_models`), puis, si 0 modèle est retourné (programme ne supportant pas la commande ou format non reconnu), retombe sur la lecture du fichier `~/.{stem}/agent/models.json` (`get_available_models_list`). Les chaînes `provider/modelId` du fallback sont converties en objets `{ provider, id, label }` pour homogénéité. Les paramètres et l'aide intégrée utilisent directement la source fichier.
 
 > **Résolution du shim npm scopé (issue #84)** : pour les paquets npm scopés (ex. `@earendil-works/pi-coding-agent`), `resolve_pi_executable()` (pi_update.rs) ne suppose plus un dossier `node_modules/pi` fixe. Il résout le vrai cli via le champ `bin` du `package.json` des paquets de `node_modules` (directs ET scopés), préférant le paquet nommé « pi » — aucun chemin de build codé en dur. Si aucun cli n'est trouvé, le shim est lancé via `cmd.exe /c` sous Windows. `probe_backend()`/`get_backend_info` (rpc.rs) réutilisent la MÊME résolution que le lancement réel pour que le health-check soit fidèle au spawn. Le message « Connexion au super-agent perdue » (super-agent.js) joint désormais un court extrait du stderr réel à la cause.
+
+### 4ter. Niveaux de réflexion (paramétrables)
+
+Le **niveau de réflexion** (thinking) dit combien le modèle réfléchit avant de répondre. Clés du moteur pi : `off|minimal|low|medium|high|xhigh|max` ; `""` = **non réglé**.
+
+- **Priorité** au lancement d'une session : session vivante → niveau de l'agent (`thinking_pi`/`thinking_plh`, repli croisé π ↔ ℓ) → réglage général `default_thinking_level` → défaut du modèle → défaut du moteur.
+- **Clamp** : le niveau demandé est ramené aux paliers **réellement supportés** par le modèle (jamais au-dessus, jamais inventé). Si aucun palier n'est connu, **aucun** `set_thinking_level` n'est envoyé.
+- **Où vivent les réglages** : par agent en base SQLite (`agents.thinking_pi` / `thinking_plh`, migration idempotente) ; général et Assistant dans `AppConfig`.
+- **D'où vient la liste** (jamais codée en dur) : la **session vivante** fait autorité (`get_available_thinking_levels`) ; sans session, `available_thinking_levels_for_model` lit `~/.<stem>/agent/models-store.json` (carte `thinkingLevelMap` du modèle, `reasoning: false` → `["off"]`) puis `~/.<stem>/agent/models.json` (`providers.<p>.compat.supportsReasoningEffort === false` → `["off"]`, cas `llama-cpp`). Ni l'un ni l'autre → état « Indisponible — lancez une session pour interroger le moteur ».
+- **Commandes RPC/Tauri** : `available_thinking_levels_for_model` (lecture disque, sans session), `set_agent_process_thinking_level`, `get_agent_process_thinking_levels`.
+- **UI** : ⚙️ → Agent Pi (« Niveau de réflexion par défaut »), ⚙️ → Assistant (« Niveau de réflexion de l'Assistant »), éditeur 🎭 (« Niveau de réflexion (π) » / « (ℓ) », repeuplé à chaque changement de modèle) et carte d'agent (niveau demandé). Le sélecteur affiche le **libellé français** et enregistre la **clé technique**.
+- **Modèle qui ne sait pas raisonner** : sélecteur **désactivé** + message nommant le fournisseur ; la valeur enregistrée reste présente dans le sélecteur, donc un enregistrement ne l'efface jamais.
+- **Fail-open** : toute erreur (registre illisible, backend sans ces commandes) laisse la session démarrer normalement, avec un simple avertissement console.
 
 ### 4bis. Santé et mise à jour du backend (issue #26)
 
@@ -301,7 +316,7 @@ coche ✓ incluse. Applicable aussi aux choix relayés via l'assistant (tâche #
 ## 12. Reste à faire (futur)
 
 - [ ] Modèle par défaut configurable dans les paramètres (sélecteur dans settings)
-- [ ] Niveau de thinking configurable (low/medium/high) dans les paramètres
+- [x] Niveau de thinking configurable dans les paramètres ✅ (par agent, général et Assistant — § 4ter)
 - [ ] Éditeur intégré pour le dialogue `extension_ui_request` type `editor` (actuellement un simple prompt)
 - [ ] Export conversation (HTML/Markdown)
 - [ ] Tests multi-plateforme (macOS, Linux)
@@ -450,6 +465,12 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   s'affiche pour éviter qu'un prompt échoue en silence. À l'envoi d'un prompt,
   Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
   le resynchronise (avec un message) si nécessaire.
+- **Niveau de réflexion** : réglable dans ⚙️ (**Niveau de réflexion par défaut**),
+  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
+  Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
+  niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
+  être employé (message dans la conversation). Un modèle incapable de raisonner
+  affiche un sélecteur désactivé qui en donne la raison.
 - **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
   sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur
   🧠 + codeur 🔨), inactifs en affichage. À la désactivation, le sélecteur

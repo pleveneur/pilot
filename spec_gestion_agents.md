@@ -8,7 +8,7 @@
 L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
 
 ### L'écran
-- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**.
+- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**. Le **niveau de réflexion demandé** (`π` / `ℓ`) est affiché sur la carte dès qu'un niveau est réglé.
   - Attention : les modèles affichés sont **demandés**, pas **employés**. Au démarrage d'une session, Pilot applique le modèle du **backend actif**, sinon celui de l'**autre backend** (repli croisé), sinon le **modèle par défaut** du registre de modèles — et une session **déjà lancée** garde le modèle qu'elle utilise (modifier la carte ne la change pas). L'infobulle de la carte le rappelle.
 - **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
 - **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
@@ -18,6 +18,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
 - **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
 - **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir. Ce réglage est une **intention** pour les sessions à venir (cf. l'encadré ci-dessus) : il n'est pas réappliqué à une session en cours.
+- **Niveau de réflexion (`π` / `ℓ`)** : combien le modèle réfléchit avant de répondre (Désactivé → Maximal). Le menu ne propose que les paliers **réellement supportés** par le modèle ; « Non réglé » suit le réglage général de Pilot. Un modèle incapable de raisonner (ex. `llama-cpp`) affiche un sélecteur **désactivé** avec la raison. Au lancement, le niveau est **ajusté** aux capacités du modèle (jamais un palier supérieur).
 - **Lecture seule** : consigne stricte de ne pas écrire de fichiers. **Garder le contexte** : la session n'est pas remise à zéro entre deux appels.
 - **Max appels / run** et **Profondeur max** : garde-fous propres à l'agent.
 
@@ -66,7 +67,7 @@ concernés + coût estimé en tokens + contraintes suggérées + dépendances).
 ## 1. Objectifs
 
 - Définir des agents nommés dans un **registre global** persisté en base SQLite (`pilot.db`, tables `agents` / `agent_views`) — et non dans un fichier `~/.pilot/agents.json` (voir § 3).
-- Chaque agent a un rôle (system prompt), un modèle par backend (`pi` / `plh`) et une liste de **compétences** (skills) visibles.
+- Chaque agent a un rôle (system prompt), un modèle par backend (`pi` / `plh`), un **niveau de réflexion** par backend (colonnes `thinking_pi` / `thinking_plh` ; voir `spec_rpc.md` § 4ter) et une liste de **compétences** (skills) visibles.
 - Un coordinateur reçoit la demande utilisateur et déclenche les agents spécialisés.
 - Protocole séquentiel `[[CALL:agent_id]]` / `[[RESULT from agent_id]]`.
 - Garde-fous : profondeur, budget, cycle, timeout, stop global.

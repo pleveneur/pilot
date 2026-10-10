@@ -24,6 +24,13 @@ apprend et répond.
   il est rouvert aussi (état global persisté dans la config, pas par projet).
   Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
   fermeture.
+- **Niveau de réflexion de l'Assistant** : Paramètres ⚙️ → onglet Assistant →
+  « Niveau de réflexion de l'Assistant ». Par défaut **« Non réglé (suit le
+  réglage général) »**, c'est-à-dire le niveau par défaut de Pilot, puis celui du
+  modèle, puis celui du moteur. Seuls les paliers réellement supportés par le
+  modèle de l'Assistant sont proposés ; un modèle incapable de raisonner affiche
+  un sélecteur désactivé. Le niveau est **ajusté** au modèle au démarrage de la
+  session (jamais un palier supérieur).
 
 ### Donner un nom à votre assistant
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant

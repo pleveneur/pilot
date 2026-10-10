@@ -570,6 +570,12 @@ dialogue avec l'IA, écriture/modification de code, sans quitter l'éditeur.
   s'affiche pour éviter qu'un prompt échoue en silence. À l'envoi d'un prompt,
   Pilot vérifie que le modèle actif correspond bien au modèle sélectionné et
   le resynchronise (avec un message) si nécessaire.
+- **Niveau de réflexion** : réglable dans ⚙️ (**Niveau de réflexion par défaut**),
+  par agent dans l'éditeur 🎭, et pour l'Assistant dans son onglet de Paramètres.
+  Seuls les paliers **réellement supportés par le modèle** sont proposés, et le
+  niveau demandé est **ajusté** au modèle au lancement : un palier inférieur peut
+  être employé (message dans la conversation). Un modèle incapable de raisonner
+  affiche un sélecteur désactivé qui en donne la raison.
 - **Mode Orchestration** : à l'activation (bouton 🧠 + modale de test), le
   sélecteur standard est masqué et remplacé par deux sélecteurs (orchestrateur
   🧠 + codeur 🔨), inactifs en affichage. À la désactivation, le sélecteur
@@ -982,7 +988,7 @@ des sessions (jours)** (0 = désactivé).
 L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
 
 ### L'écran
-- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**.
+- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**. Le **niveau de réflexion demandé** (`π` / `ℓ`) est affiché sur la carte dès qu'un niveau est réglé.
   - Attention : les modèles affichés sont **demandés**, pas **employés**. Au démarrage d'une session, Pilot applique le modèle du **backend actif**, sinon celui de l'**autre backend** (repli croisé), sinon le **modèle par défaut** du registre de modèles — et une session **déjà lancée** garde le modèle qu'elle utilise (modifier la carte ne la change pas). L'infobulle de la carte le rappelle.
 - **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
 - **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
@@ -992,6 +998,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
 - **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
 - **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir. Ce réglage est une **intention** pour les sessions à venir (cf. l'encadré ci-dessus) : il n'est pas réappliqué à une session en cours.
+- **Niveau de réflexion (`π` / `ℓ`)** : combien le modèle réfléchit avant de répondre (Désactivé → Maximal). Le menu ne propose que les paliers **réellement supportés** par le modèle ; « Non réglé » suit le réglage général de Pilot. Un modèle incapable de raisonner (ex. `llama-cpp`) affiche un sélecteur **désactivé** avec la raison. Au lancement, le niveau est **ajusté** aux capacités du modèle (jamais un palier supérieur).
 - **Lecture seule** : consigne stricte de ne pas écrire de fichiers. **Garder le contexte** : la session n'est pas remise à zéro entre deux appels.
 - **Max appels / run** et **Profondeur max** : garde-fous propres à l'agent.
 
@@ -1103,6 +1110,13 @@ apprend et répond.
   il est rouvert aussi (état global persisté dans la config, pas par projet).
   Décochez le réglage si vous préférez ne rouvrir que l'onglet au moment de la
   fermeture.
+- **Niveau de réflexion de l'Assistant** : Paramètres ⚙️ → onglet Assistant →
+  « Niveau de réflexion de l'Assistant ». Par défaut **« Non réglé (suit le
+  réglage général) »**, c'est-à-dire le niveau par défaut de Pilot, puis celui du
+  modèle, puis celui du moteur. Seuls les paliers réellement supportés par le
+  modèle de l'Assistant sont proposés ; un modèle incapable de raisonner affiche
+  un sélecteur désactivé. Le niveau est **ajusté** au modèle au démarrage de la
+  session (jamais un palier supérieur).
 
 ### Donner un nom à votre assistant
 - **Paramètres ⚙️ → onglet « Assistant »** : donnez un nom à votre assistant
