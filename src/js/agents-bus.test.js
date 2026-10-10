@@ -313,6 +313,34 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     expect(getRunState("projetA")).toBe("idle");
   });
 
+  it("faux positif du rejeu de file : run fraîche, agent actif silencieux (aucune donnée sonde) → verrou MAINTENU avec un plancher d'inactivité", async () => {
+    // Cause racine des pertes de travail : la sonde d'admission du rejeu de file
+    // (cadencée à 15 s) appelait `releaseStuckRunLock` sans condition de durée.
+    // Un run qui venait de démarrer (agent déclaré actif, session pas encore
+    // enregistrée côté Rust : ni busy ni lastActivity) était donc coupé au bout
+    // de quelques secondes alors que l'agent travaillait encore en silence
+    // (réflexion, lecture d'un gros fichier, série de tests).
+    beginRunWithAgent();
+    mockSessions([session()]); // vivante, sans busy ni lastActivity
+    // Appelant OBSERVATEUR : il exige une inactivité d'au moins 2 min. La run
+    // vient de démarrer → rien à couper, même après deux mesures concordantes.
+    await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
+    await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
+    expect(getRunState("projetA")).toBe("running");
+  });
+
+  it("plancher d'inactivité : au-delà du plancher, la session fantôme est bien libérée (protection réelle préservée)", async () => {
+    // Même avec un plancher d'inactivité, un FAUX verrou (session vivante mais au
+    // repos depuis bien plus que le plancher) reste libéré : la protection
+    // réelle (verrou fantôme, agent mort, réservation abandonnée) est intacte.
+    const ctx = beginRunWithAgent();
+    ctx.startedAt = Date.now() - 5 * 60 * 1000;
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 5 * 60 * 1000).toISOString() })]);
+    await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
+    await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
+    expect(getRunState("projetA")).toBe("idle");
+  });
+
   it("sonde de sessions en erreur → verrou MAINTENU (fail-closed : jamais de libération sur incertitude)", async () => {
     beginRunWithAgent();
     vi.mocked(invoke).mockImplementation(async (cmd) => {

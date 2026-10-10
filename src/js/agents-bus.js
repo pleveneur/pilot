@@ -527,17 +527,29 @@ function clearAllRuns() {
 //
 // Tâche 2 : s'assure aussi que le cas 3 remonte bien le projet (key) pour
 // drainer la bonne file (les files d'exclusivité sont scopées PAR PROJET).
-export async function releaseStuckRunLock(project) {
+// `opts.requireIdleMs` : plancher d'inactivité (ms) exigé avant toute
+// libération par une porte AMBIGUË (ghosts/orphanQueue). Réservé aux appelants
+// OBSERVATEURS qui sondent périodiquement (rejeu de file, cadencé à 15 s) : ils
+// n'ont pas à couper une run qui vient de démarrer ou qui vient d'émettre un
+// événement (agent qui réfléchit, lit un gros fichier ou enchaîne des tests sans
+// rien afficher). Défaut 0 = comportement historique (chemins de LANCEMENT,
+// vérification explicite d'un verrou).
+/**
+ * @param {string} project
+ * @param {{requireIdleMs?:number}} [opts]
+ */
+export async function releaseStuckRunLock(project, opts = {}) {
   // Toutes les runs du projet (défaut + lectures parallèles) peuvent porter un
   // verrou fantôme : le watchdog est appliqué à CHACUNE.
   for (const key of runKeysOfProject(project)) {
-    await releaseStuckRunLockForKey(key);
+    await releaseStuckRunLockForKey(key, opts);
   }
 }
 
-async function releaseStuckRunLockForKey(key) {
+async function releaseStuckRunLockForKey(key, opts = {}) {
   const ctx = busState.runs[key];
   if (!ctx || ctx.runState !== "running") return;
+  const requireIdleMs = Number(opts && opts.requireIdleMs) > 0 ? Number(opts.requireIdleMs) : 0;
 
   // 1. Cas nominal : aucun agent actif et aucun groupe parallèle en cours →
   //    verrou bloqué (fin normale/erreur sans libération).
@@ -588,6 +600,22 @@ async function releaseStuckRunLockForKey(key) {
       : orphanQueue
         ? "orphanQueue"
         : "ghosts";
+
+  // Plancher d'inactivité demandé par l'appelant (voir `releaseStuckRunLock`) :
+  // les portes AMBIGUËS ne concluent pas « plus personne ne travaille » tant
+  // que la run a produit un événement (ou vient de démarrer) il y a moins de
+  // `requireIdleMs`. C'est le faux positif corrigé : un agent qui travaille en
+  // silence était coupé au bout de quelques secondes — travail perdu. La
+  // protection réelle reste entière dès que l'inactivité dépasse le plancher
+  // (session fantôme, process mort, réservation abandonnée : toujours libérés).
+  // Les portes NON ambiguës (noActive, residualParallel) gardent leur
+  // libération immédiate : un verrou sans aucun agent porteur ne doit pas
+  // attendre (issue #87).
+  if (stuck && requireIdleMs > 0 && (door === "ghosts" || door === "orphanQueue")) {
+    const idleSince = ctx.lastActivityAt || ctx.startedAt || 0;
+    if (!idleSince || Date.now() - idleSince < requireIdleMs) return;
+  }
+
   if (!stuck) {
     // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
     //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).

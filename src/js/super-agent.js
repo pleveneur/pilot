@@ -453,6 +453,18 @@ let runAgentsQueueReplayByProject = {}; // project → timer id
 // l'attente devient perceptible.
 const RUN_AGENTS_QUEUE_REPLAY_MS = 15 * 1000;
 
+// Faux positifs du garde-fou de run : la sonde d'admission du rejeu de file
+// (cadencée à 15 s) appelait `releaseStuckRunLock` sans condition de durée, ce
+// qui libérait une run qui venait de démarrer (agent pas encore enregistré côté
+// Rust) ou qui travaillait en silence (réflexion, lecture d'un gros fichier,
+// série de tests) — travail perdu. Un observateur PÉRIODIQUE n'a pas à couper si
+// vite : on exige une inactivité d'au moins 2 min (alignée sur la fenêtre
+// d'activité « récente » du moteur) avant toute libération par une porte ambiguë
+// (agents déclarés actifs mais silencieux, travail en file sans porteur).
+// La protection réelle (verrou fantôme, agent mort, réservation abandonnée)
+// reste assurée au-delà de ce délai.
+const RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS = 2 * 60 * 1000;
+
 /**
  * Filet de sécurité CONSCIENT DE L'ACTIVITÉ (watchdog run_agents) : détermine
  * si une run d'agents de l'assistant est encore réellement active sur le projet
@@ -479,7 +491,7 @@ async function isRunStillActive(runProject) {
   // ce verrou (`launchOrQueue`, `startRun`, watchdog) : on applique le même
   // ordre ici, au seul point de sonde partagé par les deux files. Idempotent :
   // ne libère qu'un verrou réellement inactif.
-  await releaseStuckRunLock(runProject);
+  await releaseStuckRunLock(runProject, { requireIdleMs: RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS });
   if (isRunInProgress(runProject)) return true;
   try {
     const res = await invoke("list_agent_sessions");

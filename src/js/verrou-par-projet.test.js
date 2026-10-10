@@ -70,7 +70,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant } from "./agents-bus.js";
+import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay } from "./super-agent.js";
 import { estimateAndReserve } from "./reservations.js";
@@ -655,6 +655,41 @@ describe("POINT G — rejeu garanti de la file de missions", () => {
       expect(launched).toBe(1);
       expect(isRunInProgress(p), "le verrou fantôme est libéré").toBe(false);
     } finally {
+      delete runAgentsQueueByProject[p];
+      endRun(p);
+    }
+  });
+
+  // FAUX POSITIF du garde-fou (pertes de travail en série) : la sonde d'admission
+  // du rejeu (cadencée à 15 s) libérait un verrou dont la session n'était pas
+  // encore enregistrée côté Rust (ni busy ni lastActivity) alors que l'agent
+  // travaillait encore en silence (réflexion, lecture d'un gros fichier, série
+  // de tests). Le rejeu doit exiger une inactivité MINIMALE avant de conclure
+  // par une porte ambiguë (« agents déclarés actifs mais silencieux »).
+  // ÉCHOUE avant le correctif : la 2e passe libère le verrou et la mission part.
+  it("une run fraîche avec un agent déclaré actif et silencieux n'est PAS coupée par le rejeu", async () => {
+    const p = "point-g-run-fraiche";
+    let launched = 0;
+    runAgentsQueueByProject[p] = [{ launch: () => { launched++; } }];
+    const ctx = beginRun(p, { readOnly: false });
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = p;
+    try {
+      // Session VIVANTE mais sans busy ni lastActivity : l'agent n'a pas encore
+      // été observé côté Rust, il ne faut PAS en déduire qu'il est mort.
+      invoke.mockResolvedValue({
+        sessions: [{ agent: "codeur", project: p, mode: "agent_process", alive: true }],
+      });
+      __setWatchdogConfirmDelayForTest(0);
+      // Deux passes concordantes : sans plancher d'inactivité, la 2e libérait.
+      expect((await replayQueuedMissionForProject(p)).reason).toBe("busy");
+      expect((await replayQueuedMissionForProject(p)).reason).toBe("busy");
+      expect(launched, "la mission ne doit PAS partir (l'agent travaille en silence)").toBe(0);
+      expect(isRunInProgress(p), "le verrou de la run vivante est conservé").toBe(true);
+    } finally {
+      __setWatchdogConfirmDelayForTest();
+      invoke.mockReset();
+      invoke.mockResolvedValue(undefined);
       delete runAgentsQueueByProject[p];
       endRun(p);
     }

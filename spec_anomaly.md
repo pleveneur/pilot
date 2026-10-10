@@ -334,6 +334,38 @@ d'événements, avec deux angles morts :
    échec » au lieu d'un échec mensonger (qui relançait une mission déjà faite).
    Le message d'échec mentionne explicitement l'absence de travail nouveau.
 
+### 2.4 quater Plancher d'inactivité des portes ambiguës (faux positifs du rejeu de file)
+
+Les libérations « fantômes » les plus coûteuses (travail perdu) ne venaient pas du
+filet Rust mais du **frontend** : la sonde d'admission du **rejeu de file** de
+missions (`super-agent.js`, `isRunStillActive`, cadencée à **15 s**) appelait
+`releaseStuckRunLock` (agents-bus.js) **sans condition de durée**. Sur une run qui
+venait de démarrer — agent déclaré actif mais session **pas encore enregistrée**
+côté Rust (ni `busy`, ni `lastActivity`) — les portes **ambiguës** (`ghosts`,
+`orphanQueue`) concluaient « plus personne ne travaille » au bout de quelques
+secondes et libéraient le verrou alors que l'agent travaillait encore **en
+silence** (réflexion, lecture d'un gros fichier, série de tests) : travail perdu,
+reproduit plusieurs fois en une heure.
+
+Correctif minimal, au niveau du **déclencheur** (le verrou fantôme reste libéré) :
+
+1. `releaseStuckRunLock(project, opts)` accepte un plancher optionnel
+   `opts.requireIdleMs` (défaut **0** = comportement historique des chemins de
+   **lancement** et des vérifications explicites).
+2. Quand il est fourni, les portes **ambiguës** (`ghosts`, `orphanQueue`) ne
+   libèrent rien tant que la run a produit un événement — ou a démarré — il y a
+   **moins** de `requireIdleMs`. Les portes **non ambiguës** (`noActive`,
+   `residualParallel`, verrou sans aucun agent porteur, issue #87) gardent leur
+   libération **immédiate**.
+3. Seul l'**observateur périodique** (rejeu de file) fournit ce plancher :
+   `RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS = 2 min` (aligné sur la fenêtre
+d'activité « récente » du moteur).
+
+Effet : plus aucune coupure d'une run silencieuse de moins de 2 min ; **au-delà**,
+la protection réelle est intacte (session fantôme, process mort, réservation
+abandonnée sont toujours libérés). Le plancher n'est **pas** exposé dans les
+paramètres (non réclamé, ajouterait un réglage pour un cas interne).
+
 ### 2.5 Agent de diagnostic (`anomaly::start_diagnostic_agent`)
 
 Commande Tauri : lance un processus agent dédié (`diagnostic`, canal
