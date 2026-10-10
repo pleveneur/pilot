@@ -1,11 +1,12 @@
 // pi-update.js — Détection et mise à jour de l'agent Pi (issue #26)
 //
-// À l'ouverture de l'onglet agent, si le backend est `pi` (pas `plh`) et que
-// l'utilisateur n'a pas choisi « Ne plus demander », on vérifie si une nouvelle
-// version de Pi est disponible (endpoint officiel pi.dev). Si oui, on affiche
-// une modale proposant de la mettre à jour via la commande intégrée
-// `pi update --self`. L'utilisateur peut choisir « Ne plus demander » (flag
-// `pi_skip_update_check` persisté dans la config).
+// Au lancement de Pilot (main.js) ET à l'ouverture de l'onglet agent (tabs.js),
+// si le backend est `pi` (pas `plh`) et que l'utilisateur n'a pas choisi « Ne
+// plus demander », on vérifie si une nouvelle version de Pi est disponible
+// (endpoint officiel pi.dev). Si oui, on affiche une modale proposant de la
+// mettre à jour via la commande intégrée `pi update --self`. L'utilisateur peut
+// choisir « Ne plus demander » (flag `pi_skip_update_check` persisté dans la
+// config). Les deux points d'appel sont idempotents.
 
 import { invoke } from "@tauri-apps/api/core";
 import { animateModalOpen } from "./modal-anim.js";
@@ -86,12 +87,19 @@ async function skipForever() {
 
 /**
  * Vérifie si une mise à jour de Pi est disponible et, le cas échéant, affiche
- * la modale de proposition. À appeler à l'ouverture de l'onglet agent.
- * Ne fait rien si : backend non `pi`, « Ne plus demander » activé, ou déjà en
- * cours de vérification.
+ * la modale de proposition. Appelée **au lancement de Pilot** (main.js) ET à
+ * l'ouverture de l'onglet agent (tabs.js) : les deux points d'appel sont donc
+ * idempotents.
+ * Ne fait rien si : backend non `pi`, « Ne plus demander » activé, vérification
+ * déjà en cours, ou modale de proposition déjà affichée et non traitée.
  */
 export async function checkPiUpdate() {
   if (_checking) return;
+  // Déjà proposée et pas encore traitée : ne pas relancer un aller-retour réseau
+  // ni rejouer l'animation d'ouverture (second point d'appel : lancement →
+  // ouverture de l'onglet agent, ou l'inverse).
+  const shown = document.getElementById("pi-update-modal");
+  if (shown && !shown.classList.contains("hidden")) return;
   // Uniquement pour le backend `pi` (pas `plh`).
   const info = getBackendInfoSync();
   if (!info || info.kind !== "pi") return;

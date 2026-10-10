@@ -355,6 +355,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // (tabs.js _openAgent) affiche alors un écran guidé au lieu de planter.
   checkPiHealth().then((h) => { if (h && !h.ok) warnPiUnavailable(h); });
 
+  // 3d-sexies. Vérification de mise à jour du MOTEUR (pi) AU LANCEMENT (#334).
+  // Elle n'était déclenchée qu'à l'ouverture de l'onglet agent (tabs.js). On
+  // attend la fin de la sonde backend — `getBackendInfoSync()` est synchrone et
+  // vide avant la 1ʳᵉ sonde : `checkPiUpdate` sortirait aussitôt sans rien
+  // vérifier — puis on laisse le démarrage se terminer : la vérification est un
+  // appel réseau, elle ne doit ni retarder l'affichage ni bloquer la chaîne
+  // d'init. Tous les garde-fous (backend `plh`, « Ne plus demander »,
+  // vérification déjà en cours) restent dans `checkPiUpdate`.
+  setTimeout(() => { refreshBackendInfo().then(() => checkPiUpdate()); }, 2500);
+
   // 3d-ter. Afficher la version de l'app dans la barre de statut
   try {
     const ver = await getVersion();
