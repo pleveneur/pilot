@@ -922,8 +922,13 @@ impl AgentService {
         };
         let agent_level =
             crate::thinking::resolve_agent_thinking(&thinking_pi, &thinking_plh, &stem);
-        // T6 branchera ici `AppConfig::default_thinking_level`.
-        let general_level = String::new();
+        // T6 : réglage général de Pilot (⚙️ Paramètres → Agent Pi). Lecture par
+        // `config_snapshot` (try_lock) : jamais de blocage si un autre thread
+        // tient le verrou de configuration pendant le démarrage d'un agent.
+        let general_level = app
+            .state::<AppState>()
+            .config_snapshot()
+            .default_thinking_level;
         if agent_level.is_empty() && general_level.is_empty() {
             // Aucun réglage : ne rien envoyer (pi garde son défaut).
             return;
@@ -1686,6 +1691,7 @@ impl AgentService {
         cwd: &str,
         pi_path: &str,
         default_model: Option<(String, String)>,
+        thinking_level: &str,
     ) -> Result<(), String> {
         // Anti-course : sérialise le démarrage. Plusieurs commandes concurrentes
         // (start_super_agent_session, get_super_agent_state, send_super_agent_prompt)
@@ -1774,7 +1780,59 @@ impl AgentService {
             let cmd = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
             self.send_superagent_sync(cmd).ok();
         }
+        // T6 : niveau de réflexion de l'Assistant (même séquence que les agents :
+        // après le set_model ci-dessus → interroger → ramener → poser).
+        self.apply_superagent_thinking(thinking_level);
         Ok(())
+    }
+
+    /// T6 : applique le **niveau de réflexion** à la session fraîchement amorcée
+    /// de l'Assistant (🧭), après son `set_model` (séquence stricte du plan :
+    /// set_model → get_available_thinking_levels → ramenage → set_thinking_level).
+    ///
+    /// `wanted` est le niveau voulu, déjà résolu par
+    /// `super_agent::resolve_super_agent_thinking_level`. Chaîne vide = aucun
+    /// réglage → rien n'est envoyé (le moteur garde son défaut : zéro régression).
+    ///
+    /// Fail-open : toute erreur (commande inconnue d'un pi ancien, timeout, refus)
+    /// se traduit par une simple trace ; la session de l'Assistant démarre quand
+    /// même. Le réglage enregistré n'est jamais modifié par le ramenage : seule la
+    /// session applique le niveau *effectif* maximum supporté par le modèle.
+    fn apply_superagent_thinking(&self, wanted: &str) {
+        if wanted.is_empty() {
+            return;
+        }
+        // La session vivante est l'autorité sur les niveaux réellement supportés.
+        let available = match self
+            .send_superagent_sync_timeout(serde_json::json!({ "type": "get_available_thinking_levels" }), 12)
+        {
+            Ok(resp) => crate::thinking::levels_from_rpc_response(&resp),
+            Err(e) => {
+                eprintln!(
+                    "[agent-service] niveaux de réflexion indisponibles pour l'Assistant : {}",
+                    e
+                );
+                return;
+            }
+        };
+        let Some(level) = crate::thinking::resolve_thinking_level(&[wanted], &available) else {
+            eprintln!(
+                "[agent-service] aucun niveau de réflexion applicable pour l'Assistant (voulu : {}) — le moteur garde son défaut.",
+                wanted
+            );
+            return;
+        };
+        eprintln!(
+            "[agent-service] niveau de réflexion résolu pour l'Assistant : {} (voulu : {})",
+            level, wanted
+        );
+        let cmd = serde_json::json!({ "type": "set_thinking_level", "level": level });
+        if let Err(e) = self.send_superagent_sync_timeout(cmd, 12) {
+            eprintln!(
+                "[agent-service] set_thinking_level initial non appliqué pour l'Assistant : {}",
+                e
+            );
+        }
     }
 
     /// Arrête la session du super-agent (état Stopped, processus tué).

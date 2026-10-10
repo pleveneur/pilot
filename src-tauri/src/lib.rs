@@ -346,6 +346,12 @@ struct AppConfig {
     show_thinking: bool,
     #[serde(default)]
     show_tools: bool,
+    // Niveau de réflexion **par défaut** des agents (T6) : clé technique
+    // `off|minimal|low|medium|high|xhigh|max`. `""` (défaut) = aucun réglage :
+    // chaque agent suit alors le défaut de son modèle, puis le défaut du moteur
+    // (comportement historique, aucune régression pour qui ne touche à rien).
+    #[serde(default)]
+    default_thinking_level: String,
     // Issue #41 : notification native desktop quand l'agent a terminé une tâche,
     // y compris pour un chat LOCAL (pas seulement à distance). Défaut off.
     #[serde(default)]
@@ -633,6 +639,11 @@ struct AppConfig {
     super_agent_show_thinking: bool,
     #[serde(default)]
     super_agent_show_tools: bool,
+    // T6 : niveau de réflexion de l'Assistant (🧭). `""` (défaut) = non réglé :
+    // repli sur le défaut du modèle puis sur celui du moteur. Appliqué à
+    // l'amorçage de la session de l'Assistant, comme `super_agent_model`.
+    #[serde(default)]
+    super_agent_thinking_level: String,
     // Issue #16 : notification native desktop quand l'Assistant (🧭) signale un
     // événement important (tâche déléguée à un agent terminée, anomalie de
     // suivi). Défaut off (désactivé), même principe que notify_agent_done.
@@ -1007,6 +1018,7 @@ impl Default for AppConfig {
             screen_control_emergency_stop: false,
             show_thinking: true,
             show_tools: false,
+            default_thinking_level: String::new(),
             notify_agent_done: false,
             telegram_notify_enabled: false,
             telegram_bot_token: String::new(),
@@ -1092,6 +1104,7 @@ impl Default for AppConfig {
             dashboard_auto_refresh_seconds: default_dashboard_refresh_seconds(),
             super_agent_show_thinking: true,
             super_agent_show_tools: false,
+            super_agent_thinking_level: String::new(),
             notify_super_agent_done: false,
             assistant_sound_enabled: false,
             assistant_sound_volume: default_assistant_sound_volume(),

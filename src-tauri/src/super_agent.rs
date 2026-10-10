@@ -182,6 +182,16 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
             cfg.super_agent_default_model.clone(),
         )
     };
+    // T6 : niveau de réflexion de l'Assistant — réglage dédié puis réglage
+    // général de Pilot ; `None` = rien à envoyer (défaut du moteur conservé).
+    let thinking_level = {
+        let cfg = state.config_snapshot();
+        resolve_super_agent_thinking_level(
+            &cfg.super_agent_thinking_level,
+            &cfg.default_thinking_level,
+        )
+        .unwrap_or_default()
+    };
     let cwd = state
         .project_path
         .lock()
@@ -198,7 +208,7 @@ pub(crate) fn do_start_super_agent_session(state: &AppState, app: &AppHandle) ->
     );
     state
         .agent_service
-        .start_superagent(app, &cwd, &pi_path, default_model)
+        .start_superagent(app, &cwd, &pi_path, default_model, &thinking_level)
 }
 
 /// Résout le modèle par défaut du backend actif depuis `model-switch.json`
@@ -272,6 +282,34 @@ pub(crate) fn resolve_super_agent_model(
         (m, _) => m,
     };
     chosen.or_else(|| parse_model_spec(dedicated)).or(global)
+}
+
+/// T6 — **niveau de réflexion** de l'Assistant (🧭), fonction **pure** sœur de
+/// `resolve_super_agent_model` : testable sans configuration ni session.
+///
+/// Priorité (§3 du plan) :
+///   1. réglage dédié de l'Assistant (`AppConfig::super_agent_thinking_level`) ;
+///   2. réglage général de Pilot (`AppConfig::default_thinking_level`) ;
+///   3. `None` → rien n'est envoyé à pi, qui applique alors **son** défaut par
+///      modèle puis son défaut global. Ces deux derniers étages ne sont donc pas
+///      des paramètres : ils appartiennent au moteur, et Pilot n'a aucun moyen de
+///      les connaître avant d'interroger la session (§6 : la session vivante est
+///      l'autorité). Les inventer ici serait une valeur fausse.
+///
+/// Le niveau rendu n'est **pas** encore ramené aux capacités du modèle : ce
+/// ramenage a lieu au moment de l'application, sur la liste réelle renvoyée par
+/// `get_available_thinking_levels` (voir `AgentService::apply_superagent_thinking`).
+pub(crate) fn resolve_super_agent_thinking_level(
+    chosen: &str,
+    general: &str,
+) -> Option<String> {
+    for candidate in [chosen, general] {
+        let value = candidate.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 /// Liste concise des projets connus de la base (path + nom), pour que
@@ -1306,6 +1344,8 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "prompt": cfg.super_agent_prompt,
         "show_thinking": cfg.super_agent_show_thinking,
         "show_tools": cfg.super_agent_show_tools,
+        // T6 : niveau de réflexion de l'Assistant ("" = non réglé).
+        "thinking_level": cfg.super_agent_thinking_level,
         "super_agent_invisible_agent": cfg.super_agent_invisible_agent,
         "super_agent_purge_before_delegate": cfg.super_agent_purge_before_delegate,
         "super_agent_quality_gate": cfg.super_agent_quality_gate,
@@ -1332,6 +1372,7 @@ pub fn set_super_agent_config(
     prompt: Option<String>,
     show_thinking: Option<bool>,
     show_tools: Option<bool>,
+    thinking_level: Option<String>,
     adaptive_personality: Option<bool>,
     super_agent_quality_gate: Option<bool>,
     super_agent_force_structured_brief: Option<bool>,
@@ -1360,6 +1401,11 @@ pub fn set_super_agent_config(
     }
     if let Some(v) = show_tools {
         cfg.super_agent_show_tools = v;
+    }
+    // T6 : niveau de réflexion de l'Assistant. Une chaîne vide efface le réglage
+    // → repli sur le réglage général de Pilot, puis sur le défaut du moteur.
+    if let Some(v) = thinking_level {
+        cfg.super_agent_thinking_level = v.trim().to_string();
     }
     if let Some(v) = adaptive_personality {
         cfg.super_agent_adaptive_personality = v;
@@ -4285,7 +4331,8 @@ mod tests {
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         task_counts, take_trash_entry, trash_entry_preview, validate_export_json,
         list_memory_trash_entries,
-        memory_removal_result, parse_model_spec, resolve_super_agent_model, MEMORY_FORMAT,
+        memory_removal_result, parse_model_spec, resolve_super_agent_model,
+        resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
@@ -4293,6 +4340,47 @@ mod tests {
     use rusqlite::Connection;
 
     // ── Issue #88 : modèle par défaut dédié à l'assistant ──
+    #[test]
+    fn super_agent_thinking_level_prefers_its_own_setting_over_the_general_one() {
+        // T6 : le réglage dédié de l'Assistant prime sur le réglage général.
+        assert_eq!(
+            resolve_super_agent_thinking_level("high", "low"),
+            Some("high".to_string())
+        );
+        // Sans réglage dédié, repli sur le réglage général de Pilot.
+        assert_eq!(
+            resolve_super_agent_thinking_level("", "medium"),
+            Some("medium".to_string())
+        );
+        assert_eq!(
+            resolve_super_agent_thinking_level("   ", "  low "),
+            Some("low".to_string())
+        );
+    }
+
+    #[test]
+    fn super_agent_thinking_level_is_none_without_any_setting() {
+        // Aucun réglage → `None` : RIEN n'est envoyé à pi, qui garde son défaut
+        // (par modèle puis global). C'est la garantie de non-régression.
+        assert_eq!(resolve_super_agent_thinking_level("", ""), None);
+        assert_eq!(resolve_super_agent_thinking_level("   ", "  "), None);
+    }
+
+    #[test]
+    fn super_agent_thinking_level_never_invents_a_level() {
+        // La valeur est rendue telle quelle (nettoyée) : aucun niveau n'est inventé
+        // ni traduit ici, et le ramenage aux capacités du modèle n'a lieu qu'à
+        // l'application, sur la liste réelle de la session.
+        assert_eq!(
+            resolve_super_agent_thinking_level("xhigh", ""),
+            Some("xhigh".to_string())
+        );
+        assert_eq!(
+            resolve_super_agent_thinking_level("", "off"),
+            Some("off".to_string())
+        );
+    }
+
     #[test]
     fn model_spec_parses_provider_and_id() {
         assert_eq!(

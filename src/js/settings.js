@@ -20,6 +20,8 @@ import { SCREEN_JOURNAL_RELATIVE_PATH, parseScreenJournal } from "./screen-guard
 import { plfaceOutcomeMessage, plfaceStopMessage, plfaceStateMessage, isVrmPath, avatarRejectedMessage } from "./plface-utils.js";
 import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModelProgressPercent } from "./laya-utils.js";
 import { listen } from "@tauri-apps/api/event";
+// T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
+import { thinkingLevelOptions } from "./thinking-levels.js";
 
 let currentConfig = null;
 
@@ -94,6 +96,74 @@ function populateModelSelect(selectEl, models, currentValue) {
   } else {
     selectEl.value = "";
   }
+}
+
+/**
+ * T6 — Niveaux de réflexion réellement supportés par un modèle, sans session pi :
+ * lecture du registre de pi (`~/.<stem>/agent/models-store.json` puis `models.json`).
+ * Aucune liste n'est inventée ; toute erreur rend `[]` (fail-open).
+ * @returns {Promise<string[]>}
+ */
+async function loadThinkingLevelsForModel(modelSpec) {
+  const [provider, ...rest] = String(modelSpec || "").split("/");
+  const modelId = rest.join("/");
+  if (!provider || !modelId) return [];
+  try {
+    const levels = await invoke("available_thinking_levels_for_model", { provider, modelId });
+    return Array.isArray(levels) ? levels : [];
+  } catch (e) {
+    console.warn("[settings] niveaux de réflexion illisibles pour", modelSpec, e);
+    return [];
+  }
+}
+
+/**
+ * T6 — Peuple un sélecteur de niveau de réflexion à partir du **modèle réellement
+ * utilisé** (jamais une liste codée en dur) et le désactive avec un message
+ * explicite quand le modèle ne sait pas raisonner (§8 du plan). Le contenu est
+ * calculé par le socle pur (`thinkingLevelOptions`, testé sous Node).
+ *
+ * @param {HTMLSelectElement|null} selectEl
+ * @param {HTMLElement|null} noteEl élément où afficher le message d'indisponibilité
+ * @param {string} modelSpec "provider/modelId" du modèle effectif ("" = inconnu)
+ * @param {string} current niveau enregistré ("" = non réglé)
+ * @param {string} unsetLabel libellé de l'entrée « non réglé »
+ */
+async function refreshThinkingLevelSelect(selectEl, noteEl, modelSpec, current, unsetLabel) {
+  if (!selectEl) return;
+  const [provider] = String(modelSpec || "").split("/");
+  const levels = await loadThinkingLevelsForModel(modelSpec);
+  const res = thinkingLevelOptions(levels, { current, provider, unsetLabel });
+  selectEl.innerHTML = "";
+  for (const opt of res.options) {
+    selectEl.appendChild(new Option(opt.label, opt.value));
+  }
+  selectEl.value = current || "";
+  selectEl.disabled = res.disabled;
+  if (noteEl) {
+    noteEl.textContent = res.message;
+    noteEl.style.display = res.message ? "" : "none";
+  }
+}
+
+/**
+ * T6 — Niveaux de l'Assistant : le modèle effectif est son modèle dédié s'il est
+ * défini, sinon le modèle par défaut du backend (même résolution que le moteur,
+ * `resolve_super_agent_model`). `available_thinking_levels_for_model` lit le
+ * registre du backend `pi` : c'est le moteur de l'Assistant.
+ * Les deux éléments DOM sont passés en paramètres (l'appelant les détient).
+ */
+async function refreshAssistantThinkingLevels(currentConfig, selectEl, noteEl) {
+  const modelSpec =
+    String(currentConfig.super_agent_default_model || "").trim() ||
+    String(currentConfig.super_agent_model || "").trim();
+  await refreshThinkingLevelSelect(
+    selectEl,
+    noteEl,
+    modelSpec,
+    (currentConfig.super_agent_thinking_level || "").trim(),
+    "Non réglé (suit le réglage général)",
+  );
 }
 
 export async function initSettings() {
@@ -247,6 +317,10 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
+  // T6 : niveau de réflexion de l'Assistant ("" = non réglé → repli sur le
+  // réglage général puis sur le défaut du moteur).
+  const selectSuperAgentThinkingLevel = document.getElementById("setting-superagent-thinking-level");
+  const superAgentThinkingLevelNote = document.getElementById("setting-superagent-thinking-level-note");
   const chkSuperAgentTools = document.getElementById("setting-superagent-tools");
   const chkSuperAgentNotifyDone = document.getElementById("setting-superagent-notify-done");
   const chkAssistantSoundEnabled = document.getElementById("setting-assistant-sound-enabled");
@@ -1072,6 +1146,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     ? currentConfig.super_agent_clients.join("\n") : "";
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
+  await refreshAssistantThinkingLevels(currentConfig, selectSuperAgentThinkingLevel, superAgentThinkingLevelNote);
   if (chkSuperAgentTools) chkSuperAgentTools.checked = currentConfig.super_agent_show_tools === true;
   if (chkSuperAgentNotifyDone) chkSuperAgentNotifyDone.checked = currentConfig.notify_super_agent_done === true;
   if (chkAssistantSoundEnabled) chkAssistantSoundEnabled.checked = currentConfig.assistant_sound_enabled === true;
@@ -1919,6 +1994,9 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
           : [],
         super_agent_prompt: taSuperAgentPrompt ? taSuperAgentPrompt.value : "",
         super_agent_show_thinking: chkSuperAgentThinking ? chkSuperAgentThinking.checked !== false : true,
+        // T6 : niveau de réflexion de l'Assistant. Un sélecteur désactivé conserve
+        // la valeur enregistrée dans ses options → jamais de réglage effacé.
+        super_agent_thinking_level: selectSuperAgentThinkingLevel ? selectSuperAgentThinkingLevel.value.trim() : "",
         super_agent_show_tools: chkSuperAgentTools ? chkSuperAgentTools.checked === true : false,
         notify_super_agent_done: chkSuperAgentNotifyDone ? chkSuperAgentNotifyDone.checked === true : false,
         assistant_sound_enabled: chkAssistantSoundEnabled ? chkAssistantSoundEnabled.checked === true : false,

@@ -8,6 +8,9 @@ import {
   availableThinkingLevels,
   clampThinkingLevel,
   pickThinkingLevel,
+  thinkingLevelOptions,
+  THINKING_UNSET_LABEL,
+  THINKING_UNAVAILABLE_MESSAGE,
 } from "./thinking-levels.js";
 
 describe("libellés", () => {
@@ -99,5 +102,59 @@ describe("pickThinkingLevel", () => {
     expect(pickThinkingLevel([])).toBe(null);
     expect(pickThinkingLevel(["", "   "])).toBe(null);
     expect(pickThinkingLevel(undefined)).toBe(null);
+  });
+});
+
+describe("thinkingLevelOptions — contenu d'un sélecteur (T6)", () => {
+  it("modèle raisonnant : entrée « non réglé » + niveaux supportés, dans l'ordre", () => {
+    const res = thinkingLevelOptions(["off", "low", "medium", "high"], { current: "medium" });
+    expect(res.disabled).toBe(false);
+    expect(res.message).toBe("");
+    expect(res.options.map((o) => o.value)).toEqual(["", "off", "low", "medium", "high"]);
+    expect(res.options[0].label).toBe(THINKING_UNSET_LABEL);
+    // Les libellés sont français (jamais la clé technique seule).
+    expect(res.options.find((o) => o.value === "high").label).toBe("Élevé");
+  });
+
+  it("n'invente aucun niveau : ce que dit le moteur, rien d'autre", () => {
+    const res = thinkingLevelOptions(["low", "high"]);
+    expect(res.options.map((o) => o.value)).toEqual(["", "low", "high"]);
+  });
+
+  it("modèle sans raisonnement : sélecteur désactivé + message nommant le fournisseur", () => {
+    const res = thinkingLevelOptions(["off"], { provider: "llama-cpp" });
+    expect(res.disabled).toBe(true);
+    expect(res.message).toContain("llama-cpp");
+    expect(res.message).toContain("ne propose pas de niveau de réflexion");
+  });
+
+  it("liste inconnue (registre illisible) : désactivé + message d'indisponibilité", () => {
+    const res = thinkingLevelOptions([]);
+    expect(res.disabled).toBe(true);
+    expect(res.message).toBe(THINKING_UNAVAILABLE_MESSAGE);
+    expect(res.options.map((o) => o.value)).toEqual([""]);
+  });
+
+  it("la valeur enregistrée est TOUJOURS sélectionnable (aucune perte au save)", () => {
+    // Cas limite : « off » enregistré et « off » seul supporté → le `.value` du
+    // sélecteur désactivé doit rester « off » (sinon enregistrer effacerait le
+    // réglage).
+    expect(thinkingLevelOptions(["off"], { current: "off" }).options.map((o) => o.value)).toEqual([
+      "",
+      "off",
+    ]);
+    // Niveau enregistré que le modèle ne supporte plus (modèle changé) : conservé
+    // en tête, marqué, jamais effacé en silence.
+    const res = thinkingLevelOptions(["off", "low"], { current: "xhigh" });
+    expect(res.options.map((o) => o.value)).toEqual(["", "xhigh", "off", "low"]);
+    expect(res.options[1].label).toContain("non supporté");
+  });
+
+  it("tolère une entrée invalide sans lever d'exception", () => {
+    expect(thinkingLevelOptions(undefined).disabled).toBe(true);
+    expect(thinkingLevelOptions(["niveau-inconnu", "high"]).options.map((o) => o.value)).toEqual([
+      "",
+      "high",
+    ]);
   });
 });

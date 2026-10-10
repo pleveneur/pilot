@@ -903,6 +903,13 @@
               <input type="checkbox" id="setting-superagent-thinking" />
               <label for="setting-superagent-thinking" title="Afficher la réflexion de l'Assistant (pensée) dans la conversation — même rendu que l'agent standard.">Afficher la réflexion de l'Assistant</label>
             </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-superagent-thinking-level" title="Plus le niveau est élevé, plus le modèle réfléchit avant de répondre : réponses souvent meilleures, mais plus lentes et plus coûteuses.">Niveau de réflexion de l'Assistant :</label>
+              <select id="setting-superagent-thinking-level">
+                <option value="">Non réglé (suit le moteur)</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent" id="setting-superagent-thinking-level-note" style="display:none;font-size:11px;color:var(--text-muted);"></div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-tools" />
               <label for="setting-superagent-tools" title="Afficher les outils (actions) utilisés par l'Assistant dans la conversation — même rendu que l'agent standard.">Afficher les outils de l'Assistant</label>
