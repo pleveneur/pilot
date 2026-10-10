@@ -7,6 +7,7 @@ import {
   normalizeAgent,
   resolveAgentThinking,
   resolveAgentModel,
+  describeAgentModels,
 } from "./agents.js";
 
 describe("normalizeAgent — niveaux de réflexion (T3)", () => {
@@ -36,6 +37,32 @@ describe("resolveAgentThinking — repli croisé pi ↔ plh", () => {
   it("miroir de resolveAgentModel", () => {
     const a = { models: { pi: "", plh: "ollama/x" } };
     expect(resolveAgentModel(a, "pi")).toBe("ollama/x");
+  });
+});
+
+describe("describeAgentModels — la carte dit « demandé », pas « en cours » (#323)", () => {
+  it("annonce le libellé « modèle demandé » et les deux backends", () => {
+    const d = describeAgentModels({ models: { pi: "ollama/x", plh: "openai/y" } });
+    expect(d.text).toBe("modèle demandé — π ollama/x · ℓ openai/y");
+  });
+
+  it("un backend non réglé est explicite (« non réglé », jamais un tiret muet)", () => {
+    const d = describeAgentModels({ models: { pi: "ollama/x", plh: "" } });
+    expect(d.text).toContain("π ollama/x");
+    expect(d.text).toContain("ℓ non réglé");
+  });
+
+  it("l'infobulle expose la chaîne de résolution réelle et le cas de la session en cours", () => {
+    const d = describeAgentModels({ models: { pi: "a/b" } });
+    expect(d.title).toContain("DEMANDÉ");
+    expect(d.title).toContain("repli croisé");
+    expect(d.title).toContain("par défaut");
+    expect(d.title).toContain("session déjà lancée");
+  });
+
+  it("tolère un agent sans modèles (aucune exception)", () => {
+    expect(describeAgentModels(null).text).toBe("modèle demandé — π non réglé · ℓ non réglé");
+    expect(describeAgentModels({}).text).toBe("modèle demandé — π non réglé · ℓ non réglé");
   });
 });
 

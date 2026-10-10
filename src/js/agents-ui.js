@@ -15,6 +15,7 @@ import {
   upsertAgent,
   deleteAgent,
   normalizeAgent,
+  describeAgentModels,
   mergeEditedAgent,
   validateAgentId,
   buildDefaultCoordinator,
@@ -248,6 +249,7 @@ export async function createAgents(container) {
     listEl.innerHTML = "";
     for (const raw of registry.agents) {
       const a = normalizeAgent(raw);
+      const models = describeAgentModels(a);
       const card = document.createElement("div");
       card.className = "agent-card" + (a.readonly ? " readonly" : "");
       card.dataset.id = a.id;
@@ -267,9 +269,7 @@ export async function createAgents(container) {
           </div>
         </div>
         ${badges.length ? `<div class="agent-card-badges">${badges.join("")}</div>` : ""}
-        <div class="agent-card-models muted">
-          π ${escapeHtml(a.models.pi || "—")} · ℓ ${escapeHtml(a.models.plh || "—")}
-        </div>
+        <div class="agent-card-models muted" title="${escapeHtml(models.title)}">${escapeHtml(models.text)}</div>
         <div class="agent-card-actions">
           <button class="agent-btn" data-action="edit" title="Modifier"><i data-lucide="pencil" class="icon-sm"></i></button>
           <button class="agent-btn" data-action="delete" title="Supprimer"><i data-lucide="trash-2" class="icon-sm"></i></button>

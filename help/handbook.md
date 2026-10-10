@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-08 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-10 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -982,7 +982,8 @@ des sessions (jours)** (0 = désactivé).
 L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivre** ce qu'elle fait. Pour lancer une tâche, utilisez l'onglet **🧭 Assistant** (ou la discussion d'un agent).
 
 ### L'écran
-- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les modèles (`π` = pi, `ℓ` = plh), et des badges : **lecture seule** et le **nombre de compétences**.
+- **Colonne de gauche : l'équipe.** Chaque carte montre le nom, l'identifiant, les **modèles demandés** (`π` = pi, `ℓ` = plh ; « non réglé » si le champ est vide), et des badges : **lecture seule** et le **nombre de compétences**.
+  - Attention : les modèles affichés sont **demandés**, pas **employés**. Au démarrage d'une session, Pilot applique le modèle du **backend actif**, sinon celui de l'**autre backend** (repli croisé), sinon le **modèle par défaut** du registre de modèles — et une session **déjà lancée** garde le modèle qu'elle utilise (modifier la carte ne la change pas). L'infobulle de la carte le rappelle.
 - **Colonne de droite : l'activité.** Tableau de bord des runs en cours : qui travaille, sur quel outil, la **chaîne des appels**, le **budget restant** et la **profondeur**. L'agent en cours est surligné. Le bilan reste visible après la fin de la run.
 - **➕ Ajouter** crée un agent ; **✏️ Modifier** ouvre l'éditeur ; **🗑️ Supprimer** retire un agent.
 - **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
@@ -990,7 +991,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 ### Créer / modifier un agent
 - **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
 - **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
-- **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir.
+- **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir. Ce réglage est une **intention** pour les sessions à venir (cf. l'encadré ci-dessus) : il n'est pas réappliqué à une session en cours.
 - **Lecture seule** : consigne stricte de ne pas écrire de fichiers. **Garder le contexte** : la session n'est pas remise à zéro entre deux appels.
 - **Max appels / run** et **Profondeur max** : garde-fous propres à l'agent.
 

@@ -120,6 +120,34 @@ export function resolveAgentModel(agent, backend, fallbackModel = "") {
 }
 
 /**
+ * Décrit les modèles **demandés** d'un agent, pour l'onglet 🎭 Agents (défaut
+ * #323 — « le modèle écrit sur la carte n'est pas forcément celui employé »).
+ *
+ * Le registre décrit une INTENTION, pas le modèle réellement chargé. Modèle
+ * effectif d'une session : celui du backend **actif** (`models.{pi|plh}`), à
+ * défaut celui de l'autre backend (repli croisé, `resolveAgentModel`), à défaut
+ * le `defaultModel` du registre de modèles ; et une session déjà lancée garde le
+ * modèle qu'elle a (Pilot ne réapplique rien sur une reprise). D'où un libellé
+ * « modèle demandé » et une infobulle qui explique la chaîne de résolution :
+ * l'UI cesse d'affirmer ce qu'elle ne peut pas garantir.
+ *
+ * @param {object} agent agent normalisé
+ * @returns {{text: string, title: string}}
+ */
+export function describeAgentModels(agent) {
+  const models = agent && agent.models && typeof agent.models === "object" ? agent.models : {};
+  const pi = String(models.pi || "").trim();
+  const plh = String(models.plh || "").trim();
+  const text = `modèle demandé — π ${pi || "non réglé"} · ℓ ${plh || "non réglé"}`;
+  const title = [
+    "Modèle DEMANDÉ pour ce backend (réglage du registre de l'agent) — pas le modèle réellement chargé.",
+    "Au démarrage d'une session, Pilot applique le modèle du backend actif, sinon celui de l'autre backend (repli croisé), sinon le modèle par défaut du registre de modèles.",
+    "Une session déjà lancée garde le modèle qu'elle utilise : le modifier ici ne la change pas.",
+  ].join(" ");
+  return { text, title };
+}
+
+/**
  * Résout le niveau de réflexion d'un agent selon le backend actif (T3) —
  * miroir de `resolveAgentModel`, avec repli croisé pi ↔ plh. `""` = non réglé
  * (l'appelant poursuit alors la chaîne : réglage général de Pilot, puis défaut
