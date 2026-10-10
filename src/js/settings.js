@@ -344,6 +344,55 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
   // ── Super-agent (spec_super_agent.md) ──
   const inputSuperAgentName = document.getElementById("setting-superagent-name");
   const taSuperAgentClients = document.getElementById("setting-superagent-clients");
+
+  /**
+   * Clients de l'assistant : la BASE DE SUIVI est la source de vérité (c'est
+   * elle que lisent le panneau « Projets & clients », le Suivi et le Kanban).
+   * La config n'en garde qu'un MIROIR, qui peut être en retard : remplir la
+   * liste depuis la config ferait afficher une liste vide alors que des clients
+   * existent — et l'enregistrement les effacerait. On lit donc la base, avec
+   * repli sur la config si elle est injoignable.
+   */
+  function clientNames(list) {
+    return (Array.isArray(list) ? list : [])
+      .map((c) => (typeof c === "string" ? c : c && c.name))
+      .filter(Boolean);
+  }
+
+  async function fillSuperAgentClientsFromDb(fallback) {
+    if (!taSuperAgentClients) return;
+    let names = clientNames(fallback);
+    try {
+      const res = await invoke("list_clients");
+      names = clientNames(res && res.clients);
+    } catch (e) {
+      console.warn("list_clients:", e);
+    }
+    taSuperAgentClients.value = names.join("\n");
+  }
+
+  /** Applique la liste saisie à la base de suivi (ajouts et retraits réels). */
+  async function applySuperAgentClientsToDb(names) {
+    const wanted = clientNames(names);
+    let current = [];
+    try {
+      const res = await invoke("list_clients");
+      current = clientNames(res && res.clients);
+    } catch (e) {
+      console.warn("list_clients:", e);
+      return;
+    }
+    for (const name of wanted) {
+      if (!current.includes(name)) {
+        try { await invoke("add_client", { name }); } catch (e) { console.warn("add_client:", e); }
+      }
+    }
+    for (const name of current) {
+      if (!wanted.includes(name)) {
+        try { await invoke("remove_client", { name }); } catch (e) { console.warn("remove_client:", e); }
+      }
+    }
+  }
   const taSuperAgentPrompt = document.getElementById("setting-superagent-prompt");
   const chkSuperAgentThinking = document.getElementById("setting-superagent-thinking");
   // T6 : niveau de réflexion de l'Assistant ("" = non réglé → repli sur le
@@ -1176,8 +1225,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
     if (chkGraphIncludeCalls) chkGraphIncludeCalls.checked = currentConfig.graph_include_calls !== false;
   // ── Super-agent (spec_super_agent.md) ──
   if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
-  if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
-    ? currentConfig.super_agent_clients.join("\n") : "";
+  await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
   if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
   if (chkSuperAgentThinking) chkSuperAgentThinking.checked = currentConfig.super_agent_show_thinking !== false;
   await refreshAssistantThinkingLevels(currentConfig, selectSuperAgentThinkingLevel, superAgentThinkingLevelNote);
@@ -1749,8 +1797,7 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
           selectTheme.value = currentConfig.theme || "dark";
           populateSubthemeSelect(selectSubtheme, currentConfig.theme || "dark", currentConfig.subtheme || "default");
           if (inputSuperAgentName) inputSuperAgentName.value = currentConfig.super_agent_name || "Assistant";
-          if (taSuperAgentClients) taSuperAgentClients.value = Array.isArray(currentConfig.super_agent_clients)
-            ? currentConfig.super_agent_clients.join("\n") : "";
+          await fillSuperAgentClientsFromDb(currentConfig.super_agent_clients);
           if (taSuperAgentPrompt) taSuperAgentPrompt.value = currentConfig.super_agent_prompt || "";
           if (chkSuperAgentConcise) chkSuperAgentConcise.checked = currentConfig.super_agent_concise === true;
           if (chkSuperAgentUserFriendly) chkSuperAgentUserFriendly.checked = currentConfig.super_agent_user_friendly === true;
@@ -2058,6 +2105,10 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
       };
     try {
       await invoke("save_config", { config });
+      // Les clients de l'assistant vivent dans la BASE DE SUIVI (source de vérité) :
+      // la liste saisie y est appliquée via les commandes dédiées. La config
+      // n'en garde qu'un miroir, resynchronisé depuis la base par Rust.
+      await applySuperAgentClientsToDb(config.super_agent_clients);
       window._pilotModalAnimations = config.modal_animations !== false;
       applyTheme(config.theme, config.subtheme || "default");
       refreshShowThinking();

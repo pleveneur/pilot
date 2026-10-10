@@ -1383,15 +1383,23 @@ pub fn set_super_agent_config(
     super_agent_events_overlay_seconds: Option<u32>,
     super_agent_tasks_tab_enabled: Option<bool>,
 ) -> Result<(), String> {
+    // Clients & association projet → client : la base de suivi est la source de
+    // vérité (panneau Suivi / Kanban / assistant). On y applique la demande AVANT
+    // de toucher au miroir de config — sinon les deux se contrediraient.
+    if let Some(c) = clients.as_ref() {
+        apply_clients_to_db(&state, &app, c)?;
+    }
+    if let Some(pc) = project_client.as_ref() {
+        let conn = open_db(&app)?;
+        for (path, client) in pc.iter() {
+            let target = if client.trim().is_empty() { None } else { Some(client.as_str()) };
+            db_set_project_client(&conn, path, target)?;
+        }
+        refresh_clients_mirror(&state, &conn)?;
+    }
     let mut cfg = state.config.lock().unwrap();
     if let Some(n) = name {
         cfg.super_agent_name = n;
-    }
-    if let Some(c) = clients {
-        cfg.super_agent_clients = c;
-    }
-    if let Some(pc) = project_client {
-        cfg.super_agent_project_client = pc;
     }
     if let Some(p) = prompt {
         cfg.super_agent_prompt = p;
@@ -1597,92 +1605,274 @@ pub fn set_super_agent_open(state: State<AppState>, app: AppHandle, open: bool) 
     Ok(())
 }
 
+// ── Clients & association projet → client : SOURCE DE VÉRITÉ UNIQUE ──
+//
+// La base de suivi (`super-agent.db`) est la SEULE source de vérité des clients
+// et de l'association projet → client : c'est elle que lisent déjà le panneau
+// Suivi (`get_super_agent_tracking`), le Kanban et l'assistant lui-même
+// (`db_query` / `db_execute`). Les commandes ci-dessous ne lisent donc plus la
+// config (`super_agent_clients` / `super_agent_project_client`, conservées
+// comme simple MIROIR resynchronisé depuis la base) : sinon le panneau
+// « Projets & clients » et le Suivi affichaient deux associations différentes.
+//
+// Ces assistants ne prennent qu'une `&Connection` (aucun AppHandle) : ils
+// restent donc testables sur une base en mémoire.
+
+/// Clients de la base, triés par nom.
+pub(crate) fn db_list_clients(conn: &Connection) -> Result<Vec<(i64, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name FROM clients ORDER BY name")
+        .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Erreur lecture clients: {}", e))?;
+    let mut out: Vec<(i64, String)> = Vec::new();
+    for row in rows.flatten() {
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Ajoute un client (idempotent : `INSERT OR IGNORE` sur le nom unique).
+pub(crate) fn db_add_client(conn: &Connection, name: &str) -> Result<(), String> {
+    conn.execute("INSERT OR IGNORE INTO clients (name) VALUES (?1)", rusqlite::params![name])
+        .map_err(|e| format!("Erreur ajout client: {}", e))?;
+    Ok(())
+}
+
+/// Retire un client. Les projets rattachés sont DÉTACHÉS (client_id = NULL) —
+/// aucun projet ni tâche n'est supprimé : seul le lien vers le client disparaît.
+pub(crate) fn db_remove_client(conn: &Connection, name: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE projects SET client_id = NULL, updated_at = datetime('now')
+         WHERE client_id = (SELECT id FROM clients WHERE name = ?1)",
+        rusqlite::params![name],
+    )
+    .map_err(|e| format!("Erreur détachement des projets: {}", e))?;
+    conn.execute("DELETE FROM clients WHERE name = ?1", rusqlite::params![name])
+        .map_err(|e| format!("Erreur suppression client: {}", e))?;
+    Ok(())
+}
+
+/// Renomme un client (l'association des projets suit automatiquement : elle
+/// passe par `projects.client_id`).
+pub(crate) fn db_rename_client(conn: &Connection, old: &str, new: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE clients SET name = ?2, updated_at = datetime('now') WHERE name = ?1",
+        rusqlite::params![old, new],
+    )
+    .map_err(|e| format!("Erreur renommage client: {}", e))?;
+    Ok(())
+}
+
+/// Associe (ou détache avec `None`) un projet à un client. Le projet est créé
+/// au besoin (nom = dernier segment du chemin) ; un projet déjà connu garde son
+/// nom — on ne fait que (re)lier le client. Ne supprime jamais rien.
+pub(crate) fn db_set_project_client(conn: &Connection, path: &str, client: Option<&str>) -> Result<(), String> {
+    let name = PathBuf::from(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string();
+    conn.execute(
+        "INSERT OR IGNORE INTO projects (path, name) VALUES (?1, ?2)",
+        rusqlite::params![path, name],
+    )
+    .map_err(|e| format!("Erreur création du projet: {}", e))?;
+    let client_id: Option<i64> = conn
+        .query_row("SELECT id FROM clients WHERE name = ?1", rusqlite::params![client], |r| r.get(0))
+        .ok();
+    conn.execute(
+        "UPDATE projects SET client_id = ?2, updated_at = datetime('now') WHERE path = ?1",
+        rusqlite::params![path, client_id],
+    )
+    .map_err(|e| format!("Erreur association client: {}", e))?;
+    Ok(())
+}
+
+/// Projets connus de la base avec le nom de leur client (chaîne vide si aucun) :
+/// `(path, name, client)`, les plus récemment modifiés d'abord.
+pub(crate) fn db_list_projects_with_client(conn: &Connection) -> Result<Vec<(String, String, String)>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.path, p.name, COALESCE(c.name, '') FROM projects p
+             LEFT JOIN clients c ON c.id = p.client_id
+             ORDER BY p.updated_at DESC",
+        )
+        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })
+        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for row in rows.flatten() {
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Association `chemin de projet → nom de client` (projets rattachés seulement).
+pub(crate) fn db_project_client_map(conn: &Connection) -> Result<HashMap<String, String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT p.path, c.name FROM projects p
+             JOIN clients c ON c.id = p.client_id",
+        )
+        .map_err(|e| format!("Erreur lecture association projets/clients: {}", e))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| format!("Erreur lecture association projets/clients: {}", e))?;
+    let mut out: HashMap<String, String> = HashMap::new();
+    for row in rows.flatten() {
+        out.insert(row.0, row.1);
+    }
+    Ok(out)
+}
+
+/// Réconcilie la table `clients` avec la liste saisie dans les réglages :
+/// ajoute les manquants, retire les absents (projets détachés, jamais
+/// supprimés). Aucune autre donnée n'est touchée.
+pub(crate) fn db_reconcile_clients(conn: &Connection, wanted: &[String]) -> Result<(), String> {
+    let current: Vec<String> = db_list_clients(conn)?.into_iter().map(|(_, n)| n).collect();
+    for name in wanted {
+        if !current.contains(name) {
+            db_add_client(conn, name)?;
+        }
+    }
+    for name in current {
+        if !wanted.contains(&name) {
+            db_remove_client(conn, &name)?;
+        }
+    }
+    Ok(())
+}
+
+/// Applique `wanted` à la base de suivi puis resynchronise le MIROIR de config
+/// (`super_agent_clients` / `super_agent_project_client`). Point d'entrée unique
+/// utilisé par les réglages (`save_config`) et par `set_super_agent_config`, pour
+/// que la config ne puisse jamais contredire la base.
+pub(crate) fn apply_clients_to_db(state: &AppState, app: &AppHandle, wanted: &[String]) -> Result<(), String> {
+    let conn = open_db(app)?;
+    db_reconcile_clients(&conn, wanted)?;
+    let clients: Vec<String> = db_list_clients(&conn)?.into_iter().map(|(_, n)| n).collect();
+    let project_client = db_project_client_map(&conn)?;
+    drop(conn);
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_clients = clients;
+    cfg.super_agent_project_client = project_client;
+    Ok(())
+}
+
+/// Lit le MIROIR clients/association depuis la base de suivi **sans créer la
+/// base** (retourne `None` si elle n'existe pas encore). Sert à resynchroniser
+/// la config à l'enregistrement, pour qu'une config périmée ne puisse jamais
+/// contredire l'association réelle.
+pub(crate) fn read_clients_mirror(app: &AppHandle) -> Option<(Vec<String>, HashMap<String, String>)> {
+    let path = db_path(app).ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let conn = Connection::open(&path).ok()?;
+    let clients = db_list_clients(&conn)
+        .ok()?
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    let project_client = db_project_client_map(&conn).ok()?;
+    Some((clients, project_client))
+}
+
+/// Resynchronise le miroir de config depuis la base (sans rien modifier en
+/// base). Utilisé après chaque écriture d'association.
+fn refresh_clients_mirror(state: &AppState, conn: &Connection) -> Result<(), String> {
+    let clients: Vec<String> = db_list_clients(conn)?.into_iter().map(|(_, n)| n).collect();
+    let project_client = db_project_client_map(conn)?;
+    let mut cfg = state.config.lock().unwrap();
+    cfg.super_agent_clients = clients;
+    cfg.super_agent_project_client = project_client;
+    Ok(())
+}
+
 // ── Clients ──
 
 #[tauri::command]
-pub fn list_clients(state: State<AppState>, _app: AppHandle) -> Result<Value, String> {
-    let cfg = state.config.lock().unwrap();
-    let clients: Vec<Value> = cfg
-        .super_agent_clients
-        .iter()
-        .map(|c| serde_json::json!({"name": c}))
+pub fn list_clients(_state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let clients: Vec<Value> = db_list_clients(&conn)?
+        .into_iter()
+        .map(|(id, name)| serde_json::json!({"id": id, "name": name}))
         .collect();
     Ok(serde_json::json!({"clients": clients}))
 }
 
 #[tauri::command]
 pub fn add_client(state: State<AppState>, app: AppHandle, name: String) -> Result<(), String> {
-    let mut cfg = state.config.lock().unwrap();
-    if !cfg.super_agent_clients.contains(&name) {
-        cfg.super_agent_clients.push(name);
-        crate::save_config_disk(&app, &cfg)?;
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Ok(());
     }
+    let conn = open_db(&app)?;
+    db_add_client(&conn, &name)?;
+    refresh_clients_mirror(&state, &conn)?;
+    drop(conn);
+    let cfg = state.config.lock().unwrap();
+    crate::save_config_disk(&app, &cfg)?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn remove_client(state: State<AppState>, app: AppHandle, name: String) -> Result<(), String> {
-    let mut cfg = state.config.lock().unwrap();
-    cfg.super_agent_clients.retain(|c| c != &name);
-    // Retirer l'association projet → client pour ce client.
-    cfg.super_agent_project_client.retain(|_, v| v != &name);
+    let conn = open_db(&app)?;
+    db_remove_client(&conn, &name)?;
+    refresh_clients_mirror(&state, &conn)?;
+    drop(conn);
+    let cfg = state.config.lock().unwrap();
     crate::save_config_disk(&app, &cfg)?;
     Ok(())
 }
 
 #[tauri::command]
 pub fn rename_client(state: State<AppState>, app: AppHandle, old_name: String, new_name: String) -> Result<(), String> {
-    let mut cfg = state.config.lock().unwrap();
-    if let Some(idx) = cfg.super_agent_clients.iter().position(|c| c == &old_name) {
-        cfg.super_agent_clients[idx] = new_name.clone();
+    let new_name = new_name.trim().to_string();
+    if new_name.is_empty() {
+        return Ok(());
     }
-    for v in cfg.super_agent_project_client.values_mut() {
-        if *v == old_name {
-            *v = new_name.clone();
-        }
-    }
-    crate::save_config_disk(&app, &cfg)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn set_project_client(state: State<AppState>, app: AppHandle, project_path: String, client: Option<String>) -> Result<(), String> {
-    let mut cfg = state.config.lock().unwrap();
-    match client {
-        Some(c) => { cfg.super_agent_project_client.insert(project_path, c); }
-        None => { cfg.super_agent_project_client.remove(&project_path); }
-    }
-    crate::save_config_disk(&app, &cfg)?;
-    Ok(())
-}
-
-/// Liste les projets connus de la base avec leur client associé (source de
-/// vérité : la config `super_agent_project_client`, path → nom de client).
-/// Retourne `{ projects: [{ path, name, client }] }`.
-#[tauri::command]
-pub fn list_super_agent_projects(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let conn = open_db(&app)?;
-    let mut stmt = conn
-        .prepare("SELECT path, name FROM projects ORDER BY updated_at DESC")
-        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| format!("Erreur lecture projets: {}", e))?;
-    let mut projects: Vec<Value> = Vec::new();
-    for row in rows {
-        if let Ok((path, name)) = row {
-            projects.push(serde_json::json!({"path": path, "name": name}));
-        }
-    }
-    drop(stmt);
+    db_rename_client(&conn, &old_name, &new_name)?;
+    refresh_clients_mirror(&state, &conn)?;
     drop(conn);
-    // Associer le client depuis la config (source de vérité de l'association).
     let cfg = state.config.lock().unwrap();
-    for p in projects.iter_mut() {
-        let path = p.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        let client = cfg.super_agent_project_client.get(path).cloned().unwrap_or_default();
-        p["client"] = serde_json::json!(client);
-    }
+    crate::save_config_disk(&app, &cfg)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_project_client(
+    state: State<AppState>,
+    app: AppHandle,
+    project_path: String,
+    client: Option<String>,
+) -> Result<(), String> {
+    let conn = open_db(&app)?;
+    db_set_project_client(&conn, &project_path, client.as_deref())?;
+    refresh_clients_mirror(&state, &conn)?;
+    drop(conn);
+    let cfg = state.config.lock().unwrap();
+    crate::save_config_disk(&app, &cfg)?;
+    Ok(())
+}
+
+/// Liste les projets connus de la base avec leur client associé.
+/// Source de vérité : `projects.client_id` → `clients.name` (la même que le
+/// Suivi et le Kanban). Retourne `{ projects: [{ path, name, client }] }`.
+#[tauri::command]
+pub fn list_super_agent_projects(_state: State<AppState>, app: AppHandle) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let projects: Vec<Value> = db_list_projects_with_client(&conn)?
+        .into_iter()
+        .map(|(path, name, client)| serde_json::json!({"path": path, "name": name, "client": client}))
+        .collect();
     Ok(serde_json::json!({"projects": projects}))
 }
 
@@ -4323,6 +4513,8 @@ mod tests_inner_helper {
 mod tests {
     use super::{
         build_capped_injection_message, build_project_context, classify_task_status,
+        db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
+        db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary, enqueue_session_summary, init_db, is_task_open, kanban_tasks,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
@@ -4488,6 +4680,81 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_db(&conn).unwrap();
         conn
+    }
+
+    // ── Association projet → client : la base de suivi est la source de vérité ──
+    // Ces tests verrouillent le contrat des assistants (aucun AppHandle) : ajout
+    // idempotent, suppression qui DÉTACHE les projets (jamais de perte de projet
+    // ni de tâche), renommage suivi automatiquement, création du projet au
+    // besoin. Les chemins de test utilisent « / » : séparateur accepté sur les
+    // trois plateformes (le nom du projet reste donc correct partout).
+    #[test]
+    fn client_helpers_attach_rename_and_detach() {
+        let conn = mem_conn();
+        db_add_client(&conn, "IA_PL").unwrap();
+        db_add_client(&conn, "IA_PL").unwrap(); // idempotent (nom unique)
+        assert_eq!(db_list_clients(&conn).unwrap().len(), 1);
+
+        db_set_project_client(&conn, "C:/p/pilot", Some("IA_PL")).unwrap();
+        let projects = db_list_projects_with_client(&conn).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].1, "pilot", "nom déduit du chemin");
+        assert_eq!(projects[0].2, "IA_PL");
+        assert_eq!(
+            db_project_client_map(&conn).unwrap().get("C:/p/pilot").map(|s| s.as_str()),
+            Some("IA_PL")
+        );
+
+        // Renommer le client ne casse pas l'association des projets.
+        db_rename_client(&conn, "IA_PL", "Kalico").unwrap();
+        assert_eq!(db_list_projects_with_client(&conn).unwrap()[0].2, "Kalico");
+
+        // Supprimer le client DÉTACHE le projet : ni le projet ni son nom ne
+        // disparaissent (aucune donnée du propriétaire n'est détruite).
+        db_remove_client(&conn, "Kalico").unwrap();
+        let after = db_list_projects_with_client(&conn).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].1, "pilot");
+        assert_eq!(after[0].2, "");
+        assert!(db_list_clients(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_project_client_keeps_known_project_name() {
+        let conn = mem_conn();
+        db_add_client(&conn, "C").unwrap();
+        conn.execute(
+            "INSERT INTO projects (path, name) VALUES (?1, ?2)",
+            rusqlite::params!["C:/p/x", "Nom choisi"],
+        )
+        .unwrap();
+        // Un projet déjà connu garde son nom (souvent plus parlant que le nom
+        // de dossier) : on ne fait que (re)lier le client.
+        db_set_project_client(&conn, "C:/p/x", Some("C")).unwrap();
+        assert_eq!(db_list_projects_with_client(&conn).unwrap()[0].1, "Nom choisi");
+        // Détachement explicite.
+        db_set_project_client(&conn, "C:/p/x", None).unwrap();
+        assert_eq!(db_list_projects_with_client(&conn).unwrap()[0].2, "");
+        // Client inconnu : aucune association, aucune erreur.
+        db_set_project_client(&conn, "C:/p/y", Some("Inconnu")).unwrap();
+        assert_eq!(db_project_client_map(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn reconcile_clients_matches_wanted_list() {
+        let conn = mem_conn();
+        db_add_client(&conn, "Ancien").unwrap();
+        db_set_project_client(&conn, "C:/p/A", Some("Ancien")).unwrap();
+        // Liste saisie dans les réglages : ajouts + retraits, sans toucher aux
+        // projets (le client retiré est simplement détaché).
+        db_reconcile_clients(&conn, &["Un".to_string(), "Deux".to_string()]).unwrap();
+        let names: Vec<String> = db_list_clients(&conn).unwrap().into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, vec!["Deux".to_string(), "Un".to_string()]);
+        assert_eq!(db_list_projects_with_client(&conn).unwrap().len(), 1);
+        assert_eq!(db_project_client_map(&conn).unwrap().len(), 0);
+        // Réconcilier avec la liste déjà en place ne change rien (idempotent).
+        db_reconcile_clients(&conn, &["Un".to_string(), "Deux".to_string()]).unwrap();
+        assert_eq!(db_list_clients(&conn).unwrap().len(), 2);
     }
 
     // Volet « Tâches » du panneau de la cloche (commit 5818b55) : la date

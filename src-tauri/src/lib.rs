@@ -1979,8 +1979,19 @@ fn get_config(state: State<AppState>, app: AppHandle) -> Result<AppConfig, Strin
 fn save_config(
     state: State<AppState>,
     app: AppHandle,
-    config: AppConfig,
+    mut config: AppConfig,
 ) -> Result<(), String> {
+    // Clients & association projet → client : la base de suivi de l'assistant est
+    // la source de vérité (elle est lue par le panneau « Projets & clients », le
+    // Suivi, le Kanban et l'assistant lui-même). La config n'en garde qu'un
+    // miroir : on le relit donc de la base avant d'écrire, pour qu'une config
+    // périmée ne vienne jamais contredire l'association réelle. La liste saisie
+    // dans les réglages est appliquée à la base par les commandes dédiées
+    // (`add_client` / `remove_client`), côté interface.
+    if let Some((clients, project_client)) = super_agent::read_clients_mirror(&app) {
+        config.super_agent_clients = clients;
+        config.super_agent_project_client = project_client;
+    }
     // Écrire sur le disque d'abord (opération lente), puis mettre à jour l'état
     save_config_disk(&app, &config)?;
     *state.config.lock().unwrap() = config;

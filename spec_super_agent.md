@@ -73,6 +73,11 @@ apprend et répond.
 - Chaque projet suivi peut être **attaché à un client** : dans le panneau
   **🏢 (Projets & clients)**, choisissez le client de chaque projet dans le menu
   déroulant. L'association est enregistrée immédiatement.
+- **Une seule source de vérité** : clients et associations vivent dans la
+  **base de suivi locale** (`super-agent.db`), pas dans la config — c'est la même
+  liste que celle du **Suivi**, du **Kanban** et de l'Assistant lui-même. La
+  config n'en garde qu'un miroir relu depuis la base. Retirer un client
+  **détache** ses projets (aucun projet ni tâche n'est supprimé).
 
 ### Rendu de la conversation (harmonisé avec l'agent)
 - La conversation avec l'Assistant utilise **le même rendu que l'agent

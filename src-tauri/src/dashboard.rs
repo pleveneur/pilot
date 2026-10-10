@@ -19,6 +19,7 @@ use serde_json::Value;
 use tauri::{AppHandle, State};
 
 use crate::agent_service::{ASSISTANT_SPACE, SUPERAGENT_ID};
+use crate::super_agent;
 use crate::{run_captured, AppState};
 
 /// Dossiers/dépendances/caches exclus du « poids du code source pur ».
@@ -885,7 +886,7 @@ pub(crate) fn human_size(bytes: u64) -> String {
 /// Commande principale : renvoie toutes les métriques du tableau de bord du
 /// projet actif. Lecture seule. Retourne un objet JSON structuré par section.
 #[tauri::command]
-pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
+pub fn get_project_dashboard(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let project_path = state.project_path.lock().unwrap().clone();
 
     // Aucun projet ouvert : retourner le volet Assistant uniquement (métriques
@@ -917,13 +918,7 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
         .and_then(|s| s.to_str())
         .unwrap_or(&project_path)
         .to_string();
-    let client = {
-        let cfg = state.config_snapshot();
-        cfg.super_agent_project_client
-            .get(&project_path)
-            .cloned()
-            .unwrap_or_default()
-    };
+    let client = super_agent_client_for(&app, &project_path);
     let refreshed_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     // ── Stockage & poids ──
@@ -1058,6 +1053,26 @@ pub fn get_project_dashboard(state: State<AppState>) -> Result<Value, String> {
 /// chemin, nom, client associé, activité de l'agent (occupé ?), nombre de
 /// tâches (total + ouvertes), statut de suivi et horodatage de la dernière
 /// session indexée. Lecture seule — ne modifie aucun fichier.
+// ── Client associé à un projet : la base de suivi est la source de vérité ──
+
+/// Association `chemin de projet → nom de client`, lue dans la base de suivi de
+/// l'assistant (`projects.client_id` → `clients.name`) — la même que celle du
+/// Suivi et du panneau « Projets & clients ». Lecture seule : une base absente
+/// ou illisible donne une association vide (jamais d'erreur d'affichage).
+fn super_agent_client_map(app: &AppHandle) -> HashMap<String, String> {
+    super_agent::read_clients_mirror(app)
+        .map(|(_, map)| map)
+        .unwrap_or_default()
+}
+
+/// Nom du client d'un projet (chaîne vide si aucun), lu dans la base de suivi.
+fn super_agent_client_for(app: &AppHandle, project_path: &str) -> String {
+    super_agent_client_map(app)
+        .get(project_path)
+        .cloned()
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
     let config = state.config_snapshot();
@@ -1076,7 +1091,10 @@ pub fn get_project_tracking(state: State<AppState>, app: AppHandle) -> Result<Va
     let mut seen = std::collections::HashSet::new();
     projects.retain(|p| seen.insert(p.clone()));
     let active = state.active_project.lock().unwrap().clone();
-    let client_map = config.super_agent_project_client.clone();
+    // Client par projet : lu dans la BASE DE SUIVI (source de vérité, comme le
+    // Suivi et le panneau « Projets & clients ») — la config n'en est qu'un
+    // miroir, qui peut être en retard.
+    let client_map = super_agent_client_map(&app);
     drop(config);
 
     // Activité de l'agent par projet (issue #13). Calculée sous le verrou puis
