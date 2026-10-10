@@ -3,13 +3,13 @@
 > Résumé concis (≤ 30 lignes) : **état global + liens vers les specs détaillées**.
 > Pas d'historique des étapes terminées — il vit dans les specs par domaine et `git log`.
 
-## 🔴 Priorité n°1 — Super-agent 🧭 : bugs + erreurs console (À TRAITER EN PREMIER)
-Signaux utilisateur persistants depuis la TÂCHE 2 (open_project / delegate_to_coder,
-association projet→client, nom de l'assistant injecté). Pistes : `pilot-assistant-actions.ts`,
-`super_agent.rs` (extension + prompt système), `super-agent.js` (sentinel
-`PILOT_ASSISTANT_ACTION::`, panneau Projets & clients, `pilot-config-changed`),
-`tabs.js` (`updateSuperAgentLabel`), `list_super_agent_projects`. Reproduire en console,
-corriger, vérifier qu'`ask_pi_caged_timed` (help/review/agents_md) n'est pas cassé.
+## 🟠 Super-agent 🧭 — reste à traiter
+Signaux utilisateur depuis la TÂCHE 2 : `open_project` / `delegate_to_coder` (**non
+reproduits** : chemins relus, corrects ; les défauts voisins déjà corrigés depuis
+`8ae8551`), erreurs console de l'onglet (**aucune reproduite**).
+✅ Corrigés (2026-10-11) : **association projet → client** (`0b0df74`, source de vérité
+unique : la base de suivi) et **nom de l'assistant** (`ff7b43f`, plus de « Magnus » codé
+en dur). Voir [`spec_super_agent.md`](spec_super_agent.md) § Gérer les clients / Paramètres.
 
 ## Statut global
 - Phases 1 à 10 : ✅ terminées. Prochaine étape hors GDS : **H4 (Plan Editor)**.
