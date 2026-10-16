@@ -24,7 +24,7 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   toggleSelection, selectionCount, canCloseSelection, bulkCloseConfirmMessage,
   planBulkClose, buildBulkUndoPlan,
   buildKanbanColumns, listKanbanProjects, filterKanbanTasks, selectKanbanIdeas,
-  formatCardProject, isBlockedTask } from "./super-agent-kanban.js";
+  formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -166,16 +166,20 @@ export function createSuperKanban(container) {
     const desc = escapeHtml((t.description || "").slice(0, 140));
     const blocked = isBlockedTask(t);
     const blocker = blocked ? escapeHtml(String(t.blocker_reason).trim().slice(0, 200)) : "";
+    // Dependance « attend la tache X » : etat DISTINCT du blocage par incident.
+    const waiting = isWaitingDependency(t);
+    const depLabel = waiting ? dependencyLabel(t) : "";
     const selKey = normalizeTaskStatus(t.status);
     const selOpts = STATUS_OPTIONS
       .map(([k, l]) => `<option value="${k}" ${k === selKey ? "selected" : ""}>${l}</option>`)
       .join("");
-    return `<div class="super-kanban-card${blocked ? " blocked" : ""}" draggable="true" data-task-id="${t.id}">
+    return `<div class="super-kanban-card${blocked ? " blocked" : ""}${waiting ? " waiting-dep" : ""}" draggable="true" data-task-id="${t.id}">
       <div class="super-kanban-card-head">
         <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
         <div class="super-kanban-card-title">${title}</div>
       </div>
       ${blocked ? `<div class="super-kanban-card-blocker" title="${blocker}"><i data-lucide="alert-triangle" class="icon-sm"></i> Bloquée : ${blocker}</div>` : ""}
+      ${waiting ? `<div class="super-kanban-card-dependency" title="${escapeAttr(depLabel)}"><i data-lucide="link-2" class="icon-sm"></i> ${escapeHtml(depLabel)}</div>` : ""}
       ${proj ? `<div class="super-kanban-card-proj"><i data-lucide="folder" class="icon-sm"></i> ${proj}</div>` : ""}
       ${desc ? `<div class="super-kanban-card-desc">${desc}</div>` : ""}
       <div class="super-kanban-card-tools">

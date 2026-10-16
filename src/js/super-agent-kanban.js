@@ -535,3 +535,43 @@ export function formatCardProject(item) {
 export function isBlockedTask(task) {
   return String((task && task.blocker_reason) || "").trim().length > 0;
 }
+
+/**
+ * Etat de dependance d'une tache vis-a-vis de la tache qu'elle attend
+ * ("attend la tache X"). L'etat est calcule par le coeur
+ * (`dependency_state` de `get_super_agent_kanban`) : "waiting" (la tache
+ * attendue n'est pas close), "ready" (pas de dependance, ou dependance close),
+ * "unknown" (lien mort). Un champ absent (reponse d'un coeur plus ancien) est
+ * traite comme "ready" : on ne devine JAMAIS un « en attente ». Pur.
+ * @param {{dependency_state?: string}} task
+ * @returns {"waiting"|"ready"|"unknown"}
+ */
+export function taskDependencyState(task) {
+  const state = String((task && task.dependency_state) || "").trim();
+  if (state === "waiting" || state === "ready" || state === "unknown") return state;
+  return "ready";
+}
+
+/**
+ * La tache attend-elle une autre tache NON close ? Distinct du blocage par
+ * incident (`isBlockedTask` / `blocker_reason`). Pur.
+ * @param {{dependency_state?: string}} task
+ * @returns {boolean}
+ */
+export function isWaitingDependency(task) {
+  return taskDependencyState(task) === "waiting";
+}
+
+/**
+ * Libelle du badge « En attente de : <titre> » d'une tache freinee par une
+ * dependance. Retourne "" si la tache n'est pas en attente. Le titre vient du
+ * coeur (`depends_on_title`) ; sans titre connu, on reste generique pour ne pas
+ * inventer. Distinct du motif de blocage (incident). Pur.
+ * @param {{dependency_state?: string, depends_on_title?: string}} task
+ * @returns {string}
+ */
+export function dependencyLabel(task) {
+  if (!isWaitingDependency(task)) return "";
+  const title = String((task && task.depends_on_title) || "").trim();
+  return title ? `En attente de : ${title}` : "En attente d'une autre tache";
+}

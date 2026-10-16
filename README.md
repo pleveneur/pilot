@@ -71,6 +71,7 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **Sélecteur de projet** en haut : **« Tous les projets »** (défaut) ou **un projet précis** — votre choix est **conservé** d'une ouverture à l'autre. En mode « tous les projets », **chaque carte indique son projet** (et le client s'il est renseigné).
 - **Idées** : vos **idées d'évolution** apparaissent en **sous-catégorie « Idées »** dans la colonne « À faire », visuellement séparées des tâches à faire (aucune confusion entre une idée et une tâche).
 - **Tâches bloquées** : une tâche bloquée affiche en rouge le **motif du blocage** directement sur sa carte.
+- **Tâches qui en attendent une autre** : une tâche peut **attendre** une autre tâche (« attend la tâche X ») et affiche un badge bleu **« En attente de : <titre> »**. Elle redevient disponible **toute seule** dès que la tâche attendue est terminée ou annulée — sans manipulation. Les chaînes (A attend B qui attend C) sont gérées ; un lien circulaire est refusé.
 - **Pilotage direct** : créer, éditer, glisser une carte d'une colonne à l'autre, supprimer (confirmation en deux temps), et **clôturer plusieurs tâches d'un coup** (avec annulation possible). Tout reste dans la base de suivi locale de l'Assistant.
 
 ### Terminal intégré (xterm.js + PTY)

@@ -31,17 +31,45 @@ export default function (pi: ExtensionAPI) {
       "Créer une tâche de suivi dans un projet. Retourne { ok, task_id }. Utilise-la pour enregistrer une tâche à suivre pour un projet.",
     promptSnippet: "create_task: créer une tâche de suivi dans un projet",
     promptGuidelines: [
-      "Use create_task to record a task to track for a project. Provide the absolute project path and a title. Optionally add a description and a deadline (ISO date).",
+      "Use create_task to record a task to track for a project. Provide the absolute project path and a title. Optionally add a description, a deadline (ISO date), and dependsOnTaskId to make this task wait until another task is finished (wait for task X).",
     ],
     parameters: Type.Object({
       projectPath: Type.String({ description: "Chemin absolu du projet" }),
       title: Type.String({ description: "Titre de la tâche" }),
       description: Type.Optional(Type.String({ description: "Description de la tâche" })),
       deadline: Type.Optional(Type.String({ description: "Échéance (date ISO)" })),
+      dependsOnTaskId: Type.Optional(
+        Type.Number({ description: "Id de la tâche à attendre avant de démarrer celle-ci" }),
+      ),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const result = await ctx.ui.input(TOOLS_SENTINEL + "create_task::" + JSON.stringify(params), "");
+      if (result == null) {
+        return { content: [{ type: "text", text: "Requête annulée." }] };
+      }
+      return { content: [{ type: "text", text: result }] };
+    },
+  });
+
+  pi.registerTool({
+    name: "set_task_dependency",
+    label: "Set Task Dependency",
+    description:
+      "Définir (ou effacer) la dépendance d'une tâche : elle ne sera prête à démarrer qu'une fois la tâche attendue terminée ou annulée. Refuse un lien sur soi-même et les cycles. Retourne { ok, task_id, depends_on_task_id, depends_on_title, dependency_state }.",
+    promptSnippet: "set_task_dependency: faire attendre une tâche une autre tâche",
+    promptGuidelines: [
+      "Use set_task_dependency to make a task wait for another task (wait for task X). Provide the task id and the dependsOnTaskId of the task to wait for; omit dependsOnTaskId (or pass 0) to clear the dependency. Circular links are refused.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.Number({ description: "Identifiant de la tâche à conditionner" }),
+      dependsOnTaskId: Type.Optional(
+        Type.Number({ description: "Id de la tâche à attendre, omettre (ou 0) pour effacer" }),
+      ),
+    }),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await ctx.ui.input(TOOLS_SENTINEL + "set_task_dependency::" + JSON.stringify(params), "");
       if (result == null) {
         return { content: [{ type: "text", text: "Requête annulée." }] };
       }

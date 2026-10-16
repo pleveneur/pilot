@@ -3412,6 +3412,7 @@ pub fn run() {
             super_agent::super_agent_schedule_list,
             super_agent::super_agent_schedule_tick,
             super_agent::super_agent_create_task,
+            super_agent::super_agent_set_task_dependency,
             super_agent::super_agent_update_task,
             super_agent::super_agent_delete_task,
             super_agent::super_agent_update_task_status,

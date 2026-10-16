@@ -1436,6 +1436,20 @@ uniquement un bloc d'instructions dans le prompt système.
   (posée via `super_agent_flag_blocker`) affiche un **badge rouge « Bloquée :
   <motif> »** sur sa carte (règle pure `isBlockedTask`), et la carte est marquée
   visuellement — le blocage reste **distinct** et **lisible**.
+- **Tâches en attente d'une dépendance (« attend la tâche X »)** : une tâche peut
+  **attendre** une autre tâche (`depends_on_task_id`) — elle ne sera prête à
+  démarrer qu'une fois la tâche attendue **terminée ou annulée**. Tant que ce
+  n'est pas le cas, sa carte affiche un **badge bleu « En attente de : <titre> »**
+  (règles pures `isWaitingDependency` / `dependencyLabel`), **distinct** du badge
+  rouge de blocage : une **attente** (qui se lève **toute seule**) n'est pas une
+  **panne** (qui demande une action). L'état est **calculé à la lecture** par le
+  cœur (`dependency_state` : `waiting` / `ready` / `unknown`), **jamais stocké** :
+  dès que la tâche attendue est close, la dépendance **cesse de bloquer sans
+  aucune étape manuelle**. Les **chaînes** (A attend B qui attend C) sont permises ;
+  un **lien circulaire** ou un **lien sur soi-même** est **refusé** à l'écriture ;
+  une dépendance vers une tâche **supprimée** est **détachée** automatiquement.
+  La colonne est ajoutée par **migration additive** (une base ancienne s'ouvre
+  sans perte de données).
 - **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
   `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
   **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
@@ -1450,6 +1464,11 @@ uniquement un bloc d'instructions dans le prompt système.
   - Un bouton **« + Nouvelle carte »** (barre d'outils) ouvre un formulaire
     (projet, titre, description, échéance) → `super_agent_create_task` ; en mode
     projet filtré, le **projet affiché est pré-rempli**
+  - La **dépendance** « attend la tâche X » se pose via
+    `super_agent_set_task_dependency` (créer = `depends_on_task_id` sur
+    `super_agent_create_task`) : l'**Assistant** peut la poser depuis ses outils
+    (`set_task_dependency`, `create_task` avec `dependsOnTaskId`), et le **cœur
+    refuse** un cycle ou un lien sur soi-même avec un message clair.
   - Chaque carte a des boutons **éditer** (titre, description, projet,
     échéance, statut) et **supprimer** (confirmation en deux temps) →
     `super_agent_update_task` / `super_agent_delete_task`.

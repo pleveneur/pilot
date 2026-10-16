@@ -22,6 +22,9 @@ import {
   isOpenIdeaStatus,
   formatCardProject,
   isBlockedTask,
+  taskDependencyState,
+  isWaitingDependency,
+  dependencyLabel,
 } from "./super-agent-kanban.js";
 
 describe("KANBAN_COLUMNS", () => {
@@ -426,5 +429,47 @@ describe("isBlockedTask", () => {
     expect(isBlockedTask({ blocker_reason: null })).toBe(false);
     expect(isBlockedTask({})).toBe(false);
     expect(isBlockedTask(null)).toBe(false);
+  });
+});
+
+// Dépendances entre tâches (« attend la tâche X ») : l'état est calculé par le
+// cœur (`dependency_state`). L'interface ne devine jamais un « en attente » et
+// distingue cette attente du blocage par incident (`blocker_reason`).
+describe("taskDependencyState", () => {
+  it("lit l'état fourni par le cœur, sinon considère la tâche prête", () => {
+    expect(taskDependencyState({ dependency_state: "waiting" })).toBe("waiting");
+    expect(taskDependencyState({ dependency_state: "ready" })).toBe("ready");
+    expect(taskDependencyState({ dependency_state: "unknown" })).toBe("unknown");
+    // Champ absent (cœur plus ancien) : jamais un « en attente » inventé.
+    expect(taskDependencyState({})).toBe("ready");
+    expect(taskDependencyState(null)).toBe("ready");
+    // Valeur inconnue : traité comme prête (fail-open d'affichage).
+    expect(taskDependencyState({ dependency_state: "bizarre" })).toBe("ready");
+  });
+});
+
+describe("isWaitingDependency", () => {
+  it("ne vaut vrai que pour une dépendance non close", () => {
+    expect(isWaitingDependency({ dependency_state: "waiting" })).toBe(true);
+    expect(isWaitingDependency({ dependency_state: "ready" })).toBe(false);
+    expect(isWaitingDependency({ dependency_state: "unknown" })).toBe(false);
+    // Une tâche bloquée par incident n'attend pas forcément une tâche.
+    expect(isWaitingDependency({ blocker_reason: "Panne" })).toBe(false);
+    expect(isWaitingDependency(null)).toBe(false);
+  });
+});
+
+describe("dependencyLabel", () => {
+  it("nomme la tâche attendue, reste générique sans titre, vide sinon", () => {
+    expect(dependencyLabel({ dependency_state: "waiting", depends_on_title: "Specs" })).toBe(
+      "En attente de : Specs",
+    );
+    expect(dependencyLabel({ dependency_state: "waiting" })).toBe(
+      "En attente d'une autre tache",
+    );
+    // Pas en attente → aucun libellé (carte normale ou blocage par incident).
+    expect(dependencyLabel({ dependency_state: "ready", depends_on_title: "Specs" })).toBe("");
+    expect(dependencyLabel({ blocker_reason: "Panne" })).toBe("");
+    expect(dependencyLabel(null)).toBe("");
   });
 });

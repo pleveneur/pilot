@@ -129,6 +129,11 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "tasks", "deadline", "TEXT")?;
     ensure_column(conn, "tasks", "blocker_reason", "TEXT")?;
     ensure_column(conn, "tasks", "source_task_id", "INTEGER")?;
+    // Dependances entre taches : une tache peut « attendre » une autre tache
+    // (elle ne sera prete a demarrer qu'une fois celle-ci terminee ou annulee).
+    // Migration ADDITIVE (colonne ajoutee, rien detruit) : une base ancienne
+    // s'ouvre toujours et ses donnees sont conservees.
+    ensure_column(conn, "tasks", "depends_on_task_id", "INTEGER")?;
     // T1 : migration idempotente de la colonne `delivered` (résumés déjà en
     // base sur les anciennes bases). Les anciens résumés non livrés restent
     // `delivered=0` et seront rejoués à la prochaine opportunité.
@@ -2078,6 +2083,97 @@ fn task_counts(conn: &Connection, project_id: i64) -> (i64, i64) {
     (open, done)
 }
 
+// ── Dependances entre taches du suivi ──
+//
+// Une tache peut « attendre » une autre tache (colonne `depends_on_task_id`) :
+// tant que la tache attendue n'est pas close (terminee ou annulee), la tache
+// n'est PAS prete a demarrer. La dependance est DERIVEE a la lecture (aucun
+// drapeau stocke) : des que la tache attendue est close, la tache redevient
+// prete sans geste manuel. Une chaine (A attend B qui attend C) est permise ;
+// un lien circulaire est refuse a l'ecriture. La logique d'affichage (badge)
+// reste cote interface (`super-agent-kanban.js`).
+
+/// Profondeur maximale de parcours d'une chaine de dependances. Borne la
+/// detection de cycle : une base exterieure deja cyclique ne peut jamais faire
+/// boucler la verification (on s'arrete et on refuse prudemment).
+const DEPENDENCY_MAX_DEPTH: usize = 512;
+
+/// Statut (lu en base) de la tache `task_id`, ou `None` si introuvable.
+fn task_status_of(conn: &Connection, task_id: i64) -> Option<String> {
+    conn.query_row(
+        "SELECT status FROM tasks WHERE id = ?1",
+        rusqlite::params![task_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Titre de la tache `task_id`, ou `None` si introuvable.
+fn task_title_of(conn: &Connection, task_id: i64) -> Option<String> {
+    conn.query_row(
+        "SELECT title FROM tasks WHERE id = ?1",
+        rusqlite::params![task_id],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// Une dependance FREINE-t-elle la tache attendue ? Oui tant que la tache
+/// attendue existe et n'est ni terminee ni annulee (regle unique
+/// `classify_task_status`). Un statut « a qualifier » freine (il n'est pas une
+/// fin) ; une tache attendue absente (lien mort) ne freine jamais.
+fn dependency_is_waiting(depends_status: Option<&str>) -> bool {
+    match depends_status {
+        None => false,
+        Some(s) => !matches!(classify_task_status(s), "done" | "cancelled"),
+    }
+}
+
+/// Etat de dependance d'une tache pour l'affichage : "waiting" (la tache
+/// attendue n'est pas close), "ready" (pas de dependance, ou dependance close),
+/// ou "unknown" (lien mort : la tache attendue n'existe plus). L'affichage ne
+/// considere "waiting" que comme frein.
+fn dependency_state_of(conn: &Connection, depends_on_id: Option<i64>) -> &'static str {
+    match depends_on_id {
+        None => "ready",
+        Some(id) => match task_status_of(conn, id) {
+            None => "unknown",
+            Some(s) if dependency_is_waiting(Some(&s)) => "waiting",
+            Some(_) => "ready",
+        },
+    }
+}
+
+/// Detecte si definir `task_id -> depends_on_id` creerait un CYCLE (la tache
+/// attendue depend deja, directement ou par chaine, de la tache a contraindre).
+/// Parcours BORNE (`DEPENDENCY_MAX_DEPTH`) : jamais de boucle infinie. Une
+/// chaine trop longue est refusee par prudence plutot qu'ecrite sans validation.
+fn dependency_would_cycle(
+    conn: &Connection,
+    task_id: i64,
+    depends_on_id: i64,
+) -> Result<bool, String> {
+    if task_id == depends_on_id {
+        return Ok(true);
+    }
+    let mut current = depends_on_id;
+    for _ in 0..DEPENDENCY_MAX_DEPTH {
+        let next: Option<i64> = conn
+            .query_row(
+                "SELECT depends_on_task_id FROM tasks WHERE id = ?1",
+                rusqlite::params![current],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .unwrap_or(None);
+        match next {
+            Some(n) if n == task_id => return Ok(true),
+            Some(n) => current = n,
+            None => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
 // ── Tableau de bord de suivi multi-projets ──
 
 /// Renvoie un tableau de bord structuré de suivi multi-projets : clients,
@@ -2208,10 +2304,12 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
     let mut stmt = conn
         .prepare(
             "SELECT c.name, p.name, p.path, t.id, t.title, t.description, \
-                    t.status, t.deadline, t.created_at, t.updated_at, t.blocker_reason \
+                    t.status, t.deadline, t.created_at, t.updated_at, t.blocker_reason, \
+                    t.depends_on_task_id, d.title, d.status \
              FROM tasks t \
              JOIN projects p ON p.id = t.project_id \
              LEFT JOIN clients c ON c.id = p.client_id \
+             LEFT JOIN tasks d ON d.id = t.depends_on_task_id \
              ORDER BY c.name, p.name, t.created_at",
         )
         .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
@@ -2230,6 +2328,9 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
                 r.get::<_, String>(8)?,
                 r.get::<_, String>(9)?,
                 r.get::<_, Option<String>>(10)?,
+                r.get::<_, Option<i64>>(11)?,
+                r.get::<_, Option<String>>(12)?,
+                r.get::<_, Option<String>>(13)?,
             ))
         })
         .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
@@ -2251,9 +2352,24 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
             created,
             updated,
             blocker_reason,
+            depends_on_task_id,
+            depends_on_title,
+            depends_on_status,
         )) = row
         {
             let client_name = client.unwrap_or_else(|| "Sans client".to_string());
+            // Etat DERIVE : une dependance pointant vers une tache absente (lien
+            // mort) est "unknown" et ne freine pas ; une tache attendue encore
+            // ouverte est "waiting".
+            let dependency_state = if depends_on_task_id.is_some() {
+                match depends_on_status.as_deref() {
+                    None => "unknown",
+                    Some(s) if dependency_is_waiting(Some(s)) => "waiting",
+                    Some(_) => "ready",
+                }
+            } else {
+                "ready"
+            };
             let task = serde_json::json!({
                 "id": tid,
                 "title": title,
@@ -2266,6 +2382,9 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
                 "project_path": ppath,
                 "client_name": client_name,
                 "blocker_reason": blocker_reason,
+                "depends_on_task_id": depends_on_task_id,
+                "depends_on_title": depends_on_title,
+                "dependency_state": dependency_state,
             });
             match index.get(&client_name) {
                 Some(&i) => {
@@ -2822,7 +2941,10 @@ fn resolve_project_id(conn: &Connection, project_path: &str) -> Result<i64, Stri
     .map_err(|e| format!("Projet introuvable après upsert: {}", e))
 }
 
-/// A4 — Crée une tâche dans un projet. Retourne `{ ok, task_id }`.
+/// A4 — Crée une tâche dans un projet. Retourne `{ ok, task_id }`. Un
+/// `depends_on_task_id` optionnel pose dès la création la dépendance « attend la
+/// tâche X » (la tâche attendue doit exister ; aucun cycle possible sur une
+/// tâche qui vient d'être créée).
 #[tauri::command]
 pub fn super_agent_create_task(
     app: AppHandle,
@@ -2830,6 +2952,7 @@ pub fn super_agent_create_task(
     title: String,
     description: Option<String>,
     deadline: Option<String>,
+    depends_on_task_id: Option<i64>,
 ) -> Result<Value, String> {
     let title = title.trim();
     if title.is_empty() {
@@ -2837,12 +2960,77 @@ pub fn super_agent_create_task(
     }
     let conn = open_db(&app)?;
     let project_id = resolve_project_id(&conn, &project_path)?;
+    let depends_on = match depends_on_task_id {
+        Some(id) if id > 0 => Some(id),
+        _ => None,
+    };
+    if let Some(dep) = depends_on {
+        if task_status_of(&conn, dep).is_none() {
+            return Err(format!("create_task : tache attendue {} introuvable", dep));
+        }
+    }
     conn.execute(
-        "INSERT INTO tasks (project_id, title, description, deadline, status) VALUES (?1, ?2, ?3, ?4, 'demande')",
-        rusqlite::params![project_id, title, description.unwrap_or_default(), deadline],
+        "INSERT INTO tasks (project_id, title, description, deadline, status, depends_on_task_id) VALUES (?1, ?2, ?3, ?4, 'demande', ?5)",
+        rusqlite::params![project_id, title, description.unwrap_or_default(), deadline, depends_on],
     )
     .map_err(|e| format!("Erreur création tâche: {}", e))?;
-    Ok(serde_json::json!({ "ok": true, "task_id": conn.last_insert_rowid() }))
+    let task_id = conn.last_insert_rowid();
+    Ok(serde_json::json!({
+        "ok": true,
+        "task_id": task_id,
+        "depends_on_task_id": depends_on,
+    }))
+}
+
+/// Definit (ou efface) la dependance d'une tache de suivi : la tache ne sera
+/// prete a demarrer qu'une fois la tache attendue terminee (ou annulee). Refuse
+/// un lien sur soi-meme et un lien circulaire (parcours borne). Un
+/// `depends_on_task_id` absent ou <= 0 EFFACE la dependance. Retourne
+/// `{ ok, task_id, depends_on_task_id, depends_on_title, dependency_state }`.
+#[tauri::command]
+pub fn super_agent_set_task_dependency(
+    app: AppHandle,
+    task_id: i64,
+    depends_on_task_id: Option<i64>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    // La tache a contraindre doit exister (message clair plutot qu'un UPDATE muet).
+    if task_status_of(&conn, task_id).is_none() {
+        return Err(format!("Tache {} introuvable", task_id));
+    }
+    let depends_on = match depends_on_task_id {
+        Some(id) if id > 0 => Some(id),
+        _ => None,
+    };
+    if let Some(dep) = depends_on {
+        if dep == task_id {
+            return Err(
+                "Dependance refusee : une tache ne peut pas attendre elle-meme".to_string(),
+            );
+        }
+        if task_status_of(&conn, dep).is_none() {
+            return Err(format!("Tache attendue {} introuvable", dep));
+        }
+        if dependency_would_cycle(&conn, task_id, dep)? {
+            return Err(
+                "Dependance refusee : cela creerait un cycle (la tache attendue depend deja de celle-ci)"
+                    .to_string(),
+            );
+        }
+    }
+    conn.execute(
+        "UPDATE tasks SET depends_on_task_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+        rusqlite::params![depends_on, task_id],
+    )
+    .map_err(|e| format!("Erreur mise a jour dependance: {}", e))?;
+    let depends_on_title = depends_on.and_then(|d| task_title_of(&conn, d));
+    Ok(serde_json::json!({
+        "ok": true,
+        "task_id": task_id,
+        "depends_on_task_id": depends_on,
+        "depends_on_title": depends_on_title,
+        "dependency_state": dependency_state_of(&conn, depends_on),
+    }))
 }
 
 /// A4.1 — Met à jour les champs fournis (non-None) d'une tâche : titre,
@@ -2924,6 +3112,12 @@ pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, St
     // bloque jamais la suppression sur un souci de décisions).
     let _ = conn.execute(
         "DELETE FROM decisions WHERE task_id = ?1",
+        rusqlite::params![task_id],
+    );
+    // Nettoyage des DEPENDANCES pointant vers cette tache : aucune tache ne doit
+    // rester en attente d'une tache supprimee (lien mort).
+    let _ = conn.execute(
+        "UPDATE tasks SET depends_on_task_id = NULL WHERE depends_on_task_id = ?1",
         rusqlite::params![task_id],
     );
     let n = conn
@@ -4108,7 +4302,7 @@ pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
     {
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, created_at, updated_at FROM tasks ORDER BY id",
+                "SELECT id, project_id, title, description, status, deadline, blocker_reason, source_task_id, depends_on_task_id, created_at, updated_at FROM tasks ORDER BY id",
             )
             .map_err(|e| format!("Erreur lecture tâches : {}", e))?;
         let rows = stmt
@@ -4122,8 +4316,9 @@ pub(crate) fn serialize_tracking(conn: &Connection) -> Result<Value, String> {
                     "deadline": r.get::<_, Option<String>>(5)?,
                     "blocker_reason": r.get::<_, Option<String>>(6)?,
                     "source_task_id": r.get::<_, Option<i64>>(7)?,
-                    "created_at": r.get::<_, String>(8)?,
-                    "updated_at": r.get::<_, String>(9)?,
+                    "depends_on_task_id": r.get::<_, Option<i64>>(8)?,
+                    "created_at": r.get::<_, String>(9)?,
+                    "updated_at": r.get::<_, String>(10)?,
                 }))
             })
             .map_err(|e| format!("Erreur lecture tâches : {}", e))?;
@@ -4323,18 +4518,33 @@ pub(crate) fn replace_tracking(conn: &Connection, data: &Value) -> Result<Vec<St
                 .map_err(|e| format!("Erreur insertion tâche « {} » : {}", title, e))?;
                 task_map.insert(old, conn.last_insert_rowid());
             }
-            // Second passage : source_task_id (handoff) réécrit après toutes les
-            // insertions (référence vers une tâche potentiellement plus tardive).
+            // Second passage : source_task_id (handoff) et depends_on_task_id
+            // (dependance) reecrits apres toutes les insertions (reference vers un
+            // identifiant reattribue a l'import).
             for t in tasks {
                 let old = t.get("id").and_then(|x| x.as_i64());
                 let src_old = t.get("source_task_id").and_then(|x| x.as_i64());
-                if let (Some(o), Some(so)) = (old, src_old) {
-                    if let (Some(&new_id), Some(&src_new)) = (task_map.get(&o), task_map.get(&so)) {
+                let dep_old = t.get("depends_on_task_id").and_then(|x| x.as_i64());
+                let new_id = match old.and_then(|o| task_map.get(&o)).copied() {
+                    Some(id) => id,
+                    None => continue,
+                };
+                if let Some(so) = src_old {
+                    if let Some(&src_new) = task_map.get(&so) {
                         conn.execute(
                             "UPDATE tasks SET source_task_id = ?1 WHERE id = ?2",
                             rusqlite::params![src_new, new_id],
                         )
-                        .map_err(|e| format!("Erreur réécriture source_task_id : {}", e))?;
+                        .map_err(|e| format!("Erreur reecriture source_task_id : {}", e))?;
+                    }
+                }
+                if let Some(dep) = dep_old {
+                    if let Some(&dep_new) = task_map.get(&dep) {
+                        conn.execute(
+                            "UPDATE tasks SET depends_on_task_id = ?1 WHERE id = ?2",
+                            rusqlite::params![dep_new, new_id],
+                        )
+                        .map_err(|e| format!("Erreur reecriture depends_on_task_id : {}", e))?;
                     }
                 }
             }
@@ -4607,7 +4817,8 @@ mod tests {
         build_capped_injection_message, build_project_context, classify_task_status,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
-        deliver_one_summary, enqueue_session_summary, init_db, is_task_open, kanban_ideas,
+        deliver_one_summary,
+        enqueue_session_summary, init_db, is_task_open, kanban_ideas,
         kanban_tasks,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
@@ -4932,6 +5143,148 @@ mod tests {
         let task = &data["clients"][0]["tasks"][0];
         assert_eq!(task["blocker_reason"], "En attente de decision");
         assert_eq!(task["client_name"], "Client A");
+    }
+
+    // Dependances entre taches (« attend la tache X ») : l'etat est DERIVE a la
+    // lecture de l'etat de la tache attendue, jamais stocke. Ce test verrouille
+    // la regle de deblocage automatique (aucun geste manuel) et le fait qu'un
+    // lien mort ne freine jamais.
+    #[test]
+    fn dependency_state_follows_closure_without_stored_flag() {
+        // Imports locaux : le module de tests est compile hors `cfg(test)`,
+        // les lister en tete ferait apparaitre un avertissement d'import inutilise.
+        use super::{dependency_is_waiting, dependency_state_of};
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO projects (path, name) VALUES ('/p/a', 'A');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Base', 'demande');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Suite', 'demande');",
+        )
+        .unwrap();
+        // Aucune dependance : la tache est prete.
+        assert_eq!(dependency_state_of(&conn, None), "ready");
+        // « Suite » attend « Base » (encore ouverte) → en attente.
+        conn.execute("UPDATE tasks SET depends_on_task_id = 1 WHERE id = 2", [])
+            .unwrap();
+        assert_eq!(dependency_state_of(&conn, Some(1)), "waiting");
+        // Le statut libre « a qualifier » n'est PAS une fin : la dependance freine.
+        conn.execute("UPDATE tasks SET status = 'redaction_specs' WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(dependency_state_of(&conn, Some(1)), "waiting");
+        // La tache attendue est TERMINEE → la dependance cesse de freiner, SANS
+        // geste manuel (aucun drapeau stocke).
+        conn.execute("UPDATE tasks SET status = 'terminee' WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(dependency_state_of(&conn, Some(1)), "ready");
+        // Une tache attendue ANNULEE ne freine pas non plus.
+        conn.execute("UPDATE tasks SET status = 'annulee' WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(dependency_state_of(&conn, Some(1)), "ready");
+        // Lien mort (tache attendue introuvable) : signale « unknown » mais ne
+        // freine jamais (on ne bloque pas pour un lien mort).
+        assert_eq!(dependency_state_of(&conn, Some(999)), "unknown");
+        assert!(!dependency_is_waiting(None));
+    }
+
+    // Chaines de dependances (A attend B qui attend C) : autorisees et bornees.
+    // Cycle et lien sur soi-meme : refuses avant toute ecriture.
+    #[test]
+    fn dependency_cycle_and_self_link_are_refused() {
+        use super::dependency_would_cycle;
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO projects (path, name) VALUES ('/p/a', 'A');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'A', 'demande');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'B', 'demande');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'C', 'demande');",
+        )
+        .unwrap();
+        // Chaine A -> B -> C : autorisee.
+        assert!(!dependency_would_cycle(&conn, 1, 2).unwrap());
+        conn.execute("UPDATE tasks SET depends_on_task_id = 2 WHERE id = 1", [])
+            .unwrap();
+        assert!(!dependency_would_cycle(&conn, 2, 3).unwrap());
+        conn.execute("UPDATE tasks SET depends_on_task_id = 3 WHERE id = 2", [])
+            .unwrap();
+        // Fermer la boucle (C attend A) serait un cycle : refuse.
+        assert!(dependency_would_cycle(&conn, 3, 1).unwrap());
+        // Lien sur soi-meme : refuse.
+        assert!(dependency_would_cycle(&conn, 3, 3).unwrap());
+        // Une base deja cyclique ne fait JAMAIS boucler la verification (parcours
+        // borne) : on refuse par prudence sans se figer.
+        conn.execute("UPDATE tasks SET depends_on_task_id = 1 WHERE id = 3", [])
+            .unwrap();
+        assert!(dependency_would_cycle(&conn, 99, 1).unwrap());
+    }
+
+    // Kanban : l'etat de dependance et le titre de la tache attendue DOIVENT
+    // ressortir sur la carte pour l'affichage « en attente de : <titre> ».
+    #[test]
+    fn kanban_tasks_exposes_dependency_state() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'A', 1);\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Attendue', 'en_cours');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Suivante', 'demande');",
+        )
+        .unwrap();
+        conn.execute("UPDATE tasks SET depends_on_task_id = 1 WHERE id = 2", [])
+            .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        let suivante = tasks.iter().find(|t| t["title"] == "Suivante").unwrap();
+        assert_eq!(suivante["depends_on_task_id"], 1);
+        assert_eq!(suivante["depends_on_title"], "Attendue");
+        assert_eq!(suivante["dependency_state"], "waiting");
+        // Sans dependance : etat « ready » explicite (cle presente).
+        let attendue = tasks.iter().find(|t| t["title"] == "Attendue").unwrap();
+        assert!(attendue["depends_on_task_id"].is_null());
+        assert!(attendue["depends_on_title"].is_null());
+        assert_eq!(attendue["dependency_state"], "ready");
+    }
+
+    // Une base ANCIENNE (table `tasks` sans la colonne `depends_on_task_id`)
+    // DOIT s'ouvrir sans erreur, gagner la colonne par migration additive et
+    // conserver ses donnees. `init_db` doit rester idempotent.
+    #[test]
+    fn old_tracking_base_opens_and_gains_dependency_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                project_id INTEGER NOT NULL,\
+                title TEXT NOT NULL,\
+                description TEXT DEFAULT '',\
+                status TEXT DEFAULT 'demande',\
+                created_at TEXT DEFAULT (datetime('now')),\
+                updated_at TEXT DEFAULT (datetime('now')));\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Ancienne tache', 'demande');",
+        )
+        .unwrap();
+
+        // Ouverture par la version courante : migration additive, aucune perte.
+        init_db(&conn).unwrap();
+        let has_col: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'depends_on_task_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_col, 1, "la colonne de dependance doit etre ajoutee");
+        let (title, dep): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT title, depends_on_task_id FROM tasks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "Ancienne tache", "les donnees doivent etre conservees");
+        assert!(dep.is_none());
+        // Idempotent : une seconde ouverture ne casse rien.
+        init_db(&conn).unwrap();
     }
 
     // Règle unique « ouverte ou close » (miroir de la non-régression JS) : une

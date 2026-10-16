@@ -7531,6 +7531,28 @@ body.pilot-loading *::after {
   margin-top: 1px;
 }
 
+/* Carte EN ATTENTE D'UNE DÉPENDANCE (« attend la tâche X ») : état DISTINCT du
+   blocage par incident ci-dessus — la dépendance n'est pas une panne, elle se
+   lève toute seule quand la tâche attendue est close. */
+.super-kanban-card.waiting-dep {
+  border-left-color: var(--accent, #6b8cff);
+}
+.super-kanban-card-dependency {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent, #6b8cff);
+  background: color-mix(in srgb, var(--accent, #6b8cff) 12%, transparent);
+  border-radius: 6px;
+  padding: 3px 6px;
+  word-break: break-word;
+}
+.super-kanban-card-dependency i {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 /* Sous-catégorie « Idées » (table `idees_evolutions`) sous les tâches « À faire » */
 .super-kanban-ideas {
   display: flex;

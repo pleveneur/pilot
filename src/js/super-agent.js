@@ -4314,6 +4314,15 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
               title: String(params.title || ""),
               description: params.description != null ? String(params.description) : null,
               deadline: params.deadline != null ? String(params.deadline) : null,
+              dependsOnTaskId:
+                params.dependsOnTaskId != null ? Number(params.dependsOnTaskId) : null,
+            });
+            break;
+          case "set_task_dependency":
+            result = await invoke("super_agent_set_task_dependency", {
+              taskId: Number(params.taskId),
+              dependsOnTaskId:
+                params.dependsOnTaskId != null ? Number(params.dependsOnTaskId) : null,
             });
             break;
           case "update_task_status":
