@@ -219,6 +219,13 @@ describe("avertissement GitHub avant le passage au GDS", () => {
     expect(flat).not.toMatch(/n'y sera[^<]{0,40}(plus|supprim)/i);
     // La formulation exacte attendue.
     expect(flat).toContain("n'utilisera plus GitHub pour ce projet");
+    // Point 232 : le corps du panneau commence par une MAJUSCULE après
+    // l'entête en gras (« Avant de publier sur le GDS, à savoir : »). Une
+    // minuscule était en place ; l'assertion ci-dessous échoue si elle revient.
+    expect(flat, "le panneau doit reprendre par « À partir de maintenant »")
+      .toContain("À partir de maintenant");
+    expect(flat, "la minuscule ne doit plus ouvrir la phrase")
+      .not.toContain("à partir de maintenant");
   });
 
   it("projet déjà sur le serveur : aucun avertissement GitHub (pas de répétition)", async () => {
@@ -271,6 +278,61 @@ describe("rafraîchissement de l'explorateur après un geste GDS", () => {
 
     expect(calls).toContain("gds_sync_project");
     expect(rebuilt, "l'explorateur doit être rafraîchi après la synchro").toHaveBeenCalled();
+  });
+
+  it("ajout d'un projet au GDS : `_rebuildTree` est appelé", async () => {
+    // Point 232 : l'appel `refreshExplorerAfterGds()` du chemin « Ajouter ce
+    // projet au GDS » (`renderAdd`) n'était couvert par aucun test dédié — la
+    // suppression de cet appel passait inaperçue. Ce test échoue dans ce cas.
+    const rebuilt = vi.fn();
+    globalThis.window._pilotGetSidebar = () => ({ _rebuildTree: rebuilt });
+    invokeImpl = (cmd) => {
+      if (cmd === "gds_identity_prefs") return Promise.resolve(identity);
+      if (cmd === "gds_connection_status") return Promise.resolve({ status: "error", on_server: false });
+      if (cmd === "gds_get_config") return Promise.resolve({ enabled: true, db_host: "127.0.0.1", db_user: "gds", db_port: "5432" });
+      if (cmd === "gds_list_saved_servers") return Promise.resolve([server]);
+      if (cmd === "gds_add_project") return Promise.resolve({ initialized: false });
+      return Promise.resolve(null);
+    };
+    const container = makeContainer();
+    createGds(container);
+    await flush();
+
+    const add = container.querySelector("#gds-add-btn");
+    expect(add, "bouton « Ajouter le projet au GDS » absent").not.toBeNull();
+    await add.click();
+    await container.querySelector("#gds-add-github-confirm").click();
+    await flush();
+
+    expect(calls).toContain("gds_add_project");
+    expect(rebuilt, "l'explorateur doit être rafraîchi après l'ajout d'un projet").toHaveBeenCalled();
+  });
+
+  it("recréation du raccourci : `_rebuildTree` est appelé", async () => {
+    // Point 232 : même défaut pour le chemin « (Re)créer le raccourci vers le
+    // dépôt » (`renderRegistered` → `runRelink`). Projet DÉJÀ inscrit sur le
+    // serveur : le geste est immédiat (aucun avertissement GitHub à confirmer).
+    const rebuilt = vi.fn();
+    globalThis.window._pilotGetSidebar = () => ({ _rebuildTree: rebuilt });
+    invokeImpl = (cmd) => {
+      if (cmd === "gds_identity_prefs") return Promise.resolve(identity);
+      if (cmd === "gds_connection_status") return Promise.resolve({ status: "error", on_server: true });
+      if (cmd === "gds_get_config") return Promise.resolve({ enabled: true, db_host: "127.0.0.1", db_user: "gds", db_port: "5432" });
+      if (cmd === "gds_list_saved_servers") return Promise.resolve([server]);
+      if (cmd === "gds_add_project") return Promise.resolve({ initialized: false });
+      return Promise.resolve(null);
+    };
+    const container = makeContainer();
+    createGds(container);
+    await flush();
+
+    const relink = container.querySelector("#gds-relink-btn");
+    expect(relink, "bouton « (Re)créer le raccourci » absent").not.toBeNull();
+    await relink.click();
+    await flush();
+
+    expect(calls).toContain("gds_add_project");
+    expect(rebuilt, "l'explorateur doit être rafraîchi après la recréation du raccourci").toHaveBeenCalled();
   });
 
   it("publication réussie : `_rebuildTree` est appelé", async () => {

@@ -977,7 +977,7 @@ export function createGds(container) {
       <div id="${idPrefix}-github-notice" class="gds-panel" style="display:none; margin-top:8px">
         <div class="gds-panel-desc">
           <strong>Avant de publier sur le GDS, à savoir :</strong>
-          à partir de maintenant, ce projet travaille avec le GDS : Pilot n'utilisera plus GitHub
+          À partir de maintenant, ce projet travaille avec le GDS : Pilot n'utilisera plus GitHub
           pour ce projet. Ce qui est déjà sur GitHub reste <strong>intact</strong> (Pilot n'y touche
           jamais), et le supprimer de GitHub est à <strong>votre</strong> main.
         </div>
