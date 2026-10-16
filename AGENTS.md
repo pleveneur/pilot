@@ -189,6 +189,7 @@ pilot/
 │       ├── session-history.js # Historique sessions (H9) : index .pilot/sessions.jsonl + recherche + tags
 │       ├── feedback.js       # Onglet « 💬 Feedback » : remarques/évolutions (GitHub + email + lecture issues)
 │       ├── super-agent.js    # Onglet « 🧭 Assistant » : suivi multi-projets lecture seule (chat, config, init, relais des choix d'agent, tâche #22)
+│       ├── super-agent-context.js # 🧭 : contexte de suivi COURT joint automatiquement à la demande déléguée (pures : projet, tâches, décisions, mémoire)
 │       ├── dashboard.js      # Onglet « 📊 Tableau de bord » (issue #51) : métriques projet (stockage, Git, langages, activité)
 │       ├── vault.js          # Onglet « 🔐 Coffre » (issue #52) : coffre fort de mots de passe chiffré (AES-256-GCM)
 │       ├── diff-view.js       # Diff Review (A4) : diff inline + porte pré-écriture (renderEditGateDialog)

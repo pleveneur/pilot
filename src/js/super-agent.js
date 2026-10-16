@@ -29,6 +29,7 @@ import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classi
 import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
+import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
 import { shouldScheduleTick, parseScheduleEvery, formatReminderNotificationLabel } from "./super-agent-schedule.js";
 import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnapshot, buildRunningMissions } from "./agent-activity.js";
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
@@ -639,6 +640,46 @@ function speak(text) {
  * PAS faire) ne sont plus reconstruites localement. NB : le bus d'agents
  * (agents-bus.js) ne construit PAS l'enveloppe — il reçoit le brief déjà
  * enveloppé. */
+
+/**
+ * Rassemble le CONTEXTE DE SUIVI a joindre a une demande deleguee (module pur
+ * super-agent-context.js) : projet concerne, taches suivies, decisions et
+ * sessions recentes, memoire de session de l'assistant, objectif de la demande.
+ * FAIL-OPEN : toute erreur (suivi indisponible) renvoie "" — une delegation
+ * n'est jamais bloquee ni retardee definitivement par le contexte.
+ * @param {string|null} projectPath
+ * @param {string} task
+ * @returns {Promise<string>} bloc de contexte ("" si l'assistant ne sait rien).
+ */
+async function loadDelegationContext(projectPath, task) {
+  try {
+    const [tracking, sessionMemory] = await Promise.all([
+      invoke("get_super_agent_tracking").catch(() => null),
+      invoke("super_agent_load_session_memory").catch(() => null),
+    ]);
+    return buildDelegationContext({ tracking, sessionMemory, projectPath, task });
+  } catch (_) {
+    return "";
+  }
+}
+
+/**
+ * Joint le contexte de suivi (court et borne) a la demande deleguee et le
+ * signale dans la conversation de l'assistant. Le contexte est PREFIXE : il
+ * complete la demande (clairement separe par son titre), il ne la remplace
+ * pas. Sans contexte, la demande part inchangee.
+ * @param {HTMLElement} messagesEl
+ * @param {string} brief
+ * @param {string|null} projectPath
+ * @param {string} task
+ * @returns {Promise<string>}
+ */
+async function attachDelegationContext(messagesEl, brief, projectPath, task) {
+  const context = await loadDelegationContext(projectPath, task);
+  if (!context) return brief;
+  appendSystemMessage(messagesEl, "🧠 Contexte de suivi joint à la demande de l'agent.");
+  return prefixDelegationContext(brief, context);
+}
 
 /** Recharge la config (nom, clients, prompt, options) depuis Rust. */
 export async function refreshSuperAgentConfig() {
@@ -3636,11 +3677,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // la consigne quality-gate). Le bus d'agents (agents-bus.js) passe le
         // brief tel quel à l'agent — c'est donc ce module qui construit
         // l'enveloppe, pas le bus. + purge de la conversation de chaque agent
-        // avant la run (contexte vierge).
-        const brief = applyAssistantBriefEnvelope(task, {
+        // avant la run (contexte vierge). Le CONTEXTE DE SUIVI de l'assistant
+        // (projet, tâches, décisions, sessions, mémoire) est joint
+        // automatiquement ici, sur le projet cible.
+        const brief = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
-        });
+        }), targetProject || window._pilotProjectPath || null, task);
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: targetProject, mcp_server: mcpServer }));
         // Nature de la mission : LECTURE seulement si TOUS les agents demandés
         // sont en lecture seule (registre des agents, champ `readonly`). Une
@@ -4020,11 +4063,13 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         }
         appendSystemMessage(messagesEl, `🤖 Je lance la tâche d'assistant sur les agents : ${agentIds.join(", ")}…`);
         // Enveloppe de brief STRUCTURÉ (même mécanisme que run_agents) pour que
-        // l'agent d'assistant réussisse du premier coup.
-        const brief = applyAssistantBriefEnvelope(task, {
+        // l'agent d'assistant réussisse du premier coup. Aucun projet cible ici
+        // (agent hors projet) : seul le suivi de session de l'assistant est
+        // joint, et rien du tout s'il ne sait rien.
+        const brief = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(task, {
           forceStructured: configCache.super_agent_force_structured_brief !== false,
           qualityGate: configCache.super_agent_quality_gate !== false,
-        });
+        }), null, task);
         // Projet réservé : l'agent d'assistant n'est lié à aucun projet.
         const target = ASSISTANT_SPACE;
         const assignments = agentIds.map((aid) => ({ agentId: aid, brief, project: target, mcp_server: mcpServer }));
@@ -4403,19 +4448,20 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
         await respondSuperAgentAction(id, false);
         return;
       }
-      // TÂCHE T1 : l'enveloppe de brief structuré (contexte/objectif/consignes/
-      // ce qu'il ne faut PAS faire) est appliquée mécaniquement à la demande
-      // déléguée, en plus de la consigne quality-gate (config). Ne duplique pas
-      // les sections que l'assistant aurait déjà rédigées.
-      const request = applyAssistantBriefEnvelope(info.request, {
-        forceStructured: configCache.super_agent_force_structured_brief !== false,
-        qualityGate: configCache.super_agent_quality_gate !== false,
-      });
       // A13 (assistant headless multi-projets) : un `project` explicite permet
       // de déléguer à un projet NON actif. Son agent est démarré en arrière-plan
       // (invisible) sans ouvrir le projet ni l'onglet. Sinon, on retombe sur le
       // projet actif (comportement historique).
       const projectPath = info.project || window._pilotProjectPath || null;
+      // TÂCHE T1 : l'enveloppe de brief structuré (contexte/objectif/consignes/
+      // ce qu'il ne faut PAS faire) est appliquée mécaniquement à la demande
+      // déléguée, en plus de la consigne quality-gate (config). Ne duplique pas
+      // les sections que l'assistant aurait déjà rédigées. Le CONTEXTE DE SUIVI
+      // de l'assistant est joint au préalable (mêmes données que `run_agents`).
+      const request = await attachDelegationContext(messagesEl, applyAssistantBriefEnvelope(info.request, {
+        forceStructured: configCache.super_agent_force_structured_brief !== false,
+        qualityGate: configCache.super_agent_quality_gate !== false,
+      }), projectPath, String(info.request || ""));
       appendSystemMessage(messagesEl, `🤖 Je lance l'agent du projet et lui transmets la demande…`);
       const tabs = window._pilotTabs;
       if (!tabs) {

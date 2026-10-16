@@ -610,6 +610,47 @@ uniquement un bloc d'instructions dans le prompt système.
   ce plan et les contraintes retenues. Le `plan-maker` est un agent lecture seule qui ne
   modifie aucun code ; il ne fait que produire le plan JSON.
 
+### Contexte de suivi joint automatiquement à la demande déléguée
+- Avant de **lancer un agent** — agent du projet (`run_agents`), agent hors
+  projet (`run_assistant_agents`) ou délégation directe (`delegate_to_coder`) —
+  l'Assistant **préfixe à la demande un bloc de contexte COURT**, construit à
+  partir de **son propre suivi** : projet concerné, tâches suivies, décisions
+  et sessions récentes, sujet et chantiers en cours (mémoire de session).
+- But : l'agent part **au courant** de ce qui a déjà été fait, décidé ou réglé —
+  il ne refait pas et ne contredit pas l'existant (moins d'allers-retours).
+- Le bloc est **bref et borné** (plafond **700 caractères**, troncature
+  annoncée) et **clairement séparé** de la demande : il porte son propre titre
+  (`## Contexte de suivi (assistant)`) et la demande complète le suit.
+- **Rien d'inventé** : si l'Assistant ne sait rien du projet (projet non suivi,
+  mémoire vide), **aucun bloc** n'est ajouté — la demande part inchangée.
+- Il est **visible** dans la conversation : le message « 🧠 Contexte de suivi
+  joint à la demande de l'agent. » signale l'ajout.
+- Les décisions récentes sont exposées par la base de suivi **par client** :
+  quand le client suit **plusieurs projets**, le bloc le dit explicitement
+  (« Décisions récentes (client X) ») au lieu de les faire passer pour celles
+  du projet.
+- Technique (module **pur** `src/js/super-agent-context.js`, I/O et branchement
+  dans `super-agent.js` — `loadDelegationContext` / `attachDelegationContext`) :
+  lecture de `get_super_agent_tracking` + `super_agent_load_session_memory`,
+  **fail-open** (toute erreur → aucun bloc, la délégation n'est jamais
+  bloquée). Couverture : `src/js/super-agent-context.test.js`.
+
+<!-- HELP:super-agent-delegation-context -->
+### Le contexte que l'assistant joint à la demande qu'il délègue
+Quand l'**Assistant** confie une tâche à un agent, il **ajoute
+automatiquement un court rappel de contexte** en tête de la demande : le
+**projet** concerné, les **tâches** qu'il suit, les **décisions** et les
+**sessions récentes**, ainsi que son **sujet** et ses **chantiers en cours**.
+L'agent démarre donc **déjà au courant** de ce qui a été fait et décidé : il
+évite de refaire ou de contredire l'existant.
+
+Ce rappel est **volontairement bref** (quelques lignes, longueur plafonnée et
+troncature annoncée) et **distinct de votre demande**, qui suit. L'Assistant
+n'invente rien : s'il ne sait rien de ce projet, **il n'ajoute aucun rappel**.
+Vous voyez, dans la conversation, le message « 🧠 Contexte de suivi joint à la
+demande de l'agent. » lorsqu'un rappel a été ajouté.
+<!-- /HELP:super-agent-delegation-context -->
+
 ### L'Assistant, coordinateur de la redistribution des tâches
 L'Assistant est le **coordinateur** de la redistribution des tâches entre les
 agents du registre global (base SQLite). Il peut :
