@@ -728,3 +728,126 @@ export function shouldOfferTemplatePoints(checks, mode) {
   if (normalizeChecklistMode(mode) === "off") return false;
   return checklistProgress(checks).total === 0;
 }
+
+// ── Idée 4 (Lot A), tranche 4.4 : bloc « Livrable » de la fiche de tâche ─────
+// La fiche d'une tâche affiche ses lignes de traçabilité RELUES EN BASE
+// (`super_agent_task_deliverable_list`, tranche 4.3) : libellé du livrable, date,
+// et l'origine (ou la décision liée) quand elle existe. Rien n'est décidé ni
+// inventé ici : ces fonctions PURES normalisent la réponse des commandes de
+// lecture et préparent l'affichage. L'écriture d'une ligne est AUTOMATIQUE côté
+// cœur (tranche 4.2) : l'interface n'offre aucun chemin d'écriture.
+
+/// Noms EXACTS des deux commandes de lecture de la traçabilité (contrat avec
+/// `super_agent.rs`, tranche 4.3). La fiche n'appelle que la commande par tâche ;
+/// la commande par projet servira à la vue « Traçabilité » (tranche suivante).
+export const TASK_DELIVERABLE_LIST_COMMAND = "super_agent_task_deliverable_list";
+export const PROJECT_DELIVERABLE_LIST_COMMAND = "super_agent_project_deliverable_list";
+
+/// Mention de repli écrite par le cœur quand l'origine d'un livrable n'est pas
+/// identifiable (miroir de `DELIVERABLE_ORIGIN_UNKNOWN`, super_agent.rs). Elle
+/// n'est jamais répétée à l'écran : elle signifie « origine inconnue ».
+export const DELIVERABLE_ORIGIN_UNKNOWN = "origine non précisée";
+
+/// Texte du bloc « Livrable » quand la tâche n'a AUCUNE livraison.
+export const DELIVERABLE_EMPTY_TEXT = "Aucune livraison enregistrée";
+
+/// Début de la ligne d'information affichée quand la lecture échoue.
+export const DELIVERABLE_ERROR_PREFIX = "Livraisons indisponibles";
+
+/**
+ * Formate l'horodatage d'une ligne de traçabilité (`created_at`, SQLite
+ * « AAAA-MM-JJ HH:MM:SS » ou ISO) au format « JJ/MM/AAAA ». Chaîne vide si
+ * l'horodatage est absent ou illisible : on n'invente jamais une date. Pur.
+ * @param {string|null|undefined} createdAt
+ * @returns {string}
+ */
+export function formatDeliverableDate(createdAt) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(createdAt == null ? "" : createdAt).trim());
+  if (!m) return "";
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+/**
+ * Origine affichable d'une ligne : la décision liée quand elle existe
+ * (« Décision #12 »), complétée par l'origine textuelle si elle est renseignée.
+ * La mention de repli du cœur (« origine non précisée ») n'est jamais répétée.
+ * Chaîne vide quand l'origine est inconnue : aucune mention n'est inventée. Pur.
+ * @param {{decision_id?: number|null, origin?: string}} row ligne brute relue
+ * @returns {string}
+ */
+export function deliverableOriginLabel(row) {
+  const r = row || {};
+  const origin = String(r.origin == null ? "" : r.origin).trim();
+  const known = origin && origin !== DELIVERABLE_ORIGIN_UNKNOWN ? origin : "";
+  if (r.decision_id != null) {
+    return known ? `Décision #${r.decision_id} : ${known}` : `Décision #${r.decision_id}`;
+  }
+  return known;
+}
+
+/**
+ * Normalise la réponse d'une commande de lecture (`{ deliverables: [...] }`) en
+ * lignes d'affichage `{ id, label, date, origin }`. L'ORDRE de la base est
+ * CONSERVÉ (la fiche affiche l'ordre de production, du plus ancien au plus
+ * récent) : aucun tri n'est refait ici. Les entrées nulles sont ignorées ; une
+ * réponse absente ou sans ligne donne une liste VIDE — aucune ligne inventée. Pur.
+ * @param {{deliverables?: Array}|null|undefined} result
+ * @returns {Array<{id: number|null, label: string, date: string, origin: string}>}
+ */
+export function buildDeliverableLines(result) {
+  const rows = result && Array.isArray(result.deliverables) ? result.deliverables : [];
+  const lines = [];
+  for (const row of rows) {
+    if (!row) continue;
+    lines.push({
+      id: row.id == null ? null : row.id,
+      label: String(row.label == null ? "" : row.label).trim(),
+      date: formatDeliverableDate(row.created_at),
+      origin: deliverableOriginLabel(row),
+    });
+  }
+  return lines;
+}
+
+/**
+ * Libellé du compteur discret du bloc : « 2 livraisons », ou chaîne VIDE quand
+ * la tâche n'a aucune livraison (aucune mention parasite sur les tâches sans
+ * traçabilité). Pur.
+ * @param {number} count
+ * @returns {string}
+ */
+export function deliverableCounterLabel(count) {
+  const n = Number(count) || 0;
+  if (n <= 0) return "";
+  return `${n} livraison${n > 1 ? "s" : ""}`;
+}
+
+/**
+ * Prépare le contenu du bloc « Livrable » de la fiche à partir de la réponse
+ * brute de la commande de lecture : `{ lines, count, counter, empty }`. Aucune
+ * lecture n'est faite ici (l'appel `invoke` reste à l'interface) et aucune ligne
+ * n'est inventée : une réponse vide donne `empty: true`. Pur.
+ * @param {{deliverables?: Array}|null|undefined} result
+ * @returns {{lines: Array, count: number, counter: string, empty: boolean}}
+ */
+export function buildDeliverableBlock(result) {
+  const lines = buildDeliverableLines(result);
+  return {
+    lines,
+    count: lines.length,
+    counter: deliverableCounterLabel(lines.length),
+    empty: lines.length === 0,
+  };
+}
+
+/**
+ * Ligne d'information affichée si la lecture des livraisons échoue. Ne lève
+ * JAMAIS d'exception (`err` peut être une chaîne, un objet `Error`, `null`…) :
+ * la fiche doit continuer de fonctionner. Pur.
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function deliverableErrorMessage(err) {
+  const detail = String((err && err.message) || err || "").trim();
+  return detail ? `${DELIVERABLE_ERROR_PREFIX} : ${detail}` : DELIVERABLE_ERROR_PREFIX;
+}

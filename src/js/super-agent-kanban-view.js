@@ -27,7 +27,9 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel,
   checklistCounterLabel, parseChecklistGate,
   DEFAULT_CHECKLIST_TEMPLATE, normalizeChecklistMode, normalizeChecklistTemplate,
-  parseChecklistTemplate, shouldOfferTemplatePoints } from "./super-agent-kanban.js";
+  parseChecklistTemplate, shouldOfferTemplatePoints,
+  TASK_DELIVERABLE_LIST_COMMAND, buildDeliverableBlock, deliverableErrorMessage,
+  DELIVERABLE_EMPTY_TEXT } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -596,6 +598,42 @@ export function createSuperKanban(container) {
     // Tâche sans point : proposer (sans rien imposer) les points du modèle.
     if (!checks.length) await offerTemplatePoints(list);
   }
+
+  /**
+   * Idée 4 (Lot A), tranche 4.4 : relit les lignes de traçabilité de la tâche
+   * EN BASE et redessine le bloc « Livrable » de la fiche (aucun état deviné côté
+   * écran). Bloc en LECTURE SEULE : l'écriture d'une ligne est automatique côté
+   * cœur (tranche 4.2), aucun bouton n'écrit ici. Un échec de lecture affiche une
+   * ligne d'information claire et ne remonte JAMAIS d'exception : le reste de la
+   * fiche continue de fonctionner.
+   */
+  async function renderDeliverables(block, taskId) {
+    if (!block) return;
+    const list = block.querySelector(".kanban-deliverables-list");
+    const count = block.querySelector(".kanban-deliverables-count");
+    if (!list) return;
+    try {
+      const res = await invoke(TASK_DELIVERABLE_LIST_COMMAND, { taskId });
+      const { lines, counter } = buildDeliverableBlock(res);
+      if (count) count.textContent = counter;
+      list.innerHTML = lines.length
+        ? lines
+            .map(
+              (l) => `<div class="kanban-check-row kanban-deliverable-row">
+            <span class="kanban-check-label kanban-deliverable-label"><span>${escapeHtml(l.label)}</span></span>
+            <span class="dash-muted kanban-deliverable-meta">${escapeHtml(l.date)}${l.origin ? ` · ${escapeHtml(l.origin)}` : ""}</span>
+          </div>`
+            )
+            .join("")
+        : `<div class="dash-muted kanban-deliverables-empty">${escapeHtml(DELIVERABLE_EMPTY_TEXT)}</div>`;
+      refreshIcons(list);
+    } catch (err) {
+      // Lecture impossible : une ligne d'information suffit, rien n'est inventé
+      // et aucune exception ne remonte (la fiche reste utilisable).
+      if (count) count.textContent = "";
+      list.innerHTML = `<div class="dash-error kanban-deliverables-error">${escapeHtml(deliverableErrorMessage(err))}</div>`;
+    }
+  }
   const clearDragOver = () =>
     container.querySelectorAll(".super-kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
 
@@ -720,6 +758,10 @@ export function createSuperKanban(container) {
             <button type="button" class="btn kanban-checklist-add-btn">Ajouter</button>
           </div>
         </div>` : ""}
+        ${isEdit ? `<div class="kanban-field kanban-checklist kanban-deliverables">
+          <div class="kanban-checklist-head"><i data-lucide="package-check" class="icon-sm"></i> Livrable <span class="kanban-deliverables-count dash-muted"></span></div>
+          <div class="kanban-checklist-list kanban-deliverables-list"><div class="dash-muted">Chargement des livraisons…</div></div>
+        </div>` : ""}
         <div class="modal-actions">
           <button type="button" class="btn kanban-cancel-btn">Annuler</button>
           <button type="submit" class="btn kanban-save-btn">${isEdit ? "Enregistrer" : "Créer"}</button>
@@ -786,6 +828,15 @@ export function createSuperKanban(container) {
     // l'écran n'affiche jamais un état deviné.
     if (isEdit) {
       const block = overlay.querySelector(".kanban-checklist");
+      // Idée 4 (Lot A), tranche 4.4 : le bloc « Livrable » de la fiche est relu EN
+      // BASE à l'ouverture ET après CHAQUE opération de la fiche — l'écran
+      // n'affiche jamais un état deviné (même invariant que la checklist). Le bloc
+      // est en LECTURE SEULE : l'écriture d'une ligne de traçabilité est
+      // automatique côté cœur (tranche 4.2), aucun bouton n'écrit ici. Une écriture
+      // réussie depuis la fiche ferme la fiche et recharge le Kanban : les lignes
+      // neuves apparaissent donc dès la réouverture, jamais par un état optimiste.
+      const deliverableBlock = overlay.querySelector(".kanban-deliverables");
+      const reloadDeliverables = () => renderDeliverables(deliverableBlock, task.id);
       const addPoint = async () => {
         const input = block.querySelector(".kanban-checklist-input");
         const label = (input.value || "").trim();
@@ -797,6 +848,7 @@ export function createSuperKanban(container) {
           console.error("Erreur ajout point de checklist:", err);
         }
         await renderChecklist(block, task.id);
+        await reloadDeliverables();
       };
       // Tranche 3.5 : crée les points du MODÈLE par défaut (jamais imposés :
       // uniquement sur un clic explicite, et seulement si la tâche n'a aucun
@@ -812,6 +864,7 @@ export function createSuperKanban(container) {
           }
         }
         await renderChecklist(block, task.id);
+        await reloadDeliverables();
       };
       block.addEventListener("click", async (e) => {
         const del = e.target.closest(".kanban-check-del");
@@ -822,6 +875,7 @@ export function createSuperKanban(container) {
             console.error("Erreur suppression point de checklist:", err);
           }
           await renderChecklist(block, task.id);
+          await reloadDeliverables();
           return;
         }
         if (e.target.closest(".kanban-checklist-add-btn")) await addPoint();
@@ -845,8 +899,10 @@ export function createSuperKanban(container) {
           console.error("Erreur coche point de checklist:", err);
         }
         await renderChecklist(block, task.id);
+        await reloadDeliverables();
       });
       renderChecklist(block, task.id);
+      reloadDeliverables();
     }
     const first = overlay.querySelector("input[name=title]");
     if (first) first.focus();
