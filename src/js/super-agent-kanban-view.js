@@ -467,7 +467,15 @@ export function createSuperKanban(container) {
             f.title.reportValidity();
             return;
           }
-          await invoke("super_agent_create_task", { projectPath, title, description, deadline });
+          await invoke("super_agent_create_task", {
+            projectPath,
+            title,
+            description,
+            deadline,
+            // Pas de dependance posee depuis ce formulaire : la valeur explicite
+            // evite toute ambiguite de deserialisation cote Tauri.
+            dependsOnTaskId: null,
+          });
         }
         close();
         loadSuperKanban();
