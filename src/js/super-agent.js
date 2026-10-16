@@ -531,8 +531,9 @@ export async function replayQueuedMissionForProject(target, deps = {}) {
     delete runAgentsQueueByProject[target];
     return { replayed: false, reason: "empty" };
   }
-  runAgentsInFlightByProject[target] = true;
-  next.launch();
+  // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`) — un échec du
+  // lancement ne perd ni la mission ni le verrou local du projet.
+  launchQueuedMission(target, next);
   return { replayed: true, reason: "launched" };
 }
 
@@ -555,6 +556,81 @@ export function armQueueReplay(target) {
       armQueueReplay(target); // encore des missions en file : on reste prêt
     }
   }, RUN_AGENTS_QUEUE_REPLAY_MS);
+}
+
+/**
+ * Point de suivi 344 (volet c) — LANCEMENT PROTÉGÉ de la mission qui sort de la
+ * file d'attente.
+ *
+ * Défaut corrigé : la tête de file était lancée directement, sans protection,
+ * alors que le flag « run en vol » du projet (`runAgentsInFlightByProject`) est
+ * posé AVANT l'appel. Si le lancement échouait — promesse rejetée (préparation
+ * de run impossible) ou exception synchrone — la mission avait DÉJÀ été retirée
+ * de la file (`shift`) : elle était perdue en silence ET le projet restait
+ * marqué « run en vol », si bien que toutes les missions suivantes de ce projet
+ * étaient mises en file jusqu'au watchdog de 5 min (attente fantôme). L'appel
+ * est désormais protégé : en cas d'échec, la mission est remise EN TÊTE de file
+ * (jamais perdue), le projet est libéré et le rejeu périodique est réarmé.
+ * @param {string} target - projet (clé de file)
+ * @param {{launch: function(): (Promise<unknown>|unknown)}} entry - mission en file (sortie de file par l'appelant)
+ * @returns {void}
+ */
+function launchQueuedMission(target, entry) {
+  if (!target || !entry) return;
+  runAgentsInFlightByProject[target] = true;
+  const onFailure = (err) => {
+    console.warn("[super-agent] lancement d'une mission en file en échec :", err);
+    // Le projet ne doit pas rester marqué « run en vol » (attente fantôme pour
+    // toutes les missions suivantes) ; la libération est immédiate.
+    runAgentsInFlightByProject[target] = false;
+    // La mission, déjà retirée de la file par le `shift` de l'appelant, y
+    // retourne EN TÊTE : un lancement en échec n'a rien démarré, aucun doublon
+    // possible (`includes` protège d'une remise en file déjà faite).
+    if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
+    if (!runAgentsQueueByProject[target].includes(entry)) runAgentsQueueByProject[target].unshift(entry);
+    // Le rejeu périodique reprend la mission dès que le projet est libre.
+    armQueueReplay(target);
+  };
+  let result;
+  try {
+    result = entry.launch();
+  } catch (e) {
+    onFailure(e);
+    return;
+  }
+  if (result && typeof result.then === "function") result.catch(onFailure);
+}
+
+// Point de suivi 344 (volet c) — points d'entrée de TEST (jamais utilisés en
+// production) : état observable de la file de missions d'un projet et remise à
+// zéro des timers/file, pour prouver la libération du verrou local, de la file
+// et du statut après une interruption.
+/** @param {string} target @returns {{inFlight:boolean,queueLength:number,replayArmed:boolean,watchdogArmed:boolean}} */
+export function __superAgentQueueStateForTest(target) {
+  return {
+    inFlight: !!runAgentsInFlightByProject[target],
+    queueLength: (runAgentsQueueByProject[target] || []).length,
+    replayArmed: !!runAgentsQueueReplayByProject[target],
+    watchdogArmed: !!runAgentsWatchdogByProject[target],
+  };
+}
+
+/** Remet à zéro file, flag et timers de la file de missions (tests uniquement). */
+export function __resetSuperAgentQueueForTest() {
+  for (const t of Object.keys(runAgentsQueueReplayByProject)) {
+    clearTimeout(runAgentsQueueReplayByProject[t]);
+    delete runAgentsQueueReplayByProject[t];
+  }
+  for (const t of Object.keys(delegationQueueReplayByProject)) {
+    clearTimeout(delegationQueueReplayByProject[t]);
+    delete delegationQueueReplayByProject[t];
+  }
+  for (const t of Object.keys(runAgentsWatchdogByProject)) {
+    clearTimeout(runAgentsWatchdogByProject[t]);
+    delete runAgentsWatchdogByProject[t];
+  }
+  for (const t of Object.keys(runAgentsQueueByProject)) delete runAgentsQueueByProject[t];
+  for (const t of Object.keys(runAgentsInFlightByProject)) delete runAgentsInFlightByProject[t];
 }
 
 // POINT C (file de DÉLÉGATIONS, issue #66) — déclencheur de rejeu explicite,
@@ -3772,11 +3848,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // l'onglet : fonctions module-level, persistance côté Rust).
           finishRunAgentsToSuperAgent(result, projectPath, ok);
           // Lancer la run suivante mise en file pour CE projet, s'il y en a une.
+          // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
           const queue = runAgentsQueueByProject[target] || [];
           const next = queue.shift();
           if (next) {
-            runAgentsInFlightByProject[target] = true;
-            next.launch();
+            launchQueuedMission(target, next);
           } else {
             delete runAgentsQueueByProject[target];
           }
@@ -4093,11 +4169,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // POINT E : rejouer la mission suivante RÉELLEMENT mise en file (même
           // file que `run_agents`). Sans ce vidage, un accusé « queued » restait
           // sans effet et la mission était perdue en silence.
+          // Volet (c) : lancement PROTÉGÉ (voir `launchQueuedMission`).
           const queue = runAgentsQueueByProject[target] || [];
           const next = queue.shift();
           if (next) {
-            runAgentsInFlightByProject[target] = true;
-            next.launch();
+            launchQueuedMission(target, next);
           } else {
             delete runAgentsQueueByProject[target];
           }
@@ -4116,7 +4192,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             // par `settleRun`). Auparavant ce chemin répondait « queued » sans
             // jamais pousser dans une file → mission perdue en silence.
             if (!runAgentsQueueByProject[target]) runAgentsQueueByProject[target] = [];
-            runAgentsQueueByProject[target].push({ launch: () => { startRun(); } });
+            // Volet (c) : la promesse de `startRun` est RETOURNÉE (et non avalée),
+            // sinon un échec du lancement devenait un rejet non géré et laissait
+            // le projet marqué « run en vol » — voir `launchQueuedMission`.
+            runAgentsQueueByProject[target].push({ launch: () => startRun() });
             runAgentsQueueByProject[target].at(-1).label = task;
             // POINT G : la file d'assistant est couverte par le MÊME déclencheur de
             // rejeu (aucune run d'assistant ne pose de watchdog : sans cela une

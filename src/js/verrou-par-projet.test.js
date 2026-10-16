@@ -72,7 +72,7 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn(), exit: vi.fn() 
 import { invoke } from "@tauri-apps/api/core";
 import { beginRun, endRun, isRunInProgress, getRunState, initAgentsBus, startParallelRun, handleAgentEvent, attachMissionSink, releaseStuckRunLock, runAgentsForAssistant, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import { canSendManualCommand, MANUAL_COMMAND_NATURE, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
-import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay } from "./super-agent.js";
+import { armQueueReplay, replayQueuedMissionForProject, runAgentsQueueByProject, delegationState, replayDelegationQueueForProject, armDelegationQueueReplay, __superAgentQueueStateForTest, __resetSuperAgentQueueForTest } from "./super-agent.js";
 import { estimateAndReserve } from "./reservations.js";
 
 // POINT I — DÉTOUR DE ROUTAGE : une mission confiée à un agent PRÉCIS était
@@ -552,7 +552,9 @@ describe("POINT E — run_assistant_agents : file réelle, jamais un faux « que
     const startRunIdx = branch.indexOf("const startRun = async () => {");
     const settleBody = branch.slice(settleIdx, startRunIdx);
     expect(settleBody).toContain("runAgentsQueueByProject[target] || []");
-    expect(settleBody).toContain("next.launch()");
+    // Volet (c) du point de suivi 344 : la relance passe par le lancement
+    // PROTÉGÉ (un échec ne perd plus la mission ni le verrou du projet).
+    expect(settleBody).toContain("launchQueuedMission(target, next)");
     // L'accusé rapporte le lancement RÉEL (plus de « queued » sans file).
     expect(branch).toContain("JSON.stringify({ ok: true, launched: launchedNow, queued: !launchedNow })");
   });
@@ -1037,5 +1039,78 @@ describe("R2 — le dépôt inter-projets différé dit comment reprendre", () =
     const spec = readFileSync(new URL("../../spec_interproject.md", import.meta.url), "utf8");
     expect(spec).toContain("reprise manuelle");
     expect(spec).toContain("aucun rejeu automatique");
+  });
+});
+
+// Point de suivi 344 (volet c) — LIBÉRATION PROPRE quand le lancement d'une
+// mission EN FILE échoue.
+//
+// DÉFAUT (corrigé) : la tête de file était lancée directement, sans protection,
+// alors que le flag « run en vol » du projet était posé AVANT (`queue.shift()`
+// avait déjà RETIRÉ la mission de la file). Si le lancement échouait — promesse
+// rejetée, ou exception synchrone — la mission était PERDUE en silence et le
+// projet restait marqué « run en vol » : toutes les missions suivantes de ce
+// projet étaient mises en file jusqu'au watchdog de 5 min (attente fantôme).
+// Ces tests ÉCHOUENT avant le correctif (file vidée + flag resté à true) et
+// PASSENT après (mission remise en tête de file, flag libéré, rejeu réarmé).
+describe("Point de suivi 344 (volet c) — libération propre si un lancement en file échoue", () => {
+  const P = "volet-c-lancement-en-echec";
+
+  afterEach(() => {
+    __resetSuperAgentQueueForTest();
+  });
+
+  it("un lancement qui REJETTE ne perd pas la mission et ne laisse pas le projet bloqué", async () => {
+    let attempts = 0;
+    runAgentsQueueByProject[P] = [{
+      launch: () => {
+        attempts++;
+        return Promise.reject(new Error("backend indisponible"));
+      },
+    }];
+
+    const r = await replayQueuedMissionForProject(P, { isAdmissionFree: async () => true });
+    expect(r).toEqual({ replayed: true, reason: "launched" });
+    // Laisse la promesse rejetée être traitée (gestion d'échec du lancement).
+    await new Promise((res) => setTimeout(res, 0));
+
+    expect(attempts, "la mission a bien été lancée une fois").toBe(1);
+    // INVARIANT 1 (file d'attente) : la mission n'est PAS perdue — elle est
+    // remise en tête de file pour être rejouée.
+    expect(runAgentsQueueByProject[P] || [], "mission perdue après un échec de lancement").toHaveLength(1);
+    // INVARIANT 2 (verrou local + statut) : le projet n'est pas resté « run en
+    // vol » (sinon toute mission suivante attend le watchdog de 5 min).
+    expect(__superAgentQueueStateForTest(P).inFlight, "le projet reste marqué « run en vol »").toBe(false);
+    // INVARIANT 3 : le rejeu périodique est réarmé (sans quoi la mission remise en
+    // file n'aurait plus aucun déclencheur).
+    expect(__superAgentQueueStateForTest(P).replayArmed, "aucun déclencheur de rejeu réarmé").toBe(true);
+
+    // La mission remise en file DÉMARRE au rejeu suivant (rien n'est resté coincé).
+    let launched = 0;
+    runAgentsQueueByProject[P] = [{ launch: () => { launched++; return Promise.resolve(); } }];
+    const r2 = await replayQueuedMissionForProject(P, { isAdmissionFree: async () => true });
+    expect(r2).toEqual({ replayed: true, reason: "launched" });
+    expect(launched).toBe(1);
+  });
+
+  it("un lancement qui LÈVE (exception synchrone) ne fait pas échouer le rejeu et conserve la mission", async () => {
+    runAgentsQueueByProject[P] = [{ launch: () => { throw new Error("verrou indisponible"); } }];
+
+    // Ne rejette pas (une exception du lancement ne doit pas remonter au rejeu
+    // périodique, qui deviendrait un rejet non géré).
+    const r = await replayQueuedMissionForProject(P, { isAdmissionFree: async () => true });
+    expect(r).toEqual({ replayed: true, reason: "launched" });
+    expect(runAgentsQueueByProject[P] || [], "mission perdue après une exception de lancement").toHaveLength(1);
+    expect(__superAgentQueueStateForTest(P).inFlight, "le projet reste marqué « run en vol »").toBe(false);
+    expect(__superAgentQueueStateForTest(P).replayArmed).toBe(true);
+  });
+
+  it("aucun site de relance de la file n'appelle `launch()` sans protection", () => {
+    // Preuve structurelle : les 3 relances de la file (rejeu périodique + les 2
+    // `settleRun`) passent par le lancement protégé.
+    const src = readFileSync(new URL("../js/super-agent.js", import.meta.url), "utf8");
+    expect(src).not.toMatch(/next\.launch\(\)/);
+    expect(src).toContain("function launchQueuedMission(target, entry)");
+    expect((src.match(/launchQueuedMission\(target, next\)/g) || []).length).toBe(3);
   });
 });
