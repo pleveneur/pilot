@@ -139,6 +139,30 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         );
         CREATE INDEX IF NOT EXISTS idx_task_checks_task
             ON task_checks(task_id, position);
+        -- Idée 4 (Lot A), tranche 4.1 : traçabilité livrable → demande. Une ligne
+        -- décrit UN livrable produit pour une tâche de suivi (`task_id`) et
+        -- pointe, quand elle est identifiable, la décision ou demande d'origine
+        -- (`decision_id`, facultatif). Quand l'origine n'est pas identifiable,
+        -- `origin` porte une mention textuelle (« origine non précisée ») : une
+        -- ligne de traçabilité existe TOUJOURS, on ne force jamais une saisie.
+        -- Références LOGIQUES, sans contrainte de clé étrangère : le rattachement
+        -- est vérifié à l'écriture (tâche inconnue refusée, donc aucune ligne
+        -- orpheline) et le nettoyage est fait par le code
+        -- (`db_delete_task_deliverables`, appelé par `super_agent_delete_task`).
+        -- La table ne modifie ni `decisions` ni aucune table existante et
+        -- n'ajoute aucune contrainte aux purges existantes (replace_tracking).
+        -- Création IDEMPOTENTE : une base existante s'ouvre sans changement,
+        -- une base neuve reçoit la table.
+        CREATE TABLE IF NOT EXISTS deliverables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            decision_id INTEGER,
+            label TEXT NOT NULL,
+            origin TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_deliverables_task
+            ON deliverables(task_id, id);
         "
     )
     .map_err(|e| format!("Erreur init base: {}", e))?;
@@ -2242,6 +2266,127 @@ fn db_delete_task_checks(conn: &Connection, task_id: i64) -> Result<usize, Strin
     .map_err(|e| format!("Erreur nettoyage checklist: {}", e))
 }
 
+// ── Idée 4 (Lot A), tranche 4.1 : traçabilité livrable → demande ──
+//
+// Une ligne de `deliverables` décrit UN livrable produit pour UNE tâche de
+// suivi (`tasks.id`), et pointe quand elle est identifiable la décision ou
+// demande d'origine (`decisions.id`, facultatif). Le rattachement à la tâche
+// est VÉRIFIÉ à l'ajout : une tâche inconnue est refusée, il n'existe donc
+// jamais de ligne orpheline. Supprimer une tâche emporte ses lignes
+// (`db_delete_task_deliverables`, appelé par `super_agent_delete_task`) sans
+// jamais toucher aux lignes des autres tâches. Ces opérations sont des helpers
+// PURS sur `&Connection` (aucun `AppHandle`), donc testables en base mémoire ;
+// les tranches suivantes (commandes Tauri, affichage, réglages) s'appuieront
+// dessus sans dupliquer de logique.
+
+/// Mention portée dans `origin` quand l'origine d'un livrable n'est pas
+/// identifiable (règle de l'idée 4) : la ligne de traçabilité existe toujours,
+/// on ne force jamais une saisie.
+const DELIVERABLE_ORIGIN_UNKNOWN: &str = "origine non précisée";
+
+/// Lit les livrables d'une tâche, du plus ancien au plus récent (`id`
+/// croissant, c'est-à-dire l'ordre de production). Une tâche sans livrable
+/// renvoie une liste vide (jamais une erreur).
+#[allow(dead_code)] // tranche 4.1 : helpers purs, consommés aux tranches suivantes
+fn db_list_task_deliverables(conn: &Connection, task_id: i64) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, task_id, decision_id, label, origin, created_at \
+             FROM deliverables WHERE task_id = ?1 ORDER BY id",
+        )
+        .map_err(|e| format!("Erreur lecture livrables: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![task_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "task_id": r.get::<_, i64>(1)?,
+                "decision_id": r.get::<_, Option<i64>>(2)?,
+                "label": r.get::<_, String>(3)?,
+                "origin": r.get::<_, String>(4)?,
+                "created_at": r.get::<_, Option<String>>(5)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur lecture livrables: {}", e))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Lit les livrables d'un projet (toutes ses tâches réunies), de la plus
+/// récente à la plus ancienne (`created_at` décroissant, `id` décroissant à
+/// horodatage égal — pour rester déterministe). Le `project_id` est dérivé par
+/// jointure sur `tasks` : il n'est pas stocké dans la table. Un projet sans
+/// livrable renvoie une liste vide (jamais une erreur).
+#[allow(dead_code)] // tranche 4.1 : helpers purs, consommés aux tranches suivantes
+fn db_list_project_deliverables(conn: &Connection, project_id: i64) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.id, d.task_id, t.project_id, d.decision_id, d.label, \
+                    d.origin, d.created_at \
+             FROM deliverables d JOIN tasks t ON t.id = d.task_id \
+             WHERE t.project_id = ?1 ORDER BY d.created_at DESC, d.id DESC",
+        )
+        .map_err(|e| format!("Erreur lecture livrables: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![project_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "task_id": r.get::<_, i64>(1)?,
+                "project_id": r.get::<_, i64>(2)?,
+                "decision_id": r.get::<_, Option<i64>>(3)?,
+                "label": r.get::<_, String>(4)?,
+                "origin": r.get::<_, String>(5)?,
+                "created_at": r.get::<_, Option<String>>(6)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur lecture livrables: {}", e))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Ajoute une ligne de traçabilité à une tâche existante et retourne son id.
+/// Refuse un libellé vide et une tâche inconnue (donc jamais de ligne
+/// orpheline). `decision_id` est facultatif (une origine non identifiable est
+/// simplement absente). Une origine vide (ou seulement des espaces) devient la
+/// mention `DELIVERABLE_ORIGIN_UNKNOWN` : la ligne existe toujours.
+#[allow(dead_code)] // tranche 4.1 : helpers purs, consommés aux tranches suivantes
+fn db_add_deliverable(
+    conn: &Connection,
+    task_id: i64,
+    decision_id: Option<i64>,
+    label: &str,
+    origin: &str,
+) -> Result<i64, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("add_deliverable : un libellé est requis".to_string());
+    }
+    if task_status_of(conn, task_id).is_none() {
+        return Err(format!("add_deliverable : tâche {} introuvable", task_id));
+    }
+    let origin = origin.trim();
+    let origin = if origin.is_empty() {
+        DELIVERABLE_ORIGIN_UNKNOWN
+    } else {
+        origin
+    };
+    conn.execute(
+        "INSERT INTO deliverables (task_id, decision_id, label, origin) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![task_id, decision_id, label, origin],
+    )
+    .map_err(|e| format!("Erreur ajout livrable: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Supprime TOUS les livrables d'une tâche (nettoyage à la suppression de la
+/// tâche). Retourne le nombre de lignes supprimées. N'échoue jamais sur une
+/// tâche sans livrable ; ne touche jamais aux lignes des autres tâches.
+fn db_delete_task_deliverables(conn: &Connection, task_id: i64) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM deliverables WHERE task_id = ?1",
+        rusqlite::params![task_id],
+    )
+    .map_err(|e| format!("Erreur nettoyage livrables: {}", e))
+}
+
 // ── Idée 3 (Lot A), tranche 3.2 : commandes Tauri de la checklist ──
 //
 // Enveloppes MINCES : chacune ouvre la base puis délègue au helper pur
@@ -3716,6 +3861,11 @@ pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, St
     // tâche supprimée — aucun point orphelin ne subsiste, les points des autres
     // tâches sont intacts (fail-open : on ne bloque jamais la suppression).
     let _ = db_delete_task_checks(&conn, task_id);
+    // Idée 4 (Lot A), tranche 4.1 : suppression des livrables de la tâche
+    // supprimée — aucune ligne de traçabilité orpheline ne subsiste, celles des
+    // autres tâches sont intactes (fail-open : on ne bloque jamais la
+    // suppression).
+    let _ = db_delete_task_deliverables(&conn, task_id);
     let n = conn
         .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![task_id])
         .map_err(|e| format!("Erreur suppression tâche: {}", e))?;
@@ -5428,6 +5578,8 @@ mod tests {
         build_capped_injection_message, build_project_context, classify_task_status,
         db_add_task_check, db_delete_task_check, db_delete_task_checks, db_list_task_checks,
         db_set_task_check_done,
+        db_add_deliverable, db_delete_task_deliverables, db_list_project_deliverables,
+        db_list_task_deliverables, DELIVERABLE_ORIGIN_UNKNOWN,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
@@ -7387,6 +7539,169 @@ mod tests {
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0]["id"], id);
         assert_eq!(checks[0]["label"], "Survivre au redémarrage");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Idée 4 (Lot A), tranche 4.1 : traçabilité livrable → demande ──
+    // Ces tests verrouillent le contrat des lignes de traçabilité (aucun
+    // AppHandle) : ajout puis lecture, refus d'un libellé vide et d'une tâche
+    // inconnue (donc jamais de ligne orpheline), tri antéchronologique au
+    // niveau projet, nettoyage d'une tâche SANS toucher aux autres, et création
+    // IDEMPOTENTE de la table (une base existante se rouvre intacte).
+
+    #[test]
+    fn deliverable_add_then_list_round_trip() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Une tâche sans livrable renvoie une liste vide — jamais une erreur.
+        assert!(db_list_task_deliverables(&conn, t1).unwrap().is_empty());
+
+        let a = db_add_deliverable(&conn, t1, None, "Compiler", "").unwrap();
+        let b = db_add_deliverable(&conn, t1, Some(7), "  Lancer les tests  ", " demande #12 ")
+            .unwrap();
+
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_ne!(a, b);
+        assert_eq!(rows[0]["id"], a);
+        assert_eq!(rows[0]["label"], "Compiler");
+        // Origine non fournie : la mention de repli est écrite (jamais vide).
+        assert_eq!(rows[0]["origin"], DELIVERABLE_ORIGIN_UNKNOWN);
+        assert!(rows[0]["decision_id"].is_null());
+        assert_eq!(rows[0]["task_id"], t1);
+        // Libellé et origine nettoyés en bord ; décision d'origine conservée.
+        assert_eq!(rows[1]["id"], b);
+        assert_eq!(rows[1]["label"], "Lancer les tests");
+        assert_eq!(rows[1]["origin"], "demande #12");
+        assert_eq!(rows[1]["decision_id"], 7);
+        assert!(rows[1]["created_at"].is_string());
+        // Les livrables de l'AUTRE tâche ne remontent pas dans cette liste.
+        assert!(db_list_task_deliverables(&conn, t2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deliverable_rejects_empty_label_and_unknown_task() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Libellé vide (ou seulement des espaces) : refusé, rien n'est inséré.
+        assert!(db_add_deliverable(&conn, t1, None, "", "").is_err());
+        assert!(db_add_deliverable(&conn, t1, None, "   \t ", "").is_err());
+        // Tâche inconnue : refusée → aucune ligne orpheline ne peut exister.
+        assert!(db_add_deliverable(&conn, 9999, None, "Livrable orphelin", "").is_err());
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM deliverables", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 0, "aucune ligne ne doit avoir été insérée");
+        // Cas nominal : le rattachement à une tâche réelle fonctionne.
+        assert!(db_add_deliverable(&conn, t1, None, "Livrable réel", "").is_ok());
+    }
+
+    #[test]
+    fn project_deliverables_are_listed_most_recent_first() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Les deux tâches appartiennent au projet 1 et le projet est dérivé par
+        // jointure sur `tasks` (rien n'est stocké dans la table).
+        let a = db_add_deliverable(&conn, t1, None, "Ancien", "").unwrap();
+        let b = db_add_deliverable(&conn, t2, None, "Milieu", "").unwrap();
+        let c = db_add_deliverable(&conn, t1, None, "Récent", "").unwrap();
+        // `datetime('now')` est à la seconde : on force des horodatages
+        // distincts pour prouver le tri antéchronologique.
+        conn.execute(
+            "UPDATE deliverables SET created_at = '2026-01-01 10:00:00' WHERE id = ?1",
+            [a],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE deliverables SET created_at = '2026-01-02 10:00:00' WHERE id = ?1",
+            [b],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE deliverables SET created_at = '2026-01-03 10:00:00' WHERE id = ?1",
+            [c],
+        )
+        .unwrap();
+
+        let rows = db_list_project_deliverables(&conn, 1).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], c, "le plus récent vient en tête");
+        assert_eq!(rows[1]["id"], b);
+        assert_eq!(rows[2]["id"], a);
+        assert_eq!(rows[0]["project_id"], 1);
+        assert_eq!(rows[0]["task_id"], t1);
+
+        // À horodatage ÉGAL, l'id décroissant tranche (tri déterministe).
+        conn.execute("UPDATE deliverables SET created_at = '2026-01-03 10:00:00'", [])
+            .unwrap();
+        let rows = db_list_project_deliverables(&conn, 1).unwrap();
+        assert_eq!(rows[0]["id"], c);
+        assert_eq!(rows[1]["id"], b);
+        assert_eq!(rows[2]["id"], a);
+
+        // Un projet sans livrable (ou inconnu) renvoie une liste vide.
+        assert!(db_list_project_deliverables(&conn, 42).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_task_removes_only_its_own_deliverables() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        db_add_deliverable(&conn, t1, None, "Livrable 1", "").unwrap();
+        db_add_deliverable(&conn, t1, None, "Livrable 2", "").unwrap();
+        let keep = db_add_deliverable(&conn, t2, None, "Livrable de l'autre tâche", "").unwrap();
+
+        // Nettoyage appelé par `super_agent_delete_task` avant le DELETE tâche.
+        assert_eq!(db_delete_task_deliverables(&conn, t1).unwrap(), 2);
+        conn.execute("DELETE FROM tasks WHERE id = ?1", [t1]).unwrap();
+
+        assert!(db_list_task_deliverables(&conn, t1).unwrap().is_empty());
+        // Les livrables de l'AUTRE tâche restent INTACTS.
+        let autre = db_list_task_deliverables(&conn, t2).unwrap();
+        assert_eq!(autre.len(), 1);
+        assert_eq!(autre[0]["id"], keep);
+        assert_eq!(autre[0]["label"], "Livrable de l'autre tâche");
+        // Aucun livrable orphelin ne subsiste en base.
+        let orphelins: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM deliverables WHERE task_id NOT IN (SELECT id FROM tasks)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphelins, 0, "aucune ligne orpheline après suppression");
+        // Fail-open : nettoyer une tâche sans livrable (ou inconnue) n'échoue pas.
+        assert_eq!(db_delete_task_deliverables(&conn, t2).unwrap(), 1);
+        assert_eq!(db_delete_task_deliverables(&conn, 12345).unwrap(), 0);
+    }
+
+    #[test]
+    fn deliverables_table_survives_reopen_and_reinit() {
+        // Idempotence : une base DÉJÀ migrée se rouvre sans erreur et sans perte.
+        let path = std::env::temp_dir().join(format!(
+            "pilot-deliverables-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let id: i64;
+        {
+            let conn = Connection::open(&path).unwrap();
+            init_db(&conn).unwrap();
+            conn.execute_batch(
+                "INSERT INTO clients (name) VALUES ('Client A');\
+                 INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+                 INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche');",
+            )
+            .unwrap();
+            id = db_add_deliverable(&conn, 1, None, "Survivre au redémarrage", "").unwrap();
+            drop(conn);
+        }
+        // Réouverture : `init_db` (CREATE TABLE/INDEX IF NOT EXISTS) est rejoué
+        // — ici DEUX fois — sans casser la table ni perdre la ligne existante.
+        let conn = Connection::open(&path).unwrap();
+        init_db(&conn).unwrap();
+        init_db(&conn).unwrap();
+        let rows = db_list_task_deliverables(&conn, 1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], id);
+        assert_eq!(rows[0]["label"], "Survivre au redémarrage");
         drop(conn);
         let _ = std::fs::remove_file(&path);
     }
