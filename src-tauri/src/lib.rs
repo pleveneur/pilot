@@ -3456,6 +3456,8 @@ pub fn run() {
             super_agent::super_agent_task_check_add,
             super_agent::super_agent_task_check_set_done,
             super_agent::super_agent_task_check_delete,
+            super_agent::super_agent_task_deliverable_list,
+            super_agent::super_agent_project_deliverable_list,
             super_agent::super_agent_add_decision,
             super_agent::super_agent_add_milestone,
             super_agent::super_agent_set_deadline,

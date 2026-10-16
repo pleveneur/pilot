@@ -2458,6 +2458,73 @@ fn db_record_delivery_trace(
     Ok(Some(id))
 }
 
+// ── Idée 4 (Lot A), tranche 4.3 : commandes Tauri de LECTURE de la traçabilité ──
+//
+// Deux enveloppes MINCES, sur le modèle exact des commandes de checklist de
+// l'idée 3 : chacune ouvre la base puis délègue au helper PUR de la tranche
+// 4.1 — aucune logique métier n'est dupliquée, aucune règle n'est réécrite.
+// Ces commandes sont en LECTURE SEULE : elles n'insèrent, ne modifient ni ne
+// suppriment quoi que ce soit. Elles prennent un `AppHandle` (indisponible hors
+// application graphique) : leur contrat de données est donc verrouillé par les
+// tests des helpers purs (`db_list_task_deliverables`,
+// `db_list_project_deliverables_by_path`).
+
+/// Lit les livrables d'un projet DÉSIGNÉ PAR SON CHEMIN — comme les autres
+/// commandes du suivi (`resolve_project_id`, `period_report`) — de la plus
+/// récente à la plus ancienne. Le chemin est résolu en `project_id` par la
+/// seule colonne `projects.path` ; un chemin vide, inconnu ou absent du suivi
+/// renvoie une liste VIDE, jamais une erreur : l'interface affiche « aucune
+/// traçabilité » au lieu de subir un échec de commande. Aucun AppHandle (donc
+/// testable sur une connexion en mémoire, comme le helper de la tranche 4.1).
+fn db_list_project_deliverables_by_path(
+    conn: &Connection,
+    project_path: &str,
+) -> Result<Vec<Value>, String> {
+    let path = project_path.trim();
+    if path.is_empty() {
+        return Ok(Vec::new());
+    }
+    let project_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok();
+    match project_id {
+        Some(id) => db_list_project_deliverables(conn, id),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Liste les lignes de traçabilité d'une tâche de suivi (du plus ancien au plus
+/// récent, c'est-à-dire l'ordre de production). Une tâche sans livraison
+/// renvoie `{ deliverables: [], count: 0 }` — jamais une erreur.
+#[tauri::command]
+pub fn super_agent_task_deliverable_list(app: AppHandle, task_id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let rows = db_list_task_deliverables(&conn, task_id)?;
+    Ok(serde_json::json!({ "deliverables": rows, "count": rows.len() }))
+}
+
+/// Liste les lignes de traçabilité d'un projet de suivi, identifié par son
+/// chemin, de la plus récente à la plus ancienne (`created_at` décroissant,
+/// `id` décroissant à horodatage égal). Un projet sans livraison — ou un chemin
+/// inconnu du suivi — renvoie `{ deliverables: [], count: 0 }` sans erreur.
+#[tauri::command]
+pub fn super_agent_project_deliverable_list(
+    app: AppHandle,
+    project_path: String,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let rows = db_list_project_deliverables_by_path(&conn, &project_path)?;
+    Ok(serde_json::json!({
+        "deliverables": rows,
+        "count": rows.len(),
+        "project_path": project_path.trim(),
+    }))
+}
+
 // ── Idée 3 (Lot A), tranche 3.2 : commandes Tauri de la checklist ──
 //
 // Enveloppes MINCES : chacune ouvre la base puis délègue au helper pur
@@ -5669,7 +5736,8 @@ mod tests {
         db_add_task_check, db_delete_task_check, db_delete_task_checks, db_list_task_checks,
         db_set_task_check_done,
         db_add_deliverable, db_delete_task_deliverables, db_list_project_deliverables,
-        db_list_task_deliverables, db_record_delivery_trace, DELIVERABLE_ORIGIN_UNKNOWN,
+        db_list_project_deliverables_by_path, db_list_task_deliverables, db_record_delivery_trace,
+        DELIVERABLE_ORIGIN_UNKNOWN,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
@@ -7918,6 +7986,98 @@ mod tests {
         // …mais le changement de statut, lui, RÉUSSIT (fail-open).
         apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
         assert_eq!(task_status_of(&conn, t1).as_deref(), Some("livree"));
+    }
+
+    // ── Lot A idée 4, tranche 4.3 : contrat des commandes de LECTURE ──
+    // Les deux commandes Tauri exigent un `AppHandle` (indisponible hors
+    // application graphique) : ce sont donc les helpers PURS qu'elles appellent
+    // (`db_list_task_deliverables`, `db_list_project_deliverables_by_path`) qui
+    // sont verrouillés ici — mêmes entrées, mêmes sorties, en base mémoire.
+
+    #[test]
+    fn deliverable_read_returns_an_empty_list_for_a_task_without_delivery() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Tâche sans livraison : liste vide, jamais une erreur.
+        assert!(db_list_task_deliverables(&conn, t1).unwrap().is_empty());
+        // Tâche inconnue du suivi : même réponse, toujours sans erreur.
+        assert!(db_list_task_deliverables(&conn, 9999).unwrap().is_empty());
+        // Ces lectures n'écrivent RIEN (les commandes sont en lecture seule).
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM deliverables", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 0, "une lecture ne doit jamais insérer de ligne");
+    }
+
+    #[test]
+    fn deliverable_read_lists_most_recent_first_after_two_deliveries() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Deux livraisons EFFECTIVES, par le chemin d'écriture réel (tranche 4.2).
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t2, "livree", "off", false).unwrap();
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1);
+        let first = rows[0]["id"].as_i64().unwrap();
+        // Seconde livraison de la MÊME tâche (aller-retour hors état livré).
+        apply_status_change_like_the_commands(&conn, t1, "en_cours", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_ne!(rows[1]["id"].as_i64().unwrap(), first);
+
+        // Lecture par PROJET, désigné par son CHEMIN comme les autres commandes
+        // du suivi : non vide (les deux tâches du projet y contribuent) et de la
+        // plus récente à la plus ancienne.
+        let second = rows[1]["id"].as_i64().unwrap();
+        let other_task_line: i64 = conn
+            .query_row(
+                "SELECT id FROM deliverables WHERE task_id = ?1",
+                [t2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rows = db_list_project_deliverables_by_path(&conn, "/p/a").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|d| d["project_id"] == 1));
+        // Horodatages forcés DISTINCTS : le plus récent vient bien en tête.
+        // (`datetime('now')` est à la seconde, les lignes seraient sinon ex æquo
+        // et c'est l'id décroissant qui trancherait — aussi antéchronologique,
+        // mais ce test doit prouver le tri par date.)
+        let dated = [
+            (first, "2026-01-01 10:00:00"),
+            (other_task_line, "2026-01-02 10:00:00"),
+            (second, "2026-01-03 10:00:00"),
+        ];
+        for (id, at) in dated {
+            conn.execute(
+                "UPDATE deliverables SET created_at = ?1 WHERE id = ?2",
+                rusqlite::params![at, id],
+            )
+            .unwrap();
+        }
+        let rows = db_list_project_deliverables_by_path(&conn, "/p/a").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["id"], second, "le plus récent vient en tête");
+        assert_eq!(rows[1]["id"], other_task_line);
+        assert_eq!(rows[2]["id"], first, "le plus ancien vient en dernier");
+        assert_eq!(rows[0]["created_at"], "2026-01-03 10:00:00");
+    }
+
+    #[test]
+    fn deliverable_read_of_an_unknown_project_is_empty_and_never_fails() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        db_add_deliverable(&conn, t1, None, "Livrable", "").unwrap();
+        // Projet jamais vu du suivi, chemin vide ou seulement des espaces :
+        // liste vide, jamais une erreur ni un panic.
+        for path in ["/projet/inconnu", "", "   "] {
+            let rows = db_list_project_deliverables_by_path(&conn, path).unwrap();
+            assert!(rows.is_empty(), "chemin {:?}", path);
+        }
+        // Le projet CONNU répond normalement ; les espaces autour du chemin
+        // sont nettoyés (même contrat que `resolve_project_id`).
+        assert_eq!(db_list_project_deliverables_by_path(&conn, "/p/a").unwrap().len(), 1);
+        assert_eq!(db_list_project_deliverables_by_path(&conn, "  /p/a  ").unwrap().len(), 1);
+        // Et ces lectures n'ont rien modifié (lecture seule stricte).
+        assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 1);
     }
 
     // ── Lot A idée 3, tranche 3.3 : contrôle de checklist au passage en « Terminé » ──
