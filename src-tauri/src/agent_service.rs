@@ -455,7 +455,7 @@ impl AgentService {
             } else {
                 raw_project
             };
-            if self.agent_alive(&project, &agent_id) {
+            if self.session_alive_normalized(&project, &agent_id) {
                 // Exécution légitime : rien à faire (session parkée ou en cours).
                 continue;
             }
@@ -478,19 +478,12 @@ impl AgentService {
             }
             // Verrou d'exclusivité moteur : libérer la marque `busy` résiduelle
             // (sinon la file JS attend un agent qui n'existe plus).
-            {
-                let mut m = anomaly_map.lock().unwrap();
-                if let Some(e) = m.get_mut(&format!("{}\u{1f}{}", project, agent_id)) {
-                    e.busy = false;
-                    e.blocked_reported = false;
-                    e.auto_stopped_reported = false;
-                }
-            }
+            Self::clear_anomaly_busy_normalized(anomaly_map, &project, &agent_id);
             // Session morte retirée du registre : sans cela, la sonde
             // `list_agent_sessions` listait encore l'entrée (présente mais non
             // vivante) et les gardes d'exclusivité frontend conservaient un
             // créneau fantôme.
-            self.drop_dead_session(&project, &agent_id);
+            self.drop_dead_session_normalized(&project, &agent_id);
             // Journal : une ligne par purge (diagnostic sans redémarrage).
             eprintln!(
                 "[agent-service] issue #87 : état d'exécution fantôme purgé — agent={} projet={} ({}) proc_state=Running sans processus vivant → Unloaded (loaded=0, busy=0, verrou libéré)",
@@ -514,9 +507,90 @@ impl AgentService {
         self.purge_ghost_running_states(&conn, anomaly_map)
     }
 
+    /// Libère la marque `busy` des entrées d'anomalie du couple (projet, agent),
+    /// à la forme NORMALISÉE du chemin près. La map est alimentée par `rpc.rs`
+    /// avec le chemin BRUT de l'appelant, alors que la purge lit le chemin
+    /// CANONIQUE en base (tâche #345) : comparer les seules clés exactes laisserait
+    /// un `busy` résiduel et bloquerait le prochain démarrage. Ne crée aucune entrée.
+    fn clear_anomaly_busy_normalized(
+        map: &Arc<Mutex<HashMap<String, anomaly::AgentAnomalyState>>>,
+        project: &str,
+        agent_id: &str,
+    ) {
+        let norm = crate::normalize_project_path(project);
+        let mut guard = map.lock().unwrap();
+        for (key, entry) in guard.iter_mut() {
+            let matches = key
+                .split_once('\u{1f}')
+                .map(|(p, a)| a == agent_id && crate::normalize_project_path(p) == norm)
+                .unwrap_or(false);
+            if matches {
+                entry.busy = false;
+                entry.blocked_reported = false;
+                entry.auto_stopped_reported = false;
+            }
+        }
+    }
+
+    /// Vrai si une session (projet, agent) VIVANTE existe, à la forme NORMALISÉE
+    /// du chemin près (`\` vs `/`, casse, slash final).
+    ///
+    /// Tâche #345 : le registre `agents` est indexé par `chemin_normalise` alors
+    /// que le registre de sessions garde le chemin brut de l'appelant ; sans cette
+    /// correspondance tolérante, la purge d'états fantômes croirait la session
+    /// morte et remettrait l'état d'un agent bien vivant à zéro.
+    fn session_alive_normalized(&self, project: &str, agent_id: &str) -> bool {
+        let norm = crate::normalize_project_path(project);
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.iter_mut().any(|(key, entry)| {
+            key.split_once('\u{1f}')
+                .map(|(_, a)| a == agent_id)
+                .unwrap_or(false)
+                && crate::normalize_project_path(&entry.project) == norm
+                && entry
+                    .session
+                    .child
+                    .try_wait()
+                    .map(|s| s.is_none())
+                    .unwrap_or(false)
+        })
+    }
+
+    /// Retire du registre les sessions MORTES de (projet, agent), à la forme
+    /// normalisée du chemin près (idempotent). Complément de
+    /// `session_alive_normalized` pour la purge des états fantômes (issue #87).
+    fn drop_dead_session_normalized(&self, project: &str, agent_id: &str) {
+        let norm = crate::normalize_project_path(project);
+        let mut sessions = self.sessions.lock().unwrap();
+        let mut dead: Vec<String> = Vec::new();
+        for (key, entry) in sessions.iter_mut() {
+            let same_scope = key
+                .split_once('\u{1f}')
+                .map(|(_, a)| a == agent_id)
+                .unwrap_or(false)
+                && crate::normalize_project_path(&entry.project) == norm;
+            if !same_scope {
+                continue;
+            }
+            let is_dead = entry
+                .session
+                .child
+                .try_wait()
+                .map(|s| s.is_some())
+                .unwrap_or(true);
+            if is_dead {
+                dead.push(key.clone());
+            }
+        }
+        for k in dead {
+            sessions.remove(&k);
+        }
+    }
+
     /// Retire du registre la session de (projet, agent) si son processus est
     /// MORT (idempotent, sans effet si absente ou vivante). Utilisé par la
     /// purge des états fantômes (issue #87).
+    #[allow(dead_code)]
     fn drop_dead_session(&self, project: &str, agent_id: &str) {
         let key = Self::session_key(project, agent_id);
         let mut sessions = self.sessions.lock().unwrap();
@@ -540,16 +614,19 @@ impl AgentService {
     /// agents globaux (project_path IS NULL).
     pub fn list_agents(&self, app: &AppHandle, project_path: Option<&str>) -> Result<Vec<Agent>, String> {
         let conn = db::open_conn(app)?;
+        // Tâche #345 : lecture par clé CANONIQUE de projet (l'index UNIQUE
+        // `(id, chemin_normalise)` est la source de vérité du périmètre).
+        let scope = normalize_scope(project_path);
         let mut stmt = conn
             .prepare(
                 "SELECT * FROM agents
                  WHERE (?1 IS NULL AND project_path IS NULL)
-                    OR (?1 IS NOT NULL AND project_path = ?1)
+                    OR (?1 IS NOT NULL AND chemin_normalise = ?1)
                  ORDER BY id",
             )
             .map_err(|e| format!("Erreur préparation list_agents: {}", e))?;
         let rows = stmt
-            .query_map(params![project_path], |row| Agent::from_row(row))
+            .query_map(params![scope], |row| Agent::from_row(row))
             .map_err(|e| format!("Erreur requête list_agents: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
@@ -561,15 +638,17 @@ impl AgentService {
     /// Récupère un agent par (id, project_path).
     pub fn get_agent(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>) -> Result<Option<Agent>, String> {
         let conn = db::open_conn(app)?;
+        // Tâche #345 : lecture par clé canonique (cf. `list_agents`).
+        let scope = normalize_scope(project_path);
         let mut stmt = conn
             .prepare(
                 "SELECT * FROM agents
                  WHERE id = ?1
-                   AND ((?2 IS NULL AND project_path IS NULL) OR (?2 IS NOT NULL AND project_path = ?2))",
+                   AND ((?2 IS NULL AND project_path IS NULL) OR (?2 IS NOT NULL AND chemin_normalise = ?2))",
             )
             .map_err(|e| format!("Erreur préparation get_agent: {}", e))?;
         let mut rows = stmt
-            .query_map(params![agent_id, project_path], |row| Agent::from_row(row))
+            .query_map(params![agent_id, scope], |row| Agent::from_row(row))
             .map_err(|e| format!("Erreur requête get_agent: {}", e))?;
         match rows.next() {
             Some(Ok(a)) => Ok(Some(a)),
@@ -590,15 +669,16 @@ impl AgentService {
     /// « sauvegarde du registre complet » (remplace `save_agent_registry`).
     pub fn replace_agents(&self, app: &AppHandle, project_path: Option<&str>, agents: &[Agent]) -> Result<(), String> {
         let conn = db::open_conn(app)?;
-        // Supprime les agents du scope puis réinsère.
+        // Supprime les agents du scope (clé canonique, tâche #345) puis réinsère.
+        let scope = normalize_scope(project_path);
         conn.execute(
-            "DELETE FROM agents WHERE (?1 IS NULL AND project_path IS NULL) OR (?1 IS NOT NULL AND project_path = ?1)",
-            params![project_path],
+            "DELETE FROM agents WHERE (?1 IS NULL AND project_path IS NULL) OR (?1 IS NOT NULL AND chemin_normalise = ?1)",
+            params![scope],
         )
         .map_err(|e| format!("Erreur purge replace_agents: {}", e))?;
         for a in agents {
             let mut a = a.clone();
-            a.project_path = project_path.map(|s| s.to_string());
+            a.project_path = scope.clone();
             self.upsert_agent(app, &a)?;
         }
         Ok(())
@@ -617,6 +697,9 @@ impl AgentService {
     /// la barre d'onglets agents à l'identique (cahier §5.2).
     pub fn list_agent_views(&self, app: &AppHandle, project_path: &str) -> Result<Vec<AgentView>, String> {
         let conn = db::open_conn(app)?;
+        // Tâche #345 : la table suit la clé canonique du registre `agents`
+        // (clé étrangère sur `(id, project_path)`).
+        let scope = crate::normalize_project_path(project_path);
         let mut stmt = conn
             .prepare(
                 "SELECT agent_id, project_path, order_index, name_override, active
@@ -624,7 +707,7 @@ impl AgentService {
             )
             .map_err(|e| format!("Erreur préparation list_agent_views: {}", e))?;
         let rows = stmt
-            .query_map(params![project_path], |row| AgentView::from_row(row))
+            .query_map(params![scope], |row| AgentView::from_row(row))
             .map_err(|e| format!("Erreur requête list_agent_views: {}", e))?;
         let mut out = Vec::new();
         for r in rows {
@@ -637,13 +720,15 @@ impl AgentService {
     /// barre d'onglets agents »).
     pub fn save_agent_views(&self, app: &AppHandle, project_path: &str, views: &[AgentView]) -> Result<(), String> {
         let conn = db::open_conn(app)?;
-        conn.execute("DELETE FROM agent_views WHERE project_path = ?1", params![project_path])
+        // Tâche #345 : clé canonique côté écriture (cf. `list_agent_views`).
+        let scope = crate::normalize_project_path(project_path);
+        conn.execute("DELETE FROM agent_views WHERE project_path = ?1", params![scope])
             .map_err(|e| format!("Erreur purge save_agent_views: {}", e))?;
         for v in views {
             conn.execute(
                 "INSERT INTO agent_views (agent_id, project_path, order_index, name_override, active)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![v.agent_id, v.project_path, v.order_index, v.name_override, v.active as i64],
+                params![v.agent_id, scope, v.order_index, v.name_override, v.active as i64],
             )
             .map_err(|e| format!("Erreur insert save_agent_views: {}", e))?;
         }
@@ -653,10 +738,12 @@ impl AgentService {
     /// Pose la visibilité d'un agent (0 = invisible, 1 = vue ouverte).
     pub fn set_visible(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>, visible: bool) -> Result<(), String> {
         let conn = db::open_conn(app)?;
+        // Tâche #345 : cible par clé canonique (cf. `get_agent`).
+        let scope = normalize_scope(project_path);
         let changed = conn.execute(
             "UPDATE agents SET visible = ?1
-             WHERE id = ?2 AND ((?3 IS NULL AND project_path IS NULL) OR (?3 IS NOT NULL AND project_path = ?3))",
-            params![visible as i64, agent_id, project_path],
+             WHERE id = ?2 AND ((?3 IS NULL AND project_path IS NULL) OR (?3 IS NOT NULL AND chemin_normalise = ?3))",
+            params![visible as i64, agent_id, scope],
         )
         .map_err(|e| format!("Erreur set_visible: {}", e))?;
         // Bug 3 : un UPDATE qui ne matche aucune ligne = agent absent → erreur
@@ -680,10 +767,12 @@ impl AgentService {
         state: &AgentProcessState,
     ) -> Result<(), String> {
         let conn = db::open_conn(app)?;
+        // Tâche #345 : cible par clé canonique (cf. `get_agent`).
+        let scope = normalize_scope(project_path);
         let changed = conn.execute(
             "UPDATE agents SET loaded = ?1, busy = ?2, proc_state = ?3
-             WHERE id = ?4 AND ((?5 IS NULL AND project_path IS NULL) OR (?5 IS NOT NULL AND project_path = ?5))",
-            params![loaded as i64, busy as i64, state.as_str(), agent_id, project_path],
+             WHERE id = ?4 AND ((?5 IS NULL AND project_path IS NULL) OR (?5 IS NOT NULL AND chemin_normalise = ?5))",
+            params![loaded as i64, busy as i64, state.as_str(), agent_id, scope],
         )
         .map_err(|e| format!("Erreur set_state: {}", e))?;
         // Bug 3 : un UPDATE qui ne matche aucune ligne = agent absent → erreur
@@ -702,11 +791,20 @@ impl AgentService {
     /// état local transitoire non persisté).
     fn emit_state_changed(&self, app: &AppHandle, agent_id: &str, project_path: Option<&str>) {
         if let Ok(Some(a)) = self.get_agent(app, agent_id, project_path) {
+            // Tâche #345 : le registre stocke la clé CANONIQUE du projet, mais le
+            // frontend indexe ses agents invisibles par le chemin BRUT qu'il a
+            // fourni (clé `agentId::projectPath`, cf. `handleAgentStateChanged`).
+            // On émet donc la portée de l'appelant, pas la valeur normalisée, tout
+            // en gardant la valeur en base pour un agent global (`None`).
+            let emitted: Option<String> = match project_path {
+                Some(p) => Some(p.to_string()),
+                None => a.project_path.clone(),
+            };
             let _ = app.emit(
                 "agent-state-changed",
                 serde_json::json!({
                     "agentId": a.id,
-                    "projectPath": a.project_path,
+                    "projectPath": emitted,
                     "loaded": a.loaded,
                     "busy": a.busy,
                     "procState": a.state.as_str(),
@@ -720,6 +818,14 @@ impl AgentService {
 
     /// Clé composite (project, agent) du registre de sessions. Le séparateur
     /// U+001F (unit separator) ne peut pas apparaître dans un chemin de projet.
+    ///
+    /// Tâche #345 : la clé conserve le chemin BRUT fourni par l'appelant (et non
+    /// sa forme canonique) : c'est la convention attendue par la map d'anomalie
+    /// (clé `project\u{1f}agent`, alimentée par `rpc.rs` avec le chemin brut) et par
+    /// `collect_session_states` (qui relit le projet depuis la clé). Le registre
+    /// `agents`, lui, est indexé par la forme canonique (`chemin_normalise`) : la
+    /// purge d'états fantômes fait donc la correspondance à la forme normalisée
+    /// près (`session_alive_normalized`), sans changer la clé de session.
     fn session_key(project: &str, agent_id: &str) -> String {
         format!("{}\u{1f}{}", project, agent_id)
     }
@@ -2957,6 +3063,18 @@ fn collect_session_states(
         .collect()
 }
 
+/// Tâche #345 — clé canonique de portée d'un agent (`None` = agent global).
+///
+/// Le registre `agents` était interrogé avec le chemin BRUT du projet : deux
+/// écritures du même projet sous une forme de chemin différente (`G:/p` puis
+/// `G:\p\`) créaient deux fiches (« fiches d'agent en double »). Toutes les
+/// lectures et écritures passent désormais par `crate::normalize_project_path`
+/// (déjà utilisé par GDS), la même clé que `agents.chemin_normalise`
+/// (index UNIQUE `(id, chemin_normalise)`).
+fn normalize_scope(project_path: Option<&str>) -> Option<String> {
+    project_path.map(crate::normalize_project_path)
+}
+
 /// Insère ou met à jour un agent dans la connexion donnée (P4).
 ///
 /// Bug de persistance : `UNIQUE(id, project_path)` traite les NULL comme
@@ -3019,14 +3137,21 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
             .map_err(|e| format!("Erreur insert upsert_agent: {}", e))?;
         }
     } else {
+        // Tâche #345 : écriture sous la clé CANONIQUE (déjà normalisée par
+        // `normalize_scope` pour les lectures). `project_path` et
+        // `chemin_normalise` sont alignés ; l'unicité est portée par l'index
+        // `(id, chemin_normalise)`, insensible à la forme du chemin fourni.
+        let canonical = crate::normalize_project_path(
+            agent.project_path.as_deref().unwrap_or_default(),
+        );
         conn.execute(
             "INSERT INTO agents (
-                id, project_path, name, icon, description, role,
+                id, project_path, chemin_normalise, name, icon, description, role,
                 models_pi, models_plh, thinking_pi, thinking_plh, capabilities, skills,
                 readonly, keep_context,
                 max_calls_per_run, call_depth, loaded, busy, proc_state, visible, last_active_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
-             ON CONFLICT(id, project_path) DO UPDATE SET
+             ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+             ON CONFLICT(id, chemin_normalise) DO UPDATE SET
                 name=excluded.name, icon=excluded.icon, description=excluded.description,
                 role=excluded.role, models_pi=excluded.models_pi, models_plh=excluded.models_plh,
                 thinking_pi=excluded.thinking_pi, thinking_plh=excluded.thinking_plh,
@@ -3035,7 +3160,7 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
                 call_depth=excluded.call_depth, loaded=excluded.loaded, busy=excluded.busy,
                 proc_state=excluded.proc_state, visible=excluded.visible, last_active_at=excluded.last_active_at",
             params![
-                agent.id, agent.project_path, agent.name, agent.icon, agent.description, agent.role,
+                agent.id, canonical, agent.name, agent.icon, agent.description, agent.role,
                 agent.models.pi, agent.models.plh, agent.thinking.pi, agent.thinking.plh,
                 capabilities, skills,
                 agent.readonly as i64, agent.keep_context as i64,
@@ -3053,11 +3178,13 @@ fn upsert_agent_conn(conn: &rusqlite::Connection, agent: &Agent) -> Result<(), S
 /// explicite si aucune ligne n'a été supprimée (agent absent), comme
 /// `set_visible`/`set_state` : un échec silencieux laisserait une ligne fantôme.
 fn delete_agent_conn(conn: &rusqlite::Connection, agent_id: &str, project_path: Option<&str>) -> Result<(), String> {
+    // Tâche #345 : suppression par clé canonique (cf. `upsert_agent_conn`).
+    let scope = normalize_scope(project_path);
     let changed = conn
         .execute(
             "DELETE FROM agents
-             WHERE id = ?1 AND ((?2 IS NULL AND project_path IS NULL) OR (?2 IS NOT NULL AND project_path = ?2))",
-            params![agent_id, project_path],
+             WHERE id = ?1 AND ((?2 IS NULL AND project_path IS NULL) OR (?2 IS NOT NULL AND chemin_normalise = ?2))",
+            params![agent_id, scope],
         )
         .map_err(|e| format!("Erreur suppression agent: {}", e))?;
     if changed == 0 {
@@ -3385,6 +3512,93 @@ mod tests {
             visible: true,
             last_active_at: None,
         }
+    }
+
+    /// Connexion en mémoire avec le schéma réel (`init_db`) pour les tests de
+    /// persistance du registre (tâche #345).
+    fn persistence_conn() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
+        crate::db::init_db(&conn).expect("schéma pilot.db");
+        conn
+    }
+
+    // ── Tâche #345 : clé de projet canonique (fiches d'agent en double) ──
+
+    /// `normalize_scope` ramène les deux formes d'un même chemin à UNE clé
+    /// (séparateur `\` vs `/`, slash final), et laisse `None` (agent global) tel quel.
+    #[test]
+    fn normalize_scope_maps_path_spellings_to_one_key() {
+        assert_eq!(
+            normalize_scope(Some("G:/IA_PL/pilot/")),
+            normalize_scope(Some("G:\\IA_PL\\pilot")),
+            "les deux formes du même chemin doivent donner la même clé"
+        );
+        assert_eq!(normalize_scope(None), None);
+    }
+
+    /// Cœur du bug #345 : deux écritures du MÊME projet sous deux formes de
+    /// chemin ne créent qu'UNE fiche, et la seconde met bien à jour la première.
+    #[test]
+    fn upsert_project_agent_dedups_path_spellings() {
+        let conn = persistence_conn();
+
+        let mut first = sample_agent("git-point");
+        first.project_path = Some("G:/IA_PL/pilot".to_string());
+        upsert_agent_conn(&conn, &first).expect("premier upsert");
+
+        let mut second = first.clone();
+        second.project_path = Some("G:\\IA_PL\\pilot\\".to_string());
+        second.name = "Git point (maj)".to_string();
+        upsert_agent_conn(&conn, &second).expect("second upsert, autre forme");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE id = 'git-point' AND chemin_normalise IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .expect("compte des fiches");
+        assert_eq!(count, 1, "une seule fiche malgré deux formes de chemin");
+
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM agents WHERE id = 'git-point' AND chemin_normalise = ?1",
+                rusqlite::params![crate::normalize_project_path("G:\\IA_PL\\pilot\\")],
+                |r| r.get(0),
+            )
+            .expect("relecture par la forme normalisée");
+        assert_eq!(name, "Git point (maj)", "la seconde écriture a mis à jour la fiche");
+    }
+
+    /// La lecture et la suppression acceptent n'importe quelle forme du chemin
+    /// (elles passent par la clé canonique) sans toucher un projet distinct.
+    #[test]
+    fn read_and_delete_accept_any_path_spelling() {
+        let conn = persistence_conn();
+
+        let mut a = sample_agent("codeur");
+        a.project_path = Some("G:/IA_PL/pilot".to_string());
+        upsert_agent_conn(&conn, &a).expect("upsert projet 1");
+
+        let mut b = sample_agent("codeur");
+        b.project_path = Some("G:/IA_PL/pilot - Analyseur".to_string());
+        upsert_agent_conn(&conn, &b).expect("upsert projet 2 (distinct)");
+
+        let read: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM agents WHERE id = 'codeur' AND chemin_normalise = ?1",
+                rusqlite::params![crate::normalize_project_path("G:\\IA_PL\\pilot")],
+                |r| r.get(0),
+            )
+            .expect("lecture par forme à backslashes");
+        assert_eq!(read, 1, "la fiche est retrouvée quelle que soit la forme");
+
+        // Suppression avec encore une autre forme : la fiche canonique part.
+        delete_agent_conn(&conn, "codeur", Some("G:\\IA_PL\\pilot\\")).expect("suppression");
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agents WHERE id = 'codeur'", [], |r| r.get(0))
+            .expect("compte après suppression");
+        assert_eq!(remaining, 1, "seul le projet supprimé disparaît, pas l'autre");
     }
 
     // ── Compétences (lot 2 : injection + filtrage strict) ──
@@ -3915,22 +4129,9 @@ mod tests {
     /// second upsert met à jour la ligne existante au lieu d'en créer une autre.
     #[test]
     fn upsert_global_agent_is_idempotent() {
-        let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
-        conn.execute_batch(
-            "CREATE TABLE agents (
-                id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
-                icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
-                models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
-                thinking_pi TEXT NOT NULL DEFAULT '', thinking_plh TEXT NOT NULL DEFAULT '',
-                capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
-                readonly INTEGER DEFAULT 0,
-                keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
-                call_depth INTEGER DEFAULT 1, loaded INTEGER DEFAULT 0, busy INTEGER DEFAULT 0,
-                proc_state TEXT DEFAULT 'Unloaded', visible INTEGER DEFAULT 1, last_active_at TEXT,
-                UNIQUE (id, project_path)
-            );",
-        )
-        .expect("création table");
+        // Tâche #345 : schéma RÉEL de `pilot.db` (porte `chemin_normalise` et
+        // l'index UNIQUE `(id, chemin_normalise)` exigés par `upsert_agent_conn`).
+        let conn = persistence_conn();
 
         let agent = Agent {
             id: "analyseur".to_string(),
@@ -3984,22 +4185,9 @@ mod tests {
     /// silencieuse : un agent absent est signalé.
     #[test]
     fn delete_agent_removes_only_target_row() {
-        let conn = rusqlite::Connection::open_in_memory().expect("db mémoire");
-        conn.execute_batch(
-            "CREATE TABLE agents (
-                id TEXT NOT NULL, project_path TEXT, name TEXT NOT NULL,
-                icon TEXT DEFAULT '🤖', description TEXT DEFAULT '', role TEXT NOT NULL,
-                models_pi TEXT DEFAULT '', models_plh TEXT DEFAULT '',
-                thinking_pi TEXT NOT NULL DEFAULT '', thinking_plh TEXT NOT NULL DEFAULT '',
-                capabilities TEXT DEFAULT '[]', skills TEXT NOT NULL DEFAULT '[]',
-                readonly INTEGER DEFAULT 0,
-                keep_context INTEGER DEFAULT 0, max_calls_per_run INTEGER DEFAULT 5,
-                call_depth INTEGER DEFAULT 1, loaded INTEGER DEFAULT 0, busy INTEGER DEFAULT 0,
-                proc_state TEXT DEFAULT 'Unloaded', visible INTEGER DEFAULT 1, last_active_at TEXT,
-                UNIQUE (id, project_path)
-            );",
-        )
-        .expect("création table");
+        // Tâche #345 : schéma RÉEL de `pilot.db` (porte `chemin_normalise` et
+        // l'index UNIQUE `(id, chemin_normalise)` exigés par `upsert_agent_conn`).
+        let conn = persistence_conn();
 
         let mut global = sample_agent("diag-1");
         global.visible = false;
