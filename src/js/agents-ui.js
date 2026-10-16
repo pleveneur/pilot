@@ -322,36 +322,45 @@ export async function createAgents(container) {
           <button class="modal-close" id="btn-ae-close" title="Fermer">×</button>
         </div>
         <div class="agent-form">
-          <label>ID (kebab-case)</label>
-          <input type="text" id="ae-id" value="${escapeHtml(a.id)}" ${!isNew ? "disabled" : ""} />
-          <label>Nom</label>
-          <input type="text" id="ae-name" value="${escapeHtml(a.name)}" />
-          <label>Icône</label>
-          <input type="text" id="ae-icon" value="${escapeHtml(a.icon)}" />
-          <label>Description</label>
-          <input type="text" id="ae-description" value="${escapeHtml(a.description)}" />
-          <label>Rôle</label>
-          <textarea id="ae-role" rows="6">${escapeHtml(a.role)}</textarea>
-          <label>Compétences (bibliothèque commune)</label>
-          <div class="agent-form-skills" id="ae-skills"></div>
-          <label>Modèle π (pi)</label>
-          <select id="ae-model-pi"><option value="">Modèle par défaut</option></select>
-          <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (π)</label>
-          <select id="ae-thinking-pi"><option value="">Non réglé (suit le réglage général)</option></select>
-          <div class="muted agent-form-note" id="ae-thinking-pi-note" style="display:none"></div>
-          <label>Modèle ℓ (plh)</label>
-          <select id="ae-model-plh"><option value="">Modèle par défaut</option></select>
-          <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (ℓ)</label>
-          <select id="ae-thinking-plh"><option value="">Non réglé (suit le réglage général)</option></select>
-          <div class="muted agent-form-note" id="ae-thinking-plh-note" style="display:none"></div>
-          <div class="agent-form-checks">
-            <label><input type="checkbox" id="ae-readonly" ${a.readonly ? "checked" : ""} /> Lecture seule</label>
-            <label><input type="checkbox" id="ae-keep" ${a.keep_context ? "checked" : ""} /> Garder le contexte</label>
+          <!-- Fiche d'agent : deux colonnes (identite/modeles a gauche,
+               role/competences/options/limites a droite). Les identifiants
+               #ae-* sont conserves a l'identique pour ne rien casser. -->
+          <div class="agent-form-cols">
+            <div class="agent-form-col">
+              <label>ID (kebab-case)</label>
+              <input type="text" id="ae-id" value="${escapeHtml(a.id)}" ${!isNew ? "disabled" : ""} />
+              <label>Nom</label>
+              <input type="text" id="ae-name" value="${escapeHtml(a.name)}" />
+              <label>Icône</label>
+              <input type="text" id="ae-icon" value="${escapeHtml(a.icon)}" />
+              <label>Description</label>
+              <input type="text" id="ae-description" value="${escapeHtml(a.description)}" />
+              <label>Modèle π (pi)</label>
+              <select id="ae-model-pi"><option value="">Modèle par défaut</option></select>
+              <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (π)</label>
+              <select id="ae-thinking-pi"><option value="">Non réglé (suit le réglage général)</option></select>
+              <div class="muted agent-form-note" id="ae-thinking-pi-note" style="display:none"></div>
+              <label>Modèle ℓ (plh)</label>
+              <select id="ae-model-plh"><option value="">Modèle par défaut</option></select>
+              <label title="${THINKING_LEVEL_HINT}">Niveau de réflexion (ℓ)</label>
+              <select id="ae-thinking-plh"><option value="">Non réglé (suit le réglage général)</option></select>
+              <div class="muted agent-form-note" id="ae-thinking-plh-note" style="display:none"></div>
+            </div>
+            <div class="agent-form-col">
+              <label>Rôle</label>
+              <textarea id="ae-role" rows="6">${escapeHtml(a.role)}</textarea>
+              <label>Compétences (bibliothèque commune)</label>
+              <div class="agent-form-skills" id="ae-skills"></div>
+              <div class="agent-form-checks">
+                <label><input type="checkbox" id="ae-readonly" ${a.readonly ? "checked" : ""} /> Lecture seule</label>
+                <label><input type="checkbox" id="ae-keep" ${a.keep_context ? "checked" : ""} /> Garder le contexte</label>
+              </div>
+              <label>Max appels / run</label>
+              <input type="number" id="ae-max-calls" value="${a.max_calls_per_run}" min="1" max="100" />
+              <label>Profondeur max</label>
+              <input type="number" id="ae-depth" value="${a.call_depth}" min="0" max="10" />
+            </div>
           </div>
-          <label>Max appels / run</label>
-          <input type="number" id="ae-max-calls" value="${a.max_calls_per_run}" min="1" max="100" />
-          <label>Profondeur max</label>
-          <input type="number" id="ae-depth" value="${a.call_depth}" min="0" max="10" />
         </div>
         <div class="modal-actions">
           <button id="btn-ae-save">Enregistrer</button>

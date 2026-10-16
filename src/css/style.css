@@ -6743,8 +6743,8 @@ body.pilot-loading *::after {
 
 /* Configuration des agents : éditeur en modale (agents-ui.js). */
 .modal-content.agent-editor-content {
-  width: 560px;
-  max-width: 92vw;
+  width: 900px;
+  max-width: 96vw;
   max-height: 88vh;
   overflow-y: auto;
   display: flex;
@@ -6765,6 +6765,39 @@ body.pilot-loading *::after {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Editeur d'agent : mise en page sur DEUX COLONNES (fiche d'agent).
+   Colonne gauche = identite + modeles ; colonne droite = role, competences,
+   options et limites. La classe est purement structurelle : les identifiants
+   #ae-* restent inchanges (aucun code de lecture n'est impacte). */
+.agent-form-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.agent-form-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Le role (prompt de l'agent) doit rester confortable a lire : hauteur mini
+   garantie et redimensionnement vertical par l'utilisateur. */
+#ae-role {
+  resize: vertical;
+  min-height: 150px;
+  line-height: 1.45;
+}
+
+/* Ecran etroit : retour a UNE SEULE colonne, sans debordement ni champ coupe. */
+@media (max-width: 900px) {
+  .agent-form-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .agent-form label {
