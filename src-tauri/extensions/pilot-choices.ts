@@ -36,6 +36,13 @@ const MULTI_SENTINEL = "PILOT_MULTI_CHOICE::";
 // La valeur renvoyée est un JSON `{ confirmed: boolean, note?: string }`.
 const CONFIRM_SENTINEL = "PILOT_CONFIRM::";
 
+// Garde-fou anti-blocage : en mode RPC, un `ctx.ui.*` émet un
+// `extension_ui_request` et pi attend la réponse SANS limite de temps. Ces
+// outils posent une question à l'utilisateur : on garde une attente longue
+// (30 min) mais BORNÉE, pour qu'une question restée sans réponse ne fige pas la
+// session ni la file d'attente du projet.
+const PILOT_UI_OPTS = { timeout: 1800000 };
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_choice",
@@ -52,9 +59,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const choice = await ctx.ui.select(params.title, params.options);
+      const choice = await ctx.ui.select(params.title, params.options, PILOT_UI_OPTS);
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
       }
       // Pilot renvoie un JSON `{ selected: string, note?: string }`
       // (note = précision optionnelle saisie par l'utilisateur).
@@ -102,9 +109,9 @@ export default function (pi: ExtensionAPI) {
       // Titre préfixé par le sentinel → Pilot rend une multi-sélection.
       // La valeur renvoyée est un JSON `{ selected: string[], note?: string }`
       // (note = précision optionnelle saisie par l'utilisateur).
-      const choice = await ctx.ui.select(MULTI_SENTINEL + params.title, params.options);
+      const choice = await ctx.ui.select(MULTI_SENTINEL + params.title, params.options, PILOT_UI_OPTS);
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé le choix (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
       }
       let selected: string[] = [];
       let note = "";
@@ -145,9 +152,10 @@ export default function (pi: ExtensionAPI) {
       const choice = await ctx.ui.select(
         CONFIRM_SENTINEL + JSON.stringify({ title: params.title, message: params.message }),
         ["Oui", "Non"],
+        PILOT_UI_OPTS,
       );
       if (choice == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé la confirmation." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé la confirmation (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
       }
       let confirmed = false;
       let note = "";
@@ -189,9 +197,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const value = await ctx.ui.input(params.title, params.placeholder || "");
+      const value = await ctx.ui.input(params.title, params.placeholder || "", PILOT_UI_OPTS);
       if (value == null) {
-        return { content: [{ type: "text", text: "L'utilisateur a annulé la saisie." }] };
+        return { content: [{ type: "text", text: "L'utilisateur a annulé la saisie (ou n'a pas répondu dans le délai imparti de 30 min)." }] };
       }
       return { content: [{ type: "text", text: `Saisie de l'utilisateur : ${value}` }] };
     },

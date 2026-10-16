@@ -65,6 +65,13 @@ pub struct AgentAnomalyState {
     /// posé, l'arrêt automatique (T2), le plafond « réfléchit » de l'Assistant
     /// et la libération du créneau « run fantôme » sont SUSPENDUS : une attente
     /// d'utilisateur n'est pas un blocage, c'est un état légitime (nuit, réunion).
+    ///
+    /// Bug « agents figés » : cette suspension est BORNÉE dans le temps (cf.
+    /// `AWAITING_USER_MAX_SUSPEND_SECS`). Une question dont la réponse ne revient
+    /// JAMAIS (handshake pi ↔ Pilot perdu, extension qui n'a pas rendu la main)
+    /// laissait sinon le marqueur posé à vie, désarmant tous les filets
+    /// automatiques : la session restait « occupée » et réservait la file
+    /// d'attente du projet indéfiniment.
     pub awaiting_user: bool,
     /// Une opération d'OUTIL est-elle en cours d'exécution ? Posé sur
     /// `tool_execution_start`, levé sur `tool_execution_end` (et sur tout
@@ -307,6 +314,30 @@ pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<
     (iso, relative)
 }
 
+/// Durée MAXIMALE pendant laquelle une attente de réponse utilisateur
+/// (`awaiting_user`) suspend les garde-fous automatiques. Bug « agents figés » :
+/// une `extension_ui_request` jamais résolue (handshake pi ↔ Pilot perdu) laissait
+/// le marqueur posé À VIE et désarmait donc TOUS les filets automatiques (arrêt
+/// T2, alerte de session muette, libération du créneau fantôme) : la session
+/// restait « occupée » et son créneau réservait la file d'attente du projet sans
+/// fin. Au-delà de ce délai SANS AUCUN événement (donc sans réponse), l'attente
+/// est considérée comme perdue et les filets reprennent la main. Les attentes
+/// légitimes (utilisateur absent : nuit, réunion) sont plus courtes, et les
+/// dialogues d'extension sont eux-mêmes bornés (2 min, 30 min au plus).
+pub(crate) const AWAITING_USER_MAX_SUSPEND_SECS: u64 = 45 * 60;
+
+/// L'attente de réponse utilisateur suspend-elle ENCORE les garde-fous
+/// automatiques ? Oui tant qu'aucun événement n'est survenu depuis
+/// `AWAITING_USER_MAX_SUSPEND_SECS` (`last_activity` est l'horodatage de la
+/// question : tant que l'agent attend, aucun autre événement n'arrive). Pure et
+/// testable.
+fn awaiting_user_suspends(entry: &AgentAnomalyState, now: Instant) -> bool {
+    if !entry.awaiting_user {
+        return false;
+    }
+    now.saturating_duration_since(entry.last_activity).as_secs() < AWAITING_USER_MAX_SUSPEND_SECS
+}
+
 /// Décide si un agent doit être arrêté AUTOMATIQUEMENT (T2) : agent busy, sans
 /// progression (aucune nouvelle activité) depuis `timeout_minutes` (seuil dédié),
 /// et pas déjà arrêté pour cette exécution. Pure et testable. Le filtrage du
@@ -314,7 +345,7 @@ pub fn last_activity_info(state: &AgentAnomalyState) -> (Option<String>, Option<
 /// via `agent_service.agent_process_alive` (l'observateur de la map d'anomalie
 /// couvre aussi la session principale, le reviewer et le super-agent).
 fn should_auto_stop(entry: &AgentAnomalyState, enabled: bool, timeout_minutes: u32, now: Instant) -> bool {
-    if !enabled || !entry.busy || entry.auto_stopped_reported || entry.awaiting_user {
+    if !enabled || !entry.busy || entry.auto_stopped_reported || awaiting_user_suspends(entry, now) {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -335,7 +366,7 @@ fn should_auto_stop_on_progress(
     timeout_minutes: u32,
     now: Instant,
 ) -> bool {
-    if !enabled || !entry.busy || entry.auto_stopped_reported || entry.awaiting_user {
+    if !enabled || !entry.busy || entry.auto_stopped_reported || awaiting_user_suspends(entry, now) {
         return false;
     }
     // Une opération d'outil EN COURS est un travail qui avance : un long build,
@@ -371,7 +402,12 @@ fn should_report_silent_session(
     silent_minutes: u32,
     now: Instant,
 ) -> bool {
-    if !enabled || !entry.busy || entry.blocked_reported || entry.awaiting_user || entry.tool_in_progress {
+    if !enabled
+        || !entry.busy
+        || entry.blocked_reported
+        || awaiting_user_suspends(entry, now)
+        || entry.tool_in_progress
+    {
         return false;
     }
     if entry.produced_output {
@@ -396,7 +432,7 @@ fn is_super_agent_key(project: &str, agent: &str) -> bool {
 /// n'est plus un travail en cours → on libère la marque busy SANS tuer le
 /// process (le kill relève de l'arrêt auto T2). Pure et testable.
 pub(crate) fn should_release_stale_busy(entry: &AgentAnomalyState, grace_minutes: u32, now: Instant) -> bool {
-    if !entry.busy || entry.awaiting_user {
+    if !entry.busy || awaiting_user_suspends(entry, now) {
         return false;
     }
     let idle_secs = now.duration_since(entry.last_activity).as_secs();
@@ -618,7 +654,7 @@ pub fn start_monitor(app: AppHandle, anomaly_map: Arc<Mutex<HashMap<String, Agen
                     if anomaly_enabled
                         && entry.busy
                         && !entry.blocked_reported
-                        && !entry.awaiting_user
+                        && !awaiting_user_suspends(entry, now)
                         && idle_secs > anomaly_timeout_secs
                     {
                         entry.blocked_reported = true;
@@ -1625,18 +1661,20 @@ mod tests {
         }
     }
 
-    /// Bug « question sans réponse > seuil » : tant que `awaiting_user` est posé,
-    /// AUCUNE décision automatique (arrêt T2, plafond Assistant, libération du
-    /// créneau fantôme) ne se déclenche, même après une inactivité très longue.
+    /// Bug « question sans réponse > seuil » : tant que `awaiting_user` est posé
+    /// (et que la suspension n'a pas expiré, cf. le test suivant), AUCUNE décision
+    /// automatique (arrêt T2, plafond Assistant, libération du créneau fantôme) ne
+    /// se déclenche, même après une inactivité supérieure à tous les seuils.
     /// Dès que le marqueur est levé, l'arrêt redevient déclenchable au-delà du
     /// seuil (aucune régression du filet de sécurité).
     #[test]
     fn awaiting_user_suspends_auto_stop_and_stale_release() {
         let now = Instant::now() + Duration::from_secs(100_000);
-        // 100 min d'inactivité, busy, non arrêté, selon l'attente utilisateur.
+        // 40 min d'inactivité (plus que tous les seuils, mais SOUS le plafond de
+        // suspension de l'attente utilisateur), busy, non arrêté.
         let state = |awaiting_user: bool| AgentAnomalyState {
-            last_activity: now - Duration::from_secs(6000),
-            last_progress: now - Duration::from_secs(6000),
+            last_activity: now - Duration::from_secs(2400),
+            last_progress: now - Duration::from_secs(2400),
             last_activity_wall: Some(SystemTime::now()),
             last_event: "extension_ui_request".to_string(),
             busy: true,
@@ -1675,6 +1713,56 @@ mod tests {
         // toujours traitée comme avant (filet de sécurité intact).
         let blocked = state(false);
         assert!(should_auto_stop(&blocked, true, 10, now));
+    }
+
+    /// Bug « agents figés » (C1 du diagnostic) : une `extension_ui_request` jamais
+    /// résolue (handshake pi ↔ Pilot perdu, extension qui n'a pas rendu la main)
+    /// laissait `awaiting_user` posé à VIE et désarmait donc TOUS les filets
+    /// automatiques : la session restait « occupée » et son créneau réservait la
+    /// file d'attente du projet indéfiniment. La suspension est désormais BORNÉE
+    /// (`AWAITING_USER_MAX_SUSPEND_SECS`) : au-delà, les filets reprennent la main
+    /// (arrêt T2, alerte de session muette, libération du créneau fantôme).
+    #[test]
+    fn awaiting_user_suspension_expires_and_frees_the_project_slot() {
+        let now = Instant::now() + Duration::from_secs(100_000);
+        let state = |idle_secs: u64| AgentAnomalyState {
+            last_activity: now - Duration::from_secs(idle_secs),
+            last_progress: now - Duration::from_secs(idle_secs),
+            last_activity_wall: Some(SystemTime::now()),
+            last_event: "extension_ui_request".to_string(),
+            busy: true,
+            blocked_reported: false,
+            auto_stopped_reported: false,
+            awaiting_user: true,
+            tool_in_progress: false,
+            produced_output: false,
+        };
+
+        // (a) Juste avant l'expiration : l'attente suspend encore (état légitime :
+        //     l'utilisateur n'a simplement pas encore répondu).
+        let waiting = state(AWAITING_USER_MAX_SUSPEND_SECS - 60);
+        assert!(awaiting_user_suspends(&waiting, now), "attente récente → suspension");
+        assert!(!should_auto_stop(&waiting, true, 10, now));
+        assert!(!should_release_stale_busy(&waiting, 25, now));
+
+        // (b) Après le plafond : la réponse ne reviendra plus → la session ne doit
+        //     plus rester « occupée » ni réserver la file d'attente du projet.
+        let lost = state(AWAITING_USER_MAX_SUSPEND_SECS + 60);
+        assert!(!awaiting_user_suspends(&lost, now), "attente périmée → plus de suspension");
+        assert!(
+            should_auto_stop(&lost, true, 10, now),
+            "attente perdue → arrêt automatique de la session figée"
+        );
+        assert!(should_auto_stop_on_progress(&lost, true, 10, now));
+        assert!(should_report_silent_session(&lost, true, 10, now));
+        assert!(
+            should_release_stale_busy(&lost, 25, now),
+            "attente perdue → créneau fantôme libéré"
+        );
+        assert!(
+            !busy_entry_is_exclusive(&lost, 25, now),
+            "attente perdue → la session ne réserve plus le projet (exclusivité libérée)"
+        );
     }
 
     /// Lot 3 (défaut A) : une session MUETTE ET INACTIVE (busy, aucun résultat
@@ -1762,14 +1850,26 @@ mod tests {
             !should_report_silent_session(&working, true, 30, now),
             "outil en cours → jamais signalée"
         );
-        // (e) question posée à l'utilisateur, en attente de réponse.
+        // (e) question posée à l'utilisateur, en attente de réponse (40 min
+        //     d'inactivité : au-delà du seuil, mais SOUS le plafond de suspension
+        //     de l'attente — cf. `AWAITING_USER_MAX_SUSPEND_SECS`).
         let waiting = AgentAnomalyState {
             awaiting_user: true,
-            ..state_at(3600, true, false)
+            ..state_at(2400, true, false)
         };
         assert!(
             !should_report_silent_session(&waiting, true, 30, now),
             "attente utilisateur → jamais signalée"
+        );
+        // (f) attente utilisateur PÉRIMÉE (bug « agents figés » : réponse qui ne
+        //     reviendra jamais) → la session muette est signalée comme avant.
+        let lost = AgentAnomalyState {
+            awaiting_user: true,
+            ..state_at(AWAITING_USER_MAX_SUSPEND_SECS + 60, true, false)
+        };
+        assert!(
+            should_report_silent_session(&lost, true, 30, now),
+            "attente utilisateur périmée → session muette signalée"
         );
     }
 }

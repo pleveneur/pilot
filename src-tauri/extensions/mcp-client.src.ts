@@ -69,6 +69,13 @@ const CONNECT_TIMEOUT_MS = 8000;
 // Timeout d'un appel outil (callTool) une fois connecté.
 const CALL_TIMEOUT_MS = 60000;
 // Titre du dialogue de confirmation d'une action sur l'écran.
+// Garde-fou anti-blocage : en mode RPC, un `ctx.ui.*` émet un
+// `extension_ui_request` et pi attend la réponse SANS limite de temps. Ces
+// outils posent une question à l'utilisateur : on garde une attente longue
+// (30 min) mais BORNÉE, pour qu'une question restée sans réponse ne fige pas la
+// session ni la file d'attente du projet.
+const PILOT_UI_OPTS = { timeout: 1800000 };
+
 const SCREEN_CONFIRM_TITLE = "Contrôle de l'écran par l'agent";
 
 // Réglages du contrôle de l'écran (miroir de AppConfig / screen-guard.js).
@@ -519,7 +526,7 @@ async function askScreenConfirmation(
     const answer = await ctx.ui.confirm(
       SCREEN_CONFIRM_TITLE,
       SCREEN_GATE_SENTINEL + JSON.stringify(payload)
-    );
+    , PILOT_UI_OPTS);
     return answer === true;
   } catch {
     return false;

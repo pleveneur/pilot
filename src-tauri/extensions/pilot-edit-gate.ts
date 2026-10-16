@@ -33,6 +33,15 @@ function truncate(s: string | null): string | null {
   return s.slice(0, MAX_PAYLOAD) + "\n…[truncated by Pilot edit gate]";
 }
 
+// Garde-fou anti-blocage : en mode RPC, un `ctx.ui.*` émet un
+// `extension_ui_request` et pi attend la réponse SANS limite de temps. Si Pilot
+// ne répond pas, la porte pré-écriture ne rendait jamais la main : la session de
+// l'agent restait « occupée » (aucun `agent_start`/`agent_end`), le verrou de run
+// du projet n'était jamais libéré et la file d'attente restait bloquée.
+// L'attente est donc bornée ; au-delà, l'absence de réponse vaut REFUS
+// (fail-closed, comme tout autre échec de cette porte).
+const PILOT_UI_OPTS = { timeout: 600000 };
+
 export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     let tool: string;
@@ -79,9 +88,9 @@ export default function (pi: ExtensionAPI) {
       });
       const message = SENTINEL + payload;
 
-      const ok = await ctx.ui.confirm("Pilot — confirmer la modification du fichier", message);
+      const ok = await ctx.ui.confirm("Pilot — confirmer la modification du fichier", message, PILOT_UI_OPTS);
       if (!ok) {
-        return { block: true, reason: "Modification refusée par l'utilisateur (Pilot edit gate)" };
+        return { block: true, reason: "Modification refusée : pas de confirmation (refus explicite, ou absence de réponse de Pilot dans le délai imparti de 10 min — par défaut la session n'a pas été bloquée)." };
       }
       // ok === true → allow the tool to run (return nothing).
     } catch (err) {

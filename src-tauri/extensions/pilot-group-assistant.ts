@@ -36,6 +36,16 @@ const TICKET_CREATE_SENTINEL = "PILOT_GROUP_TICKET_CREATE::";
 const TICKET_SEARCH_SENTINEL = "PILOT_GROUP_TICKET_SEARCH::";
 const PROJECT_QUERY_SENTINEL = "PILOT_GROUP_PROJECT_QUERY::";
 
+// Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
+// émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
+// limite de temps. Si Pilot ne répond pas (événement non routé, session
+// occupée, réponse perdue), l'outil ne rendait JAMAIS la main : la session
+// restait « occupée » et réservait la file d'attente du projet jusqu'à l'arrêt
+// par le watchdog. On borne donc l'attente : au-delà, pi résout la promesse
+// (undefined / false) et l'outil retourne une erreur explicite au modèle au
+// lieu de bloquer indéfiniment.
+const PILOT_UI_OPTS = { timeout: 120000 };
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "group_tracking_query",
@@ -58,9 +68,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const scope = params.scope || "all";
-      const result = await ctx.ui.input(TRACKING_QUERY_SENTINEL + scope, "");
+      const result = await ctx.ui.input(TRACKING_QUERY_SENTINEL + scope, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Lecture annulée." }] };
+        return { content: [{ type: "text", text: "Lecture annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -95,9 +105,9 @@ export default function (pi: ExtensionAPI) {
         priority: params.priority || "medium",
         type: params.type || "evolution",
       });
-      const result = await ctx.ui.input(TICKET_CREATE_SENTINEL + payload, "");
+      const result = await ctx.ui.input(TICKET_CREATE_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Création de ticket annulée." }] };
+        return { content: [{ type: "text", text: "Création de ticket annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -128,9 +138,9 @@ export default function (pi: ExtensionAPI) {
         project_id: params.project_id || "",
         client_id: params.client_id || "",
       });
-      const result = await ctx.ui.input(TICKET_SEARCH_SENTINEL + payload, "");
+      const result = await ctx.ui.input(TICKET_SEARCH_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Recherche de tickets annulée." }] };
+        return { content: [{ type: "text", text: "Recherche de tickets annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -157,9 +167,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const scope = params.scope || "projects";
-      const result = await ctx.ui.input(PROJECT_QUERY_SENTINEL + scope, "");
+      const result = await ctx.ui.input(PROJECT_QUERY_SENTINEL + scope, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Lecture annulée." }] };
+        return { content: [{ type: "text", text: "Lecture annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

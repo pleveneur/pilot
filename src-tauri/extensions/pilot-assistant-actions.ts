@@ -49,6 +49,16 @@ const GIT_STATUS_SENTINEL = "PILOT_ASSISTANT_GIT_STATUS::";
 // l'historique des commits (JSON) comme `value` de la réponse.
 const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
 
+// Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
+// émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
+// limite de temps. Si Pilot ne répond pas (événement non routé, session
+// occupée, réponse perdue), l'outil ne rendait JAMAIS la main : la session
+// restait « occupée » et réservait la file d'attente du projet jusqu'à l'arrêt
+// par le watchdog. On borne donc l'attente : au-delà, pi résout la promesse
+// (undefined / false) et l'outil retourne une erreur explicite au modèle au
+// lieu de bloquer indéfiniment.
+const PILOT_UI_OPTS = { timeout: 120000 };
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "open_project",
@@ -65,7 +75,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ action: "open_project", path: params.path });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         return { content: [{ type: "text", text: `Le projet « ${params.path} » a été ouvert et rendu actif.` }] };
       }
@@ -86,7 +96,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ action: "purge_agent_conversation" });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         return { content: [{ type: "text", text: "La conversation de l'agent a été purgée (modèle actif préservé)." }] };
       }
@@ -125,7 +135,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ action: "create_agent", agent: params });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         return { content: [{ type: "text", text: `L'agent « ${params.name || params.id} » (${params.id}) a été créé dans le registre global.` }] };
       }
@@ -155,9 +165,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, project: params.project || null, mcp_server: params.mcp_server || null });
-      const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "");
+      const result = await ctx.ui.input(RUN_AGENTS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Lancement de la tâche annulé." }] };
+        return { content: [{ type: "text", text: "Lancement de la tâche annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -183,9 +193,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ agent_ids: params.agent_ids, task: params.task, workspace: params.workspace || null, mcp_server: params.mcp_server || null });
-      const result = await ctx.ui.input(RUN_ASSISTANT_AGENTS_SENTINEL + payload, "");
+      const result = await ctx.ui.input(RUN_ASSISTANT_AGENTS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé." }] };
+        return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -207,9 +217,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ project: params.project });
-      const result = await ctx.ui.input(PROJECT_SNAPSHOT_SENTINEL + payload, "");
+      const result = await ctx.ui.input(PROJECT_SNAPSHOT_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Analyse du projet annulée." }] };
+        return { content: [{ type: "text", text: "Analyse du projet annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -231,9 +241,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ project: params.project });
-      const result = await ctx.ui.input(GIT_STATUS_SENTINEL + payload, "");
+      const result = await ctx.ui.input(GIT_STATUS_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Analyse Git annulée." }] };
+        return { content: [{ type: "text", text: "Analyse Git annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -255,9 +265,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ project: params.project });
-      const result = await ctx.ui.input(GIT_LOG_SENTINEL + payload, "");
+      const result = await ctx.ui.input(GIT_LOG_SENTINEL + payload, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Analyse Git annulée." }] };
+        return { content: [{ type: "text", text: "Analyse Git annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -277,9 +287,9 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const result = await ctx.ui.input(MCP_STATE_SENTINEL + "{}", "");
+      const result = await ctx.ui.input(MCP_STATE_SENTINEL + "{}", "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Interrogation de l'état MCP annulée." }] };
+        return { content: [{ type: "text", text: "Interrogation de l'état MCP annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -303,7 +313,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ action: "stop_agent", agentId: params.agentId || null, project: params.project || null });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         const target = params.agentId ? `L'agent « ${params.agentId} »` : "L'agent du projet actif";
         return { content: [{ type: "text", text: `${target} a été arrêté.` }] };
@@ -333,7 +343,7 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const payload = JSON.stringify({ action: "delegate_to_coder", request: params.request, agentId: params.agent_id || null, project: params.project || null, background: params.background === true });
-      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload);
+      const ok = await ctx.ui.confirm("Pilot — action assistant", ACTION_SENTINEL + payload, PILOT_UI_OPTS);
       if (ok) {
         const mode = params.background === true ? "en arrière-plan (agent invisible)" : "(son onglet est ouvert)";
         const target = `l'agent « ${params.agent_id} »`;

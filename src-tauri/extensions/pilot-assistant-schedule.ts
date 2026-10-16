@@ -29,6 +29,16 @@ import { Type } from "typebox";
 // dans le `input` reçu et exécute la commande au lieu d'afficher un champ.
 const SCHEDULE_SENTINEL = "PILOT_ASSISTANT_SCHEDULE::";
 
+// Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
+// émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
+// limite de temps. Si Pilot ne répond pas (événement non routé, session
+// occupée, réponse perdue), l'outil ne rendait JAMAIS la main : la session
+// restait « occupée » et réservait la file d'attente du projet jusqu'à l'arrêt
+// par le watchdog. On borne donc l'attente : au-delà, pi résout la promesse
+// (undefined / false) et l'outil retourne une erreur explicite au modèle au
+// lieu de bloquer indéfiniment.
+const PILOT_UI_OPTS = { timeout: 120000 };
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "schedule_create",
@@ -53,9 +63,9 @@ export default function (pi: ExtensionAPI) {
         prompt: params.prompt,
         everySeconds: params.everySeconds,
       });
-      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
+      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Création de planification annulée." }] };
+        return { content: [{ type: "text", text: "Création de planification annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -74,9 +84,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const req = JSON.stringify({ op: "list" });
-      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
+      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Liste annulée." }] };
+        return { content: [{ type: "text", text: "Liste annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -98,9 +108,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const req = JSON.stringify({ op: "set_enabled", id: params.id, enabled: params.enabled });
-      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
+      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Modification de planification annulée." }] };
+        return { content: [{ type: "text", text: "Modification de planification annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -121,9 +131,9 @@ export default function (pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const req = JSON.stringify({ op: "delete", id: params.id });
-      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "");
+      const result = await ctx.ui.input(SCHEDULE_SENTINEL + req, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Suppression annulée." }] };
+        return { content: [{ type: "text", text: "Suppression annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },

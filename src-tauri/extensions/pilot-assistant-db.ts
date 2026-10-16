@@ -26,6 +26,16 @@ import { Type } from "typebox";
 const DB_QUERY_SENTINEL = "PILOT_ASSISTANT_DB_QUERY::";
 const DB_EXEC_SENTINEL = "PILOT_ASSISTANT_DB_EXEC::";
 
+// Garde-fou anti-blocage (bug « agents figés ») : en mode RPC, un `ctx.ui.*`
+// émet un `extension_ui_request` sur stdout et pi attend la réponse SANS
+// limite de temps. Si Pilot ne répond pas (événement non routé, session
+// occupée, réponse perdue), l'outil ne rendait JAMAIS la main : la session
+// restait « occupée » et réservait la file d'attente du projet jusqu'à l'arrêt
+// par le watchdog. On borne donc l'attente : au-delà, pi résout la promesse
+// (undefined / false) et l'outil retourne une erreur explicite au modèle au
+// lieu de bloquer indéfiniment.
+const PILOT_UI_OPTS = { timeout: 120000 };
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "db_query",
@@ -42,9 +52,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await ctx.ui.input(DB_QUERY_SENTINEL + params.sql, "");
+      const result = await ctx.ui.input(DB_QUERY_SENTINEL + params.sql, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Requête annulée." }] };
+        return { content: [{ type: "text", text: "Requête annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
@@ -66,9 +76,9 @@ export default function (pi: ExtensionAPI) {
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await ctx.ui.input(DB_EXEC_SENTINEL + params.sql, "");
+      const result = await ctx.ui.input(DB_EXEC_SENTINEL + params.sql, "", PILOT_UI_OPTS);
       if (result == null) {
-        return { content: [{ type: "text", text: "Requête annulée." }] };
+        return { content: [{ type: "text", text: "Requête annulée. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
       return { content: [{ type: "text", text: result }] };
     },
