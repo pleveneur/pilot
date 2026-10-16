@@ -24,7 +24,8 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   toggleSelection, selectionCount, canCloseSelection, bulkCloseConfirmMessage,
   planBulkClose, buildBulkUndoPlan,
   buildKanbanColumns, listKanbanProjects, filterKanbanTasks, selectKanbanIdeas,
-  formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel } from "./super-agent-kanban.js";
+  formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel,
+  checklistCounterLabel, parseChecklistGate } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -71,6 +72,12 @@ export function createSuperKanban(container) {
   // le filtre de projet change (aucun appel supplémentaire au backend).
   let kanbanClients = [];
   let kanbanIdeas = [];
+  // Idée 3 (Lot A), tranche 3.4 : dernière checklist RELUE EN BASE par tâche
+  // (id → points). Alimente le compteur des cartes et la fiche de tâche ;
+  // aucune valeur n'est devinée côté écran. Un chargement plus récent annule
+  // le précédent (`checkFetchToken`).
+  let checkCounts = new Map();
+  let checkFetchToken = 0;
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
   // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
@@ -173,10 +180,14 @@ export function createSuperKanban(container) {
     const selOpts = STATUS_OPTIONS
       .map(([k, l]) => `<option value="${k}" ${k === selKey ? "selected" : ""}>${l}</option>`)
       .join("");
+    // Idée 3 (Lot A), tranche 3.4 : compteur discret de la checklist (« 2/3 »),
+    // affiché SEULEMENT si la tâche porte au moins un point (relu en base).
+    const checkLabel = checklistCounterLabel(checkCounts.get(t.id));
     return `<div class="super-kanban-card${blocked ? " blocked" : ""}${waiting ? " waiting-dep" : ""}" draggable="true" data-task-id="${t.id}">
       <div class="super-kanban-card-head">
         <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
         <div class="super-kanban-card-title">${title}</div>
+        ${checkLabel ? `<span class="kanban-check-counter" title="${checkLabel} : points de checklist cochés">${checkLabel}</span>` : ""}
       </div>
       ${blocked ? `<div class="super-kanban-card-blocker" title="${blocker}"><i data-lucide="alert-triangle" class="icon-sm"></i> Bloquée : ${blocker}</div>` : ""}
       ${waiting ? `<div class="super-kanban-card-dependency" title="${escapeAttr(depLabel)}"><i data-lucide="link-2" class="icon-sm"></i> ${escapeHtml(depLabel)}</div>` : ""}
@@ -239,6 +250,9 @@ export function createSuperKanban(container) {
     container.innerHTML = toolbarHtml() + bulkBarHtml() + scope + `<div class="super-kanban-board">${cols}</div>`;
     refreshIcons(container);
     syncBulkUi();
+    // Les compteurs de checklist déjà relus en base restent affichés tels quels
+    // après un re-rendu (changement de filtre) sans nouvel appel au backend.
+    applyCheckCounters();
   }
 
   /**
@@ -260,14 +274,47 @@ export function createSuperKanban(container) {
     const decision = planBulkClose(visibleTasks(), selectedTaskIds, confirmed);
     if (!decision.applied) return; // confirmation refusée → rien ne change
     const applied = [];
+    // Idée 3 (Lot A), tranche 3.4 : en mode « rappel », le cœur réclame une
+    // confirmation pour les tâches dont la checklist n'est pas finie. On collecte
+    // ces tâches (et les refus secs du mode bloquant) au lieu d'interrompre le
+    // lot, puis on demande UNE fois avant de relancer ces clôtures avec `force`.
+    const needsForce = [];
+    const refused = [];
     for (const c of decision.changes) {
       try {
         await invoke("super_agent_update_task_status", { taskId: c.id, status: c.to });
         applied.push(c);
       } catch (err) {
-        console.error("Erreur clôture en lot:", err);
+        const verdict = parseChecklistGate(err);
+        if (verdict.needsConfirmation) needsForce.push({ change: c, message: verdict.message });
+        else if (verdict.refused) refused.push(verdict.message);
+        else console.error("Erreur clôture en lot:", err);
       }
     }
+    if (needsForce.length) {
+      const nf = needsForce.length;
+      const ok = await openKanbanConfirm({
+        title: "Checklist incomplète",
+        message: escapeHtml(needsForce.map((x) => x.message).join(" ")),
+        confirmLabel: `Clôturer ${nf} tâche${nf > 1 ? "s" : ""}`,
+      });
+      if (ok) {
+        for (const { change } of needsForce) {
+          try {
+            await invoke("super_agent_update_task_status", {
+              taskId: change.id,
+              status: change.to,
+              force: true,
+            });
+            applied.push(change);
+          } catch (err) {
+            console.error("Erreur clôture en lot (forcée) :", err);
+          }
+        }
+      }
+    }
+    // Mode bloquant : le refus du cœur est montré tel quel, sans relance.
+    if (refused.length) await showKanbanNotice("Clôture refusée", refused.join(" "));
     lastBulkClose = applied.length ? { changes: applied } : null;
     selectedTaskIds = new Set();
     loadSuperKanban();
@@ -317,6 +364,180 @@ export function createSuperKanban(container) {
       refreshIcons(overlay);
     });
   }
+
+  /**
+   * Avis minimal non bloquant-ambigu (même habillage que les modales Kanban) :
+   * sert à montrer tel quel le refus rendu par le cœur. Résolue à la fermeture.
+   */
+  function showKanbanNotice(title, message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal";
+      overlay.innerHTML = `<div class="modal-content kanban-modal-content">
+        <h2><i data-lucide="alert-triangle" class="icon-lg"></i> ${escapeHtml(title)}</h2>
+        <p class="kanban-confirm-msg">${escapeHtml(String(message))}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn kanban-notice-ok">Fermer</button>
+        </div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const done = () => {
+        overlay.remove();
+        resolve();
+      };
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) done();
+      });
+      overlay.querySelector(".kanban-notice-ok").addEventListener("click", done);
+      refreshIcons(overlay);
+    });
+  }
+
+  // ── Idée 3 (Lot A), tranche 3.4 : contrôle de checklist à la clôture ───────
+  // Le MODE (désactivé / rappel / bloquant) est décidé côté Rust : l'interface
+  // ne fait que LIRE le verdict (`parseChecklistGate`) et n'applique donc aucune
+  // règle propre. En mode « rappel » le cœur autorise la clôture si elle est
+  // relancée AVEC `force: true` → une confirmation explicite, puis UNE seule
+  // relance. En mode bloquant le refus est affiché tel quel, SANS relance.
+
+  /**
+   * Traite l'échec d'une écriture qui fait passer une tâche en « Terminé » :
+   * demande confirmation puis relance UNE fois avec `force` si le cœur réclame
+   * une confirmation (mode « rappel ») ; affiche le refus tel quel sinon.
+   * @param {unknown} err erreur renvoyée par `invoke`
+   * @param {Function} retryWithForce relance de la même écriture, forçée
+   * @returns {Promise<boolean>} vrai si l'écriture a fini par aboutir
+   */
+  async function handleChecklistGate(err, retryWithForce) {
+    const verdict = parseChecklistGate(err);
+    if (verdict.needsConfirmation) {
+      const ok = await openKanbanConfirm({
+        title: "Checklist incomplète",
+        message: escapeHtml(verdict.message),
+        confirmLabel: "Terminer quand même",
+      });
+      if (!ok) return false; // refus de forcer → rien n'est écrit
+      try {
+        await retryWithForce();
+        return true;
+      } catch (err2) {
+        await showKanbanNotice("Checklist incomplète", String(err2));
+        return false;
+      }
+    }
+    if (verdict.refused) {
+      // Mode bloquant : le message du cœur est montré tel quel, sans relance.
+      await showKanbanNotice("Clôture refusée", verdict.message);
+      return false;
+    }
+    console.error("Erreur changement de statut de tâche :", err);
+    return false;
+  }
+
+  /**
+   * Change le STATUT d'une tâche en respectant le contrôle de checklist du cœur.
+   * @returns {Promise<boolean>} vrai si le statut a bien été écrit
+   */
+  function updateTaskStatusWithGate(taskId, status) {
+    return invoke("super_agent_update_task_status", { taskId, status }).then(
+      () => true,
+      (err) =>
+        handleChecklistGate(err, () =>
+          invoke("super_agent_update_task_status", { taskId, status, force: true })
+        )
+    );
+  }
+
+  /**
+   * Écrit la fiche (titre/description/projet/échéance/statut) via
+   * `super_agent_update_task`, en respectant le même contrôle de checklist quand
+   * le statut visé est « Terminé ».
+   * @returns {Promise<boolean>} vrai si la fiche a bien été enregistrée
+   */
+  function updateTaskWithGate(params) {
+    return invoke("super_agent_update_task", params).then(
+      () => true,
+      (err) => handleChecklistGate(err, () => invoke("super_agent_update_task", { ...params, force: true }))
+    );
+  }
+
+  /**
+   * Compteurs de checklist des cartes : lecture EN BASE des tâches affichées
+   * (aucun état deviné). Séquentielle et fail-open — une lecture impossible
+   * laisse simplement la carte sans compteur. Un chargement plus récent annule
+   * le précédent (jeton).
+   */
+  async function refreshCheckCounts() {
+    const token = ++checkFetchToken;
+    for (const t of visibleTasks()) {
+      if (!t || t.id == null) continue;
+      try {
+        const res = await invoke("super_agent_task_check_list", { taskId: t.id });
+        if (token !== checkFetchToken) return; // un chargement plus récent a pris la main
+        checkCounts.set(t.id, (res && res.checks) || []);
+      } catch (_err) {
+        /* checklist illisible : pas de compteur inventé */
+      }
+    }
+    applyCheckCounters();
+  }
+
+  /**
+   * Met à jour le compteur des cartes DÉJÀ rendues (sans re-rendre le tableau :
+   * défilement, sélection et glisser-déposer restent intacts).
+   */
+  function applyCheckCounters() {
+    container.querySelectorAll(".super-kanban-card[data-task-id]").forEach((card) => {
+      const id = Number(card.dataset.taskId);
+      const label = checklistCounterLabel(checkCounts.get(id));
+      let el = card.querySelector(".kanban-check-counter");
+      if (!label) {
+        if (el) el.remove(); // tâche sans point : aucune pastille (inchangé)
+        return;
+      }
+      if (!el) {
+        el = document.createElement("span");
+        el.className = "kanban-check-counter";
+        const head = card.querySelector(".super-kanban-card-head");
+        (head || card).appendChild(el);
+      }
+      el.textContent = label;
+      el.title = `${label} : points de checklist cochés`;
+    });
+  }
+
+  /**
+   * Relit la checklist d'une tâche EN BASE et redessine le bloc de la fiche
+   * (aucun état deviné côté écran). Le résultat alimente aussi le compteur de la
+   * carte correspondante. Appelée après CHAQUE opération.
+   */
+  async function renderChecklist(block, taskId) {
+    const list = block.querySelector(".kanban-checklist-list");
+    const count = block.querySelector(".kanban-checklist-count");
+    let checks = [];
+    try {
+      const res = await invoke("super_agent_task_check_list", { taskId });
+      checks = (res && res.checks) || [];
+    } catch (err) {
+      list.innerHTML = `<div class="dash-error">Checklist indisponible : ${escapeHtml(String(err))}</div>`;
+      return;
+    }
+    checkCounts.set(taskId, checks);
+    const label = checklistCounterLabel(checks);
+    if (count) count.textContent = label ? `${label} point(s) cochés` : "aucun point";
+    list.innerHTML = checks.length
+      ? checks
+          .map(
+            (c) => `<div class="kanban-check-row${c.done ? " done" : ""}">
+            <label class="kanban-check-label"><input type="checkbox" class="kanban-check-toggle" data-check-id="${c.id}" ${c.done ? "checked" : ""}> <span>${escapeHtml(c.label)}</span></label>
+            <button type="button" class="kanban-icon-btn kanban-check-del" data-check-id="${c.id}" title="Supprimer ce point"><i data-lucide="x" class="icon-sm"></i></button>
+          </div>`
+          )
+          .join("")
+      : `<div class="dash-muted kanban-checklist-empty">Aucun point : aucune vérification n'est requise avant de terminer cette tâche.</div>`;
+    refreshIcons(list);
+    applyCheckCounters();
+  }
   const clearDragOver = () =>
     container.querySelectorAll(".super-kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
 
@@ -350,6 +571,9 @@ export function createSuperKanban(container) {
         return;
       }
       renderKanban();
+      // Compteurs de checklist des cartes (lecture en base, après le rendu pour
+      // ne jamais retarder l'affichage du Kanban).
+      refreshCheckCounts();
     } catch (err) {
       console.error("Erreur get_super_agent_kanban:", err);
       container.innerHTML =
@@ -362,13 +586,11 @@ export function createSuperKanban(container) {
   // (~/.pilot/super-agent.db), jamais sur les fichiers projets.
 
   // Déplace une carte vers une colonne (statut canonique via columnToStatus).
+  // Le passage en « Terminé » est soumis au contrôle de checklist du cœur :
+  // confirmation + UNE relance forcée en mode « rappel », refus affiché tel quel
+  // en mode bloquant (aucune règle dupliquée ici, cf. `handleChecklistGate`).
   async function moveKanbanTask(taskId, status) {
-    try {
-      await invoke("super_agent_update_task_status", { taskId, status });
-      loadSuperKanban();
-    } catch (err) {
-      console.error("Erreur déplacement carte:", err);
-    }
+    if (await updateTaskStatusWithGate(taskId, status)) loadSuperKanban();
   }
 
   // Supprime une carte (bouton en deux temps : 1er clic « arme », 2e clic confirme).
@@ -431,6 +653,14 @@ export function createSuperKanban(container) {
         ${isEdit ? `<label class="kanban-field">Statut
           <select name="status">${statusOptions}</select>
         </label>` : ""}
+        ${isEdit ? `<div class="kanban-field kanban-checklist">
+          <div class="kanban-checklist-head"><i data-lucide="list-checks" class="icon-sm"></i> Checklist de livraison <span class="kanban-checklist-count dash-muted"></span></div>
+          <div class="kanban-checklist-list"><div class="dash-muted">Chargement de la checklist…</div></div>
+          <div class="kanban-checklist-add">
+            <input type="text" class="kanban-checklist-input" placeholder="Nouveau point (ex: tests passés)" aria-label="Nouveau point de checklist">
+            <button type="button" class="btn kanban-checklist-add-btn">Ajouter</button>
+          </div>
+        </div>` : ""}
         <div class="modal-actions">
           <button type="button" class="btn kanban-cancel-btn">Annuler</button>
           <button type="submit" class="btn kanban-save-btn">${isEdit ? "Enregistrer" : "Créer"}</button>
@@ -438,7 +668,12 @@ export function createSuperKanban(container) {
       </form>
     </div>`;
     document.body.appendChild(overlay);
-    const close = () => overlay.remove();
+    const close = () => {
+      overlay.remove();
+      // Le compteur des cartes peut avoir changé depuis la fiche : on relit le
+      // cache (toujours issu de la base) sans recharger tout le Kanban.
+      applyCheckCounters();
+    };
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
     });
@@ -452,7 +687,7 @@ export function createSuperKanban(container) {
       const deadline = f.deadline.value || ""; // "" efface l'échéance
       try {
         if (isEdit) {
-          await invoke("super_agent_update_task", {
+          const saved = await updateTaskWithGate({
             taskId: task.id,
             title,
             description,
@@ -460,6 +695,9 @@ export function createSuperKanban(container) {
             status: columnToStatus(f.status.value),
             deadline,
           });
+          // Statut refusé ou confirmation déclinée : la fiche reste ouverte, rien
+          // n'a été écrit (aucun état optimiste affiché).
+          if (!saved) return;
         } else {
           const projectPath = f.project.value || (projects[0] && projects[0].path) || "";
           if (!projectPath) {
@@ -484,6 +722,57 @@ export function createSuperKanban(container) {
       }
     });
     refreshIcons(overlay);
+    // Idée 3 (Lot A), tranche 3.4 : checklist de la tâche éditée. Le bloc est
+    // TOUJOURS relu en base après chaque opération (ajout, coche, suppression) —
+    // l'écran n'affiche jamais un état deviné.
+    if (isEdit) {
+      const block = overlay.querySelector(".kanban-checklist");
+      const addPoint = async () => {
+        const input = block.querySelector(".kanban-checklist-input");
+        const label = (input.value || "").trim();
+        if (!label) return;
+        try {
+          await invoke("super_agent_task_check_add", { taskId: task.id, label });
+          input.value = "";
+        } catch (err) {
+          console.error("Erreur ajout point de checklist:", err);
+        }
+        await renderChecklist(block, task.id);
+      };
+      block.addEventListener("click", async (e) => {
+        const del = e.target.closest(".kanban-check-del");
+        if (del) {
+          try {
+            await invoke("super_agent_task_check_delete", { checkId: Number(del.dataset.checkId) });
+          } catch (err) {
+            console.error("Erreur suppression point de checklist:", err);
+          }
+          await renderChecklist(block, task.id);
+          return;
+        }
+        if (e.target.closest(".kanban-checklist-add-btn")) await addPoint();
+      });
+      block.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && e.target.closest(".kanban-checklist-input")) {
+          e.preventDefault(); // pas de soumission implicite du formulaire de la fiche
+          addPoint();
+        }
+      });
+      block.addEventListener("change", async (e) => {
+        const cb = e.target.closest(".kanban-check-toggle");
+        if (!cb) return;
+        try {
+          await invoke("super_agent_task_check_set_done", {
+            checkId: Number(cb.dataset.checkId),
+            done: cb.checked,
+          });
+        } catch (err) {
+          console.error("Erreur coche point de checklist:", err);
+        }
+        await renderChecklist(block, task.id);
+      });
+      renderChecklist(block, task.id);
+    }
     const first = overlay.querySelector("input[name=title]");
     if (first) first.focus();
   }

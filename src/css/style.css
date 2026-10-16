@@ -7878,6 +7878,89 @@ body.pilot-loading *::after {
   resize: vertical;
   min-height: 60px;
 }
+
+/* ── Idée 3 (Lot A), tranche 3.4 : checklist de livraison ──────────────────
+   Compteur discret « 2/3 » sur la carte (affiché seulement si la tâche porte au
+   moins un point) + checklist éditable dans la fiche de tâche. */
+.kanban-check-counter {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-tertiary, var(--text-secondary));
+  background: var(--surface-1, #16181d);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+.kanban-checklist {
+  border-top: 1px dashed var(--border-subtle, rgba(255,255,255,0.12));
+  padding-top: 9px;
+}
+.kanban-checklist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #e6e8ee);
+}
+.kanban-checklist-head i {
+  color: var(--accent, #6b8cff);
+}
+.kanban-checklist-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+}
+.kanban-checklist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kanban-check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+}
+.kanban-check-row.done .kanban-check-label span {
+  text-decoration: line-through;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+.kanban-check-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  word-break: break-word;
+}
+.kanban-checklist-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kanban-checklist-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text-primary, #e6e8ee);
+  background: var(--surface-2, #1e2128);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 7px;
+}
+.kanban-checklist-input:focus {
+  outline: none;
+  border-color: var(--accent, #6b8cff);
+}
+.kanban-checklist-add-btn {
+  font-size: 12px;
+  padding: 4px 9px;
+}
 .dash-metrics-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));

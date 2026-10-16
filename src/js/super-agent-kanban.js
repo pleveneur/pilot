@@ -575,3 +575,78 @@ export function dependencyLabel(task) {
   const title = String((task && task.depends_on_title) || "").trim();
   return title ? `En attente de : ${title}` : "En attente d'une autre tache";
 }
+
+// ── Idée 3 (Lot A), tranche 3.4 : checklist de livraison vue de l'écran ──────
+// L'interface ne DÉCIDE rien et ne DEVINE rien : elle compte les points RELUS
+// EN BASE (commandes `super_agent_task_check_*`) et se contente de LIRE le
+// verdict rendu par le cœur (`guard_task_checklist`, tranche 3.3). Aucune règle
+// de mode (désactivé / rappel / bloquant) n'est réécrite ici : le mode est
+// décidé côté Rust, l'écran affiche le verdict. Ces fonctions pures sont
+// testables sans DOM ni invoke.
+
+/// Préfixe des messages du contrôle de checklist (miroir de
+/// `checklist_gate_message` dans `super_agent.rs`).
+export const CHECKLIST_GATE_PREFIX = "Checklist de livraison :";
+
+/// Formule que le cœur n'ajoute QU'EN mode « rappel » : la clôture est alors
+/// possible en relançant avec `force = true`.
+export const CHECKLIST_FORCE_HINT = "force = true";
+
+/**
+ * Compte les points d'une checklist : `{ total, done, remaining }`. Une liste
+ * absente ou vide donne 0/0/0 — une tâche sans point ne change donc jamais
+ * d'apparence. Les entrées nulles sont ignorées. Pur.
+ * @param {Array<{done?: boolean}>|null|undefined} checks
+ * @returns {{total: number, done: number, remaining: number}}
+ */
+export function checklistProgress(checks) {
+  const list = Array.isArray(checks) ? checks.filter(Boolean) : [];
+  const total = list.length;
+  const done = list.filter((c) => !!c.done).length;
+  return { total, done, remaining: total - done };
+}
+
+/**
+ * Compteur discret d'une carte : « 2/3 » (points cochés / total). Chaîne vide
+ * quand la tâche ne porte AUCUN point, pour que les tâches existantes gardent
+ * exactement leur apparence. Pur.
+ * @param {Array<{done?: boolean}>|null|undefined} checks
+ * @returns {string}
+ */
+export function checklistCounterLabel(checks) {
+  const { total, done } = checklistProgress(checks);
+  return total ? `${done}/${total}` : "";
+}
+
+/**
+ * Lit le VERDICT du contrôle de checklist dans l'erreur renvoyée par le cœur
+ * (`super_agent_update_task_status` / `super_agent_update_task`). Le mode reste
+ * décidé côté Rust ; l'interface se borne à distinguer les deux refus possibles
+ * d'après le message, sans réimplémenter la règle :
+ *  - `needsConfirmation` : la clôture est possible en relançant UNE fois avec
+ *    `force: true` (la formule « force = true » n'est présente qu'en mode
+ *    « rappel ») ;
+ *  - `refused` : la clôture est refusée (mode bloquant) — forcer n'y changerait
+ *    rien, donc aucune relance n'est proposée ;
+ *  - `gate: false` : l'erreur ne vient pas du contrôle de checklist (erreur
+ *    technique, à journaliser telle quelle).
+ * Pur.
+ * @param {unknown} err erreur rejetée par `invoke`, ou son message
+ * @returns {{gate: boolean, needsConfirmation: boolean, refused: boolean,
+ *            remaining: number, message: string}}
+ */
+export function parseChecklistGate(err) {
+  const message = String((err && err.message) || err || "").trim();
+  if (!message.includes(CHECKLIST_GATE_PREFIX)) {
+    return { gate: false, needsConfirmation: false, refused: false, remaining: 0, message };
+  }
+  const m = /(\d+)\s*point/i.exec(message);
+  const needsConfirmation = message.includes(CHECKLIST_FORCE_HINT);
+  return {
+    gate: true,
+    needsConfirmation,
+    refused: !needsConfirmation,
+    remaining: m ? Number(m[1]) : 0,
+    message,
+  };
+}
