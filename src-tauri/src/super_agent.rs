@@ -176,6 +176,13 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     // Migration ADDITIVE (colonne ajoutee, rien detruit) : une base ancienne
     // s'ouvre toujours et ses donnees sont conservees.
     ensure_column(conn, "tasks", "depends_on_task_id", "INTEGER")?;
+    // Idée 2 (Lot A), tranche 1 : temps estimé / temps passé par tâche. Deux
+    // colonnes ADDITIVES, entières et FACULTATIVES (`NULL` = non renseigné, à
+    // distinguer de `0` = « rien prévu » / « rien passé »). Une base ancienne
+    // s'ouvre toujours, ses tâches existantes restent non renseignées : aucune
+    // perte, aucune erreur au démarrage.
+    ensure_column(conn, "tasks", "estimated_minutes", "INTEGER")?;
+    ensure_column(conn, "tasks", "spent_minutes", "INTEGER")?;
     // T1 : migration idempotente de la colonne `delivered` (résumés déjà en
     // base sur les anciennes bases). Les anciens résumés non livrés restent
     // `delivered=0` et seront rejoués à la prochaine opportunité.
@@ -2814,6 +2821,84 @@ fn dependency_would_cycle(
         }
     }
     Ok(true)
+}
+
+// ── Idée 2 (Lot A), tranche 1 : temps estimé / temps passé d'une tâche ──
+//
+// Deux colonnes ADDITIVES sur `tasks` : `estimated_minutes` (temps prévu) et
+// `spent_minutes` (temps réellement passé), entières et FACULTATIVES. Une base
+// existante s'ouvre sans perte : les tâches existantes restent NON renseignées
+// (`NULL`), jamais forcées à zéro. Ces helpers sont PURS sur `&Connection`
+// (aucun `AppHandle`, testables en base mémoire) ; les tranches suivantes
+// (commandes Tauri, affichage, réglage) s'appuieront dessus sans dupliquer de
+// logique.
+
+/// Lit les temps d'une tâche : `(estimé, passé)`. `None` = NON RENSEIGNÉ, à
+/// distinguer de `Some(0)` (« rien prévu » / « rien passé »). Une tâche inconnue
+/// est refusée (jamais une lecture silencieuse).
+#[allow(dead_code)] // tranche 1 : helper pur, consommé aux tranches suivantes
+fn db_task_time(conn: &Connection, task_id: i64) -> Result<(Option<i64>, Option<i64>), String> {
+    if task_status_of(conn, task_id).is_none() {
+        return Err(format!("Tache {} introuvable", task_id));
+    }
+    conn.query_row(
+        "SELECT estimated_minutes, spent_minutes FROM tasks WHERE id = ?1",
+        rusqlite::params![task_id],
+        |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?)),
+    )
+    .map_err(|e| format!("Erreur lecture des temps: {}", e))
+}
+
+/// Fixe le temps PRÉVU (estimé) d'une tâche. `Some(n)` écrit `n` minutes
+/// (`n >= 0`), `None` remet la valeur à « non renseigné ». Refuse une valeur
+/// négative et une tâche inconnue. Le temps passé n'est jamais touché.
+#[allow(dead_code)] // tranche 1 : helper pur, consommé aux tranches suivantes
+fn db_set_task_estimated_minutes(
+    conn: &Connection,
+    task_id: i64,
+    minutes: Option<i64>,
+) -> Result<(), String> {
+    if let Some(n) = minutes {
+        if n < 0 {
+            return Err(format!("Temps estime refuse : {} minute(s) negative(s)", n));
+        }
+    }
+    if task_status_of(conn, task_id).is_none() {
+        return Err(format!("Tache {} introuvable", task_id));
+    }
+    conn.execute(
+        "UPDATE tasks SET estimated_minutes = ?1, updated_at = datetime('now') WHERE id = ?2",
+        rusqlite::params![minutes, task_id],
+    )
+    .map_err(|e| format!("Erreur mise a jour du temps estime: {}", e))?;
+    Ok(())
+}
+
+/// AJOUTE du temps PASSÉ à une tâche (on CUMULE, on n'écrase jamais) et
+/// retourne le nouveau total (`>= 0`). Refuse une valeur négative et une tâche
+/// inconnue. Ajouter `0` à une valeur non renseignée la renseigne à `0`
+/// (« rien passé »), ce qui reste distinct d'une valeur absente avant cet
+/// ajout. Le temps estimé n'est jamais touché.
+#[allow(dead_code)] // tranche 1 : helper pur, consommé aux tranches suivantes
+fn db_add_task_spent_minutes(conn: &Connection, task_id: i64, minutes: i64) -> Result<i64, String> {
+    if minutes < 0 {
+        return Err(format!("Temps passe refuse : {} minute(s) negative(s)", minutes));
+    }
+    if task_status_of(conn, task_id).is_none() {
+        return Err(format!("Tache {} introuvable", task_id));
+    }
+    conn.execute(
+        "UPDATE tasks SET spent_minutes = COALESCE(spent_minutes, 0) + ?1, \
+         updated_at = datetime('now') WHERE id = ?2",
+        rusqlite::params![minutes, task_id],
+    )
+    .map_err(|e| format!("Erreur ajout du temps passe: {}", e))?;
+    conn.query_row(
+        "SELECT COALESCE(spent_minutes, 0) FROM tasks WHERE id = ?1",
+        rusqlite::params![task_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| format!("Erreur lecture du temps passe: {}", e))
 }
 
 // ── Tableau de bord de suivi multi-projets ──
@@ -5802,6 +5887,7 @@ mod tests {
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
         evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
+        db_task_time, db_set_task_estimated_minutes, db_add_task_spent_minutes,
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
@@ -8568,5 +8654,115 @@ mod tests {
         );
         // Tâche inconnue → liste vide, jamais une erreur (fail-open).
         assert!(db_unchecked_task_check_labels(&conn, 9999).unwrap().is_empty());
+    }
+
+    // ── Lot A idée 2, tranche 1 : temps estimé / temps passé d'une tâche ──
+    // Deux colonnes additives sur `tasks`. Ces tests verrouillent le contrat des
+    // helpers purs (aucun AppHandle) : colonnes présentes sur une base neuve,
+    // migration rejouée sans erreur, « non renseigné » distinct de zéro, refus
+    // d'une valeur négative et d'une tâche inconnue, et CUMUL du temps passé.
+
+    #[test]
+    fn tasks_gain_the_two_time_columns_on_a_fresh_base() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        for name in ["estimated_minutes", "spent_minutes"] {
+            let has: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(has, 1, "colonne manquante: {}", name);
+        }
+        conn.execute_batch(
+            "INSERT INTO projects (path, name) VALUES ('/p/a', 'Projet A');\
+             INSERT INTO tasks (project_id, title) VALUES (1, 'Sans temps');",
+        )
+        .unwrap();
+        // Facultatives : une tâche créée sans temps reste NON renseignée.
+        let (est, spent) = db_task_time(&conn, 1).unwrap();
+        assert!(est.is_none() && spent.is_none());
+        // Migration rejouée DEUX fois : aucune erreur, aucune donnée perdue.
+        init_db(&conn).unwrap();
+        init_db(&conn).unwrap();
+        let (est, spent) = db_task_time(&conn, 1).unwrap();
+        assert!(est.is_none() && spent.is_none());
+    }
+
+    #[test]
+    fn old_tracking_base_gains_the_time_columns_without_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tasks (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                project_id INTEGER NOT NULL,\
+                title TEXT NOT NULL,\
+                description TEXT DEFAULT '',\
+                status TEXT DEFAULT 'demande',\
+                created_at TEXT DEFAULT (datetime('now')),\
+                updated_at TEXT DEFAULT (datetime('now')));\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Ancienne tache', 'demande');",
+        )
+        .unwrap();
+        // Ouverture par la version courante : migration additive, aucune perte.
+        init_db(&conn).unwrap();
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'estimated_minutes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has, 1, "la colonne de temps estime doit etre ajoutee");
+        let (est, spent) = db_task_time(&conn, 1).unwrap();
+        assert!(est.is_none() && spent.is_none(), "valeurs vides, pas zero");
+        let title: String = conn
+            .query_row("SELECT title FROM tasks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "Ancienne tache", "les donnees doivent etre conservees");
+        // Idempotent : une seconde ouverture ne casse rien.
+        init_db(&conn).unwrap();
+    }
+
+    #[test]
+    fn time_helpers_refuse_negative_values_and_unknown_tasks() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Valeur négative : refusée, RIEN n'est écrit.
+        assert!(db_set_task_estimated_minutes(&conn, t1, Some(-1)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, t1, -5).is_err());
+        let (est, spent) = db_task_time(&conn, t1).unwrap();
+        assert!(est.is_none() && spent.is_none(), "un refus n'ecrit rien");
+        // Tâche inconnue : refusée en LECTURE comme en écriture.
+        assert!(db_task_time(&conn, 9999).is_err());
+        assert!(db_set_task_estimated_minutes(&conn, 9999, Some(30)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, 9999, 15).is_err());
+        // Zéro est ACCEPTÉ (il veut dire « rien prévu » / « rien passé »).
+        db_set_task_estimated_minutes(&conn, t1, Some(0)).unwrap();
+        assert_eq!(db_task_time(&conn, t1).unwrap().0, Some(0));
+    }
+
+    #[test]
+    fn spent_time_accumulates_and_unset_is_not_zero() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Non renseigné ≠ zéro : les deux colonnes sont VIDES, pas à 0.
+        let (est, spent) = db_task_time(&conn, t1).unwrap();
+        assert!(est.is_none(), "le temps estime doit etre NON renseigne");
+        assert!(spent.is_none(), "le temps passe doit etre NON renseigne");
+        // Un zéro explicite, lui, EST renseigné (« rien prévu »).
+        db_set_task_estimated_minutes(&conn, t1, Some(0)).unwrap();
+        assert_eq!(db_task_time(&conn, t1).unwrap().0, Some(0));
+        // Cumul : deux ajouts successifs s'ADDITIONNENT (on n'écrase pas).
+        assert_eq!(db_add_task_spent_minutes(&conn, t1, 25).unwrap(), 25);
+        assert_eq!(db_add_task_spent_minutes(&conn, t1, 35).unwrap(), 60);
+        assert_eq!(db_task_time(&conn, t1).unwrap().1, Some(60));
+        // L'estimé se règle indépendamment ; `None` le dé-renseigne.
+        db_set_task_estimated_minutes(&conn, t1, Some(90)).unwrap();
+        assert_eq!(db_task_time(&conn, t1).unwrap().0, Some(90));
+        db_set_task_estimated_minutes(&conn, t1, None).unwrap();
+        assert_eq!(db_task_time(&conn, t1).unwrap().0, None);
+        // Le second réglage n'a jamais touché le cumul du temps passé.
+        assert_eq!(db_task_time(&conn, t1).unwrap().1, Some(60));
     }
 }
