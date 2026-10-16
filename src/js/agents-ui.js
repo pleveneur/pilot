@@ -348,7 +348,7 @@ export async function createAgents(container) {
             </div>
             <div class="agent-form-col">
               <label>Rôle</label>
-              <textarea id="ae-role" rows="6">${escapeHtml(a.role)}</textarea>
+              <textarea id="ae-role" rows="8">${escapeHtml(a.role)}</textarea>
               <label>Compétences (bibliothèque commune)</label>
               <div class="agent-form-skills" id="ae-skills"></div>
               <div class="agent-form-checks">

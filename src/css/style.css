@@ -6744,7 +6744,7 @@ body.pilot-loading *::after {
 /* Configuration des agents : éditeur en modale (agents-ui.js). */
 .modal-content.agent-editor-content {
   width: 900px;
-  max-width: 96vw;
+  max-width: 92vw;
   max-height: 88vh;
   overflow-y: auto;
   display: flex;
@@ -6786,10 +6786,10 @@ body.pilot-loading *::after {
 }
 
 /* Le role (prompt de l'agent) doit rester confortable a lire : hauteur mini
-   garantie et redimensionnement vertical par l'utilisateur. */
+   garantie et redimensionnement vertical par l'utilisateur (jamais horizontal). */
 #ae-role {
   resize: vertical;
-  min-height: 150px;
+  min-height: 200px;
   line-height: 1.45;
 }
 

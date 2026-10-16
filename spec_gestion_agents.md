@@ -15,6 +15,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
 
 ### Créer / modifier un agent
+- L'éditeur s'ouvre dans une **fenêtre large** organisée en **deux colonnes** : à gauche l'**identité** et les **modèles**, à droite le **rôle**, les **compétences** et les **garde-fous**. Le champ **Rôle** est haut et **redimensionnable verticalement**. Sur une fenêtre étroite, les deux colonnes se replient en **une seule** (rien n'est coupé) et la fenêtre défile si la hauteur manque.
 - **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
 - **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
 - **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir. Ce réglage est une **intention** pour les sessions à venir (cf. l'encadré ci-dessus) : il n'est pas réappliqué à une session en cours.
@@ -276,6 +277,15 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 | `src/js/agents.js` | Fonctions pures : registre, modèles, prompts, parsing (`[[CALL]]`, `[[PARALLEL]]`), agrégation, garde-fous. |
 | `src/js/agents-bus.js` | Bus d'exécution : pile, timeouts, envois/réceptions, dispatch parallèle (`dispatchParallel`, `startParallelRun`), buffers par agent. |
 | `src/js/agents-ui.js` | Rendu de l'onglet Agents : **configuration** (liste + éditeur, dont le sélecteur de compétences) et panneau d'**activité** des runs. |
+
+#### Fiche d'agent (éditeur, deux colonnes)
+
+L'éditeur d'agent (`.modal-content.agent-editor-content` : largeur 900 px plafonnée à `92 vw`, `max-height: 88 vh`) présente la fiche sur **deux colonnes** (`.agent-form-cols`, grille `minmax(0, 1fr) minmax(0, 1.1fr)`) :
+
+- **colonne gauche** — identité et modèles : `#ae-id`, `#ae-name`, `#ae-icon`, `#ae-description`, `#ae-model-pi` + `#ae-thinking-pi` (+ note), `#ae-model-plh` + `#ae-thinking-plh` (+ note) ;
+- **colonne droite** — rôle, compétences et garde-fous : `#ae-role` (textarea haut, `resize: vertical`), `#ae-skills`, `#ae-readonly`, `#ae-keep`, `#ae-max-calls`, `#ae-depth`.
+
+Les identifiants `#ae-*` sont **inchangés** : l'enregistrement relit exactement les mêmes valeurs (aucune perte). Sous `max-width: 900px`, la grille repasse en **une seule colonne** (aucun champ coupé) ; l'`overflow-y` de `.agent-form` conserve le défilement quand la hauteur manque. Test de cablage : `src/js/agents-editor-layout.test.js`.
 
 ### Résolution du modèle
 

@@ -997,6 +997,7 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - **🔄 Réinitialiser** restaure les **7 agents fournis** (coordinateur, architecte, codeur, reviewer, testeur, documenteur, plan-maker). **Vos agents personnalisés sont conservés.**
 
 ### Créer / modifier un agent
+- L'éditeur s'ouvre dans une **fenêtre large** organisée en **deux colonnes** : à gauche l'**identité** et les **modèles**, à droite le **rôle**, les **compétences** et les **garde-fous**. Le champ **Rôle** est haut et **redimensionnable verticalement**. Sur une fenêtre étroite, les deux colonnes se replient en **une seule** (rien n'est coupé) et la fenêtre défile si la hauteur manque.
 - **ID** : identifiant machine en kebab-case, non modifiable après création. Un identifiant fourni par Pilot (ex. `codeur`) est refusé à la création : la réinitialisation écraserait cet agent.
 - **Nom, icône, description, rôle** : la **description** sert au coordinateur pour router les tâches ; le **rôle** est le prompt système de l'agent.
 - **Modèles** : modèle `π` (pi) et `ℓ` (plh) séparés ; « Modèle par défaut » laisse Pilot choisir. Ce réglage est une **intention** pour les sessions à venir (cf. l'encadré ci-dessus) : il n'est pas réappliqué à une session en cours.
