@@ -2387,6 +2387,77 @@ fn db_delete_task_deliverables(conn: &Connection, task_id: i64) -> Result<usize,
     .map_err(|e| format!("Erreur nettoyage livrables: {}", e))
 }
 
+// ── Idée 4 (Lot A), tranche 4.2 : écriture automatique à la livraison ──
+//
+// Une tâche qui entre EFFECTIVEMENT dans l'état « livré » (règle unique
+// `classify_task_status` → "done", exactement l'état contrôlé par
+// `guard_task_checklist`) reçoit UNE ligne de traçabilité : le libellé court du
+// livrable est le TITRE de la tâche, et l'origine reprend la décision liée la
+// plus récente si elle existe, sinon la mention `DELIVERABLE_ORIGIN_UNKNOWN`.
+// Une tâche DÉJÀ livrée que l'on repasse sur un statut livré n'écrit rien de
+// plus : une ligne par PASSAGE effectif, jamais par écriture.
+//
+// La décision est centralisée dans un seul helper PUR (`db_record_delivery_trace`),
+// sans aucun `AppHandle` ; les voies existantes qui écrivent un statut l'appellent
+// APRÈS une écriture réussie, au même endroit où `guard_task_checklist` est appelé
+// AVANT l'écriture — aucune voie nouvelle n'est créée, aucune logique n'est
+// dupliquée. L'appel est fail-open (`let _ =`) : une traçabilité impossible
+// (dont une base SANS table `deliverables`) ne bloque jamais le changement de
+// statut et ne le fait jamais échouer. L'écriture est INCONDITIONNELLE pour
+// l'instant : le réglage « enregistrer une ligne à chaque livraison » n'existe
+// pas encore (tranche 4.5 le rendra désactivable).
+
+/// Décision liée la plus récente d'une tâche (`(id, summary)`), ou `None` si
+/// aucune décision ne lui est rattachée. Sert d'ORIGINE à la ligne de
+/// traçabilité ; l'absence de décision n'est jamais une erreur (on écrit alors
+/// la mention de repli).
+fn latest_task_decision(conn: &Connection, task_id: i64) -> Option<(i64, String)> {
+    conn.query_row(
+        "SELECT id, summary FROM decisions WHERE task_id = ?1 \
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+        rusqlite::params![task_id],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+    )
+    .ok()
+}
+
+/// Écrit la ligne de traçabilité d'un PASSAGE EFFECTIF d'une tâche dans l'état
+/// livré et retourne son id. Sans effet (`Ok(None)`) si la tâche n'entre pas
+/// dans cet état (nouveau statut hors « livré ») ou si elle y était DÉJÀ
+/// (`previous_status` livré) : une seule ligne par passage. Le libellé est le
+/// titre de la tâche ; `decision_id`/`origin` reprennent la décision liée si
+/// elle existe, sinon la mention `DELIVERABLE_ORIGIN_UNKNOWN`.
+fn db_record_delivery_trace(
+    conn: &Connection,
+    task_id: i64,
+    previous_status: Option<&str>,
+    new_status: &str,
+) -> Result<Option<i64>, String> {
+    if classify_task_status(new_status) != "done" {
+        return Ok(None);
+    }
+    if previous_status
+        .map(classify_task_status)
+        .map(|kind| kind == "done")
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let title: String = conn
+        .query_row(
+            "SELECT title FROM tasks WHERE id = ?1",
+            rusqlite::params![task_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("Erreur lecture tâche: {}", e))?;
+    let (decision_id, origin) = match latest_task_decision(conn, task_id) {
+        Some((id, summary)) => (Some(id), summary),
+        None => (None, DELIVERABLE_ORIGIN_UNKNOWN.to_string()),
+    };
+    let id = db_add_deliverable(conn, task_id, decision_id, &title, &origin)?;
+    Ok(Some(id))
+}
+
 // ── Idée 3 (Lot A), tranche 3.2 : commandes Tauri de la checklist ──
 //
 // Enveloppes MINCES : chacune ouvre la base puis délègue au helper pur
@@ -3811,7 +3882,11 @@ pub fn super_agent_update_task(
     // Idée 3 (Lot A), tranche 3.3 : contrôle de checklist AVANT l'écriture, si
     // la mise à jour fait passer la tâche en « Terminé ». Même point d'entrée
     // que `super_agent_update_task_status` : aucune logique dupliquée.
+    // Le statut AVANT écriture est mémorisé ici : il sert à ne tracer qu'un
+    // passage EFFECTIF à l'état livré (idée 4, tranche 4.2).
+    let mut previous_status: Option<String> = None;
     if let Some(ref target) = new_status {
+        previous_status = task_status_of(&conn, task_id);
         let mode = {
             let cfg = state.config.lock().unwrap();
             cfg.super_agent_checklist_mode.clone()
@@ -3835,6 +3910,13 @@ pub fn super_agent_update_task(
         .map_err(|e| format!("Erreur mise à jour tâche: {}", e))?;
     if n == 0 {
         return Err(format!("Tâche {} introuvable", task_id));
+    }
+    // Idée 4 (Lot A), tranche 4.2 : ligne de traçabilité au passage EFFECTIF à
+    // l'état livré, APRÈS une écriture réussie. Fail-open : une panne de
+    // traçabilité (dont une base sans table `deliverables`) ne bloque jamais la
+    // mise à jour de la tâche, déjà écrite à ce stade.
+    if let Some(ref target) = new_status {
+        let _ = db_record_delivery_trace(&conn, task_id, previous_status.as_deref(), target);
     }
     Ok(serde_json::json!({ "ok": true, "task_id": task_id }))
 }
@@ -3895,6 +3977,9 @@ pub fn super_agent_update_task_status(
         let cfg = state.config.lock().unwrap();
         cfg.super_agent_checklist_mode.clone()
     };
+    // Le statut AVANT écriture est mémorisé ici : il sert à ne tracer qu'un
+    // passage EFFECTIF à l'état livré (idée 4, tranche 4.2).
+    let previous_status = task_status_of(&conn, task_id);
     guard_task_checklist(
         &conn,
         task_id,
@@ -3911,6 +3996,11 @@ pub fn super_agent_update_task_status(
     if n == 0 {
         return Err(format!("Tâche {} introuvable", task_id));
     }
+    // Idée 4 (Lot A), tranche 4.2 : ligne de traçabilité au passage EFFECTIF à
+    // l'état livré, APRÈS une écriture réussie. Fail-open : une panne de
+    // traçabilité (dont une base sans table `deliverables`) ne bloque jamais le
+    // changement de statut, déjà écrit à ce stade.
+    let _ = db_record_delivery_trace(&conn, task_id, previous_status.as_deref(), status);
     Ok(serde_json::json!({ "ok": true, "task_id": task_id, "status": status }))
 }
 
@@ -5579,7 +5669,7 @@ mod tests {
         db_add_task_check, db_delete_task_check, db_delete_task_checks, db_list_task_checks,
         db_set_task_check_done,
         db_add_deliverable, db_delete_task_deliverables, db_list_project_deliverables,
-        db_list_task_deliverables, DELIVERABLE_ORIGIN_UNKNOWN,
+        db_list_task_deliverables, db_record_delivery_trace, DELIVERABLE_ORIGIN_UNKNOWN,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
@@ -7704,6 +7794,130 @@ mod tests {
         assert_eq!(rows[0]["label"], "Survivre au redémarrage");
         drop(conn);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Lot A idée 4, tranche 4.2 : ligne de traçabilité écrite à la livraison ──
+    // La décision d'écrire est PURE (`db_record_delivery_trace`) : une ligne par
+    // PASSAGE effectif à l'état livré, jamais par écriture.
+
+    /// Rejoue la séquence EXACTE des voies qui écrivent un statut — statut lu
+    /// AVANT, contrôle de checklist AVANT, écriture, traçabilité APRÈS en
+    /// fail-open) : les commandes Tauri exigent un `AppHandle` (indisponible
+    /// hors application graphique), ce rejeu verrouille donc leur contrat de
+    /// données sans réimplémenter de règle métier.
+    fn apply_status_change_like_the_commands(
+        conn: &Connection,
+        task_id: i64,
+        new_status: &str,
+        mode: &str,
+        force: bool,
+    ) -> Result<(), String> {
+        let previous_status = task_status_of(conn, task_id);
+        guard_task_checklist(conn, task_id, new_status, mode, force)?;
+        let n = conn
+            .execute(
+                "UPDATE tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
+                rusqlite::params![new_status, task_id],
+            )
+            .map_err(|e| format!("Erreur mise à jour statut: {}", e))?;
+        if n == 0 {
+            return Err(format!("Tâche {} introuvable", task_id));
+        }
+        let _ = db_record_delivery_trace(conn, task_id, previous_status.as_deref(), new_status);
+        Ok(())
+    }
+
+    #[test]
+    fn delivery_writes_exactly_one_trace_line_labelled_with_the_task_title() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Aucune décision liée : la ligne existe quand même (origine = mention
+        // de repli), et le libellé court du livrable est le TITRE de la tâche.
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1, "un passage effectif → exactement une ligne");
+        assert_eq!(rows[0]["label"], "Tâche 1");
+        assert_eq!(rows[0]["origin"], DELIVERABLE_ORIGIN_UNKNOWN);
+        assert!(rows[0]["decision_id"].is_null());
+        assert_eq!(rows[0]["task_id"], t1);
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("livree"));
+        // La ligne appartient à CETTE tâche : celles de l'autre sont intactes.
+        assert!(db_list_task_deliverables(&conn, t2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn delivery_trace_is_written_once_per_passage_not_once_per_write() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 1);
+        // Tâche DÉJÀ livrée repassée sur un statut livré : rien de nouveau.
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "terminee", "off", false).unwrap();
+        assert_eq!(
+            db_list_task_deliverables(&conn, t1).unwrap().len(),
+            1,
+            "une seule ligne par passage effectif"
+        );
+        // Un aller-retour hors état livré puis un retour dans cet état est un
+        // NOUVEAU passage : une seconde ligne, c'est voulu (deux livraisons).
+        apply_status_change_like_the_commands(&conn, t1, "en_cours", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn non_delivery_status_writes_no_trace_line() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        for status in ["en_cours", "a_valider", "a_qualifier", "annulee"] {
+            apply_status_change_like_the_commands(&conn, t1, status, "off", false).unwrap();
+        }
+        assert!(
+            db_list_task_deliverables(&conn, t1).unwrap().is_empty(),
+            "aucun statut hors état livré n'écrit de ligne"
+        );
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("annulee"));
+    }
+
+    #[test]
+    fn delivery_trace_takes_its_origin_from_the_linked_decision() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Décision liée à la tâche : elle devient l'origine de la ligne.
+        conn.execute(
+            "INSERT INTO decisions (project_id, task_id, summary) \
+             VALUES (1, ?1, 'Demande initiale : afficher le total')",
+            rusqlite::params![t1],
+        )
+        .unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["origin"], "Demande initiale : afficher le total");
+        assert_eq!(rows[0]["decision_id"], 1);
+    }
+
+    #[test]
+    fn checklist_refusal_in_block_mode_writes_no_trace_line() {
+        let (conn, task) = mem_conn_with_open_task();
+        db_add_task_check(&conn, task, "Tests verts").unwrap();
+        // Mode bloquant : le refus intervient AVANT toute écriture — donc avant
+        // la traçabilité aussi.
+        let err = apply_status_change_like_the_commands(&conn, task, "livree", "block", false)
+            .unwrap_err();
+        assert!(err.contains("Tests verts"), "{}", err);
+        assert!(db_list_task_deliverables(&conn, task).unwrap().is_empty());
+        // Le statut n'a pas bougé non plus (aucune écriture partielle).
+        assert_eq!(task_status_of(&conn, task).as_deref(), Some("en_cours"));
+    }
+
+    #[test]
+    fn missing_deliverables_table_never_blocks_the_status_change() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Base SANS la table de traçabilité (cas d'une base ancienne) :
+        conn.execute("DROP TABLE deliverables", []).unwrap();
+        // L'écriture de la ligne échoue franchement (jamais un panic)…
+        assert!(db_record_delivery_trace(&conn, t1, Some("en_cours"), "livree").is_err());
+        // …mais le changement de statut, lui, RÉUSSIT (fail-open).
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("livree"));
     }
 
     // ── Lot A idée 3, tranche 3.3 : contrôle de checklist au passage en « Terminé » ──
