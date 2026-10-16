@@ -457,7 +457,6 @@ pub fn ensure_git_repo_with_identity(cwd: &str, email: &str, name: &str) -> Resu
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, MutexGuard};
 
     // L'environnement git est process-wide : on SÉRIE les tests qui isolent la
@@ -465,7 +464,6 @@ pub(crate) mod test_helpers {
     // parallèles. Les seuls tests exécutant des sous-processus git du crate
     // acquièrent ce verrou (aucun autre module ne lance git dans ses tests).
     static GIT_ENV_LOCK: Mutex<()> = Mutex::new(());
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     /// Guard posé au début des tests git : pointe la config git GLOBALE vers un
     /// fichier temporaire jetable (retiré au Drop, même en cas de panique) pour
@@ -482,13 +480,12 @@ pub(crate) mod test_helpers {
         /// Avec identité → `"[user]\n name = Test\n email = test@example.com\n"`.
         /// Vide (`""`) → AUCUNE identité (test d'échec clair).
         pub(crate) fn new(global_config: &str) -> Self {
-            let _lock = GIT_ENV_LOCK.lock().unwrap();
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let marker = std::env::temp_dir().join(format!(
-                "pilot-git-iso-{}-{}",
-                std::process::id(),
-                n
-            ));
+            // Le verrou est pris en RÉCUPÉRANT sa contamination : un test qui
+            // panique en le tenant ne doit pas faire échouer en cascade tous les
+            // tests git suivants (`PoisonError`).
+            let _lock = crate::test_util::lock_unpoisoned(&GIT_ENV_LOCK);
+            let marker = std::env::temp_dir()
+                .join(format!("pilot-git-iso-{}", crate::test_util::unique_suffix()));
             let _ = std::fs::write(&marker, global_config.as_bytes());
             std::env::set_var("GIT_CONFIG_GLOBAL", &marker);
             std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
@@ -516,11 +513,13 @@ mod tests {
         IsolatedGitConfig::new("[user]\n name = Pilot Test\n email = pilot-test@example.com\n")
     }
 
-    fn temp_work(label: &str) -> (std::path::PathBuf, String) {
-        let dir = std::env::temp_dir().join(format!("pilot-git-{}-{}", label, std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        (dir.clone(), dir.to_string_lossy().to_string())
+    /// Répertoire de travail de test : UNIQUE (les tests tournent en parallèle
+    /// dans un MÊME processus, donc `process::id()` seul ne suffisait pas) et
+    /// supprimé automatiquement en fin de test — même en cas d'échec.
+    fn temp_work(label: &str) -> (crate::test_util::TempDir, String) {
+        let dir = crate::test_util::TempDir::new(&format!("pilot-git-{}", label));
+        let d = dir.str();
+        (dir, d)
     }
 
     fn commit_count(cwd: &str) -> usize {
@@ -533,7 +532,7 @@ mod tests {
     #[test]
     fn ensure_git_repo_with_initial_commit_initializes_a_non_repo() {
         let _iso = identity_iso();
-        let (dir, d) = temp_work("init");
+        let (_dir, d) = temp_work("init");
         std::fs::write(std::path::Path::new(&d).join("a.txt"), "hello").unwrap();
         assert!(!git_is_repo(&d));
         let res = ensure_git_repo_with_initial_commit(&d).unwrap();
@@ -543,20 +542,18 @@ mod tests {
         assert_eq!(commit_count(&d), 1);
         let ls = run_captured("git", &["-C", &d, "ls-files"], Duration::from_secs(3));
         assert!(ls.trim().contains("a.txt"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn ensure_git_repo_with_initial_commit_is_idempotent() {
         let _iso = identity_iso();
-        let (dir, d) = temp_work("idem");
+        let (_dir, d) = temp_work("idem");
         std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
         assert!(ensure_git_repo_with_initial_commit(&d).unwrap());
         assert_eq!(commit_count(&d), 1);
         // Rejouer sans nouveau fichier : déjà repo → false, AUCUN 2e commit.
         assert!(!ensure_git_repo_with_initial_commit(&d).unwrap());
         assert_eq!(commit_count(&d), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -564,12 +561,11 @@ mod tests {
         // Task 1 : invariant — dossier non-repo → work tree + premier commit,
         // puis attaché (remote add + push) sur un bare de TEST sans erreur.
         let _iso = identity_iso();
-        let (wd, work) = temp_work("attach");
+        let (_wd, work) = temp_work("attach");
         std::fs::write(std::path::Path::new(&work).join("app.txt"), "code").unwrap();
         assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
 
-        let bare = std::env::temp_dir().join(format!("pilot-git-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bare);
+        let bare = crate::test_util::TempDir::new("pilot-git-bare");
         gds_core::git_cmd::git_init_bare(&bare.to_string_lossy()).unwrap();
         let branch = git_current_branch(&work);
         assert!(!branch.is_empty() && branch != "HEAD");
@@ -578,8 +574,6 @@ mod tests {
         // Le bare de test contient bien le commit initial.
         let log = run_captured("git", &["-C", &bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
         assert!(log.contains("initial commit"));
-        let _ = std::fs::remove_dir_all(&bare);
-        let _ = std::fs::remove_dir_all(&wd);
     }
 
     #[test]
@@ -587,7 +581,7 @@ mod tests {
         // Projet INSCRIT sur le GDS : une tentative d'envoi vers un autre dépôt
         // (origin / GitHub) est REFUSÉE avant toute action, avec le message
         // attendu. Le remote du GDS, lui, reste autorisé.
-        let (dir, d) = temp_work("gds-guard");
+        let (_dir, d) = temp_work("gds-guard");
         let pilot = std::path::Path::new(&d).join(".pilot");
         std::fs::create_dir_all(&pilot).unwrap();
         std::fs::write(
@@ -599,15 +593,13 @@ mod tests {
         assert!(err.contains("travaille avec le GDS"), "message réel: {err}");
         assert!(err.contains("GitHub"), "message réel: {err}");
         assert!(ensure_gds_push_destination(&d, "gds").is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn git_push_leaves_a_non_gds_project_untouched() {
         // Projet NON inscrit : comportement strictement inchangé (aucune garde).
-        let (dir, d) = temp_work("non-gds-guard");
+        let (_dir, d) = temp_work("non-gds-guard");
         assert!(ensure_gds_push_destination(&d, "origin").is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -615,17 +607,15 @@ mod tests {
         // Envoi SANS destination précisée : il doit viser le dépôt du GDS, jamais
         // `origin`. `git_push` pose l'association (`-u`) — on le vérifie pour de vrai.
         let _iso = identity_iso();
-        let (wd, work) = temp_work("bare-push-gds");
+        let (_wd, work) = temp_work("bare-push-gds");
         std::fs::write(std::path::Path::new(&work).join("a.txt"), "x").unwrap();
         assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
         let pilot = std::path::Path::new(&work).join(".pilot");
         std::fs::create_dir_all(&pilot).unwrap();
         std::fs::write(pilot.join("gds.json"), r#"{"enabled":true,"identity_email":"a@b.c"}"#).unwrap();
 
-        let origin_bare = std::env::temp_dir().join(format!("pilot-origin-bare-{}", std::process::id()));
-        let gds_bare = std::env::temp_dir().join(format!("pilot-gds-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&origin_bare);
-        let _ = std::fs::remove_dir_all(&gds_bare);
+        let origin_bare = crate::test_util::TempDir::new("pilot-origin-bare");
+        let gds_bare = crate::test_util::TempDir::new("pilot-gds-bare");
         gds_core::git_cmd::git_init_bare(&origin_bare.to_string_lossy()).unwrap();
         gds_core::git_cmd::git_init_bare(&gds_bare.to_string_lossy()).unwrap();
         git_remote_add(&work, "origin", &origin_bare.to_string_lossy()).unwrap();
@@ -645,9 +635,6 @@ mod tests {
         assert!(gds_log.contains("initial commit"), "le dépôt GDS doit avoir reçu le commit");
         let origin_log = run_captured("git", &["-C", &origin_bare.to_string_lossy(), "log", "--oneline", "--all"], Duration::from_secs(3));
         assert!(origin_log.trim().is_empty(), "origin doit rester vierge, reçu: {origin_log}");
-        let _ = std::fs::remove_dir_all(&origin_bare);
-        let _ = std::fs::remove_dir_all(&gds_bare);
-        let _ = std::fs::remove_dir_all(&wd);
     }
 
     #[test]
@@ -776,11 +763,10 @@ To add an exception for this directory, call:\n\
         // Bout en bout, cas réel « projet jamais publié » : dépôt distant SANS la
         // branche demandée → le message doit porter la raison réelle de Git.
         let _iso = identity_iso();
-        let (wd, work) = temp_work("fetch-reason");
+        let (_wd, work) = temp_work("fetch-reason");
         std::fs::write(std::path::Path::new(&work).join("a.txt"), "x").unwrap();
         assert!(ensure_git_repo_with_initial_commit(&work).unwrap());
-        let bare = std::env::temp_dir().join(format!("pilot-git-fetch-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bare);
+        let bare = crate::test_util::TempDir::new("pilot-git-fetch-bare");
         gds_core::git_cmd::git_init_bare(&bare.to_string_lossy()).unwrap();
         git_remote_add(&work, "gds", &bare.to_string_lossy()).unwrap();
         let err = git_fetch(&work, "gds", "main").unwrap_err();
@@ -790,8 +776,6 @@ To add an exception for this directory, call:\n\
             err
         );
         assert!(!err.ends_with(": main"), "message sans raison : {}", err);
-        let _ = std::fs::remove_dir_all(&bare);
-        let _ = std::fs::remove_dir_all(&wd);
     }
 
     #[test]
@@ -799,7 +783,7 @@ To add an exception for this directory, call:\n\
         // Task 4 : identité git absente → échec avec message CLAIR (pas une
         // erreur git brute) et AUCUN état cassé.
         let _iso = IsolatedGitConfig::new(""); // config globale vide → aucune identité
-        let (dir, d) = temp_work("identity");
+        let (_dir, d) = temp_work("identity");
         std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
         let res = ensure_git_repo_with_initial_commit(&d);
         assert!(res.is_err());
@@ -808,7 +792,6 @@ To add an exception for this directory, call:\n\
         assert!(!err.contains("Committer identity unknown"), "pas d'erreur git brute: {}", err);
         // Pas d'état cassé : git init a eu lieu, le dossier reste un work tree valide.
         assert!(git_is_repo(&d));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -816,7 +799,7 @@ To add an exception for this directory, call:\n\
         // L'identification est écrite en LOCAL (`--local`, .git/config) et jamais
         // dans la config globale (isolée par GIT_CONFIG_GLOBAL + fichier temp).
         let _iso = IsolatedGitConfig::new("");
-        let (dir, d) = temp_work("conf-local");
+        let (_dir, d) = temp_work("conf-local");
         crate::git::git_init(&d).unwrap();
         git_config_local_user_name(&d, "Alice").unwrap();
         git_config_local_user_email(&d, "alice@example.com").unwrap();
@@ -827,7 +810,6 @@ To add an exception for this directory, call:\n\
         let local = std::path::Path::new(&d).join(".git").join("config");
         let content = std::fs::read_to_string(&local).unwrap();
         assert!(content.contains("Alice") && content.contains("alice@example.com"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -835,13 +817,12 @@ To add an exception for this directory, call:\n\
         // Une identité GLOBALE déjà présente est respectée (non intrusif) : elle
         // n'est pas écrasée par l'identité GDS locale.
         let _iso = identity_iso(); // config globale : Pilot Test <pilot-test@example.com>
-        let (dir, d) = temp_work("conf-keep");
+        let (_dir, d) = temp_work("conf-keep");
         crate::git::git_init(&d).unwrap();
         // Tenter de régler l'identité GDS (autre nom/email) : la globale reste.
         ensure_git_repo_with_identity(&d, "gds@example.com", "GDS User").unwrap();
         assert_eq!(git_config_user_name(&d), "Pilot Test");
         assert_eq!(git_config_user_email(&d), "pilot-test@example.com");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -849,7 +830,7 @@ To add an exception for this directory, call:\n\
         // Sans identité globale (config vide) : l'identité GDS est réglée en LOCAL
         // et le premier commit réussit — aucune config utilisateur réelle touchée.
         let _iso = IsolatedGitConfig::new("");
-        let (dir, d) = temp_work("ident-commit");
+        let (_dir, d) = temp_work("ident-commit");
         std::fs::write(std::path::Path::new(&d).join("a.txt"), "hello").unwrap();
         assert!(!git_is_repo(&d));
         let ok = ensure_git_repo_with_identity(&d, "gds@example.com", "Alice").unwrap();
@@ -858,7 +839,6 @@ To add an exception for this directory, call:\n\
         assert_eq!(git_config_user_name(&d), "Alice");
         assert_eq!(git_config_user_email(&d), "gds@example.com");
         assert_eq!(commit_count(&d), 1);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -866,7 +846,7 @@ To add an exception for this directory, call:\n\
         // Dépôt déjà existant : identité comblée (si absente), retourne false,
         // AUCUN commit supplémentaire.
         let _iso = IsolatedGitConfig::new("");
-        let (dir, d) = temp_work("ident-idem");
+        let (_dir, d) = temp_work("ident-idem");
         std::fs::write(std::path::Path::new(&d).join("f.txt"), "x").unwrap();
         assert!(ensure_git_repo_with_identity(&d, "gds@example.com", "Bob").unwrap());
         assert_eq!(commit_count(&d), 1);
@@ -875,7 +855,6 @@ To add an exception for this directory, call:\n\
         assert_eq!(commit_count(&d), 1);
         assert_eq!(git_config_user_name(&d), "Bob");
         assert_eq!(git_config_user_email(&d), "gds@example.com");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

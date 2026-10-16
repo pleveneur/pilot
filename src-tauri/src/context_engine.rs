@@ -635,14 +635,11 @@ mod tests {
     fn query_source_falls_back_before_any_network_when_db_missing() {
         // Sans DB, query_index_blocking retourne v1-fallback sans toucher au
         // réseau : le prompt ne doit jamais dépendre d'Ollama pour partir.
-        let tmp = std::env::temp_dir().join(format!("ctx-fallback-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let _ = std::fs::create_dir_all(&tmp);
+        let tmp = crate::test_util::TempDir::new("ctx-fallback");
         let res = query_index_blocking(tmp.to_str().unwrap(), "prompt", 1000, "http://127.0.0.1:9", "m")
             .unwrap();
         assert_eq!(res.source, "v1-fallback");
         assert!(res.context.is_empty());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 

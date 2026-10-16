@@ -3301,8 +3301,8 @@ mod tests {
 
     #[test]
     fn gds_save_config_recomputes_ssh_host_when_server_url_changes() {
-        let dir = std::env::temp_dir().join(format!("pilot-gds-test-recompute-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-test-recompute");
+        let project = dir.str();
         let initial = GdsConfig {
             enabled: true,
             server_url: "postgres://postgres:secret@old.host:5432/postgres".to_string(),
@@ -3333,13 +3333,12 @@ mod tests {
         let saved = read_gds_config(&project).unwrap();
         // ssh_host recalculé depuis la nouvelle URL.
         assert_eq!(saved.ssh_host, "new.host:22");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn gds_save_config_preserves_ssh_host_when_url_unchanged() {
-        let dir = std::env::temp_dir().join(format!("pilot-gds-test-preserve-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-test-preserve");
+        let project = dir.str();
         let initial = GdsConfig {
             enabled: true,
             server_url: "postgres://postgres:secret@host:5432/postgres".to_string(),
@@ -3371,7 +3370,6 @@ mod tests {
         // ssh_host recalculé (vide → dérivé), gds_local_dir préservé.
         assert_eq!(saved.ssh_host, "host:22");
         assert_eq!(saved.gds_local_dir.as_deref(), Some("/custom/dir"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3530,8 +3528,8 @@ mod tests {
         // Rétrocompat : un `.pilot/gds.json` écrit AVANT ce chantier (sans
         // `ssh_port` ni `gds_server_repos`) doit se charger sans erreur, avec un
         // port SSH à 22 (comportement historique) et aucune racine serveur.
-        let dir = std::env::temp_dir().join(format!("pilot-gds-retro-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-retro");
+        let project = dir.str();
         std::fs::create_dir_all(dir.join(".pilot")).unwrap();
         std::fs::write(
             gds_config_path(&project),
@@ -3543,15 +3541,14 @@ mod tests {
         assert_eq!(cfg.gds_server_repos, None);
         assert_eq!(cfg.ssh_host, "192.168.1.10:22");
         assert_eq!(gds_remote_url(&cfg, "proj"), "ssh://git@192.168.1.10:22/proj.git");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_gds_config_never_embeds_password() {
         // Une config ancienne avec URL postgres://user:pass@host ne doit JAMAIS
         // être réécrite avec le mot de passe en clair dans server_url.
-        let dir = std::env::temp_dir().join(format!("pilot-gds-test-nopass-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-test-nopass");
+        let project = dir.str();
         let cfg = GdsConfig {
             enabled: true,
             server_url: "postgres://postgres:SUPERSECRET@host:5432/postgres".to_string(),
@@ -3574,7 +3571,6 @@ mod tests {
         assert_eq!(saved.db_host, "host");
         assert_eq!(saved.db_user, "postgres");
         assert_eq!(saved.server_url, "postgres://postgres@host:5432/postgres");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3607,8 +3603,7 @@ mod tests {
     /// pas — sans preuve côté serveur, la réponse est « à vérifier ».
     #[tokio::test]
     async fn bare_exists_local_disk_only_for_native_local_server() {
-        let base = std::env::temp_dir().join(format!("pilot-gds-test-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = crate::test_util::TempDir::new("pilot-gds-test-bare");
         let name = "proj";
         // Le dossier homonyme existe sur CE poste (c'est lui qui trompait).
         std::fs::create_dir_all(base.join("repos").join(format!("{}.git", name))).unwrap();
@@ -3671,8 +3666,6 @@ mod tests {
             ..distant.clone()
         };
         assert!(!server_bare_exists(None, &distant_win, name).await);
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
@@ -3740,9 +3733,8 @@ mod tests {
         let _guard = TestGdsSecretsGuard::new();
         let host = "192.168.1.250";
         let key = server_key(host, "pilot");
-        let proj_dir = std::env::temp_dir()
-            .join(format!("pilot-gds-apply-proj-{}", std::process::id()));
-        let proj = proj_dir.to_string_lossy().to_string();
+        let proj_dir = crate::test_util::TempDir::new_absent("pilot-gds-apply-proj");
+        let proj = proj_dir.str();
         // Un serveur enregistré est toujours marqué validé (l'enregistrement
         // n'a lieu qu'après un test de connexion réussi dans gds_provision).
         save_server_credentials(host, "5432", "pilot", "dbpw", "adminpw").unwrap();
@@ -3766,7 +3758,6 @@ mod tests {
         // gds_apply_server refuse un serveur non validé.
         let res = gds_apply_server(proj, host.to_string(), "5432".to_string(), "pilot".to_string(), "dev@kalico".to_string());
         assert!(res.is_err());
-        let _ = std::fs::remove_dir_all(&proj_dir);
     }
 
     #[test]
@@ -3778,15 +3769,12 @@ mod tests {
         let _iso = crate::git::test_helpers::IsolatedGitConfig::new(
             "[user]\n name = Pilot Test\n email = pilot-test@example.com\n",
         );
-        let work = std::env::temp_dir().join(format!("pilot-gds-wrk-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&work);
-        std::fs::create_dir_all(&work).unwrap();
-        let work = work.to_string_lossy().to_string();
+        let work_dir = crate::test_util::TempDir::new("pilot-gds-wrk");
+        let work = work_dir.str();
         std::fs::write(std::path::Path::new(&work).join("main.rs"), "fn main() {}\n").unwrap();
 
-        let bare = std::env::temp_dir().join(format!("pilot-gds-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bare);
-        let bare = bare.to_string_lossy().to_string();
+        let bare_dir = crate::test_util::TempDir::new("pilot-gds-bare");
+        let bare = bare_dir.str();
         gds_core::git_cmd::git_init_bare(&bare).unwrap();
 
         // 1. invariant : non-repo → initialisé avec premier commit.
@@ -3809,8 +3797,6 @@ mod tests {
             Duration::from_secs(3),
         );
         assert_eq!(count.trim(), "1", "aucun 2e commit attendu");
-        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&work));
-        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&bare));
     }
 
     /// Cas de terrain (défaut confirmé) : le dépôt du serveur existe mais est
@@ -3823,15 +3809,12 @@ mod tests {
         let _iso = crate::git::test_helpers::IsolatedGitConfig::new(
             "[user]\n name = Pilot Test\n email = pilot-test@example.com\n",
         );
-        let work = std::env::temp_dir().join(format!("pilot-gds-empty-wrk-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&work);
-        std::fs::create_dir_all(&work).unwrap();
-        let work = work.to_string_lossy().to_string();
+        let work_dir = crate::test_util::TempDir::new("pilot-gds-empty-wrk");
+        let work = work_dir.str();
         std::fs::write(std::path::Path::new(&work).join("main.rs"), "fn main() {}\n").unwrap();
 
-        let bare = std::env::temp_dir().join(format!("pilot-gds-empty-bare-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&bare);
-        let bare = bare.to_string_lossy().to_string();
+        let bare_dir = crate::test_util::TempDir::new("pilot-gds-empty-bare");
+        let bare = bare_dir.str();
         gds_core::git_cmd::git_init_bare(&bare).unwrap();
 
         ensure_git_repo_with_initial_commit(&work).unwrap();
@@ -3860,17 +3843,14 @@ mod tests {
 
         // Chemin de dépôt obsolète (dépôt réellement absent) : non interrogeable
         // → « à vérifier », jamais « connecté » ni « publié ».
-        let missing = std::env::temp_dir().join(format!("pilot-gds-absent-{}", std::process::id()));
-        let missing = missing.to_string_lossy().to_string();
+        let missing_dir = crate::test_util::TempDir::new_absent("pilot-gds-absent");
+        let missing = missing_dir.str();
         git_remote_add(&work, "gds", &missing).unwrap();
         assert_eq!(remote_branch_state(&work), None);
         assert_eq!(
             connection_status_from_flags(true, true, true, true, true, true, remote_branch_state(&work)),
             "error"
         );
-
-        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&work));
-        let _ = std::fs::remove_dir_all(&std::path::PathBuf::from(&bare));
     }
 
     #[test]
@@ -3878,8 +3858,7 @@ mod tests {
         // Task 5.3 : un échec d'attache (remote add / push) doit retirer le
         // bare serveur créé → pas d'état « à moitié attaché » (remove_bare,
         // pattern de add_project_to_gds). Purement local (tempdir).
-        let local = std::env::temp_dir().join(format!("pilot-gds-part-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&local);
+        let local = crate::test_util::TempDir::new("pilot-gds-part");
         std::fs::create_dir_all(crate::gds_git::repos_dir(&local.to_string_lossy())).unwrap();
         let bare = crate::gds_git::repo_bare_path(&local.to_string_lossy(), "proj");
         std::fs::create_dir_all(&bare).unwrap();
@@ -3888,7 +3867,6 @@ mod tests {
         crate::gds_git::remove_bare(&local.to_string_lossy(), "proj").unwrap();
         assert!(!bare.exists());
         crate::gds_git::remove_bare(&local.to_string_lossy(), "proj").unwrap();
-        let _ = std::fs::remove_dir_all(&local);
     }
 
     #[test]
@@ -3952,8 +3930,8 @@ mod tests {
         // Secrets mémorisés isolés (jamais ~/.pilot réel).
         let _guard = TestGdsSecretsGuard::new();
         // Projet sans .pilot/gds.json (ou désactivé) → Ok(None), jamais d'erreur.
-        let dir = std::env::temp_dir().join(format!("pilot-gds-autoprov-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-autoprov");
+        let project = dir.str();
         // Pas de config → Ok(None).
         let rt = tokio::runtime::Runtime::new().unwrap();
         let res = rt.block_on(crate::gds::auto_provision_pool(&project));
@@ -3981,7 +3959,6 @@ mod tests {
         let _ = write_gds_config(&project, &cfg);
         let res = rt.block_on(crate::gds::auto_provision_pool(&project));
         assert!(res.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3992,13 +3969,12 @@ mod tests {
         let _iso = crate::git::test_helpers::IsolatedGitConfig::new("");
         let _guard = TestGdsSecretsGuard::new();
         memorize_git_name("Alice").unwrap();
-        let dir = std::env::temp_dir().join(format!("pilot-gds-prefs-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
+        let dir = crate::test_util::TempDir::new("pilot-gds-prefs");
+        let project = dir.str();
         let v = gds_git_identity_prefs(project.clone()).unwrap();
         assert_eq!(v["name_configured"], false);
         assert_eq!(v["email_configured"], false);
         assert_eq!(v["git_name"], "Alice", "nom mémorisé pré-rempli");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4063,15 +4039,13 @@ mod tests {
         // du compte connecté (qu'il soit dev OU admin) est réglé en LOCAL, et le
         // nom mémorisé/fourni aussi — sans toucher la config utilisateur réelle.
         let _iso = crate::git::test_helpers::IsolatedGitConfig::new("");
-        let dir = std::env::temp_dir().join(format!("pilot-gds-idauto-{}", std::process::id()));
-        let project = dir.to_string_lossy().to_string();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_util::TempDir::new("pilot-gds-idauto");
+        let project = dir.str();
         std::fs::write(std::path::Path::new(&project).join("a.txt"), "x").unwrap();
         // email = compte GDS (ici admin : même chemin que dev) ; nom fourni une fois.
         crate::git::ensure_git_repo_with_identity(&project, "admin@kalico", "Alice").unwrap();
         assert_eq!(crate::git::git_config_user_email(&project), "admin@kalico");
         assert_eq!(crate::git::git_config_user_name(&project), "Alice");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -4321,10 +4295,9 @@ mod tests {
         // PLUS écraser le port SSH ni la racine des dépôts côté serveur du
         // projet ; le nom d'hôte SSH suit le nouveau serveur.
         let _guard = TestGdsSecretsGuard::new();
-        let dir = std::env::temp_dir().join(format!("pilot-gds-apply-keep-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::test_util::TempDir::new("pilot-gds-apply-keep");
         std::fs::create_dir_all(dir.join(".pilot")).unwrap();
-        let project = dir.to_string_lossy().to_string();
+        let project = dir.str();
         let mut cfg = GdsConfig {
             enabled: true,
             db_host: "10.9.2.1".to_string(),
@@ -4355,7 +4328,6 @@ mod tests {
         assert_eq!(after.gds_server_repos.as_deref(), Some("/home/git/repos"));
         assert_eq!(after.ssh_host, "10.9.3.1:2222");
         assert_eq!(after.gds_local_dir.as_deref(), Some("/tmp/clones"));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── Étape 2 : enrichissement « déjà en local » (fonction pure partagée) ────
@@ -4371,16 +4343,10 @@ mod tests {
         })
     }
 
-    /// Dossier temporaire vierge, isolé par test (aucun dossier réel du poste).
-    fn tmp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "pilot-gds-etape2-{}-{}",
-            tag,
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Dossier temporaire vierge, isolé par test (aucun dossier réel du poste),
+    /// UNIQUE entre tests parallèles et supprimé automatiquement en fin de test.
+    fn tmp_dir(tag: &str) -> crate::test_util::TempDir {
+        crate::test_util::TempDir::new(&format!("pilot-gds-etape2-{}", tag))
     }
 
     /// Réplique EXACTE de la boucle historiquement embarquée dans
@@ -4432,7 +4398,6 @@ mod tests {
             base.join("Kodali").to_string_lossy()
         );
         assert_eq!(repos[0]["work_exists"], json!(false));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Dossier absent : rien n'existe (ni clone, ni projet de travail), et un
@@ -4446,7 +4411,6 @@ mod tests {
         assert_eq!(repos[0]["local_exists"], json!(false));
         assert_eq!(repos[0]["work_exists"], json!(false));
         assert_eq!(repos[0]["work_path"], json!(""));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Projet de travail RENOMMÉ (nom de dossier différent du dépôt) : la
@@ -4460,7 +4424,6 @@ mod tests {
         enrich_local_state(&mut repos, &base.to_string_lossy(), &[renomme]);
         assert_eq!(repos[0]["local_exists"], json!(false));
         assert_eq!(repos[0]["work_exists"], json!(false));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Même nom, CASSE différente : reconnu (comparaison insensible à la casse).
@@ -4476,7 +4439,6 @@ mod tests {
             repos[0]["work_path"].as_str().unwrap(),
             ailleurs.join("KODALI").to_string_lossy()
         );
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Le « projet de travail » EST le clone GDS lui-même : `work_exists` reste
@@ -4491,7 +4453,6 @@ mod tests {
         assert_eq!(repos[0]["local_exists"], json!(true));
         assert_eq!(repos[0]["work_exists"], json!(false));
         assert_eq!(repos[0]["work_path"], json!(""));
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// PREUVE anti-régression : sur un jeu de lignes varié (clone présent, absent,
@@ -4522,7 +4483,6 @@ mod tests {
             got, expected,
             "la fonction extraite doit rendre le même résultat que la boucle d'origine"
         );
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     // ── Étape 3 : récupérer un projet depuis la SEULE fiche du serveur ────────
@@ -4546,7 +4506,6 @@ mod tests {
             gds_config_path(&dest),
             std::path::Path::new(&dest).join(".pilot").join("gds.json")
         );
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// L'URL du dépôt se construit depuis la FICHE SEULE (aucun projet ouvert) :
@@ -4651,7 +4610,6 @@ mod tests {
         assert!(fetch_or_clone(&dest, &src).unwrap(), "dossier présent → réutilisé");
         let after = crate::run_captured("git", &["-C", &dest, "remote", "-v"], Duration::from_secs(3));
         assert_eq!(after, remotes, "aucun lien ajouté au second passage");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// Garde de refus : un dossier de destination qui existe SANS être un dépôt
@@ -4668,6 +4626,5 @@ mod tests {
         assert!(err.contains("n'est pas un dépôt Git"), "refus explicite : {}", err);
         assert!(std::path::Path::new(&dest).join("important.txt").exists());
         assert!(std::path::Path::new(&dest).is_dir());
-        let _ = std::fs::remove_dir_all(&base);
     }
 }

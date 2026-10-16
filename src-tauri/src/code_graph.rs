@@ -1593,15 +1593,15 @@ mod tests {
 
     #[test]
     fn graph_roundtrip_sqlite() {
-        let tmp = std::env::temp_dir().join(format!("cg-roundtrip-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
+        // Dossier UNIQUE (les tests tournent en parallèle dans le même
+        // processus) et supprimé automatiquement, même en cas d'échec.
+        let tmp = crate::test_util::TempDir::new("cg-roundtrip");
         std::fs::create_dir_all(tmp.join(".pilot")).unwrap();
         let conn = open_db(&tmp.join(".pilot").join("context-index.db")).unwrap();
         let (nodes, edges) = extract_v1("main.py", "from .utils import helper\ndef main(): pass\n");
         insert_file_graph(&conn, "main.py", "abcd", 0, &nodes, &edges).unwrap();
         assert_eq!(count_nodes(&conn), nodes.len());
         assert_eq!(count_edges(&conn), edges.len());
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1666,8 +1666,7 @@ mod tests {
 
     #[test]
     fn add_cross_file_imports_creates_file_to_file_edges() {
-        let tmp = std::env::temp_dir().join(format!("cg-cross-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
+        let tmp = crate::test_util::TempDir::new("cg-cross");
         std::fs::create_dir_all(tmp.join(".pilot")).unwrap();
         let conn = open_db(&tmp.join(".pilot").join("context-index.db")).unwrap();
         // Fichier A importe B : arête file→import (même chemin) + nœud import.
@@ -1683,7 +1682,6 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(count, 1);
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 

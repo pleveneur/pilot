@@ -116,6 +116,11 @@ mod plface;
 mod laya;
 mod laya_model;
 mod laya_download;
+// Utilitaires partagés par les TESTS (répertoires temporaires uniques et
+// auto-nettoyés, verrou de test non contaminable). Compilé en mode test
+// uniquement : jamais présent dans le binaire de production.
+#[cfg(test)]
+mod test_util;
 
 // ── État global de l'application ──
 

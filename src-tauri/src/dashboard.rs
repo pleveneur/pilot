@@ -1545,41 +1545,34 @@ mod tests {
 
     #[test]
     fn detect_dependencies_empty_dir() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_deps_{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
+        let tmp = crate::test_util::TempDir::new("pilot_dash_deps");
         let deps = detect_dependencies(&tmp);
         assert!(deps.is_empty());
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn detect_dependencies_node() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_deps2_{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
+        let tmp = crate::test_util::TempDir::new("pilot_dash_deps2");
         fs::write(tmp.join("package.json"), "{}").unwrap();
         let deps = detect_dependencies(&tmp);
         assert!(deps.contains(&"Node.js".to_string()));
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn disk_total_size_includes_excluded() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_disk_{}", std::process::id()));
+        let tmp = crate::test_util::TempDir::new("pilot_dash_disk");
         let _ = fs::create_dir_all(tmp.join("node_modules"));
         fs::write(tmp.join("node_modules/big.bin"), vec![0u8; 4096]).unwrap();
         fs::write(tmp.join("src.rs"), "fn main() {}").unwrap();
         let size = disk_total_size(&tmp);
         assert!(size >= 4096, "disk_size should include excluded dirs");
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn validate_purge_refuses_out_of_project() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_v1_{}", std::process::id()));
-        let _ = fs::create_dir_all(&tmp);
-        // Un chemin hors projet (canonicalizé) doit être refusé.
-        let outside = std::env::temp_dir().join("pilot_dash_outside_target");
-        let _ = fs::create_dir_all(&outside);
+        let tmp = crate::test_util::TempDir::new("pilot_dash_v1");
+        // Un chemin hors projet doit être refusé.
+        let outside = crate::test_util::TempDir::new("pilot_dash_outside_target");
         let item = serde_json::json!({
             "name": "target",
             "path": outside.to_string_lossy(),
@@ -1587,13 +1580,11 @@ mod tests {
         });
         let res = validate_purge_item(&tmp, &item);
         assert!(res.is_err(), "out-of-project path must be refused");
-        let _ = fs::remove_dir_all(&tmp);
-        let _ = fs::remove_dir_all(&outside);
     }
 
     #[test]
     fn validate_purge_refuses_git() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_v2_{}", std::process::id()));
+        let tmp = crate::test_util::TempDir::new("pilot_dash_v2");
         let _ = fs::create_dir_all(tmp.join(".git"));
         // Un item pointant vers .git doit être refusé.
         let item = serde_json::json!({
@@ -1611,12 +1602,11 @@ mod tests {
         });
         let res2 = validate_purge_item(&tmp, &gc);
         assert!(res2.is_ok(), "git_gc must be allowed");
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn validate_purge_accepts_node_modules() {
-        let tmp = std::env::temp_dir().join(format!("pilot_dash_v3_{}", std::process::id()));
+        let tmp = crate::test_util::TempDir::new("pilot_dash_v3");
         let _ = fs::create_dir_all(tmp.join("node_modules"));
         let item = serde_json::json!({
             "name": "node_modules",
@@ -1625,6 +1615,5 @@ mod tests {
         });
         let res = validate_purge_item(&tmp, &item);
         assert!(res.is_ok(), "node_modules in project must be allowed");
-        let _ = fs::remove_dir_all(&tmp);
     }
 }

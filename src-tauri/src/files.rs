@@ -204,22 +204,14 @@ mod tests {
 
     #[test]
     fn write_context_handoff_writes_warning_to_disk() {
-        let base = std::env::temp_dir().join(format!(
-            "pilot-handoff-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let project = base.to_string_lossy().to_string();
+        let base = crate::test_util::TempDir::new("pilot-handoff-test");
+        let project = base.str();
         write_context_handoff(project.clone(), "BLOC-CONTEXTE".to_string())
             .expect("écriture handoff");
         let written = fs::read_to_string(base.join(".pilot").join("context-inject.md"))
             .expect("lecture handoff");
         assert!(written.starts_with(CONTEXT_HANDOFF_STALENESS_WARNING));
         assert!(written.ends_with("BLOC-CONTEXTE"));
-        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

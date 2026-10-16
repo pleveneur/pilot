@@ -1400,13 +1400,18 @@ http.createServer((req, res) => {
         // paresseusement). `LAYA_REAL_MODEL_DIR` permet d'aller plus loin :
         // `ready:true` avec le vrai modèle, sans jamais rien télécharger.
         let real = std::env::var("LAYA_REAL_MODEL_DIR").unwrap_or_default();
+        // Dossier de modèle temporaire : UNIQUE et supprimé automatiquement en
+        // fin de test, même en cas d'échec. Déclaré AVANT le choix du dossier
+        // pour que le gardien vive jusqu'à la dernière assertion du test.
+        let tmp_model = crate::test_util::TempDir::new("pilot-laya-emb");
         let (model_dir, real_ok) = if !real.trim().is_empty() && Path::new(real.trim()).is_dir() {
             (real.trim().to_string(), true)
         } else {
-            let tmp = std::env::temp_dir().join(format!("pilot-laya-emb-{}", std::process::id()));
-            std::fs::create_dir_all(&tmp).expect("dossier de modèle temporaire");
-            (tmp.to_string_lossy().to_string(), false)
+            (tmp_model.str(), false)
         };
+        // Trace d'arrêt : nommé par PID de test (ce test est unique dans la
+        // suite, et la trace est effacée par `stop_owned` ; aucun fichier ne
+        // s'accumule, contrairement à un suffixe unique).
         let pid_path = std::env::temp_dir().join(format!("pilot-laya-emb-{}.pid", std::process::id()));
         crate::plface::clear_pid_file(&pid_path);
 

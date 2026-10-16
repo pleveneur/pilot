@@ -3702,8 +3702,7 @@ mod tests {
     /// sont listés, triés par nom ; un dossier absent ne fait pas échouer.
     #[test]
     fn scan_skills_dir_lists_only_skills() {
-        let dir = std::env::temp_dir().join(format!("pilot-skills-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::test_util::TempDir::new("pilot-skills-test");
         std::fs::create_dir_all(dir.join("zeta")).expect("mkdir zeta");
         std::fs::write(dir.join("zeta").join("SKILL.md"), "---\ndescription: Zêta\n---\n").expect("write zeta");
         std::fs::create_dir_all(dir.join("alpha")).expect("mkdir alpha");
@@ -3719,8 +3718,6 @@ mod tests {
         assert_eq!(skills[0].description, "Alpha");
         assert_eq!(skills[1].description, "Zêta");
         assert!(scan_skills_dir(&dir.join("inexistant")).is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -5118,9 +5115,7 @@ mod tests {
     /// (défaut : les agents lancés par l'assistant ne l'avaient pas).
     #[test]
     fn write_laya_extension_ecrit_extension_et_coeur() {
-        let dir = std::env::temp_dir().join(format!("pilot-laya-ext-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("dossier temporaire");
+        let dir = crate::test_util::TempDir::new("pilot-laya-ext");
 
         let ext = AgentService::write_laya_extension(&dir).expect("extension Laya écrite");
         assert!(ext.ends_with("pilot-laya.ts"), "chemin attendu : {ext}");
@@ -5132,7 +5127,5 @@ mod tests {
                 .expect("cœur lisible")
                 .contains("askLaya")
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
