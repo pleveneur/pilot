@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1484,6 +1484,13 @@ uniquement un bloc d'instructions dans le prompt système.
   applique un contrôle selon `super_agent_checklist_mode` (`off` / `warn`
   défaut / `block`) ; l'écran ne fait que **lire le verdict**. Réglages : mode +
   modèle de points (`super_agent_checklist_template`).
+- **Traçabilité livrable → demande** (idée 4) : à chaque **passage effectif**
+  d'une tâche en état livré (une seule fois, jamais pour une tâche déjà livrée),
+  une ligne est écrite dans `deliverables` — libellé = titre de la tâche, origine
+  = décision liée la plus récente, sinon mention de repli « origine non
+  précisée » — et la fiche affiche le bloc **« Livrable »** en lecture seule.
+  L'écriture, **fail-open** (elle ne bloque jamais le changement de statut), est
+  conditionnée par `super_agent_tracabilite_enabled` (défaut : activé).
 - **Clôturer plusieurs tâches d'un coup** (clôture EN LOT, purement additive) :
   - chaque carte porte une **case à cocher** ; une **barre en haut** de la vue
     affiche le **nombre de tâches sélectionnées** et reste **visible au
@@ -2199,6 +2206,29 @@ Dans **Paramètres**, rubrique **« Assistant (suivi multi-projets) »** :
   simple / Bloquante) ;
 - **« Modèle de checklist par défaut »** : les points proposés par le bouton
   « Ajouter les points du modèle », **un point par ligne**.
+
+---
+
+### Retrouver ce qui a été livré (traçabilité)
+
+La **traçabilité** relie chaque livraison à sa **demande d'origine** : vous voyez
+d'un coup d'œil **qui a demandé quoi, quand**, sans fouiller les conversations.
+
+- **Enregistrement automatique** : dès qu'une tâche du suivi passe à l'état
+  **livré** (« Livré » / « Terminé »), Pilot enregistre **une ligne** avec le
+  **titre** de la tâche, la **date** et, si elle existe, la **décision** à
+  l'origine de la livraison. Une tâche déjà livrée que l'on repasse en livré
+  n'ajoute **rien** ; c'est un passage **hors** état livré suivi d'un retour qui
+  crée une **nouvelle** ligne (une livraison de plus).
+- **Où la retrouver** : ouvrez la **fiche de la tâche** (bouton *éditer* sur sa
+  carte) — le bloc **« Livrable »** liste ses livraisons avec leur **date** et
+  leur **origine** (« Décision #12 : … »). Sans livraison, il indique simplement
+  **« Aucune livraison enregistrée »**.
+- **Origine inconnue** : si aucune décision n'est reliée à la tâche, la ligne
+  porte la mention **« origine non précisée »** — la livraison reste tracée.
+- **Désactiver** : dans **Paramètres → Assistant (suivi multi-projets)**,
+  décochez **« Enregistrer une ligne de traçabilité à chaque livraison »**
+  (activé par défaut). Décocher **n'efface aucune** ligne déjà enregistrée.
 
 ---
 
