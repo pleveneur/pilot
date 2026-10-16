@@ -2140,8 +2140,9 @@ fn task_counts(conn: &Connection, project_id: i64) -> (i64, i64) {
 // emporte ses points (`db_delete_task_checks`, appelé par
 // `super_agent_delete_task`) sans jamais toucher aux points des autres tâches.
 // Ces opérations sont des helpers purs sur `&Connection` (aucun `AppHandle`),
-// donc testables en base mémoire ; les commandes Tauri seront ajoutées par la
-// tranche 3.2.
+// donc testables en base mémoire. La tranche 3.2 leur ajoute quatre commandes
+// Tauri MINCES (ouverture de la base puis appel au helper, aucune logique
+// dupliquée) ; la tranche 3.4 exposera l'onglet qui les consomme.
 
 /// Lit les points de checklist d'une tâche, dans l'ordre d'affichage
 /// (`position` puis `id` pour rester déterministe à position égale). Une tâche
@@ -2237,6 +2238,55 @@ fn db_delete_task_checks(conn: &Connection, task_id: i64) -> Result<usize, Strin
         rusqlite::params![task_id],
     )
     .map_err(|e| format!("Erreur nettoyage checklist: {}", e))
+}
+
+// ── Idée 3 (Lot A), tranche 3.2 : commandes Tauri de la checklist ──
+//
+// Enveloppes MINCES : chacune ouvre la base puis délègue au helper pur
+// ci-dessus. Aucune logique métier n'est dupliquée ici. Les quatre commandes
+// prennent un `AppHandle` (indisponible hors application graphique) : leur
+// contrat de données est donc verrouillé par les tests des helpers purs.
+
+/// Liste les points de checklist d'une tâche de suivi, dans l'ordre d'affichage.
+/// Une tâche sans point renvoie une liste vide (jamais une erreur).
+#[tauri::command]
+pub fn super_agent_task_check_list(app: AppHandle, task_id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let rows = db_list_task_checks(&conn, task_id)?;
+    Ok(serde_json::json!({ "checks": rows, "count": rows.len() }))
+}
+
+/// Ajoute un point de checklist à une tâche existante (libellé requis, tâche
+/// connue) et retourne `{ ok, check_id, task_id }`.
+#[tauri::command]
+pub fn super_agent_task_check_add(
+    app: AppHandle,
+    task_id: i64,
+    label: String,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    let check_id = db_add_task_check(&conn, task_id, &label)?;
+    Ok(serde_json::json!({ "ok": true, "check_id": check_id, "task_id": task_id }))
+}
+
+/// Coche (ou décoche) un point de checklist. Retourne `{ ok, check_id, done }`.
+#[tauri::command]
+pub fn super_agent_task_check_set_done(
+    app: AppHandle,
+    check_id: i64,
+    done: bool,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_set_task_check_done(&conn, check_id, done)?;
+    Ok(serde_json::json!({ "ok": true, "check_id": check_id, "done": done }))
+}
+
+/// Supprime un point de checklist. Retourne `{ ok, check_id }`.
+#[tauri::command]
+pub fn super_agent_task_check_delete(app: AppHandle, check_id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_delete_task_check(&conn, check_id)?;
+    Ok(serde_json::json!({ "ok": true, "check_id": check_id }))
 }
 
 // ── Dependances entre taches du suivi ──
