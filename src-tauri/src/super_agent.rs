@@ -8135,6 +8135,191 @@ mod tests {
         assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 1);
     }
 
+    // ── Lot A idée 4, tranche 4.6 : tests de COMPLÉMENT ──
+    // Ces tests ne rejouent pas les cas déjà verrouillés en 4.2/4.5 : ils
+    // portent sur des VARIANTES qui n'étaient pas couvertes — livraison sans
+    // décision PROPRE à la tâche (le filtre par `task_id` est prouvé), décision
+    // liée au résumé VIDE (jamais une origine vide), statut libre livré par la
+    // commande DIRECTE de statut, séquence complète de suppression d'une tâche,
+    // et la voie de la FICHE (`super_agent_update_task`) qui n'était pas
+    // rejouée jusqu'ici.
+
+    #[test]
+    fn delivery_without_a_decision_of_its_own_falls_back_to_the_unknown_origin() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Le projet contient bien une décision… mais rattachée à l'AUTRE tâche :
+        // elle ne doit JAMAIS servir d'origine à t1 (filtre par `task_id`).
+        conn.execute(
+            "INSERT INTO decisions (project_id, task_id, summary) \
+             VALUES (1, ?1, 'Décision rattachée à la tâche 2')",
+            rusqlite::params![t2],
+        )
+        .unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1, "une livraison sans décision liée trace quand même");
+        let origin = rows[0]["origin"].as_str().unwrap();
+        assert_eq!(origin, DELIVERABLE_ORIGIN_UNKNOWN, "origine de repli attendue");
+        assert!(!origin.trim().is_empty(), "jamais une origine vide");
+        assert_ne!(origin, "Décision rattachée à la tâche 2");
+        assert!(
+            rows[0]["decision_id"].is_null(),
+            "aucune décision de la tâche elle-même n'est liée"
+        );
+    }
+
+    #[test]
+    fn delivery_origin_is_never_empty_even_with_a_blank_linked_decision() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Décision liée mais SANS texte : la saisie vide est refusée à l'entrée
+        // (`super_agent_add_decision`), mais une base peut en contenir. La ligne
+        // de traçabilité existe toujours et son origine n'est jamais vide.
+        let decision_id = {
+            conn.execute(
+                "INSERT INTO decisions (project_id, task_id, summary) VALUES (1, ?1, '   ')",
+                rusqlite::params![t1],
+            )
+            .unwrap();
+            conn.last_insert_rowid()
+        };
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1);
+        let origin = rows[0]["origin"].as_str().unwrap();
+        assert_eq!(origin, DELIVERABLE_ORIGIN_UNKNOWN, "jamais une valeur vide");
+        assert!(!origin.trim().is_empty());
+        // La décision liée reste référencée : la ligne pointe ce qui existait,
+        // c'est seulement son ORIGINE textuelle qui retombe sur la mention sûre.
+        assert_eq!(rows[0]["decision_id"], decision_id);
+    }
+
+    #[test]
+    fn direct_status_command_with_a_free_form_delivered_status_writes_its_line() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // La commande DIRECTE de statut (`super_agent_update_task_status`)
+        // accepte un statut libre : classé « livré » comme les autres, il trace
+        // donc sa ligne (jamais une écriture silencieuse).
+        let libre = "livree - v0.4.11 publiee et installateurs disponibles";
+        apply_status_change_like_the_commands(&conn, t1, libre, "off", false).unwrap();
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some(libre));
+
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1, "un statut libre livré écrit sa ligne");
+        assert_eq!(rows[0]["label"], "Tâche 1");
+        assert_eq!(rows[0]["origin"], DELIVERABLE_ORIGIN_UNKNOWN);
+    }
+
+    #[test]
+    fn deleting_a_task_cleans_its_trace_and_spares_the_other_task_end_to_end() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Deux passages livrés sur t1 (aller-retour hors état livré), un sur t2,
+        // plus une décision, un point de checklist et une DÉPENDANCE vers t1 :
+        // la séquence EXACTE de `super_agent_delete_task` est rejouée dans le
+        // même ordre (références nettoyées AVANT la tâche).
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "en_cours", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
+        apply_status_change_like_the_commands(&conn, t2, "livree", "off", false).unwrap();
+        db_add_task_check(&conn, t1, "Point de t1").unwrap();
+        conn.execute(
+            "INSERT INTO decisions (project_id, task_id, summary) VALUES (1, ?1, 'Demande de t1')",
+            rusqlite::params![t1],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE tasks SET depends_on_task_id = ?1 WHERE id = ?2",
+            rusqlite::params![t1, t2],
+        )
+        .unwrap();
+
+        let _ = conn.execute(
+            "DELETE FROM decisions WHERE task_id = ?1",
+            rusqlite::params![t1],
+        );
+        let _ = conn.execute(
+            "UPDATE tasks SET depends_on_task_id = NULL WHERE depends_on_task_id = ?1",
+            rusqlite::params![t1],
+        );
+        let _ = db_delete_task_checks(&conn, t1);
+        let _ = db_delete_task_deliverables(&conn, t1);
+        let n = conn
+            .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![t1])
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // Rien ne survit pour t1 : ni ligne de traçabilité, ni point, ni lien.
+        assert!(db_list_task_deliverables(&conn, t1).unwrap().is_empty());
+        assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
+        // La tâche t2 et SA ligne de traçabilité sont INTACTES ; sa dépendance
+        // vers la tâche supprimée est détachée (aucun lien mort).
+        assert!(task_status_of(&conn, t2).is_some());
+        assert_eq!(db_list_task_deliverables(&conn, t2).unwrap().len(), 1);
+        let depends: Option<i64> = conn
+            .query_row(
+                "SELECT depends_on_task_id FROM tasks WHERE id = ?1",
+                rusqlite::params![t2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(depends.is_none(), "la dépendance vers la tâche supprimée est détachée");
+    }
+
+    #[test]
+    fn card_edit_status_update_writes_or_skips_its_line_according_to_the_setting() {
+        // Voie de la FICHE (`super_agent_update_task`) : statut lu AVANT,
+        // écriture (champs + statut), traçabilité APRÈS selon le réglage.
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        let previous = task_status_of(&conn, t1);
+        assert_eq!(
+            conn.execute(
+                "UPDATE tasks SET title = ?1, status = ?2 WHERE id = ?3",
+                rusqlite::params!["Tâche 1 renommée", "livree", t1],
+            )
+            .unwrap(),
+            1
+        );
+        // Réglage ACTIF : une ligne, libellée avec le titre écrit à l'instant.
+        assert!(record_delivery_trace_if_enabled(
+            &conn,
+            t1,
+            previous.as_deref(),
+            "livree",
+            true
+        )
+        .unwrap()
+        .is_some());
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["label"], "Tâche 1 renommée");
+
+        // Réglage DÉSACTIVÉ (autre base) : aucune ligne, et la mise à jour du
+        // statut a bien réussi quand même.
+        let (conn2, t2, _) = mem_conn_with_two_tasks();
+        let previous2 = task_status_of(&conn2, t2);
+        assert_eq!(
+            conn2
+                .execute(
+                    "UPDATE tasks SET status = ?1 WHERE id = ?2",
+                    rusqlite::params!["livree", t2],
+                )
+                .unwrap(),
+            1
+        );
+        assert!(record_delivery_trace_if_enabled(
+            &conn2,
+            t2,
+            previous2.as_deref(),
+            "livree",
+            false
+        )
+        .unwrap()
+        .is_none());
+        assert!(db_list_task_deliverables(&conn2, t2).unwrap().is_empty());
+        assert_eq!(task_status_of(&conn2, t2).as_deref(), Some("livree"));
+    }
+
     // ── Lot A idée 4, tranche 4.3 : contrat des commandes de LECTURE ──
     // Les deux commandes Tauri exigent un `AppHandle` (indisponible hors
     // application graphique) : ce sont donc les helpers PURS qu'elles appellent

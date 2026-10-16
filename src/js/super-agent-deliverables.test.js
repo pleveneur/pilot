@@ -88,6 +88,56 @@ describe("deliverableOriginLabel — origine ou décision liée", () => {
   });
 });
 
+// Lot A idée 4, tranche 4.6 : la mention de repli écrite par le CŒUR
+// (« origine non précisée ») est le contrat entre les deux côtés : la constante
+// JS doit rester son miroir exact, et une origine inconnue ne doit ni masquer la
+// ligne ni faire apparaître un texte inventé à l'écran.
+describe("origine non précisée — mention de repli du cœur, jamais inventée à l'écran", () => {
+  it("la constante JS est le miroir EXACT du littéral écrit par le cœur", () => {
+    expect(DELIVERABLE_ORIGIN_UNKNOWN).toBe("origine non précisée");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const root = resolve(here, "../..");
+    const coreSrc = readFileSync(resolve(root, "src-tauri/src/super_agent.rs"), "utf8");
+    expect(coreSrc).toContain(
+      `const DELIVERABLE_ORIGIN_UNKNOWN: &str = "${DELIVERABLE_ORIGIN_UNKNOWN}";`
+    );
+  });
+
+  it("la ligne reste AFFICHÉE sans origine (libellé + date), sans texte inventé", () => {
+    const block = buildDeliverableBlock({
+      deliverables: [
+        {
+          id: 1,
+          label: "Livré sans demande",
+          origin: "",
+          decision_id: null,
+          created_at: "2026-10-17 09:00:00",
+        },
+        {
+          id: 2,
+          label: "Origine inconnue du cœur",
+          origin: DELIVERABLE_ORIGIN_UNKNOWN,
+          decision_id: null,
+          created_at: "2026-10-18 09:00:00",
+        },
+      ],
+    });
+    // L'origine inconnue ne masque jamais une livraison : les deux lignes
+    // restent affichables, avec leur libellé et leur date.
+    expect(block.count).toBe(2);
+    expect(block.counter).toBe("2 livraisons");
+    expect(block.lines.map((l) => l.label)).toEqual([
+      "Livré sans demande",
+      "Origine inconnue du cœur",
+    ]);
+    expect(block.lines.map((l) => l.date)).toEqual(["17/10/2026", "18/10/2026"]);
+    for (const line of block.lines) {
+      // Aucun texte inventé : ni la valeur brute du cœur, ni « null »/« undefined ».
+      expect(line.origin).toBe("");
+    }
+  });
+});
+
 describe("buildDeliverableLines — normalisation de la réponse de la base", () => {
   it("CONSERVE l'ordre de la base (du plus ancien au plus récent)", () => {
     const lines = buildDeliverableLines({
@@ -228,6 +278,12 @@ describe("fiche de tâche — le bloc « Livrable » lit la base par la commande
     expect(render).toContain("l.origin ?");
   });
 
+  it("n'affiche l'origine QUE si elle existe (la mention de repli n'est jamais répétée)", () => {
+    // Origine inconnue ⇒ `origin` vaut "" ⇒ aucun segment « · … » n'est ajouté :
+    // jamais « origine non précisée », jamais « null »/« undefined » à l'écran.
+    expect(render).toContain('${l.origin ? ` · ${escapeHtml(l.origin)}` : ""}');
+  });
+
   it("tolère l'échec de lecture : ligne d'information, aucune exception remontée", () => {
     const catchBranch = slice(render, "} catch (err) {", "\n  }");
     expect(catchBranch).toContain("deliverableErrorMessage(err)");
@@ -298,6 +354,13 @@ describe("fiche de tâche — bloc en LECTURE SEULE (aucun chemin d'écriture)",
     expect(markup).not.toContain("<button");
     expect(markup).not.toContain("invoke(");
     expect(markup).not.toContain("kanban-deliverables-add");
+  });
+
+  it("n'offre aucun champ de saisie non plus : le bloc reste en lecture seule", () => {
+    expect(markup).not.toContain("<input");
+    expect(markup).not.toContain("<select");
+    expect(markup).not.toContain("<textarea");
+    expect(markup).not.toContain("contenteditable");
   });
 
   it("n'existe aucun appel d'écriture des livraisons dans toute la vue", () => {
