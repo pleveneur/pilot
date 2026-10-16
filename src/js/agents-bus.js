@@ -353,6 +353,10 @@ function newRunCtx(key, project) {
     // « tour démarré dans CETTE run » (antidate les événements terminaux).
     endedByAgent: {},
     pendingErrorByAgent: {},
+    // Point de suivi 344 (b) : agentId → true quand le tour a été interrompu
+    // (abort du moteur) plutôt que par une vraie erreur du modèle. Le message
+    // simple et complet est alors produit en fin de tour par failAgentTurn.
+    interruptedRunByAgent: {},
     startedByAgent: {},
     // Ciblage de projet (run_agents) : agentId → cwd du projet (toujours égal à
     // ctx.project dans ce contexte). Utilisé pour router les commandes
@@ -1518,10 +1522,21 @@ function maybeDetectAgentLoop(agentId, ctx) {
 function handleAgentMessageError(agentId, msg, ctx) {
   if (!msg || msg.stopReason !== "error" || !msg.errorMessage) return false;
   const raw = String(msg.errorMessage);
-  const friendly = raw === "Connection error."
-    ? "erreur de connexion, vérifiez votre connexion à l'API"
-    : raw;
-  const message = `L'agent ${agentId} : le modèle a répondu une erreur — ${friendly}`;
+  // Point de suivi 344 (b) : une INTERRUPTION (abort du moteur) n'est pas une
+  // erreur du modèle. On n'affiche jamais le texte technique du moteur
+  // (« This operation was aborted ») : le message simple et complet (ce qui
+  // s'est passé + devenir du travail déjà fait) est produit en fin de tour par
+  // failAgentTurn, après vérification du disque.
+  const interrupted = /abort/i.test(raw);
+  if (interrupted) ctx.interruptedRunByAgent[agentId] = true;
+  const friendly = interrupted
+    ? null
+    : raw === "Connection error."
+      ? "erreur de connexion, vérifiez votre connexion à l'API"
+      : raw;
+  const message = interrupted
+    ? `L'agent ${agentId} a été interrompu avant la fin de son travail.`
+    : `L'agent ${agentId} : le modèle a répondu une erreur — ${friendly}`;
   console.error("[agents-bus] message error", agentId, raw);
   emit("notify", { agentId, message });
   // Restitution fiable : on NE fait PAS échouer le tour immédiatement. pi se
@@ -1756,6 +1771,7 @@ export function handleAgentEvent(ev) {
     // est annulée (la run continue, pas d'échec) et on informe l'UI.
     const hadPending = !!ctx.pendingErrorByAgent[agentId];
     ctx.pendingErrorByAgent[agentId] = undefined;
+    delete ctx.interruptedRunByAgent[agentId];
     console.warn("[agents-bus] auto_retry_start (relance automatique pi)", agentId);
     if (hadPending) {
       emit("notify", { agentId, message: `⏳ L'agent ${agentId} est relancé automatiquement après l'erreur du fournisseur.` });
@@ -2000,12 +2016,33 @@ function settleAgentTurn(agentId, ctx) {
   finishAgentTurn(agentId, ctx);
 }
 
+/**
+ * Point de suivi 344 (volet b) : phrase simple en français pour une run
+ * interrompue. Le moteur renvoie un texte technique incompréhensible (« This
+ * operation was aborted ») ; on le remplace par ce qui s'est passé ET ce que
+ * devient le travail déjà fait (vérifié sur le disque, comme au watchdog).
+ * @param {object} ctx - contexte de run
+ * @returns {Promise<string>}
+ */
+async function describeInterruptedRun(ctx) {
+  const kept = await workOnDiskDuringRun(ctx);
+  return kept
+    ? "L'exécution de l'agent a été interrompue avant la fin. Le travail qu'il avait déjà écrit sur le disque a été conservé : vérifiez les fichiers modifiés avant de relancer."
+    : "L'exécution de l'agent a été interrompue avant la fin. Rien n'a été écrit sur le disque : aucun travail à récupérer, vous pouvez relancer la tâche.";
+}
+
 async function failAgentTurn(agentId, reason, ctx) {
   ctx.endedByAgent[agentId] = true; // marqueur anti double-finalisation
   ctx.pendingErrorByAgent[agentId] = undefined;
   ctx.streamingTextByAgent[agentId] = "";
   ctx.toolCallsByAgent[agentId] = [];
   ctx.readOnlyToolCallsByAgent[agentId] = [];
+  // Point de suivi 344 (b) : message compréhensible quand la run est
+  // interrompue (le texte technique du moteur n'est jamais montré).
+  if (ctx.interruptedRunByAgent[agentId] || /abort/i.test(String(reason))) {
+    delete ctx.interruptedRunByAgent[agentId];
+    reason = await describeInterruptedRun(ctx);
+  }
   const project = ctx.agentProject[agentId] || ctx.project;
   // T6 : libérer les réservations du projet à l'échec du tour du codeur.
   await cleanupReservationsForAgent(agentId, project);

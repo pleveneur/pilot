@@ -1056,3 +1056,68 @@ describe("applyAgentThinkingLevel — ramenage et fail-open (T5)", () => {
     expect(ctx.thinkingLevel).toBeUndefined();
   });
 });
+
+// ── Point de suivi 344 (volet b) — message compréhensible quand une run est
+// interrompue. Le moteur renvoie un texte technique (« This operation was
+// aborted ») que l'utilisateur ne peut pas interpréter : on attend une phrase
+// simple en français qui dit ce qui s'est passé ET ce que devient le travail
+// déjà fait (vérifié sur le disque).
+describe("run interrompue — message compréhensible (point de suivi 344 b)", () => {
+  const flushAsync = async () => {
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+  };
+  const ev = (agentId, type, event = {}) => ({
+    payload: { project: "projetAbandon", agent_id: agentId, event: { type, ...event } },
+  });
+  const abortMsg = (agentId) =>
+    ev(agentId, "message", {
+      message: { role: "assistant", stopReason: "error", errorMessage: "This operation was aborted", content: [] },
+    });
+
+  /** Prépare une run d'un agent actif et capture le rapport final de la mission. */
+  const beginInterruptedRun = () => {
+    const ctx = beginRun("projetAbandon");
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = "projetAbandon";
+    const got = [];
+    attachMissionSink(ctx.runKey, {
+      onDone: (t) => got.push({ kind: "done", text: t }),
+      onError: (e) => got.push({ kind: "error", text: e.message }),
+    });
+    return { ctx, got };
+  };
+
+  afterEach(() => {
+    endRun("projetAbandon");
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+  });
+
+  it("rien écrit sur le disque → phrase simple, sans le texte technique", async () => {
+    const { got } = beginInterruptedRun();
+    handleAgentEvent(ev("codeur", "agent_start"));
+    handleAgentEvent(abortMsg("codeur"));
+    handleAgentEvent(ev("codeur", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(got).toHaveLength(1);
+    const text = got[0].text;
+    expect(text).not.toMatch(/aborted/i); // plus de texte technique
+    expect(text).toContain("interrompue"); // ce qui s'est passé
+    expect(text).toContain("Rien n'a été écrit sur le disque"); // devenir du travail
+  });
+
+  it("du travail déjà écrit sur le disque → conservé, dit explicitement", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "git_status_project" ? { is_repo: true, head_ts: 0, pending: 2 } : cmd === "file_exists" ? true : undefined
+    );
+    const { got } = beginInterruptedRun();
+    handleAgentEvent(ev("codeur", "agent_start"));
+    handleAgentEvent(abortMsg("codeur"));
+    handleAgentEvent(ev("codeur", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(got).toHaveLength(1);
+    const text = got[0].text;
+    expect(text).not.toMatch(/aborted/i);
+    expect(text).toContain("a été conservé"); // le travail déjà écrit est gardé
+  });
+});
