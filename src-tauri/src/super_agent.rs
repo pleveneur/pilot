@@ -121,6 +121,24 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(project_id) REFERENCES projects(id)
         );
+        -- Idée 3 (Lot A) : checklist de livraison d'une tâche de suivi.
+        -- Chaque point appartient à UNE tâche (`tasks.id`). `done` = état coché
+        -- (0/1), `position` = ordre d'affichage (0, 1, 2…), `updated_at` =
+        -- horodatage de la dernière modification. Création IDEMPOTENTE : une
+        -- base existante s'ouvre sans changement, une base neuve reçoit la
+        -- table. Aucune donnée vivante n'est touchée.
+        CREATE TABLE IF NOT EXISTS task_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            done INTEGER NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(task_id) REFERENCES tasks(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_checks_task
+            ON task_checks(task_id, position);
         "
     )
     .map_err(|e| format!("Erreur init base: {}", e))?;
@@ -2114,6 +2132,113 @@ fn task_counts(conn: &Connection, project_id: i64) -> (i64, i64) {
     (open, done)
 }
 
+// ── Idée 3 (Lot A), tranche 3.1 : checklist de livraison ──
+//
+// Un point de checklist appartient à UNE tâche de suivi (`tasks.id`). Le
+// rattachement est VÉRIFIÉ à l'ajout : un point orphelin (tâche inconnue) est
+// refusé, il n'existe donc jamais de point sans tâche. Supprimer une tâche
+// emporte ses points (`db_delete_task_checks`, appelé par
+// `super_agent_delete_task`) sans jamais toucher aux points des autres tâches.
+// Ces opérations sont des helpers purs sur `&Connection` (aucun `AppHandle`),
+// donc testables en base mémoire ; les commandes Tauri seront ajoutées par la
+// tranche 3.2.
+
+/// Lit les points de checklist d'une tâche, dans l'ordre d'affichage
+/// (`position` puis `id` pour rester déterministe à position égale). Une tâche
+/// sans point renvoie une liste vide (jamais une erreur).
+fn db_list_task_checks(conn: &Connection, task_id: i64) -> Result<Vec<Value>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, task_id, label, done, position, created_at, updated_at \
+             FROM task_checks WHERE task_id = ?1 ORDER BY position, id",
+        )
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![task_id], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(0)?,
+                "task_id": r.get::<_, i64>(1)?,
+                "label": r.get::<_, String>(2)?,
+                "done": r.get::<_, i64>(3)? != 0,
+                "position": r.get::<_, i64>(4)?,
+                "created_at": r.get::<_, Option<String>>(5)?,
+                "updated_at": r.get::<_, Option<String>>(6)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    Ok(rows.flatten().collect())
+}
+
+/// Ajoute un point de checklist à une tâche existante. Refuse un libellé vide
+/// et une tâche inconnue (aucun point orphelin possible). Le point est placé en
+/// fin de liste (`position` = max + 1). Retourne l'id du point créé.
+fn db_add_task_check(conn: &Connection, task_id: i64, label: &str) -> Result<i64, String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err("add_task_check : un libellé est requis".to_string());
+    }
+    if task_status_of(conn, task_id).is_none() {
+        return Err(format!(
+            "add_task_check : tâche {} introuvable",
+            task_id
+        ));
+    }
+    let position: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM task_checks WHERE task_id = ?1",
+            rusqlite::params![task_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("Erreur calcul position checklist: {}", e))?;
+    conn.execute(
+        "INSERT INTO task_checks (task_id, label, done, position) VALUES (?1, ?2, 0, ?3)",
+        rusqlite::params![task_id, label, position],
+    )
+    .map_err(|e| format!("Erreur ajout point checklist: {}", e))?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Coche (ou décoche) un point de checklist. Retourne une erreur si le point
+/// n'existe pas (jamais de mise à jour silencieuse).
+fn db_set_task_check_done(conn: &Connection, check_id: i64, done: bool) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "UPDATE task_checks SET done = ?1, updated_at = datetime('now') WHERE id = ?2",
+            rusqlite::params![if done { 1 } else { 0 }, check_id],
+        )
+        .map_err(|e| format!("Erreur coche checklist: {}", e))?;
+    if n == 0 {
+        return Err(format!("Point de checklist {} introuvable", check_id));
+    }
+    Ok(())
+}
+
+/// Supprime un point de checklist. Retourne une erreur si le point n'existe
+/// pas (aucune suppression silencieuse d'un identifiant inconnu).
+fn db_delete_task_check(conn: &Connection, check_id: i64) -> Result<(), String> {
+    let n = conn
+        .execute(
+            "DELETE FROM task_checks WHERE id = ?1",
+            rusqlite::params![check_id],
+        )
+        .map_err(|e| format!("Erreur suppression point checklist: {}", e))?;
+    if n == 0 {
+        return Err(format!("Point de checklist {} introuvable", check_id));
+    }
+    Ok(())
+}
+
+/// Supprime TOUS les points de checklist d'une tâche (nettoyage à la
+/// suppression de la tâche). Retourne le nombre de points supprimés. N'échoue
+/// jamais sur une tâche sans point ; ne touche jamais aux autres tâches.
+fn db_delete_task_checks(conn: &Connection, task_id: i64) -> Result<usize, String> {
+    conn.execute(
+        "DELETE FROM task_checks WHERE task_id = ?1",
+        rusqlite::params![task_id],
+    )
+    .map_err(|e| format!("Erreur nettoyage checklist: {}", e))
+}
+
 // ── Dependances entre taches du suivi ──
 //
 // Une tache peut « attendre » une autre tache (colonne `depends_on_task_id`) :
@@ -3385,6 +3510,10 @@ pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, St
         "UPDATE tasks SET depends_on_task_id = NULL WHERE depends_on_task_id = ?1",
         rusqlite::params![task_id],
     );
+    // Idée 3 (Lot A), tranche 3.1 : suppression des points de checklist de la
+    // tâche supprimée — aucun point orphelin ne subsiste, les points des autres
+    // tâches sont intacts (fail-open : on ne bloque jamais la suppression).
+    let _ = db_delete_task_checks(&conn, task_id);
     let n = conn
         .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![task_id])
         .map_err(|e| format!("Erreur suppression tâche: {}", e))?;
@@ -5080,6 +5209,8 @@ mod tests_inner_helper {
 mod tests {
     use super::{
         build_capped_injection_message, build_project_context, classify_task_status,
+        db_add_task_check, db_delete_task_check, db_delete_task_checks, db_list_task_checks,
+        db_set_task_check_done,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
@@ -6858,5 +6989,186 @@ mod tests {
             super::SUPER_AGENT_TOOLS_PROMPT.contains("run_assistant_agents"),
             "le bloc outils doit mentionner run_assistant_agents (agents hors projet)"
         );
+    }
+
+    // ── Idée 3 (Lot A), tranche 3.1 : checklist de livraison ──
+    // Ces tests verrouillent le contrat des points de checklist (aucun
+    // AppHandle) : ordre d'affichage stable, refus des libellés vides et des
+    // tâches inconnues (donc jamais de point orphelin), coche/décoche horodatée,
+    // erreur sur un point inconnu, nettoyage d'une tâche SANS toucher aux autres,
+    // et création IDEMPOTENTE de la table (une base existante se rouvre intacte).
+
+    /// Base mémoire avec un client, un projet et DEUX tâches : renvoie
+    /// `(connexion, id_tâche_1, id_tâche_2)`.
+    fn mem_conn_with_two_tasks() -> (Connection, i64, i64) {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche 1');\
+             INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche 2');",
+        )
+        .unwrap();
+        (conn, 1, 2)
+    }
+
+    #[test]
+    fn task_checks_are_listed_in_insertion_order() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Une tâche sans point renvoie une liste vide — jamais une erreur.
+        assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
+
+        let a = db_add_task_check(&conn, t1, "Compiler").unwrap();
+        let b = db_add_task_check(&conn, t1, "  Lancer les tests  ").unwrap();
+        let c = db_add_task_check(&conn, t1, "Committer").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+
+        let checks = db_list_task_checks(&conn, t1).unwrap();
+        assert_eq!(checks.len(), 3);
+        // Ordre d'ajout respecté (position croissante, id croissant).
+        assert_eq!(checks[0]["id"], a);
+        assert_eq!(checks[1]["id"], b);
+        assert_eq!(checks[2]["id"], c);
+        assert_eq!(checks[0]["label"], "Compiler");
+        assert_eq!(checks[1]["label"], "Lancer les tests", "libellé nettoyé en bord");
+        assert_eq!(checks[2]["label"], "Committer");
+        assert_eq!(checks[0]["position"], 0);
+        assert_eq!(checks[1]["position"], 1);
+        assert_eq!(checks[2]["position"], 2);
+        // Un point neuf n'est jamais coché d'office, et il est bien rattaché.
+        assert_eq!(checks[0]["done"], false);
+        assert_eq!(checks[0]["task_id"], t1);
+        // Les points de l'AUTRE tâche ne remontent pas dans cette liste.
+        assert!(db_list_task_checks(&conn, t2).unwrap().is_empty());
+    }
+
+    #[test]
+    fn task_check_rejects_empty_label_and_unknown_task() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Libellé vide (ou seulement des espaces) : refusé, rien n'est inséré.
+        assert!(db_add_task_check(&conn, t1, "").is_err());
+        assert!(db_add_task_check(&conn, t1, "   \t ").is_err());
+        assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
+        // Tâche inconnue : refusée → aucun point orphelin ne peut exister.
+        assert!(db_add_task_check(&conn, 9999, "Point orphelin").is_err());
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_checks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 0, "aucun point ne doit avoir été inséré");
+        // Cas nominal : le rattachement à une tâche réelle fonctionne.
+        assert!(db_add_task_check(&conn, t1, "Point réel").is_ok());
+    }
+
+    #[test]
+    fn task_check_toggle_sets_done_and_touches_updated_at() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        let id = db_add_task_check(&conn, t1, "Publier").unwrap();
+        // On vieillit l'horodatage pour prouver qu'il est bien réécrit à la coche.
+        conn.execute(
+            "UPDATE task_checks SET updated_at = '2000-01-01 00:00:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+
+        db_set_task_check_done(&conn, id, true).unwrap();
+        let coche = db_list_task_checks(&conn, t1).unwrap();
+        assert_eq!(coche[0]["done"], true);
+        assert_ne!(
+            coche[0]["updated_at"], "2000-01-01 00:00:00",
+            "updated_at doit être réécrit à la coche"
+        );
+
+        conn.execute(
+            "UPDATE task_checks SET updated_at = '2000-01-01 00:00:00' WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+        db_set_task_check_done(&conn, id, false).unwrap();
+        let decoche = db_list_task_checks(&conn, t1).unwrap();
+        assert_eq!(decoche[0]["done"], false, "la décoche est possible");
+        assert_ne!(decoche[0]["updated_at"], "2000-01-01 00:00:00");
+
+        // Point inconnu : erreur, aucune mise à jour silencieuse ni point fantôme.
+        assert!(db_set_task_check_done(&conn, 9999, true).is_err());
+        assert_eq!(db_list_task_checks(&conn, t1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn task_check_delete_reports_unknown_point() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        let id = db_add_task_check(&conn, t1, "À retirer").unwrap();
+        assert!(
+            db_delete_task_check(&conn, 9999).is_err(),
+            "supprimer un point inexistant doit échouer"
+        );
+        db_delete_task_check(&conn, id).unwrap();
+        assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
+        // Deuxième suppression du même point : erreur (aucun succès trompeur).
+        assert!(db_delete_task_check(&conn, id).is_err());
+    }
+
+    #[test]
+    fn deleting_a_task_removes_only_its_own_checks() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        db_add_task_check(&conn, t1, "Point 1").unwrap();
+        db_add_task_check(&conn, t1, "Point 2").unwrap();
+        let c3 = db_add_task_check(&conn, t2, "Point de l'autre tâche").unwrap();
+
+        // Nettoyage appelé par `super_agent_delete_task` avant le DELETE tâche.
+        assert_eq!(db_delete_task_checks(&conn, t1).unwrap(), 2);
+        conn.execute("DELETE FROM tasks WHERE id = ?1", [t1]).unwrap();
+
+        assert!(db_list_task_checks(&conn, t1).unwrap().is_empty());
+        // Les points de l'AUTRE tâche restent INTACTS (même id, même libellé).
+        let autre = db_list_task_checks(&conn, t2).unwrap();
+        assert_eq!(autre.len(), 1);
+        assert_eq!(autre[0]["id"], c3);
+        assert_eq!(autre[0]["label"], "Point de l'autre tâche");
+        // Aucun point orphelin ne subsiste en base.
+        let orphelins: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_checks WHERE task_id NOT IN (SELECT id FROM tasks)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphelins, 0, "aucun point orphelin après suppression");
+        // Fail-open : nettoyer une tâche sans point (ou inconnue) n'échoue pas.
+        assert_eq!(db_delete_task_checks(&conn, t2).unwrap(), 1);
+        assert_eq!(db_delete_task_checks(&conn, 12345).unwrap(), 0);
+    }
+
+    #[test]
+    fn task_checks_table_survives_reopen_and_reinit() {
+        // Idempotence : une base DÉJÀ migrée se rouvre sans erreur et sans perte.
+        let path = std::env::temp_dir().join(format!(
+            "pilot-task-checks-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let id: i64;
+        {
+            let conn = Connection::open(&path).unwrap();
+            init_db(&conn).unwrap();
+            conn.execute_batch(
+                "INSERT INTO clients (name) VALUES ('Client A');\
+                 INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+                 INSERT INTO tasks (project_id, title) VALUES (1, 'Tâche');",
+            )
+            .unwrap();
+            id = db_add_task_check(&conn, 1, "Survivre au redémarrage").unwrap();
+            drop(conn);
+        }
+        // Réouverture : `init_db` (CREATE TABLE/INDEX IF NOT EXISTS) est rejoué
+        // sans casser la table ni perdre le point existant.
+        let conn = Connection::open(&path).unwrap();
+        init_db(&conn).unwrap();
+        let checks = db_list_task_checks(&conn, 1).unwrap();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0]["id"], id);
+        assert_eq!(checks[0]["label"], "Survivre au redémarrage");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 }
