@@ -389,6 +389,12 @@ uniquement un bloc d'instructions dans le prompt système.
     canonique (`super-agent-kanban.js` : `columnToStatus`) ; le statut est
     normalisé en colonne au prochain rechargement.
   - Après chaque écriture, la vue se **recharge** automatiquement.
+- **Checklist de livraison par tâche** (idée 3) : chaque fiche peut porter des
+  points à cocher (table `task_checks`, commandes `super_agent_task_check_*`),
+  la carte affiche le compteur « 2/3 », et au passage en « Terminé » le cœur
+  applique un contrôle selon `super_agent_checklist_mode` (`off` / `warn`
+  défaut / `block`) ; l'écran ne fait que **lire le verdict**. Réglages : mode +
+  modèle de points (`super_agent_checklist_template`).
 - **Clôturer plusieurs tâches d'un coup** (clôture EN LOT, purement additive) :
   - chaque carte porte une **case à cocher** ; une **barre en haut** de la vue
     affiche le **nombre de tâches sélectionnées** et reste **visible au
@@ -1589,6 +1595,49 @@ une tâche à un agent en lui donnant accès au serveur de son choix.
   démarrage. Le bouton **Tester la connexion** interroge le serveur distant pour
   vérifier l'adresse et la clé.
 <!-- /HELP:super-agent-mcp -->
+
+<!-- HELP:super-agent-checklist -->
+### Checklist de livraison d'une tâche
+
+Une tâche du tableau Kanban peut porter une **checklist de livraison** : la
+liste des points à vérifier avant de la considérer comme finie (par exemple
+« tests passés », « documentation à jour »). Elle sert de garde-fou : elle
+rappelle ce qui reste à faire et peut empêcher de terminer une tâche trop tôt.
+
+- **Ajouter un point** : ouvrez la fiche de la tâche (bouton **éditer** de sa
+  carte), saisissez le point dans le champ **« Nouveau point »** puis cliquez
+  sur **« Ajouter »** (la touche Entrée fonctionne aussi).
+- **Cocher / décocher un point** : cliquez la case devant le point ; le point
+  est conservé, seul son état change.
+- **Retirer un point** : cliquez la croix à côté du point.
+- **Compteur sur la carte** : la carte affiche **« 2/3 »** (points cochés /
+  nombre total de points). Une tâche sans point n'affiche **aucun compteur**.
+- **Modèle de points** : sur une tâche qui n'a encore **aucun** point, un bouton
+  **« Ajouter les points du modèle »** propose d'un clic les points habituels
+  (ceux réglés dans les Paramètres). Rien n'est jamais ajouté tout seul.
+
+#### Au passage en « Terminé »
+
+Le contrôle dépend du mode choisi :
+
+- **Désactivée** : aucun contrôle, la tâche se termine normalement.
+- **Rappel simple** (mode par défaut) : si des points restent à cocher, un
+  avertissement liste ceux qui manquent et une confirmation **« Terminer quand
+  même »** permet de clôturer ; si vous annulez, la tâche reste dans sa colonne.
+- **Bloquante** : la clôture est **refusée** tant que des points restent à
+  cocher (le message est affiché, sans possibilité de passer outre).
+
+Le même comportement s'applique quand vous **clôturez plusieurs tâches d'un
+coup**.
+
+#### Où régler cela
+
+Dans **Paramètres**, rubrique **« Assistant (suivi multi-projets) »** :
+- **« Checklist de livraison obligatoire »** : le mode (Désactivée / Rappel
+  simple / Bloquante) ;
+- **« Modèle de checklist par défaut »** : les points proposés par le bouton
+  « Ajouter les points du modèle », **un point par ligne**.
+<!-- /HELP:super-agent-checklist -->
 
 ## 9. Perspective — lien futur avec un serveur de sources
 
