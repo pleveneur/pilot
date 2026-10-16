@@ -811,6 +811,16 @@ struct AppConfig {
     // explicite) décide. Un champ absent retombe sur le modèle par défaut.
     #[serde(default = "default_super_agent_checklist_template")]
     super_agent_checklist_template: String,
+    // Lot A idée 4, tranche 4.5 : enregistrer une LIGNE DE TRAÇABILITÉ à chaque
+    // livraison (passage EFFECTIF d'une tâche de suivi à l'état « livré »).
+    // Activé par défaut : une configuration qui NE MENTIONNE PAS ce champ
+    // (toutes les configs existantes, et l'utilisateur qui ne touche à rien)
+    // écrit la ligne exactement comme avant. Désactivé ⇒ aucune ligne n'est
+    // écrite ; le changement de statut continue de réussir (l'enregistrement de
+    // la ligne est de toute façon tolérant à l'échec). Ce réglage ne fait
+    // qu'autoriser ou refuser l'écriture : il n'affiche aucune liste.
+    #[serde(default = "default_true")]
+    super_agent_tracabilite_enabled: bool,
     // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
     // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
     // fréquence explicite. Exprimée en secondes, bornée côté application au
@@ -1166,6 +1176,7 @@ impl Default for AppConfig {
             super_agent_tasks_tab_enabled: true,
             super_agent_checklist_mode: String::new(),
             super_agent_checklist_template: default_super_agent_checklist_template(),
+            super_agent_tracabilite_enabled: true,
             super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),

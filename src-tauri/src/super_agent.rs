@@ -2403,9 +2403,12 @@ fn db_delete_task_deliverables(conn: &Connection, task_id: i64) -> Result<usize,
 // AVANT l'écriture — aucune voie nouvelle n'est créée, aucune logique n'est
 // dupliquée. L'appel est fail-open (`let _ =`) : une traçabilité impossible
 // (dont une base SANS table `deliverables`) ne bloque jamais le changement de
-// statut et ne le fait jamais échouer. L'écriture est INCONDITIONNELLE pour
-// l'instant : le réglage « enregistrer une ligne à chaque livraison » n'existe
-// pas encore (tranche 4.5 le rendra désactivable).
+// statut et ne le fait jamais échouer.
+//
+// Tranche 4.5 : l'écriture passe par le REGLAGE d'activation
+// (`super_agent_tracabilite_enabled`, défaut vrai) — voir
+// `record_delivery_trace_if_enabled` juste après `db_record_delivery_trace`.
+// Réglage désactivé ⇒ aucune ligne, et rien d'autre ne change.
 
 /// Décision liée la plus récente d'une tâche (`(id, summary)`), ou `None` si
 /// aucune décision ne lui est rattachée. Sert d'ORIGINE à la ligne de
@@ -2456,6 +2459,26 @@ fn db_record_delivery_trace(
     };
     let id = db_add_deliverable(conn, task_id, decision_id, &title, &origin)?;
     Ok(Some(id))
+}
+
+/// Lot A idée 4, tranche 4.5 : applique le RÉGLAGE d'activation à l'écriture de
+/// la ligne de traçabilité de la tranche 4.2. Le réglage vit dans la
+/// configuration (`super_agent_tracabilite_enabled`, **défaut vrai** : un champ
+/// absent se comporte comme aujourd'hui). Réglage désactivé ⇒ aucune ligne
+/// n'est écrite (`Ok(None)`) et rien d'autre ne change : au moment de l'appel le
+/// changement de statut a déjà réussi, et les appelants restent fail-open
+/// (`let _ =`), donc une traçabilité impossible ne bloque jamais rien.
+fn record_delivery_trace_if_enabled(
+    conn: &Connection,
+    task_id: i64,
+    previous_status: Option<&str>,
+    new_status: &str,
+    enabled: bool,
+) -> Result<Option<i64>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    db_record_delivery_trace(conn, task_id, previous_status, new_status)
 }
 
 // ── Idée 4 (Lot A), tranche 4.3 : commandes Tauri de LECTURE de la traçabilité ──
@@ -3983,7 +4006,19 @@ pub fn super_agent_update_task(
     // traçabilité (dont une base sans table `deliverables`) ne bloque jamais la
     // mise à jour de la tâche, déjà écrite à ce stade.
     if let Some(ref target) = new_status {
-        let _ = db_record_delivery_trace(&conn, task_id, previous_status.as_deref(), target);
+        // Tranche 4.5 : le RÉGLAGE décide si la ligne est écrite. Il est lu ici,
+        // après l'écriture réussie (jamais pendant la garde du verrou de config).
+        let tracabilite = {
+            let cfg = state.config.lock().unwrap();
+            cfg.super_agent_tracabilite_enabled
+        };
+        let _ = record_delivery_trace_if_enabled(
+            &conn,
+            task_id,
+            previous_status.as_deref(),
+            target,
+            tracabilite,
+        );
     }
     Ok(serde_json::json!({ "ok": true, "task_id": task_id }))
 }
@@ -4040,9 +4075,15 @@ pub fn super_agent_update_task_status(
     let conn = open_db(&app)?;
     // Idée 3 (Lot A), tranche 3.3 : contrôle de checklist au passage en
     // « Terminé » (point d'entrée interne unique `guard_task_checklist`).
-    let mode = {
+    // Tranche 4.5 : le MÊME verrou de config fournit le mode de checklist (idée
+    // 3) et le réglage d'activation de la traçabilité (idée 4) : la décision est
+    // prise une fois, avant toute écriture.
+    let (mode, tracabilite) = {
         let cfg = state.config.lock().unwrap();
-        cfg.super_agent_checklist_mode.clone()
+        (
+            cfg.super_agent_checklist_mode.clone(),
+            cfg.super_agent_tracabilite_enabled,
+        )
     };
     // Le statut AVANT écriture est mémorisé ici : il sert à ne tracer qu'un
     // passage EFFECTIF à l'état livré (idée 4, tranche 4.2).
@@ -4064,10 +4105,17 @@ pub fn super_agent_update_task_status(
         return Err(format!("Tâche {} introuvable", task_id));
     }
     // Idée 4 (Lot A), tranche 4.2 : ligne de traçabilité au passage EFFECTIF à
-    // l'état livré, APRÈS une écriture réussie. Fail-open : une panne de
-    // traçabilité (dont une base sans table `deliverables`) ne bloque jamais le
-    // changement de statut, déjà écrit à ce stade.
-    let _ = db_record_delivery_trace(&conn, task_id, previous_status.as_deref(), status);
+    // l'état livré, APRÈS une écriture réussie. Tranche 4.5 : elle n'est écrite
+    // que si le réglage `super_agent_tracabilite_enabled` est actif (défaut).
+    // Fail-open : une panne de traçabilité (dont une base sans table
+    // `deliverables`) ne bloque jamais le changement de statut, déjà écrit.
+    let _ = record_delivery_trace_if_enabled(
+        &conn,
+        task_id,
+        previous_status.as_deref(),
+        status,
+        tracabilite,
+    );
     Ok(serde_json::json!({ "ok": true, "task_id": task_id, "status": status }))
 }
 
@@ -5737,6 +5785,7 @@ mod tests {
         db_set_task_check_done,
         db_add_deliverable, db_delete_task_deliverables, db_list_project_deliverables,
         db_list_project_deliverables_by_path, db_list_task_deliverables, db_record_delivery_trace,
+        record_delivery_trace_if_enabled,
         DELIVERABLE_ORIGIN_UNKNOWN,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
@@ -7880,6 +7929,22 @@ mod tests {
         mode: &str,
         force: bool,
     ) -> Result<(), String> {
+        // Réglage de traçabilité ACTIF : c'est le défaut (une config qui ne
+        // mentionne pas le champ se comporte ainsi).
+        apply_status_change_with_tracabilite(conn, task_id, new_status, mode, force, true)
+    }
+
+    /// Même rejeu, réglage de traçabilité INCLUS (tranche 4.5) : `enabled=false`
+    /// reproduit une configuration où l'utilisateur a décoché « Enregistrer une
+    /// ligne de traçabilité à chaque livraison ».
+    fn apply_status_change_with_tracabilite(
+        conn: &Connection,
+        task_id: i64,
+        new_status: &str,
+        mode: &str,
+        force: bool,
+        enabled: bool,
+    ) -> Result<(), String> {
         let previous_status = task_status_of(conn, task_id);
         guard_task_checklist(conn, task_id, new_status, mode, force)?;
         let n = conn
@@ -7891,7 +7956,13 @@ mod tests {
         if n == 0 {
             return Err(format!("Tâche {} introuvable", task_id));
         }
-        let _ = db_record_delivery_trace(conn, task_id, previous_status.as_deref(), new_status);
+        let _ = record_delivery_trace_if_enabled(
+            conn,
+            task_id,
+            previous_status.as_deref(),
+            new_status,
+            enabled,
+        );
         Ok(())
     }
 
@@ -7986,6 +8057,82 @@ mod tests {
         // …mais le changement de statut, lui, RÉUSSIT (fail-open).
         apply_status_change_like_the_commands(&conn, t1, "livree", "off", false).unwrap();
         assert_eq!(task_status_of(&conn, t1).as_deref(), Some("livree"));
+    }
+
+    // ── Lot A idée 4, tranche 4.5 : réglage d'activation de la traçabilité ──
+    // Le réglage `super_agent_tracabilite_enabled` gouverne l'écriture de la ligne
+    // de la tranche 4.2. Il est ACTIVÉ PAR DÉFAUT : une configuration qui ne le
+    // mentionne pas (toutes les configs existantes) écrit la ligne comme avant.
+    // Désactivé ⇒ AUCUNE ligne, et le changement de statut réussit toujours.
+
+    /// Le réglage tel que le lit `AppConfig` au chargement du fichier de
+    /// configuration : un champ ABSENT retombe sur le défaut du type (vrai).
+    fn tracabilite_from_json(json: &str) -> bool {
+        let cfg: crate::AppConfig = serde_json::from_str(json).unwrap();
+        cfg.super_agent_tracabilite_enabled
+    }
+
+    #[test]
+    fn tracabilite_setting_is_enabled_when_absent_from_the_config() {
+        // Config vide (cas d'un premier lancement) : activé.
+        assert!(tracabilite_from_json("{}"));
+        // Config d'aujourd'hui, qui ignore ce champ : comportement inchangé.
+        assert!(tracabilite_from_json(
+            r#"{"theme":"dark","super_agent_checklist_mode":"warn"}"#
+        ));
+        // Une clé inconnue (version plus récente) ne perturbe rien.
+        assert!(tracabilite_from_json(r#"{"super_agent_reglage_inconnu":42}"#));
+        // Une valeur explicite est respectée dans les DEUX sens.
+        assert!(tracabilite_from_json(r#"{"super_agent_tracabilite_enabled":true}"#));
+        assert!(!tracabilite_from_json(
+            r#"{"super_agent_tracabilite_enabled":false}"#
+        ));
+    }
+
+    #[test]
+    fn delivery_trace_is_written_when_the_setting_is_enabled() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Réglage actif — y compris quand il vient d'un champ ABSENT de la config.
+        let enabled = tracabilite_from_json("{}");
+        apply_status_change_with_tracabilite(&conn, t1, "livree", "off", false, enabled)
+            .unwrap();
+        let rows = db_list_task_deliverables(&conn, t1).unwrap();
+        assert_eq!(rows.len(), 1, "réglage actif → une ligne écrite");
+        assert_eq!(rows[0]["label"], "Tâche 1");
+    }
+
+    #[test]
+    fn delivery_trace_is_skipped_when_the_setting_is_disabled() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Aucune décision liée et aucun point de checklist : seule la traçabilité
+        // est en cause — si elle était écrite, le test le verrait.
+        apply_status_change_with_tracabilite(&conn, t1, "livree", "off", false, false)
+            .unwrap();
+        assert!(
+            db_list_task_deliverables(&conn, t1).unwrap().is_empty(),
+            "réglage désactivé → aucune ligne"
+        );
+        // Rien d'autre ne change : le changement de statut a bien eu lieu.
+        assert_eq!(task_status_of(&conn, t1).as_deref(), Some("livree"));
+        // Et il réussit toujours, y compris sans table `deliverables` (fail-open).
+        let (conn2, t2, _) = mem_conn_with_two_tasks();
+        conn2.execute("DROP TABLE deliverables", []).unwrap();
+        apply_status_change_with_tracabilite(&conn2, t2, "livree", "off", false, false)
+            .unwrap();
+        assert_eq!(task_status_of(&conn2, t2).as_deref(), Some("livree"));
+    }
+
+    #[test]
+    fn disabling_the_setting_leaves_existing_trace_lines_untouched() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Une livraison tracée AVANT la désactivation…
+        apply_status_change_with_tracabilite(&conn, t1, "livree", "off", false, true).unwrap();
+        assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 1);
+        // …reste intacte : désactiver n'efface jamais de données existantes.
+        apply_status_change_with_tracabilite(&conn, t1, "en_cours", "off", false, false)
+            .unwrap();
+        apply_status_change_with_tracabilite(&conn, t1, "livree", "off", false, false).unwrap();
+        assert_eq!(db_list_task_deliverables(&conn, t1).unwrap().len(), 1);
     }
 
     // ── Lot A idée 4, tranche 4.3 : contrat des commandes de LECTURE ──
