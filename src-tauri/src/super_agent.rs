@@ -1428,6 +1428,8 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "super_agent_events_overlay_enabled": cfg.super_agent_events_overlay_enabled,
         "super_agent_events_overlay_seconds": cfg.super_agent_events_overlay_seconds,
         "super_agent_tasks_tab_enabled": cfg.super_agent_tasks_tab_enabled,
+        // Lot A idée 3 : mode du contrôle de checklist ("off"/"warn"/"block").
+        "super_agent_checklist_mode": cfg.super_agent_checklist_mode,
     }))
 }
 
@@ -2287,6 +2289,134 @@ pub fn super_agent_task_check_delete(app: AppHandle, check_id: i64) -> Result<Va
     let conn = open_db(&app)?;
     db_delete_task_check(&conn, check_id)?;
     Ok(serde_json::json!({ "ok": true, "check_id": check_id }))
+}
+
+// ── Idée 3 (Lot A), tranche 3.3 : contrôle au passage en « Terminé » ──
+//
+// Le contrôle est posé dans LA fonction interne de changement de statut
+// (`guard_task_checklist`), pas dans un écran : toute voie qui fait passer une
+// tâche en « Terminé » — la commande de statut comme l'édition de tâche du
+// Kanban — passe par ce point d'entrée unique, donc aucune ne peut le
+// contourner. Les décisions elles-mêmes sont des fonctions PURES
+// (`evaluate_checklist_gate`, `checklist_mode_from_config`) : testables sans
+// base ni application graphique.
+
+/// Verdict du contrôle de checklist. Sérialisable pour pouvoir être renvoyé
+/// tel quel à l'interface (tranche 3.4) sans réinventer un format.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum GateVerdict {
+    /// Clôture autorisée : mode désactivé, aucun point restant, ou rappel
+    /// forcé explicitement.
+    Allowed,
+    /// Mode `warn` : la clôture exige une confirmation explicite
+    /// (`force = true`).
+    ConfirmNeeded { remaining: usize },
+    /// Mode `block` : la clôture est refusée tant qu'un point reste à cocher,
+    /// même avec `force`.
+    Refused { remaining: usize },
+}
+
+/// Décision PURE du contrôle, à partir du mode, du nombre de points non cochés
+/// et du forçage éventuel :
+///   - `unchecked == 0` → toujours autorisé (aucune régression pour les tâches
+///     sans point de checklist) ;
+///   - `off` → autorisé (contrôle désactivé) ;
+///   - `warn` (et tout mode inconnu) → confirmation requise, sauf `force` ;
+///   - `block` → refus tant qu'il reste un point, `force` compris.
+fn evaluate_checklist_gate(mode: &str, unchecked: usize, force: bool) -> GateVerdict {
+    if unchecked == 0 {
+        return GateVerdict::Allowed;
+    }
+    match mode {
+        "off" => GateVerdict::Allowed,
+        "block" => GateVerdict::Refused {
+            remaining: unchecked,
+        },
+        _ => {
+            if force {
+                GateVerdict::Allowed
+            } else {
+                GateVerdict::ConfirmNeeded {
+                    remaining: unchecked,
+                }
+            }
+        }
+    }
+}
+
+/// Lit le mode de checklist d'une valeur de configuration, avec repli SÛR sur
+/// `warn` : un mode absent (chaîne vide), inconnu ou en casse différente vaut
+/// `warn` — jamais bloquant par surprise, jamais silencieusement désactivé.
+fn checklist_mode_from_config(raw: &str) -> &str {
+    match raw.trim().to_lowercase().as_str() {
+        "off" => "off",
+        "block" => "block",
+        _ => "warn",
+    }
+}
+
+/// Message actionnable (en français) expliquant pourquoi une tâche n'a PAS été
+/// marquée terminée. Les libellés restants sont bornés à 5 (au-delà : « … et N
+/// autres ») ; en mode `warn`, la phrase indique comment conclure malgré tout.
+/// Renvoie une chaîne vide quand la clôture est autorisée.
+fn checklist_gate_message(labels: &[String], verdict: &GateVerdict) -> String {
+    let remaining = match verdict {
+        GateVerdict::Allowed => return String::new(),
+        GateVerdict::ConfirmNeeded { remaining } | GateVerdict::Refused { remaining } => *remaining,
+    };
+    let shown: Vec<&str> = labels.iter().take(5).map(|s| s.as_str()).collect();
+    let mut message = format!(
+        "Checklist de livraison : {} point(s) restent à cocher avant de terminer la tâche : {}",
+        remaining,
+        shown.join(", ")
+    );
+    if labels.len() > shown.len() {
+        message.push_str(&format!(" … et {} autre(s)", labels.len() - shown.len()));
+    }
+    message.push('.');
+    if matches!(verdict, GateVerdict::ConfirmNeeded { .. }) {
+        message.push_str(" Relance avec force = true pour conclure malgré tout.");
+    }
+    message
+}
+
+/// Libellés des points NON cochés d'une tâche, dans l'ordre d'affichage. Une
+/// tâche sans point (ou inconnue) renvoie une liste vide — jamais une erreur.
+fn db_unchecked_task_check_labels(conn: &Connection, task_id: i64) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT label FROM task_checks WHERE task_id = ?1 AND done = 0 \
+             ORDER BY position, id",
+        )
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    let rows = stmt
+        .query_map(rusqlite::params![task_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("Erreur lecture checklist: {}", e))?;
+    Ok(rows.flatten().collect())
+}
+
+/// POINT D'ENTRÉE INTERNE UNIQUE du contrôle : à appeler avant toute écriture
+/// qui fait passer une tâche en « Terminé ». Sans effet (Ok) si le nouveau
+/// statut n'est pas « terminé » ou si la tâche n'a aucun point restant — donc
+/// aucune régression pour les tâches existantes. Sinon, applique
+/// `evaluate_checklist_gate` et renvoie le message actionnable en cas de refus.
+fn guard_task_checklist(
+    conn: &Connection,
+    task_id: i64,
+    new_status: &str,
+    mode: &str,
+    force: bool,
+) -> Result<(), String> {
+    if classify_task_status(new_status) != "done" {
+        return Ok(());
+    }
+    let pending = db_unchecked_task_check_labels(conn, task_id)?;
+    let verdict = evaluate_checklist_gate(mode, pending.len(), force);
+    match verdict {
+        GateVerdict::Allowed => Ok(()),
+        _ => Err(checklist_gate_message(&pending, &verdict)),
+    }
 }
 
 // ── Dependances entre taches du suivi ──
@@ -3480,6 +3610,7 @@ pub fn super_agent_set_task_dependency(
 /// piloter ses cartes en CRUD (création/édition/projet/échéance/statut).
 #[tauri::command]
 pub fn super_agent_update_task(
+    state: State<AppState>,
     app: AppHandle,
     task_id: i64,
     title: Option<String>,
@@ -3487,11 +3618,14 @@ pub fn super_agent_update_task(
     project_path: Option<String>,
     status: Option<String>,
     deadline: Option<String>,
+    force: Option<bool>,
 ) -> Result<Value, String> {
     let conn = open_db(&app)?;
     let mut sets: Vec<String> = Vec::new();
     // Valeurs SQL au bon ordre des `sets` (le 1er paramètre remplit '?' n°1).
     let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    // Statut cible, conservé pour le contrôle de checklist AVANT l'écriture.
+    let mut new_status: Option<String> = None;
 
     if let Some(t) = title {
         let t = t.trim().to_string();
@@ -3516,6 +3650,7 @@ pub fn super_agent_update_task(
             return Err("update_task : un statut est requis".to_string());
         }
         sets.push("status = ?".to_string());
+        new_status = Some(s.clone());
         params.push(rusqlite::types::Value::Text(s));
     }
     if let Some(d) = deadline {
@@ -3526,6 +3661,23 @@ pub fn super_agent_update_task(
     if sets.is_empty() {
         // Rien à mettre à jour : succès sans effet.
         return Ok(serde_json::json!({ "ok": true, "task_id": task_id }));
+    }
+
+    // Idée 3 (Lot A), tranche 3.3 : contrôle de checklist AVANT l'écriture, si
+    // la mise à jour fait passer la tâche en « Terminé ». Même point d'entrée
+    // que `super_agent_update_task_status` : aucune logique dupliquée.
+    if let Some(ref target) = new_status {
+        let mode = {
+            let cfg = state.config.lock().unwrap();
+            cfg.super_agent_checklist_mode.clone()
+        };
+        guard_task_checklist(
+            &conn,
+            task_id,
+            target,
+            checklist_mode_from_config(&mode),
+            force.unwrap_or(false),
+        )?;
     }
 
     let mut sql = String::from("UPDATE tasks SET ");
@@ -3576,15 +3728,30 @@ pub fn super_agent_delete_task(app: AppHandle, task_id: i64) -> Result<Value, St
 /// A4 — Met à jour le statut d'une tâche. Retourne `{ ok, task_id, status }`.
 #[tauri::command]
 pub fn super_agent_update_task_status(
+    state: State<AppState>,
     app: AppHandle,
     task_id: i64,
     status: String,
+    force: Option<bool>,
 ) -> Result<Value, String> {
     let status = status.trim();
     if status.is_empty() {
         return Err("update_task_status : un statut est requis".to_string());
     }
     let conn = open_db(&app)?;
+    // Idée 3 (Lot A), tranche 3.3 : contrôle de checklist au passage en
+    // « Terminé » (point d'entrée interne unique `guard_task_checklist`).
+    let mode = {
+        let cfg = state.config.lock().unwrap();
+        cfg.super_agent_checklist_mode.clone()
+    };
+    guard_task_checklist(
+        &conn,
+        task_id,
+        status,
+        checklist_mode_from_config(&mode),
+        force.unwrap_or(false),
+    )?;
     let n = conn
         .execute(
             "UPDATE tasks SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -5274,6 +5441,8 @@ mod tests {
         resolve_schedule_every, SCHEDULE_MAX, SCHEDULE_MIN_EVERY_SECS,
         task_counts, take_trash_entry, trash_entry_preview, validate_export_json,
         list_memory_trash_entries,
+        checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
+        evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
@@ -7220,5 +7389,163 @@ mod tests {
         assert_eq!(checks[0]["label"], "Survivre au redémarrage");
         drop(conn);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Lot A idée 3, tranche 3.3 : contrôle de checklist au passage en « Terminé » ──
+    // Décisions PURES (aucune base, aucun écran) : les 3 modes, le cas « rien à
+    // cocher », le contournement par `force`, et le repli sûr du mode.
+
+    #[test]
+    fn checklist_gate_allows_when_task_has_no_unchecked_point() {
+        // Aucune régression : sans point restant, TOUS les modes autorisent (y
+        // compris `block`), avec ou sans force. Une tâche sans checklist passe
+        // donc exactement comme avant.
+        for mode in ["off", "warn", "block", "inconnu"] {
+            for force in [false, true] {
+                assert_eq!(
+                    evaluate_checklist_gate(mode, 0, force),
+                    GateVerdict::Allowed,
+                    "mode={} force={}",
+                    mode,
+                    force
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn checklist_gate_handles_the_three_modes() {
+        // off → tout passe (contrôle désactivé).
+        assert_eq!(
+            evaluate_checklist_gate("off", 2, false),
+            GateVerdict::Allowed
+        );
+        assert_eq!(
+            evaluate_checklist_gate("off", 2, true),
+            GateVerdict::Allowed
+        );
+        // warn → confirmation requise, sauf force.
+        assert_eq!(
+            evaluate_checklist_gate("warn", 2, false),
+            GateVerdict::ConfirmNeeded { remaining: 2 }
+        );
+        assert_eq!(
+            evaluate_checklist_gate("warn", 2, true),
+            GateVerdict::Allowed
+        );
+        // block → refuse tant qu'il reste un point, `force` compris.
+        assert_eq!(
+            evaluate_checklist_gate("block", 1, false),
+            GateVerdict::Refused { remaining: 1 }
+        );
+        assert_eq!(
+            evaluate_checklist_gate("block", 1, true),
+            GateVerdict::Refused { remaining: 1 }
+        );
+        // Mode inconnu/vide → comportement de `warn` : jamais bloquant par
+        // surprise, jamais silencieusement désactivé.
+        assert_eq!(
+            evaluate_checklist_gate("bidon", 3, false),
+            GateVerdict::ConfirmNeeded { remaining: 3 }
+        );
+        assert_eq!(evaluate_checklist_gate("", 3, true), GateVerdict::Allowed);
+    }
+
+    #[test]
+    fn checklist_mode_falls_back_to_warn() {
+        // Absent / vide / inconnu → `warn`.
+        assert_eq!(checklist_mode_from_config(""), "warn");
+        assert_eq!(checklist_mode_from_config("   "), "warn");
+        assert_eq!(checklist_mode_from_config("inconnu"), "warn");
+        assert_eq!(checklist_mode_from_config("Warn"), "warn");
+        // Valeurs reconnues, casse et espaces ignorés.
+        assert_eq!(checklist_mode_from_config(" off "), "off");
+        assert_eq!(checklist_mode_from_config("BLOCK"), "block");
+    }
+
+    #[test]
+    fn checklist_gate_message_is_actionable_and_bounded() {
+        let labels: Vec<String> = (1..=8).map(|i| format!("point {}", i)).collect();
+        let warn = checklist_gate_message(&labels, &GateVerdict::ConfirmNeeded { remaining: 8 });
+        assert!(warn.contains("8 point(s)"), "{}", warn);
+        // Au plus 5 libellés, le reste est résumé.
+        assert!(warn.contains("point 5"), "{}", warn);
+        assert!(!warn.contains("point 6"), "{}", warn);
+        assert!(warn.contains("… et 3 autre(s)"), "{}", warn);
+        assert!(warn.contains("force = true"), "{}", warn);
+        // En `block`, `force` ne suffit pas : inviter à forcer serait mensonger.
+        let blocked = checklist_gate_message(&labels, &GateVerdict::Refused { remaining: 8 });
+        assert!(blocked.contains("8 point(s)"), "{}", blocked);
+        assert!(!blocked.contains("force = true"), "{}", blocked);
+        // Clôture autorisée → aucun message.
+        assert!(checklist_gate_message(&labels, &GateVerdict::Allowed).is_empty());
+    }
+
+    /// Base mémoire avec un projet et une tâche en cours, prête à clôturer.
+    fn mem_conn_with_open_task() -> (Connection, i64) {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO projects (path, name) VALUES ('/p/a', 'Projet A');\
+             INSERT INTO tasks (project_id, title, status) VALUES (1, 'Tâche', 'en_cours');",
+        )
+        .unwrap();
+        (conn, 1)
+    }
+
+    #[test]
+    fn guard_task_checklist_skips_non_done_status_and_empty_checklist() {
+        let (conn, task) = mem_conn_with_open_task();
+        // Tâche SANS point : aucun changement de comportement, quel que soit le mode.
+        assert!(guard_task_checklist(&conn, task, "terminee", "warn", false).is_ok());
+        assert!(guard_task_checklist(&conn, task, "terminee", "block", false).is_ok());
+        // Un point restant existe, mais le statut visé n'est pas « terminé » : le
+        // contrôle ne s'applique pas.
+        db_add_task_check(&conn, task, "Relire le diff").unwrap();
+        assert!(guard_task_checklist(&conn, task, "en_cours", "block", false).is_ok());
+        assert!(guard_task_checklist(&conn, task, "a_qualifier", "block", false).is_ok());
+    }
+
+    #[test]
+    fn guard_task_checklist_enforces_the_three_modes_without_writing() {
+        let (conn, task) = mem_conn_with_open_task();
+        let c1 = db_add_task_check(&conn, task, "Tests verts").unwrap();
+        let c2 = db_add_task_check(&conn, task, "Doc à jour").unwrap();
+        // warn sans force → refus, message listant les libellés restants.
+        let err = guard_task_checklist(&conn, task, "terminee", "warn", false).unwrap_err();
+        assert!(
+            err.contains("Tests verts") && err.contains("Doc à jour"),
+            "{}",
+            err
+        );
+        assert!(err.contains("force = true"), "{}", err);
+        // warn + force → autorisé (jamais bloquant par surprise).
+        assert!(guard_task_checklist(&conn, task, "terminee", "warn", true).is_ok());
+        // block refuse même avec force, et n'invite pas à forcer.
+        let err = guard_task_checklist(&conn, task, "terminee", "block", true).unwrap_err();
+        assert!(!err.contains("force = true"), "{}", err);
+        // off → autorisé.
+        assert!(guard_task_checklist(&conn, task, "terminee", "off", false).is_ok());
+        // Contrôle purement LECTEUR : la tâche n'a pas bougé.
+        assert_eq!(task_status_of(&conn, task).as_deref(), Some("en_cours"));
+        // Checklist entièrement cochée → autorisé en `block` sans force.
+        db_set_task_check_done(&conn, c1, true).unwrap();
+        db_set_task_check_done(&conn, c2, true).unwrap();
+        assert!(guard_task_checklist(&conn, task, "terminee", "block", false).is_ok());
+    }
+
+    #[test]
+    fn unchecked_checklist_labels_are_ordered_and_fail_open() {
+        let (conn, task) = mem_conn_with_open_task();
+        db_add_task_check(&conn, task, "Un").unwrap();
+        let c2 = db_add_task_check(&conn, task, "Deux").unwrap();
+        db_add_task_check(&conn, task, "Trois").unwrap();
+        db_set_task_check_done(&conn, c2, true).unwrap();
+        // Seuls les points NON cochés, dans l'ordre d'affichage.
+        assert_eq!(
+            db_unchecked_task_check_labels(&conn, task).unwrap(),
+            vec!["Un".to_string(), "Trois".to_string()]
+        );
+        // Tâche inconnue → liste vide, jamais une erreur (fail-open).
+        assert!(db_unchecked_task_check_labels(&conn, 9999).unwrap().is_empty());
     }
 }

@@ -798,6 +798,13 @@ struct AppConfig {
     // onglets. Désactivé → panneau inchangé (Événements seuls).
     #[serde(default = "default_true")]
     super_agent_tasks_tab_enabled: bool,
+    // Lot A idée 3 : contrôle de checklist au passage d'une tâche de suivi en
+    // « Terminé » ("off" / "warn" / "block"). Défaut "warn" (repli sûr) : un
+    // réglage absent, vide ou inconnu n'est JAMAIS bloquant par surprise. Ce
+    // champ n'a pas encore d'écran (tranche 3.5) ; il est déjà lu par les
+    // commandes de changement de statut.
+    #[serde(default)]
+    super_agent_checklist_mode: String,
     // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
     // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
     // fréquence explicite. Exprimée en secondes, bornée côté application au
@@ -1147,6 +1154,7 @@ impl Default for AppConfig {
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
             super_agent_tasks_tab_enabled: true,
+            super_agent_checklist_mode: String::new(),
             super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),
