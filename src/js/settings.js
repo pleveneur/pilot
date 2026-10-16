@@ -469,6 +469,10 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
 // points par défaut (un point par ligne) proposé sur une tâche sans point.
 const selectSuperAgentChecklistMode = document.getElementById("setting-superagent-checklist-mode");
 const taSuperAgentChecklistTemplate = document.getElementById("setting-superagent-checklist-template");
+// ── Lot A idée 4 (tranche 5b) : ligne de traçabilité à chaque livraison ──
+// Clé `super_agent_tracabilite_enabled` (défaut ON côté Rust : champ absent ⇒
+// activé, donc aucune régression pour les configurations existantes).
+const chkSuperAgentTracabilite = document.getElementById("setting-superagent-tracabilite");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -1311,6 +1315,9 @@ const taSuperAgentChecklistTemplate = document.getElementById("setting-superagen
   if (taSuperAgentChecklistTemplate) {
     taSuperAgentChecklistTemplate.value = normalizeChecklistTemplate(currentConfig.super_agent_checklist_template);
   }
+  // ── Lot A idée 4 (tranche 5b) : traçabilité des livraisons ──
+  // Clé absente ⇒ coché (défaut « activé »), comme le réglage Rust correspondant.
+  if (chkSuperAgentTracabilite) chkSuperAgentTracabilite.checked = currentConfig.super_agent_tracabilite_enabled !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -2179,6 +2186,10 @@ const taSuperAgentChecklistTemplate = document.getElementById("setting-superagen
         super_agent_checklist_template: taSuperAgentChecklistTemplate
           ? normalizeChecklistTemplate(taSuperAgentChecklistTemplate.value)
           : normalizeChecklistTemplate(currentConfig?.super_agent_checklist_template),
+        // ── Lot A idée 4 (tranche 5b) : traçabilité des livraisons ──
+        // Champ absent du DOM ⇒ vrai (défaut), pour ne jamais désactiver un
+        // réglage que l'utilisateur n'a pas touché.
+        super_agent_tracabilite_enabled: chkSuperAgentTracabilite ? chkSuperAgentTracabilite.checked !== false : true,
       };
     try {
       await invoke("save_config", { config });
