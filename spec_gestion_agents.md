@@ -102,7 +102,7 @@ Le registre global vit dans la base SQLite de l'application (`pilot.db`, dossier
 - **Clé de projet canonique (`chemin_normalise`)** : toutes les lectures/écritures du registre passent par `crate::normalize_project_path` (`/` vs `\`, casse, slash final) et l'index `UNIQUE (id, chemin_normalise)` — le même projet écrit sous deux formes ne crée plus deux fiches. Migration automatique dans `init_db` : copie de sûreté `pilot.db.bak-chemins-normalises` (jamais écrasée) puis fusion des doublons existants (fiche la plus ancienne conservée) et alignement de `agents.project_path` + `agent_views.project_path`.
 - `agent_views` : vues d'onglets (ordre, nom affiché, onglet actif).
 - La colonne `skills` est un tableau JSON de noms de dossiers de `~/.pilot/skills` (migration idempotente `NOT NULL DEFAULT '[]'`).
-- Un ancien fichier `~/.pilot/agents.json` peut subsister sur une installation ancienne : il **n'est plus lu ni écrit**.
+- Un ancien fichier `~/.pilot/agents.json` peut subsister sur une installation ancienne : il **n'est plus lu ni écrit** et peut être supprimé sans risque (retiré de l'installation de référence, avec sauvegarde datée, point 333).
 
 ```jsonc
 // forme sérialisée d'un agent (colonne → JSON)

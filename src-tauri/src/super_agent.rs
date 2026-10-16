@@ -350,8 +350,8 @@ fn known_projects_context(app: &AppHandle) -> String {
     }
 }
 
-/// Liste les agents disponibles dans le registre global (base SQLite,
-/// alimentée par `~/.pilot/agents.json`) et produit un résumé compact
+/// Liste les agents disponibles dans le registre global (base SQLite `pilot.db`)
+/// et produit un résumé compact
 /// (id, icône, description tronquée à `SUPER_AGENT_AGENT_DESC_MAX`) injecté dans
 /// le prompt système de l'assistant pour qu'il sache quels agents il peut
 /// piloter via `run_agents`.

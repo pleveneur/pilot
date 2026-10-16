@@ -108,7 +108,7 @@ export default function (pi: ExtensionAPI) {
     name: "create_agent",
     label: "Create Agent",
     description:
-      "Créer un agent sur mesure dans le registre global (~/.pilot/agents.json) quand les agents disponibles ne conviennent pas à la tâche. Tu définis toi-même son rôle (system prompt), son nom, son icône, sa description, ses modèles (pi/plh), sa lecture seule, son budget et sa profondeur. L'agent devient aussitôt disponible pour être sélectionné via run_agents. Bloque jusqu'à ce que Pilot ait créé l'agent.",
+      "Créer un agent sur mesure dans le registre global (base SQLite `pilot.db`) quand les agents disponibles ne conviennent pas à la tâche. Tu définis toi-même son rôle (system prompt), son nom, son icône, sa description, ses modèles (pi/plh), sa lecture seule, son budget et sa profondeur. L'agent devient aussitôt disponible pour être sélectionné via run_agents. Bloque jusqu'à ce que Pilot ait créé l'agent.",
     promptSnippet: "create_agent: créer un agent sur mesure (rôle construit selon le besoin)",
     promptGuidelines: [
       "Use create_agent when the available agents do not fit the task and you need a custom role. Define a precise role (system prompt) describing exactly what the agent must do, its constraints, and its output format.",

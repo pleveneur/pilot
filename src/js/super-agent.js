@@ -4751,7 +4751,7 @@ async function handleSuperAgentAction(id, jsonStr, messagesEl) {
       }
     } else if (action === "create_agent") {
       // Coordinateur assistant : crée un agent sur mesure dans le registre global
-      // (~/.pilot/agents.json) quand les agents disponibles ne conviennent pas.
+      // (base SQLite `pilot.db`) quand les agents disponibles ne conviennent pas.
       const agent = info.agent;
       if (!agent || !agent.id || !agent.name || !agent.role) {
         appendSystemMessage(messagesEl, "❌ create_agent : id, name et role sont requis.");

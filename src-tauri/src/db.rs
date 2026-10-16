@@ -5,8 +5,8 @@
 //   - `agents`      : l'objet Agent (état logique, indépendant de l'UI).
 //   - `agent_views` : la vue optionnelle (onglet) dissociée de l'objet.
 //
-// La persistance des onglets (ex `tabs.rs` JSON hachés) et le registre
-// `~/.pilot/agents.json` convergent vers ces tables.
+// La persistance des onglets (ex `tabs.rs` JSON hachés) et le registre des
+// agents sont désormais centralisés dans ces tables.
 
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
