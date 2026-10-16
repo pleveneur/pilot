@@ -5,6 +5,7 @@
 // module (env vitest Node, sans Tauri/window) → `isRunInProgress()` doit
 // retourner false sans amorcer le bus.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
 
 // Mock des commandes Tauri : stopAgentsRun doit purger les réservations (T6-fix,
 // fuite 1) via deleteReservations (file_exists → delete_file_or_dir). On simule
@@ -1120,4 +1121,148 @@ describe("run interrompue — message compréhensible (point de suivi 344 b)", (
     expect(text).not.toMatch(/aborted/i);
     expect(text).toContain("a été conservé"); // le travail déjà écrit est gardé
   });
+});
+
+// ── Point de suivi 344 (volet a) — AUCUNE PERTE DU TRAVAIL ÉCRIT à l'arrêt
+// d'une run. Le travail d'un agent est écrit sur le disque par SES PROPRES
+// outils (write/edit/bash, exécutés par le processus `pi`), jamais par Pilot :
+// Pilot ne met rien en tampon et ne rétablit rien. Le seul primitif de retour en
+// arrière du projet est `git_restore_snapshot` (A1), appelé EXCLUSIVEMENT par le
+// bouton manuel « annuler la tâche » (agent-pi.js). Ces tests verrouillent cet
+// invariant pour TOUS les chemins d'arrêt d'une run : abort du moteur, erreur du
+// modèle, arrêt manuel, fin brutale du processus (watchdog : voir le test
+// structurel ci-dessous qui couvre aussi super-agent.js, où vit le watchdog de
+// 5 min). Échec du test = un chemin d'arrêt s'est mis à détruire ou à rétablir
+// du travail écrit.
+describe("aucune perte du travail écrit à l'arrêt d'une run (point de suivi 344 a)", () => {
+  const readSrc = (name) => readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
+
+  // Commandes qui pourraient DÉTRUIRE ou RÉTABLIR le travail écrit d'un agent.
+  const DESTRUCTIVE_INVOKES = ["git_restore_snapshot", "git_checkout", "git_reset", "delete_file_or_dir"];
+
+  // Isolation du journal d'appels : chaque scénario ne juge QUE ses propres
+  // commandes (sinon une trace laissée par un scénario précédent le ferait
+  // échouer à tort).
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+  });
+
+  it("le seul retour en arrière du projet est l'annulation MANUELLE (A1)", () => {
+    const hits = [];
+    for (const f of readdirSync(new URL("./", import.meta.url))) {
+      if (!f.endsWith(".js") || f.endsWith(".test.js")) continue;
+      const n = (readSrc(f).match(/git_restore_snapshot/g) || []).length;
+      if (n > 0) hits.push([f, n]);
+    }
+    // Un SEUL site : le bouton ↩️ « annuler la tâche » de l'orchestration.
+    expect(hits).toEqual([["agent-pi.js", 1]]);
+  });
+
+  it("les chemins d'arrêt (agents-bus + super-agent : watchdog compris) n'ont aucun appel destructeur", () => {
+    for (const f of ["agents-bus.js", "super-agent.js"]) {
+      const src = readSrc(f);
+      for (const cmd of DESTRUCTIVE_INVOKES) {
+        expect(src, `${f} ne doit pas invoquer ${cmd}`).not.toContain(cmd);
+      }
+      expect(src, `${f} ne doit pas remettre les fichiers à zéro`).not.toMatch(/reset\s+--hard|git\s+clean\s+-/);
+    }
+  });
+
+  // ── Preuve comportementale, chemin par chemin ──
+  const flushAsync = async () => {
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+  };
+  const ev = (project, agentId, type, event = {}) => ({
+    payload: { project, agent_id: agentId, event: { type, ...event } },
+  });
+  const modelError = (project, agentId, message) =>
+    ev(project, agentId, "message", { message: { role: "assistant", stopReason: "error", errorMessage: message, content: [] } });
+
+  /** Run d'un agent actif, avec un rapport de mission capturé. */
+  const beginRunOfAgent = (project) => {
+    const ctx = beginRun(project);
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = project;
+    const got = [];
+    attachMissionSink(ctx.runKey, {
+      onDone: (t) => got.push({ kind: "done", text: t }),
+      onError: (e) => got.push({ kind: "error", text: e.message }),
+    });
+    return { ctx, got };
+  };
+
+  /**
+   * Appels Tauri destructeurs pour le TRAVAIL DU PROJET restés dans le journal.
+   * `reservations.json` est exclu : c'est un fichier de comptabilité interne de
+   * Pilot (verrous de fichiers), pas le travail de l'agent.
+   * @returns {Array<{cmd: string, path: string}>}
+   */
+  const destructiveCalls = () =>
+    vi.mocked(invoke).mock.calls
+      .map(([cmd, args]) => ({ cmd: String(cmd), path: String((args && args.path) || "") }))
+      .filter(({ cmd, path }) => DESTRUCTIVE_INVOKES.includes(cmd) && !path.endsWith("reservations.json"));
+
+  const scenarios = [
+    {
+      name: "abort du moteur",
+      project: "projet344Abort",
+      send: (P) => [
+        ev(P, "codeur", "agent_start"),
+        modelError(P, "codeur", "This operation was aborted"),
+        ev(P, "codeur", "agent_end", { willRetry: false }),
+      ],
+    },
+    {
+      name: "erreur du modèle (non abort)",
+      project: "projet344Erreur",
+      send: (P) => [
+        ev(P, "codeur", "agent_start"),
+        modelError(P, "codeur", "Connection error."),
+        ev(P, "codeur", "agent_end", { willRetry: false }),
+      ],
+    },
+    {
+      name: "fin brutale du processus (process_exit)",
+      project: "projet344Exit",
+      send: (P) => [
+        ev(P, "codeur", "agent_start"),
+        ev(P, "codeur", "process_exit", { reason: "processus arrêté" }),
+      ],
+    },
+    {
+      name: "arrêt manuel (stopAgentsRun)",
+      project: "projet344Stop",
+      send: (P) => [ev(P, "codeur", "agent_start")],
+      after: async () => { await stopAgentsRun({}); },
+    },
+  ];
+
+  for (const sc of scenarios) {
+    it(`${sc.name} : la run s'arrête, les fichiers déjà écrits restent en place`, async () => {
+      // Le projet contient déjà du travail écrit (2 fichiers modifiés).
+      vi.mocked(invoke).mockImplementation(async (cmd) => {
+        if (cmd === "git_status_project") return { is_repo: true, head_ts: 0, pending: 2 };
+        if (cmd === "file_exists") return true;
+        return undefined;
+      });
+      const { got } = beginRunOfAgent(sc.project);
+      for (const e of sc.send(sc.project)) handleAgentEvent(e);
+      if (sc.after) await sc.after();
+      await flushAsync();
+
+      // L'arrêt est bien allé au bout (rapport de mission livré ou run fermée)…
+      expect(getRunState(sc.project).state).not.toBe("running");
+      // …et AUCUNE commande n'a rétabli ni supprimé un fichier du projet.
+      expect(destructiveCalls()).toEqual([]);
+
+      // Le travail écrit survit aussi à la vérification disque : la sonde est une
+      // LECTURE (`git_status_project`), jamais une écriture.
+      if (sc.name === "abort du moteur") {
+        expect(got).toHaveLength(1);
+        expect(got[0].text).toContain("a été conservé");
+      }
+      endRun(sc.project);
+    });
+  }
 });
