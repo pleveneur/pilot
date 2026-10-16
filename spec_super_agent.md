@@ -228,34 +228,49 @@ apprend et répond.
   par défaut), l'Assistant passe en mode **coordinateur pur**. Il **ne modifie
   pas** le mécanisme d'échange assistant↔agents : c'est uniquement un bloc
   d'instructions injecté dans son prompt système.
-- **Règles injectées** (les 5 points) :
-  1. **PROPOSE ET LANCE** : pour tout travail substantiel lié à un projet
-     (réfléchir, analyser, modifier, vérifier), il annonce en une ligne les
-     étapes ET l'équipe d'agents qu'il utilise, puis lance directement.
-  2. **RÉPONDS TOI-MÊME aux questions simples** : état d'une tâche, information
-     déjà connue de son suivi (base), question de compréhension. Il ne délègue
-     pas pour répondre à une question dont il a déjà la réponse.
-  3. **DÉLÈGUE dès qu'il faut RÉFLÉCHIR** sur une demande liée à un projet
-     (analyse, recherche, rédaction, modification) : il confie le raisonnement
-     à l'agent le plus adapté.
-  4. **Les appels Git liés aux issues** passent par un agent (github-tracker /
-     git-point), pas par ses outils Git directs. La vérification de l'état d'un
-     agent passe par un agent, pas par `list_agent_sessions`.
-  5. **Priorité au message utilisateur** : s'il tape pendant qu'il délègue,
-     l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
-     la délégation continue en arrière-plan, puis revient dessus à la fin).
+- **Délégation IMPÉRATIVE** : tant que le mode est actif, l'Assistant **ne
+  réfléchit pas lui-même**, il **délègue**. Tout travail intellectuel — analyse,
+  recherche, rédaction, conception, diagnostic, plan, code, vérification — est
+  confié à un agent.
+- **Ce que l'Assistant fait lui-même, et rien d'autre** : (1) répondre avec une
+  information **déjà** dans son suivi (base, projets et tâches connus) ;
+  (2) prendre les décisions de **coordination** (choisir l'agent, découper,
+  ordonner, arbitrer) ; (3) **reformuler** en langage clair le retour d'un agent.
+- **DEUX familles d'agents** (la consigne les nomme explicitement) :
+  1. **Agents d'un projet** (le projet est le contexte) :
+     `run_agents(agent_ids, task, project)` — travail DANS un projet (code,
+     documentation, tests, état du dépôt) ; `project` omis = projet actif.
+  2. **Agents hors projet** (créés pour l'Assistant, rattachés à aucun projet) :
+     `run_assistant_agents(agent_ids, task)` — travail qui ne dépend d'AUCUN
+     projet (recherche, analyse, rédaction interne), l'agent tourne dans
+     `~/.pilot/assistant/`. Si aucun agent ne convient : `create_agent` d'abord.
+- **Marche à suivre obligatoire** : choisir la famille ET les agents, annoncer
+  en une ligne les étapes ET les agents, puis **lancer immédiatement** — sans
+  mener le travail intellectuel soi-même.
+- **Les appels Git liés aux issues** passent par un agent (github-tracker /
+  git-point), pas par ses outils Git directs. La vérification de l'état d'un
+  agent ne se fait pas soi-même.
+- **Priorité au message utilisateur** : s'il tape pendant qu'il délègue,
+  l'Assistant traite son message EN PRIORITÉ (réponse immédiate, signale que
+  la délégation continue en arrière-plan, puis revient dessus à la fin).
 
 <!-- HELP:super-agent-coordinator -->
 ### Mode « Assistant coordinateur pur »
 Dans **Paramètres → section Assistant**, l'option **« Assistant coordinateur
 (déléguer quand il faut réfléchir) »** (désactivée par défaut) fait passer
-l'Assistant en mode **coordinateur** plutôt qu'exécutant :
-- Il **annonce les étapes ET les agents** puis **lance directement** (pour tout
-  travail substantiel lié à un projet).
-- Il **répond lui-même aux questions simples** (état d'une tâche, information
-  déjà connue de son suivi).
-- Il **délègue dès qu'il faut réfléchir** sur un projet (analyse, recherche,
-  rédaction, modification) à l'agent le plus adapté.
+l'Assistant en mode **coordinateur** plutôt qu'exécutant. Tant qu'il est actif,
+il ne réfléchit pas lui-même : **tout travail intellectuel** (analyse,
+recherche, rédaction, conception, diagnostic, plan, code, vérification) est
+confié à un agent.
+- Il fait lui-même **seulement** : répondre avec une information **déjà** dans
+  son suivi, prendre les **décisions de coordination**, **reformuler** en
+  langage clair le retour d'un agent.
+- Il dispose de **deux familles d'agents** :
+  - les **agents d'un projet** (le projet est le contexte) — pour tout travail
+    dans un projet ;
+  - les **agents hors projet** (créés pour lui, sans projet) — pour la
+    recherche, l'analyse ou la rédaction interne.
+- Il **annonce les étapes ET les agents** puis **lance immédiatement**.
 - Les appels Git liés aux issues et la vérification de l'état des agents
   passent par des agents (pas par ses outils directs).
 - Si vous tapez pendant une délégation, il vous répond **en priorité** puis

@@ -426,7 +426,7 @@ fn available_agents_context(state: &AppState, app: &AppHandle) -> String {
 /// les outils d'agents (`run_agents`, `create_agent`, `delegate_to_coder`,
 /// `ask_multi_choice`, `ask_confirm`, `ask_input`) et le flux « plan-maker »
 /// pour les demandes de code importantes (plan → délégation).
-const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de `run_agents(agent_ids, task)` (méthode par défaut : lance une tâche sur un/plusieurs agents en arrière-plan, tu reçois un accusé puis le résultat agrégé), `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
+const SUPER_AGENT_TOOLS_PROMPT: &str = "\n\n## Outils d'agents\nTu disposes de DEUX familles de délégation : `run_agents(agent_ids, task, project)` (agents d'un projet : le travail se fait dans un projet, avec le projet comme contexte ; `project` omis = projet actif) et `run_assistant_agents(agent_ids, task)` (agents hors projet, créés pour toi, tournant dans `~/.pilot/assistant/` : recherche, analyse, rédaction interne — aucun contexte de projet). Tu disposes aussi de `create_agent(...)` (agent sur mesure si nécessaire), `delegate_to_coder` (EXCEPTION, tâche simple d'écriture sur le projet actif), et `ask_multi_choice`/`ask_confirm`/`ask_input` (interroger l'utilisateur).\n\nUn seul agent à la fois par projet : une demande vers un agent déjà actif est mise en file d'attente et se lance automatiquement à la fin.\n\nExécute le travail via des agents spécifiques (`run_agents`/`run_assistant_agents`/`create_agent`), pas `delegate_to_coder`. Avant de déléguer : affine la demande (pose des questions si elle est floue), puis lance.\n\nPour une demande de code importante (plusieurs fichiers/étapes) : demande un plan à `plan-maker` via `run_agents`, puis délègue l'exécution. Pour une demande simple (1 fichier, < 50 lignes), délègue directement sans plan-maker.\n";
 
 /// Bloc d'instructions injecté dans le prompt système de l'assistant : règles
 /// de résilience / anti-blocage ET anti-boucle de `run_agents` (fusionnées : une
@@ -501,22 +501,37 @@ fn concise_guideline(enabled: bool) -> String {
 }
 
 /// Construit la consigne « Assistant coordinateur pur » à injecter dans le
-/// prompt système du super-agent. Quand activé, l'assistant annonce les étapes
-/// et les agents puis lance directement ; il répond lui-même aux questions
-/// simples et délègue dès qu'il faut réfléchir sur un projet. Retourne une
-/// chaîne vide si le mode est désactivé. Le mode est UNIQUEMENT un texte
-/// d'instructions : aucun changement du mécanisme d'échange assistant↔agents.
+/// prompt système du super-agent. Quand activé, la délégation est IMPÉRATIVE :
+/// tout travail intellectuel (analyse, recherche, rédaction, conception,
+/// diagnostic, plan, code, vérification) est confié à un agent ; l'assistant ne
+/// répond lui-même que pour une information déjà dans son suivi, une décision de
+/// coordination ou une reformulation en langage clair. La consigne nomme les
+/// DEUX familles d'agents (agents d'un projet via `run_agents`, agents hors
+/// projet via `run_assistant_agents`). Retourne une chaîne vide si le mode est
+/// désactivé. Le mode est UNIQUEMENT un texte d'instructions : aucun changement
+/// du mécanisme d'échange assistant↔agents.
 fn coordinator_guideline(enabled: bool) -> String {
     if !enabled {
         return String::new();
     }
-    "\n\n## Mode « Assistant coordinateur pur »
-Tu es le coordinateur, pas l'exécutant. Règles :
-1. PROPOSE ET LANCE : pour tout travail substantiel lié à un projet (réfléchir, analyser, modifier, vérifier), annonce en une ligne les étapes ET l'équipe d'agents que tu utilises, puis lance directement.
-2. RÉPONDS TOI-MÊME aux questions simples : état d'une tâche, information déjà connue de ton suivi (base), question de compréhension. Ne délègue pas pour répondre à une question dont tu as déjà la réponse.
-3. DÉLÈGUE dès qu'il faut RÉFLÉCHIR sur une demande liée à un projet (analyse, recherche, rédaction, modification) : confie le raisonnement à l'agent le plus adapté.
-4. Les appels Git liés aux issues passent par un agent (github-tracker / git-point), pas par tes outils Git directs. La vérification de l'état d'un agent passe par un agent, pas par list_agent_sessions.
-5. Si l'utilisateur tape pendant que tu délègues, traite son message EN PRIORITÉ : réponds immédiatement, signale que la délégation continue en arrière-plan, et reviens dessus à la fin.".to_string()
+    "\n\n## Mode « Assistant coordinateur pur » (IMPÉRATIF)
+Tu es le coordinateur, PAS l'exécutant. Tant que ce mode est actif, tu NE RÉFLÉCHIS PAS toi-même : tu DÉLÈGUES. Tout travail intellectuel — analyse, recherche, rédaction, conception, diagnostic, plan, code, vérification — est confié à un agent. Si tu dois déléguer, il n'y a AUCUN intérêt à faire le travail toi-même : ce serait un doublon inutile.
+
+Ce que tu fais TOI-MÊME, et rien d'autre :
+1. Répondre avec une information DÉJÀ dans ton suivi (base interne, projets et tâches connus).
+2. Prendre les décisions de COORDINATION : choisir l'agent, découper, ordonner, arbitrer.
+3. REFORMULER en langage clair le retour d'un agent (sans code ni noms de fichiers).
+
+DEUX FAMILLES D'AGENTS — choisis toujours la bonne :
+1. AGENTS D'UN PROJET (le projet est le contexte) : `run_agents(agent_ids, task, project)`. Le travail se fait DANS un projet (code, documentation, tests, état du dépôt). `project` = chemin absolu du projet cible ; omis = projet actif.
+2. AGENTS HORS PROJET (créés pour toi, rattachés à aucun projet) : `run_assistant_agents(agent_ids, task)`. Le travail ne dépend d'AUCUN projet (recherche, analyse, rédaction interne) ; l'agent tourne dans ton espace `~/.pilot/assistant/`, sans contexte de projet. N'utilise pas `run_agents` pour ce cas, ni l'inverse.
+Si aucun agent ne convient, crée-le d'abord avec `create_agent`, puis lance.
+
+Marche à suivre obligatoire à chaque demande :
+1. Choisis la famille (projet ou hors projet) et les agents adaptés.
+2. Annonce en une ligne les étapes ET les agents, puis lance IMMÉDIATEMENT (`run_agents` / `run_assistant_agents`) — sans mener le travail intellectuel toi-même.
+3. Les appels Git liés aux issues passent par un agent (github-tracker / git-point), pas par tes outils Git directs. Ne vérifie pas l'état d'un agent toi-même.
+4. Si l'utilisateur tape pendant que tu délègues, traite son message EN PRIORITÉ : réponds immédiatement, signale que la délégation continue en arrière-plan, puis reviens dessus à la fin.".to_string()
 }
 
 /// Construit la consigne « mode user-friendly » (issue #16) à injecter dans le
@@ -5889,6 +5904,71 @@ mod tests {
         assert!(
             total <= budget,
             "textes fixes du prompt assistant : {total} caracteres > plafond {budget} — compacter ou relever le plafond explicitement"
+        );
+    }
+
+    /// Mode « Assistant coordinateur pur » : quand il est ACTIF, la consigne doit
+    /// rendre la delegation IMPERATIVE et nommer les DEUX familles d'agents
+    /// (agents d'un projet via `run_agents`, agents hors projet via
+    /// `run_assistant_agents`). Quand le mode est inactif, AUCUNE consigne n'est
+    /// injectee : rien n'est impose (le mode reste parametrable).
+    #[test]
+    fn coordinator_guideline_imposes_delegation_and_names_both_agent_families() {
+        // Inactif : aucune consigne, aucune obligation injectee.
+        assert!(
+            super::coordinator_guideline(false).is_empty(),
+            "mode coordinateur inactif : aucune consigne ne doit etre injectee"
+        );
+
+        let on = super::coordinator_guideline(true);
+        // Obligation de deleguer, explicitement imperative.
+        assert!(
+            on.contains("IMPÉRATIF") && on.contains("tu DÉLÈGUES"),
+            "la consigne doit imposer la delegation quand le mode est actif"
+        );
+        assert!(
+            on.contains("AUCUN intérêt à faire le travail toi-même"),
+            "la consigne doit dire qu'il n'y a aucun interet a reflechir soi-meme"
+        );
+        // Les deux familles d'agents et l'outil de chacune.
+        assert!(
+            on.contains("DEUX FAMILLES D'AGENTS"),
+            "la consigne doit annoncer explicitement les deux familles d'agents"
+        );
+        assert!(
+            on.contains("AGENTS D'UN PROJET") && on.contains("run_agents("),
+            "la consigne doit decrire les agents d'un projet (outil run_agents)"
+        );
+        assert!(
+            on.contains("AGENTS HORS PROJET") && on.contains("run_assistant_agents("),
+            "la consigne doit decrire les agents hors projet (outil run_assistant_agents)"
+        );
+        // Perimetre du travail confie a un agent : tout ce qui demande de reflechir.
+        for mot in [
+            "analyse",
+            "recherche",
+            "rédaction",
+            "conception",
+            "diagnostic",
+            "plan",
+            "code",
+            "vérification",
+        ] {
+            assert!(
+                on.contains(mot),
+                "la consigne doit couvrir le travail « {mot} »"
+            );
+        }
+        // Ce que l'assistant fait lui-meme, et rien d'autre.
+        assert!(
+            on.contains("Ce que tu fais TOI-MÊME, et rien d'autre"),
+            "la consigne doit delimiter ce que l'assistant fait lui-meme"
+        );
+        // Le bloc de description des outils doit lui aussi nommer les deux outils
+        // (sinon l'outil hors projet resterait invisible).
+        assert!(
+            super::SUPER_AGENT_TOOLS_PROMPT.contains("run_assistant_agents"),
+            "le bloc outils doit mentionner run_assistant_agents (agents hors projet)"
         );
     }
 }
