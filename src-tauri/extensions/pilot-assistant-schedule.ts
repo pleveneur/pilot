@@ -3,8 +3,9 @@
 // L'assistant (onglet 🧭) peut programmer des rappels qui reviennent dans sa
 // conversation à l'échéance : relance différée (« recheck dans 10 min ») ou
 // périodique (« point toutes les 5 min tant que le codeur tourne »). Trois outils :
-//   - schedule_create(name, prompt, everySeconds) → crée une relance périodique
-//     (everySeconds >= 60). Retourne { id, nextFireAt }.
+//   - schedule_create(name, prompt, everySeconds?) → crée une relance périodique
+//     (everySeconds OPTIONNEL, >= 60 ; omis = fréquence par défaut des rappels de
+//     surveillance, réglage Paramètres → Assistant). Retourne { id, nextFireAt }.
 //   - schedule_list() → liste les planifications actives.
 //   - schedule_delete(id) → supprime une planification.
 //   - schedule_set_enabled(id, enabled) → désactive/réactive une planification
@@ -44,16 +45,18 @@ export default function (pi: ExtensionAPI) {
     name: "schedule_create",
     label: "Schedule Create",
     description:
-      "Programmer une relance périodique qui reviendra dans ta conversation à l'échéance (everySeconds >= 60). Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Retourne { id, nextFireAt }.",
+      "Programmer une relance périodique qui reviendra dans ta conversation à l'échéance. `everySeconds` est OPTIONNEL : si tu ne le donnes pas, la relance prend la fréquence par défaut des rappels de surveillance (réglée par l'utilisateur dans Paramètres → Assistant, 1 heure par défaut). Quand tu le donnes, il doit être >= 60 secondes. Utile pour surveiller un codeur en cours, ou repointer un chantier plus tard. Retourne { id, nextFireAt }.",
     promptSnippet: "schedule_create: programmer une relance périodique",
     promptGuidelines: [
-      "Use schedule_create to program a periodic reminder that will come back in your conversation at the due time. everySeconds must be >= 60. Give a clear name and a prompt describing what to recheck.",
+      "Use schedule_create to program a periodic reminder that will come back in your conversation at the due time. everySeconds is OPTIONAL: if you omit it, the reminder uses the user's default surveillance frequency (1 hour by default). If you pass it, it must be >= 60.",
       "Max 20 active schedules. Use schedule_list to see existing ones and schedule_delete to remove them.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Nom unique de la planification" }),
       prompt: Type.String({ description: "Texte injecté à l'échéance (ce qu'il faut rechecker)" }),
-      everySeconds: Type.Integer({ description: "Intervalle en secondes (>= 60)" }),
+      everySeconds: Type.Optional(
+        Type.Integer({ description: "Intervalle en secondes (>= 60). Omis = fréquence par défaut des rappels de surveillance." })
+      ),
     }),
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

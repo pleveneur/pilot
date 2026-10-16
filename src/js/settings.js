@@ -192,6 +192,41 @@ async function refreshDefaultThinkingLevels(currentConfig, selectEl, noteEl) {
   );
 }
 
+// ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──
+// Bornes alignées sur le backend (super_agent.rs) : minimum technique 60 s et
+// plafond de 20 rappels ACTIFS. Les valeurs du <select> sont déjà en secondes.
+const SCHEDULE_INTERVAL_DEFAULT_SECS = 3600;
+const SCHEDULE_MAX_ACTIVE = 20;
+
+/**
+ * Normalise la fréquence choisie (valeur du <select> ou de la config) :
+ * entier de secondes, jamais sous le minimum technique de 60 s. Toute valeur
+ * absente ou inexploitable retombe sur le défaut (1 heure).
+ */
+function normalizeScheduleInterval(value) {
+  const n = typeof value === "string" ? parseInt(value, 10) : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return SCHEDULE_INTERVAL_DEFAULT_SECS;
+  return Math.max(Math.round(n), 60);
+}
+
+/**
+ * Affiche « n sur 20 » rappels de surveillance actifs, à côté du réglage de
+ * fréquence. Lecture seule (liste des rappels) ; fail-open : en cas d'erreur on
+ * n'affiche rien plutôt qu'un chiffre faux.
+ */
+async function refreshSuperAgentScheduleCount(el) {
+  if (!el) return;
+  try {
+    const res = await invoke("super_agent_schedule_list");
+    const rows = res && Array.isArray(res.schedules) ? res.schedules : [];
+    const active = rows.filter((s) => s && s.enabled !== false).length;
+    el.textContent = `${active} sur ${SCHEDULE_MAX_ACTIVE} rappels de surveillance actifs`;
+  } catch (e) {
+    console.warn("super_agent_schedule_list (Paramètres):", e);
+    el.textContent = "";
+  }
+}
+
 export async function initSettings() {
   const modal = document.getElementById("settings-modal");
   const btnSettings = document.getElementById("btn-settings");
@@ -416,6 +451,9 @@ const chkGraphIncludeCalls = document.getElementById("setting-graph-include-call
 const chkSuperAgentForceStructuredBrief = document.getElementById("setting-superagent-force-structured-brief");
 const chkSuperAgentInheritContext = document.getElementById("setting-superagent-inherit-context");
 const chkSuperAgentAutoCheckStartup = document.getElementById("setting-superagent-auto-check-startup");
+// ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──
+const selectSuperAgentScheduleInterval = document.getElementById("setting-superagent-schedule-interval");
+const superAgentScheduleCount = document.getElementById("setting-superagent-schedule-count");
 // ── Tâche #160 : overlay plein écran des événements ──
 const chkSuperAgentEventsOverlay = document.getElementById("setting-superagent-events-overlay");
 const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-superagent-events-overlay-seconds");
@@ -1245,6 +1283,11 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   if (chkSuperAgentForceStructuredBrief) chkSuperAgentForceStructuredBrief.checked = currentConfig.super_agent_force_structured_brief !== false;
   if (chkSuperAgentInheritContext) chkSuperAgentInheritContext.checked = currentConfig.super_agent_inherit_context === true;
   if (chkSuperAgentAutoCheckStartup) chkSuperAgentAutoCheckStartup.checked = currentConfig.super_agent_auto_check_startup === true;
+  // ── Lot A idée 6 : fréquence des rappels de surveillance ──
+  if (selectSuperAgentScheduleInterval) {
+    selectSuperAgentScheduleInterval.value = String(normalizeScheduleInterval(currentConfig.super_agent_schedule_interval_secs));
+  }
+  await refreshSuperAgentScheduleCount(superAgentScheduleCount);
   // ── Tâche #160 : overlay plein écran des événements ──
   if (chkSuperAgentEventsOverlay) chkSuperAgentEventsOverlay.checked = currentConfig.super_agent_events_overlay_enabled === true;
   if (inputSuperAgentEventsOverlaySeconds) inputSuperAgentEventsOverlaySeconds.value = currentConfig.super_agent_events_overlay_seconds ?? 5;
@@ -2098,6 +2141,12 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
         super_agent_force_structured_brief: chkSuperAgentForceStructuredBrief ? chkSuperAgentForceStructuredBrief.checked !== false : true,
         super_agent_inherit_context: chkSuperAgentInheritContext ? chkSuperAgentInheritContext.checked === true : false,
         super_agent_auto_check_startup: chkSuperAgentAutoCheckStartup ? chkSuperAgentAutoCheckStartup.checked === true : false,
+        // ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──
+        // Bornée au minimum technique de 60 s (le select propose 5 min minimum,
+        // mais une config ancienne/corrompue ne doit jamais descendre sous 60 s).
+        super_agent_schedule_interval_secs: normalizeScheduleInterval(
+          selectSuperAgentScheduleInterval ? selectSuperAgentScheduleInterval.value : 3600
+        ),
         // ── Tâche #160 : overlay plein écran des événements ──
         super_agent_events_overlay_enabled: chkSuperAgentEventsOverlay ? chkSuperAgentEventsOverlay.checked === true : false,
         super_agent_events_overlay_seconds: inputSuperAgentEventsOverlaySeconds ? (parseInt(inputSuperAgentEventsOverlaySeconds.value, 10) || 5) : 5,

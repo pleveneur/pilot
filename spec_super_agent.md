@@ -1442,6 +1442,15 @@ ancien sans avoir à annuler les plus récents.
   appartient à l'Assistant, son réglage est donc rangé dans cet onglet
   (déplacé depuis l'onglet « Agent Pi »). Identifiants DOM et clés de
   configuration **inchangés** — voir `spec_telegram.md`.
+- **Fréquence des rappels de surveillance** (Lot A idée 6) : fréquence par défaut
+  des **nouveaux** rappels créés par l'Assistant **sans** fréquence explicite
+  (`schedule_create` sans `everySeconds`). Choix : 5 / 15 / 30 minutes,
+  **1 heure (défaut)**, 1 jour. Clé de configuration :
+  `super_agent_schedule_interval_secs` (secondes, défaut `3600`).
+  Les rappels **déjà** programmés conservent leur propre `every` : changer le
+  réglage ne les touche pas (aucune action « appliquer à tous »). Bornes
+  inchangées : `every` ≥ 60 s, 20 rappels **actifs** au maximum. Le nombre de
+  rappels actifs (« n sur 20 ») est affiché à côté du réglage (lecture seule).
 
 ### Transfert de mémoire (issue #69)
 

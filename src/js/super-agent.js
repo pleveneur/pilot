@@ -4475,10 +4475,16 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
       try {
         let result;
         if (req.op === "create") {
+          // Lot A idée 6 : `every` est optionnel. Si l'assistant ne précise AUCUNE
+          // fréquence (champ absent, 0 ou invalide), on envoie `null` : Rust
+          // applique alors le réglage « Fréquence des rappels de surveillance »
+          // (1 heure par défaut). Une fréquence explicite est transmise telle
+          // quelle (le garde-fou >= 60 s reste côté Rust).
+          const everySeconds = Number(req.everySeconds);
           result = await invoke("super_agent_schedule_create", {
             name: String(req.name || ""),
             prompt: String(req.prompt || ""),
-            every: Number(req.everySeconds || 0),
+            every: Number.isFinite(everySeconds) && everySeconds > 0 ? everySeconds : null,
           });
         } else if (req.op === "list") {
           result = await invoke("super_agent_schedule_list");

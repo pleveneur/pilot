@@ -965,6 +965,25 @@ pub fn super_agent_db_execute(app: AppHandle, sql: String) -> Result<Value, Stri
 pub(crate) const SCHEDULE_MIN_EVERY_SECS: i64 = 60;
 pub(crate) const SCHEDULE_MAX: i64 = 20;
 
+/// Lot A idée 6 : résout la fréquence d'un NOUVEAU rappel.
+///
+/// - `explicit` = fréquence demandée par l'Assistant (`everySeconds`) ; une
+///   valeur strictement positive est respectée TELLE QUELLE (le garde-fou de
+///   `schedule_insert` refuse ensuite tout < 60 s) ;
+/// - `explicit` absente ou non exploitable → fréquence par défaut du réglage
+///   « Fréquence des rappels de surveillance » (`default_secs`, en secondes),
+///   elle-même bornée au minimum technique de 60 s (une config ancienne ou
+///   corrompue ne peut donc pas créer un rappel trop rapide).
+///
+/// Les rappels DÉJÀ créés ne passent jamais par ici : ils conservent leur
+/// `every` en base.
+pub(crate) fn resolve_schedule_every(explicit: Option<i64>, default_secs: u32) -> i64 {
+    match explicit {
+        Some(v) if v > 0 => v,
+        _ => std::cmp::max(default_secs as i64, SCHEDULE_MIN_EVERY_SECS),
+    }
+}
+
 /// Planification telle que renvoyée au frontend / à l'assistant.
 pub(crate) struct DueSchedule {
     id: i64,
@@ -1167,15 +1186,27 @@ pub(crate) fn schedule_mark_done(conn: &Connection, id: i64, now: &str) -> Resul
 // ── Commandes Tauri (appelées depuis super-agent.js / l'extension) ──
 
 /// Crée une planification d'action récurrente pour l'assistant.
+///
+/// Lot A idée 6 : `every` est optionnel. Quand l'assistant ne précise pas de
+/// fréquence (`None` ou `<= 0`), le rappel prend la fréquence par défaut du
+/// réglage « Fréquence des rappels de surveillance » (défaut 1 heure).
 #[tauri::command]
 pub fn super_agent_schedule_create(
+    state: State<'_, AppState>,
     app: AppHandle,
     name: String,
     prompt: String,
-    every: i64,
+    every: Option<i64>,
 ) -> Result<Value, String> {
+    // Défaut lu à CHAQUE création : le réglage est donc pris en compte à chaud
+    // (et relu du disque au démarrage suivant, comme le reste de la config).
+    let default_secs = {
+        let cfg = state.config.lock().unwrap();
+        cfg.super_agent_schedule_interval_secs
+    };
+    let resolved = resolve_schedule_every(every, default_secs);
     let conn = open_db(&app)?;
-    let id = schedule_insert(&conn, &name, &prompt, every)?;
+    let id = schedule_insert(&conn, &name, &prompt, resolved)?;
     // Annonce l'échéance réelle du premier déclenchement (created_at + every),
     // calculée par la même expression que le tick de décision.
     let next_fire_at = schedule_next_fire(&conn, id)?
@@ -5059,6 +5090,7 @@ mod tests {
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
+        resolve_schedule_every, SCHEDULE_MAX, SCHEDULE_MIN_EVERY_SECS,
         task_counts, take_trash_entry, trash_entry_preview, validate_export_json,
         list_memory_trash_entries,
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
@@ -6129,6 +6161,85 @@ mod tests {
             schedule_insert(&conn, &format!("s{}", i), "prompt", 120).unwrap();
         }
         assert!(schedule_insert(&conn, "s21", "prompt", 120).is_err());
+    }
+
+    // ── Lot A idée 6 : fréquence par défaut des rappels de surveillance ──
+
+    #[test]
+    fn schedule_default_frequency_is_one_hour_and_comes_from_the_setting() {
+        // Sans fréquence explicite → valeur du réglage (défaut global : 1 heure).
+        assert_eq!(resolve_schedule_every(None, 3600), 3600);
+        assert_eq!(resolve_schedule_every(None, 900), 900);
+        // Une valeur non exploitable (0, négative) retombe sur le réglage.
+        assert_eq!(resolve_schedule_every(Some(0), 3600), 3600);
+        assert_eq!(resolve_schedule_every(Some(-5), 900), 900);
+        assert_eq!(resolve_schedule_every(Some(0), 86400), 86400);
+    }
+
+    #[test]
+    fn schedule_explicit_frequency_is_kept_unchanged() {
+        // Une fréquence explicite n'est JAMAIS écrasée par le réglage.
+        assert_eq!(resolve_schedule_every(Some(300), 3600), 300);
+        assert_eq!(resolve_schedule_every(Some(60), 86400), 60);
+        assert_eq!(resolve_schedule_every(Some(86400), 300), 86400);
+    }
+
+    #[test]
+    fn schedule_default_is_clamped_to_the_60s_minimum() {
+        // Un réglage devenu incohérent (< 60 s) ne peut pas créer un rappel trop
+        // rapide : le minimum technique reste la borne basse.
+        assert_eq!(resolve_schedule_every(None, 5), SCHEDULE_MIN_EVERY_SECS);
+        assert_eq!(resolve_schedule_every(None, 0), SCHEDULE_MIN_EVERY_SECS);
+    }
+
+    #[test]
+    fn schedule_created_without_frequency_takes_the_setting_and_never_moves_existing_ones() {
+        let conn = mem_conn();
+        // Rappel « ancien » (fréquence explicite) : il ne doit JAMAIS bouger
+        // quand le réglage change.
+        let old = schedule_insert(&conn, "ancien", "prompt", 989).unwrap();
+        // Nouvelle valeur de réglage : 15 minutes.
+        let setting_secs = 900u32;
+        let new_id = schedule_insert(
+            &conn,
+            "nouveau sans frequence",
+            "prompt",
+            resolve_schedule_every(None, setting_secs),
+        )
+        .unwrap();
+        let every_of = |id: i64| -> i64 {
+            conn.query_row(
+                "SELECT every FROM assistant_schedules WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(every_of(old), 989, "un rappel existant garde son every");
+        assert_eq!(every_of(new_id), 900, "un nouveau rappel prend le reglage");
+        // Le reglage change encore : ni l'ancien ni le nouveau ne bougent (aucune
+        // action « appliquer a tous » n'est declenchee par le seul reglage).
+        assert_eq!(every_of(old), 989);
+        assert_eq!(every_of(new_id), 900);
+        // Bornes conservees a la creation : un reglage incoherent est borne a 60 s,
+        // qui reste accepte ; 59 s reste refuse.
+        assert_eq!(resolve_schedule_every(None, 10), SCHEDULE_MIN_EVERY_SECS);
+        assert!(schedule_insert(&conn, "borne basse", "prompt", SCHEDULE_MIN_EVERY_SECS).is_ok());
+        assert!(schedule_insert(&conn, "sous la borne", "prompt", SCHEDULE_MIN_EVERY_SECS - 1).is_err());
+        // Plafond de 20 rappels ACTIFS inchange (ici 22 inserts au total : le 21e
+        // actif doit etre refuse).
+        for i in 0..17 {
+            schedule_insert(&conn, &format!("remplissage {}", i), "prompt", 3600).unwrap();
+        }
+        assert!(schedule_insert(&conn, "au dela du plafond", "prompt", 3600).is_err());
+        let active: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assistant_schedules WHERE enabled = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, SCHEDULE_MAX);
     }
 
     #[test]

@@ -975,6 +975,19 @@
               <input type="checkbox" id="setting-superagent-auto-check-startup" />
               <label for="setting-superagent-auto-check-startup" title="À l'ouverture de la session de l'Assistant, vérifier automatiquement les « points à faire » (relances programmées) et les lancer. Désactivé par défaut : l'Assistant ne lance pas automatiquement un rappel dû au démarrage, sauf si vous validez ce comportement.">Vérifier les points à faire à l'ouverture de la session (relances programmées)</label>
             </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-superagent-schedule-interval" title="Rythme par défaut des NOUVEAUX rappels de surveillance créés par l'Assistant (veille des risques, reprise des chantiers). Les rappels déjà programmés gardent leur propre fréquence. Minimum technique : 60 secondes.">Fréquence des rappels de surveillance :</label>
+              <select id="setting-superagent-schedule-interval">
+                <option value="300">Toutes les 5 minutes</option>
+                <option value="900">Toutes les 15 minutes</option>
+                <option value="1800">Toutes les 30 minutes</option>
+                <option value="3600">Toutes les heures (défaut)</option>
+                <option value="86400">Tous les jours</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent">
+              <span id="setting-superagent-schedule-count" style="font-size:12px;color:var(--text-muted);"></span>
+            </div>
             <div class="setting-row setting-row-checkbox setting-row-indent">
               <input type="checkbox" id="setting-superagent-events-overlay" />
               <label for="setting-superagent-events-overlay" title="Afficher TEMPORAIREMENT au centre de l'écran (au-dessus de tout) chaque événement de l'Assistant (fin de tâche, erreur, agent terminé…), comme le panneau cloche. Le dernier événement remplace le précédent. Les questions interactives (choix, confirmations) ne sont pas concernées. Désactivé par défaut.">Événements en plein écran (bandeau central temporaire)</label>

@@ -798,6 +798,14 @@ struct AppConfig {
     // onglets. Désactivé → panneau inchangé (Événements seuls).
     #[serde(default = "default_true")]
     super_agent_tasks_tab_enabled: bool,
+    // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
+    // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
+    // fréquence explicite. Exprimée en secondes, bornée côté application au
+    // minimum technique de 60 s. Défaut : 1 heure (3600 s).
+    // Les rappels DÉJÀ existants de `assistant_schedules` gardent leur propre
+    // `every` : ce réglage n'est qu'un défaut pour les NOUVEAUX rappels.
+    #[serde(default = "default_super_agent_schedule_interval_secs")]
+    super_agent_schedule_interval_secs: u32,
     // ── GDS (spec_gds.md) : paramètre GLOBAL d'activation/désactivation ──
     // Distinct de l'activation par projet (.pilot/gds.json, décision 29/08/2026) :
     // ce toggle global coupe TOUTES les opérations GDS (sync, verrous, suivi
@@ -878,6 +886,9 @@ struct AppConfig {
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
+/// Lot A idée 6 : fréquence par défaut des nouveaux rappels de surveillance
+/// (1 heure). Compromis utile sans harceler, loin du minimum technique de 60 s.
+fn default_super_agent_schedule_interval_secs() -> u32 { 3600 }
 
 fn default_true() -> bool { true }
 fn default_anomaly_timeout_minutes() -> u32 { 30 }
@@ -1136,6 +1147,7 @@ impl Default for AppConfig {
             super_agent_events_overlay_enabled: false,
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
             super_agent_tasks_tab_enabled: true,
+            super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),
             plface_autostart_enabled: false,
@@ -3748,6 +3760,20 @@ fn rename_dir_fallback(source: &std::path::Path, dest: &std::path::Path) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{ensure_assistant_notify_script, normalize_project_path, AppConfig};
+
+    #[test]
+    fn schedule_interval_defaults_to_one_hour_and_is_reloaded_from_disk() {
+        // Ancienne config (champ absent) → défaut : 1 heure (3600 s).
+        let legacy: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.super_agent_schedule_interval_secs, 3600);
+        // Nouvelle installation : même défaut.
+        assert_eq!(AppConfig::default().super_agent_schedule_interval_secs, 3600);
+        // Relu au démarrage suivant : la valeur enregistrée est restaurée à
+        // l'identique (persistance disque, via le JSON de config).
+        let reloaded: AppConfig =
+            serde_json::from_str(r#"{"super_agent_schedule_interval_secs":900}"#).unwrap();
+        assert_eq!(reloaded.super_agent_schedule_interval_secs, 900);
+    }
 
     #[test]
     fn normalize_handles_trailing_slash() {
