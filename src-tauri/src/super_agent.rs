@@ -2459,6 +2459,240 @@ fn kanban_ideas(conn: &Connection) -> Result<Vec<Value>, String> {
     Ok(ideas)
 }
 
+// ── Idée 5 (Lot A) : bilan de période ──
+
+/// Rassemble le bilan d'une période `[from, to]` (dates ISO `YYYY-MM-DD`,
+/// calculées côté JS en heure LOCALE — `period-report.js`) pour un projet
+/// donné, ou pour TOUS les projets suivis quand `project_path` est absent/vide.
+///
+/// Sections : tâches terminées/livrées (règle unique `classify_task_status` =
+/// "done", dernière mise à jour dans la période — un statut libre comme
+/// « fini » est donc reconnu), décisions prises, jalons atteints, blocages
+/// rencontrés (tâches dont `blocker_reason` reste renseigné et mises à jour
+/// dans la période).
+///
+/// Limite assumée de cette première tranche : la date de référence est
+/// `updated_at` (heure UTC de SQLite) ; une action faite tard le soir à l'ouest
+/// de Greenwich peut tomber dans la période voisine. Aucun AppHandle : helper
+/// testable sur une connexion en mémoire (`init_db`).
+fn period_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    project_path: Option<&str>,
+) -> Result<Value, String> {
+    let from = from.trim();
+    let to = to.trim();
+    if from.is_empty() || to.is_empty() {
+        return Err("period_report : les bornes de période (from, to) sont requises".to_string());
+    }
+    let project_path = project_path.map(str::trim).filter(|p| !p.is_empty());
+    let project_id: Option<i64> = match project_path {
+        Some(p) => conn
+            .query_row(
+                "SELECT id FROM projects WHERE path = ?1",
+                rusqlite::params![p],
+                |r| r.get::<_, i64>(0),
+            )
+            .ok(),
+        None => None,
+    };
+    // Projet nommé mais inconnu du suivi : bilan VIDE honnête (section vides,
+    // pas d'erreur) — l'utilisateur voit « aucun élément », il ne subit pas un
+    // échec de la commande.
+    if project_path.is_some() && project_id.is_none() {
+        return Ok(serde_json::json!({
+            "from": from,
+            "to": to,
+            "project_path": project_path,
+            "project_found": false,
+            "tasks_done": [],
+            "decisions": [],
+            "milestones": [],
+            "blockers": [],
+            "counts": { "tasks_done": 0, "decisions": 0, "milestones": 0, "blockers": 0 },
+        }));
+    }
+
+    // Tâches terminées/livrées. On lit les tâches du périmètre puis on retient
+    // celles que la règle unique classe « done » (statuts libres inclus) ; le
+    // filtre `(?3 IS NULL OR …)` porte le projet optionnel sans SQL dynamique.
+    let mut tasks_done: Vec<Value> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.title, t.status, t.updated_at, p.name, p.path \
+                 FROM tasks t JOIN projects p ON p.id = t.project_id \
+                 WHERE date(t.updated_at) BETWEEN date(?1) AND date(?2) \
+                   AND (?3 IS NULL OR t.project_id = ?3) \
+                 ORDER BY t.updated_at, t.id",
+            )
+            .map_err(|e| format!("Erreur lecture bilan (tâches): {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![from, to, project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture bilan (tâches): {}", e))?;
+        for row in rows {
+            if let Ok((id, title, status, updated_at, project_name, project_path)) = row {
+                if classify_task_status(&status) == "done" {
+                    tasks_done.push(serde_json::json!({
+                        "id": id, "title": title, "status": status,
+                        "updated_at": updated_at, "project_name": project_name,
+                        "project_path": project_path,
+                    }));
+                }
+            }
+        }
+    }
+
+    // Décisions prises dans la période.
+    let mut decisions: Vec<Value> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT d.id, d.summary, d.created_at, p.name, p.path \
+                 FROM decisions d JOIN projects p ON p.id = d.project_id \
+                 WHERE date(d.created_at) BETWEEN date(?1) AND date(?2) \
+                   AND (?3 IS NULL OR d.project_id = ?3) \
+                 ORDER BY d.created_at, d.id",
+            )
+            .map_err(|e| format!("Erreur lecture bilan (décisions): {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![from, to, project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture bilan (décisions): {}", e))?;
+        for row in rows {
+            if let Ok((id, summary, created_at, project_name, project_path)) = row {
+                decisions.push(serde_json::json!({
+                    "id": id, "summary": summary, "created_at": created_at,
+                    "project_name": project_name, "project_path": project_path,
+                }));
+            }
+        }
+    }
+
+    // Jalons ATTEINTS dans la période (statut `atteint`).
+    let mut milestones: Vec<Value> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.title, m.due_date, m.updated_at, p.name, p.path \
+                 FROM milestones m JOIN projects p ON p.id = m.project_id \
+                 WHERE m.status = 'atteint' \
+                   AND date(m.updated_at) BETWEEN date(?1) AND date(?2) \
+                   AND (?3 IS NULL OR m.project_id = ?3) \
+                 ORDER BY m.updated_at, m.id",
+            )
+            .map_err(|e| format!("Erreur lecture bilan (jalons): {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![from, to, project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture bilan (jalons): {}", e))?;
+        for row in rows {
+            if let Ok((id, title, due_date, updated_at, project_name, project_path)) = row {
+                milestones.push(serde_json::json!({
+                    "id": id, "title": title, "due_date": due_date,
+                    "updated_at": updated_at, "project_name": project_name,
+                    "project_path": project_path,
+                }));
+            }
+        }
+    }
+
+    // Blocages rencontrés : tâches dont le motif est ENCORE renseigné et mises à
+    // jour dans la période (aucune colonne « date de blocage » dédiée à ce jour).
+    let mut blockers: Vec<Value> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.title, t.status, t.blocker_reason, t.updated_at, p.name, p.path \
+                 FROM tasks t JOIN projects p ON p.id = t.project_id \
+                 WHERE t.blocker_reason IS NOT NULL AND TRIM(t.blocker_reason) <> '' \
+                   AND date(t.updated_at) BETWEEN date(?1) AND date(?2) \
+                   AND (?3 IS NULL OR t.project_id = ?3) \
+                 ORDER BY t.updated_at, t.id",
+            )
+            .map_err(|e| format!("Erreur lecture bilan (blocages): {}", e))?;
+        let rows = stmt
+            .query_map(rusqlite::params![from, to, project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(|e| format!("Erreur lecture bilan (blocages): {}", e))?;
+        for row in rows {
+            if let Ok((id, title, status, reason, updated_at, project_name, project_path)) = row {
+                blockers.push(serde_json::json!({
+                    "id": id, "title": title, "status": status,
+                    "blocker_reason": reason, "updated_at": updated_at,
+                    "project_name": project_name, "project_path": project_path,
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "from": from,
+        "to": to,
+        "project_path": project_path,
+        "project_found": true,
+        "tasks_done": tasks_done,
+        "decisions": decisions,
+        "milestones": milestones,
+        "blockers": blockers,
+        "counts": {
+            "tasks_done": tasks_done.len(),
+            "decisions": decisions.len(),
+            "milestones": milestones.len(),
+            "blockers": blockers.len(),
+        },
+    }))
+}
+
+/// Idée 5 (Lot A) — Bilan de période : commande Tauri appelée par la vue de
+/// suivi (`super-agent.js`). Les bornes `from`/`to` sont calculées côté JS
+/// (`period-report.js`, semaine du lundi au dimanche en heure locale) ;
+/// `project_path` vide/absent = bilan de TOUS les projets suivis.
+#[tauri::command]
+pub async fn super_agent_period_report(
+    app: AppHandle,
+    from: String,
+    to: String,
+    project_path: Option<String>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    period_report(&conn, &from, &to, project_path.as_deref())
+}
+
 // ── Apprentissage : injection de résumé de session ──
 
 // P0-4 : plafond UNIQUE de ce qui est réellement VERSÉ dans la conversation de
@@ -4819,7 +5053,7 @@ mod tests {
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
         deliver_one_summary,
         enqueue_session_summary, init_db, is_task_open, kanban_ideas,
-        kanban_tasks,
+        kanban_tasks, period_report,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
@@ -5143,6 +5377,65 @@ mod tests {
         let task = &data["clients"][0]["tasks"][0];
         assert_eq!(task["blocker_reason"], "En attente de decision");
         assert_eq!(task["client_name"], "Client A");
+    }
+
+    // Idée 5 (Lot A) — Bilan de période : chaque section est rassemblée dans les
+    // bornes demandées, le filtre projet est respecté, une période vide ne
+    // produit aucune erreur et un projet inconnu du suivi donne un bilan vide
+    // honnête. Ce test verrouille le contrat de `period_report` (aucun AppHandle).
+    #[test]
+    fn period_report_gathers_sections_within_bounds() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/b', 'Projet B', 1);\
+             INSERT INTO tasks (project_id, title, status, created_at, updated_at) \
+               VALUES (1, 'Livree dans la periode', 'livree', '2026-10-05', '2026-10-07');\
+             INSERT INTO tasks (project_id, title, status, created_at, updated_at) \
+               VALUES (1, 'Terminee statut libre', 'fini', '2026-10-05', '2026-10-06');\
+             INSERT INTO tasks (project_id, title, status, created_at, updated_at) \
+               VALUES (1, 'Hors periode', 'livree', '2026-09-01', '2026-09-01');\
+             INSERT INTO tasks (project_id, title, status, created_at, updated_at, blocker_reason) \
+               VALUES (2, 'Bloquee B', 'en_cours', '2026-10-05', '2026-10-08', 'Attente decision');\
+             INSERT INTO decisions (project_id, summary, created_at) \
+               VALUES (1, 'Decision A', '2026-10-09');\
+             INSERT INTO decisions (project_id, summary, created_at) \
+               VALUES (1, 'Decision hors periode', '2026-09-10');\
+             INSERT INTO milestones (project_id, title, due_date, status, created_at, updated_at) \
+               VALUES (1, 'Jalon atteint', '2026-10-10', 'atteint', '2026-10-01', '2026-10-10');\
+             INSERT INTO milestones (project_id, title, due_date, status) \
+               VALUES (1, 'Jalon planifie', '2026-11-01', 'planifie');",
+        )
+        .unwrap();
+
+        // Tous projets : chaque section est comptée dans [2026-10-05, 2026-10-11].
+        let all = period_report(&conn, "2026-10-05", "2026-10-11", None).unwrap();
+        assert_eq!(all["counts"]["tasks_done"], 2);
+        assert_eq!(all["counts"]["decisions"], 1);
+        assert_eq!(all["counts"]["milestones"], 1);
+        assert_eq!(all["counts"]["blockers"], 1);
+        assert_eq!(all["project_found"], true);
+
+        // Filtre projet : seul le projet B ressort (sa tâche bloquée).
+        let b = period_report(&conn, "2026-10-05", "2026-10-11", Some("/p/b")).unwrap();
+        assert_eq!(b["counts"]["blockers"], 1);
+        assert_eq!(b["counts"]["tasks_done"], 0);
+        assert_eq!(b["counts"]["decisions"], 0);
+
+        // Période vide : aucune section, aucune erreur.
+        let empty = period_report(&conn, "2025-01-01", "2025-01-07", None).unwrap();
+        assert_eq!(empty["counts"]["tasks_done"], 0);
+        assert!(empty["tasks_done"].as_array().unwrap().is_empty());
+
+        // Projet nommé mais inconnu : bilan vide honnête, jamais une erreur.
+        let unknown =
+            period_report(&conn, "2026-10-05", "2026-10-11", Some("/p/inexistant")).unwrap();
+        assert_eq!(unknown["project_found"], false);
+        assert!(unknown["blockers"].as_array().unwrap().is_empty());
+
+        // Bornes vides refusées explicitement.
+        assert!(period_report(&conn, "", "2026-10-11", None).is_err());
     }
 
     // Dependances entre taches (« attend la tache X ») : l'etat est DERIVE a la

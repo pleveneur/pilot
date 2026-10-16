@@ -35,6 +35,7 @@ import { mountCollapsibleAgentList, subscribeAgentActivity, getAgentActivitySnap
 import { buildRunAgentsSummary, runAgentsResultFailed, emitRunAgentsFinishNotice } from "./run-agents-notify.js";
 import { shouldRememberAgentReport, shouldDeliverAgentReport } from "./super-agent-exchange-filter.js";
 import { captureProjectBadgeNames, extendBadgesWithText, pathTailName, resolveBubbleBadgeNames } from "./super-agent-badges.js";
+import { periodBounds, periodKindLabel, formatPeriodReport, weekBounds } from "./period-report.js";
 import { isGdsConnected, isProjectGds } from "./gds-status.js";
 import { isBusyStale, isProjectWorking } from "./exclusivity-queue.js";
 import { shouldFinalizeOnAgentEnd } from "./agent-hardening.js";
@@ -1792,6 +1793,7 @@ export async function createSuperAgent(container) {
     <button class="agent-btn" data-action="projects" title="Projets & clients (associer un projet à un client)"><i data-lucide="building-2" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="config" title="Configurer (nom, clients, prompt)"><i data-lucide="settings" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="tracking" title="Afficher/masquer le suivi multi-projets"><i data-lucide="layout-dashboard" class="icon-sm"></i></button>
+    <button class="agent-btn" data-action="period-report" title="Bilan de période (tâches terminées, décisions, jalons, blocages)"><i data-lucide="calendar-range" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="analyze-data" title="Analyser et ranger mes données (analyse en lecture seule : rapport + proposition de rangement)"><i data-lucide="folder-search" class="icon-sm"></i></button>
     <button class="agent-btn" data-action="telegram-dialog" id="superagent-telegram-btn" title="Communication Telegram" aria-label="Communication Telegram" hidden><i data-lucide="message-circle" class="icon-sm"></i></button>
     <select class="agent-model-select" id="superagent-model-select" title="Changer de modèle"></select>
@@ -1971,6 +1973,122 @@ export async function createSuperAgent(container) {
   trackingEl.id = "super-tracking";
   trackingEl.className = "super-tracking hidden";
   container.appendChild(trackingEl);
+
+  // ── Bilan de période (Idée 5, Lot A) ──
+  // Panneau de la vue de suivi : choix de la période (semaine en cours / semaine
+  // dernière / période libre), affichage du bilan mis en forme et bouton
+  // « Copier ». Les bornes de période et la mise en forme du texte sont des
+  // fonctions PURES (`period-report.js`), testées sans DOM. Le rassemblement des
+  // données est fait par la commande Tauri `super_agent_period_report`.
+  const periodReportEl = document.createElement("div");
+  periodReportEl.id = "super-period-report";
+  periodReportEl.className = "super-tracking super-period-report hidden";
+  periodReportEl.innerHTML = `
+    <div class="super-period-controls">
+      <label class="super-period-kind-label" for="super-period-kind">Période</label>
+      <select id="super-period-kind" class="super-period-kind">
+        <option value="this-week">Semaine en cours</option>
+        <option value="last-week">Semaine dernière</option>
+        <option value="custom">Période libre</option>
+      </select>
+      <span class="super-period-custom hidden">
+        <input type="date" id="super-period-from" aria-label="Début de la période" />
+        <span class="dash-muted">→</span>
+        <input type="date" id="super-period-to" aria-label="Fin de la période" />
+      </span>
+      <button class="agent-btn super-period-refresh" title="Afficher le bilan"><i data-lucide="refresh-cw" class="icon-sm"></i><span>Afficher</span></button>
+      <button class="agent-btn super-period-copy" title="Copier le bilan" disabled><i data-lucide="copy" class="icon-sm"></i><span>Copier</span></button>
+    </div>
+    <div class="super-period-meta dash-muted"></div>
+    <pre class="super-period-text">Choisissez une période puis cliquez sur « Afficher ».</pre>
+  `;
+  container.appendChild(periodReportEl);
+
+  const periodKindEl = periodReportEl.querySelector("#super-period-kind");
+  const periodCustomEl = periodReportEl.querySelector(".super-period-custom");
+  const periodFromEl = periodReportEl.querySelector("#super-period-from");
+  const periodToEl = periodReportEl.querySelector("#super-period-to");
+  const periodMetaEl = periodReportEl.querySelector(".super-period-meta");
+  const periodTextEl = periodReportEl.querySelector(".super-period-text");
+  const periodCopyBtn = periodReportEl.querySelector(".super-period-copy");
+  let periodReportText = "";
+
+  // Champs de période libre préremplis sur la semaine en cours (repli pratique).
+  {
+    const initial = weekBounds(new Date());
+    periodFromEl.value = initial.from;
+    periodToEl.value = initial.to;
+  }
+  const syncPeriodCustomVisibility = () => {
+    periodCustomEl.classList.toggle("hidden", periodKindEl.value !== "custom");
+  };
+  periodKindEl.addEventListener("change", syncPeriodCustomVisibility);
+  syncPeriodCustomVisibility();
+
+  // Rassemble et affiche le bilan de la période choisie. Les bornes sont
+  // calculées côté JS (`periodBounds`, heure locale) et envoyées au backend
+  // sous forme de deux dates ISO ; le projet visé est le projet actif de
+  // l'application, ou TOUS les projets suivis s'il n'y en a pas.
+  async function loadPeriodReport() {
+    const kind = periodKindEl.value;
+    const bounds = periodBounds(kind, new Date(), {
+      from: periodFromEl.value,
+      to: periodToEl.value,
+    });
+    if (!bounds) {
+      periodMetaEl.textContent = "Période incomplète : choisissez deux dates.";
+      periodTextEl.textContent = "";
+      periodReportText = "";
+      periodCopyBtn.disabled = true;
+      return;
+    }
+    const projectPath = window._pilotProjectPath || null;
+    periodMetaEl.textContent = `Période ${bounds.from} → ${bounds.to} · ${
+      projectPath ? pathTailName(projectPath) : "tous les projets"
+    }`;
+    periodTextEl.textContent = "Chargement du bilan…";
+    periodCopyBtn.disabled = true;
+    try {
+      const report = await invoke("super_agent_period_report", {
+        from: bounds.from,
+        to: bounds.to,
+        projectPath,
+      });
+      periodReportText = formatPeriodReport(report, {
+        title: `Bilan de période — ${periodKindLabel(kind)}`,
+      });
+      periodTextEl.textContent = periodReportText;
+      periodCopyBtn.disabled = false;
+    } catch (err) {
+      console.error("super_agent_period_report:", err);
+      periodReportText = "";
+      periodTextEl.textContent = `Erreur : ${String(err)}`;
+      periodCopyBtn.disabled = true;
+    }
+  }
+
+  // Copie le bilan affiché (texte prêt à coller). Repli sans exception : si le
+  // presse-papiers est inaccessible, on sélectionne le texte pour un Ctrl+C.
+  async function copyPeriodReport() {
+    if (!periodReportText) return;
+    try {
+      await navigator.clipboard.writeText(periodReportText);
+      toastInfo("Bilan de période copié dans le presse-papiers.");
+    } catch (_) {
+      const range = document.createRange();
+      range.selectNodeContents(periodTextEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      toastInfo("Texte sélectionné : copiez-le avec Ctrl+C.");
+    }
+  }
+
+  periodReportEl
+    .querySelector(".super-period-refresh")
+    .addEventListener("click", () => loadPeriodReport());
+  periodCopyBtn.addEventListener("click", () => copyPeriodReport());
+  refreshIcons(periodReportEl);
 
   // La vue Kanban multi-projets (get_super_agent_kanban) s'ouvre dans un
   // ONGLET DÉDIÉ de Pilot (mode `superagent-kanban`) via le bouton #btn-superkanban
@@ -2560,9 +2678,20 @@ export async function createSuperAgent(container) {
       // #btn-superkanban de la sidebar, onglet Assistant (spec_super_agent.md).
       if (trackingEl.classList.contains("hidden")) {
         trackingEl.classList.remove("hidden");
+        periodReportEl.classList.add("hidden");
         loadSuperTracking();
       } else {
         trackingEl.classList.add("hidden");
+      }
+    } else if (action === "period-report") {
+      // Bilan de période (Idée 5, Lot A) : panneau d'affichage + copie. Un
+      // seul panneau de suivi à la fois — on masque la liste multi-projets.
+      if (periodReportEl.classList.contains("hidden")) {
+        periodReportEl.classList.remove("hidden");
+        trackingEl.classList.add("hidden");
+        loadPeriodReport();
+      } else {
+        periodReportEl.classList.add("hidden");
       }
     } else if (action === "analyze-data") {
       await launchDataAnalysis();

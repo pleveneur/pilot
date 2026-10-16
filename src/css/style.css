@@ -7374,6 +7374,66 @@ body.pilot-loading *::after {
   margin-bottom: 2px;
 }
 
+/* Bilan de période (Idée 5, Lot A) — panneau de la vue de suivi 🧭 */
+.super-period-report {
+  gap: 10px;
+}
+.super-period-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+.super-period-kind-label {
+  color: var(--text-secondary, #9aa0aa);
+}
+.super-period-controls select,
+.super-period-controls input[type="date"] {
+  background: var(--bg-input, #1c1f26);
+  color: var(--text-primary, #e6e8ee);
+  border: 1px solid var(--border-color, #2c313a);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.super-period-custom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.super-period-custom.hidden {
+  display: none;
+}
+.super-period-refresh,
+.super-period-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.super-period-copy[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+.super-period-text {
+  flex: 1;
+  min-height: 120px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, "Cascadia Mono", Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary, #e6e8ee);
+  background: var(--bg-input, #1c1f26);
+  border: 1px solid var(--border-color, #2c313a);
+  border-radius: 6px;
+  user-select: text;
+}
+
 /* Vue Kanban multi-projets (Assistant 🧭) — basculée via le bouton « Vues » */
 .super-kanban {
   display: flex;

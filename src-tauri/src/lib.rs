@@ -3460,6 +3460,7 @@ pub fn run() {
             super_agent::list_super_agent_projects,
             super_agent::get_super_agent_tracking,
             super_agent::get_super_agent_kanban,
+            super_agent::super_agent_period_report,
             super_agent::query_super_agent,
             // ── Assistant de groupe (GDS Phase C2, spec_gds.md §C2) ──
             group_assistant::start_group_assistant_session,
