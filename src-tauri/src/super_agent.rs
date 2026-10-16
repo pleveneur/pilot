@@ -2182,25 +2182,33 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
 
 /// Lecture seule en vue Kanban de la base de suivi de l'assistant
 /// (~/.pilot/super-agent.db) : retourne TOUTES les tâches, aplaties, classées
-/// par client puis par projet, avec le statut BRUT (la normalisation en
-/// 4 colonnes est faite côté frontend par `super-agent-kanban.js`, qui reste
-/// une logique pure testable). Les tâches sans client associé tombent dans un
-/// pseudo-client « Sans client » pour rester visibles.
+/// par client puis par projet, avec le statut BRUT et le motif de blocage
+/// (`blocker_reason`), la normalisation en colonnes étant faite côté frontend
+/// par `super-agent-kanban.js` (logique pure testable). Les tâches sans client
+/// associé tombent dans un pseudo-client « Sans client » pour rester visibles.
+///
+/// Retourne aussi `ideas` : les idées de la table `idees_evolutions` (créée à la
+/// demande par l'assistant), à afficher en SOUS-CATÉGORIE « Idées » de la colonne
+/// « À faire ». Aucune table n'est créée ici : si `idees_evolutions` n'existe pas
+/// (base neuve), `ideas` est simplement vide.
 #[tauri::command]
 pub async fn get_super_agent_kanban(app: AppHandle) -> Result<Value, String> {
     let conn = open_db(&app)?;
-    kanban_tasks(&conn)
+    let mut data = kanban_tasks(&conn)?;
+    if let Some(obj) = data.as_object_mut() {
+        obj.insert("ideas".to_string(), Value::Array(kanban_ideas(&conn)?));
+    }
+    Ok(data)
 }
 
 /// Requête du volet Kanban, séparée de la commande pour rester testable sur une
 /// connexion en mémoire (`init_db` + `Connection::open_in_memory`), comme les
-/// autres helpers de suivi prenant `&Connection`. Aucun changement de
-/// comportement : la commande se contente de lui passer la connexion ouverte.
+/// autres helpers de suivi prenant `&Connection`.
 fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
     let mut stmt = conn
         .prepare(
             "SELECT c.name, p.name, p.path, t.id, t.title, t.description, \
-                    t.status, t.deadline, t.created_at, t.updated_at \
+                    t.status, t.deadline, t.created_at, t.updated_at, t.blocker_reason \
              FROM tasks t \
              JOIN projects p ON p.id = t.project_id \
              LEFT JOIN clients c ON c.id = p.client_id \
@@ -2221,6 +2229,7 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
                 r.get::<_, String>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })
         .map_err(|e| format!("Erreur lecture kanban: {}", e))?;
@@ -2230,7 +2239,20 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
     let mut by_client: Vec<(String, Vec<Value>)> = Vec::new();
     let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for row in rows {
-        if let Ok((client, pname, ppath, tid, title, desc, status, deadline, created, updated)) = row {
+        if let Ok((
+            client,
+            pname,
+            ppath,
+            tid,
+            title,
+            desc,
+            status,
+            deadline,
+            created,
+            updated,
+            blocker_reason,
+        )) = row
+        {
             let client_name = client.unwrap_or_else(|| "Sans client".to_string());
             let task = serde_json::json!({
                 "id": tid,
@@ -2242,6 +2264,8 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
                 "updated_at": updated,
                 "project_name": pname,
                 "project_path": ppath,
+                "client_name": client_name,
+                "blocker_reason": blocker_reason,
             });
             match index.get(&client_name) {
                 Some(&i) => {
@@ -2261,6 +2285,59 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
         .collect();
 
     Ok(serde_json::json!({ "clients": clients }))
+}
+
+/// Idées de la table `idees_evolutions` (créée à la demande par l'assistant via
+/// `db_execute`), aplaties avec le projet et le client associés. La table peut
+/// être ABSENTE (base neuve, base de développement) : on ne crée AUCUNE table
+/// parallèle, on renvoie alors une liste vide. Helper testable sur `&Connection`.
+fn kanban_ideas(conn: &Connection) -> Result<Vec<Value>, String> {
+    let present: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'idees_evolutions'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if present == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT c.name, p.name, p.path, i.id, i.titre, i.description, \
+                    i.statut, i.priorite, i.created_at, i.updated_at \
+             FROM idees_evolutions i \
+             LEFT JOIN projects p ON p.id = i.project_id \
+             LEFT JOIN clients c ON c.id = p.client_id \
+             ORDER BY i.created_at",
+        )
+        .map_err(|e| format!("Erreur lecture idees kanban: {}", e))?;
+
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(serde_json::json!({
+                "id": r.get::<_, i64>(3)?,
+                "title": r.get::<_, String>(4)?,
+                "description": r.get::<_, String>(5)?,
+                "status": r.get::<_, String>(6)?,
+                "priority": r.get::<_, String>(7)?,
+                "created_at": r.get::<_, String>(8)?,
+                "updated_at": r.get::<_, String>(9)?,
+                "project_name": r.get::<_, Option<String>>(1)?,
+                "project_path": r.get::<_, Option<String>>(2)?,
+                "client_name": r.get::<_, Option<String>>(0)?,
+            }))
+        })
+        .map_err(|e| format!("Erreur lecture idees kanban: {}", e))?;
+
+    let mut ideas: Vec<Value> = Vec::new();
+    for row in rows {
+        if let Ok(v) = row {
+            ideas.push(v);
+        }
+    }
+    Ok(ideas)
 }
 
 // ── Apprentissage : injection de résumé de session ──
@@ -4530,7 +4607,8 @@ mod tests {
         build_capped_injection_message, build_project_context, classify_task_status,
         db_add_client, db_list_clients, db_list_projects_with_client, db_project_client_map,
         db_reconcile_clients, db_remove_client, db_rename_client, db_set_project_client,
-        deliver_one_summary, enqueue_session_summary, init_db, is_task_open, kanban_tasks,
+        deliver_one_summary, enqueue_session_summary, init_db, is_task_open, kanban_ideas,
+        kanban_tasks,
         mark_session_summary_delivered, parse_memory_trash, parse_session_memory,
         pending_session_summaries, push_trash_entry, remove_session_memory_item,
         replace_tracking, restore_session_memory_item, schedule_delete, schedule_due,
@@ -4801,6 +4879,59 @@ mod tests {
             .find(|t| t["title"] == "Tâche sans échéance")
             .unwrap();
         assert!(undated["deadline"].is_null());
+    }
+
+    // Kanban : le motif de blocage d'une tâche DOIT ressortir sur la carte, et
+    // les idées de la table `idees_evolutions` DOIVENT être renvoyées à part
+    // (sous-catégorie « Idées » de la colonne « À faire »). La table n'existe pas
+    // au schéma initial : on ne crée AUCUNE table parallèle, on renvoie une liste
+    // vide. Ce test échoue si `blocker_reason` disparaît de la requête ou si la
+    // lecture des idées crée une table de son côté.
+    #[test]
+    fn kanban_tasks_exposes_blocker_and_ideas() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO tasks (project_id, title, status, blocker_reason) \
+               VALUES (1, 'Tache bloquee', 'en_cours', 'En attente de decision');",
+        )
+        .unwrap();
+
+        // Table absente (base neuve) : liste vide, aucune création de table.
+        assert!(kanban_ideas(&conn).unwrap().is_empty());
+        let created: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'idees_evolutions'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(created, 0, "aucune table parallèle ne doit être créée");
+
+        // Table créée par l'assistant : les idées ressortent avec projet + client.
+        conn.execute_batch(
+            "CREATE TABLE idees_evolutions (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, \
+                titre TEXT NOT NULL, description TEXT DEFAULT '', \
+                priorite TEXT DEFAULT 'moyenne', statut TEXT DEFAULT 'idee', \
+                created_at TEXT DEFAULT (datetime('now')), \
+                updated_at TEXT DEFAULT (datetime('now')));\
+             INSERT INTO idees_evolutions (project_id, titre, statut) \
+               VALUES (1, 'Idee A', 'idee');",
+        )
+        .unwrap();
+        let ideas = kanban_ideas(&conn).unwrap();
+        assert_eq!(ideas.len(), 1);
+        assert_eq!(ideas[0]["title"], "Idee A");
+        assert_eq!(ideas[0]["project_name"], "Projet A");
+        assert_eq!(ideas[0]["client_name"], "Client A");
+
+        // Le motif de blocage et le client ressortent sur la tâche.
+        let data = kanban_tasks(&conn).unwrap();
+        let task = &data["clients"][0]["tasks"][0];
+        assert_eq!(task["blocker_reason"], "En attente de decision");
+        assert_eq!(task["client_name"], "Client A");
     }
 
     // Règle unique « ouverte ou close » (miroir de la non-régression JS) : une

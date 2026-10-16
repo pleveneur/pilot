@@ -14,6 +14,14 @@ import {
   filterOpenTasksByClient,
   filterUnqualifiedTasksByClient,
   formatTaskDeadline,
+  ALL_PROJECTS,
+  IDEAS_GROUP_LABEL,
+  listKanbanProjects,
+  filterKanbanTasks,
+  selectKanbanIdeas,
+  isOpenIdeaStatus,
+  formatCardProject,
+  isBlockedTask,
 } from "./super-agent-kanban.js";
 
 describe("KANBAN_COLUMNS", () => {
@@ -300,5 +308,123 @@ describe("formatTaskDeadline", () => {
     expect(formatTaskDeadline(undefined, now)).toBeNull();
     expect(formatTaskDeadline("", now)).toBeNull();
     expect(formatTaskDeadline("pas une date", now)).toBeNull();
+  });
+});
+
+// ── Kanban multi-projets : filtre de projet + sous-catégorie « Idées » ─────────
+// Ces tests verrouillent le comportement attendu à l'écran : sélecteur « tous /
+// un projet », nom du projet (et du client) sur les cartes, idées rangées SOUS
+// les tâches « À faire » (jamais mélangées), motif de blocage détecté.
+const SAMPLE_TASKS = [
+  {
+    name: "Client A",
+    tasks: [
+      { id: 1, status: "demande", project_path: "/pilot", project_name: "Pilot", client_name: "Client A" },
+      { id: 2, status: "en_cours", project_path: "/autre", project_name: "Autre", client_name: "Sans client" },
+    ],
+  },
+  { name: "Sans client", tasks: [{ id: 3, status: "terminee", project_path: "/pilot", project_name: "Pilot" }] },
+];
+const SAMPLE_IDEAS = [
+  { id: 10, title: "Idée Pilot", status: "idee", project_path: "/pilot", project_name: "Pilot", client_name: "Client A" },
+  { id: 11, title: "Idée Autre", status: "a_prevoir", project_path: "/autre", project_name: "Autre" },
+  { id: 12, title: "Idée faite", status: "implementee", project_path: "/pilot", project_name: "Pilot" },
+];
+
+describe("listKanbanProjects", () => {
+  it("liste les projets uniques des tâches et des idées, triés par nom", () => {
+    const projects = listKanbanProjects(SAMPLE_TASKS, SAMPLE_IDEAS);
+    expect(projects.map((p) => p.path)).toEqual(["/autre", "/pilot"]);
+    expect(projects[0].name).toBe("Autre");
+  });
+
+  it("ignore les entrées sans chemin et gère une entrée vide ou null", () => {
+    expect(listKanbanProjects([{ tasks: [{ project_path: "" }] }], [])).toEqual([]);
+    expect(listKanbanProjects(null, null)).toEqual([]);
+  });
+});
+
+describe("filterKanbanTasks", () => {
+  it("ne filtre rien pour ALL_PROJECTS (valeur par défaut) ou une valeur vide", () => {
+    expect(filterKanbanTasks(SAMPLE_TASKS, ALL_PROJECTS).map((t) => t.id)).toEqual([1, 2, 3]);
+    expect(filterKanbanTasks(SAMPLE_TASKS, "").map((t) => t.id)).toEqual([1, 2, 3]);
+  });
+
+  it("ne garde que les tâches du projet demandé", () => {
+    expect(filterKanbanTasks(SAMPLE_TASKS, "/pilot").map((t) => t.id)).toEqual([1, 3]);
+    expect(filterKanbanTasks(SAMPLE_TASKS, "/autre").map((t) => t.id)).toEqual([2]);
+  });
+});
+
+describe("selectKanbanIdeas", () => {
+  it("exclut les idées déjà implémentées et filtre par projet", () => {
+    expect(selectKanbanIdeas(SAMPLE_IDEAS, ALL_PROJECTS).map((i) => i.id)).toEqual([10, 11]);
+    expect(selectKanbanIdeas(SAMPLE_IDEAS, "/pilot").map((i) => i.id)).toEqual([10]);
+  });
+
+  it("gère une entrée vide ou null", () => {
+    expect(selectKanbanIdeas(null, ALL_PROJECTS)).toEqual([]);
+    expect(selectKanbanIdeas([], "/pilot")).toEqual([]);
+  });
+});
+
+describe("isOpenIdeaStatus", () => {
+  it("considère ouvertes les idées à étudier/planifier (aucune confusion avec une tâche)", () => {
+    expect(isOpenIdeaStatus("idee")).toBe(true);
+    expect(isOpenIdeaStatus("a_prevoir")).toBe(true);
+    expect(isOpenIdeaStatus("etudiee - verdict rendu")).toBe(true);
+    expect(isOpenIdeaStatus("")).toBe(true);
+    expect(isOpenIdeaStatus(undefined)).toBe(true);
+  });
+
+  it("clôt les idées implémentées, réalisées, livrées, annulées ou rejetées", () => {
+    expect(isOpenIdeaStatus("implémentée")).toBe(false);
+    expect(isOpenIdeaStatus("realisee")).toBe(false);
+    expect(isOpenIdeaStatus("livrée - v0.4.29")).toBe(false);
+    expect(isOpenIdeaStatus("annulée")).toBe(false);
+    expect(isOpenIdeaStatus("abandonnee")).toBe(false);
+    expect(isOpenIdeaStatus("rejetee")).toBe(false);
+  });
+});
+
+describe("buildKanbanColumns (idées)", () => {
+  it("range les idées en SOUS-catégorie de « À faire », jamais parmi les cartes", () => {
+    const cols = buildKanbanColumns([{ id: 1, status: "demande" }], SAMPLE_IDEAS);
+    const todo = cols.find((c) => c.key === "todo");
+    expect(todo.cards.map((t) => t.id)).toEqual([1]);
+    expect(todo.ideaCards.map((i) => i.id)).toEqual([10, 11, 12]);
+    expect(cols.filter((c) => c.key !== "todo").every((c) => !c.ideaCards)).toBe(true);
+    expect(IDEAS_GROUP_LABEL).toBe("Idées");
+  });
+
+  it("expose ideaCards vide quand aucune idée n'est fournie (appel à un argument inchangé)", () => {
+    const todo = buildKanbanColumns([]).find((c) => c.key === "todo");
+    expect(todo.ideaCards).toEqual([]);
+  });
+
+  it("les idées ne polluent jamais le compteur de tâches des colonnes", () => {
+    const cols = buildKanbanColumns([{ id: 1, status: "demande" }], SAMPLE_IDEAS);
+    expect(countByColumn(cols)).toEqual({ todo: 1, progress: 0, review: 0, done: 0, unqualified: 0 });
+  });
+});
+
+describe("formatCardProject", () => {
+  it("affiche le projet et le client (s'il est renseigné)", () => {
+    expect(formatCardProject({ project_name: "Pilot", client_name: "Acme" })).toBe("Pilot - Acme");
+    expect(formatCardProject({ project_name: "Pilot", client_name: "Sans client" })).toBe("Pilot");
+    expect(formatCardProject({ project_name: "Pilot" })).toBe("Pilot");
+    expect(formatCardProject({ client_name: "Acme" })).toBe("Acme");
+    expect(formatCardProject({})).toBe("");
+    expect(formatCardProject(null)).toBe("");
+  });
+});
+
+describe("isBlockedTask", () => {
+  it("ne bloque que lorsqu'un motif de blocage est renseigné (blocker_reason)", () => {
+    expect(isBlockedTask({ blocker_reason: "Attente décision client" })).toBe(true);
+    expect(isBlockedTask({ blocker_reason: "   " })).toBe(false);
+    expect(isBlockedTask({ blocker_reason: null })).toBe(false);
+    expect(isBlockedTask({})).toBe(false);
+    expect(isBlockedTask(null)).toBe(false);
   });
 });

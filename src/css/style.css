@@ -7379,7 +7379,7 @@ body.pilot-loading *::after {
 }
 .super-kanban-board {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 .super-kanban-col {
@@ -7467,6 +7467,105 @@ body.pilot-loading *::after {
   padding: 10px 0;
   border: 1px dashed var(--border-subtle, rgba(255,255,255,0.1));
   border-radius: 8px;
+}
+
+/* Sélecteur de projet + portée affichée (Kanban multi-projets : tous / un seul) */
+.kanban-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.kanban-project-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #9aa0aa);
+}
+.kanban-project-filter i {
+  color: var(--accent, #6b8cff);
+}
+.kanban-project-select {
+  font-size: 12px;
+  color: var(--text-primary, #e6e8ee);
+  background: var(--surface-1, #16181d);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  padding: 4px 8px;
+  max-width: 280px;
+}
+.kanban-project-select:focus {
+  outline: none;
+  border-color: var(--accent, #6b8cff);
+}
+.kanban-scope {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #e6e8ee);
+}
+.kanban-scope i {
+  color: var(--accent, #6b8cff);
+}
+
+/* Carte BLOQUÉE : le motif de blocage (colonne `blocker_reason`) reste lisible */
+.super-kanban-card.blocked {
+  border-left-color: var(--danger, #ef4444);
+}
+.super-kanban-card-blocker {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 12%, transparent);
+  border-radius: 6px;
+  padding: 3px 6px;
+  word-break: break-word;
+}
+.super-kanban-card-blocker i {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* Sous-catégorie « Idées » (table `idees_evolutions`) sous les tâches « À faire » */
+.super-kanban-ideas {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle, rgba(255,255,255,0.12));
+}
+.super-kanban-ideas-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary, #9aa0aa);
+}
+.super-kanban-ideas-head i {
+  color: #fbbf24;
+}
+.kanban-idea-card {
+  border-left-color: #fbbf24;
+  background: color-mix(in srgb, #fbbf24 6%, var(--surface-2, #1e2128));
+}
+.kanban-idea-card .super-kanban-card-head i {
+  color: #fbbf24;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.kanban-idea-meta {
+  font-size: 10px;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-style: italic;
 }
 
 /* ── Pilotage CRUD du Kanban (création/édition/déplacement/suppression) ── */

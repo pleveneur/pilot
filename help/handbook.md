@@ -1408,11 +1408,34 @@ uniquement un bloc d'instructions dans le prompt système.
 - La vue **liste** du suivi multi-projets reste dans le **panneau inférieur** de
   l'onglet 🧭 (bouton « suivi multi-projets »), strictement inchangée : le
   bouton « Vues » ne bascule plus cette liste, il ouvre l'onglet Kanban dédié.
-- Dans l'onglet Kanban, les tâches sont affichées **par client**, chacune
+- **Sélecteur de projet** en haut de l'onglet : **« Tous les projets »** (défaut)
+  ou **un projet précis**. Le choix est **conservé d'une ouverture à l'autre**
+  (localStorage `pilot:kanban:project`) ; un projet mémorisé qui n'existe plus
+  retombe sur « Tous les projets ». Le filtrage et la liste des projets sont des
+  fonctions **pures** (`listKanbanProjects`, `filterKanbanTasks`), le choix ne
+  provoque **aucun appel supplémentaire** (la réponse est gardée en mémoire).
+- Dans l'onglet Kanban, les tâches sont affichées **dans une grille unique**, chacune
   classée dans l'une des **5 colonnes** « À faire / En cours / À valider /
   Terminé / À qualifier ». La colonne « À qualifier » recueille les statuts que
   la règle unique ne sait pas trancher : rien ne disparaît en silence, mais une
   tâche close en texte libre ne compte jamais comme ouverte.
+- En mode **« Tous les projets »**, **chaque carte porte le nom de son projet**
+  (et le **client** s'il est renseigné) ; un bandeau rappelle la **portée**
+  affichée et le **nombre de tâches** visibles.
+- **Idées en sous-catégorie des tâches à faire** : sous les cartes de la colonne
+  « À faire » apparaît un sous-groupe titré **« Idées »**, alimenté par la table
+  **existante** `idees_evolutions` de la base de suivi (lue en **lecture seule**
+  par `get_super_agent_kanban`, champ `ideas` — **aucune table nouvelle**). Les
+  idées sont **visuellement distinctes** des tâches (carte à liseré jaune, ampoule,
+  statut et priorité affichés, **aucun bouton de tâche**) et **jamais mélangées**
+  aux tâches : elles ne comptent pas dans le compteur de la colonne. Une idée
+  **implémentée / réalisée / livrée / annulée / rejetée** n'est pas affichée (règle
+  pure `isOpenIdeaStatus`). Si la table est absente (base neuve), le sous-groupe
+  est simplement vide.
+- **Tâches bloquées** : une tâche dont la colonne `blocker_reason` est renseignée
+  (posée via `super_agent_flag_blocker`) affiche un **badge rouge « Bloquée :
+  <motif> »** sur sa carte (règle pure `isBlockedTask`), et la carte est marquée
+  visuellement — le blocage reste **distinct** et **lisible**.
 - **Règle unique « ouverte ou close »** (miroir JS `normalizeTaskStatus` /
   `isOpenTaskStatus` ↔ Rust `classify_task_status` / `is_task_open`) : elle
   **reconnaît les statuts clos en texte libre** (« terminee - verifie par les
@@ -1420,12 +1443,13 @@ uniquement un bloc d'instructions dans le prompt système.
   Les compteurs du cœur (`super_agent_tracking`, `super_agent_project_overview`,
   timeline, santé projet) appliquent la même règle. À la création d'une tâche, le
   statut canonique `demande` est écrit explicitement (plus de texte libre implicite).
-- Chaque carte de tâche rappelle le **titre**, le **projet** concerné et un
-  extrait de la **description**. Les tâches annulées ou abandonnées
+- Chaque carte de tâche rappelle le **titre**, le **projet** (et le **client**)
+  concerné et un extrait de la **description**. Les tâches annulées ou abandonnées
   n'apparaissent pas dans le tableau.
 - **Pilotage complet (création / édition / déplacement / suppression)** :
-  - Un bouton **« + Nouvelle carte »** par client ouvre un formulaire
-    (projet, titre, description, échéance) → `super_agent_create_task`.
+  - Un bouton **« + Nouvelle carte »** (barre d'outils) ouvre un formulaire
+    (projet, titre, description, échéance) → `super_agent_create_task` ; en mode
+    projet filtré, le **projet affiché est pré-rempli**
   - Chaque carte a des boutons **éditer** (titre, description, projet,
     échéance, statut) et **supprimer** (confirmation en deux temps) →
     `super_agent_update_task` / `super_agent_delete_task`.
@@ -1439,7 +1463,9 @@ uniquement un bloc d'instructions dans le prompt système.
     affiche le **nombre de tâches sélectionnées** et reste **visible au
     défilement** (liste longue : la mise en page n'est pas cassée) ;
   - le bouton **« Clôturer la sélection »** (et « Tout désélectionner ») n'est
-    **visible qu'à partir d'une tâche cochée** ;
+    **visible qu'à partir d'une tâche cochée** ; la clôture ne porte que sur les
+    cartes **visibles** (changer de projet **vide la sélection** : le filtre ne
+    peut jamais faire clôturer une tâche masquée) ;
   - il demande une **confirmation** qui annonce le **nombre de tâches** et
     rappelle que l'opération est **réversible** ; une confirmation **refusée
     n'écrit rien** ;
@@ -1503,8 +1529,8 @@ uniquement un bloc d'instructions dans le prompt système.
   `toolInProgress`) de `list_agent_sessions` puis `get_agent_supervision` : les
   consommateurs existants les ignorent.
 - **Cliquer sur une mission** referme le panneau. Les **tâches** du suivi
-  multi-projets (`get_super_agent_kanban`, statuts ouverts, groupées par client,
-  statut, échéance, case « À qualifier ») restent affichées **dans l'onglet Kanban
+  multi-projets (`get_super_agent_kanban`, statuts ouverts, filtre par projet,
+  statut, échéance, case « À qualifier », idées) restent affichées **dans l'onglet Kanban
   dédié**, ouvert par le bouton Kanban de la barre latérale — ce volet ne les
   duplique plus.
 

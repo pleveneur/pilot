@@ -186,11 +186,16 @@ export function columnToStatus(key) {
 
 /**
  * Répartit une liste de tâches brutes (telles que retournées par la commande
- * Rust `get_super_agent_kanban`) dans les 4 colonnes, dans l'ordre stable de
+ * Rust `get_super_agent_kanban`) dans les colonnes, dans l'ordre stable de
  * KANBAN_COLUMNS. Chaque colonne contient { key, label, icon, tone, cards }.
  * Une tâche annulée/abandonnée est exclue (hors tableau).
+ *
+ * Les IDÉES (table `idees_evolutions`, déjà existante) ne sont JAMAIS mélangées
+ * aux tâches : elles sont rangées à part dans `todo.ideaCards`, pour être
+ * affichées en sous-catégorie « Idées » de la colonne « À faire ». Le paramètre
+ * `ideas` est optionnel (appel à un argument inchangé).
  */
-export function buildKanbanColumns(tasks) {
+export function buildKanbanColumns(tasks, ideas) {
   const columns = KANBAN_COLUMNS.map((c) => ({ ...c, cards: [] }));
   const byKey = new Map(columns.map((c) => [c.key, c]));
   for (const task of tasks || []) {
@@ -199,6 +204,8 @@ export function buildKanbanColumns(tasks) {
     const col = byKey.get(key) || byKey.get("todo");
     if (col) col.cards.push(task);
   }
+  const todo = byKey.get("todo");
+  if (todo) todo.ideaCards = (ideas || []).slice();
   return columns;
 }
 
@@ -399,4 +406,132 @@ export function formatTaskDeadline(deadline, now = new Date()) {
   const iso = `${m[1]}-${m[2]}-${m[3]}`;
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return { text: `${m[3]}/${m[2]}/${m[1]}`, overdue: iso < today, iso };
+}
+
+// ── Sélecteur de projet + sous-catégorie « Idées » (Kanban multi-projets) ────
+// Le Kanban sert aussi bien pour UN projet que pour TOUS : un filtre en haut
+// limite l'affichage à un projet (le choix est conservé côté vue). Ces fonctions
+// pures ne connaissent ni DOM ni invoke → testables directement.
+
+/** Valeur du sélecteur « Tous les projets » (choix par défaut). */
+export const ALL_PROJECTS = "__all__";
+
+/** Titre du sous-groupe d'idées dans la colonne « À faire ». */
+export const IDEAS_GROUP_LABEL = "Idées";
+
+/**
+ * Liste les projets présents dans la réponse Kanban (tâches et/ou idées),
+ * dédoublonnés par chemin et triés par nom. Retourne `[{ path, name }]`. Un
+ * projet sans chemin est ignoré (impossible à filtrer). Pur.
+ * @param {Array<{tasks?: Array}>} clients
+ * @param {Array} [ideas]
+ */
+export function listKanbanProjects(clients, ideas) {
+  const byPath = new Map();
+  const add = (path, name) => {
+    const p = String(path || "");
+    if (!p || byPath.has(p)) return;
+    byPath.set(p, { path: p, name: String(name || "") || p });
+  };
+  for (const client of clients || []) {
+    for (const t of (client && client.tasks) || []) {
+      if (t) add(t.project_path, t.project_name);
+    }
+  }
+  for (const i of ideas || []) {
+    if (i) add(i.project_path, i.project_name);
+  }
+  return Array.from(byPath.values()).sort((a, b) => a.name.localeCompare(b.name, "fr"));
+}
+
+/**
+ * Aplatit toutes les tâches de la réponse Kanban et ne garde que celles du
+ * projet demandé. `ALL_PROJECTS` (ou une valeur vide) ne filtre rien : le mode
+ * « tous les projets » montre tout, chaque carte portant son projet. Pur.
+ * @param {Array<{tasks?: Array}>} clients
+ * @param {string} [projectPath]
+ * @returns {Array}
+ */
+export function filterKanbanTasks(clients, projectPath) {
+  const all = [];
+  for (const client of clients || []) {
+    for (const t of (client && client.tasks) || []) if (t) all.push(t);
+  }
+  if (!projectPath || projectPath === ALL_PROJECTS) return all;
+  return all.filter((t) => String(t.project_path || "") === String(projectPath));
+}
+
+// Statuts d'idée considérés comme CLOS (l'idée n'est plus à faire) : on ne les
+// affiche pas dans le tableau, comme les tâches annulées. Le reste (idee,
+// a_prevoir, a planifier, « etudiee - verdict rendu… ») reste visible.
+const IDEA_CLOSED_STATUSES = new Set([
+  "implementee",
+  "implemente",
+  "realisee",
+  "realise",
+  "livree",
+  "livre",
+  "annulee",
+  "annule",
+  "abandonnee",
+  "abandonne",
+  "rejetee",
+  "rejete",
+]);
+
+/**
+ * Une idée est-elle encore ouverte (à afficher dans la sous-catégorie « Idées ») ?
+ * Une idée implémentée / réalisée / livrée / annulée / rejetée est close. Le test
+ * est insensible à la casse et aux accents. Pur.
+ * @param {string} status
+ * @returns {boolean}
+ */
+export function isOpenIdeaStatus(status) {
+  const tokens = String(status || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (!tokens.length) return true;
+  return !tokens.some((t) => IDEA_CLOSED_STATUSES.has(t));
+}
+
+/**
+ * Idées à afficher, filtrées par projet et débarrassées de celles déjà closes.
+ * `ALL_PROJECTS` (ou vide) ne filtre pas par projet. Pur.
+ * @param {Array} ideas
+ * @param {string} [projectPath]
+ * @returns {Array}
+ */
+export function selectKanbanIdeas(ideas, projectPath) {
+  const all = (ideas || []).filter((i) => i && isOpenIdeaStatus(i.status));
+  if (!projectPath || projectPath === ALL_PROJECTS) return all;
+  return all.filter((i) => String(i.project_path || "") === String(projectPath));
+}
+
+/**
+ * Libellé projet d'une carte : « Projet » ou « Projet - Client » quand le client
+ * est renseigné. Sert à comprendre d'un coup d'oeil à quel projet appartient la
+ * carte en mode « tous les projets ». Retourne "" si aucun projet. Pur.
+ * @param {{project_name?: string, client_name?: string}} item
+ * @returns {string}
+ */
+export function formatCardProject(item) {
+  const proj = String((item && item.project_name) || "").trim();
+  const client = String((item && item.client_name) || "").trim();
+  if (!proj) return client;
+  if (!client || client === "Sans client") return proj;
+  return `${proj} - ${client}`;
+}
+
+/**
+ * Une tâche est-elle BLOQUÉE ? Le blocage est porté par la colonne
+ * `blocker_reason` (marquée via `super_agent_flag_blocker`). Le motif doit
+ * rester lisible sur la carte. Pur.
+ * @param {{blocker_reason?: string}} task
+ * @returns {boolean}
+ */
+export function isBlockedTask(task) {
+  return String((task && task.blocker_reason) || "").trim().length > 0;
 }

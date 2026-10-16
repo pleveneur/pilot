@@ -66,6 +66,13 @@ Pilot se comporte aussi comme un **gestionnaire de projets** : il ouvre plusieur
 - **Sauvegarde automatique** à la fermeture d'onglet (silencieuse).
 - **Détection de conflits** : si un fichier ouvert est modifié de l'extérieur pendant une édition, l'onglet clignote en rouge.
 
+### Kanban de suivi (🗂, onglet)
+- Le suivi multi-projets s'affiche dans un **onglet Kanban dédié** : chaque tâche est rangée dans une colonne **À faire / En cours / À valider / Terminé / À qualifier**.
+- **Sélecteur de projet** en haut : **« Tous les projets »** (défaut) ou **un projet précis** — votre choix est **conservé** d'une ouverture à l'autre. En mode « tous les projets », **chaque carte indique son projet** (et le client s'il est renseigné).
+- **Idées** : vos **idées d'évolution** apparaissent en **sous-catégorie « Idées »** dans la colonne « À faire », visuellement séparées des tâches à faire (aucune confusion entre une idée et une tâche).
+- **Tâches bloquées** : une tâche bloquée affiche en rouge le **motif du blocage** directement sur sa carte.
+- **Pilotage direct** : créer, éditer, glisser une carte d'une colonne à l'autre, supprimer (confirmation en deux temps), et **clôturer plusieurs tâches d'un coup** (avec annulation possible). Tout reste dans la base de suivi locale de l'Assistant.
+
 ### Terminal intégré (xterm.js + PTY)
 - Shell natif selon l'OS : `cmd.exe` (Windows), `zsh`/`bash` (macOS/Linux).
 - **Streaming** des sorties PTY vers le frontend via événements Tauri.
