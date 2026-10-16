@@ -2604,6 +2604,60 @@ pub fn super_agent_task_check_delete(app: AppHandle, check_id: i64) -> Result<Va
     Ok(serde_json::json!({ "ok": true, "check_id": check_id }))
 }
 
+// ── Idée 2 (Lot A), tranche 2.2 : commandes Tauri de saisie et de lecture ──
+//
+// Enveloppes MINCES de la tranche 1 : chacune ouvre la base puis délègue aux
+// helpers purs `db_set_task_estimated_minutes`, `db_add_task_spent_minutes` et
+// `db_task_time_json`. Aucune règle n'est dupliquée ici : une valeur négative
+// est refusée, une tâche inconnue est refusée, le temps passé se CUMULE. Le
+// temps attendu à l'appel est exprimé en MINUTES.
+
+/// Lit le temps d'une tâche : temps PRÉVU et temps PASSÉ, en minutes, avec deux
+/// booléens `*_set` (« renseigné ou non »). `null`/`false` = NON RENSEIGNÉ, à
+/// distinguer de `0` (« rien prévu » / « rien passé »). Refuse une tâche
+/// inconnue. Renvoie `db_task_time_json` tel quel.
+#[tauri::command]
+pub fn super_agent_task_time_get(app: AppHandle, task_id: i64) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_task_time_json(&conn, task_id)
+}
+
+/// Règle le temps PRÉVU (estimé) d'une tâche, en minutes. `minutes = null` remet
+/// la valeur à « non renseigné ». Refuse une valeur négative et une tâche
+/// inconnue ; ne touche jamais au temps passé. Renvoie l'état complet.
+#[tauri::command]
+pub fn super_agent_task_time_set_estimated(
+    app: AppHandle,
+    task_id: i64,
+    minutes: Option<i64>,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_set_task_estimated_minutes(&conn, task_id, minutes)?;
+    let mut value = db_task_time_json(&conn, task_id)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("ok".to_string(), Value::Bool(true));
+    }
+    Ok(value)
+}
+
+/// AJOUTE du temps PASSÉ à une tâche, en minutes (CUMUL : on n'écrase jamais).
+/// Refuse une valeur négative et une tâche inconnue ; ne touche jamais au temps
+/// prévu. Renvoie l'état complet après ajout.
+#[tauri::command]
+pub fn super_agent_task_time_add_spent(
+    app: AppHandle,
+    task_id: i64,
+    minutes: i64,
+) -> Result<Value, String> {
+    let conn = open_db(&app)?;
+    db_add_task_spent_minutes(&conn, task_id, minutes)?;
+    let mut value = db_task_time_json(&conn, task_id)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("ok".to_string(), Value::Bool(true));
+    }
+    Ok(value)
+}
+
 // ── Idée 3 (Lot A), tranche 3.3 : contrôle au passage en « Terminé » ──
 //
 // Le contrôle est posé dans LA fonction interne de changement de statut
@@ -2899,6 +2953,23 @@ fn db_add_task_spent_minutes(conn: &Connection, task_id: i64, minutes: i64) -> R
         |r| r.get::<_, i64>(0),
     )
     .map_err(|e| format!("Erreur lecture du temps passe: {}", e))
+}
+
+/// Charge utile UNIQUE des commandes de temps (lecture et écriture) : le temps
+/// PRÉVU et le temps PASSÉ, en minutes, plus deux booléens `*_set`
+/// (« renseigné ou non »). `null` / `false` = NON RENSEIGNÉ, à distinguer de
+/// `0` (« rien prévu » / « rien passé ») ; les booléens évitent le piège
+/// JavaScript où `0` est faux. Pur sur `&Connection` (aucun `AppHandle`) :
+/// c'est le contrat verrouillé par les tests.
+fn db_task_time_json(conn: &Connection, task_id: i64) -> Result<Value, String> {
+    let (estimated, spent) = db_task_time(conn, task_id)?;
+    Ok(serde_json::json!({
+        "task_id": task_id,
+        "estimated_minutes": estimated,
+        "spent_minutes": spent,
+        "estimated_set": estimated.is_some(),
+        "spent_set": spent.is_some(),
+    }))
 }
 
 // ── Tableau de bord de suivi multi-projets ──
@@ -5887,7 +5958,7 @@ mod tests {
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
         evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
-        db_task_time, db_set_task_estimated_minutes, db_add_task_spent_minutes,
+        db_task_time, db_task_time_json, db_set_task_estimated_minutes, db_add_task_spent_minutes,
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
@@ -8764,5 +8835,61 @@ mod tests {
         assert_eq!(db_task_time(&conn, t1).unwrap().0, None);
         // Le second réglage n'a jamais touché le cumul du temps passé.
         assert_eq!(db_task_time(&conn, t1).unwrap().1, Some(60));
+    }
+
+    // ── Lot A idée 2, tranche 2.2 : contrat des commandes de temps ──
+    // Les commandes Tauri (qui prennent un `AppHandle`) délèguent à
+    // `db_task_time_json` et aux deux helpers d'écriture : ces tests
+    // verrouillent la charge utile renvoyée à l'interface (`null` ≠ `0`, booléens
+    // `*_set`) ainsi que les règles de refus.
+
+    #[test]
+    fn time_commands_set_estimated_then_read_it_back() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Tâche sans temps : « non renseigné », jamais zéro.
+        let v = db_task_time_json(&conn, t1).unwrap();
+        assert_eq!(v["task_id"], serde_json::json!(t1));
+        assert!(v["estimated_minutes"].is_null());
+        assert!(v["spent_minutes"].is_null());
+        assert_eq!(v["estimated_set"], serde_json::json!(false));
+        assert_eq!(v["spent_set"], serde_json::json!(false));
+        // Réglage du temps prévu, puis RELECTURE.
+        db_set_task_estimated_minutes(&conn, t1, Some(120)).unwrap();
+        let v = db_task_time_json(&conn, t1).unwrap();
+        assert_eq!(v["estimated_minutes"], serde_json::json!(120));
+        assert_eq!(v["estimated_set"], serde_json::json!(true));
+        assert!(v["spent_minutes"].is_null(), "le passe reste intact");
+        // `None` remet la valeur à « non renseigné ».
+        db_set_task_estimated_minutes(&conn, t1, None).unwrap();
+        let v = db_task_time_json(&conn, t1).unwrap();
+        assert!(v["estimated_minutes"].is_null());
+        assert_eq!(v["estimated_set"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn time_commands_accumulate_spent_minutes_over_two_calls() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Deux ajouts successifs s'ADDITIONNENT (on n'écrase pas).
+        assert_eq!(db_add_task_spent_minutes(&conn, t1, 45).unwrap(), 45);
+        assert_eq!(db_add_task_spent_minutes(&conn, t1, 15).unwrap(), 60);
+        let v = db_task_time_json(&conn, t1).unwrap();
+        assert_eq!(v["spent_minutes"], serde_json::json!(60));
+        assert_eq!(v["spent_set"], serde_json::json!(true));
+        // Le temps prévu n'a jamais été touché par les ajouts.
+        assert!(v["estimated_minutes"].is_null());
+    }
+
+    #[test]
+    fn time_commands_refuse_negative_values_and_unknown_tasks() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Valeur négative : refusée, RIEN n'est écrit.
+        assert!(db_set_task_estimated_minutes(&conn, t1, Some(-1)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, t1, -5).is_err());
+        let v = db_task_time_json(&conn, t1).unwrap();
+        assert!(v["estimated_minutes"].is_null() && v["spent_minutes"].is_null());
+        // Tâche inconnue : refusée en LECTURE comme en écriture.
+        assert!(db_task_time_json(&conn, 9999).is_err());
+        assert!(db_set_task_estimated_minutes(&conn, 9999, Some(10)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, 9999, 10).is_err());
     }
 }
