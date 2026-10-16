@@ -3742,6 +3742,11 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           if (message && (message.startsWith("⏳") || message.startsWith("▶️") || message.startsWith("⏱️"))) {
             injectRunAgentsResultToSuperAgent(`[Info run_agents] ${message}`, projectPath);
           }
+          // Point de suivi 331 : rendre VISIBLE le repli de modèle dans le
+          // panneau d'événements de l'Assistant (là où la run a été lancée).
+          if (message && message.startsWith("⚠️ Modèle")) {
+            pushSuperAgentSystemEvent("warn", message);
+          }
         });
         // Non bloquant : on lance la run en arrière-plan et on renvoie « ok »
         // immédiatement. Le résultat est injecté à l'assistant à la fin.

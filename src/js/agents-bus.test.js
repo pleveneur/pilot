@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, describeModelFallback, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -115,6 +115,55 @@ describe("resolveEffectiveModel — fallback defaultModel du model-switch.json",
     expect(resolveEffectiveModel(a, "pi", "  openai/gpt-4o  ")).toBe("openai/gpt-4o");
     expect(resolveEffectiveModel(a, "pi", undefined)).toBe("");
     expect(resolveEffectiveModel(a, "pi", null)).toBe("");
+  });
+});
+
+describe("describeModelFallback — repli de modèle VISIBLE (point de suivi 331)", () => {
+  const mkAgent = (models) => ({ id: "codeur", models: { pi: "", plh: "", ...models } });
+
+  it("aucun repli quand l'agent a un modèle pour le backend actif", () => {
+    const info = describeModelFallback(mkAgent({ pi: "ollama/qwen2" }), "pi", "openai/gpt-4o");
+    expect(info.fallback).toBe(false);
+    expect(info.source).toBe("agent");
+    expect(info.model).toBe("ollama/qwen2");
+    expect(info.message).toBe("");
+  });
+
+  it("repli CROISÉ (modèle de l'autre moteur) signalé avec le modèle employé", () => {
+    const info = describeModelFallback(mkAgent({ pi: "ollama/qwen2" }), "plh", "openai/gpt-4o");
+    expect(info.fallback).toBe(true);
+    expect(info.source).toBe("cross");
+    expect(info.model).toBe("ollama/qwen2");
+    expect(info.message).toContain("ollama/qwen2");
+    expect(info.message).toContain("codeur");
+  });
+
+  it("repli sur le defaultModel signalé lui aussi", () => {
+    const info = describeModelFallback(mkAgent({}), "pi", "anthropic/claude");
+    expect(info.fallback).toBe(true);
+    expect(info.source).toBe("default");
+    expect(info.model).toBe("anthropic/claude");
+    expect(info.message).toContain("anthropic/claude");
+  });
+
+  it("aucun modèle disponible → pas de repli silencieux ni message (échec explicite déjà géré)", () => {
+    const info = describeModelFallback(mkAgent({}), "pi", "");
+    expect(info.model).toBe("");
+    expect(info.fallback).toBe(false);
+    expect(info.source).toBe("none");
+    expect(info.message).toBe("");
+  });
+
+  it("robuste aux entrées manquantes (agent absent, fallback non chaîne)", () => {
+    expect(describeModelFallback(null, "pi", "openai/gpt-4o")).toEqual({
+      model: "openai/gpt-4o",
+      fallback: true,
+      source: "default",
+      message: expect.stringContaining("openai/gpt-4o"),
+    });
+    const info = describeModelFallback(mkAgent({ pi: "p/m" }), "pi", undefined);
+    expect(info.model).toBe("p/m");
+    expect(info.fallback).toBe(false);
   });
 });
 

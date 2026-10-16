@@ -1254,6 +1254,44 @@ export function resolveEffectiveModel(agent, backend, fallbackModel) {
 }
 
 /**
+ * Point de suivi 331 — décrit le REPLI de modèle d'un tour d'agent pour le
+ * rendre VISIBLE (message utilisateur + journal) au lieu de le subir en
+ * silence. Le repli se produit quand l'agent n'a aucun modèle réglé pour le
+ * backend actif : Pilot emploie alors le modèle réglé pour l'autre moteur
+ * (repli croisé), sinon le `defaultModel` du registre de modèles.
+ *
+ * PURE (testable) : aucun accès IPC.
+ * @param {object} agent - agent normalisé (avec .models.{pi,plh})
+ * @param {string} backend - "pi" | "plh" | "unknown"
+ * @param {string} fallbackModel - defaultModel du model-switch.json ("" si aucun)
+ * @returns {{model: string, fallback: boolean, source: "agent"|"cross"|"default"|"none", message: string}}
+ */
+export function describeModelFallback(agent, backend, fallbackModel) {
+  const models = agent && agent.models && typeof agent.models === "object" ? agent.models : {};
+  const own = typeof models[backend] === "string" ? models[backend].trim() : "";
+  const other = backend === "pi" ? "plh" : "pi";
+  const cross = typeof models[other] === "string" ? models[other].trim() : "";
+  const model = resolveEffectiveModel(agent, backend, fallbackModel);
+  const name = agent && agent.id ? agent.id : "?";
+  if (!model) return { model: "", fallback: false, source: "none", message: "" };
+  if (own && own === model) return { model, fallback: false, source: "agent", message: "" };
+  if (cross && cross === model) {
+    return {
+      model,
+      fallback: true,
+      source: "cross",
+      message: `⚠️ Modèle : l'agent « ${name} » n'a pas de modèle pour ce moteur — repli sur « ${model} » (modèle de l'autre moteur).`,
+    };
+  }
+  return {
+    model,
+    fallback: true,
+    source: "default",
+    message: `⚠️ Modèle : l'agent « ${name} » n'a aucun modèle réglé — repli sur le modèle par défaut « ${model} ».`,
+  };
+}
+
+/**
  * T5 — niveau de réflexion voulu d'un agent, chaîne de priorité du plan :
  *   1. niveau de l'agent du registre pour le backend actif (repli croisé pi ↔ plh) ;
  *   2. réglage général de Pilot (`default_thinking_level`, T6) ;
@@ -2336,10 +2374,19 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
   // D'abord le modèle configuré de l'agent ; s'il est vide, on retombe sur le
   // defaultModel du model-switch.json (résolu une fois par run, caché dans le
   // ctx). Sans modèle du tout, le tour échoue explicitement AVANT de lancer pi.
-  let model = resolveAgentModel(agent, backend, "");
+  //
+  // Point de suivi 331 : ce repli était SILENCIEUX. Il est désormais signalé à
+  // l'utilisateur (événement `notify` « ⚠️ Modèle … ») et tracé (console.warn),
+  // pour qu'il sache quel modèle est réellement employé à la place du demandé.
+  const ownModel = agent && agent.models && typeof agent.models[backend] === "string"
+    ? agent.models[backend].trim()
+    : "";
+  let model = ownModel;
+  let modelFallback = { fallback: false, source: "agent", message: "" };
   if (!model) {
     const fb = await ensureFallbackModel(ctx);
-    model = resolveEffectiveModel(agent, backend, fb);
+    modelFallback = describeModelFallback(agent, backend, fb);
+    model = modelFallback.model;
   }
   const [provider, ...rest] = model.split("/");
   const modelId = rest.join("/");
@@ -2348,6 +2395,14 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     console.error("[agents-bus]", msg);
     failAgentTurn(agent.id, msg, ctx);
     return;
+  }
+
+  // Point de suivi 331 : le repli de modèle n'est plus muet — trace journal +
+  // message clair côté interface (bandeau d'activité des agents, et panneau
+  // d'événements de l'Assistant via setBusNotifyCallback).
+  if (modelFallback.fallback && modelFallback.message) {
+    console.warn(`[agents-bus] repli de modèle pour l'agent ${agent.id} : ${modelFallback.message}`);
+    emit("notify", { agentId: agent.id, message: modelFallback.message, notifyType: "info", model });
   }
 
   const prompt = buildAgentPrompt(agent, brief, projectContext, backend, model);
