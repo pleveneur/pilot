@@ -25,7 +25,9 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   planBulkClose, buildBulkUndoPlan,
   buildKanbanColumns, listKanbanProjects, filterKanbanTasks, selectKanbanIdeas,
   formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel,
-  checklistCounterLabel, parseChecklistGate } from "./super-agent-kanban.js";
+  checklistCounterLabel, parseChecklistGate,
+  DEFAULT_CHECKLIST_TEMPLATE, normalizeChecklistMode, normalizeChecklistTemplate,
+  parseChecklistTemplate, shouldOfferTemplatePoints } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -78,6 +80,11 @@ export function createSuperKanban(container) {
   // le précédent (`checkFetchToken`).
   let checkCounts = new Map();
   let checkFetchToken = 0;
+  // Idée 3 (Lot A), tranche 3.5 : réglages de la checklist (mode de contrôle +
+  // modèle de points), relus en configuration à CHAQUE ouverture de fiche. Ils
+  // ne servent qu'à PROPOSER les points du modèle sur une tâche sans point :
+  // rien n'est jamais créé automatiquement. `null` = pas encore lu.
+  let checklistCfg = null;
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
   // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
@@ -507,6 +514,55 @@ export function createSuperKanban(container) {
   }
 
   /**
+   * Lit les DEUX réglages de checklist en configuration (mode + modèle), une
+   * fois par fiche ouverte. Lecture seule, fail-open : une configuration
+   * illisible retombe sur les défauts sûrs (mode « rappel », modèle par défaut)
+   * — jamais sur une erreur bloquante pour l'utilisateur.
+   */
+  async function loadChecklistConfig() {
+    if (checklistCfg) return checklistCfg;
+    try {
+      const cfg = await invoke("get_config");
+      checklistCfg = {
+        mode: normalizeChecklistMode(cfg && cfg.super_agent_checklist_mode),
+        template: normalizeChecklistTemplate(cfg && cfg.super_agent_checklist_template),
+      };
+    } catch (_err) {
+      checklistCfg = { mode: "warn", template: DEFAULT_CHECKLIST_TEMPLATE };
+    }
+    return checklistCfg;
+  }
+
+  /**
+   * Ajoute, sur une tâche SANS point, un bouton « Ajouter les points du modèle »
+   * — seulement si le contrôle n'est pas désactivé et que le modèle contient au
+   * moins un point. Rien n'est créé tant que l'utilisateur n'a pas cliqué, et
+   * aucune tâche ayant déjà des points n'est touchée.
+   */
+  async function offerTemplatePoints(list) {
+    if (list.querySelector(".kanban-checklist-template-btn")) return;
+    const cfg = await loadChecklistConfig();
+    if (!shouldOfferTemplatePoints([], cfg.mode)) return;
+    const points = parseChecklistTemplate(cfg.template);
+    if (!points.length) return;
+    // Un rendu plus récent (ou un point déjà ajouté) a pu changer l'état.
+    if (!list.isConnected || !list.querySelector(".kanban-checklist-empty")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "kanban-checklist-suggest";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn kanban-checklist-template-btn";
+    btn.textContent = "Ajouter les points du modèle";
+    btn.title = `Créer ${points.length} point(s) de checklist : ${points.join(" | ")}`;
+    const hint = document.createElement("span");
+    hint.className = "dash-muted";
+    hint.textContent = points.join(" · ");
+    wrap.appendChild(btn);
+    wrap.appendChild(hint);
+    list.appendChild(wrap);
+  }
+
+  /**
    * Relit la checklist d'une tâche EN BASE et redessine le bloc de la fiche
    * (aucun état deviné côté écran). Le résultat alimente aussi le compteur de la
    * carte correspondante. Appelée après CHAQUE opération.
@@ -537,6 +593,8 @@ export function createSuperKanban(container) {
       : `<div class="dash-muted kanban-checklist-empty">Aucun point : aucune vérification n'est requise avant de terminer cette tâche.</div>`;
     refreshIcons(list);
     applyCheckCounters();
+    // Tâche sans point : proposer (sans rien imposer) les points du modèle.
+    if (!checks.length) await offerTemplatePoints(list);
   }
   const clearDragOver = () =>
     container.querySelectorAll(".super-kanban-col.drag-over").forEach((c) => c.classList.remove("drag-over"));
@@ -609,6 +667,7 @@ export function createSuperKanban(container) {
   // laissée vide est effacée (chaîne vide passée à update_task).
   async function openKanbanModal({ mode, task }) {
     const isEdit = mode === "edit";
+    checklistCfg = null; // réglages relus pour CETTE fiche (jamais ceux d'une précédente)
     let projects = [];
     try {
       const data = await invoke("list_super_agent_projects");
@@ -739,6 +798,21 @@ export function createSuperKanban(container) {
         }
         await renderChecklist(block, task.id);
       };
+      // Tranche 3.5 : crée les points du MODÈLE par défaut (jamais imposés :
+      // uniquement sur un clic explicite, et seulement si la tâche n'a aucun
+      // point — le bouton n'existe que dans ce cas).
+      const addTemplatePoints = async () => {
+        const cfg = await loadChecklistConfig();
+        const points = parseChecklistTemplate(cfg.template);
+        for (const label of points) {
+          try {
+            await invoke("super_agent_task_check_add", { taskId: task.id, label });
+          } catch (err) {
+            console.error("Erreur ajout point du modèle:", err);
+          }
+        }
+        await renderChecklist(block, task.id);
+      };
       block.addEventListener("click", async (e) => {
         const del = e.target.closest(".kanban-check-del");
         if (del) {
@@ -751,6 +825,7 @@ export function createSuperKanban(container) {
           return;
         }
         if (e.target.closest(".kanban-checklist-add-btn")) await addPoint();
+        else if (e.target.closest(".kanban-checklist-template-btn")) await addTemplatePoints();
       });
       block.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && e.target.closest(".kanban-checklist-input")) {

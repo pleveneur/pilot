@@ -22,6 +22,10 @@ import { layaStatusMessage, layaOutcomeMessage, layaModelStateMessage, layaModel
 import { listen } from "@tauri-apps/api/event";
 // T6 : contenu des sélecteurs de niveau de réflexion (socle pur, testé sous Node).
 import { thinkingLevelOptions } from "./thinking-levels.js";
+// Lot A idée 3 (tranche 3.5) : réglages de la checklist de livraison. Fonctions
+// PURES (normalisation du mode, lecture/découpage du modèle) partagées avec la
+// fiche de tâche du Kanban — testées dans super-agent-checklist.test.js.
+import { normalizeChecklistMode, normalizeChecklistTemplate } from "./super-agent-kanban.js";
 
 let currentConfig = null;
 
@@ -460,6 +464,11 @@ const inputSuperAgentEventsOverlaySeconds = document.getElementById("setting-sup
 const superAgentEventsOverlayDurationRow = document.getElementById("superagent-events-overlay-duration-row");
 // Onglet « Tâches » du panneau cloche (actif par défaut).
 const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-tab");
+// ── Lot A idée 3 (tranche 3.5) : checklist de livraison ──
+// Mode de contrôle au passage en « Terminé » (off / warn / block) et modèle de
+// points par défaut (un point par ligne) proposé sur une tâche sans point.
+const selectSuperAgentChecklistMode = document.getElementById("setting-superagent-checklist-mode");
+const taSuperAgentChecklistTemplate = document.getElementById("setting-superagent-checklist-template");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -1293,6 +1302,15 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
   if (inputSuperAgentEventsOverlaySeconds) inputSuperAgentEventsOverlaySeconds.value = currentConfig.super_agent_events_overlay_seconds ?? 5;
   if (superAgentEventsOverlayDurationRow) superAgentEventsOverlayDurationRow.style.display = (chkSuperAgentEventsOverlay && chkSuperAgentEventsOverlay.checked) ? "" : "none";
   if (chkSuperAgentTasksTab) chkSuperAgentTasksTab.checked = currentConfig.super_agent_tasks_tab_enabled !== false;
+  // ── Lot A idée 3 (tranche 3.5) : checklist de livraison ──
+  // Repli sûr : un mode absent/inconnu s'affiche « Rappel simple » (défaut) et un
+  // modèle absent/vide affiche le modèle par défaut — jamais un réglage vide.
+  if (selectSuperAgentChecklistMode) {
+    selectSuperAgentChecklistMode.value = normalizeChecklistMode(currentConfig.super_agent_checklist_mode);
+  }
+  if (taSuperAgentChecklistTemplate) {
+    taSuperAgentChecklistTemplate.value = normalizeChecklistTemplate(currentConfig.super_agent_checklist_template);
+  }
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -2151,6 +2169,16 @@ const chkSuperAgentTasksTab = document.getElementById("setting-superagent-tasks-
         super_agent_events_overlay_enabled: chkSuperAgentEventsOverlay ? chkSuperAgentEventsOverlay.checked === true : false,
         super_agent_events_overlay_seconds: inputSuperAgentEventsOverlaySeconds ? (parseInt(inputSuperAgentEventsOverlaySeconds.value, 10) || 5) : 5,
         super_agent_tasks_tab_enabled: chkSuperAgentTasksTab ? chkSuperAgentTasksTab.checked !== false : true,
+        // ── Lot A idée 3 (tranche 3.5) : checklist de livraison ──
+        // Mode normalisé (off/warn/block, défaut « rappel ») et modèle de points
+        // normalisé (un champ vidé retombe sur le modèle par défaut côté Rust :
+        // `save_config` réécrit toute la config, un vide écraserait le défaut).
+        super_agent_checklist_mode: selectSuperAgentChecklistMode
+          ? normalizeChecklistMode(selectSuperAgentChecklistMode.value)
+          : normalizeChecklistMode(currentConfig?.super_agent_checklist_mode),
+        super_agent_checklist_template: taSuperAgentChecklistTemplate
+          ? normalizeChecklistTemplate(taSuperAgentChecklistTemplate.value)
+          : normalizeChecklistTemplate(currentConfig?.super_agent_checklist_template),
       };
     try {
       await invoke("save_config", { config });

@@ -805,6 +805,12 @@ struct AppConfig {
     // commandes de changement de statut.
     #[serde(default)]
     super_agent_checklist_mode: String,
+    // Lot A idée 3 : MODÈLE de checklist par défaut (un point par ligne) proposé
+    // sur une tâche qui n'a encore AUCUN point. Champ libre, jamais imposé :
+    // rien n'est créé automatiquement, l'utilisateur (ou l'écran, sur un clic
+    // explicite) décide. Un champ absent retombe sur le modèle par défaut.
+    #[serde(default = "default_super_agent_checklist_template")]
+    super_agent_checklist_template: String,
     // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
     // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
     // fréquence explicite. Exprimée en secondes, bornée côté application au
@@ -893,6 +899,10 @@ struct AppConfig {
 }
 
 fn default_super_agent_events_overlay_seconds() -> u32 { 5 }
+/// Lot A idée 3 : modèle de checklist par défaut (un point par ligne).
+fn default_super_agent_checklist_template() -> String {
+    ["Tests passés", "Documentation à jour", "Rien de non commité"].join("\n")
+}
 /// Lot A idée 6 : fréquence par défaut des nouveaux rappels de surveillance
 /// (1 heure). Compromis utile sans harceler, loin du minimum technique de 60 s.
 fn default_super_agent_schedule_interval_secs() -> u32 { 3600 }
@@ -1155,6 +1165,7 @@ impl Default for AppConfig {
             super_agent_events_overlay_seconds: default_super_agent_events_overlay_seconds(),
             super_agent_tasks_tab_enabled: true,
             super_agent_checklist_mode: String::new(),
+            super_agent_checklist_template: default_super_agent_checklist_template(),
             super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),

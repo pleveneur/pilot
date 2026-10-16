@@ -650,3 +650,81 @@ export function parseChecklistGate(err) {
     message,
   };
 }
+
+// ── Idée 3 (Lot A), tranche 3.5 : réglages de la checklist de livraison ─────
+// Deux réglages pilotent la checklist : le MODE de contrôle au passage en
+// « Terminé » (`super_agent_checklist_mode`) et le MODÈLE de points proposé sur
+// une tâche qui n'a encore aucun point (`super_agent_checklist_template`).
+// Rien n'est décidé ici sur le fond du contrôle (c'est le cœur Rust qui
+// tranche) : ces fonctions PURES se bornent à lire/normaliser la configuration,
+// découper le modèle en lignes et dire si l'écran peut PROPOSER les points du
+// modèle. SANS I/O, testables directement.
+
+/// Modèle de checklist par défaut, un point par ligne. Miroir de
+/// `default_super_agent_checklist_template` (src-tauri/src/lib.rs) : une config
+/// ancienne, absente ou vide retombe EXACTEMENT sur ces trois points.
+export const DEFAULT_CHECKLIST_TEMPLATE_LINES = [
+  "Tests passés",
+  "Documentation à jour",
+  "Rien de non commité",
+];
+export const DEFAULT_CHECKLIST_TEMPLATE = DEFAULT_CHECKLIST_TEMPLATE_LINES.join("\n");
+
+/** Modes de contrôle acceptés, dans l'ordre d'affichage du réglage. */
+export const CHECKLIST_MODES = ["off", "warn", "block"];
+
+/**
+ * Normalise le mode de contrôle de checklist (`super_agent_checklist_mode`) avec
+ * repli SÛR sur `warn` — même règle que `checklist_mode_from_config` côté Rust :
+ * une valeur absente, vide, inconnue ou en casse différente vaut « rappel »
+ * (jamais bloquant par surprise, jamais silencieusement désactivé). Pur.
+ * @param {unknown} raw
+ * @returns {"off"|"warn"|"block"}
+ */
+export function normalizeChecklistMode(raw) {
+  const v = String(raw == null ? "" : raw).trim().toLowerCase();
+  if (v === "off") return "off";
+  if (v === "block") return "block";
+  return "warn";
+}
+
+/**
+ * Normalise le modèle de checklist (`super_agent_checklist_template`) : un champ
+ * absent ou vide (config ancienne) retombe sur le modèle par défaut — la même
+ * valeur que celle écrite par le cœur Rust. Pur.
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function normalizeChecklistTemplate(raw) {
+  const v = String(raw == null ? "" : raw).trim();
+  return v || DEFAULT_CHECKLIST_TEMPLATE;
+}
+
+/**
+ * Découpe le modèle en points : une ligne non vide = un point. Les lignes
+ * vides/blanches sont ignorées, les espaces de début/fin retirés, `\r\n`
+ * toléré. Un modèle absent/vide donne donc les points du modèle par défaut.
+ * Pur.
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+export function parseChecklistTemplate(raw) {
+  return normalizeChecklistTemplate(raw)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/**
+ * L'écran peut-il PROPOSER les points du modèle sur cette tâche ? Oui seulement
+ * si la tâche n'a AUCUN point ET que le contrôle n'est pas désactivé (`off`).
+ * Rien n'est jamais imposé : c'est le clic de l'utilisateur qui crée les points.
+ * Pur.
+ * @param {Array<{done?: boolean}>|null|undefined} checks points relus en base
+ * @param {unknown} mode mode de configuration brut
+ * @returns {boolean}
+ */
+export function shouldOfferTemplatePoints(checks, mode) {
+  if (normalizeChecklistMode(mode) === "off") return false;
+  return checklistProgress(checks).total === 0;
+}

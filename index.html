@@ -1001,6 +1001,21 @@
               <input type="checkbox" id="setting-superagent-tasks-tab" />
               <label for="setting-superagent-tasks-tab" title="Ajouter un onglet « En cours » au panneau de la cloche (onglet Assistant) : liste les MISSIONS RÉELLEMENT en cours de vos agents (projet, texte de la demande), un agent au repos n'y figure pas. Une mission qui attend qu'un agent se libère apparaît avec la mention « en attente ». Activé par défaut.">Onglet « En cours » dans le panneau de la cloche (missions des agents)</label>
             </div>
+            <div class="setting-row setting-row-indent">
+              <label for="setting-superagent-checklist-mode" title="Contrôle des points de checklist quand une tâche de suivi passe en « Terminé » : Désactivée = aucun contrôle ; Rappel simple (défaut) = un avertissement signale les points restants et la clôture reste possible ; Bloquante = la clôture est refusée tant que des points restent à cocher.">Checklist de livraison obligatoire :</label>
+              <select id="setting-superagent-checklist-mode">
+                <option value="off">Désactivée</option>
+                <option value="warn">Rappel simple (défaut)</option>
+                <option value="block">Bloquante</option>
+              </select>
+            </div>
+            <div class="setting-row setting-row-indent" style="align-items:flex-start;">
+              <label for="setting-superagent-checklist-template" title="Points proposés (un par ligne) sur une tâche qui n'a encore aucun point. Rien n'est créé automatiquement : un bouton « Ajouter les points du modèle » les ajoute si vous le souhaitez.">Modèle de checklist par défaut :</label>
+              <textarea id="setting-superagent-checklist-template" rows="4" placeholder="Tests passés&#10;Documentation à jour&#10;Rien de non commité" style="width:260px;font-family:var(--font-mono);font-size:12px;"></textarea>
+            </div>
+            <div class="setting-row" style="font-size:11px;color:var(--text-muted);">
+              Un point par ligne. Ces points sont seulement proposés sur une tâche sans point : jamais ajoutés ni imposés automatiquement.
+            </div>
           </div>
           <div class="settings-section">
             <h3 class="settings-section-title"><i data-lucide="building-2" class="icon-sm"></i> Clients</h3>

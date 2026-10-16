@@ -10,6 +10,13 @@ import {
   checklistProgress,
   checklistCounterLabel,
   parseChecklistGate,
+  DEFAULT_CHECKLIST_TEMPLATE,
+  DEFAULT_CHECKLIST_TEMPLATE_LINES,
+  CHECKLIST_MODES,
+  normalizeChecklistMode,
+  normalizeChecklistTemplate,
+  parseChecklistTemplate,
+  shouldOfferTemplatePoints,
 } from "./super-agent-kanban.js";
 
 describe("checklistProgress", () => {
@@ -106,5 +113,69 @@ describe("parseChecklistGate — lecture du verdict du cœur", () => {
     expect(WARN_MESSAGE.includes(CHECKLIST_FORCE_HINT)).toBe(true);
     expect(BLOCK_MESSAGE.includes(CHECKLIST_GATE_PREFIX)).toBe(true);
     expect(BLOCK_MESSAGE.includes(CHECKLIST_FORCE_HINT)).toBe(false);
+  });
+});
+
+// ── Tranche 3.5 : réglages (mode + modèle de points) ────────────────────────
+
+describe("normalizeChecklistMode — lecture du mode de contrôle", () => {
+  it("reconnaît les trois modes, quel que soit la casse ou les espaces", () => {
+    expect(normalizeChecklistMode("off")).toBe("off");
+    expect(normalizeChecklistMode("  OFF ")).toBe("off");
+    expect(normalizeChecklistMode("warn")).toBe("warn");
+    expect(normalizeChecklistMode("Block")).toBe("block");
+  });
+
+  it("retombe sur « rappel simple » (défaut) pour un mode absent ou inconnu", () => {
+    // Même repli que `checklist_mode_from_config` (super_agent.rs) : jamais
+    // bloquant par surprise, jamais silencieusement désactivé.
+    for (const raw of [undefined, null, "", "   ", "strict", "true", 0, {}]) {
+      expect(normalizeChecklistMode(raw)).toBe("warn");
+    }
+    expect(CHECKLIST_MODES).toEqual(["off", "warn", "block"]);
+  });
+});
+
+describe("normalizeChecklistTemplate / parseChecklistTemplate — modèle de points", () => {
+  it("fournit le modèle par défaut quand le champ est absent ou vide", () => {
+    expect(DEFAULT_CHECKLIST_TEMPLATE_LINES).toEqual([
+      "Tests passés",
+      "Documentation à jour",
+      "Rien de non commité",
+    ]);
+    for (const raw of [undefined, null, "", "   ", "\n\n"]) {
+      expect(normalizeChecklistTemplate(raw)).toBe(DEFAULT_CHECKLIST_TEMPLATE);
+      expect(parseChecklistTemplate(raw)).toEqual(DEFAULT_CHECKLIST_TEMPLATE_LINES);
+    }
+  });
+
+  it("garde le modèle saisi (espaces de bord retirés) sans le remplacer", () => {
+    expect(normalizeChecklistTemplate("  Un point\nDeux  ")).toBe("Un point\nDeux");
+  });
+
+  it("découpe une ligne non vide par point, tolère les blancs et \\r\\n", () => {
+    expect(parseChecklistTemplate("Tests passés\n\n  Documentation à jour  \r\nRien de non commité\n")).toEqual([
+      "Tests passés",
+      "Documentation à jour",
+      "Rien de non commité",
+    ]);
+    expect(parseChecklistTemplate("seul")).toEqual(["seul"]);
+  });
+});
+
+describe("shouldOfferTemplatePoints — proposition JAMAIS imposée", () => {
+  it("propose les points du modèle sur une tâche sans point, sauf si désactivé", () => {
+    expect(shouldOfferTemplatePoints([], "warn")).toBe(true);
+    expect(shouldOfferTemplatePoints([], "block")).toBe(true);
+    expect(shouldOfferTemplatePoints([], undefined)).toBe(true); // mode absent → défaut « rappel »
+    expect(shouldOfferTemplatePoints([], "off")).toBe(false);
+    expect(shouldOfferTemplatePoints(null, "warn")).toBe(true);
+  });
+
+  it("ne propose RIEN quand la tâche a déjà des points (aucun changement)", () => {
+    for (const mode of CHECKLIST_MODES) {
+      expect(shouldOfferTemplatePoints([{ done: false }], mode)).toBe(false);
+      expect(shouldOfferTemplatePoints([{ done: true }], mode)).toBe(false);
+    }
   });
 });
