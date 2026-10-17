@@ -2165,6 +2165,38 @@ fn task_counts(conn: &Connection, project_id: i64) -> (i64, i64) {
     (open, done)
 }
 
+/// Totaux de temps d'un projet : (estimé, passé), en minutes. `None` = AUCUNE
+/// tâche du projet n'a ce temps renseigné, à distinguer de `Some(0)` (« rien de
+/// prévu » / « rien passé » explicitement). Mêmes règles que `task_counts` :
+/// calqué sur lui, pur sur `&Connection`, fail-open sur erreur de lecture.
+/// Le SQL porte les deux règles : `SUM` IGNORE les `NULL` (une tâche sans
+/// estimation ne compte donc jamais comme zéro) et `COUNT(col)` compte les
+/// non-`NULL` (`0` = rien de renseigné → `None`).
+fn project_time_totals(conn: &Connection, project_id: i64) -> (Option<i64>, Option<i64>) {
+    let row = conn.query_row(
+        "SELECT COUNT(estimated_minutes), SUM(estimated_minutes), \
+         COUNT(spent_minutes), SUM(spent_minutes) FROM tasks WHERE project_id = ?1",
+        rusqlite::params![project_id],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+            ))
+        },
+    );
+    match row {
+        Ok((est_count, est_sum, spent_count, spent_sum)) => (
+            if est_count > 0 { est_sum } else { None },
+            if spent_count > 0 { spent_sum } else { None },
+        ),
+        // Projet inconnu ou lecture impossible : rien de renseigné (jamais une
+        // erreur, comme `task_counts`).
+        Err(_) => (None, None),
+    }
+}
+
 // ── Idée 3 (Lot A), tranche 3.1 : checklist de livraison ──
 //
 // Un point de checklist appartient à UNE tâche de suivi (`tasks.id`). Le
@@ -3011,11 +3043,20 @@ pub async fn get_super_agent_tracking(app: AppHandle) -> Result<Value, String> {
         for row in project_rows {
             if let Ok((pid, pname, ppath)) = row {
                 let (tasks_en_cours, tasks_terminees) = task_counts(&conn, pid);
+                // Idée 2, tranche 4b : totaux de temps du projet. Contrat de la
+                // tranche 2 conservé pour éviter le zéro faux en JavaScript :
+                // `null` = rien de renseigné, et `*_set` porte la présence
+                // (jamais la valeur, car `0` est falsy en JS).
+                let (estimated_minutes, spent_minutes) = project_time_totals(&conn, pid);
                 projects.push(serde_json::json!({
                     "name": pname,
                     "path": ppath,
                     "tasks_en_cours": tasks_en_cours,
                     "tasks_terminees": tasks_terminees,
+                    "estimated_minutes": estimated_minutes,
+                    "spent_minutes": spent_minutes,
+                    "estimated_set": estimated_minutes.is_some(),
+                    "spent_set": spent_minutes.is_some(),
                 }));
             }
         }
@@ -5954,7 +5995,7 @@ mod tests {
         schedule_insert, schedule_list, schedule_mark_done, schedule_next_fire,
         schedule_next_fire_at, schedule_set_enabled, serialize_session_memory, serialize_tracking,
         resolve_schedule_every, SCHEDULE_MAX, SCHEDULE_MIN_EVERY_SECS,
-        task_counts, take_trash_entry, trash_entry_preview, validate_export_json,
+        task_counts, project_time_totals, take_trash_entry, trash_entry_preview, validate_export_json,
         list_memory_trash_entries,
         checklist_gate_message, checklist_mode_from_config, db_unchecked_task_check_labels,
         evaluate_checklist_gate, guard_task_checklist, task_status_of, GateVerdict,
@@ -8891,5 +8932,50 @@ mod tests {
         assert!(db_task_time_json(&conn, 9999).is_err());
         assert!(db_set_task_estimated_minutes(&conn, 9999, Some(10)).is_err());
         assert!(db_add_task_spent_minutes(&conn, 9999, 10).is_err());
+    }
+
+    // ── Lot A idée 2, tranche 4b : agrégat des temps par projet ──
+    // `project_time_totals` verrouille les deux règles de la tranche 1 au
+    // niveau du projet : « non renseigné ≠ 0 » et « une tâche sans estimation ne
+    // compte pas comme zéro » (portées par `SUM` sur `NULL` + `COUNT(col)`).
+
+    #[test]
+    fn project_time_totals_is_none_without_any_time() {
+        let (conn, _, _) = mem_conn_with_two_tasks();
+        // Aucune des deux tâches n'a de temps : RIEN de renseigné, pas zéro.
+        assert_eq!(project_time_totals(&conn, 1), (None, None));
+        // Projet inconnu : même réponse, jamais une erreur.
+        assert_eq!(project_time_totals(&conn, 9999), (None, None));
+    }
+
+    #[test]
+    fn project_time_totals_ignores_tasks_without_estimate() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        db_set_task_estimated_minutes(&conn, t1, Some(60)).unwrap();
+        // La tâche 2, sans estimation, ne compte PAS comme zéro : total 60.
+        assert_eq!(project_time_totals(&conn, 1), (Some(60), None));
+        // Un zéro EXPLICITE est au contraire renseigné : le total reste 60 mais
+        // la présence est bien signalée par `Some(...)` côté passé comme estimé.
+        db_set_task_estimated_minutes(&conn, t2, Some(0)).unwrap();
+        db_add_task_spent_minutes(&conn, t2, 0).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (Some(60), Some(0)));
+    }
+
+    #[test]
+    fn project_time_totals_accumulates_spent_over_tasks() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // Cumul sur PLUSIEURS tâches du même projet (45 + 30 + 15 = 90).
+        db_add_task_spent_minutes(&conn, t1, 45).unwrap();
+        db_add_task_spent_minutes(&conn, t1, 30).unwrap();
+        db_add_task_spent_minutes(&conn, t2, 15).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (None, Some(90)));
+        // Un second projet reste totalement isolé (aucun temps, aucun mélange).
+        conn.execute(
+            "INSERT INTO projects (path, name) VALUES ('/p/b', 'Projet B')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(project_time_totals(&conn, 2), (None, None));
+        assert_eq!(project_time_totals(&conn, 1), (None, Some(90)));
     }
 }
