@@ -25,6 +25,7 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   planBulkClose, buildBulkUndoPlan,
   buildKanbanColumns, listKanbanProjects, filterKanbanTasks, selectKanbanIdeas,
   formatCardProject, isBlockedTask, isWaitingDependency, dependencyLabel,
+  longTaskPill,
   checklistCounterLabel, parseChecklistGate,
   DEFAULT_CHECKLIST_TEMPLATE, normalizeChecklistMode, normalizeChecklistTemplate,
   parseChecklistTemplate, shouldOfferTemplatePoints,
@@ -207,6 +208,12 @@ export function createSuperKanban(container) {
     // Idée 3 (Lot A), tranche 3.4 : compteur discret de la checklist (« 2/3 »),
     // affiché SEULEMENT si la tâche porte au moins un point (relu en base).
     const checkLabel = checklistCounterLabel(checkCounts.get(t.id));
+    // Idée 1 (Lot A), tranche 1.3 : pastille « longue » et son infobulle. Les
+    // deux valeurs viennent du SERVEUR (`is_long_task` / `long_task_reason`,
+    // posés par le cœur Rust) : aucune détection ni seuil n'est calculé ici, et
+    // une carte ordinaire ne reçoit AUCUNE pastille (elle garde son apparence).
+    // L'infobulle recopie la raison fournie TELLE QUELLE, jamais reformulée.
+    const longPill = longTaskPill(t);
     // Idée 2 (Lot A), tranche 3 : pastille de temps « 45 min prévues / 70 min
     // passées », affichée SEULEMENT si au moins un des deux temps est renseigné
     // (relu en base). Une tâche sans temps garde exactement son apparence.
@@ -216,6 +223,7 @@ export function createSuperKanban(container) {
       <div class="super-kanban-card-head">
         <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
         <div class="super-kanban-card-title">${title}</div>
+        ${longPill ? `<span class="kanban-long-pill kanban-check-counter"${longPill.reason ? ` title="${escapeAttr(longPill.reason)}"` : ""}>${escapeHtml(longPill.label)}</span>` : ""}
         ${checkLabel ? `<span class="kanban-check-counter" title="${checkLabel} : points de checklist cochés">${checkLabel}</span>` : ""}
         ${timeLabel ? `<span class="kanban-time-pill dash-muted" title="${escapeAttr(timeLabel)}">${escapeHtml(timeLabel)}</span>` : ""}
       </div>

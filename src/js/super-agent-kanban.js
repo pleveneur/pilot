@@ -576,6 +576,35 @@ export function dependencyLabel(task) {
   return title ? `En attente de : ${title}` : "En attente d'une autre tache";
 }
 
+// ── Idée 1 (Lot A), tranche 1.3 : pastille « tâche longue » des cartes ──────
+// Le signal est CALCULÉ PAR LE CŒUR RUST (`detect_long_task`, tranches 1.1/1.2)
+// et arrive DÉJÀ DANS L'ÉTAT du Kanban sous deux champs : `is_long_task`
+// (booléen) et `long_task_reason` (raison courte déjà rédigée, ou null).
+// L'interface ne DÉTECTE RIEN et ne calcule AUCUN seuil : elle se borne à LIRE
+// ces deux champs reçus du serveur et à recopier la raison telle quelle dans
+// l'infobulle. Une carte ordinaire ne reçoit donc aucune pastille et garde
+// exactement son apparence.
+
+/// Texte de la pastille discrète des cartes signalées comme longues.
+export const LONG_TASK_PILL_LABEL = "longue";
+
+/**
+ * Pastille « tâche longue » d'une carte, telle qu'elle doit être affichée :
+ * `{ label, reason }` quand le cœur a signalé la tâche comme longue
+ * (`is_long_task`), `null` sinon — une carte ordinaire ne reçoit donc AUCUNE
+ * pastille. Le seuil de détection n'est jamais recalculé ici : seule la valeur
+ * reçue du cœur est lue, jamais le texte de la demande. `reason` est la raison
+ * fournie TELLE QUELLE (chaîne vide si le cœur n'en fournit pas : aucune raison
+ * n'est inventée). Pur.
+ * @param {{is_long_task?: boolean, long_task_reason?: string|null}} task
+ * @returns {{label: string, reason: string}|null}
+ */
+export function longTaskPill(task) {
+  if (!task || !task.is_long_task) return null;
+  const reason = String(task.long_task_reason == null ? "" : task.long_task_reason).trim();
+  return { label: LONG_TASK_PILL_LABEL, reason };
+}
+
 // ── Idée 3 (Lot A), tranche 3.4 : checklist de livraison vue de l'écran ──────
 // L'interface ne DÉCIDE rien et ne DEVINE rien : elle compte les points RELUS
 // EN BASE (commandes `super_agent_task_check_*`) et se contente de LIRE le
