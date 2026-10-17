@@ -184,6 +184,29 @@ impl WebAuth {
         self.sessions.lock().unwrap().clear();
     }
 
+    /// Révoque les sessions d'**un seul** compte GDS (révocation ciblée, point 8
+    /// tranche D1). Appelée quand le **rôle**, le **statut** ou le **mot de
+    /// passe** du compte change : le rôle est figé dans le jeton (TTL 7 jours,
+    /// jamais relu en base), donc sans révocation un membre rétrogradé ou
+    /// désactivé conserverait ses droits jusqu'à l'expiration de son jeton.
+    ///
+    /// Seules les sessions dont `user_id` correspond sont retirées : les autres
+    /// comptes gardent leur session (la révocation est ciblée, pas globale).
+    /// Renvoie le nombre de sessions révoquées.
+    ///
+    /// `user_id <= 0` est un no-op : `0` désigne une session **sans compte GDS**
+    /// (mode remote du poste), qui ne doit jamais être visée par une révocation
+    /// de compte.
+    pub fn revoke_user(&self, user_id: i64) -> usize {
+        if user_id <= 0 {
+            return 0;
+        }
+        let mut sessions = self.sessions.lock().unwrap();
+        let before = sessions.len();
+        sessions.retain(|_, s| s.user_id != user_id);
+        before - sessions.len()
+    }
+
     /// Nombre de sessions actives (pour le badge desktop « client distant connecté »).
     pub fn active_count(&self) -> usize {
         let now = Instant::now();
@@ -243,6 +266,38 @@ mod tests {
         assert_eq!(auth.active_count(), 0);
         assert!(!auth.validate(&t1));
         assert!(!auth.validate(&t2));
+    }
+
+    /// Point 8 — tranche D1 : la révocation ciblée ne touche que le compte visé,
+    /// les autres comptes et les sessions sans compte GDS restent actifs, et
+    /// `revoke_all` continue de tout révoquer.
+    #[test]
+    fn revoke_user_is_targeted_and_revoke_all_stays_global() {
+        let auth = WebAuth::new();
+        let a1 = auth.create_session_for(1, "dev", Duration::from_secs(60));
+        let a2 = auth.create_session_for(1, "dev", Duration::from_secs(60));
+        let other = auth.create_session_for(2, "admin", Duration::from_secs(60));
+        let legacy = auth.create_session(Duration::from_secs(60));
+        assert_eq!(auth.active_count(), 4);
+
+        // Seul le compte 1 est révoqué (ses 2 sessions).
+        assert_eq!(auth.revoke_user(1), 2);
+        assert!(!auth.validate(&a1));
+        assert!(!auth.validate(&a2));
+        assert!(auth.validate(&other));
+        assert!(auth.validate(&legacy));
+        assert_eq!(auth.active_count(), 2);
+
+        // Idempotent, et un identifiant hors compte (0) ne révoque rien.
+        assert_eq!(auth.revoke_user(1), 0);
+        assert_eq!(auth.revoke_user(0), 0);
+        assert!(auth.validate(&legacy));
+
+        // `revoke_all` reste global.
+        auth.revoke_all();
+        assert_eq!(auth.active_count(), 0);
+        assert!(!auth.validate(&other));
+        assert!(!auth.validate(&legacy));
     }
 
     #[test]

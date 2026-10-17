@@ -493,8 +493,8 @@ async fn gds_admin_user_role<S: GdsCtx>(
         )
             .into_response();
     }
-    match gds_db::get_user_by_email(&pool, &email).await {
-        Ok(Some(_)) => {}
+    let user = match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(u)) => u,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -503,9 +503,14 @@ async fn gds_admin_user_role<S: GdsCtx>(
                 .into_response()
         }
         Err(e) => return err_response(e),
-    }
+    };
     match gds_db::set_user_role(&pool, &email, role).await {
         Ok(()) => {
+            // Point 8 — tranche D1 : le rôle est figé dans le jeton (TTL 7 jours,
+            // jamais relu en base) ; on révoque les sessions du compte visé pour
+            // qu'un rôle retiré prenne effet immédiatement. Révocation **ciblée** :
+            // les autres comptes gardent leur session.
+            ctx.auth().revoke_user(user.id);
             ctx.audit()
                 .record(&authed.ip, &authed.key, "user_role", &email, true);
             Json(json!({ "ok": true, "email": email, "role": role })).into_response()
@@ -583,6 +588,11 @@ async fn gds_admin_user_status<S: GdsCtx>(
     }
     match gds_db::set_user_status(&pool, &email, status).await {
         Ok(()) => {
+            // Point 8 — tranche D1 : un statut changé (activation comme
+            // désactivation) révoque les sessions du compte visé. Un compte
+            // désactivé ne doit pas garder ses droits jusqu'à l'expiration de son
+            // jeton.
+            ctx.auth().revoke_user(user.id);
             ctx.audit()
                 .record(&authed.ip, &authed.key, "user_status", &email, true);
             Json(json!({ "ok": true, "email": email, "status": status })).into_response()
@@ -618,8 +628,8 @@ async fn gds_admin_user_password<S: GdsCtx>(
         )
             .into_response();
     }
-    match gds_db::get_user_by_email(&pool, &email).await {
-        Ok(Some(_)) => {}
+    let user = match gds_db::get_user_by_email(&pool, &email).await {
+        Ok(Some(u)) => u,
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -628,13 +638,17 @@ async fn gds_admin_user_password<S: GdsCtx>(
                 .into_response()
         }
         Err(e) => return err_response(e),
-    }
+    };
     let hash = match WebAuth::hash_password(&body.password) {
         Ok(h) => h,
         Err(e) => return err_response(e),
     };
     match gds_db::reset_user_password(&pool, &email, &hash).await {
         Ok(()) => {
+            // Point 8 — tranche D1 : un mot de passe réinitialisé révoque les
+            // sessions existantes du compte visé (l'ancien mot de passe ne doit
+            // plus laisser de session valide).
+            ctx.auth().revoke_user(user.id);
             ctx.audit()
                 .record(&authed.ip, &authed.key, "user_password", &email, true);
             Json(json!({ "ok": true, "email": email })).into_response()
@@ -2221,6 +2235,43 @@ mod tests {
             "service_stop",
         ] {
             assert!(actions.iter().any(|x| x == a), "action absente du journal: {}", a);
+        }
+    }
+
+    /// Point 8 — tranche D1 : les trois routes d'administration qui changent le
+    /// rôle, le statut ou le mot de passe d'un compte doivent révoquer les
+    /// sessions **de ce compte** (`WebAuth::revoke_user`). Sans cet appel, un
+    /// membre rétrogradé ou désactivé garde ses droits jusqu'à l'expiration de
+    /// son jeton (TTL 7 jours). Contrôle structurel exécutable sans PostgreSQL,
+    /// donc présent en CI ; le comportement ciblé de `revoke_user` lui-même est
+    /// couvert par les tests unitaires de `auth.rs`.
+    #[test]
+    fn account_mutations_revoke_the_targeted_user_sessions() {
+        let src = include_str!("http.rs");
+        let body_of = |signature: &str| {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("handler `{}` absent", signature));
+            let body = &src[start..];
+            // `}` en colonne 0 = fin de la fonction, robuste CRLF/LF.
+            let end = body
+                .find("\n}")
+                .unwrap_or_else(|| panic!("fin du handler `{}` introuvable", signature));
+            &body[..end]
+        };
+        for signature in [
+            "async fn gds_admin_user_role<S: GdsCtx>(",
+            "async fn gds_admin_user_status<S: GdsCtx>(",
+            "async fn gds_admin_user_password<S: GdsCtx>(",
+        ] {
+            let body = body_of(signature);
+            assert!(
+                body.contains("ctx.auth().revoke_user("),
+                "`{}` ne révoque plus les sessions du compte visé : un rôle, un \
+                 statut ou un mot de passe changé resterait sans effet sur la \
+                 session en cours (point 8, tranche D1)",
+                signature
+            );
         }
     }
 
