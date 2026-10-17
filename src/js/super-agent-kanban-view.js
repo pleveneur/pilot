@@ -96,6 +96,12 @@ export function createSuperKanban(container) {
   // Un chargement plus récent annule le précédent (`timeFetchToken`).
   let taskTimes = new Map();
   let timeFetchToken = 0;
+  // Lot A idée 2, tranche 5 : réglage d'AFFICHAGE du suivi du temps
+  // (`super_agent_show_time`, défaut désactivé). Il ne gouverne QUE l'affichage
+  // du temps : masqué ⇒ la fiche n'a pas de bloc « Temps », aucune carte ne
+  // porte de pastille et rien n'est lu en base ; activé ⇒ tout réapparaît avec
+  // les règles de la tranche 3. Aucune donnée n'est écrite ni effacée.
+  let showTime = false;
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
   // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
@@ -204,7 +210,8 @@ export function createSuperKanban(container) {
     // Idée 2 (Lot A), tranche 3 : pastille de temps « 45 min prévues / 70 min
     // passées », affichée SEULEMENT si au moins un des deux temps est renseigné
     // (relu en base). Une tâche sans temps garde exactement son apparence.
-    const timeLabel = taskTimePillLabel(taskTimes.get(t.id));
+    // Tranche 5 : la pastille n'existe que si le réglage d'affichage l'autorise.
+    const timeLabel = showTime ? taskTimePillLabel(taskTimes.get(t.id)) : "";
     return `<div class="super-kanban-card${blocked ? " blocked" : ""}${waiting ? " waiting-dep" : ""}" draggable="true" data-task-id="${t.id}">
       <div class="super-kanban-card-head">
         <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
@@ -539,6 +546,11 @@ export function createSuperKanban(container) {
    * annule le précédent (jeton).
    */
   async function refreshTaskTimes() {
+    // Tranche 5 : rien n'est lu (ni affiché) quand le suivi du temps est masqué.
+    if (!showTime) {
+      applyTimePills();
+      return;
+    }
     const token = ++timeFetchToken;
     for (const t of visibleTasks()) {
       if (!t || t.id == null) continue;
@@ -559,6 +571,12 @@ export function createSuperKanban(container) {
    * carte dont les deux temps sont non renseignés ne reçoit AUCUNE pastille.
    */
   function applyTimePills() {
+    // Tranche 5 : réglage désactivé ⇒ AUCUNE pastille, quoi qu'il reste en
+    // cache : les cartes retrouvent exactement leur apparence d'avant l'idée 2.
+    if (!showTime) {
+      container.querySelectorAll(".super-kanban-card .kanban-time-pill").forEach((el) => el.remove());
+      return;
+    }
     container.querySelectorAll(".super-kanban-card[data-task-id]").forEach((card) => {
       const id = Number(card.dataset.taskId);
       const label = taskTimePillLabel(taskTimes.get(id));
@@ -596,6 +614,25 @@ export function createSuperKanban(container) {
       checklistCfg = { mode: "warn", template: DEFAULT_CHECKLIST_TEMPLATE };
     }
     return checklistCfg;
+  }
+
+  /**
+   * Lot A idée 2, tranche 5 : lit le réglage d'AFFICHAGE du suivi du temps
+   * (`super_agent_show_time`, défaut désactivé). Lecture seule, fail-open : une
+   * configuration illisible retombe sur « masqué » (défaut sûr, identique à
+   * l'absence du champ) — jamais sur une erreur bloquante. Appelée avant le
+   * rendu des cartes et à chaque ouverture de fiche pour que le changement soit
+   * immédiat.
+   * @returns {Promise<boolean>}
+   */
+  async function loadTimeConfig() {
+    try {
+      const cfg = await invoke("get_config");
+      showTime = !!(cfg && cfg.super_agent_show_time === true);
+    } catch (_err) {
+      showTime = false;
+    }
+    return showTime;
   }
 
   /**
@@ -768,6 +805,10 @@ export function createSuperKanban(container) {
           `<div class="dash-muted">Aucune tâche pour l'instant. Utilisez « Initialiser » ou « Projets & clients » dans l'onglet Assistant pour démarrer le suivi.</div>`;
         return;
       }
+      // Tranche 5 : le réglage d'affichage du temps est relu AVANT le rendu :
+      // les pastilles n'apparaissent que s'il est explicitement activé (défaut :
+      // masqué, comme avant l'idée 2).
+      await loadTimeConfig();
       renderKanban();
       // Compteurs de checklist des cartes (lecture en base, après le rendu pour
       // ne jamais retarder l'affichage du Kanban).
@@ -811,6 +852,9 @@ export function createSuperKanban(container) {
   async function openKanbanModal({ mode, task }) {
     const isEdit = mode === "edit";
     checklistCfg = null; // réglages relus pour CETTE fiche (jamais ceux d'une précédente)
+    // Tranche 5 : réglage d'affichage du temps relu à CHAQUE ouverture de fiche,
+    // pour que le bloc « Temps » suive immédiatement un changement de réglage.
+    await loadTimeConfig();
     let projects = [];
     try {
       const data = await invoke("list_super_agent_projects");
@@ -863,7 +907,7 @@ export function createSuperKanban(container) {
             <button type="button" class="btn kanban-checklist-add-btn">Ajouter</button>
           </div>
         </div>` : ""}
-        ${isEdit ? `<div class="kanban-field kanban-checklist kanban-task-time">
+        ${isEdit && showTime ? `<div class="kanban-field kanban-checklist kanban-task-time">
           <div class="kanban-checklist-head"><i data-lucide="clock" class="icon-sm"></i> Temps <span class="kanban-time-summary kanban-checklist-count dash-muted"></span></div>
           <div class="kanban-checklist-add">
             <input type="text" inputmode="numeric" class="kanban-checklist-input kanban-time-estimated-input" placeholder="Temps prévu (min)" aria-label="Temps prévu en minutes">
@@ -1068,17 +1112,22 @@ export function createSuperKanban(container) {
         if (input) input.value = "";
         await renderTaskTime(timeBlock, task.id);
       };
-      timeBlock.addEventListener("click", (e) => {
-        if (e.target.closest(".kanban-time-set-btn")) { setEstimated(); return; }
-        if (e.target.closest(".kanban-time-add-btn")) addSpent();
-      });
-      timeBlock.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter" || !e.target.closest(".kanban-checklist-input")) return;
-        e.preventDefault(); // pas de soumission implicite du formulaire de la fiche
-        if (e.target.closest(".kanban-time-estimated-input")) setEstimated();
-        else if (e.target.closest(".kanban-time-spent-input")) addSpent();
-      });
-      renderTaskTime(timeBlock, task.id);
+      // Tranche 5 : le bloc « Temps » n'existe pas dans la fiche quand le réglage
+      // d'affichage est désactivé (défaut) — aucun champ, aucun écouteur et
+      // aucune lecture en base : la fiche redevient celle d'avant l'idée 2.
+      if (timeBlock) {
+        timeBlock.addEventListener("click", (e) => {
+          if (e.target.closest(".kanban-time-set-btn")) { setEstimated(); return; }
+          if (e.target.closest(".kanban-time-add-btn")) addSpent();
+        });
+        timeBlock.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" || !e.target.closest(".kanban-checklist-input")) return;
+          e.preventDefault(); // pas de soumission implicite du formulaire de la fiche
+          if (e.target.closest(".kanban-time-estimated-input")) setEstimated();
+          else if (e.target.closest(".kanban-time-spent-input")) addSpent();
+        });
+        renderTaskTime(timeBlock, task.id);
+      }
       renderChecklist(block, task.id);
       reloadDeliverables();
     }

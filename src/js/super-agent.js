@@ -850,6 +850,12 @@ let pendingRender = false;
 let lastAssistantRawText = "";
 let superShowThinking = true; // réglage « Afficher la réflexion » (issue #43)
 let superShowTools = false;   // réglage « Afficher les outils » (issue #43)
+// Lot A idée 2, tranche 5 : réglage d'AFFICHAGE du suivi du temps estimé /
+// passé (défaut désactivé). Lu dans la configuration (`show_time`) et appliqué
+// UNIQUEMENT à l'affichage : masqué ⇒ la vue d'ensemble reste exactement comme
+// avant l'idée 2 ; activé ⇒ le total par projet réapparaît. Aucune donnée n'est
+// écrite ni effacée par ce réglage.
+let superShowTime = false;
 // Toggles du bandeau « assistant occupé » et de la teinte « réflexion » de la
 // barre de saisie, exposés au module scope pour que handleSuperAgentEvent (qui
 // est au niveau module) puisse les appeler. Assigned dans createSuperAgent
@@ -1120,6 +1126,9 @@ const INVISIBLE_LOOP_BUFFER_MIN = 200;
 function refreshSuperRenderOptions() {
   superShowThinking = configCache.show_thinking !== false;
   superShowTools = configCache.show_tools === true;
+  // Lot A idée 2, tranche 5 : le suivi du temps n'est affiché que s'il est
+  // explicitement activé (champ absent ⇒ masqué, comme avant l'idée 2).
+  superShowTime = configCache.show_time === true;
 }
 
 // ── Rendu de messages (même structure DOM que l'agent standard agent-pi.js) ──
@@ -2166,7 +2175,10 @@ export async function createSuperAgent(container) {
             // Temps par projet (Lot A, idée 2, tranche 4c) : ajouté à côté des
             // compteurs existants, et SEULEMENT si au moins un des deux temps est
             // renseigné (`*_set`) — sinon la ligne garde son apparence actuelle.
-            const time = projectTrackingTimeFragment(p);
+            // Tranche 5 : rien de tout cela n'est affiché si le réglage
+            // d'affichage du suivi du temps est désactivé (défaut) : la vue
+            // d'ensemble redevient exactement celle d'avant l'idée 2.
+            const time = superShowTime ? projectTrackingTimeFragment(p) : "";
             return `<div class="super-tracking-project">
                  <span class="super-tracking-project-name">${escapeHtmlForSuper(p.name || p.path || "")}</span>
                  <span class="dash-muted">${p.tasks_en_cours ?? 0} en cours · ${p.tasks_terminees ?? 0} terminées</span>

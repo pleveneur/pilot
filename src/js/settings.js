@@ -473,6 +473,11 @@ const taSuperAgentChecklistTemplate = document.getElementById("setting-superagen
 // Clé `super_agent_tracabilite_enabled` (défaut ON côté Rust : champ absent ⇒
 // activé, donc aucune régression pour les configurations existantes).
 const chkSuperAgentTracabilite = document.getElementById("setting-superagent-tracabilite");
+// ── Lot A idée 2 (tranche 5) : afficher le suivi du temps estimé / passé ──
+// Clé `super_agent_show_time` (défaut OFF côté Rust : champ absent ⇒ masqué,
+// donc le suivi du temps ne s'affiche pas tant que le propriétaire ne l'a pas
+// demandé). Ce réglage ne touche QUE l'affichage.
+const chkSuperAgentShowTime = document.getElementById("setting-superagent-show-time");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -1318,6 +1323,9 @@ const chkSuperAgentTracabilite = document.getElementById("setting-superagent-tra
   // ── Lot A idée 4 (tranche 5b) : traçabilité des livraisons ──
   // Clé absente ⇒ coché (défaut « activé »), comme le réglage Rust correspondant.
   if (chkSuperAgentTracabilite) chkSuperAgentTracabilite.checked = currentConfig.super_agent_tracabilite_enabled !== false;
+  // ── Lot A idée 2 (tranche 5) : affichage du suivi du temps ──
+  // Clé absente ⇒ décoché (défaut « désactivé »), comme le réglage Rust.
+  if (chkSuperAgentShowTime) chkSuperAgentShowTime.checked = currentConfig.super_agent_show_time === true;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -2190,6 +2198,10 @@ const chkSuperAgentTracabilite = document.getElementById("setting-superagent-tra
         // Champ absent du DOM ⇒ vrai (défaut), pour ne jamais désactiver un
         // réglage que l'utilisateur n'a pas touché.
         super_agent_tracabilite_enabled: chkSuperAgentTracabilite ? chkSuperAgentTracabilite.checked !== false : true,
+        // ── Lot A idée 2 (tranche 5) : affichage du suivi du temps ──
+        // Champ absent du DOM ⇒ faux par défaut : le suivi du temps reste masqué
+        // tant qu'il n'est pas explicitement demandé.
+        super_agent_show_time: chkSuperAgentShowTime ? chkSuperAgentShowTime.checked === true : false,
       };
     try {
       await invoke("save_config", { config });

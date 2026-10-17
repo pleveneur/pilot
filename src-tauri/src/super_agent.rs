@@ -1461,6 +1461,10 @@ pub fn get_super_agent_config(state: State<AppState>) -> Result<Value, String> {
         "super_agent_tasks_tab_enabled": cfg.super_agent_tasks_tab_enabled,
         // Lot A idée 3 : mode du contrôle de checklist ("off"/"warn"/"block").
         "super_agent_checklist_mode": cfg.super_agent_checklist_mode,
+        // Lot A idée 2, tranche 5 : afficher le suivi du temps estimé / passé
+        // (défaut : désactivé, champ absent ⇒ false). Lu par la vue d'ensemble
+        // du suivi pour décider s'il faut afficher le total par projet.
+        "show_time": cfg.super_agent_show_time,
     }))
 }
 
@@ -8285,6 +8289,51 @@ mod tests {
         assert!(!tracabilite_from_json(
             r#"{"super_agent_tracabilite_enabled":false}"#
         ));
+    }
+
+    // ── Lot A idée 2, tranche 5 : réglage d'AFFICHAGE du suivi du temps ──
+    // Le réglage `super_agent_show_time` gouverne UNIQUEMENT l'affichage du
+    // temps estimé / passé. Il est DÉSACTIVÉ PAR DÉFAUT : une configuration qui
+    // ne le mentionne pas (toutes les configs existantes) masque entièrement le
+    // suivi du temps, comme avant son introduction. Aucune donnée n'est écrite
+    // ni effacée par ce réglage.
+
+    /// Le réglage tel que le lit `AppConfig` au chargement du fichier de
+    /// configuration : un champ ABSENT retombe sur le défaut du type (faux).
+    fn show_time_from_json(json: &str) -> bool {
+        let cfg: crate::AppConfig = serde_json::from_str(json).unwrap();
+        cfg.super_agent_show_time
+    }
+
+    #[test]
+    fn show_time_setting_is_disabled_when_absent_from_the_config() {
+        // Config vide (premier lancement) : désactivé.
+        assert!(!show_time_from_json("{}"));
+        // Config d'aujourd'hui, qui ignore ce champ : suivi du temps masqué.
+        assert!(!show_time_from_json(
+            r#"{"theme":"dark","super_agent_checklist_mode":"warn"}"#
+        ));
+        // Une clé inconnue (version plus récente) ne perturbe rien.
+        assert!(!show_time_from_json(r#"{"super_agent_reglage_inconnu":42}"#));
+        // Une valeur explicite est respectée dans les DEUX sens.
+        assert!(show_time_from_json(r#"{"super_agent_show_time":true}"#));
+        assert!(!show_time_from_json(r#"{"super_agent_show_time":false}"#));
+    }
+
+    #[test]
+    fn show_time_setting_leaves_the_other_settings_untouched() {
+        // La présence du nouveau champ ne modifie aucune clé existante : le
+        // reste de la configuration est préservé tel quel au chargement.
+        let cfg: crate::AppConfig = serde_json::from_str(
+            r#"{"super_agent_show_time":true,"theme":"light",
+                "super_agent_checklist_mode":"block",
+                "super_agent_tracabilite_enabled":false}"#,
+        )
+        .unwrap();
+        assert!(cfg.super_agent_show_time);
+        assert_eq!(cfg.theme, "light");
+        assert_eq!(cfg.super_agent_checklist_mode, "block");
+        assert!(!cfg.super_agent_tracabilite_enabled);
     }
 
     #[test]

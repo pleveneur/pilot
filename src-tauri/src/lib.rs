@@ -821,6 +821,15 @@ struct AppConfig {
     // qu'autoriser ou refuser l'écriture : il n'affiche aucune liste.
     #[serde(default = "default_true")]
     super_agent_tracabilite_enabled: bool,
+    // Lot A idée 2, tranche 5 : AFFICHER le suivi du temps estimé / passé des
+    // tâches de suivi (champs de la fiche, pastille des cartes, total par projet
+    // dans la vue d'ensemble). Désactivé par défaut : un champ ABSENT de la
+    // configuration (toutes les configs existantes) masque entièrement le suivi
+    // du temps, exactement comme avant son introduction. Activé ⇒ tout
+    // réapparaît avec les règles déjà en place. Ce réglage ne touche QUE
+    // l'affichage : aucune donnée n'est écrite, effacée ni masquée en base.
+    #[serde(default)]
+    super_agent_show_time: bool,
     // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
     // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
     // fréquence explicite. Exprimée en secondes, bornée côté application au
@@ -1177,6 +1186,7 @@ impl Default for AppConfig {
             super_agent_checklist_mode: String::new(),
             super_agent_checklist_template: default_super_agent_checklist_template(),
             super_agent_tracabilite_enabled: true,
+            super_agent_show_time: false,
             super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),

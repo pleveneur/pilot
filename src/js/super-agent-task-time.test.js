@@ -208,7 +208,9 @@ describe("cartes Kanban — la pastille de temps est RELUE EN BASE", () => {
   const card = slice(viewSrc, "function taskCardHtml(t)", "function ideaCardHtml(");
 
   it("la pastille lit le cache relu en base et n'apparaît QUE s'il y a un temps", () => {
-    expect(card).toContain("const timeLabel = taskTimePillLabel(taskTimes.get(t.id));");
+    // Tranche 5 : la pastille est en plus conditionnée au réglage d'affichage
+    // du suivi du temps (`super_agent_show_time`, défaut désactivé).
+    expect(card).toContain('const timeLabel = showTime ? taskTimePillLabel(taskTimes.get(t.id)) : "";');
     expect(card).toContain('${timeLabel ? `<span class="kanban-time-pill');
     // Chaîne vide (les deux temps non renseignés) ⇒ aucun `<span>` : la carte
     // existante garde exactement son apparence.
@@ -262,12 +264,14 @@ describe("chargement de la vue — la pastille suit le Kanban", () => {
 describe("fiche de tâche — bloc « Temps » (champs de saisie)", () => {
   const markup = slice(
     viewSrc,
-    '${isEdit ? `<div class="kanban-field kanban-checklist kanban-task-time">',
+    '${isEdit && showTime ? `<div class="kanban-field kanban-checklist kanban-task-time">',
     '${isEdit ? `<div class="kanban-field kanban-checklist kanban-deliverables">'
   );
 
   it("n'apparaît que sur une tâche EXISTANTE et offre les deux saisies + leurs boutons", () => {
-    expect(markup.startsWith('${isEdit ? `')).toBe(true);
+    // Tranche 5 : en plus de « tâche existante », le bloc exige le réglage
+    // d'affichage du suivi du temps (`super_agent_show_time`).
+    expect(markup.startsWith('${isEdit && showTime ? `')).toBe(true);
     expect(count(markup, '<div class="kanban-field kanban-checklist kanban-task-time">')).toBe(1);
     expect(markup).toContain('class="kanban-checklist-input kanban-time-estimated-input"');
     expect(markup).toContain('class="kanban-checklist-input kanban-time-spent-input"');
