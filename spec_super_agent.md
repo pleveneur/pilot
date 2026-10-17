@@ -389,6 +389,13 @@ uniquement un bloc d'instructions dans le prompt système.
     canonique (`super-agent-kanban.js` : `columnToStatus`) ; le statut est
     normalisé en colonne au prochain rechargement.
   - Après chaque écriture, la vue se **recharge** automatiquement.
+- **Détection des tâches longues** (idée 1) : une fonction pure juge le
+  **titre + la description** au moment où l'état Kanban est produit et pose
+  `is_long_task` / `long_task_reason` ; le cœur seul décide (seuils et règles
+  dans `super_agent.rs`, jamais recalculés par l'interface). Pilot **signale et
+  propose** de confier la demande à un agent — il ne lance **jamais** d'agent
+  tout seul. L'affichage est conditionné par `super_agent_long_tasks_enabled`
+  (Paramètres → Assistant, **activé** par défaut : une clé absente vaut activé).
 - **Temps estimé / passé par tâche** (idée 2) : une tâche peut porter un
   **temps prévu** (valeur absolue, `super_agent_task_time_set_estimated`) et un
   **temps passé** (cumul, `super_agent_task_time_add_spent`), relus en base
@@ -1706,6 +1713,27 @@ le suivi du temps — et il est **masqué par défaut**.
 - **Rien n'est calculé ni déduit à votre place** : seules vos saisies alimentent
   l'affichage.
 <!-- /HELP:super-agent-temps -->
+
+<!-- HELP:super-agent-taches-longues -->
+### Repérer les tâches longues
+
+Certaines demandes sont **nettement plus lourdes** que les autres. Pour
+celles-là, Pilot le **signale** et vous **propose** de les confier à un agent,
+plutôt que de les laisser peser sur l'assistant de suivi.
+
+- **Ce qui s'affiche** : une **pastille discrète « longue »** sur la carte de la
+  tâche. Au survol, une **infobulle** explique **pourquoi** elle est jugée longue
+  (par exemple « 3 étapes détectées » ou « 12 fichiers cités »).
+- **Ce que Pilot ne fait pas** : il **signale** et **propose**, rien de plus. Il
+  ne lance **jamais** un agent tout seul et ne change **jamais** votre modèle.
+  La décision reste entièrement la vôtre.
+- **Demande ordinaire** : **rien ne s'affiche** — la carte reste exactement
+  comme avant, sans pastille ni infobulle.
+- **Pour éteindre complètement le repérage** : **Paramètres → Assistant
+  (suivi multi-projets)**, décochez **« Détecter les tâches longues et proposer
+  un agent »** (activé par défaut). Décocher n'efface aucune donnée et ne change
+  rien d'autre.
+<!-- /HELP:super-agent-taches-longues -->
 
 ## 9. Perspective — lien futur avec un serveur de sources
 
