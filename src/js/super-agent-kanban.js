@@ -851,3 +851,150 @@ export function deliverableErrorMessage(err) {
   const detail = String((err && err.message) || err || "").trim();
   return detail ? `${DELIVERABLE_ERROR_PREFIX} : ${detail}` : DELIVERABLE_ERROR_PREFIX;
 }
+
+// ── Idée 2 (Lot A), tranche 3 : temps prévu / passé (fiche + carte) ──────────
+// Les deux temps d'une tâche sont LUS EN BASE par les commandes de la tranche 2
+// (`super_agent_task_time_*`). L'écran ne calcule rien et ne devine rien :
+// `estimated_set` / `spent_set` (booléens) distinguent « non renseigné » de 0
+// (« rien prévu » / « rien passé ») — en JavaScript, 0 est faux, donc la VALEUR
+// ne doit jamais servir de test de présence. Ces fonctions PURES préparent
+// l'affichage et valident la saisie, sans DOM ni invoke.
+
+/// Noms EXACTS des trois commandes du temps (contrat avec `super_agent.rs`,
+/// tranche 2.2). La lecture unitaire sert à relire la valeur après CHAQUE
+/// opération, y compris la pastille des cartes.
+export const TASK_TIME_GET_COMMAND = "super_agent_task_time_get";
+export const TASK_TIME_SET_ESTIMATED_COMMAND = "super_agent_task_time_set_estimated";
+export const TASK_TIME_ADD_SPENT_COMMAND = "super_agent_task_time_add_spent";
+
+/// Mention affichée quand seul le temps passé est renseigné : jamais une
+/// estimation déduite du passé (aucun calcul faux).
+export const NO_ESTIMATE_TEXT = "pas d'estimation";
+
+/// Texte du bloc de la fiche quand AUCUN des deux temps n'est renseigné.
+export const NO_TIME_TEXT = "aucun temps renseigné";
+
+/// Message d'erreur d'une durée inexploitable (négative, décimale, texte vide
+/// pour le passé) : la saisie est REFUSÉE et rien n'est écrit.
+export const INVALID_MINUTES_MESSAGE =
+  "Temps refusé : entrez un nombre entier de minutes, sans valeur négative.";
+export const EMPTY_SPENT_MESSAGE = "Temps passé : entrez le nombre de minutes à ajouter.";
+
+/// Début de la ligne d'information affichée quand la lecture du temps échoue.
+export const TIME_ERROR_PREFIX = "Temps indisponible";
+
+/**
+ * Lit la charge utile renvoyée par les commandes du temps (tranche 2.2) et la
+ * normalise : `{ estimatedMinutes, spentMinutes, estimatedSet, spentSet }`.
+ * `null` = NON RENSEIGNÉ, à distinguer de `0` : la présence est portée par
+ * `estimated_set` / `spent_set` (jamais par la valeur, car `0` est faux en JS).
+ * Une réponse absente ou mal formée vaut « rien de renseigné » — aucune valeur
+ * n'est inventée. Pur.
+ * @param {{estimated_minutes?: number|null, spent_minutes?: number|null,
+ *          estimated_set?: boolean, spent_set?: boolean}|null|undefined} result
+ * @returns {{estimatedMinutes: number|null, spentMinutes: number|null,
+ *            estimatedSet: boolean, spentSet: boolean}}
+ */
+export function taskTimeState(result) {
+  const r = result || {};
+  const estimatedSet = !!r.estimated_set;
+  const spentSet = !!r.spent_set;
+  const num = (v) => (v == null ? 0 : Number(v) || 0);
+  return {
+    estimatedMinutes: estimatedSet ? num(r.estimated_minutes) : null,
+    spentMinutes: spentSet ? num(r.spent_minutes) : null,
+    estimatedSet,
+    spentSet,
+  };
+}
+
+/**
+ * Pastille DISCRÈTE des cartes Kanban : « 45 min prévues / 70 min passées ».
+ *  - AUCUN des deux temps renseigné → chaîne VIDE (les tâches actuelles gardent
+ *    exactement leur apparence : pas de pastille) ;
+ *  - les deux renseignés → prévu / passé ;
+ *  - prévu seul → le prévu seulement ;
+ *  - passé seul → « pas d'estimation · 70 min passées » (jamais un écart
+ *    calculé depuis le passé) ;
+ *  - un zéro SAISI s'affiche « 0 min », car la présence vient de `*_set`. Pur.
+ * @param {object|null|undefined} result charge utile des commandes du temps
+ * @returns {string}
+ */
+export function taskTimePillLabel(result) {
+  const st = taskTimeState(result);
+  if (!st.estimatedSet && !st.spentSet) return "";
+  const est = st.estimatedSet ? `${st.estimatedMinutes} min prévue${st.estimatedMinutes === 1 ? "" : "s"}` : "";
+  const spent = st.spentSet ? `${st.spentMinutes} min passée${st.spentMinutes === 1 ? "" : "s"}` : "";
+  if (est && spent) return `${est} / ${spent}`;
+  if (est) return est;
+  return `${NO_ESTIMATE_TEXT} · ${spent}`;
+}
+
+/**
+ * Texte de synthèse du bloc « Temps » de la fiche : même règle que la pastille,
+ * avec une mention explicite quand l'un des deux temps manque — et `NO_TIME_TEXT`
+ * quand AUCUN des deux n'est renseigné (la fiche dit alors explicitement que rien
+ * n'est saisi, au lieu de rester muette et ambiguë). Pur.
+ * @param {object|null|undefined} result charge utile des commandes du temps
+ * @returns {string}
+ */
+export function taskTimeSummaryLabel(result) {
+  const st = taskTimeState(result);
+  if (!st.estimatedSet && !st.spentSet) return NO_TIME_TEXT;
+  const est = st.estimatedSet ? `${st.estimatedMinutes} min prévue${st.estimatedMinutes === 1 ? "" : "s"}` : "";
+  const spent = st.spentSet ? `${st.spentMinutes} min passée${st.spentMinutes === 1 ? "" : "s"}` : "";
+  if (est && spent) return `${est} / ${spent}`;
+  if (est) return `${est} (aucun temps passé)`;
+  return `${NO_ESTIMATE_TEXT} · ${spent}`;
+}
+
+/**
+ * Convertit une saisie de minutes en nombre ENTIER positif. Toute autre valeur
+ * (négative, décimale, texte) est REFUSÉE : `{ ok: false, message }` — l'appel
+ * n'est alors jamais envoyé au cœur, rien n'est écrit. Pur.
+ * @param {unknown} raw
+ * @returns {{ok: boolean, minutes: number|null, message: string}}
+ */
+function parseMinutesValue(raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  if (!/^\d+$/.test(s)) return { ok: false, minutes: null, message: INVALID_MINUTES_MESSAGE };
+  return { ok: true, minutes: Number(s), message: "" };
+}
+
+/**
+ * Valide la saisie du temps PRÉVU : un champ VIDE remet la valeur à « non
+ * renseigné » (`minutes: null`), toute autre saisie doit être un entier positif.
+ * Pur.
+ * @param {unknown} raw valeur du champ
+ * @returns {{ok: boolean, minutes: number|null, message: string}}
+ */
+export function parseEstimatedMinutesInput(raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  if (!s) return { ok: true, minutes: null, message: "" };
+  return parseMinutesValue(s);
+}
+
+/**
+ * Valide la saisie du temps PASSÉ à AJOUTER : un champ vide est refusé (on
+ * n'ajoute pas un cumul vide), toute autre saisie doit être un entier positif.
+ * Pur.
+ * @param {unknown} raw valeur du champ
+ * @returns {{ok: boolean, minutes: number|null, message: string}}
+ */
+export function parseSpentMinutesInput(raw) {
+  const s = String(raw == null ? "" : raw).trim();
+  if (!s) return { ok: false, minutes: null, message: EMPTY_SPENT_MESSAGE };
+  return parseMinutesValue(s);
+}
+
+/**
+ * Ligne d'information affichée si la lecture ou l'écriture du temps échoue (le
+ * refus rendu par le cœur est montré tel quel : valeur négative, tâche
+ * inconnue…). Ne lève JAMAIS d'exception : la fiche reste utilisable. Pur.
+ * @param {unknown} err
+ * @returns {string}
+ */
+export function taskTimeErrorMessage(err) {
+  const detail = String((err && err.message) || err || "").trim();
+  return detail ? `${TIME_ERROR_PREFIX} : ${detail}` : TIME_ERROR_PREFIX;
+}

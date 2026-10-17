@@ -29,7 +29,10 @@ import { ALL_PROJECTS, IDEAS_GROUP_LABEL, normalizeTaskStatus, columnToStatus,
   DEFAULT_CHECKLIST_TEMPLATE, normalizeChecklistMode, normalizeChecklistTemplate,
   parseChecklistTemplate, shouldOfferTemplatePoints,
   TASK_DELIVERABLE_LIST_COMMAND, buildDeliverableBlock, deliverableErrorMessage,
-  DELIVERABLE_EMPTY_TEXT } from "./super-agent-kanban.js";
+  DELIVERABLE_EMPTY_TEXT,
+  TASK_TIME_GET_COMMAND, TASK_TIME_SET_ESTIMATED_COMMAND, TASK_TIME_ADD_SPENT_COMMAND,
+  taskTimePillLabel, taskTimeSummaryLabel, taskTimeState, taskTimeErrorMessage,
+  parseEstimatedMinutesInput, parseSpentMinutesInput } from "./super-agent-kanban.js";
 
 /** Échappe le HTML (copie locale — non exportée depuis super-agent.js). */
 function escapeHtml(s) {
@@ -87,6 +90,12 @@ export function createSuperKanban(container) {
   // ne servent qu'à PROPOSER les points du modèle sur une tâche sans point :
   // rien n'est jamais créé automatiquement. `null` = pas encore lu.
   let checklistCfg = null;
+  // Idée 2 (Lot A), tranche 3 : derniers temps RELUS EN BASE par tâche
+  // (id → charge utile de `super_agent_task_time_get`). Alimente la pastille
+  // « prévu / passé » des cartes ; aucune valeur n'est devinée côté écran.
+  // Un chargement plus récent annule le précédent (`timeFetchToken`).
+  let taskTimes = new Map();
+  let timeFetchToken = 0;
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
   // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
@@ -192,11 +201,16 @@ export function createSuperKanban(container) {
     // Idée 3 (Lot A), tranche 3.4 : compteur discret de la checklist (« 2/3 »),
     // affiché SEULEMENT si la tâche porte au moins un point (relu en base).
     const checkLabel = checklistCounterLabel(checkCounts.get(t.id));
+    // Idée 2 (Lot A), tranche 3 : pastille de temps « 45 min prévues / 70 min
+    // passées », affichée SEULEMENT si au moins un des deux temps est renseigné
+    // (relu en base). Une tâche sans temps garde exactement son apparence.
+    const timeLabel = taskTimePillLabel(taskTimes.get(t.id));
     return `<div class="super-kanban-card${blocked ? " blocked" : ""}${waiting ? " waiting-dep" : ""}" draggable="true" data-task-id="${t.id}">
       <div class="super-kanban-card-head">
         <input type="checkbox" class="kanban-select-cb" data-task-id="${t.id}" ${selectedTaskIds.has(t.id) ? "checked" : ""} title="Sélectionner cette tâche" aria-label="Sélectionner cette tâche">
         <div class="super-kanban-card-title">${title}</div>
         ${checkLabel ? `<span class="kanban-check-counter" title="${checkLabel} : points de checklist cochés">${checkLabel}</span>` : ""}
+        ${timeLabel ? `<span class="kanban-time-pill dash-muted" title="${escapeAttr(timeLabel)}">${escapeHtml(timeLabel)}</span>` : ""}
       </div>
       ${blocked ? `<div class="super-kanban-card-blocker" title="${blocker}"><i data-lucide="alert-triangle" class="icon-sm"></i> Bloquée : ${blocker}</div>` : ""}
       ${waiting ? `<div class="super-kanban-card-dependency" title="${escapeAttr(depLabel)}"><i data-lucide="link-2" class="icon-sm"></i> ${escapeHtml(depLabel)}</div>` : ""}
@@ -262,6 +276,9 @@ export function createSuperKanban(container) {
     // Les compteurs de checklist déjà relus en base restent affichés tels quels
     // après un re-rendu (changement de filtre) sans nouvel appel au backend.
     applyCheckCounters();
+    // Idem pour les pastilles de temps déjà relues : un re-rendu ne doit ni les
+    // perdre ni déclencher une nouvelle lecture en base.
+    applyTimePills();
   }
 
   /**
@@ -516,6 +533,52 @@ export function createSuperKanban(container) {
   }
 
   /**
+   * Temps des cartes : lecture EN BASE des tâches affichées (aucun état deviné).
+   * Séquentielle et fail-open — une lecture impossible laisse simplement la
+   * carte SANS pastille (jamais une valeur inventée). Un chargement plus récent
+   * annule le précédent (jeton).
+   */
+  async function refreshTaskTimes() {
+    const token = ++timeFetchToken;
+    for (const t of visibleTasks()) {
+      if (!t || t.id == null) continue;
+      try {
+        const res = await invoke(TASK_TIME_GET_COMMAND, { taskId: t.id });
+        if (token !== timeFetchToken) return; // un chargement plus récent a pris la main
+        taskTimes.set(t.id, res || {});
+      } catch (_err) {
+        /* temps illisible : aucune pastille inventée */
+      }
+    }
+    applyTimePills();
+  }
+
+  /**
+   * Met à jour la pastille de temps des cartes DÉJÀ rendues (sans re-rendre le
+   * tableau : défilement, sélection et glisser-déposer restent intacts). Une
+   * carte dont les deux temps sont non renseignés ne reçoit AUCUNE pastille.
+   */
+  function applyTimePills() {
+    container.querySelectorAll(".super-kanban-card[data-task-id]").forEach((card) => {
+      const id = Number(card.dataset.taskId);
+      const label = taskTimePillLabel(taskTimes.get(id));
+      let el = card.querySelector(".kanban-time-pill");
+      if (!label) {
+        if (el) el.remove(); // aucun temps renseigné : aucune pastille (inchangé)
+        return;
+      }
+      if (!el) {
+        el = document.createElement("span");
+        el.className = "kanban-time-pill dash-muted";
+        const head = card.querySelector(".super-kanban-card-head");
+        (head || card).appendChild(el);
+      }
+      el.textContent = label;
+      el.title = label;
+    });
+  }
+
+  /**
    * Lit les DEUX réglages de checklist en configuration (mode + modèle), une
    * fois par fiche ouverte. Lecture seule, fail-open : une configuration
    * illisible retombe sur les défauts sûrs (mode « rappel », modèle par défaut)
@@ -600,6 +663,45 @@ export function createSuperKanban(container) {
   }
 
   /**
+   * Idée 2 (Lot A), tranche 3 : relit le TEMPS d'une tâche EN BASE et redessine
+   * le résumé du bloc « Temps » de la fiche (aucun état deviné côté écran). Le
+   * résultat alimente aussi la pastille de la carte correspondante. Appelée à
+   * l'ouverture de la fiche ET après CHAQUE opération réussie. La présence d'un
+   * temps est lue sur `estimated_set` / `spent_set` — jamais sur la valeur, car
+   * `0` est faux en JavaScript : « rien prévu » (0) reste distinct de « non
+   * renseigné » (null). Un échec de lecture affiche une ligne claire et ne
+   * remonte JAMAIS d'exception : le reste de la fiche continue de fonctionner.
+   */
+  async function renderTaskTime(block, taskId) {
+    if (!block) return;
+    const summary = block.querySelector(".kanban-time-summary");
+    const estInput = block.querySelector(".kanban-time-estimated-input");
+    const errEl = block.querySelector(".kanban-time-error");
+    if (errEl) {
+      errEl.hidden = true;
+      errEl.textContent = "";
+    }
+    try {
+      const res = await invoke(TASK_TIME_GET_COMMAND, { taskId });
+      taskTimes.set(taskId, res || {});
+      const state = taskTimeState(res);
+      if (summary) summary.textContent = taskTimeSummaryLabel(res);
+      // Le prévu est PRÉREMPLI avec la valeur relue (vide = non renseigné) ; le
+      // passé reste un CUMUL à ajouter, donc son champ n'est jamais prérempli.
+      if (estInput) estInput.value = state.estimatedSet ? String(state.estimatedMinutes) : "";
+      applyTimePills();
+    } catch (err) {
+      // Lecture impossible : une ligne d'information suffit, rien n'est inventé
+      // et la pastille de la carte garde la dernière valeur relue en base.
+      if (summary) summary.textContent = "";
+      if (errEl) {
+        errEl.hidden = false;
+        errEl.textContent = taskTimeErrorMessage(err);
+      }
+    }
+  }
+
+  /**
    * Idée 4 (Lot A), tranche 4.4 : relit les lignes de traçabilité de la tâche
    * EN BASE et redessine le bloc « Livrable » de la fiche (aucun état deviné côté
    * écran). Bloc en LECTURE SEULE : l'écriture d'une ligne est automatique côté
@@ -670,6 +772,9 @@ export function createSuperKanban(container) {
       // Compteurs de checklist des cartes (lecture en base, après le rendu pour
       // ne jamais retarder l'affichage du Kanban).
       refreshCheckCounts();
+      // Idée 2 (Lot A), tranche 3 : temps des cartes (lecture en base elle aussi,
+      // APRÈS le rendu : l'affichage du Kanban n'attend pas les pastilles).
+      refreshTaskTimes();
     } catch (err) {
       console.error("Erreur get_super_agent_kanban:", err);
       container.innerHTML =
@@ -758,6 +863,19 @@ export function createSuperKanban(container) {
             <button type="button" class="btn kanban-checklist-add-btn">Ajouter</button>
           </div>
         </div>` : ""}
+        ${isEdit ? `<div class="kanban-field kanban-checklist kanban-task-time">
+          <div class="kanban-checklist-head"><i data-lucide="clock" class="icon-sm"></i> Temps <span class="kanban-time-summary kanban-checklist-count dash-muted"></span></div>
+          <div class="kanban-checklist-add">
+            <input type="text" inputmode="numeric" class="kanban-checklist-input kanban-time-estimated-input" placeholder="Temps prévu (min)" aria-label="Temps prévu en minutes">
+            <button type="button" class="btn kanban-checklist-add-btn kanban-time-set-btn">Régler le prévu</button>
+          </div>
+          <div class="kanban-checklist-add">
+            <input type="text" inputmode="numeric" class="kanban-checklist-input kanban-time-spent-input" placeholder="Temps passé à ajouter (min)" aria-label="Temps passé à ajouter en minutes">
+            <button type="button" class="btn kanban-checklist-add-btn kanban-time-add-btn">Ajouter le passé</button>
+          </div>
+          <div class="dash-muted kanban-time-hint">Le temps passé se cumule. Laisser le prévu vide l'efface ; aucun temps n'est déduit ni estimé à votre place.</div>
+          <div class="dash-error kanban-time-error" hidden></div>
+        </div>` : ""}
         ${isEdit ? `<div class="kanban-field kanban-checklist kanban-deliverables">
           <div class="kanban-checklist-head"><i data-lucide="package-check" class="icon-sm"></i> Livrable <span class="kanban-deliverables-count dash-muted"></span></div>
           <div class="kanban-checklist-list kanban-deliverables-list"><div class="dash-muted">Chargement des livraisons…</div></div>
@@ -774,6 +892,9 @@ export function createSuperKanban(container) {
       // Le compteur des cartes peut avoir changé depuis la fiche : on relit le
       // cache (toujours issu de la base) sans recharger tout le Kanban.
       applyCheckCounters();
+      // Idem pour la pastille de temps : ce qui vient d'être saisi sur la fiche
+      // se voit sur la carte dès sa fermeture (cache relu en base, jamais deviné).
+      applyTimePills();
     };
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) close();
@@ -901,6 +1022,63 @@ export function createSuperKanban(container) {
         await renderChecklist(block, task.id);
         await reloadDeliverables();
       });
+      // Idée 2 (Lot A), tranche 3 : bloc « Temps » de la fiche. Il n'écrit JAMAIS
+      // de statut (uniquement le prévu ABSOLU et le passé en CUMUL, par les deux
+      // commandes de la tranche 2.2) et il RELIT la base après CHAQUE opération
+      // réussie. Un refus (saisie invalide, valeur négative, tâche inconnue)
+      // affiche un message clair et n'écrit RIEN.
+      const timeBlock = overlay.querySelector(".kanban-task-time");
+      const setTimeError = (message) => {
+        const errEl = timeBlock && timeBlock.querySelector(".kanban-time-error");
+        if (!errEl) return;
+        errEl.hidden = false;
+        errEl.textContent = message;
+      };
+      const setEstimated = async () => {
+        const input = timeBlock.querySelector(".kanban-time-estimated-input");
+        const parsed = parseEstimatedMinutesInput(input ? input.value : "");
+        // Saisie refusée avant tout appel : rien n'est envoyé au cœur.
+        if (!parsed.ok) {
+          setTimeError(parsed.message);
+          return;
+        }
+        try {
+          await invoke(TASK_TIME_SET_ESTIMATED_COMMAND, { taskId: task.id, minutes: parsed.minutes });
+        } catch (err) {
+          setTimeError(taskTimeErrorMessage(err));
+          return;
+        }
+        await renderTaskTime(timeBlock, task.id);
+      };
+      const addSpent = async () => {
+        const input = timeBlock.querySelector(".kanban-time-spent-input");
+        const parsed = parseSpentMinutesInput(input ? input.value : "");
+        // Champ vide ou saisie invalide : refus net, aucune écriture.
+        if (!parsed.ok) {
+          setTimeError(parsed.message);
+          return;
+        }
+        try {
+          await invoke(TASK_TIME_ADD_SPENT_COMMAND, { taskId: task.id, minutes: parsed.minutes });
+        } catch (err) {
+          setTimeError(taskTimeErrorMessage(err));
+          return;
+        }
+        // Le passé est un CUMUL : le champ repart vide pour le prochain ajout.
+        if (input) input.value = "";
+        await renderTaskTime(timeBlock, task.id);
+      };
+      timeBlock.addEventListener("click", (e) => {
+        if (e.target.closest(".kanban-time-set-btn")) { setEstimated(); return; }
+        if (e.target.closest(".kanban-time-add-btn")) addSpent();
+      });
+      timeBlock.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" || !e.target.closest(".kanban-checklist-input")) return;
+        e.preventDefault(); // pas de soumission implicite du formulaire de la fiche
+        if (e.target.closest(".kanban-time-estimated-input")) setEstimated();
+        else if (e.target.closest(".kanban-time-spent-input")) addSpent();
+      });
+      renderTaskTime(timeBlock, task.id);
       renderChecklist(block, task.id);
       reloadDeliverables();
     }
