@@ -9027,4 +9027,80 @@ mod tests {
         assert_eq!(project_time_totals(&conn, 2), (None, None));
         assert_eq!(project_time_totals(&conn, 1), (None, Some(90)));
     }
+
+    // ── Lot A idée 2, tranche 6 : verrouillage de bout en bout ──
+    // Compléments des sections 1 / 2.2 / 4b / 5. Ces tests figent le comportement
+    // ATTENDU tel que consommé par l'interface (charge utile `null` ≠ `0`,
+    // cumul, agrégat par projet, réglage absent = désactivé) sans modifier la
+    // moindre règle de production.
+
+    #[test]
+    fn time_aggregate_ignores_unset_values_mixed_with_set_values() {
+        let (conn, t1, t2) = mem_conn_with_two_tasks();
+        // t1 : 60 prévues + 20 passées ; t2 : aucun temps. Les NULL de t2 ne
+        // doivent jamais être comptés comme 0 (ni dans le prévu, ni dans le passé).
+        db_set_task_estimated_minutes(&conn, t1, Some(60)).unwrap();
+        db_add_task_spent_minutes(&conn, t1, 20).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (Some(60), Some(20)));
+        // Ajouter du passé à t2 cumule sans jamais INVENTER un prévu pour t2.
+        db_add_task_spent_minutes(&conn, t2, 30).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (Some(60), Some(50)));
+        // Le prévu de t2 reste NON renseigné (jamais `Some(0)`).
+        assert_eq!(db_task_time(&conn, t2).unwrap().0, None);
+    }
+
+    #[test]
+    fn time_aggregate_returns_to_unset_when_the_only_value_is_cleared() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        db_set_task_estimated_minutes(&conn, t1, Some(45)).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (Some(45), None));
+        // Dé-renseigner la SEULE valeur du projet ramène à « rien de renseigné »
+        // (`None`), et non à `Some(0)`.
+        db_set_task_estimated_minutes(&conn, t1, None).unwrap();
+        assert_eq!(project_time_totals(&conn, 1), (None, None));
+    }
+
+    #[test]
+    fn refused_time_writes_never_change_the_aggregate() {
+        let (conn, t1, _) = mem_conn_with_two_tasks();
+        // Valeur négative et tâche inconnue : refusées, RIEN n'est écrit — le
+        // projet reste donc « rien de renseigné » (fail-safe du contrat).
+        assert!(db_set_task_estimated_minutes(&conn, t1, Some(-1)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, t1, -5).is_err());
+        assert!(db_set_task_estimated_minutes(&conn, 9999, Some(30)).is_err());
+        assert!(db_add_task_spent_minutes(&conn, 9999, 30).is_err());
+        assert_eq!(project_time_totals(&conn, 1), (None, None));
+        let (est, spent) = db_task_time(&conn, t1).unwrap();
+        assert!(est.is_none() && spent.is_none(), "un refus n'ecrit rien");
+    }
+
+    #[test]
+    fn show_time_default_is_false_and_every_other_setting_is_preserved() {
+        // Configuration RÉELLE sans le champ `super_agent_show_time` (cas de
+        // toutes les configs existantes) : le réglage retombe sur `false` et
+        // AUCUNE clé voisine n'est perdue ni réinitialisée au chargement.
+        let cfg: crate::AppConfig = serde_json::from_str(
+            r#"{"theme":"dark",
+                "super_agent_checklist_mode":"warn",
+                "super_agent_checklist_template":"modele",
+                "super_agent_tracabilite_enabled":true,
+                "super_agent_schedule_interval_secs":900,
+                "super_agent_quality_gate":true,
+                "super_agent_purge_before_delegate":false,
+                "agent_auto_stop_minutes":10}"#,
+        )
+        .unwrap();
+        assert!(!cfg.super_agent_show_time, "champ absent => desactive");
+        assert_eq!(cfg.theme, "dark");
+        assert_eq!(cfg.super_agent_checklist_mode, "warn");
+        assert_eq!(cfg.super_agent_checklist_template, "modele");
+        assert!(cfg.super_agent_tracabilite_enabled);
+        assert_eq!(cfg.super_agent_schedule_interval_secs, 900);
+        assert!(cfg.super_agent_quality_gate);
+        assert!(!cfg.super_agent_purge_before_delegate);
+        assert_eq!(cfg.agent_auto_stop_minutes, 10);
+        // Une valeur explicite reste respectée dans les DEUX sens.
+        assert!(show_time_from_json(r#"{"super_agent_show_time":true}"#));
+        assert!(!show_time_from_json(r#"{"super_agent_show_time":false}"#));
+    }
 }
