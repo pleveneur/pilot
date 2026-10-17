@@ -2201,6 +2201,206 @@ fn project_time_totals(conn: &Connection, project_id: i64) -> (Option<i64>, Opti
     }
 }
 
+// ── Idée 1 (Lot A), tranche 1.1 : détection des tâches longues ──
+//
+// Repère, dans le TEXTE d'une demande de suivi (titre + description), les
+// signaux simples qui trahissent une demande de grande ampleur : étapes
+// annoncées, fichiers cités, mots-clés de refonte, longueur du texte.
+// Fonction PURE (aucune base, aucun effet de bord) : elle servira, dans les
+// tranches suivantes, à la pastille « longue » du tableau Kanban et à
+// l'infobulle qui affiche la raison détectée.
+
+/// Seuil d'étapes annoncées : à partir de 3, la demande ressemble à un plan de
+/// travail plutôt qu'à une correction ponctuelle. Conservateur : un simple
+/// couple d'étapes ne déclenche rien.
+const LONG_TASK_MIN_STEPS: usize = 3;
+
+/// Seuil de fichiers cités : 10 fichiers DISTINCTS et plus. Conservateur, il
+/// reprend l'ordre de grandeur du plan (« plus de dix fichiers »).
+const LONG_TASK_MIN_FILES: usize = 10;
+
+/// Seuil de longueur : 1200 caractères pour titre + description. Conservateur
+/// (une consigne détaillée tient presque toujours en moins), la longueur ne
+/// déclenche à elle seule que pour un texte vraiment massif.
+const LONG_TASK_MIN_CHARS: usize = 1200;
+
+/// Mots-clés de grande ampleur, comparés sur le texte replié (minuscules, sans
+/// accents). Liste VOLONTAIREMENT courte : un seul suffit à signaler.
+const LONG_TASK_KEYWORDS: &[&str] = &[
+    "refonte",
+    "refactorisation",
+    "audit complet",
+    "audit de l'ensemble",
+    "sur tous les fichiers",
+    "tous les fichiers",
+    "ensemble du projet",
+    "de bout en bout",
+];
+
+/// Extensions reconnues pour compter un « fichier cité », sans prendre des
+/// nombres (versions), des dates ni des domaines pour des fichiers.
+const LONG_TASK_FILE_EXTENSIONS: &[&str] = &[
+    "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "md", "html", "css", "py",
+    "toml", "yml", "yaml", "sh", "ps1", "sql", "txt", "csv", "svg", "lock",
+];
+
+/// Replie un texte en minuscules sans accents, chaque séparateur devenant une
+/// espace : « Étape 2 » → « etape 2 ». Sert aux comparaisons de mots-clés et de
+/// mots d'étape, insensibles aux accents.
+fn fold_long_task_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match fold_task_char(c) {
+            Some(f) => out.push(f),
+            None => out.push(' '),
+        }
+    }
+    out
+}
+
+/// Vrai si la ligne commence par une numérotation d'étape : « 1. », « 2) »,
+/// « 3 - ». Les nombres de plus de deux chiffres (années, montants) sont
+/// ignorés pour rester conservateur.
+fn starts_with_step_number(line: &str) -> bool {
+    let mut digits = String::new();
+    for c in line.trim_start().chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            if digits.len() > 2 {
+                return false;
+            }
+            continue;
+        }
+        return !digits.is_empty() && (c == '.' || c == ')' || c == '-');
+    }
+    false
+}
+
+/// Compte les étapes annoncées : puces de liste, numérotations en tête de ligne
+/// et mentions « étape N ». Au plus une étape comptée par ligne.
+fn count_announced_steps(text: &str) -> usize {
+    let mut count = 0usize;
+    for line in text.lines() {
+        let raw = line.trim_start();
+        if raw.starts_with("- ") || raw.starts_with("* ") || raw.starts_with("• ") {
+            count += 1;
+            continue;
+        }
+        if starts_with_step_number(raw) {
+            count += 1;
+            continue;
+        }
+        let folded = fold_long_task_text(raw);
+        let mut rest = folded.as_str();
+        while let Some(pos) = rest.find("etape ") {
+            let after = &rest[pos + "etape ".len()..];
+            if after.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                count += 1;
+            }
+            rest = after;
+        }
+    }
+    count
+}
+
+/// Vrai si le jeton ressemble à un nom de fichier : chemin contenant « / » ou
+/// « \\ », ou nom terminé par une extension connue.
+fn looks_like_file(token: &str) -> bool {
+    let t = token.trim_matches(|c: char| {
+        !c.is_ascii_alphanumeric() && c != '/' && c != '\\' && c != '.' && c != '-' && c != '_'
+    });
+    if t.len() < 2 {
+        return false;
+    }
+    if t.contains('/') || t.contains('\\') {
+        return true;
+    }
+    match t.rsplit_once('.') {
+        Some((name, ext)) => {
+            !name.is_empty()
+                && !ext.is_empty()
+                && LONG_TASK_FILE_EXTENSIONS
+                    .iter()
+                    .any(|e| e.eq_ignore_ascii_case(ext))
+        }
+        None => false,
+    }
+}
+
+/// Compte les chemins et noms de fichiers DISTINCTS cités dans le texte.
+fn count_cited_files(text: &str) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    for raw in text.split_whitespace() {
+        // Un même jeton peut coller une virgule ou une parenthèse : on essaie
+        // aussi ses morceaux entre séparateurs de phrase.
+        for token in raw.split(|c: char| matches!(c, ',' | ';' | ')' | '(' | '`' | '"' | '\'')) {
+            let t = token.trim();
+            if looks_like_file(t) {
+                seen.insert(t.to_lowercase());
+            }
+        }
+    }
+    seen.len()
+}
+
+/// Renvoie le premier mot-clé de grande ampleur trouvé dans le texte replié.
+fn first_long_task_keyword(folded: &str) -> Option<&'static str> {
+    let padded = format!(" {} ", folded);
+    LONG_TASK_KEYWORDS.iter().copied().find(|k| {
+        let needle = format!(" {} ", fold_long_task_text(k));
+        padded.contains(&needle)
+    })
+}
+
+/// Détecte si une demande de suivi est « longue ».
+///
+/// Signature : `detect_long_task(title: &str, description: &str) -> Option<String>`.
+/// - `title` : titre de la tâche (jamais vide en pratique, mais toléré).
+/// - `description` : description ou demande complète ; chaîne vide acceptée.
+/// - Retour : `None` si la demande n'est pas jugée longue ; sinon une raison
+///   COURTE en français, prête pour une infobulle (ex. « 3 étapes détectées »,
+///   « 12 fichiers cités », « mot-clé « refonte » »). Plusieurs signaux sont
+///   réunis par « · ».
+///
+/// Fonction PURE et déterministe : aucun accès base, aucun effet de bord ;
+/// deux appels sur le même texte donnent le même résultat.
+// Tranches 1.2 à 1.4 : la pastille Kanban et l'infobulle consommeront cette
+// fonction ; en attendant, elle n'est utilisée que par les tests.
+#[allow(dead_code)]
+pub fn detect_long_task(title: &str, description: &str) -> Option<String> {
+    let text = if description.trim().is_empty() {
+        title.to_string()
+    } else {
+        format!("{}\n{}", title, description)
+    };
+    let folded = fold_long_task_text(&text);
+
+    let keyword = first_long_task_keyword(&folded);
+    let steps = count_announced_steps(&text);
+    let files = count_cited_files(&text);
+    let chars = text.chars().count();
+
+    let mut reasons: Vec<String> = Vec::new();
+    if let Some(kw) = keyword {
+        reasons.push(format!("mot-clé « {} »", kw));
+    }
+    if steps >= LONG_TASK_MIN_STEPS {
+        reasons.push(format!("{} étapes détectées", steps));
+    }
+    if files >= LONG_TASK_MIN_FILES {
+        reasons.push(format!("{} fichiers cités", files));
+    }
+    if chars >= LONG_TASK_MIN_CHARS {
+        reasons.push(format!("demande très longue ({} caractères)", chars));
+    }
+
+    if reasons.is_empty() {
+        None
+    } else {
+        Some(reasons.join(" · "))
+    }
+}
+
 // ── Idée 3 (Lot A), tranche 3.1 : checklist de livraison ──
 //
 // Un point de checklist appartient à UNE tâche de suivi (`tasks.id`). Le
@@ -6007,6 +6207,7 @@ mod tests {
         memory_removal_result, parse_model_spec, resolve_super_agent_model,
         resolve_super_agent_thinking_level, MEMORY_FORMAT,
         MEMORY_VERSION, MAX_INJECTED_MESSAGE_CHARS,
+        detect_long_task,
         SESSION_MEMORY_FORMAT, SESSION_MEMORY_MAX_CHARS, SESSION_MEMORY_TRASH_FORMAT,
         SESSION_MEMORY_TRASH_LIMIT, SESSION_MEMORY_TRASH_PREVIEW_MAX, SESSION_MEMORY_VERSION,
     };
@@ -9102,5 +9303,58 @@ mod tests {
         // Une valeur explicite reste respectée dans les DEUX sens.
         assert!(show_time_from_json(r#"{"super_agent_show_time":true}"#));
         assert!(!show_time_from_json(r#"{"super_agent_show_time":false}"#));
+    }
+
+    // ── Idée 1 (Lot A), tranche 1.1 : détection des tâches longues ──
+
+    #[test]
+    fn long_task_ignores_an_ordinary_short_request() {
+        // Le cas le plus important : une demande normale ne doit RIEN déclencher.
+        assert_eq!(
+            detect_long_task(
+                "Corriger le bouton Enregistrer",
+                "Le bouton Enregistrer de la fenêtre Paramètres ne répond plus depuis la dernière mise à jour."
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn long_task_detects_a_keyword_in_the_title() {
+        let reason = detect_long_task("Refonte du système d'onglets", "").expect("détectée");
+        assert!(reason.contains("refonte"), "raison = {}", reason);
+    }
+
+    #[test]
+    fn long_task_detects_many_cited_files() {
+        let files: Vec<String> = (1..=12).map(|i| format!("src/module{}.rs", i)).collect();
+        let desc = format!(
+            "Mettre à jour les appels dans {} pour suivre la nouvelle signature.",
+            files.join(", ")
+        );
+        let reason = detect_long_task("Adapter la signature", &desc).expect("détectée");
+        assert!(reason.contains("12 fichiers cités"), "raison = {}", reason);
+    }
+
+    #[test]
+    fn long_task_detects_three_announced_steps() {
+        let desc = "Étapes :\n1. Analyser le code existant\n2. Corriger les appels\n3. Vérifier le résultat";
+        let reason = detect_long_task("Adapter l'API", desc).expect("détectée");
+        assert!(reason.contains("3 étapes détectées"), "raison = {}", reason);
+    }
+
+    #[test]
+    fn long_task_ignores_empty_or_insignificant_text() {
+        assert_eq!(detect_long_task("", ""), None);
+        assert_eq!(detect_long_task("   ", "  \n "), None);
+        assert_eq!(detect_long_task("ok", ""), None);
+    }
+
+    #[test]
+    fn long_task_is_pure_and_deterministic() {
+        // Même entrée → même sortie : aucun état interne, aucun effet de bord.
+        let title = "Refonte des paramètres";
+        let desc = "1. A\n2. B\n3. C";
+        assert_eq!(detect_long_task(title, desc), detect_long_task(title, desc));
     }
 }
