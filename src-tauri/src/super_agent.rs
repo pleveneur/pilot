@@ -2364,9 +2364,9 @@ fn first_long_task_keyword(folded: &str) -> Option<&'static str> {
 ///
 /// Fonction PURE et déterministe : aucun accès base, aucun effet de bord ;
 /// deux appels sur le même texte donnent le même résultat.
-// Tranches 1.2 à 1.4 : la pastille Kanban et l'infobulle consommeront cette
-// fonction ; en attendant, elle n'est utilisée que par les tests.
-#[allow(dead_code)]
+// Tranche 1.2 : `kanban_tasks` appelle cette fonction pour poser les champs
+// `is_long_task` / `long_task_reason` de chaque carte. Les tranches 1.3 à 1.4
+// (pastille, infobulle, réglage) s'appuieront sur ces mêmes champs.
 pub fn detect_long_task(title: &str, description: &str) -> Option<String> {
     let text = if description.trim().is_empty() {
         title.to_string()
@@ -3413,6 +3413,12 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
             } else {
                 "ready"
             };
+            // Idée 1 (Lot A), tranche 1.2 : signaux « tâche longue » calculés À
+            // LA LECTURE depuis le texte de la demande (titre + description) —
+            // rien n'est stocké, aucune migration. Une carte ordinaire porte
+            // `is_long_task: false` et `long_task_reason: null` : sa forme reste
+            // celle des cartes existantes et aucun affichage n'est déclenché.
+            let long_task_reason = detect_long_task(&title, &desc);
             let task = serde_json::json!({
                 "id": tid,
                 "title": title,
@@ -3428,6 +3434,8 @@ fn kanban_tasks(conn: &Connection) -> Result<Value, String> {
                 "depends_on_task_id": depends_on_task_id,
                 "depends_on_title": depends_on_title,
                 "dependency_state": dependency_state,
+                "is_long_task": long_task_reason.is_some(),
+                "long_task_reason": long_task_reason,
             });
             match index.get(&client_name) {
                 Some(&i) => {
@@ -9356,5 +9364,93 @@ mod tests {
         let title = "Refonte des paramètres";
         let desc = "1. A\n2. B\n3. C";
         assert_eq!(detect_long_task(title, desc), detect_long_task(title, desc));
+    }
+
+    // ── Idée 1 (Lot A), tranche 1.2 : signaux « tâche longue » dans l'état Kanban ──
+    //
+    // `kanban_tasks` pose DEUX champs sur chaque carte, calculés À LA LECTURE
+    // depuis le texte de la demande (titre + description) : `is_long_task` (bool)
+    // et `long_task_reason` (texte français, `null` si la tâche n'est pas longue).
+    // Aucune écriture en base, aucun affichage : la carte ordinaire garde sa forme
+    // (les deux clés sont présentes, à `false` / `null`).
+
+    #[test]
+    fn kanban_tasks_flags_long_tasks_and_keeps_ordinary_cards_intact() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO tasks (project_id, title, description) \
+               VALUES (1, 'Corriger le bouton Enregistrer', \
+                       'Le bouton Enregistrer ne repond plus depuis la derniere mise a jour.');\
+             INSERT INTO tasks (project_id, title) \
+               VALUES (1, 'Refonte du systeme d''onglets');\
+             INSERT INTO tasks (project_id, title, description) \
+               VALUES (1, 'Adapter l''API', \
+                       'Etapes :\n1. Analyser le code existant\n2. Corriger les appels\n3. Verifier le resultat');",
+        )
+        .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 3);
+
+        // Cas ordinaire : les deux clés existent (forme inchangée) et rien n'est
+        // signalé. On vérifie la PRÉSENCE des clés, pas seulement leur valeur.
+        let ordinary = tasks
+            .iter()
+            .find(|t| t["title"] == "Corriger le bouton Enregistrer")
+            .unwrap();
+        let ordinary_obj = ordinary.as_object().unwrap();
+        assert!(ordinary_obj.contains_key("is_long_task"));
+        assert!(ordinary_obj.contains_key("long_task_reason"));
+        assert_eq!(ordinary["is_long_task"], false);
+        assert!(ordinary["long_task_reason"].is_null());
+
+        // Mot-clé dans le TITRE → signalée, raison exacte attendue.
+        let by_title = tasks
+            .iter()
+            .find(|t| t["title"] == "Refonte du systeme d'onglets")
+            .unwrap();
+        assert_eq!(by_title["is_long_task"], true);
+        assert_eq!(
+            by_title["long_task_reason"].as_str().unwrap(),
+            "mot-clé « refonte »"
+        );
+
+        // Signaux dans la DESCRIPTION (titre ordinaire) → signalée aussi.
+        let by_description = tasks
+            .iter()
+            .find(|t| t["title"] == "Adapter l'API")
+            .unwrap();
+        assert_eq!(by_description["is_long_task"], true);
+        assert_eq!(
+            by_description["long_task_reason"].as_str().unwrap(),
+            "3 étapes détectées"
+        );
+    }
+
+    #[test]
+    fn kanban_tasks_long_task_signal_never_breaks_a_project_without_one() {
+        // Projet dont AUCUNE tâche n'est longue, plus un projet SANS tâche :
+        // l'appel reste vert et rien n'est signalé.
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/b', 'Projet B', 1);\
+             INSERT INTO tasks (project_id, title, description) \
+               VALUES (1, 'Ranger le dossier partage', 'Trier les fichiers du dossier.');",
+        )
+        .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        // Une seule tâche : le projet sans tâche n'en invente aucune.
+        assert_eq!(tasks.len(), 1);
+        for task in tasks {
+            assert_eq!(task["is_long_task"], false);
+            assert!(task["long_task_reason"].is_null());
+        }
     }
 }
