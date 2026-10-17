@@ -478,6 +478,12 @@ const chkSuperAgentTracabilite = document.getElementById("setting-superagent-tra
 // donc le suivi du temps ne s'affiche pas tant que le propriétaire ne l'a pas
 // demandé). Ce réglage ne touche QUE l'affichage.
 const chkSuperAgentShowTime = document.getElementById("setting-superagent-show-time");
+// ── Lot A idée 1 (tranche 1.4) : détecter les tâches longues et proposer un agent ──
+// Clé `super_agent_long_tasks_enabled` (défaut ON côté Rust : champ absent ⇒
+// activé, mode « proposer » — Pilot signale, ne lance rien tout seul). Ce
+// réglage ne gouverne QUE l'affichage de la pastille « longue » et de son
+// infobulle : le signal reste calculé par le cœur et rien n'est écrit en base.
+const chkSuperAgentLongTasks = document.getElementById("setting-superagent-long-tasks");
   // ── Mémoire (transfert de suivi, issue #69) ──
   const chkMemTracking = document.getElementById("mem-tracking");
   const chkMemSettings = document.getElementById("mem-settings");
@@ -1326,6 +1332,10 @@ const chkSuperAgentShowTime = document.getElementById("setting-superagent-show-t
   // ── Lot A idée 2 (tranche 5) : affichage du suivi du temps ──
   // Clé absente ⇒ décoché (défaut « désactivé »), comme le réglage Rust.
   if (chkSuperAgentShowTime) chkSuperAgentShowTime.checked = currentConfig.super_agent_show_time === true;
+  // ── Lot A idée 1 (tranche 1.4) : détection des tâches longues ──
+  // Clé absente ⇒ coché (défaut « activé », mode proposer), comme le réglage
+  // Rust correspondant.
+  if (chkSuperAgentLongTasks) chkSuperAgentLongTasks.checked = currentConfig.super_agent_long_tasks_enabled !== false;
   // ── Diff Review (A4 V2) : porte pré-écriture ──
   if (chkConfirmFileEdits) chkConfirmFileEdits.checked = currentConfig.confirm_file_edits === true;
   await refreshConfirmEditsAvailability();
@@ -2202,6 +2212,10 @@ const chkSuperAgentShowTime = document.getElementById("setting-superagent-show-t
         // Champ absent du DOM ⇒ faux par défaut : le suivi du temps reste masqué
         // tant qu'il n'est pas explicitement demandé.
         super_agent_show_time: chkSuperAgentShowTime ? chkSuperAgentShowTime.checked === true : false,
+        // ── Lot A idée 1 (tranche 1.4) : détection des tâches longues ──
+        // Champ absent du DOM ⇒ vrai (défaut, mode proposer), pour ne jamais
+        // désactiver un réglage que l'utilisateur n'a pas touché.
+        super_agent_long_tasks_enabled: chkSuperAgentLongTasks ? chkSuperAgentLongTasks.checked !== false : true,
       };
     try {
       await invoke("save_config", { config });

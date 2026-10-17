@@ -9366,6 +9366,63 @@ mod tests {
         assert_eq!(detect_long_task(title, desc), detect_long_task(title, desc));
     }
 
+    // ── Idée 1 (Lot A), tranche 1.4 : réglage de détection et de proposition ──
+    // Le réglage `super_agent_long_tasks_enabled` gouverne l'AFFICHAGE de la
+    // pastille « longue » et de son infobulle (posées en tranche 1.3). Il est
+    // ACTIVÉ PAR DÉFAUT, en mode « proposer » : une configuration qui ne le
+    // mentionne pas (toutes les configs existantes) garde exactement le
+    // comportement d'avant. Désactivé ⇒ l'interface redevient celle d'avant
+    // l'idée 1. Le signal `is_long_task` reste calculé par le cœur : ce réglage
+    // n'écrit, n'efface et ne masque rien en base, et ne lance aucun agent.
+
+    /// Le réglage tel que le lit `AppConfig` au chargement du fichier de
+    /// configuration : un champ ABSENT retombe sur le défaut (vrai).
+    fn long_tasks_enabled_from_json(json: &str) -> bool {
+        let cfg: crate::AppConfig = serde_json::from_str(json).unwrap();
+        cfg.super_agent_long_tasks_enabled
+    }
+
+    #[test]
+    fn long_tasks_setting_is_enabled_when_absent_from_the_config() {
+        // Config vide (premier lancement) : activé (mode « proposer »).
+        assert!(long_tasks_enabled_from_json("{}"));
+        // Config d'aujourd'hui, qui ignore ce champ : comportement inchangé.
+        assert!(long_tasks_enabled_from_json(
+            r#"{"theme":"dark","super_agent_checklist_mode":"warn"}"#
+        ));
+        // Une clé inconnue (version plus récente) ne perturbe rien.
+        assert!(long_tasks_enabled_from_json(
+            r#"{"super_agent_reglage_inconnu":42}"#
+        ));
+        // Une valeur explicite est respectée dans les DEUX sens.
+        assert!(long_tasks_enabled_from_json(
+            r#"{"super_agent_long_tasks_enabled":true}"#
+        ));
+        assert!(!long_tasks_enabled_from_json(
+            r#"{"super_agent_long_tasks_enabled":false}"#
+        ));
+    }
+
+    #[test]
+    fn long_tasks_setting_leaves_the_other_settings_untouched() {
+        // La présence du nouveau champ ne modifie aucune clé existante : le
+        // reste de la configuration est préservé tel quel au chargement.
+        let cfg: crate::AppConfig = serde_json::from_str(
+            r#"{"super_agent_long_tasks_enabled":true,"theme":"light",
+                "super_agent_checklist_mode":"block",
+                "super_agent_tracabilite_enabled":false}"#,
+        )
+        .unwrap();
+        assert!(cfg.super_agent_long_tasks_enabled);
+        assert_eq!(cfg.theme, "light");
+        assert_eq!(cfg.super_agent_checklist_mode, "block");
+        assert!(!cfg.super_agent_tracabilite_enabled);
+        // Désactivé explicitement : respecté, et jamais confondu avec l'absence.
+        let off: crate::AppConfig =
+            serde_json::from_str(r#"{"super_agent_long_tasks_enabled":false}"#).unwrap();
+        assert!(!off.super_agent_long_tasks_enabled);
+    }
+
     // ── Idée 1 (Lot A), tranche 1.2 : signaux « tâche longue » dans l'état Kanban ──
     //
     // `kanban_tasks` pose DEUX champs sur chaque carte, calculés À LA LECTURE

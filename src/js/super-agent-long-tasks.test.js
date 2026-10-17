@@ -59,7 +59,8 @@ describe("longTaskPill — carte ordinaire : aucune pastille", () => {
   it("la pastille n'est insérée dans la carte que si le signal est présent", () => {
     const card = slice(VIEW_SRC, "function taskCardHtml(t)", "function ideaCardHtml(");
     // `${longPill ? … : ""}` : sans signal, aucune balise n'est produite.
-    expect(card).toContain("const longPill = longTaskPill(t);");
+    // Tranche 1.4 : la pastille est en plus soumise au réglage (défaut activé).
+    expect(card).toContain("const longPill = longTasksEnabled ? longTaskPill(t) : null;");
     expect(card).toContain('${longPill ? `<span class="kanban-long-pill');
     expect(card).toContain('</span>` : ""}');
   });

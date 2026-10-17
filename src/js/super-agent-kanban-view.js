@@ -103,6 +103,14 @@ export function createSuperKanban(container) {
   // porte de pastille et rien n'est lu en base ; activé ⇒ tout réapparaît avec
   // les règles de la tranche 3. Aucune donnée n'est écrite ni effacée.
   let showTime = false;
+  // Idée 1 (Lot A), tranche 1.4 : réglage « Détecter les tâches longues et
+  // proposer un agent » (`super_agent_long_tasks_enabled`, défaut ACTIVÉ, mode
+  // « proposer »). Il ne gouverne QUE l'affichage : éteint ⇒ aucune pastille
+  // « longue » ni infobulle (l'interface redevient celle d'avant l'idée 1) ;
+  // allumé (défaut) ⇒ tout réapparaît comme en tranche 1.3. Le signal
+  // `is_long_task` continue d'être calculé par le cœur et arrive déjà dans
+  // l'état Kanban : rien n'est écrit, effacé ni recalculé ici.
+  let longTasksEnabled = true;
   // Id de la carte glissée (résistant aux re-rendus : géré au niveau du conteneur).
   let dragTaskId = null;
   // Clôture en lot : ids cochés (persistants d'un re-rendu à l'autre pour ne pas
@@ -213,7 +221,8 @@ export function createSuperKanban(container) {
     // posés par le cœur Rust) : aucune détection ni seuil n'est calculé ici, et
     // une carte ordinaire ne reçoit AUCUNE pastille (elle garde son apparence).
     // L'infobulle recopie la raison fournie TELLE QUELLE, jamais reformulée.
-    const longPill = longTaskPill(t);
+    // Tranche 1.4 : le réglage peut l'éteindre complètement (défaut : activé).
+    const longPill = longTasksEnabled ? longTaskPill(t) : null;
     // Idée 2 (Lot A), tranche 3 : pastille de temps « 45 min prévues / 70 min
     // passées », affichée SEULEMENT si au moins un des deux temps est renseigné
     // (relu en base). Une tâche sans temps garde exactement son apparence.
@@ -644,6 +653,26 @@ export function createSuperKanban(container) {
   }
 
   /**
+   * Idée 1 (Lot A), tranche 1.4 : lit le réglage « Détecter les tâches longues
+   * et proposer un agent » (`super_agent_long_tasks_enabled`, défaut ACTIVÉ en
+   * mode « proposer »). Lecture seule, fail-open : une configuration illisible
+   * retombe sur le DÉFAUT (activé), jamais sur une erreur bloquante — une
+   * absence de la clé vaut aussi « activé », comme le réglage Rust. Appelée
+   * avant le rendu des cartes pour que le changement de réglage soit pris en
+   * compte au prochain affichage du Kanban.
+   * @returns {Promise<boolean>}
+   */
+  async function loadLongTasksConfig() {
+    try {
+      const cfg = await invoke("get_config");
+      longTasksEnabled = !(cfg && cfg.super_agent_long_tasks_enabled === false);
+    } catch (_err) {
+      longTasksEnabled = true;
+    }
+    return longTasksEnabled;
+  }
+
+  /**
    * Ajoute, sur une tâche SANS point, un bouton « Ajouter les points du modèle »
    * — seulement si le contrôle n'est pas désactivé et que le modèle contient au
    * moins un point. Rien n'est créé tant que l'utilisateur n'a pas cliqué, et
@@ -813,6 +842,9 @@ export function createSuperKanban(container) {
           `<div class="dash-muted">Aucune tâche pour l'instant. Utilisez « Initialiser » ou « Projets & clients » dans l'onglet Assistant pour démarrer le suivi.</div>`;
         return;
       }
+      // Tranche 1.4 : le réglage des tâches longues est relu AVANT le rendu :
+      // éteint ⇒ aucune pastille « longue » ni infobulle (défaut : activé).
+      await loadLongTasksConfig();
       // Tranche 5 : le réglage d'affichage du temps est relu AVANT le rendu :
       // les pastilles n'apparaissent que s'il est explicitement activé (défaut :
       // masqué, comme avant l'idée 2).

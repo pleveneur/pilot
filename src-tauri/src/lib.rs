@@ -830,6 +830,17 @@ struct AppConfig {
     // l'affichage : aucune donnée n'est écrite, effacée ni masquée en base.
     #[serde(default)]
     super_agent_show_time: bool,
+    // Lot A idée 1, tranche 1.4 : DÉTECTER les tâches longues et PROPOSER de les
+    // confier à un agent (mode « proposer » : Pilot signale, ne lance rien tout
+    // seul). ACTIVÉ PAR DÉFAUT : une configuration qui NE MENTIONNE PAS ce champ
+    // (toutes les configs existantes, et l'utilisateur qui ne touche à rien)
+    // garde la pastille « longue » et son infobulle exactement comme avant la
+    // tranche 1.3. Désactivé ⇒ aucune pastille ni infobulle ne s'affiche et
+    // l'interface redevient celle d'avant l'idée 1. Ce réglage ne gouverne QUE
+    // l'affichage : le signal `is_long_task` reste calculé par le cœur, rien
+    // n'est écrit ni effacé en base, et aucun agent n'est jamais lancé.
+    #[serde(default = "default_true")]
+    super_agent_long_tasks_enabled: bool,
     // Lot A idée 6 : fréquence par DÉFAUT des rappels de surveillance créés par
     // l'Assistant (outil `schedule_create`) quand celui-ci ne précise AUCUNE
     // fréquence explicite. Exprimée en secondes, bornée côté application au
@@ -1187,6 +1198,7 @@ impl Default for AppConfig {
             super_agent_checklist_template: default_super_agent_checklist_template(),
             super_agent_tracabilite_enabled: true,
             super_agent_show_time: false,
+            super_agent_long_tasks_enabled: true,
             super_agent_schedule_interval_secs: default_super_agent_schedule_interval_secs(),
             gds_enabled: true,
             group_assistant_model: String::new(),
