@@ -624,6 +624,92 @@ sur les points suivants :
 
 ---
 
+## 9. Confidentialité des données sur le gestionnaire de sources (point 8)
+
+> Cadre : **plusieurs propriétaires de projets et plusieurs postes** partagent
+> **un seul serveur de sources** (conteneur `pilot-gds`). Question posée : qui
+> voit quoi, et qu'est-ce qui est garanti (contenu projet, identifiants,
+> journaux, sauvegardes, accès au serveur) ? Constat détaillé et preuves
+> `fichier:ligne` : cf. rapport
+> `~/.pilot/assistant/rapports/pilot-point8-gds-confidentialite-plan.md`.
+
+### 9.1 Ce qui est déjà garanti (constat)
+
+- **Mots de passe de compte** : jamais en clair, empreinte **Argon2id** en base
+  (`gds-core/src/auth.rs:59`) ; jetons opaques, `authorized_keys` régénéré depuis
+  la base (`gds-core/src/ssh.rs:994`) ; comptes non `active` refusés au login
+  (`gds-core/src/http.rs:913`).
+- **Rôles** : `admin` / `dev` / `standard` (lecture seule), vocabulaire contraint
+  en base (`gds-core/migrations/0006_roles.sql`) et appliqué par un module pur
+  unique (`gds-core/src/roles.rs:88`).
+- **Ports et secrets du serveur** : un seul secret `.env` (`POSTGRES_PASSWORD`),
+  jamais versionné, jamais dans l'image ; trois ports publiés, **en clair**.
+- **Journal d'audit** : tampon mémoire + append JSONL sur le volume du
+  superviseur (`gds-core/src/audit.rs:163`, `gds-server/src/main.rs:81`).
+
+### 9.2 Ce qui n'est PAS garanti (trous, par gravité)
+
+| # | Trou | Gravité | Effort |
+|---|---|---|---|
+| C1 | **Un seul mot de passe PostgreSQL, partagé par tous les postes** — le même secret initialise le **superutilisateur** (`gds-server/src/config.rs:142`) ; tout membre lit/modifie TOUTE la base et contourne les rôles (gardes dans l'API, pas dans la base). | Critique | L (architecture) |
+| C2 | **Aucune isolation en lecture par projet** : tout compte authentifié liste tous les projets, tâches, décisions, tickets (`gds-core/src/db.rs:721,1236,1412,1585` ; `gds-core/src/http.rs:1330`). | Critique | M (filtrage) |
+| C3 | **Toute clef SSH ouvre TOUS les dépôts** : lignes `authorized_keys` sans restriction `command=` (`gds-core/src/ssh.rs:926,950`) ; un membre clone/pousse n'importe quel projet. | Critique | M/L (hooks) |
+| C4 | **Ports publiés en clair sur toutes les interfaces** par défaut, PostgreSQL ouvert à `0.0.0.0/0`, API d'admin en `http://` (jeton Bearer en clair). | Élevé | S (réglages + doc) |
+| C5 | **Aucune révocation de session** sur changement de rôle/statut/mot de passe ; jeton valable 7 jours, rôle figé dedans (`gds-core/src/http.rs:47,790` ; `revoke_all` jamais appelé). | Élevé | S/M |
+| C6 | **Secrets en clair sur chaque poste** (`~/.pilot/gds_secrets.json` : mot de passe base, admin, compte) — 0600 Unix, ACL Windows seulement (`src-tauri/src/gds.rs:271`). | Moyen | M |
+| C7 | **Sauvegardes en clair** : `tar.gz` des volumes (base + tous les dépôts + empreintes) posé sur le poste, sans chiffrement ni rétention (`scripts/gds-reload.js:150`). | Moyen | S/M |
+| C8 | **Journal d'audit effaçable** par l'administrateur (`gds-core/src/audit.rs:223`), non chiffré, IP/emails/chemins en clair. | Moyen | S/M |
+
+### 9.3 Plan par tranches (une mission courte par tranche, dans l'ordre)
+
+| Tranche | Objectif | Fichier principal | Vérification observable |
+|---|---|---|---|
+| **D1** | Révocation des sessions au changement de rôle/statut/mot de passe (`revoke_user(user_id)`). | `gds-core/src/http.rs`, `auth.rs` | `cargo test -p gds-core` — nouveau test : ancien jeton refusé après désactivation. |
+| **D2** | Revalider `status = active` (et le rôle) en base à chaque requête protégée. | `gds-core/src/http.rs` | `cargo test -p gds-core` — compte désactivé → `401` sur route partagée. |
+| **D3** | Profil réseau restrictif documenté : binds `127.0.0.1`/tailnet, `GDS_PG_ALLOWED_NETWORKS` resserré, rappel « jamais d'exposition publique ». | `gds-server/.env.example`, `docs/gds-server-setup.md` | `npm test` (parsing `.env` de `gds-reload`) + `docker compose config` (propriétaire). |
+| **D4** | Chiffrer les secrets du poste avec le coffre existant (`vault.rs`), lecture de l'ancien fichier clair conservée (aucune donnée effacée). | `src-tauri/src/gds.rs` | `cargo test --manifest-path src-tauri/Cargo.toml --lib gds`. |
+| **D5** | Chiffrer la sauvegarde (`--backup-dir`) et documenter la rétention. | `scripts/gds-reload.js` | `npm test` (suite `gds-reload.test.js`). |
+| **D6** | Audit durable : append-only, export hors serveur, effacement encadré. | `gds-core/src/audit.rs` | `cargo test -p gds-core`. |
+| **D7** | Écrire la fiche « qui voit quoi » (§10 de `spec_gds.md`) : matrice comptes × données. | `spec_gds.md` §10 | Relecture + `npm run build:handbook` si bloc `HELP`. |
+
+Les tranches **D1–D7** sont techniques et sans arbitrage : C5 et C4 (haut impact,
+petit effort) d'abord, puis C6/C7/C8. Aucune ne supprime ni ne copie de données.
+
+### 9.4 Décisions du propriétaire (hors tranches — à trancher avant de coder)
+
+- **O1 — Isolation en lecture (C2)** : qui voit quoi ? Faut-il un « client » par
+  propriétaire ? La table `project_members` existe mais **aucun droit n'en
+  dépend** (`gds-core/src/db.rs:703`) : l'activer change l'accès de tout le monde
+  d'un coup.
+- **O2 — Fin du secret PostgreSQL unique (C1)** : casser l'accès direct du poste
+  à la base (décision 11 « le poste parle en direct à la base ») au profit de
+  l'API seule, ou un rôle base par membre. Impact fort sur l'existant.
+- **O3 — Restriction SSH par dépôt (C3)** : `pre-receive` + `command=` par clef,
+  ou clefs par projet. Contraire au « V1 : tous les comptes accèdent à tous les
+  projets » (§2.2).
+- **O4 — Chiffrement au repos** : volume PostgreSQL (BitLocker du poste serveur
+  ou chiffrement applicatif) — décision d'exploitation, pas de code.
+- **O5 — Accès distant** : TLS sur l'API d'admin (`tailscale serve` obligatoire,
+  jamais de certificat auto-signé non vérifié par le poste).
+
+### 9.5 À ne pas faire (fausses bonnes idées)
+
+- Ne pas activer la restriction par projet « en dur » sans arbitrage O1 : les
+  autres propriétaires perdraient l'accès à tout, sans préavis.
+- Ne pas supprimer le rôle `Legacy` (session historique du poste, rôle vide) :
+  cela couperait les postes non encore identifiés.
+- Ne pas déplacer les volumes, `docker compose down -v`, ni toucher à la base ou
+  au conteneur au nom de la confidentialité (données du propriétaire) : toute
+  manipulation de données est une décision du propriétaire.
+- Ne pas chiffrer le volume PostgreSQL **en place** (risque de perte irréversible).
+- Ne pas ajouter un TLS auto-signé sur l'API 8080 : le poste ne vérifie pas les
+  certificats, les synchronisations casseraient.
+- Ne pas croire que `project_members` protège déjà : la table est un lecteur
+  sans effet (`gds-core/src/db.rs:703`).
+- Ne pas effacer ni réécrire l'historique d'audit existant.
+
+---
+
 *Voir aussi : `spec_web_remote.md` (web-server/axum existant), `spec_super_agent.md`
 (suivi multi-projets + base SQLite), `spec_multiprojects.md` (collection de projets),
 `git.rs` (wrapper git CLI), `AGENTS.md` (architecture & conventions).*
