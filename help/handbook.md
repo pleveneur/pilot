@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-16 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-17 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1478,6 +1478,15 @@ uniquement un bloc d'instructions dans le prompt système.
     canonique (`super-agent-kanban.js` : `columnToStatus`) ; le statut est
     normalisé en colonne au prochain rechargement.
   - Après chaque écriture, la vue se **recharge** automatiquement.
+- **Temps estimé / passé par tâche** (idée 2) : une tâche peut porter un
+  **temps prévu** (valeur absolue, `super_agent_task_time_set_estimated`) et un
+  **temps passé** (cumul, `super_agent_task_time_add_spent`), relus en base
+  (`super_agent_task_time_get`) après chaque opération ; la carte affiche alors
+  une pastille « prévu / passé » et la vue d'ensemble un total par projet.
+  Tout cet affichage est **conditionné** par le réglage
+  `super_agent_show_time` (Paramètres → Suivi), **désactivé par défaut** : sans
+  lui, aucun champ, aucune pastille et aucun total ne s'affichent (aucune
+  donnée n'est écrite ni perdue).
 - **Checklist de livraison par tâche** (idée 3) : chaque fiche peut porter des
   points à cocher (table `task_checks`, commandes `super_agent_task_check_*`),
   la carte affiche le compteur « 2/3 », et au passage en « Terminé » le cœur
@@ -2229,6 +2238,35 @@ d'un coup d'œil **qui a demandé quoi, quand**, sans fouiller les conversations
 - **Désactiver** : dans **Paramètres → Assistant (suivi multi-projets)**,
   décochez **« Enregistrer une ligne de traçabilité à chaque livraison »**
   (activé par défaut). Décocher **n'efface aucune** ligne déjà enregistrée.
+
+---
+
+### Noter le temps prévu et le temps passé d'une tâche
+
+Comparer **ce qu'une tâche avait coûté en prévision** à **ce qu'elle a réellement
+pris** aide à mieux estimer les fois suivantes. C'est exactement ce que permet
+le suivi du temps — et il est **masqué par défaut**.
+
+- **À activer d'abord** : tant que le réglage **« Afficher le suivi du temps
+  estimé / passé »** n'est pas coché (**Paramètres → Suivi**), rien n'apparaît :
+  ni champ de saisie, ni pastille, ni total. C'est le réglage d'usine. Le cocher
+  ne change aucune donnée, le décocher n'en fait perdre aucune.
+- **Renseigner les temps** : ouvrez la **fiche d'une tâche** (bouton *éditer* sur
+  sa carte), bloc **« Temps »** :
+  - **« Temps prévu (min) »** puis **« Régler le prévu »** : la valeur saisie
+    **remplace** l'ancienne (laisser le champ vide efface le prévu) ;
+  - **« Temps passé à ajouter (min) »** puis **« Ajouter le passé »** : le passé
+    **s'additionne** au total déjà noté (pratique en plusieurs séances) et le
+    champ se vide après chaque ajout.
+- **Ce qui s'affiche alors** : une pastille discrète sur la **carte**
+  (**« 45 min prévues / 70 min passées »**) et un **total par projet** dans la
+  **vue d'ensemble** du suivi (**« 2 h 15 passées · 4 h prévues »**).
+- **Quand rien n'est renseigné** : la carte reste exactement comme avant (aucune
+  pastille) et le projet n'affiche **aucune mention**. Si seul le temps passé est
+  noté, la pastille indique **« pas d'estimation · 70 min passées »** : Pilot
+  n'invente jamais un temps prévu à partir du temps passé.
+- **Rien n'est calculé ni déduit à votre place** : seules vos saisies alimentent
+  l'affichage.
 
 ---
 
