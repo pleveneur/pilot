@@ -1725,6 +1725,58 @@ async function checkSuperAgentTools(bannerEl) {
   if (bannerEl) bannerEl.hidden = !noTools;
 }
 
+// ── Temps du suivi (Lot A, idée 2, tranche 4c) ──
+// Formatage PUR des totaux de temps d'un projet, utilisé par la vue d'ensemble
+// du suivi (`loadSuperTracking`). Les totaux viennent du SERVEUR (agrégat Rust,
+// tranche 4b) : l'interface n'additionne jamais rien, elle ne fait que formater.
+//
+// Règles (rapport de la tranche 4, § « Règles d'affichage ») :
+//  - la PRÉSENCE d'un temps se lit sur `estimated_set` / `spent_set`, jamais sur
+//    la valeur (`0` est faux en JavaScript) : un `0` renseigné s'affiche donc
+//    « 0 min » et reste un temps renseigné ;
+//  - aucun des deux temps renseigné → chaîne vide, la ligne du projet garde
+//    exactement son apparence actuelle ;
+//  - 60 minutes et plus → « 2 h 15 », « 4 h 05 », « 4 h » ; en dessous →
+//    « 45 min », « 1 min ».
+
+/** Minutes entières positives ; toute valeur absente ou douteuse retombe à 0. Pur. */
+function normalizeTrackingMinutes(value) {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Formate un total de minutes : « 45 min », « 2 h 15 », « 4 h ». Pur. */
+function formatTrackingMinutes(minutes) {
+  const total = normalizeTrackingMinutes(minutes);
+  if (total < 60) return `${total} min`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest ? `${hours} h ${String(rest).padStart(2, "0")}` : `${hours} h`;
+}
+
+/**
+ * Fragment « temps » d'une ligne projet : « 2 h 15 passées · 4 h prévues », ou
+ * chaîne VIDE quand RIEN n'est renseigné (aucune mention). Pur.
+ * @param {object|null|undefined} project projet de la réponse de suivi
+ * @returns {string}
+ */
+function projectTrackingTimeFragment(project) {
+  const p = project || {};
+  const spentSet = p.spent_set === true;
+  const estimatedSet = p.estimated_set === true;
+  if (!spentSet && !estimatedSet) return "";
+  const parts = [];
+  if (spentSet) {
+    const minutes = normalizeTrackingMinutes(p.spent_minutes);
+    parts.push(`${formatTrackingMinutes(minutes)} passée${minutes === 1 ? "" : "s"}`);
+  }
+  if (estimatedSet) {
+    const minutes = normalizeTrackingMinutes(p.estimated_minutes);
+    parts.push(`${formatTrackingMinutes(minutes)} prévue${minutes === 1 ? "" : "s"}`);
+  }
+  return parts.join(" · ");
+}
+
 // ── Création de l'interface ──
 
 export async function createSuperAgent(container) {
@@ -2110,13 +2162,17 @@ export async function createSuperAgent(container) {
       let html = "";
       for (const client of clients) {
         const projects = (client.projects || [])
-          .map(
-            (p) =>
-              `<div class="super-tracking-project">
+          .map((p) => {
+            // Temps par projet (Lot A, idée 2, tranche 4c) : ajouté à côté des
+            // compteurs existants, et SEULEMENT si au moins un des deux temps est
+            // renseigné (`*_set`) — sinon la ligne garde son apparence actuelle.
+            const time = projectTrackingTimeFragment(p);
+            return `<div class="super-tracking-project">
                  <span class="super-tracking-project-name">${escapeHtmlForSuper(p.name || p.path || "")}</span>
                  <span class="dash-muted">${p.tasks_en_cours ?? 0} en cours · ${p.tasks_terminees ?? 0} terminées</span>
-               </div>`
-          )
+                 ${time ? `<span class="dash-muted super-tracking-project-time">${escapeHtmlForSuper(time)}</span>` : ""}
+               </div>`;
+          })
           .join("");
         const decisions = (client.decisions_recentes || [])
           .map((d) => `<li>${escapeHtmlForSuper(d)}</li>`)
