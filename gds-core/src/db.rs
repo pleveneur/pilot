@@ -1862,7 +1862,7 @@ pub async fn ensure_can_add_project(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use sqlx::postgres::PgConnectOptions;
     use std::str::FromStr;
@@ -1999,7 +1999,7 @@ mod tests {
     /// Base jetable : `DROP DATABASE` garanti au Drop, même en cas de panique.
     /// La suppression passe par un thread dédié (un `Drop` ne peut pas `.await`)
     /// qui ouvre son propre runtime tokio.
-    struct GdsTestDbGuard {
+    pub(crate) struct GdsTestDbGuard {
         admin_options: PgConnectOptions,
         db_name: String,
     }
@@ -2042,7 +2042,7 @@ mod tests {
     ///
     /// Le pool est déclaré **avant** le garde dans le tuple : il est donc fermé
     /// avant le `DROP DATABASE` du garde (ordre de destruction des tuples).
-    async fn fresh_migrated_test_db() -> Option<(PgPool, GdsTestDbGuard)> {
+    pub(crate) async fn fresh_migrated_test_db() -> Option<(PgPool, GdsTestDbGuard)> {
         let url = match std::env::var("PILOT_GDS_TEST_URL") {
             Ok(v) if !v.trim().is_empty() => v,
             _ => {

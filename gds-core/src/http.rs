@@ -743,17 +743,30 @@ fn bad_request(e: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response()
 }
 
+/// Refus d'authentification **unique** (point 8, tranche D2) : un jeton inconnu
+/// ou expiré, un compte supprimé, désactivé ou en attente produisent exactement
+/// la même réponse — elle ne révèle donc jamais si le compte existe.
+fn unauthorized_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "Non authentifié" })),
+    )
+        .into_response()
+}
+
 // ── Authentification (token opaque) ──
 
 /// Client authentifié injecté par `auth_middleware` dans les extensions de la
 /// requête, pour que les handlers puissent appliquer un rate limiting par token
 /// et émettre un audit log (origine + sujet) sans re-extraire le bearer.
 /// `key` = hash SHA-256 du token (jamais le token brut), `ip` = IP source,
-/// `role` = rôle du compte porté par la session (chaîne vide si la session ne
-/// porte pas de rôle — cas du mode remote du poste), `user_id` = identifiant
-/// `users.id` du compte (`0` si la session ne porte pas d'identité — refonte
-/// GDS **L3.4** ; sert à prouver l'identité des routes qui en ont besoin,
-/// `projects/create` et les clefs SSH, plus à aucun filtrage d'accès).
+/// `role` = rôle **effectif** du compte : depuis la tranche **D2** (point 8),
+/// c'est celui **relu en base** à chaque requête protégée (chaîne vide si la
+/// session ne porte pas de rôle — cas du mode remote du poste, ou comptes
+/// historiques), `user_id` = identifiant `users.id` du compte (`0` si la
+/// session ne porte pas d'identité — refonte GDS **L3.4** ; sert à prouver
+/// l'identité des routes qui en ont besoin, `projects/create` et les clefs
+/// SSH, plus à aucun filtrage d'accès).
 #[derive(Clone)]
 pub struct AuthedClient {
     pub key: String,
@@ -762,7 +775,85 @@ pub struct AuthedClient {
     pub user_id: i64,
 }
 
+/// État d'un compte **relu en base** à chaque requête protégée (point 8,
+/// tranche D2). Le rôle retenu est celui de la base, jamais celui figé dans le
+/// jeton.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AccountState {
+    /// Compte existant et actif — rôle effectif en base.
+    Active(String),
+    /// Compte inexistant, désactivé ou en attente : le jeton ne vaut plus rien.
+    Rejected,
+}
+
+/// Décision **pure** de revalidation (testable sans base) : un compte doit
+/// encore exister et être `active` ; seul le rôle de la base fait foi. Un
+/// compte supprimé, désactivé ou en attente est refusé exactement comme un
+/// jeton inconnu.
+fn account_state(user: Option<&gds_db::UserRow>) -> AccountState {
+    match user {
+        Some(u) if u.status == "active" => AccountState::Active(u.role.clone()),
+        _ => AccountState::Rejected,
+    }
+}
+
+/// Résultat de la revalidation en base d'une session (point 8, tranche D2).
+#[derive(Debug, PartialEq, Eq)]
+enum SessionRevalidation {
+    /// Rôle **effectif** à utiliser : celui de la base, ou celui du jeton pour
+    /// une session sans compte GDS (rien à relire).
+    Role(String),
+    /// Refus : le compte n'existe plus ou n'est plus actif.
+    Rejected,
+}
+
+/// Revalide une session auprès de la base à chaque requête protégée
+/// (point 8, tranche D2).
+///
+/// Le rôle et le statut étaient jusqu'ici **figés dans le jeton** (TTL 7 jours)
+/// et jamais relus : un compte désactivé, rétrogradé ou supprimé conservait ses
+/// droits tant que sa session n'était pas révoquée. D1 couvre la révocation
+/// immédiate déclenchée par les routes d'administration ; D2 couvre le jeton
+/// encore valide et toute autre source de décalage, y compris une modification
+/// faite directement en base ou par un autre chemin.
+///
+/// - `user_id > 0` : lecture en base via la requête **existante**
+///   `get_user_by_id` ; compte absent ou non `active` → refus, sinon le rôle de
+///   la base est retenu ;
+/// - `user_id <= 0` : session **sans compte GDS** (mode remote du poste,
+///   comptes historiques) — il n'y a rien à revalider, le rôle de la session est
+///   conservé ;
+/// - base **injoignable** (`pool()` en erreur) : impossible de trancher ; le
+///   comportement d'origine est conservé (le handler échouera lui-même s'il a
+///   besoin de la base). Une lecture qui échoue, elle, refuse (fail-closed).
+async fn revalidate_session<S: GdsCtx>(
+    ctx: &Arc<S>,
+    user_id: i64,
+    token_role: &str,
+) -> SessionRevalidation {
+    if user_id <= 0 {
+        return SessionRevalidation::Role(token_role.to_string());
+    }
+    let pool = match ctx.pool() {
+        Ok(p) => p,
+        Err(_) => return SessionRevalidation::Role(token_role.to_string()),
+    };
+    match gds_db::get_user_by_id(&pool, user_id).await {
+        Ok(user) => match account_state(user.as_ref()) {
+            AccountState::Active(role) => SessionRevalidation::Role(role),
+            AccountState::Rejected => SessionRevalidation::Rejected,
+        },
+        Err(_) => SessionRevalidation::Rejected,
+    }
+}
+
 /// Middleware d'authentification : valide le header `Authorization: Bearer <token>`.
+///
+/// Point 8 (tranche D2) : le jeton valide ne suffit plus — le compte qu'il
+/// désigne est **revalidé en base** à chaque requête protégée (existence,
+/// `status = active`) et le rôle **effectif** retenu est celui de la base. Un
+/// compte supprimé, désactivé ou rétrogradé ne peut donc plus utiliser son
+/// ancien jeton, même si celui-ci n'a pas encore expiré ni été révoqué.
 pub async fn auth_middleware<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
     headers: HeaderMap,
@@ -777,16 +868,22 @@ pub async fn auth_middleware<S: GdsCtx>(
                 .get::<ConnectInfo<std::net::SocketAddr>>()
                 .map(|ci| ci.0.ip().to_string())
                 .unwrap_or_default();
+            let user_id = ctx.auth().user_id_of(&token).unwrap_or(0);
+            let token_role = ctx.auth().role_of(&token).unwrap_or_default();
+            let role = match revalidate_session(&ctx, user_id, &token_role).await {
+                SessionRevalidation::Role(role) => role,
+                SessionRevalidation::Rejected => return unauthorized_response(),
+            };
             req.extensions_mut().insert(AuthedClient {
                 key: token_key(&token),
                 ip,
-                role: ctx.auth().role_of(&token).unwrap_or_default(),
-                user_id: ctx.auth().user_id_of(&token).unwrap_or(0),
+                role,
+                user_id,
             });
             return next.run(req).await;
         }
     }
-    (StatusCode::UNAUTHORIZED, Json(json!({"error": "Non authentifié"}))).into_response()
+    unauthorized_response()
 }
 
 /// Garde « administrateur uniquement » (L2.2), monté **après**
@@ -794,13 +891,12 @@ pub async fn auth_middleware<S: GdsCtx>(
 /// être authentifié (sinon 401) et sa session doit porter le rôle `admin`
 /// (sinon 403, avec une entrée d'audit `admin_denied`).
 ///
-/// Le rôle provient de la **session existante** (`WebAuth::create_session_as`),
-/// il n'est donc jamais relu depuis la base à chaque requête. Depuis **L3.3**,
-/// ce garde protège **toutes** les routes d'administration, y compris la
-/// validation d'un compte (`users/validate`, ex-limite V1). Il est
-/// volontairement **fermé par défaut** : une session sans rôle est refusée. La
-/// matrice fine des droits étendue (revalidation `status = active`) relève du
-/// lot L3.5.
+/// Le rôle provient de `AuthedClient`, alimenté par `auth_middleware` : depuis
+/// la tranche **D2** (point 8), ce rôle est celui **relu en base** à chaque
+/// requête protégée (compte actif exigé), et non plus celui figé dans le jeton.
+/// Depuis **L3.3**, ce garde protège **toutes** les routes d'administration, y
+/// compris la validation d'un compte (`users/validate`, ex-limite V1). Il est
+/// volontairement **fermé par défaut** : une session sans rôle est refusée.
 async fn require_admin<S: GdsCtx>(
     State(ctx): State<Arc<S>>,
     req: Request,
@@ -813,10 +909,7 @@ async fn require_admin<S: GdsCtx>(
             c.role.clone(),
             req.uri().path().to_string(),
         ),
-        None => {
-            return (StatusCode::UNAUTHORIZED, Json(json!({"error": "Non authentifié"})))
-                .into_response()
-        }
+        None => return unauthorized_response(),
     };
     // Matrice des droits (L3.5) : rôle `admin` exigé.
     if roles::is_admin(&role) {
@@ -2312,6 +2405,192 @@ mod tests {
         assert!(
             src[mount..mount_end].contains("require_admin"),
             "le routeur d'administration n'est plus protégé par `require_admin`"
+        );
+    }
+
+    // ── Point 8 — tranche D2 : revalidation du compte à chaque requête ──
+
+    /// Construit une ligne `users` de test (aucun accès base).
+    fn user_row(role: &str, status: &str) -> gds_db::UserRow {
+        gds_db::UserRow {
+            id: 1,
+            email: "d2@gds.test".to_string(),
+            name: "d2".to_string(),
+            password_hash: String::new(),
+            role: role.to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    /// Décision pure de revalidation : compte supprimé, désactivé ou en attente
+    /// → refus ; compte actif → le rôle retenu est celui de la **base**, jamais
+    /// celui figé dans le jeton (une rétrogradation en base s'applique donc
+    /// immédiatement, sans attendre l'expiration des 7 jours du jeton).
+    #[test]
+    fn d2_account_state_reads_status_and_role_from_the_row() {
+        // Compte supprimé : plus aucune ligne en base.
+        assert_eq!(account_state(None), AccountState::Rejected);
+        // Compte désactivé, en attente, ou statut inconnu : jamais accepté.
+        for status in ["disabled", "pending", "statut-inconnu"] {
+            assert_eq!(
+                account_state(Some(&user_row("admin", status))),
+                AccountState::Rejected,
+                "statut {:?} : le jeton ne doit plus rien valoir",
+                status
+            );
+        }
+        // Compte actif : le rôle de la base fait foi (rôle du jeton ignoré).
+        assert_eq!(
+            account_state(Some(&user_row("admin", "active"))),
+            AccountState::Active("admin".to_string())
+        );
+        assert_eq!(
+            account_state(Some(&user_row("standard", "active"))),
+            AccountState::Active("standard".to_string())
+        );
+    }
+
+    /// Point 8 — tranche D2 : le middleware d'authentification ne se fie plus au
+    /// seul jeton — il revalide le compte en base (existence + `status = active`)
+    /// et refuse avec le message **unique** des refus d'authentification, qui ne
+    /// divulgue pas si le compte existe. Contrôle structurel exécutable sans
+    /// PostgreSQL, donc présent en CI ; le comportement de bout en bout est
+    /// couvert par `d2_account_state_reads_status_and_role_from_the_row` et, si
+    /// une base de test est fournie (`PILOT_GDS_TEST_URL`), par
+    /// `d2_revalidation_reads_the_database_through_the_real_path`.
+    #[test]
+    fn d2_auth_middleware_revalidates_the_account_against_the_database() {
+        let src = include_str!("http.rs");
+        let body_of = |signature: &str| {
+            let start = src
+                .find(signature)
+                .unwrap_or_else(|| panic!("`{}` absent", signature));
+            let body = &src[start..];
+            let end = body
+                .find("\n}")
+                .unwrap_or_else(|| panic!("fin de `{}` introuvable", signature));
+            &body[..end]
+        };
+
+        let middleware = body_of("pub async fn auth_middleware<S: GdsCtx>(");
+        assert!(
+            middleware.contains("revalidate_session("),
+            "auth_middleware ne revalide plus le compte en base : un jeton \
+             désactivé, rétrogradé ou supprimé garderait ses droits (point 8, D2)"
+        );
+        assert!(
+            middleware
+                .contains("SessionRevalidation::Rejected => return unauthorized_response()"),
+            "un compte rejeté doit produire le refus d'authentification commun (401)"
+        );
+
+        let reval = body_of("async fn revalidate_session<S: GdsCtx>(");
+        assert!(
+            reval.contains("gds_db::get_user_by_id("),
+            "la revalidation doit relire le compte en base (requête existante \
+             `get_user_by_id`)"
+        );
+        assert!(
+            reval.contains("account_state(user.as_ref())"),
+            "la revalidation doit retenir le rôle et le statut de la base"
+        );
+
+        // Message unique : identique pour un jeton inconnu, un compte supprimé,
+        // désactivé ou rétrogradé — aucune fuite sur l'existence du compte.
+        let refusal = body_of("fn unauthorized_response() -> Response {");
+        assert!(refusal.contains("Non authentifié"), "message de refus absent");
+        assert!(
+            !refusal.contains("introuvable") && !refusal.contains("existe"),
+            "le message de refus ne doit rien divulguer sur l'existence du compte"
+        );
+        assert!(
+            !middleware.contains("Identifiants invalides"),
+            "le refus de session ne doit pas reprendre le message du login"
+        );
+    }
+
+    /// Contexte minimal portant un vrai pool de test (aucune dépendance Tauri).
+    struct DbTestCtx {
+        pool: PgPool,
+        auth: Arc<WebAuth>,
+        guard: Arc<WebGuard>,
+        audit: Arc<WebAudit>,
+    }
+
+    impl GdsCtx for DbTestCtx {
+        fn pool(&self) -> Result<PgPool, String> {
+            Ok(self.pool.clone())
+        }
+        fn auth(&self) -> &Arc<WebAuth> {
+            &self.auth
+        }
+        fn guard(&self) -> &Arc<WebGuard> {
+            &self.guard
+        }
+        fn audit(&self) -> &Arc<WebAudit> {
+            &self.audit
+        }
+    }
+
+    /// Point 8 — tranche D2 : revalidation de bout en bout sur une base réelle
+    /// (test facultatif). Sans `PILOT_GDS_TEST_URL` visant une base
+    /// `pilot_gds_test_*` jetable, il sort proprement (CI verte). Il exerce le
+    /// chemin **réel** de revalidation (`revalidate_session` →
+    /// `get_user_by_id`) : compte actif, puis rétrogradé, puis désactivé, puis
+    /// supprimé — sans révoquer la session entre-temps (D2 seul corrige le
+    /// décalage).
+    #[tokio::test]
+    async fn d2_revalidation_reads_the_database_through_the_real_path() {
+        let Some((pool, _guard)) = crate::db::tests::fresh_migrated_test_db().await else {
+            return;
+        };
+        let ctx = Arc::new(DbTestCtx {
+            pool: pool.clone(),
+            auth: Arc::new(WebAuth::new()),
+            guard: Arc::new(WebGuard::new()),
+            audit: Arc::new(WebAudit::new()),
+        });
+        let email = "d2@gds.test";
+        let id = gds_db::create_user(&pool, email, "d2", "hash-de-test", "admin", "active")
+            .await
+            .expect("création du compte de test");
+
+        // 1) Compte normal actif : la revalidation passe, le rôle de la base est
+        //    retenu (ici `admin`, comme le jeton — comportement inchangé).
+        assert_eq!(
+            revalidate_session(&ctx, id, "admin").await,
+            SessionRevalidation::Role("admin".to_string())
+        );
+
+        // 2) Rétrogradé en base : plus aucun droit d'administration, et cela
+        //    SANS révocation préalable (le décalage est corrigé par D2 seul).
+        gds_db::set_user_role(&pool, email, "standard")
+            .await
+            .expect("rétrogradation");
+        assert_eq!(
+            revalidate_session(&ctx, id, "admin").await,
+            SessionRevalidation::Role("standard".to_string()),
+            "le rôle effectif doit être celui de la base, pas celui du jeton"
+        );
+
+        // 3) Désactivé : refus (401), jeton encore valide par ailleurs.
+        gds_db::set_user_status(&pool, email, "disabled")
+            .await
+            .expect("désactivation");
+        assert_eq!(
+            revalidate_session(&ctx, id, "admin").await,
+            SessionRevalidation::Rejected
+        );
+
+        // 4) Supprimé : refus, identique au cas désactivé.
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("suppression du compte");
+        assert_eq!(
+            revalidate_session(&ctx, id, "admin").await,
+            SessionRevalidation::Rejected
         );
     }
 }
