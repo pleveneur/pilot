@@ -9510,4 +9510,237 @@ mod tests {
             assert!(task["long_task_reason"].is_null());
         }
     }
+
+    // ── Idée 1 (Lot A), tranche 1.5 : non-régression Kanban ──
+    //
+    // Verrouille, au niveau de l'ÉTAT Kanban (et pas seulement de la fonction
+    // pure), les trois motifs de longueur cités par le plan — refonte, beaucoup
+    // de fichiers, plusieurs étapes — ET le cas le plus important : une demande
+    // ORDINAIRE n'est jamais signalée. Aucune écriture en base : les deux champs
+    // sont calculés à la lecture depuis le texte de la demande.
+    #[test]
+    fn kanban_tasks_flags_the_three_long_task_motifs_of_the_plan() {
+        let conn = mem_conn();
+        let files: Vec<String> = (1..=12).map(|i| format!("src/module{}.rs", i)).collect();
+        let many_files_desc = format!(
+            "Mettre a jour les appels dans {} apres le changement de signature.",
+            files.join(", ")
+        );
+        let steps_desc = "Etapes :\n1. Analyser\n2. Corriger\n3. Verifier";
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (project_id, title, description) VALUES (1, 'Corriger le bouton Enregistrer', ?1)",
+            rusqlite::params!["Le bouton ne repond plus depuis la derniere mise a jour."],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (project_id, title, description) VALUES (1, 'Refonte du systeme d''onglets', '')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (project_id, title, description) VALUES (1, 'Adapter la signature', ?1)",
+            rusqlite::params![many_files_desc],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks (project_id, title, description) VALUES (1, 'Adapter l''API', ?1)",
+            rusqlite::params![steps_desc],
+        )
+        .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 4);
+        let find = |title: &str| tasks.iter().find(|t| t["title"] == title).unwrap();
+
+        // 1) Demande ordinaire : JAMAIS signalée (le cas le plus important).
+        assert_eq!(find("Corriger le bouton Enregistrer")["is_long_task"], false);
+        assert!(find("Corriger le bouton Enregistrer")["long_task_reason"].is_null());
+
+        // 2) Motif « refonte » : détecté, raison exacte et affichable.
+        assert_eq!(find("Refonte du systeme d'onglets")["is_long_task"], true);
+        assert_eq!(
+            find("Refonte du systeme d'onglets")["long_task_reason"]
+                .as_str()
+                .unwrap(),
+            "mot-clé « refonte »"
+        );
+
+        // 3) Motif « beaucoup de fichiers » : 12 fichiers distincts cités.
+        assert_eq!(find("Adapter la signature")["is_long_task"], true);
+        assert_eq!(
+            find("Adapter la signature")["long_task_reason"]
+                .as_str()
+                .unwrap(),
+            "12 fichiers cités"
+        );
+
+        // 4) Motif « plusieurs étapes » : trois étapes annoncées.
+        assert_eq!(find("Adapter l'API")["is_long_task"], true);
+        assert_eq!(
+            find("Adapter l'API")["long_task_reason"].as_str().unwrap(),
+            "3 étapes détectées"
+        );
+    }
+
+    // Non-régression de la tranche : pour un projet SANS tâche longue, l'état
+    // Kanban reste COMPLET et strictement inchangé — compteurs de tâches, idées,
+    // dépendances, checklist et livrables. Le test fige aussi l'ensemble EXACT
+    // des clés d'une carte : aucune clé existante ne doit disparaître et aucune
+    // clé parasite ne doit apparaître.
+    #[test]
+    fn kanban_state_stays_complete_for_a_project_without_a_long_task() {
+        let conn = mem_conn();
+        conn.execute_batch(
+            "INSERT INTO clients (name) VALUES ('Client A');\
+             INSERT INTO projects (path, name, client_id) VALUES ('/p/a', 'Projet A', 1);\
+             INSERT INTO tasks (project_id, title, status, deadline) \
+               VALUES (1, 'Tache attendue', 'en_cours', '2026-12-31');\
+             INSERT INTO tasks (project_id, title, status) \
+               VALUES (1, 'Suite ordinaire', 'demande');",
+        )
+        .unwrap();
+        conn.execute("UPDATE tasks SET depends_on_task_id = 1 WHERE id = 2", [])
+            .unwrap();
+        // Checklist (dont un point coché) et livrable de la tâche ordinaire.
+        let check_id = db_add_task_check(&conn, 2, "Verifier A").unwrap();
+        db_add_task_check(&conn, 2, "Verifier B").unwrap();
+        db_set_task_check_done(&conn, check_id, true).unwrap();
+        db_add_deliverable(&conn, 2, None, "Livrable A", "").unwrap();
+        // Idée de la sous-catégorie « Idées » (table créée à la demande).
+        conn.execute_batch(
+            "CREATE TABLE idees_evolutions (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, \
+                titre TEXT NOT NULL, description TEXT DEFAULT '', \
+                priorite TEXT DEFAULT 'moyenne', statut TEXT DEFAULT 'idee', \
+                created_at TEXT DEFAULT (datetime('now')), \
+                updated_at TEXT DEFAULT (datetime('now')));\
+             INSERT INTO idees_evolutions (project_id, titre, statut) \
+               VALUES (1, 'Idee A', 'idee');",
+        )
+        .unwrap();
+
+        let data = kanban_tasks(&conn).unwrap();
+        let tasks = data["clients"][0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 2);
+        let find = |title: &str| tasks.iter().find(|t| t["title"] == title).unwrap();
+
+        // Rien n'est signalé (les deux clés existent et restent vides).
+        for title in ["Tache attendue", "Suite ordinaire"] {
+            assert_eq!(find(title)["is_long_task"], false);
+            assert!(find(title)["long_task_reason"].is_null());
+        }
+
+        // Ensemble EXACT des clés d'une carte : rien n'a bougé.
+        let card = find("Suite ordinaire").as_object().unwrap();
+        let actual: std::collections::BTreeSet<&str> =
+            card.keys().map(|k| k.as_str()).collect();
+        let expected: std::collections::BTreeSet<&str> = [
+            "blocker_reason",
+            "client_name",
+            "created_at",
+            "deadline",
+            "dependency_state",
+            "depends_on_task_id",
+            "depends_on_title",
+            "description",
+            "id",
+            "is_long_task",
+            "long_task_reason",
+            "project_name",
+            "project_path",
+            "status",
+            "title",
+            "updated_at",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            actual, expected,
+            "aucune cle existante ne doit bouger, aucune cle parasite"
+        );
+
+        // Valeurs des informations préexistantes : date, dépendance, projet.
+        assert_eq!(find("Tache attendue")["deadline"], "2026-12-31");
+        assert_eq!(find("Suite ordinaire")["depends_on_task_id"], 1);
+        assert_eq!(find("Suite ordinaire")["depends_on_title"], "Tache attendue");
+        assert_eq!(find("Suite ordinaire")["dependency_state"], "waiting");
+        assert_eq!(find("Suite ordinaire")["project_name"], "Projet A");
+        assert_eq!(find("Suite ordinaire")["client_name"], "Client A");
+
+        // Compteurs du projet : 2 tâches ouvertes, 0 terminée (inchangés).
+        assert_eq!(task_counts(&conn, 1), (2, 0));
+
+        // Idées : toujours renvoyées, liées au bon projet et client.
+        let ideas = kanban_ideas(&conn).unwrap();
+        assert_eq!(ideas.len(), 1);
+        assert_eq!(ideas[0]["title"], "Idee A");
+        assert_eq!(ideas[0]["project_name"], "Projet A");
+        assert_eq!(ideas[0]["client_name"], "Client A");
+
+        // Checklist et livrables de la tâche ordinaire : intacts.
+        let checks = db_list_task_checks(&conn, 2).unwrap();
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0]["label"], "Verifier A");
+        assert_eq!(checks[0]["done"], true);
+        assert_eq!(checks[1]["done"], false);
+        let deliverables = db_list_task_deliverables(&conn, 2).unwrap();
+        assert_eq!(deliverables.len(), 1);
+        assert_eq!(deliverables[0]["label"], "Livrable A");
+    }
+
+    // Réglage (tranche 1.4) : absent de la configuration ⇒ lu comme ACTIVÉ (mode
+    // « proposer »), et CHAQUE clé voisine de l'Assistant est préservée telle
+    // quelle. Aucun agent n'est lancé, aucune donnée n'est écrite.
+    #[test]
+    fn long_tasks_setting_default_is_proposer_mode_and_preserves_neighbouring_keys() {
+        // Aucun fichier de configuration (premier lancement) : activé.
+        let fresh = crate::AppConfig::default();
+        assert!(
+            fresh.super_agent_long_tasks_enabled,
+            "defaut = activé (mode proposer)"
+        );
+
+        let cfg: crate::AppConfig = serde_json::from_str(
+            r#"{"theme":"dark","super_agent_name":"A","super_agent_prompt":"P",
+                "super_agent_concise":true,"super_agent_coordinator":true,
+                "super_agent_user_memory":"M","super_agent_adaptive_personality":true,
+                "super_agent_personality":"X","super_agent_user_friendly":true,
+                "super_agent_quality_gate":false,"super_agent_purge_before_delegate":false,
+                "super_agent_force_structured_brief":false,"super_agent_inherit_context":true,
+                "super_agent_auto_check_startup":true,"super_agent_block_agent_input":true,
+                "super_agent_invisible_agent":false,"super_agent_show_time":true,
+                "super_agent_checklist_mode":"block","super_agent_checklist_template":"M",
+                "super_agent_tracabilite_enabled":false,
+                "super_agent_schedule_interval_secs":900}"#,
+        )
+        .unwrap();
+        assert!(cfg.super_agent_long_tasks_enabled, "clé absente => activé");
+        assert_eq!(cfg.theme, "dark");
+        assert_eq!(cfg.super_agent_name, "A");
+        assert_eq!(cfg.super_agent_prompt, "P");
+        assert!(cfg.super_agent_concise);
+        assert!(cfg.super_agent_coordinator);
+        assert_eq!(cfg.super_agent_user_memory, "M");
+        assert!(cfg.super_agent_adaptive_personality);
+        assert_eq!(cfg.super_agent_personality, "X");
+        assert!(cfg.super_agent_user_friendly);
+        assert!(!cfg.super_agent_quality_gate);
+        assert!(!cfg.super_agent_purge_before_delegate);
+        assert!(!cfg.super_agent_force_structured_brief);
+        assert!(cfg.super_agent_inherit_context);
+        assert!(cfg.super_agent_auto_check_startup);
+        assert!(cfg.super_agent_block_agent_input);
+        assert!(!cfg.super_agent_invisible_agent);
+        assert!(cfg.super_agent_show_time);
+        assert_eq!(cfg.super_agent_checklist_mode, "block");
+        assert_eq!(cfg.super_agent_checklist_template, "M");
+        assert!(!cfg.super_agent_tracabilite_enabled);
+        assert_eq!(cfg.super_agent_schedule_interval_secs, 900);
+    }
 }
