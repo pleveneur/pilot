@@ -66,6 +66,19 @@ const DEFAULT_TIMEOUT_MS = 600000; // 10 min d'inactivité (le codeur fait des o
 // `activeAgents`) tout en récupérant un verrou orphelin en ~1 min.
 const QUEUED_ORPHAN_GRACE_MS = 60 * 1000;
 
+// Plancher d'inactivité des chemins de LANCEMENT (super-agent.js, startAgentsRun,
+// startParallelRun) : avant de démarrer une mission, on libère un éventuel verrou
+// de run bloqué — mais JAMAIS celui d'une run récente. Sans plancher, une run
+// venant de démarrer (agent déclaré actif mais session pas encore enregistrée
+// côté Rust, ou `busy` momentanément faux entre deux tours) était conclue
+// « fantôme » : la run EN COURS était fermée (`endRun`) et la nouvelle démarrait
+// par-dessus — l'agent qui travaillait repartait de zéro. Avec le plancher, la
+// porte ambiguë ne tire pas : le lancement voit la run encore occupée et met la
+// demande EN FILE (mécanisme existant) au lieu de détruire le travail. Aligné sur
+// la fenêtre d'activité « récente » du moteur (2 min) — au-delà, un verrou
+// vraiment fantôme est libéré comme avant.
+export const RUN_LAUNCH_MIN_STUCK_IDLE_MS = 2 * 60 * 1000;
+
 // Prudence (mission « libération abusive du verrou de run ») : les portes
 // AMBIGUËS (agents déclarés actifs mais silencieux, travail en file sans
 // porteur) ne libèrent le verrou que si DEUX mesures espacées du même écart
@@ -626,7 +639,6 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
     const idleSince = ctx.lastActivityAt || ctx.startedAt || 0;
     if (!idleSince || Date.now() - idleSince < requireIdleMs) return;
   }
-
   if (!stuck) {
     // 4. Garde de temps : verrou "running" sans activité réelle depuis trop
     //    longtemps (filet de sécurité si la sonde de vivacité est indisponible).
@@ -689,10 +701,18 @@ async function releaseStuckRunLockForKey(key, opts = {}) {
     const prev = ctx.watchdogStuckAt;
     if (!prev || now - prev < watchdogConfirmDelayMs) {
       ctx.watchdogStuckAt = now;
+      // Le plancher de l'appelant doit SURVIVRE à la revérification : le rejeu
+      // automatique repartait sinon avec `requireIdleMs = 0` et libérait la run
+      // que le plancher venait justement de protéger.
+      if (requireIdleMs > 0) ctx.watchdogStuckFloorMs = requireIdleMs;
       if (!ctx.watchdogRecheckId) {
         ctx.watchdogRecheckId = setTimeout(() => {
           ctx.watchdogRecheckId = null;
-          if (busState.runs[key] === ctx) releaseStuckRunLockForKey(key).catch(() => {});
+          const floor = ctx.watchdogStuckFloorMs || 0;
+          ctx.watchdogStuckFloorMs = 0;
+          if (busState.runs[key] === ctx) {
+            releaseStuckRunLockForKey(key, floor > 0 ? { requireIdleMs: floor } : undefined).catch(() => {});
+          }
         }, watchdogConfirmDelayMs + 50);
       }
       console.warn(
@@ -1913,7 +1933,15 @@ async function finishAgentTurn(agentId, ctx) {
   // ── H2 V2 parallèle : si cet agent fait partie d'un groupe parallèle, on
   // enregistre son résultat et on agrège quand tous les agents ont terminé.
   if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
-    ctx.parallelGroup.results[agentId] = { status: "done", text };
+    // Chantier « faux échec des runs silencieuses » : une part SANS texte
+    // devenait « (aucun texte) » dans le rapport agrégé (agents.js) → l'assistant
+    // concluait à l'échec et relançait la mission. Même preuve DISQUE que le
+    // watchdog (mission 310) avant d'enregistrer la part.
+    let partText = text;
+    if (!partText.trim() && (await workOnDiskDuringRun(ctx))) {
+      partText = `Travail PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec, même si l'agent n'a produit aucun texte final. Vérifiez le résultat produit au lieu de la relancer.`;
+    }
+    ctx.parallelGroup.results[agentId] = { status: "done", text: partText };
     ctx.parallelGroup.pending--;
     if (ctx.parallelGroup.pending <= 0) {
       const group = ctx.parallelGroup;
@@ -1991,7 +2019,23 @@ async function finishAgentTurn(agentId, ctx) {
     // Objectif 5 : la mission de cet agent est terminée → statut au repos.
     await resetAgentsProcState([agentId], ctx.project);
     if (!text || !text.trim()) {
-      emit("error", { message: `L'agent ${agentId} n'a produit aucune réponse textuelle. Il a peut-être utilisé des outils sans générer de texte final. Réessayez en reformulant votre demande.` });
+      // Chantier « faux échec des runs silencieuses » : un agent peut réussir sa
+      // mission (fichiers écrits, tests lancés) puis s'arrêter SANS phrase de
+      // conclusion. La run était déclarée en échec (« aucune réponse
+      // textuelle ») et l'assistant relançait une mission déjà réalisée. Avant
+      // de conclure, on exige la même preuve DISQUE que le watchdog
+      // (mission 310) : commit tombé pendant la run ou fichiers modifiés.
+      // Note : `toolCallsByAgent` a déjà été vidé plus haut — il ne peut PAS
+      // servir de preuve ici.
+      if (await workOnDiskDuringRun(ctx)) {
+        emit("done", {
+          agentId,
+          text: `L'agent ${agentId} a terminé sans texte final, mais du travail est PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec. Vérifiez le résultat produit au lieu de la relancer.`,
+        });
+        endRun(ctx.project, ctx.generation);
+        return;
+      }
+      emit("error", { message: `L'agent ${agentId} n'a produit aucune réponse textuelle et aucun travail n'a été détecté sur le disque. Il a peut-être utilisé des outils sans générer de texte final. Réessayez en reformulant votre demande.` });
       endRun(ctx.project, ctx.generation);
       return;
     }
@@ -2089,7 +2133,9 @@ async function failAgentTurn(agentId, reason, ctx) {
 
 export async function startAgentsRun(userPrompt, projectContext = "") {
   const runProject = window._pilotProjectPath || ".";
-  await releaseStuckRunLock(runProject);
+  // Plancher : ne jamais fermer la run d'un agent qui travaille (cf.
+  // RUN_LAUNCH_MIN_STUCK_IDLE_MS).
+  await releaseStuckRunLock(runProject, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
   if (getRunState(runProject) === "running") {
     throw new Error("Une run est déjà en cours sur ce projet.");
   }
@@ -2119,7 +2165,9 @@ export async function startParallelRun(assignments, projectContext = "", options
   // T2 : la run est scopée au PROJET cible (assignments[0].project, sinon projet
   // actif). Deux runs sur des projets DIFFÉRENTS peuvent tourner en parallèle.
   const runProject = (assignments && assignments[0] && assignments[0].project) || window._pilotProjectPath || ".";
-  await releaseStuckRunLock(runProject);
+  // Plancher : ne jamais fermer la run d'un agent qui travaille (cf.
+  // RUN_LAUNCH_MIN_STUCK_IDLE_MS).
+  await releaseStuckRunLock(runProject, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
   if (!busState.coordinator) {
     await initAgentsBus(busState.callbacks);
   }

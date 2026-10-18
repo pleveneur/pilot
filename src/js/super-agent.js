@@ -26,7 +26,7 @@ import { notifySuperAgentDone, playAssistantSound } from "./desktop-notify.js";
 import { armDoneSound, noteSoundRenderActivity, markSoundRenderIdle, resetDeferredSound, setDeferredSoundPlayer } from "./sound-deferred.js";
 setDeferredSoundPlayer(playAssistantSound);
 import { loadAgentRegistry, upsertAgent, normalizeAgent, validateAgentId, classifyAgent } from "./agents.js";
-import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE } from "./agents-bus.js";
+import { runAgentsForAssistant, runAgentsForAssistantAsync, setBusNotifyCallback, isRunInProgress, releaseStuckRunLock, endRun, ASSISTANT_SPACE, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import { estimateAndReserve } from "./reservations.js";
 import { applyAssistantBriefEnvelope } from "./structured-brief.js";
 import { buildDelegationContext, prefixDelegationContext } from "./super-agent-context.js";
@@ -434,7 +434,13 @@ export const runAgentsQueueByProject = {}; // project → [{ launch }]
 // le flag du projet et on vide sa file pour empêcher le blocage permanent des
 // runs suivantes de CE projet. Timer module-level, annulé dans `settleRun`.
 let runAgentsWatchdogByProject = {}; // project → timer id
-const RUN_AGENTS_WATCHDOG_MS = 5 * 60 * 1000; // 5 min
+// 15 min (et non 5) : ce watchdog ne relance ni n'arrête rien — il ne réinitialise
+// un flag et ne vide la file que si la run est jugée MORTE. Sur un travail
+// légitime long et SILENCIEUX (build, tests, installation, analyse), 5 min de
+// silence n'étaient pas une preuve suffisante : la file d'attente du projet
+// pouvait être vidée alors que l'agent produisait encore. Il revérifie à chaque
+// tour et repousse l'échéance tant que la run progresse.
+const RUN_AGENTS_WATCHDOG_MS = 15 * 60 * 1000; // 15 min
 
 // POINT G : déclencheur de rejeu GARANTI de la file de missions.
 // Une mission peut être mise en file derrière : une run du bus, une commande
@@ -569,7 +575,7 @@ export function armQueueReplay(target) {
  * de run impossible) ou exception synchrone — la mission avait DÉJÀ été retirée
  * de la file (`shift`) : elle était perdue en silence ET le projet restait
  * marqué « run en vol », si bien que toutes les missions suivantes de ce projet
- * étaient mises en file jusqu'au watchdog de 5 min (attente fantôme). L'appel
+ * étaient mises en file jusqu'au watchdog (attente fantôme). L'appel
  * est désormais protégé : en cas d'échec, la mission est remise EN TÊTE de file
  * (jamais perdue), le projet est libéré et le rejeu périodique est réarmé.
  * @param {string} target - projet (clé de file)
@@ -4123,7 +4129,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
         // cours — au lieu de la perdre. Retourne true si mise en file, false si
         // réellement lancée.
         const launchOrQueue = async () => {
-          await releaseStuckRunLock(target);
+          // Plancher : un verrou de run RÉCENT n'est jamais libéré ici — sinon le
+          // lancement fermait la run d'un agent qui travaillait encore. On met
+          // alors la demande en file.
+          await releaseStuckRunLock(target, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
           // POINT D : le bus ne voit PAS une commande MANUELLE en cours (elle
           // n'inscrit aucune run). On sonde en plus l'activité réelle de l'agent
           // du projet — même sonde que la délégation (isProjectAgentBusy) — pour
@@ -4227,7 +4236,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // d'abord la libération d'un verrou bloqué MAIS INACTIF
           // (releaseStuckRunLock ne libère que si aucun agent n'est réellement
           // en activité) pour que la demande courante démarre immédiatement.
-          await releaseStuckRunLock(target);
+          // Plancher : jamais de libération d'un verrou RÉCENT (agent qui travaille
+          // en silence) — la demande est alors mise en file.
+          await releaseStuckRunLock(target, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
           // Si le flag local est resté à true alors que le bus n'a plus de run
           // en cours (run précédente jamais finalisée, verrou fantôme), le
           // réinitialiser pour ne pas mettre la demande en file derrière une
@@ -4257,10 +4268,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           }
           runAgentsInFlightByProject[target] = true;
           // Filet de sécurité CONSCIENT DE L'ACTIVITÉ : si la run ne se termine
-          // pas sous 5 min, on ne réinitialise PAS aveuglément. On vérifie
-          // d'abord si la run est encore réellement active (bus en cours, agent
-          // vivant). Une tâche légitime longue (>5 min) qui progresse encore est
-          // laissée se poursuivre : on repousse simplement l'échéance. On ne
+          // pas sous RUN_AGENTS_WATCHDOG_MS, on ne réinitialise PAS aveuglément.
+          // On vérifie d'abord si la run est encore réellement active (bus en
+          // cours, agent vivant). Une tâche légitime longue qui progresse encore
+          // est laissée se poursuivre : on repousse simplement l'échéance. On ne
           // réinitialise le flag et ne vide la file QUE si la run est réellement
           // morte/inactive (blocage du lancement, verrou graphe, agent éteint).
           const runAgentsWatchdogHandler = async () => {
@@ -4289,7 +4300,10 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
             runAgentsInFlightByProject[target] = false;
             delete runAgentsWatchdogByProject[target];
             if (runAgentsQueueByProject[target]) { runAgentsQueueByProject[target].length = 0; delete runAgentsQueueByProject[target]; }
-            appendSystemMessage(messagesEl, "⚠️ La run d'agents n'a pas abouti sous 5 min — le flag de run a été réinitialisé et la file d'attente vidée.");
+            appendSystemMessage(
+              messagesEl,
+              `⚠️ La run d'agents n'a pas abouti sous ${Math.round(RUN_AGENTS_WATCHDOG_MS / 60000)} min — le flag de run a été réinitialisé et la file d'attente vidée.`
+            );
           };
           runAgentsWatchdogByProject[target] = setTimeout(runAgentsWatchdogHandler, RUN_AGENTS_WATCHDOG_MS);
           return await launchWithEstimate(); // { queued, started, preparing, error } : résultat de lancement (ou accusé si estimation en cours)
@@ -4379,8 +4393,9 @@ async function handleSuperAgentExtensionUiRequest(payload, messagesEl, state) {
           // Bug : verrou de run fantôme (même correctif que run_agents) —
           // libérer un verrou de bus bloqué MAIS INACTIF avant la garde pour
           // que la demande d'assistant démarre immédiatement au lieu de rester
-          // en file derrière une run morte.
-          await releaseStuckRunLock(target);
+          // en file derrière une run morte. Plancher : un verrou RÉCENT (agent qui
+          // travaille) n'est pas libéré — mise en file au lieu d'un kill.
+          await releaseStuckRunLock(target, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
           if (runAgentsInFlightByProject[target] && !isRunInProgress(target)) {
             runAgentsInFlightByProject[target] = false;
           }

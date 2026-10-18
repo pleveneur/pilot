@@ -831,8 +831,12 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 
 ### Programmer des relances (outil `schedule`)
 - L'Assistant peut **programmer des rappels** qui reviennent dans sa conversation
-  à l'échéance : relance différée (« recheck dans 10 min ») ou périodique
-  (« point toutes les 5 min tant que le codeur tourne »).
+  à l'échéance : relance différée (« me le rappeler demain matin ») ou périodique
+  (« point chaque lundi sur l'avancement »).
+- **Jamais pour surveiller un agent qu'il vient de lancer** : une tâche
+  déléguée se termine par un **compte-rendu déposé automatiquement** dans sa
+  conversation. Tant qu'il n'est pas arrivé, la mission est **en cours** — ni
+  relance, ni arrêt, ni nouvelle délégation, même si l'agent est silencieux.
 - Outils : **`schedule_create`** (créer une relance périodique, `everySeconds`
   ≥ 60), **`schedule_list`** (lister), **`schedule_delete`** (supprimer),
   **`schedule_set_enabled`** (désactiver/réactiver un rappel sans le supprimer).
@@ -881,10 +885,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   temps réel et **ne bloque jamais** la conversation en attendant sa fin.
 - **Pas de boucle d'attente** : ni `sleep`/attente active, ni vérifications
   répétées de `list_agent_sessions` / `get_delegation_result` / `git_status`
-  juste après un lancement.
-- Pour connaître l'avancement, il **programme UN seul rappel différé** non
-  bloquant (`schedule_create`) et le **désactive une fois le travail terminé**
-  (`schedule_set_enabled`).
+  juste après un lancement, et **aucun rappel** `schedule_create` pour suivre un
+  agent : le **compte-rendu de fin** (succès ou échec explicite) est **déposé
+  automatiquement** dans la conversation de l'Assistant.
+- **Tant que ce compte-rendu n'est pas arrivé, la mission est EN COURS** :
+  l'Assistant ne la **relance pas**, ne l'**arrête pas** et ne la **redélègue
+  pas**, même si l'agent reste silencieux longtemps (build, tests, analyse
+  longue). Un agent qui travaille n'a pas besoin d'un onglet ouvert ni d'une
+  sortie visible pour être légitime.
 - Il ne consulte un **résultat de délégation** (`get_delegation_result`) que si
   l'utilisateur le demande, ou quand il est déjà disponible.
 - Si l'utilisateur écrit pendant qu'un travail tourne, l'Assistant **répond
@@ -1601,6 +1609,16 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   délégation). L'assistant l'utilise pour superviser
   quels agents tournent et pour juger si un agent progresse réellement (dernière
   activité récente) avant de déléguer ou d'arrêter.
+- **`isWorking` — anti-intoxication sémantique (chantier « l'assistant relance
+  des agents qui travaillent »)** : `state` (`active`/`parked`) et `active`
+  décrivent l'**ONGLET** (session au premier plan ou conservée en arrière-plan),
+  jamais le travail. Un LLM les lisait comme « arrêté » et relançait un agent
+  occupé. Chaque entrée expose donc `isWorking` (booléen ADDITIF, calculé dans
+  `list_agent_sessions` par `session_is_working` : processus vivant ET
+  [`busy` OU `toolInProgress` OU activité < 2 min] — même règle que
+  `isSessionWorking` du frontend). C'est la **seule** réponse à « travaille-t-il
+  maintenant ? » ; les descriptions de l'outil (description + guidelines)
+  l'imposent explicitement au modèle.
 - **Auto-adaptation du prompt** : l'extension `pilot-assistant-prompt` fournit
   l'outil `update_my_prompt` qui remplace le prompt personnalisé de l'assistant
   (commande Rust `set_super_agent_prompt`, persistée dans la config + historique
@@ -1624,6 +1642,22 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   périmé est libéré et la demande démarre. Quand une demande est réellement
   mise en file, le retour de `run_agents` / `run_assistant_agents` l'indique
   honnêtement (`launched: false, queued: true`).
+- **Plancher de lancement (jamais de kill d'une run récente)** : les 3 chemins de
+  lancement de l'assistant — et `startAgentsRun` / `startParallelRun` du bus —
+  passent `requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS` (2 min) à
+  `releaseStuckRunLock`. Un verrou de run RÉCENT n'est donc **jamais** libéré par
+  un lancement : la demande est mise **en file**. Ce plancher survit à la
+  **revérification automatique** du watchdog (mémorisé sur la run), sinon
+  celle-ci repartait sans plancher et coupait la run protégée. Seuls le watchdog
+  (sa propre mesure) et les chemins d'**arrêt explicite** appellent sans plancher.
+- **Watchdog de run à 15 min (et non 5)** : le watchdog de `run_agents` ne
+  relance ni n'arrête rien — il ne réinitialise le flag de run et ne vide la file
+  du projet que si la run est jugée **morte**. Sur un travail légitime long et
+  **silencieux** (build, tests, installation, analyse), 5 min de silence
+  n'étaient pas une preuve suffisante : la file d'attente du projet pouvait être
+  vidée alors que l'agent produisait encore. Il revérifie à chaque tour et
+  repousse l'échéance tant que la run progresse ; le message affiché calcule son
+  délai depuis `RUN_AGENTS_WATCHDOG_MS`.
 - **Prompt allégé et plafonné (anti-regonflement)** : le prompt système est
   assemblé par la fonction pure `assemble_super_agent_system_prompt` (rôle,
   contexte projet, listes, règles figées, mémoire, guidelines). Les règles
@@ -1632,7 +1666,7 @@ La **mémoire** de l'assistant (son suivi multi-projets + sa configuration) peut
   tronque les descriptions longues à 100 caractères (fin de mot + `…`). Un test
   garde-fou (`super_agent_fixed_prompt_stays_under_budget`) échoue si le total
   des textes fixes dépasse le plafond `SUPER_AGENT_FIXED_PROMPT_BUDGET`
-  (5 550 caractères, mesuré à 5 278).
+  (5 550 caractères, mesuré à 5 497).
 
 <!-- HELP:super-agent-mcp -->
 ### MCP piloté par l'Assistant

@@ -45,9 +45,11 @@ pub struct AgentAnomalyState {
     pub last_activity_wall: Option<SystemTime>,
     /// Type du dernier événement RPC (ex: "tool_execution_end").
     pub last_event: String,
-    /// L'agent est-il en cours d'exécution (agent_start → true, agent_settled
-    /// ou agent_end → false). `agent_end` marque la fin d'un tour : on repasse
-    /// busy=false dès cet événement pour être robuste si `agent_settled` est perdu.
+    /// L'agent est-il en cours d'exécution (agent_start → true ; `agent_settled`,
+    /// ou `agent_end` SANS relance (`willRetry` ≠ true) → false). `agent_end`
+    /// marque la fin d'un TOUR : il repasse busy=false pour être robuste si
+    /// `agent_settled` est perdu, mais un tour PARTIEL (relance automatique de pi)
+    /// conserve busy : l'agent travaille toujours.
     pub busy: bool,
     /// Une alerte de blocage a-t-elle déjà été émise pour cette exécution ?
     /// Réarmé à false au prochain `agent_start`/`agent_settled` (nouvelle exécution).
@@ -131,6 +133,18 @@ const USER_REQUEST_EVENTS: &[&str] = &["extension_ui_request"];
 /// que l'arrêt automatique anti-inactivité (T2) reste déclenchable.
 const NO_PROGRESS_EVENTS: &[&str] = &["auto_retry_start", "auto_retry_end"];
 
+/// `agent_end` porte-t-il une relance automatique de pi (`willRetry: true`) ?
+/// Dans ce cas la fin de tour est PARTIELLE : l'agent continue de travailler
+/// (relance sur erreur transitoire, compaction, continuation) et son état ne
+/// doit pas être présenté comme « au repos ». Aligné sur le frontend
+/// (`agents-bus.js`, branche `agent_end` → `event.willRetry`).
+fn will_retry(value: &Value) -> bool {
+    value
+        .get("willRetry")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// Événements qui PRODUISENT un résultat visible (lot 3, défaut A).
 /// `message_end` : un message (réponse) est terminé ; `tool_execution_end` : un
 /// outil a rendu son résultat ; `compaction_end` : la compaction a abouti.
@@ -188,7 +202,15 @@ pub fn make_observer(
                     // aussi sur `agent_end` pour être robuste si `agent_settled` est
                     // perdu : l'indicateur d'activité ne doit pas rester « occupé »
                     // alors que l'agent a fini de répondre.
-                    entry.busy = false;
+                    // EXCEPTION : `agent_end` avec `willRetry: true` est un tour
+                    // PARTIEL (pi relance seul : erreur transitoire, compaction,
+                    // continuation). Effacer `busy` pendant cette fenêtre faisait
+                    // conclure aux sondes de vivacité (watchdog du bus, exclusivité,
+                    // arrêt auto) que plus personne ne travaillait → run libérée ou
+                    // agent relancé à tort au milieu de son travail.
+                    if t == "agent_settled" || !will_retry(value) {
+                        entry.busy = false;
+                    }
                 }
                 entry.updated = now;
             }
@@ -247,11 +269,18 @@ pub fn make_observer(
                     // perdu : l'indicateur d'activité ne doit pas rester « occupé »
                     // alors que l'agent a fini de répondre. Réarme aussi la détection
                     // de blocage / l'arrêt auto (nouvelle exécution à venir).
-                    entry.busy = false;
-                    entry.blocked_reported = false;
-                    entry.auto_stopped_reported = false;
-                    // Fin de tour : plus aucun outil en cours (anti-fuite).
-                    entry.tool_in_progress = false;
+                    // EXCEPTION (cf. map d'activité) : un `agent_end` avec
+                    // `willRetry: true` n'est PAS une fin — pi enchaîne un nouveau
+                    // tour. On conserve `busy`, `tool_in_progress` (l'agent
+                    // travaille toujours) jusqu'au prochain `agent_start` /
+                    // `agent_settled` (ou à la mort du process, qui réarme tout).
+                    if t == "agent_settled" || !will_retry(value) {
+                        entry.busy = false;
+                        entry.blocked_reported = false;
+                        entry.auto_stopped_reported = false;
+                        // Fin de tour : plus aucun outil en cours (anti-fuite).
+                        entry.tool_in_progress = false;
+                    }
                 }
                 // Marqueur « en attente de réponse utilisateur » : posé par une
                 // question interactive, levé par le premier événement d'activité
@@ -1613,6 +1642,69 @@ mod tests {
         map.clear();
         map.insert("/p/A2\u{1f}codeur".to_string(), state_at(0, true));
         assert!(!project_has_working_agent(&map, "/p/A", 25, now));
+    }
+
+    /// Faux positif « l'agent ne travaille plus » : pi émet des `agent_end`
+    /// PARTIELS (`willRetry: true`) avant de relancer (erreur transitoire,
+    /// compaction, continuation). Ces fins intermédiaires ne doivent PAS effacer
+    /// `busy` / `tool_in_progress` : les sondes de vivacité (watchdog du bus,
+    /// exclusivité des spécialités, arrêt auto) concluraient que l'agent est au
+    /// repos et libéreraient la run — ou relanceraient l'agent — au milieu de son
+    /// travail. Seuls `agent_settled` et un `agent_end` SANS relance reposent
+    /// l'état, exactement comme le fait le frontend (`agents-bus.js`).
+    #[test]
+    fn observer_keeps_busy_on_agent_end_with_will_retry() {
+        let activity: Arc<Mutex<HashMap<String, SessionActivity>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let anomaly: Arc<Mutex<HashMap<String, AgentAnomalyState>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let obs = make_observer(&activity, &anomaly, "/proj", "/proj\u{1f}codeur");
+
+        obs(&ev("agent_start"));
+        obs(&ev("tool_execution_start"));
+        obs(&serde_json::json!({ "type": "agent_end", "willRetry": true }));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(s.busy, "agent_end willRetry=true → tour PARTIEL : toujours occupé");
+            assert!(
+                s.tool_in_progress,
+                "agent_end willRetry=true → le travail en cours (outil / tour suivant) continue"
+            );
+            assert_eq!(s.last_event, "agent_end");
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(
+                act.get("/proj").unwrap().busy,
+                "map d'activité : occupée pendant la relance automatique"
+            );
+        }
+
+        // `agent_end` FINAL (sans relance) → repos, comportement historique conservé.
+        obs(&serde_json::json!({ "type": "agent_end", "willRetry": false }));
+        {
+            let a = anomaly.lock().unwrap();
+            let s = a.get("/proj\u{1f}codeur").unwrap();
+            assert!(!s.busy, "agent_end final → repos");
+            assert!(!s.tool_in_progress, "agent_end final → plus d'outil en cours");
+        }
+        {
+            let act = activity.lock().unwrap();
+            assert!(!act.get("/proj").unwrap().busy);
+        }
+
+        // `agent_settled` reste la fin GARANTIE : repos même sans `willRetry`.
+        obs(&ev("agent_start"));
+        obs(&serde_json::json!({ "type": "agent_end", "willRetry": true }));
+        obs(&ev("agent_settled"));
+        {
+            let a = anomaly.lock().unwrap();
+            assert!(
+                !a.get("/proj\u{1f}codeur").unwrap().busy,
+                "agent_settled → repos quoi qu'il arrive"
+            );
+        }
     }
 
     /// Bug « question sans réponse > seuil » : une question interactive

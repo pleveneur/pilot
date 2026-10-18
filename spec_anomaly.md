@@ -38,8 +38,14 @@ côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
 agent **réellement figé** (aucun outil en cours, plus aucune progression) est
 arrêté par T2.
 
+Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
+passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
+comme en train de travailler, son créneau comme sa place en file sont conservés.
+
 **Une mission n'est jamais annoncée en échec sans vérification** : quand une run
-est interrompue (inactivité, verrou libéré par le chien de garde), Pilot vérifie
+est interrompue (inactivité, verrou libéré par le chien de garde) **ou qu'un
+agent termine son tour sans texte de conclusion** (cas fréquent après une série
+d'outils), Pilot vérifie
 l'état du projet **sur le disque** (commit tombé pendant la run, ou fichiers
 modifiés pour une mission d'écriture). Si du travail est présent, le rapport
 indique « travail présent sur le disque, pas un échec » au lieu d'un échec — la
@@ -126,6 +132,15 @@ reviewer, super-agent), il met à jour **deux** maps :
 `agent_start` → `busy=true` (et réarme `blocked_reported` + `auto_stopped_reported`) ;
 `agent_settled` → `busy=false`. Tout événement d'activité (`ACTIVITY_EVENTS`)
 rafraîchit `last_activity`/`last_event`.
+
+**`agent_end` ≠ fin de mission** : pi peut émettre un `agent_end` **partiel**
+portant `willRetry: true` (relance automatique sur erreur transitoire,
+compaction, continuation). Dans ce cas `busy` et `tool_in_progress` sont
+**conservés** : l'agent travaille toujours, et les sondes de vivacité (watchdog
+du bus, exclusivité des spécialités, arrêt auto) ne doivent jamais conclure au
+repos — sinon la run est libérée, ou l'agent relancé, au milieu de son travail.
+Seuls un `agent_end` **sans relance** et `agent_settled` (fin garantie) reposent
+l'état, exactement comme le fait le frontend (`agents-bus.js`).
 
 **Purge de la marque `busy` sur TOUS les chemins d'arrêt (R2)** : la remise à
 zéro n'est pas réservée à `AgentService::stop`. `stop_project_sessions`,
@@ -333,6 +348,17 @@ d'événements, avec deux angles morts :
    une mission d'écriture → rapport « travail présent sur le disque, pas un
    échec » au lieu d'un échec mensonger (qui relançait une mission déjà faite).
    Le message d'échec mentionne explicitement l'absence de travail nouveau.
+3. **Aucune vérification du disque sur la fin de tour silencieuse** : une run
+   dont l'agent avait exécuté ses outils (write/edit/bash) puis s'arrêtait **sans
+   phrase de conclusion** était livrée en **échec** (`finishAgentTurn` →
+   « aucune réponse textuelle »), alors que le travail était écrit. L'Assistant
+   recevait cet échec, concluait que rien n'avait été fait et **relançait la
+   mission sur un travail déjà réalisé**. `finishAgentTurn` applique désormais la
+   **même preuve disque** que le watchdog (`workOnDiskDuringRun` →
+   `git_status_project`) avant de conclure : travail présent → rapport de
+   **succès** (« travail présent sur le disque, ce n'est pas un échec ») ; sinon
+   échec honnête, reformulé. **Fail-safe** : sonde indisponible → échec (jamais
+   une réussite inventée).
 
 ### 2.4 quater Plancher d'inactivité des portes ambiguës (faux positifs du rejeu de file)
 
@@ -357,9 +383,22 @@ Correctif minimal, au niveau du **déclencheur** (le verrou fantôme reste libé
    **moins** de `requireIdleMs`. Les portes **non ambiguës** (`noActive`,
    `residualParallel`, verrou sans aucun agent porteur, issue #87) gardent leur
    libération **immédiate**.
-3. Seul l'**observateur périodique** (rejeu de file) fournit ce plancher :
-   `RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS = 2 min` (aligné sur la fenêtre
-d'activité « récente » du moteur).
+3. Fournissent ce plancher : l'**observateur périodique** (rejeu de file —
+   `RUN_AGENTS_QUEUE_REPLAY_MIN_STUCK_IDLE_MS = 2 min`), et **tous les chemins de
+   LANCEMENT** (`RUN_LAUNCH_MIN_STUCK_IDLE_MS = 2 min`, même valeur) :
+   `startAgentsRun`, `startParallelRun` (agents-bus.js) et les 3 lancements de
+   l'assistant (agents-bus.js via super-agent : `run_agents`, rejeu de file de
+   l'assistant, `run_assistant_agents`). Un lancement ne peut donc plus fermer
+   une run **récente** : il voit la run occupée et met la demande **en file**
+   (mécanisme existant) au lieu de détruire le travail en cours. Les seuls
+   appels sans plancher sont la mesure du **watchdog** et les chemins d'**arrêt
+   explicite**.
+4. Le plancher **survit à la revérification automatique** : la 2ᵉ mesure du
+   watchdog (déclenchée ~7 s après la 1ʳᵉ) rejouait `releaseStuckRunLockForKey`
+   **sans option** (`requireIdleMs = 0`) et pouvait donc libérer la run que le
+   plancher venait de protéger — exactement le scénario visé lorsque l'activité
+   reprend entre les deux mesures. Le plancher est mémorisé sur la run
+   (`watchdogStuckFloorMs`) et réappliqué à la revérification.
 
 Effet : plus aucune coupure d'une run silencieuse de moins de 2 min ; **au-delà**,
 la protection réelle est intacte (session fantôme, process mort, réservation

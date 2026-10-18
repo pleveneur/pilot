@@ -1920,8 +1920,12 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 
 ### Programmer des relances (outil `schedule`)
 - L'Assistant peut **programmer des rappels** qui reviennent dans sa conversation
-  à l'échéance : relance différée (« recheck dans 10 min ») ou périodique
-  (« point toutes les 5 min tant que le codeur tourne »).
+  à l'échéance : relance différée (« me le rappeler demain matin ») ou périodique
+  (« point chaque lundi sur l'avancement »).
+- **Jamais pour surveiller un agent qu'il vient de lancer** : une tâche
+  déléguée se termine par un **compte-rendu déposé automatiquement** dans sa
+  conversation. Tant qu'il n'est pas arrivé, la mission est **en cours** — ni
+  relance, ni arrêt, ni nouvelle délégation, même si l'agent est silencieux.
 - Outils : **`schedule_create`** (créer une relance périodique, `everySeconds`
   ≥ 60), **`schedule_list`** (lister), **`schedule_delete`** (supprimer),
   **`schedule_set_enabled`** (désactiver/réactiver un rappel sans le supprimer).
@@ -1970,10 +1974,14 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
   temps réel et **ne bloque jamais** la conversation en attendant sa fin.
 - **Pas de boucle d'attente** : ni `sleep`/attente active, ni vérifications
   répétées de `list_agent_sessions` / `get_delegation_result` / `git_status`
-  juste après un lancement.
-- Pour connaître l'avancement, il **programme UN seul rappel différé** non
-  bloquant (`schedule_create`) et le **désactive une fois le travail terminé**
-  (`schedule_set_enabled`).
+  juste après un lancement, et **aucun rappel** `schedule_create` pour suivre un
+  agent : le **compte-rendu de fin** (succès ou échec explicite) est **déposé
+  automatiquement** dans la conversation de l'Assistant.
+- **Tant que ce compte-rendu n'est pas arrivé, la mission est EN COURS** :
+  l'Assistant ne la **relance pas**, ne l'**arrête pas** et ne la **redélègue
+  pas**, même si l'agent reste silencieux longtemps (build, tests, analyse
+  longue). Un agent qui travaille n'a pas besoin d'un onglet ouvert ni d'une
+  sortie visible pour être légitime.
 - Il ne consulte un **résultat de délégation** (`get_delegation_result`) que si
   l'utilisateur le demande, ou quand il est déjà disponible.
 - Si l'utilisateur écrit pendant qu'un travail tourne, l'Assistant **répond
@@ -2446,8 +2454,14 @@ côté interface peut alors mettre fin à la run **sans tuer l'agent**). Seul un
 agent **réellement figé** (aucun outil en cours, plus aucune progression) est
 arrêté par T2.
 
+Une **fin de tour partielle** de l'agent (reprise automatique après une erreur
+passagère ou une compaction) n'est **pas** un repos : l'agent reste considéré
+comme en train de travailler, son créneau comme sa place en file sont conservés.
+
 **Une mission n'est jamais annoncée en échec sans vérification** : quand une run
-est interrompue (inactivité, verrou libéré par le chien de garde), Pilot vérifie
+est interrompue (inactivité, verrou libéré par le chien de garde) **ou qu'un
+agent termine son tour sans texte de conclusion** (cas fréquent après une série
+d'outils), Pilot vérifie
 l'état du projet **sur le disque** (commit tombé pendant la run, ou fichiers
 modifiés pour une mission d'écriture). Si du travail est présent, le rapport
 indique « travail présent sur le disque, pas un échec » au lieu d'un échec — la

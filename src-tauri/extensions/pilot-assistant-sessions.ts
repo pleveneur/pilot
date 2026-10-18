@@ -4,9 +4,10 @@
 // d'agents pour coordonner le travail. Cette extension lui fournit un outil :
 //   - list_agent_sessions() → retourne la liste des sessions avec, pour chacune :
 //       project, agent, mode (main/agent_process), state (active/parked), alive,
-//       visible, active (pointeur du chat principal) et, si une activité a été
-//       enregistrée, lastActivity (timestamp ISO), lastActivityRelative
-//       (« il y a X min ») et lastEvent (type du dernier événement RPC).
+//       visible, active (pointeur du chat principal), isWorking (l'agent
+//       TRAVAILLE-t-il maintenant) et, si une activité a été enregistrée,
+//       lastActivity (timestamp ISO), lastActivityRelative (« il y a X min »),
+//       lastEvent (type du dernier événement RPC), busy, toolInProgress.
 //       Restitution (chantier fin-de-run) : pour les sessions vivantes, la
 //       sessionId de la session pi est aussi exposée — l'assistant peut la
 //       passer à get_delegation_result pour lire le résultat d'une délégation.
@@ -41,13 +42,14 @@ export default function (pi: ExtensionAPI) {
     name: "list_agent_sessions",
     label: "List Agent Sessions",
     description:
-      "Lister l'état des sessions d'agents (projet, agent, mode, état, vivacité, visibilité, actif) et leur dernière activité (lastActivity ISO, lastActivityRelative, lastEvent). Pour les sessions vivantes, expose aussi sessionId (à passer à get_delegation_result). ATTENTION : cet outil n'est PAS un outil de surveillance. Ne l'appelle JAMAIS pour suivre un agent que tu viens de lancer, ni dans une boucle, ni à intervalle régulier (y compris depuis une tâche planifiée) : cela fige ta propre session, occupe la file de travail et bloque les agents. Ne l'appelle que si l'UTILISATEUR te demande explicitement l'état des sessions. `state: \"parked\"` ne signifie PAS « arrêté » : c'est une session conservée en arrière-plan, et `active: false` signifie seulement que le pointeur du chat principal est ailleurs. Le lancement d'une tâche est déjà asynchrone : son résultat t'est transmis automatiquement, sans aucune surveillance de ta part.",
+      "Lister l'état des sessions d'agents (projet, agent, mode, état, vivacité, visibilité, actif) et leur dernière activité (lastActivity ISO, lastActivityRelative, lastEvent). Pour les sessions vivantes, expose aussi sessionId (à passer à get_delegation_result). ATTENTION : cet outil n'est PAS un outil de surveillance. Ne l'appelle JAMAIS pour suivre un agent que tu viens de lancer, ni dans une boucle, ni à intervalle régulier (y compris depuis une tâche planifiée) : cela fige ta propre session, occupe la file de travail et bloque les agents. Ne l'appelle que si l'UTILISATEUR te demande explicitement l'état des sessions. `state: \"parked\"` ne signifie PAS « arrêté » : c'est une session conservée en arrière-plan, et `active: false` signifie seulement que le pointeur du chat principal est ailleurs ; ces deux champs décrivent l'ONGLET, jamais le travail. La SEULE réponse à « travaille-t-il ? » est `isWorking: true` (tâche en cours, outil en cours, ou activité < 2 min). Le lancement d'une tâche est déjà asynchrone : son résultat t'est transmis automatiquement, sans aucune surveillance de ta part.",
     promptSnippet: "list_agent_sessions: état des sessions d'agents (usage EXCEPTIONNEL, jamais pour surveiller un agent lancé)",
     promptGuidelines: [
       "NEVER call list_agent_sessions to monitor an agent you have just launched, in a loop, or on a schedule. Doing so freezes your own session and blocks the work queue. The launch is asynchronous: the result is delivered to you automatically, so no supervision is needed.",
       "Call it ONLY when the user explicitly asks about the state of the agent sessions.",
-      "`state: \"parked\"` does NOT mean stopped: it is a session kept in the background. `active: false` only means the main chat pointer is elsewhere. Do not conclude that an agent died from these fields, and never relaunch a task because of them.",
-      "When the user does ask: each line gives project, agent, mode (main/agent_process), state (active/parked), alive (process running), visible (tab open), active, and — when recorded — lastActivity, lastActivityRelative and lastEvent.",
+      "`state: \"parked\"` does NOT mean stopped: it is a session kept in the background. `active: false` only means the main chat pointer is elsewhere. Both describe the TAB, never the work. The ONLY answer to \"is it working?\" is `isWorking: true`. Never relaunch or stop a task because of `state`/`active`.",
+      "When the user does ask: each line gives project, agent, mode (main/agent_process), state (active/parked), alive (process running), visible (tab open), active, isWorking, and — when recorded — lastActivity, lastActivityRelative and lastEvent.",
+      "Activity fields (when present): `busy: true` = the agent is executing a task (agent_start received, no settle since); `toolInProgress: true` = a tool is RUNNING right now (a build, tests or a long read is silent but IS real work). `alive: true` = the pi process is alive. A missing field never proves an agent is idle.",
       "For each alive session, the `sessionId` field (when present) is the pi session identifier: pass it to get_delegation_result to read the exact outcome of a delegated task (fall back to `agent_id` if missing).",
     ],
     parameters: Type.Object({}),

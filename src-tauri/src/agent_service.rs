@@ -1757,14 +1757,36 @@ impl AgentService {
                     .unwrap_or(false)
             };
             // Dernière activité depuis la map d'anomalie (champs optionnels).
-            let (last_activity, last_activity_relative, last_event, busy, tool_in_progress) = {
+            let (last_activity, last_activity_relative, last_event, busy, tool_in_progress, is_working) = {
                 let m = anomaly_map.lock().unwrap();
                 match m.get(&format!("{}\u{1f}{}", project, agent_id)) {
                     Some(a) => {
                         let (iso, rel) = anomaly::last_activity_info(a);
-                        (iso, rel, Some(a.last_event.clone()), Some(a.busy), Some(a.tool_in_progress))
+                        // isWorking (chantier « l'assistant relance des agents qui
+                        // travaillent ») : réponse SANS ambiguïté à la seule question
+                        // qui compte pour le LLM — « travaille-t-il maintenant ? ».
+                        // Même règle que la sonde de vivacité du frontend
+                        // (exclusivity-queue.js `isSessionWorking`) : processus vivant
+                        // ET (tâche en cours, outil en cours, ou activité depuis moins
+                        // de 2 min). `state`/`active` restent exposés (ils décrivent
+                        // l'ONGLET, pas le travail) mais ne doivent plus servir à
+                        // conclure « au repos ».
+                        let working = session_is_working(
+                            alive,
+                            a.busy,
+                            a.tool_in_progress,
+                            a.last_activity.elapsed().as_secs(),
+                        );
+                        (
+                            iso,
+                            rel,
+                            Some(a.last_event.clone()),
+                            Some(a.busy),
+                            Some(a.tool_in_progress),
+                            Some(working),
+                        )
                     }
-                    None => (None, None, None, None, None),
+                    None => (None, None, None, None, None, None),
                 }
             };
             let mut entry = serde_json::json!({
@@ -1802,6 +1824,13 @@ impl AgentService {
             // travaille » et libérait la run en ÉCHEC au milieu du travail.
             if let Some(t) = tool_in_progress {
                 entry["toolInProgress"] = serde_json::Value::Bool(t);
+            }
+            // isWorking : l'agent TRAVAILLE-t-il réellement à cet instant ? Champ
+            // ADDITIF, explicite, destiné au LLM : évite l'intoxication sémantique
+            // de `state`/`active` (qui décrivent l'ONGLET). Absent quand aucune
+            // activité n'a été enregistrée (aucune preuve de travail).
+            if let Some(w) = is_working {
+                entry["isWorking"] = serde_json::Value::Bool(w);
             }
             // prompt : DERNIER prompt réellement envoyé à cette session, déjà
             // tronqué (`record_prompt`). Sert à afficher les missions en cours
@@ -3183,6 +3212,24 @@ fn default_agent_name(id: &str) -> String {
     }
 }
 
+/// Fenêtre de « travail récent » (secondes) du champ `isWorking` : alignée sur
+/// celle du frontend (`RECENT_ACTIVITY_WINDOW_MS` = 2 min,
+/// exclusivity-queue.js) — un agent qui vient de produire un événement est
+/// considéré en travail, même entre deux tours.
+const WORKING_RECENT_WINDOW_SECS: u64 = 120;
+
+/// Sonde PURE de travail réel d'une session, exposée au LLM par le champ
+/// `isWorking` de `list_agent_sessions` (chantier « l'assistant relance des
+/// agents qui travaillent »). Même règle que `isSessionWorking` du frontend :
+/// le processus doit être VIVANT et, soit une tâche est en cours (`busy`), soit
+/// un OUTIL tourne (build/tests silencieux), soit l'activité est récente. Un
+/// processus vivant mais au repos (session parkée après `agent_settled`) n'est
+/// PAS au travail — `state: "parked"` ne dit rien du travail, seulement de
+/// l'onglet.
+fn session_is_working(alive: bool, busy: bool, tool_in_progress: bool, idle_secs: u64) -> bool {
+    alive && (busy || tool_in_progress || idle_secs < WORKING_RECENT_WINDOW_SECS)
+}
+
 /// Extrait l'état brut de toutes les sessions du registre (P2) — pur, sans
 /// accès DB (testable). Retourne pour chaque session : (projet, agent, état,
 /// mode, vivacité, actif). La clé composite est "project\u{1f}agent".
@@ -4171,6 +4218,26 @@ mod tests {
         assert!(svc.assistant_agent_alive("analyseur"));
         svc.shutdown_all();
         assert!(!svc.assistant_agent_alive("analyseur"), "arrêt complet → session assistant purgée");
+    }
+
+    /// Sonde `isWorking` exposée au LLM (chantier « l'assistant relance des
+    /// agents qui travaillent ») : elle ne doit JAMAIS exiger que l'onglet soit
+    /// visible, ni confondre « repos » et « mort ». Un agent dont un OUTIL tourne
+    /// (build/tests silencieux) ou dont l'activité est récente TRAVAILLE, et un
+    /// processus mort ne travaille jamais (même si `busy` est resté vrai).
+    #[test]
+    fn session_is_working_ignores_tab_state_and_recent_tool_activity() {
+        // Processus mort : jamais « au travail », même avec busy périmé.
+        assert!(!session_is_working(false, true, true, 0));
+        // Tâche en cours (agent_start reçu) → travail.
+        assert!(session_is_working(true, true, false, 10_000));
+        // Outil long SILENCIEUX (build, tests) : busy faux mais outil en cours.
+        assert!(session_is_working(true, false, true, 10_000));
+        // Entre deux tours : activité récente (< 2 min) → encore au travail.
+        assert!(session_is_working(true, false, false, 30));
+        // Session parkée au repos (aucun drapeau, activité ancienne) → repos.
+        assert!(!session_is_working(true, false, false, WORKING_RECENT_WINDOW_SECS));
+        assert!(!session_is_working(true, false, false, 3600));
     }
 
     /// P2 : `collect_session_states` extrait l'état de toutes les sessions du

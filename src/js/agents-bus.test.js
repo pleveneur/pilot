@@ -13,9 +13,13 @@ import { readFileSync, readdirSync } from "node:fs";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd) => (cmd === "file_exists" ? true : undefined)),
 }));
+// `initAgentsBus` (utilisé par les tests de « fin de tour silencieuse »)
+// enregistre des écouteurs d'événements Tauri : stub minimal, aucun backend en
+// environnement Node. Inoffensif pour les tests qui n'appellent pas le bus.
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { getRunState, beginRun, endRun, isRunInProgress, stopAgentsRun, resolveEffectiveModel, describeModelFallback, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest } from "./agents-bus.js";
+import { getRunState, beginRun, endRun, isRunInProgress, initAgentsBus, stopAgentsRun, resolveEffectiveModel, describeModelFallback, releaseStuckRunLock, handleAgentEvent, needsFreshAgentSession, attachMissionSink, settleMission, buildWatchdogReleaseMessage, provesWorkOnDisk, resolveWantedThinkingLevel, applyAgentThinkingLevel, __setWatchdogConfirmDelayForTest, RUN_LAUNCH_MIN_STUCK_IDLE_MS } from "./agents-bus.js";
 import {
   markProjectReserved,
   unmarkProjectReserved,
@@ -389,6 +393,27 @@ describe("releaseStuckRunLock — verrou fantôme (chantier 6/6)", () => {
     await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
     await releaseStuckRunLock("projetA", { requireIdleMs: 2 * 60 * 1000 });
     expect(getRunState("projetA")).toBe("idle");
+  });
+
+  it("le plancher SURVIT à la revérification automatique du watchdog (activité reprise entre les deux mesures)", async () => {
+    // Cause racine d'une relance destructrice : le rejeu automatique du watchdog
+    // rappelait `releaseStuckRunLockForKey` SANS option → `requireIdleMs = 0`. Le
+    // plancher de l'appelant (chemin de LANCEMENT, super-agent) protégeait donc
+    // la run pendant la 1re mesure seulement ; si l'activité reprenait juste
+    // après (outil long relancé, nouveau tour), la revérification ~7 s plus tard
+    // concluait « fantôme » et fermait la run d'un agent qui travaillait.
+    __setWatchdogConfirmDelayForTest(20);
+    const ctx = beginRunWithAgent();
+    ctx.startedAt = Date.now() - 5 * 60 * 1000;
+    ctx.lastActivityAt = Date.now() - 5 * 60 * 1000;
+    mockSessions([session({ busy: false, lastActivity: new Date(Date.now() - 5 * 60 * 1000).toISOString() })]);
+    // 1re mesure : inactivité > plancher → verdict « fantôme » ARMÉ (revérification).
+    await releaseStuckRunLock("projetA", { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
+    // L'agent reprend son travail pendant l'écart entre les deux mesures.
+    ctx.lastActivityAt = Date.now();
+    // Revérification automatique.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(getRunState("projetA"), "activité reprise → le plancher doit être réappliqué").toBe("running");
   });
 
   it("sonde de sessions en erreur → verrou MAINTENU (fail-closed : jamais de libération sur incertitude)", async () => {
@@ -1265,4 +1290,167 @@ describe("aucune perte du travail écrit à l'arrêt d'une run (point de suivi 3
       endRun(sc.project);
     });
   }
+});
+
+// ── Faux échec des runs SILENCIEUSES (chantier « l'assistant relance des agents
+// qui travaillent ou ont réussi »). Un agent peut exécuter ses outils
+// (write/edit/bash), écrire les fichiers sur le disque puis s'arrêter SANS
+// phrase de conclusion. La run était déclarée en échec (« aucune réponse
+// textuelle ») : l'assistant recevait un ÉCHEC, concluait que rien n'avait été
+// fait et relançait la mission — sur un travail déjà réalisé. La conclusion
+// d'échec exige désormais la même preuve DISQUE que le watchdog (mission 310) :
+// commit tombé pendant la run ou fichiers modifiés. Fail-safe : sonde
+// indisponible = échec honnête, jamais une réussite inventée.
+describe("fin de tour silencieuse — preuve disque avant de conclure à l'échec", () => {
+  const PROJECT = "projetSilence";
+  const flushAsync = async () => {
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+  };
+  const ev = (agentId, type, event = {}) => ({
+    payload: { project: PROJECT, agent_id: agentId, event: { type, ...event } },
+  });
+
+  /**
+   * Installe les commandes Tauri simulées du tour d'agent.
+   * @param {object|Error} gitStatus - état renvoyé par `git_status_project`
+   *   (une Error simule une sonde indisponible).
+   */
+  const installMock = (gitStatus) =>
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agents") return { agents: [] };
+      if (cmd === "git_status_project") {
+        if (gitStatus instanceof Error) throw gitStatus;
+        return gitStatus;
+      }
+      if (cmd === "file_exists") return true;
+      return undefined;
+    });
+
+  /**
+   * Joue un tour d'agent SANS aucun texte final et capture le rapport émis par
+   * le bus (`done` / `error` — canaux par lesquels l'assistant est prévenu).
+   * @param {object|Error} gitStatus - état Git simulé pendant la run
+   * @returns {Promise<{ctx: object, callbacks: {done: Function, error: Function}}>}
+   */
+  const silentTurn = async (gitStatus) => {
+    const callbacks = { done: vi.fn(), error: vi.fn() };
+    installMock(gitStatus);
+    await initAgentsBus(callbacks);
+    const ctx = beginRun(PROJECT);
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = PROJECT;
+    handleAgentEvent(ev("codeur", "agent_start"));
+    handleAgentEvent(ev("codeur", "agent_end", { willRetry: false }));
+    await flushAsync();
+    return { ctx, callbacks };
+  };
+
+  afterEach(() => {
+    endRun(PROJECT);
+    vi.mocked(invoke).mockReset();
+    vi.mocked(invoke).mockImplementation(async (cmd) => (cmd === "file_exists" ? true : undefined));
+  });
+
+  it("travail PRÉSENT sur le disque → done (la mission n'est pas un échec)", async () => {
+    const { callbacks } = await silentTurn({ is_repo: true, head_ts: 0, pending: 2 });
+    expect(callbacks.error).not.toHaveBeenCalled();
+    expect(callbacks.done).toHaveBeenCalledTimes(1);
+    const payload = callbacks.done.mock.calls[0][0];
+    expect(payload.agentId).toBe("codeur");
+    expect(payload.text).toMatch(/disque/);
+    expect(payload.text).toMatch(/PAS un échec/);
+    // La run est bien libérée (aucun verrou fantôme laissé derrière).
+    expect(getRunState(PROJECT).state).not.toBe("running");
+  });
+
+  it("commit tombé PENDANT la run → done même sans texte final", async () => {
+    const callbacks = { done: vi.fn(), error: vi.fn() };
+    // Head horodaté maintenant : il prouve le travail de CETTE run.
+    const now = { is_repo: true, head_ts: Math.round(Date.now() / 1000), pending: 0 };
+    installMock(now);
+    await initAgentsBus(callbacks);
+    const ctx = beginRun(PROJECT);
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = PROJECT;
+    handleAgentEvent(ev("codeur", "agent_start"));
+    handleAgentEvent(ev("codeur", "agent_end", { willRetry: false }));
+    await flushAsync();
+    expect(callbacks.error).not.toHaveBeenCalled();
+    expect(callbacks.done).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUCUN travail sur le disque → échec honnête conservé (comportement historique)", async () => {
+    const { callbacks } = await silentTurn({ is_repo: true, head_ts: 0, pending: 0 });
+    expect(callbacks.done).not.toHaveBeenCalled();
+    expect(callbacks.error).toHaveBeenCalledTimes(1);
+    const message = callbacks.error.mock.calls[0][0].message;
+    expect(message).toMatch(/aucune réponse textuelle/);
+    expect(message).toMatch(/aucun travail n'a été détecté/);
+  });
+
+  it("sonde git indisponible → échec honnête (fail-safe : aucune réussite inventée)", async () => {
+    const { callbacks } = await silentTurn(new Error("sonde indisponible"));
+    expect(callbacks.done).not.toHaveBeenCalled();
+    expect(callbacks.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("groupe PARALLÈLE : la part sans texte n'est pas vide si le disque prouve le travail", async () => {
+    installMock({ is_repo: true, head_ts: 0, pending: 1 });
+    await initAgentsBus({ done: vi.fn(), error: vi.fn() });
+    const ctx = beginRun(PROJECT);
+    const onComplete = vi.fn(async () => {});
+    ctx.parallelGroup = { assignments: [{ agentId: "codeur" }], results: {}, pending: 1, onComplete };
+    ctx.activeAgents.add("codeur");
+    ctx.agentProject["codeur"] = PROJECT;
+    handleAgentEvent(ev("codeur", "agent_start"));
+    handleAgentEvent(ev("codeur", "agent_end", { willRetry: false }));
+    await flushAsync();
+    // La part agrégée porte la PREUVE disque au lieu de « (aucun texte) ».
+    expect(ctx.parallelGroup).toBe(null); // groupe consommé (pending = 0)
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    const results = onComplete.mock.calls[0][0];
+    expect(results.codeur.text).toMatch(/disque/);
+    expect(results.codeur.text).toMatch(/PAS un échec/);
+  });
+});
+
+// Cause racine de la relance destructrice (mission « l'assistant relance des
+// agents qui travaillent ») : AVANT de démarrer une mission, tous les chemins de
+// LANCEMENT libéraient un éventuel verrou de run bloqué sans condition de durée.
+// Une run fraîche (agent déclaré actif, session pas encore enregistrée côté
+// Rust → aucune donnée de sonde) était donc conclue « fantôme » et FERMÉE, puis
+// la nouvelle mission démarrait par-dessus : l'agent qui travaillait repartait
+// de zéro. Chaque chemin de lancement doit désormais passer le plancher
+// `RUN_LAUNCH_MIN_STUCK_IDLE_MS` (demande mise EN FILE tant que la run est
+// récente, au lieu d'un kill). Échec du test = un nouveau chemin de lancement a
+// été ajouté sans plancher.
+describe("chemins de LANCEMENT : plancher d'inactivité obligatoire (jamais de kill d'une run récente)", () => {
+  const readSrc = (name) => readFileSync(new URL(`./${name}`, import.meta.url), "utf8");
+  const launchCalls = (src) => (src.match(/releaseStuckRunLock\([^)]*?\{[^}]*requireIdleMs:\s*RUN_LAUNCH_MIN_STUCK_IDLE_MS[^}]*\}/g) || []).length;
+
+  it("le plancher vaut la fenêtre d'activité « récente » du moteur (2 min)", () => {
+    expect(RUN_LAUNCH_MIN_STUCK_IDLE_MS).toBe(2 * 60 * 1000);
+  });
+
+  it("agents-bus : startAgentsRun et startParallelRun passent le plancher", () => {
+    // 2 sites : la run simple et le groupe parallèle.
+    expect(launchCalls(readSrc("agents-bus.js"))).toBe(2);
+  });
+
+  it("super-agent : les 3 chemins de lancement de l'assistant passent le plancher", () => {
+    // run_agents (launchOrQueue), rejeu de file de l'assistant, run_assistant_agents.
+    expect(launchCalls(readSrc("super-agent.js"))).toBe(3);
+  });
+
+  it("les seuls appels SANS plancher sont le watchdog et les arrêts explicites", () => {
+    // Trois sites légitimes, aucun n'est un lancement :
+    //   1. le watchdog (super-agent) : il revérifie l'activité à chaque tour et
+    //      ne coupe que ce qu'il juge mort ;
+    //   2. les deux chemins d'ARRÊT explicite (arrêt d'agent / file d'assistant) :
+    //      l'utilisateur a demandé l'arrêt, ou la run est finie par construction.
+    const bare = (src) => (src.match(/releaseStuckRunLock\([^),]*\)\s*;/g) || []).length;
+    expect(bare(readSrc("agents-bus.js")), "agents-bus : tous les appels portent le plancher").toBe(0);
+    expect(bare(readSrc("super-agent.js")), "super-agent : watchdog + 2 chemins d'arrêt").toBe(3);
+  });
 });
