@@ -214,37 +214,65 @@ pub(crate) fn do_start_agent_process(state: &AppState, app: &AppHandle, agent_id
 /// l'assistant) — optionnel, seulement appliqué au spawn (une session vivante
 /// reprise ne change pas de serveur).
 #[tauri::command]
-pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool, mcp_server: Option<String>) -> Result<(), String> {
+pub async fn start_agent_process(state: State<'_, AppState>, app: AppHandle, agent_id: String, cwd: String, pi_path: String, no_session: bool, mcp_server: Option<String>) -> Result<Option<u64>, String> {
     let agent_service = state.inner().agent_service.clone();
     let app = app.clone();
+    let (service, project, agent) = (agent_service.clone(), cwd.clone(), agent_id.clone());
     tauri::async_runtime::spawn_blocking(move || {
-        agent_service
+        service
             .start(
                 &app,
-                &cwd,
-                &agent_id,
+                &project,
+                &agent,
                 &pi_path,
                 no_session,
                 crate::agent_service::SpawnMode::AgentProcess,
                 mcp_server,
             )
-            .map(|_| ())
+            // uid de la session : l'appelant (bus JS) le conserve pour que les
+            // arrêts/abandons automatiques ne puissent viser QUE cette session.
+            .map(|_| agent_service.session_uid(&cwd, &agent_id))
     })
     .await
     .map_err(|e| format!("Erreur interne (join) start_agent_process: {}", e))?
 }
 
+/// Arrêt d'un agent sans garde de propriété (comportement historique). Conservé
+/// pour les chemins qui ne connaissent pas d'uid ; les appels automatiques du
+/// bus JS passent par `do_stop_agent_process_owned`.
+#[allow(dead_code)]
 pub(crate) fn do_stop_agent_process(state: &AppState, agent_id: String, project: Option<String>) {
-    let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
-    if !project.is_empty() {
-        let _ = state.agent_service.stop(&project, &agent_id);
+    let _ = do_stop_agent_process_owned(state, agent_id, project, None);
+}
+
+/// Arrêt d'un agent avec **garde de propriété** : `expected_uid` est l'uid de
+/// session renvoyé par `start_agent_process`. Si la session en place a un autre
+/// uid, l'arrêt est REFUSÉ (une autre exécution a relancé ce couple
+/// (projet, agent) entre-temps). Sans cette garde, un minuteur de run périmé
+/// tuait la session neuve du même agent (« l'agent commence et s'arrête »).
+pub(crate) fn do_stop_agent_process_owned(
+    state: &AppState,
+    agent_id: String,
+    project: Option<String>,
+    expected_uid: Option<u64>,
+) -> Result<(), String> {
+    let project = project
+        .or_else(|| state.project_path.lock().unwrap().clone())
+        .unwrap_or_default();
+    if project.is_empty() {
+        return Ok(());
     }
+    state.agent_service.stop_owned(&project, &agent_id, expected_uid)
 }
 
 #[tauri::command]
-pub fn stop_agent_process(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
-    do_stop_agent_process(state.inner(), agent_id, project);
-    Ok(())
+pub fn stop_agent_process(
+    state: State<AppState>,
+    agent_id: String,
+    project: Option<String>,
+    expected_uid: Option<u64>,
+) -> Result<(), String> {
+    do_stop_agent_process_owned(state.inner(), agent_id, project, expected_uid)
 }
 
 pub(crate) fn do_stop_all_agent_processes(state: &AppState) {
@@ -496,14 +524,26 @@ pub fn get_agent_process_thinking_levels(state: State<AppState>, agent_id: Strin
     Ok(levels)
 }
 
-pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>) -> Result<(), String> {
+pub(crate) fn do_abort_agent_process(state: &AppState, agent_id: String, project: Option<String>, expected_uid: Option<u64>) -> Result<(), String> {
     let project = project.or_else(|| state.project_path.lock().unwrap().clone()).unwrap_or_default();
-    state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}))
+    // Garde de propriété AVANT l'envoi : un abandon périmé (minuteur d'une run
+    // précédente, moniteur oublié) ne doit pas avorter la session neuve du même
+    // couple (projet, agent). L'uid vient de `start_agent_process`.
+    state.agent_service.check_session_ownership(&project, &agent_id, expected_uid)?;
+    let res = state.agent_service.send(&project, &agent_id, serde_json::json!({"type": "abort"}));
+    state.agent_service.trace_session_op(
+        if res.is_ok() { "abort" } else { "abort-echec" },
+        &project,
+        &agent_id,
+        expected_uid,
+        state.agent_service.session_uid(&project, &agent_id),
+    );
+    res
 }
 
 #[tauri::command]
-pub fn abort_agent_process(state: State<AppState>, agent_id: String, project: Option<String>) -> Result<(), String> {
-    do_abort_agent_process(state.inner(), agent_id, project)
+pub fn abort_agent_process(state: State<AppState>, agent_id: String, project: Option<String>, expected_uid: Option<u64>) -> Result<(), String> {
+    do_abort_agent_process(state.inner(), agent_id, project, expected_uid)
 }
 
 /// Envoie une commande arbitraire (ex: extension_ui_response) au processus pi d'un agent.

@@ -213,6 +213,41 @@ pub struct AgentService {
     // (`send` / `send_sync` / `send_sync_timeout`), lu par `list_agent_sessions`.
     // Purement informatif : n'influence aucune décision du service.
     last_prompts: Mutex<HashMap<String, String>>,
+    // Identité de session (uid) : compteur monotone attribué à chaque NOUVEAU
+    // spawn, clé composite identique à `sessions`. Sert aux commandes d'ARRÊT et
+    // d'ABANDON : l'appelant fournit l'uid de la session qu'il a lui-même
+    // lancée ; si la session en place porte un autre uid (relance du même
+    // couple (projet, agent) par un autre chemin), la commande est REFUSÉE.
+    // Sans cette garde, un minuteur ou un moniteur périmé d'une run précédente
+    // pouvait avorter la session flambant neuve du même agent — symptôme
+    // « l'agent commence et s'arrête aussitôt ».
+    session_uids: Mutex<HashMap<String, u64>>,
+}
+
+/// Séquence des identités de session (uid). Monotone sur toute la vie du
+/// processus : un uid n'est jamais réutilisé, même après des milliers de spawns.
+static SESSION_UID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Attribue un nouvel uid de session.
+fn next_session_uid() -> u64 {
+    use std::sync::atomic::Ordering;
+    SESSION_UID_SEQ.fetch_add(1, Ordering::SeqCst)
+}
+
+/// Décision PURE de propriété de session (testable sans AppHandle).
+///
+/// - `expected = None` : aucun contrôle (comportement historique : UI « arrêter »,
+///   fermeture de projet, arrêt de l'application).
+/// - session ABSENTE (`current = None`) : toujours accepté — il n'y a rien à
+///   arrêter, et refuser rendrait les commandes d'arrêt fragiles.
+/// - session PRÉSENTE : acceptée seulement si son uid est exactement celui
+///   attendu ; sinon une autre exécution a relancé le couple (projet, agent) et
+///   la commande doit être refusée (ne jamais tuer le travail d'un autre).
+pub fn session_ownership_allows(expected: Option<u64>, current: Option<u64>) -> bool {
+    match expected {
+        None => true,
+        Some(uid) => current.is_none() || current == Some(uid),
+    }
 }
 
 /// P0 (issue #84) diagnostic d'échec rapide du super-agent : si `.pi/extensions/`
@@ -294,6 +329,88 @@ impl AgentService {
             superagent_ext: Mutex::new(None),
             anomaly_map: Mutex::new(None),
             last_prompts: Mutex::new(HashMap::new()),
+            session_uids: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// uid de la session courante d'un couple (projet, agent), s'il y en a une.
+    pub fn session_uid(&self, project: &str, agent_id: &str) -> Option<u64> {
+        self.session_uids
+            .lock()
+            .unwrap()
+            .get(&Self::session_key(project, agent_id))
+            .copied()
+    }
+
+    /// Garde de PROPRIÉTÉ : un appelant ne peut arrêter (ou avorter) que la
+    /// session qu'il a lui-même lancée, identifiée par son uid.
+    ///
+    /// `expected` à `None` conserve le comportement historique (aucun contrôle),
+    /// pour les chemins qui ne connaissent pas d'uid (UI « arrêter », arrêt de
+    /// projet, fermeture de l'application).
+    ///
+    /// Une session ABSENTE n'est jamais un conflit (il n'y a rien à arrêter).
+    pub fn check_session_ownership(
+        &self,
+        project: &str,
+        agent_id: &str,
+        expected: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        let current = self.session_uid(project, agent_id);
+        let accepted = session_ownership_allows(expected, current);
+        self.trace_session_op(
+            if accepted { "propriete-ok" } else { "propriete-refusee" },
+            project,
+            agent_id,
+            expected,
+            current,
+        );
+        if !accepted {
+            return Err(format!(
+                "Session remplacée depuis le lancement (uid attendu {:?}, session en place {:?}) : commande refusée pour ne pas arrêter la session d'une autre exécution.",
+                expected, current
+            ));
+        }
+        Ok(current)
+    }
+
+    /// Trace (append) des opérations d'arrêt/abandon dans
+    /// `<app_data_dir>/agent-ops.log` : sans cette trace, une interruption
+    /// d'agent restait invisible (ni journal, ni événement). Rotation simple :
+    /// le fichier est supprimé au-delà de 512 Ko. Fail-open silencieux.
+    pub fn trace_session_op(
+        &self,
+        op: &str,
+        project: &str,
+        agent_id: &str,
+        expected: Option<u64>,
+        current: Option<u64>,
+    ) {
+        let app = self.app.lock().unwrap().clone();
+        let Some(app) = app else { return };
+        let Ok(dir) = app.path().app_data_dir() else { return };
+        let path = dir.join("agent-ops.log");
+        if let Ok(md) = std::fs::metadata(&path) {
+            if md.len() > 512 * 1024 {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        let line = format!(
+            "{} op={} project={} agent={} expected={:?} current={:?}\n",
+            chrono::Utc::now().to_rfc3339(),
+            op,
+            project,
+            agent_id,
+            expected,
+            current
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
         }
     }
 
@@ -967,7 +1084,7 @@ impl AgentService {
         {
             let mut sessions = self.sessions.lock().unwrap();
             sessions.insert(
-                key,
+                key.clone(),
                 SessionEntry {
                     session,
                     project: project.to_string(),
@@ -976,6 +1093,11 @@ impl AgentService {
                 },
             );
         }
+        // Identité de la session qui vient de naître : tout arrêt/abandon
+        // ultérieur devra la nommer par cet uid (voir `check_session_ownership`).
+        let uid = next_session_uid();
+        self.session_uids.lock().unwrap().insert(key, uid);
+        self.trace_session_op("spawn", project, agent_id, None, Some(uid));
         if mode == SpawnMode::MainSession {
             *self.active.lock().unwrap() = Some(agent_id.to_string());
         }
@@ -1163,8 +1285,28 @@ impl AgentService {
     }
 
     /// Arrête la session d'un agent (état Stopped) et tue le processus pi.
+    ///
+    /// Sans uid : aucun contrôle de propriété (comportement historique — UI
+    /// « arrêter », fermeture de projet, arrêt de l'application).
     pub fn stop(&self, project: &str, agent_id: &str) -> Result<(), String> {
+        self.stop_owned(project, agent_id, None)
+    }
+
+    /// Arrête la session d'un agent **si elle est bien celle attendue**.
+    ///
+    /// `expected_uid` protège les arrêts AUTOMATIQUES (minuteur de run, boucle,
+    /// moniteur, relance) d'une session remplacée entre-temps : sans cette
+    /// garde, un minuteur périmé tuait la session neuve du même couple
+    /// (projet, agent), ce qui se voyait comme « l'agent commence et s'arrête ».
+    pub fn stop_owned(
+        &self,
+        project: &str,
+        agent_id: &str,
+        expected_uid: Option<u64>,
+    ) -> Result<(), String> {
         let key = Self::session_key(project, agent_id);
+        self.check_session_ownership(project, agent_id, expected_uid)?;
+        self.session_uids.lock().unwrap().remove(&key);
         let mut stopped_mode: Option<SpawnMode> = None;
         {
             let mut sessions = self.sessions.lock().unwrap();
@@ -1507,6 +1649,12 @@ impl AgentService {
             }
             keys
         };
+        {
+            let mut uids = self.session_uids.lock().unwrap();
+            for k in &keys {
+                uids.remove(k);
+            }
+        }
         // Réserve R2 : même remise à zéro que `stop` pour chaque couple arrêté.
         // Une session fermée avec son projet n'est plus un travail en cours :
         // sans cette purge, `busy` resterait vrai et un redémarrage de l'agent
@@ -1533,6 +1681,12 @@ impl AgentService {
             }
             keys
         };
+        {
+            let mut uids = self.session_uids.lock().unwrap();
+            for k in &keys {
+                uids.remove(k);
+            }
+        }
         // Réserve R2 : même remise à zéro que `stop` (le projet reste ouvert et
         // les autres agents continuent de tourner → un faux `busy` maintiendrait
         // le verrou d'exclusivité de ce couple).
@@ -1557,6 +1711,7 @@ impl AgentService {
             }
             keys
         };
+        self.session_uids.lock().unwrap().clear();
         *self.active.lock().unwrap() = None;
         // Réserve R2 : même remise à zéro que `stop` pour chaque couple arrêté.
         for k in &keys {
@@ -3488,6 +3643,30 @@ pub fn list_common_skills() -> Vec<CommonSkillInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Garde de propriété de session : un arrêt/abandon automatique ne peut
+    /// viser QUE la session lancée par l'appelant. Sans elle, un minuteur ou un
+    /// moniteur périmé tuait la session neuve du même couple (projet, agent) :
+    /// symptôme « l'agent commence et s'arrête aussitôt ».
+    #[test]
+    fn session_ownership_allows_protege_la_session_relancee() {
+        // Aucune attente : comportement historique, toujours accepté.
+        assert!(session_ownership_allows(None, Some(7)));
+        assert!(session_ownership_allows(None, None));
+        // Session absente : rien à arrêter, on accepte.
+        assert!(session_ownership_allows(Some(7), None));
+        // Même session : accepté.
+        assert!(session_ownership_allows(Some(7), Some(7)));
+        // Session RELANCÉE (autre uid) : refusé.
+        assert!(!session_ownership_allows(Some(7), Some(8)));
+    }
+
+    #[test]
+    fn next_session_uid_est_monotone_et_unique() {
+        let a = next_session_uid();
+        let b = next_session_uid();
+        assert!(b > a, "les uid de session doivent être strictement croissants");
+    }
 
     /// Agent minimal pour les tests de compétences.
     fn sample_agent(id: &str) -> Agent {

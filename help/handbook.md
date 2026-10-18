@@ -1,4 +1,4 @@
-<!-- PILOT-HELP generated=2026-10-17 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,dashboard,vault,anomaly,telegram,laya -->
+<!-- PILOT-HELP generated=2026-10-18 topics=overview,demarrage,raccourcis,theme-parametres,terminal,recherche-outline,edition-lint,aide,dev-mode,pi-update,multi-agents,gds,commands,agent-pi,orchestration,web-remote,dictee-vocale,pdf,context-engine,code-graph,diff-review,project-memory,review,orchestration,session-history,agents,agents-md,multiprojets,interprojets,super-agent,super-agent-session-memory,super-agent-mcp,super-agent-checklist,super-agent-tracabilite,super-agent-temps,super-agent-taches-longues,dashboard,vault,anomaly,telegram,laya -->
 <!-- FICHIER GÉNÉRÉ — ne pas éditer. Source : help/overview.md + spec_*.md (blocs HELP). -->
 
 # Aide Pilot
@@ -1686,6 +1686,13 @@ uniquement un bloc d'instructions dans le prompt système.
   `ok = launched || queued || preparing`, et la branche de mise en file de
   `startRun` renvoie un objet `{queued:true,...}` au lieu du booléen `true`
   (qui était lu comme un objet → tous champs falsy).
+- **Un agent ne s'arrête plus tout seul juste après son lancement** : les
+  arrêts automatiques (inactivité d'une tâche, garde-fou anti-boucle, plafond de
+  tours) ne concernent plus que **la tâche qui les a déclenchés** — ils ne
+  peuvent plus couper l'agent d'une autre mission ou d'un autre projet. Le
+  bouton d'arrêt, lui, arrête toujours tout. Si un agent s'interrompt vraiment,
+  la cause est désormais **écrite dans un journal**
+  (`agent-ops.log`, dossier de données de Pilot).
 - **Bug #81 — Délégation débloquée après arrêt auto de l'agent standard** :
   quand le moniteur d'anomalies **arrête automatiquement** l'agent standard
   (process pi standard figé vivant, `agent-auto-stopped` avec reason dédié

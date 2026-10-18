@@ -362,6 +362,13 @@ function newRunCtx(key, project) {
     // ctx.project dans ce contexte). Utilisé pour router les commandes
     // (abort/command/prompt) vers la bonne session pendant le tour.
     agentProject: {},
+    // Propriété de session : agentId → uid de la session pi lancée par CETTE
+    // run (renvoyé par `start_agent_process`). Les arrêts/abandons automatiques
+    // le transmettent à Rust, qui refuse d'agir si la session en place a un
+    // autre uid (relance du même couple (projet, agent) par un autre chemin).
+    // Sans cette garde, un minuteur périmé ou un moniteur oublié avortait la
+    // session flambant neuve du même agent : « l'agent commence et s'arrête ».
+    sessionUid: {},
     // Bug #9 : horodatage de la dernière activité réelle (événement agent reçu).
     // Utilisé par le watchdog releaseStuckRunLock comme garde de temps : si le
     // verrou est "running" sans activité depuis trop longtemps, on le libère.
@@ -501,9 +508,9 @@ export function endRun(project, generation) {
   }
 }
 
-// Réinitialise tous les contextes de run (utilisé par destroyAgentsBus et
-// stopAgentsRun). stopAgentsRun reste volontairement GLOBAL (l'utilisateur
-// arrête tout) : on nettoie l'ensemble des runs.
+// Réinitialise tous les contextes de run (utilisé par destroyAgentsBus et par
+// stopAgentsRun en portée GLOBALE : bouton « tout arrêter » de l'utilisateur).
+// Les arrêts AUTOMATIQUES passent `runKey` et libèrent leur seule run.
 function clearAllRuns() {
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
@@ -1069,7 +1076,9 @@ function resetTimeout(ctx) {
       title: "Pilot — Agent en timeout",
       body: `⏱️ L'agent ${agentId} est resté inactif (${Math.round(busState.timeoutMs / 1000)} s). La run a été arrêtée automatiquement.`,
     }).catch(() => {});
-    stopAgentsRun({ silent: true });
+    // Portée CIBLÉE : le timeout d'inactivité de CETTE run ne doit jamais
+    // arrêter les agents d'une autre run (autre projet, autre mission).
+    stopAgentsRun({ silent: true, runKey: ctx.runKey });
   }, busState.timeoutMs);
 }
 
@@ -1484,7 +1493,7 @@ function maybeDetectAgentLoop(agentId, ctx) {
     // l'abort qui suit tue le process et le process_exit serait muet sinon.
     ctx.loopAbortReason[agentId] = "boucle d'outils détectée (appels identiques répétés)";
     emit("notify", { agentId, message: `Boucle d'outils détectée pour l'agent ${agentId} (appels identiques répétés). Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
     return;
   }
 
@@ -1502,7 +1511,7 @@ function maybeDetectAgentLoop(agentId, ctx) {
     // Bug : propager la cause réelle (boucle de réflexion) au résultat agrégé.
     ctx.loopAbortReason[agentId] = "boucle de réflexion détectée (texte répété)";
     emit("notify", { agentId, message: `Boucle détectée dans la réflexion de l'agent ${agentId}. Correction automatique…` });
-    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
+    invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
   }
 }
 
@@ -1607,7 +1616,7 @@ export function handleAgentEvent(ev) {
     if (count > maxTurns) {
       console.error("[agents-bus] MAX_PI_TURNS exceeded", agentId, count, "max", maxTurns);
       emit("error", { message: `L'agent ${agentId} a fait ${count} tours pi sans terminer (max ${maxTurns}). Arrêt forcé.` });
-      stopAgentsRun({ silent: true });
+      stopAgentsRun({ silent: true, runKey: ctx.runKey });
       return;
     }
   }
@@ -1743,7 +1752,7 @@ export function handleAgentEvent(ev) {
     console.log("[agents-bus] agent_end turn=" + ctx.turnCount, agentId);
     if (ctx.turnCount > MAX_TURNS) {
       emit("error", { message: `Boucle détectée : ${ctx.turnCount} tours (max ${MAX_TURNS}). Arrêt forcé.` });
-      stopAgentsRun({ silent: true });
+      stopAgentsRun({ silent: true, runKey: ctx.runKey });
       return;
     }
     // Restitution fiable : `agent_end` est un événement PAR RUN BAS NIVEAU —
@@ -2288,9 +2297,31 @@ export function isRunInProgress(project, options) {
   return !canStartMission(nature, runningNatures);
 }
 
+/**
+ * uid de session à exiger pour un arrêt/abandon ciblé (pure).
+ *
+ * Retourne l'uid mémorisé par la run pour cet agent, ou `null` quand la run ne
+ * le connaît pas (chemin historique : Rust applique alors son comportement par
+ * défaut, sans contrôle de propriété). Un uid absent, non numérique ou nul
+ * n'est jamais transmis.
+ * @param {object} ctx - contexte de run
+ * @param {string} agentId
+ * @returns {number|null}
+ */
+export function expectedSessionUid(ctx, agentId) {
+  const uid = ctx && ctx.sessionUid ? ctx.sessionUid[agentId] : null;
+  return typeof uid === "number" && uid > 0 ? uid : null;
+}
+
 export async function stopAgentsRun(options = {}) {
-  // stopAgentsRun reste volontairement GLOBAL (l'utilisateur arrête tout).
+  // Portée : par défaut GLOBALE (bouton « tout arrêter »). Les arrêts
+  // AUTOMATIQUES (timeout d'inactivité, boucle, plafond de tours) passent la clé
+  // de LEUR run : ils ne doivent jamais arrêter les agents d'une autre run
+  // (autre projet, autre mission), sinon une run voisine qui se termine coupe un
+  // agent qui vient de démarrer — « l'agent commence et s'arrête ».
+  const onlyKey = typeof options.runKey === "string" && options.runKey ? options.runKey : null;
   const runningKeys = Object.keys(busState.runs).filter((k) => {
+    if (onlyKey && k !== onlyKey) return false;
     const s = busState.runs[k].runState;
     return s === "running" || s === "stopping";
   });
@@ -2299,32 +2330,48 @@ export async function stopAgentsRun(options = {}) {
   // remise à zéro du lecteur de son différé pour que les surfaces restées
   // « actives » ne retardent pas le son de la prochaine mission.
   resetDeferredSound();
+  const stopped = [];
   for (const key of runningKeys) {
     const ctx = busState.runs[key];
+    if (!ctx) continue;
     ctx.runState = "stopping";
     // Livraison du rapport : chaque mission arrêtée reçoit SON arrêt (et non
     // celui d'une autre mission, comme avec l'ancien état global écrasé).
     settleMission(ctx.runKey, "stop", {});
     // H2 V2 parallèle : abort tous les agents actifs (pas seulement le dernier).
     for (const agentId of ctx.activeAgents) {
-      invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null }).catch(() => {});
+      invoke("abort_agent_process", { agentId, project: ctx.agentProject[agentId] || ctx.project || null, expectedUid: expectedSessionUid(ctx, agentId) }).catch(() => {});
     }
+    stopped.push({ project: ctx.project || key, generation: ctx.generation });
   }
   // T6-fix (fuite 1) : purger les réservations de tous les projets réservés
   // AVANT de vider les runs. En état "stopping", handleAgentEvent ignore les
   // événements agent_end (runState !== "running") → finishAgentTurn n'est
   // jamais appelé → sans cette purge, .pilot/reservations.json resterait sur
   // disque et bloquerait silencieusement les écritures des futurs agents.
-  // stopAgentsRun étant global (toutes les runs sont vidées), purger TOUTES
-  // les réservations connues est sûr et couvre aussi un codeur non actif.
-  await clearAllReservations();
+  // Portée GLOBALE : toutes les runs sont vidées, on purge donc TOUTES les
+  // réservations connues (couvre aussi un codeur non actif). Portée CIBLÉE : on
+  // ne purge que les projets réellement arrêtés, pour ne pas lever les
+  // réservations d'une autre run encore en cours.
+  if (onlyKey) {
+    for (const st of stopped) {
+      if (st.project) await deleteReservations(st.project).catch(() => {});
+    }
+  } else {
+    await clearAllReservations();
+  }
   // `silent: true` pour les arrêts automatiques (timeout, boucle, trop de tours) :
   // le message d'erreur a déjà été émis via "error". Le message « Run arrêtée par
   // l'utilisateur. » ne doit apparaître que pour un arrêt manuel (issue #10).
   if (!options.silent) {
     emit("stop", {});
   }
-  clearAllRuns();
+  if (onlyKey) {
+    // Libération de la SEULE run arrêtée (les autres runs gardent leur verrou).
+    for (const st of stopped) endRun(st.project, st.generation);
+  } else {
+    clearAllRuns();
+  }
 }
 
 export async function stopAllAgentProcesses() {
@@ -2539,13 +2586,17 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
       if (freshContext) {
         await forceStaleAgentProcessRestartIfNeeded(agent, cwd);
       }
-      await invoke("start_agent_process", {
+      const spawnUid = await invoke("start_agent_process", {
         agentId: agent.id,
         cwd,
         piPath,
         noSession,
         mcpServer: mcpServer || null,
       });
+      // Propriété de session : on retient l'uid renvoyé par Rust pour que les
+      // arrêts/abandons AUTOMATIQUES de ce tour ne puissent viser que CETTE
+      // session (jamais celle d'une relance ultérieure du même couple).
+      ctx.sessionUid[agent.id] = typeof spawnUid === "number" ? spawnUid : null;
     }
     spawned = true;
 
@@ -2586,7 +2637,11 @@ async function runAgentTurn(agent, brief, projectContext = "", project = null, o
     // Uniquement pour les agents de projet (run_agents) : les agents d'assistant
     // n'ont pas de commande stop dédiée.
     if (spawned && !isAssistant) {
-      await invoke("stop_agent_process", { agentId: agent.id, project: cwd }).catch(() => {});
+      await invoke("stop_agent_process", {
+        agentId: agent.id,
+        project: cwd,
+        expectedUid: expectedSessionUid(ctx, agent.id),
+      }).catch(() => {});
     }
     failAgentTurn(agent.id, String(err), ctx);
   }

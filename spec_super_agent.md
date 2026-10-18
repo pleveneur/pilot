@@ -597,6 +597,13 @@ uniquement un bloc d'instructions dans le prompt système.
   `ok = launched || queued || preparing`, et la branche de mise en file de
   `startRun` renvoie un objet `{queued:true,...}` au lieu du booléen `true`
   (qui était lu comme un objet → tous champs falsy).
+- **Un agent ne s'arrête plus tout seul juste après son lancement** : les
+  arrêts automatiques (inactivité d'une tâche, garde-fou anti-boucle, plafond de
+  tours) ne concernent plus que **la tâche qui les a déclenchés** — ils ne
+  peuvent plus couper l'agent d'une autre mission ou d'un autre projet. Le
+  bouton d'arrêt, lui, arrête toujours tout. Si un agent s'interrompt vraiment,
+  la cause est désormais **écrite dans un journal**
+  (`agent-ops.log`, dossier de données de Pilot).
 - **Bug #81 — Délégation débloquée après arrêt auto de l'agent standard** :
   quand le moniteur d'anomalies **arrête automatiquement** l'agent standard
   (process pi standard figé vivant, `agent-auto-stopped` avec reason dédié
@@ -1041,6 +1048,43 @@ projets/tâches et sa configuration) pour la déplacer d'un ordinateur à l'autr
 <!-- /HELP:super-agent-data-care -->
 
 <!-- /HELP:super-agent -->
+
+---
+
+## Technique — arrêts d'agents CIBLÉS et propriété de session
+
+Correctif du symptôme « l'agent commence et s'arrête aussitôt » (un agent lancé
+par l'Assistant était avorté quelques secondes après son démarrage).
+
+- **Portée des arrêts** : `stopAgentsRun({ runKey })` (agents-bus.js) limite un
+  arrêt automatique à **sa propre run** (timeout d'inactivité, plafond de tours
+  par agent, plafond de tours de run, détection de boucle). Auparavant l'appel
+  était global : la fin ou l'expiration d'une run abortait **tous** les
+  `activeAgents` de **toutes** les runs du processus. Les réservations de
+  fichiers (`.pilot/reservations.json`) ne sont purgées que pour les projets
+  réellement arrêtés ; la purge totale (`clearAllReservations`) reste le
+  propre du bouton « tout arrêter » (portée globale conservée).
+- **Propriété de session (uid)** : `AgentService` attribue un uid monotone à
+  chaque `start` (map `session_uids`, clé composite (projet, agent)) ;
+  `start_agent_process` le renvoie. Les abandons/arrêts automatiques passent
+  `expectedUid` (`abort_agent_process`, `stop_agent_process`) ; Rust refuse la
+  commande si la session en place porte un autre uid (`stop_owned`,
+  `check_session_ownership`, décision pure `session_ownership_allows`). Sans
+  uid, comportement historique inchangé (UI, fermeture de projet, arrêt).
+  Côté JS : `expectedSessionUid(ctx, agentId)` (agents-bus.js).
+- **Traçabilité** : chaque spawn/abandon/refus est ajouté à
+  `<app_data_dir>/agent-ops.log` (rotation à 512 Ko, fail-open) — une
+  interruption d'agent n'est plus invisible, avec l'uid attendu et l'uid réel.
+- **Outils de l'Assistant (vérité sur l'asynchronisme)** : `run_agents` et
+  `run_assistant_agents` ne disent plus « bloque jusqu'à la fin » (faux : ils
+  rendent la main immédiatement) et joignent `LAUNCH_FOLLOW_UP` (ne pas
+  attendre, ne pas surveiller, ne pas relancer, ne pas arrêter). `stop_agent`
+  ne renvoie plus vers `list_agent_sessions` (outil banni des lois de travail) ;
+  `list_agent_sessions` est documenté comme **exceptionnel**, jamais pour
+  surveiller, et `state: "parked"` n'y vaut pas « arrêté ».
+- **Tests** : `src/js/agents-bus-stop-scope.test.js` (portée ciblée vs globale,
+  uid transmis, réservations) ; `agent_service.rs` (`session_ownership_allows`,
+  monotonie des uid).
 
 ---
 

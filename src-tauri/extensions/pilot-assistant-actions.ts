@@ -59,6 +59,16 @@ const GIT_LOG_SENTINEL = "PILOT_ASSISTANT_GIT_LOG::";
 // lieu de bloquer indéfiniment.
 const PILOT_UI_OPTS = { timeout: 120000 };
 
+// Consigne de suite jointe à l'accusé de lancement de run_agents /
+// run_assistant_agents. Le lancement est ASYNCHRONE (Pilot rend la main
+// immédiatement, l'agent travaille en arrière-plan et le rapport est déposé
+// plus tard dans la conversation de l'assistant). Sans cette phrase, le modèle
+// relançait la même délégation, ou arrêtait l'agent qu'il venait de lancer,
+// parce que la description de l'outil laissait croire à une attente bloquante :
+// symptôme « l'agent commence et s'arrête aussitôt ».
+const LAUNCH_FOLLOW_UP =
+  "Rappel Pilot : ce lancement est ASYNCHRONE. Si `ok` vaut true (launched / queued / preparing), la tâche est en cours en arrière-plan et tu n'as RIEN à attendre : ne surveille pas l'agent, ne le relance pas, ne l'arrête pas, et n'affiche pas d'état « bloqué ». Termine ton tour ; le rapport (ou l'échec) te sera transmis automatiquement. Si `ok` vaut false, rien n'a démarré : lis `error`, préviens l'utilisateur, et ne réessaie pas la même demande en boucle.";
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "open_project",
@@ -147,10 +157,12 @@ export default function (pi: ExtensionAPI) {
     name: "run_agents",
     label: "Run Agents",
     description:
-      "Choisir quels agents disponibles utiliser et lancer une tâche sur eux. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés pour obtenir ce que tu veux, et tu leur confies une tâche. Pilot les lance et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail sur un projet via les agents du registre. Bloque jusqu'à ce que les agents aient terminé.",
-    promptSnippet: "run_agents: sélectionner des agents et lancer une tâche sur eux",
+      "Choisir quels agents disponibles utiliser et lancer une tâche sur eux. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés pour obtenir ce que tu veux, et tu leur confies une tâche. Le lancement est ASYNCHRONE : l'outil te rend la main IMMÉDIATEMENT avec un accusé (`launched` / `queued` / `preparing` + `error`). Le travail continue en arrière-plan et son résultat (rapport ou échec) t'est transmis automatiquement plus tard, déposé dans ta conversation. N'attends pas, ne surveille pas, ne relance pas et n'arrête pas l'agent : termine ton tour et laisse-le travailler.",
+    promptSnippet: "run_agents: sélectionner des agents et lancer une tâche sur eux (asynchrone : ne pas attendre)",
     promptGuidelines: [
       "Use run_agents when you need to execute work on a project through the registered agents. Select the agent ids that best fit the task (e.g. codeur, testeur, reviewer, or a custom agent you created).",
+      "The launch is ASYNCHRONOUS: the tool returns immediately and the agent works in the background. Do NOT wait for it, do NOT poll its state, do NOT relaunch the same task, and do NOT stop the agent after launching — the result (report or failure) is delivered to you automatically later. Answer the user and end your turn.",
+      "A single launch per task is enough. Never relaunch the same delegation, and never use stop_agent on an agent you have just launched: stopping the agent kills its work.",
       "Provide a clear, atomic task description.",
       "Prefer selecting the most appropriate agents rather than delegating everything to the standard coder. You are the coordinator: you choose the team.",
       "If no suitable agent exists, create one first with create_agent, then run_agents.",
@@ -169,7 +181,9 @@ export default function (pi: ExtensionAPI) {
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result + "
+
+" + LAUNCH_FOLLOW_UP }] };
     },
   });
 
@@ -177,7 +191,7 @@ export default function (pi: ExtensionAPI) {
     name: "run_assistant_agents",
     label: "Run Assistant Agents",
     description:
-      "Lancer une tâche sur des agents d'assistant (agents SANS rattachement à un projet), pour un travail qui concerne l'assistant lui-même (recherche, analyse, tâches internes de coordination) plutôt qu'un projet. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés et tu leur confies une tâche. Pilot les lance dans l'espace réservé ~/.pilot/assistant/ (pas de contexte de projet injecté) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail hors de tout projet. Bloque jusqu'à ce que les agents aient terminé.",
+      "Lancer une tâche sur des agents d'assistant (agents SANS rattachement à un projet), pour un travail qui concerne l'assistant lui-même (recherche, analyse, tâches internes de coordination) plutôt qu'un projet. Tu sélectionnes les agents (par leur id) qui te semblent les plus adaptés et tu leur confies une tâche. Pilot les lance dans l'espace réservé ~/.pilot/assistant/ (pas de contexte de projet injecté) et te renvoie le résultat agrégé. À utiliser quand tu as besoin d'exécuter du travail hors de tout projet. Le lancement est ASYNCHRONE : l'outil rend la main immédiatement et le résultat t'est transmis plus tard, sans que tu aies à attendre ni à relancer.",
     promptSnippet: "run_assistant_agents: sélectionner des agents d'assistant (sans projet) et lancer une tâche",
     promptGuidelines: [
       "Use run_assistant_agents when you need to execute work that is NOT tied to a specific project: research, analysis, internal coordination tasks for the assistant itself. The agents run in the reserved assistant workspace (~/.pilot/assistant/), without any project context.",
@@ -197,7 +211,9 @@ export default function (pi: ExtensionAPI) {
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
-      return { content: [{ type: "text", text: result }] };
+      return { content: [{ type: "text", text: result + "
+
+" + LAUNCH_FOLLOW_UP }] };
     },
   });
 
@@ -299,12 +315,13 @@ export default function (pi: ExtensionAPI) {
     name: "stop_agent",
     label: "Stop Agent",
     description:
-      "Arrêter immédiatement un agent (coupe la session en cours, qu'elle soit visible, en arrière-plan / « agent invisible », ou un agent secondaire/spécialisé/spécifique lancé via run_agents). Par défaut, arrête l'agent standard du projet actif. Si vous fournissez `agentId`, arrête précisément cet agent (standard, spécialisé, secondaire ou spécifique créé à la volée). Pour connaître l'`agentId` exact d'un agent secondaire à arrêter, appelez d'abord `list_agent_sessions` (il retourne la liste des sessions avec leur `agent`/`agentId` et `project`). À utiliser quand l'utilisateur demande d'arrêter le travail en cours, ou quand vous détectez qu'un agent s'égare ou reste bloqué en fin de run et qu'il faut l'interrompre. Bloque jusqu'à ce que Pilot ait arrêté l'agent.",
+      "Arrêter immédiatement un agent (coupe la session en cours, qu'elle soit visible, en arrière-plan / « agent invisible », ou un agent secondaire/spécialisé/spécifique lancé via run_agents). Par défaut, arrête l'agent standard du projet actif. Si vous fournissez `agentId`, arrête précisément cet agent (standard, spécialisé, secondaire ou spécifique créé à la volée) — l'identifiant est celui que vous avez vous-même utilisé dans run_agents (registre des agents), il n'y a rien à rechercher. À utiliser UNIQUEMENT quand l'utilisateur demande explicitement d'arrêter le travail en cours. Ne jamais arrêter un agent que vous venez de lancer pour une tâche : cela détruit son travail en cours.",
     promptSnippet: "stop_agent: arrêter un agent (standard par défaut, ou un agentId cible)",
     promptGuidelines: [
       "Use stop_agent when the user asks to stop the current work, or when you detect an agent is going off track or is stuck at the end of a run and must be interrupted. This cuts the running agent session immediately (visible tab, invisible background agent, or a secondary/specialized/custom agent launched via run_agents).",
       "If you know the id of the specific agent to stop (e.g. a tester, a codeur-plh, or a custom agent you created and launched via run_agents), pass it in `agentId`. If you omit `agentId`, the standard agent of the active project is stopped.",
-      "To find the exact `agentId` of a secondary agent to stop, call `list_agent_sessions` first: it returns the list of all agent sessions with their `agent`/`agentId` and `project`. Then pass that `agentId` (and optionally `project`) to stop_agent to target precisely that secondary agent.",
+      "The `agentId` is the registry id you already know (the one you passed to run_agents). Never look it up by listing sessions: that freezes the assistant session and blocks the work queue.",
+      "Never call stop_agent right after launching an agent: the launch is asynchronous by design, and stopping it kills the work it just started.",
     ],
     parameters: Type.Object({
       agentId: Type.Optional(Type.String({ description: "Identifiant de l'agent à arrêter. Si omis, arrête l'agent standard du projet actif." })),
