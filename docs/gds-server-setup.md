@@ -508,12 +508,14 @@ utilise déjà 443. Publiez alors le serveur GDS sur `--https=8443` et non 443.
 
 Le conteneur ouvre l'accès direct à la base **par mot de passe**
 (`scram-sha-256`, jamais `trust`) aux réseaux listés dans
-`GDS_PG_ALLOWED_NETWORKS` (défaut `0.0.0.0/0` : « tout ce qui atteint le port
-publié »). La restriction **réelle** reste la **publication** des ports
-(`GDS_DB_BIND_ADDR`, §3.3) : ne l'élargissez jamais au-delà du réseau privé.
-Sous Linux, où PostgreSQL voit l'adresse réelle du client, vous pouvez
-restreindre davantage, ex. `GDS_PG_ALLOWED_NETWORKS=100.64.0.0/10`
-(la plage des adresses Tailscale).
+`GDS_PG_ALLOWED_NETWORKS`. Le défaut est **restrictif** (`172.16.0.0/12`, la
+plage des réseaux Docker) : la base n'est joignable que depuis la pile
+elle-même, jamais depuis « tout ce qui atteint le port publié ». Pour
+synchroniser en direct depuis une autre machine du LAN ou du tailnet, listez
+explicitement les plages, ex. `GDS_PG_ALLOWED_NETWORKS=172.16.0.0/12,100.64.0.0/10`
+(la plage des adresses Tailscale) — et ne l'élargissez jamais au-delà du réseau
+privé. La restriction **réelle** reste de toute façon la **publication** des
+ports (`GDS_DB_BIND_ADDR`, §3.3).
 
 ---
 

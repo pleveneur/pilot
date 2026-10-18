@@ -129,13 +129,15 @@ arrive par le port publié est vue comme venant de la **passerelle du réseau
 Docker** (`172.18.0.1`), jamais de `127.0.0.1` : sans ouverture explicite, elle
 est refusée (`no pg_hba.conf entry for host …`). Le conteneur ouvre donc l'accès
 **par mot de passe** (méthode `scram-sha-256`, jamais `trust`) aux réseaux
-listés dans `GDS_PG_ALLOWED_NETWORKS` — `0.0.0.0/0` par défaut, c'est-à-dire
-« tout ce qui atteint le port publié ».
+listés dans `GDS_PG_ALLOWED_NETWORKS`. Le défaut est **restrictif**
+(`172.16.0.0/12`, la plage des réseaux Docker) : la base n'est joignable que
+depuis la pile elle-même, jamais depuis « tout ce qui atteint le port publié ».
 
-La restriction **réelle** reste la publication des ports (`GDS_BIND_ADDR`, cf.
-§5) ; pour restreindre davantage, donner une liste de plages CIDR séparées par
-des virgules (ex. `192.168.1.0/24,100.64.0.0/10` sous Linux, où PostgreSQL voit
-l'adresse réelle du client). Détail dans `.env.example`.
+Pour synchroniser en direct depuis une autre machine du LAN ou du tailnet,
+donner la liste des plages CIDR séparées par des virgules (ex.
+`172.16.0.0/12,192.168.1.0/24,100.64.0.0/10`) — jamais au-delà du réseau privé.
+La restriction **réelle** reste de toute façon la publication des ports
+(`GDS_BIND_ADDR`, cf. §5, défaut local `127.0.0.1`). Détail dans `.env.example`.
 
 ### Volumes nommés
 
