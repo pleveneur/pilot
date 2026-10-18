@@ -143,18 +143,25 @@ services:
     # publié est vue par PostgreSQL comme venant de la passerelle du réseau Docker
     # (ex. `172.18.0.1`), JAMAIS de `127.0.0.1` — sans cette ouverture, toute
     # connexion du poste est refusée (« no pg_hba.conf entry for host … »).
-    # Le défaut `0.0.0.0/0` signifie « tout ce qui ATTEINT le port publié » : la
-    # restriction RÉELLE reste la PUBLICATION des ports (`GDS_BIND_ADDR` et
-    # l'encadré SÉCURITÉ ci-dessus) — ne jamais l'élargir au-delà du LAN et du
-    # réseau privé Tailscale. Pour restreindre davantage (ex. LAN + tailnet sous
-    # Linux, où la source est l'adresse réelle du client), mettre la liste de
-    # plages CIDR séparées par des virgules dans `.env`.
+    # PROFIL RESTRICTIF PAR DÉFAUT (point 8) : le défaut est le RÉSEAU PRIVÉ DU
+    # CONTENEUR (`172.16.0.0/12`, plage des réseaux Docker), JAMAIS `0.0.0.0/0`
+    # (« tout ce qui atteint le port publié »). Pour autoriser EN PLUS le LAN ou
+    # le réseau privé Tailscale, lister les plages CIDR séparées par des virgules
+    # dans `.env` (ex. `172.16.0.0/12,192.168.1.0/24,100.64.0.0/10`) — jamais
+    # au-delà du LAN et du réseau privé Tailscale.
     environment:
-      GDS_PG_ALLOWED_NETWORKS: "${GDS_PG_ALLOWED_NETWORKS:-0.0.0.0/0}"
-    # Publication des trois ports, RESTREINTE par défaut au poste, au LAN et au
-    # réseau privé Tailscale. Chaque port a sa propre adresse d'écoute ; à
-    # défaut elle retombe sur `GDS_BIND_ADDR` (`0.0.0.0`), donc une installation
-    # L2.8 qui ne règle que `GDS_BIND_ADDR` se comporte EXACTEMENT comme avant.
+      GDS_PG_ALLOWED_NETWORKS: "${GDS_PG_ALLOWED_NETWORKS:-172.16.0.0/12}"
+      # Écoute des PROCESSUS DANS LE CONTENEUR : elle doit rester sur l'interface
+      # du conteneur, sinon les ports publiés (redirigés vers cette interface) ne
+      # peuvent pas atteindre le service. Le défaut LOCAL du code (`127.0.0.1`,
+      # point 8) vaut donc pour une exécution HORS conteneur ; ces deux lignes
+      # préservent le comportement d'une installation qui ne règle rien.
+      GDS_HTTP_BIND: "${GDS_HTTP_BIND:-0.0.0.0:8080}"
+      GDS_PG_BIND: "${GDS_PG_BIND:-0.0.0.0:5432}"
+    # Publication des trois ports, RESTREINTE par défaut au POSTE. Chaque port a
+    # sa propre adresse d'écoute ; à défaut elle retombe sur `GDS_BIND_ADDR`, dont
+    # le défaut est LOCALE (`127.0.0.1`, point 8) : une installation qui ne règle
+    # que `GDS_BIND_ADDR` n'est donc joignable que du poste.
     # Le profil L2.9 (réseau privé uniquement) est décrit dans `.env.example`
     # (§2bis) et `docs/gds-server-setup.md` :
     #   GDS_HTTP_BIND_ADDR=127.0.0.1     (interface d'administration locale,
@@ -164,9 +171,9 @@ services:
     # Voir l'encadré SÉCURITÉ en tête de fichier : au-delà de ces réseaux,
     # c'est INTERDIT.
     ports:
-      - "${GDS_HTTP_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_HTTP_PORT:-8080}:8080"
-      - "${GDS_SSH_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_SSH_PORT:-2222}:22"
-      - "${GDS_DB_BIND_ADDR:-${GDS_BIND_ADDR:-0.0.0.0}}:${GDS_HOST_DB_PORT:-5432}:5432"
+      - "${GDS_HTTP_BIND_ADDR:-${GDS_BIND_ADDR:-127.0.0.1}}:${GDS_HOST_HTTP_PORT:-8080}:8080"
+      - "${GDS_SSH_BIND_ADDR:-${GDS_BIND_ADDR:-127.0.0.1}}:${GDS_HOST_SSH_PORT:-2222}:22"
+      - "${GDS_DB_BIND_ADDR:-${GDS_BIND_ADDR:-127.0.0.1}}:${GDS_HOST_DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - repos:/srv/git/repos

@@ -356,8 +356,16 @@ pub fn gds_remote_url(cfg: &GdsConfig, project_name: &str) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Valeurs par défaut de la configuration serveur (spec cible §6.4).
-pub const DEFAULT_HTTP_BIND: &str = "0.0.0.0:8080";
-pub const DEFAULT_PG_BIND: &str = "0.0.0.0:5432";
+///
+/// PROFIL RÉSEAU RESTRICTIF PAR DÉFAUT (point 8) : l'adresse d'écoute par défaut
+/// est LOCALE (`127.0.0.1`), jamais `0.0.0.0`. Un service lancé sans réglage
+/// n'est donc joignable que depuis la machine qui l'héberge ; l'ouverture au
+/// réseau (LAN, réseau privé Tailscale) est un choix EXPLICITE de l'exploitant
+/// (`GDS_HTTP_BIND` / `GDS_PG_BIND`). Dans le conteneur, c'est la composition qui
+/// fixe l'écoute sur l'interface du conteneur (`docker-compose.yml`), nécessaire
+/// pour que les ports publiés atteignent le processus.
+pub const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8080";
+pub const DEFAULT_PG_BIND: &str = "127.0.0.1:5432";
 pub const DEFAULT_SSH_PORT: u16 = 22;
 pub const DEFAULT_REPOS_ROOT: &str = "/srv/git/repos";
 pub const DEFAULT_TLS_MODE: &str = "none";
@@ -375,9 +383,9 @@ pub const DEFAULT_DB_USER: &str = "pilot";
 /// optionnels ; `bootstrap_admin()` fournit le contrôle à la demande.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
-    /// Bind HTTP du service (défaut `0.0.0.0:8080`).
+    /// Bind HTTP du service (défaut `127.0.0.1:8080` : écoute locale).
     pub http_bind: String,
-    /// Bind PostgreSQL (défaut `0.0.0.0:5432`).
+    /// Bind PostgreSQL (défaut `127.0.0.1:5432` : écoute locale).
     pub pg_bind: String,
     /// Port SSH du serveur (défaut `22`, publié `2222` par le conteneur).
     pub ssh_port: u16,
@@ -545,8 +553,12 @@ mod tests {
     fn server_config_defaults_when_only_password_is_provided() {
         let cfg = ServerConfig::from_lookup(cfg_lookup(&[("POSTGRES_PASSWORD", "s3cret")])).unwrap();
         assert_eq!(cfg.db_password, "s3cret");
-        assert_eq!(cfg.http_bind, "0.0.0.0:8080");
-        assert_eq!(cfg.pg_bind, "0.0.0.0:5432");
+        // Point 8 : les défauts d'écoute sont LOCAUX (jamais `0.0.0.0`),
+        // l'ouverture au réseau est un réglage explicite de l'exploitant.
+        assert_eq!(cfg.http_bind, DEFAULT_HTTP_BIND);
+        assert_eq!(cfg.http_bind, "127.0.0.1:8080");
+        assert_eq!(cfg.pg_bind, DEFAULT_PG_BIND);
+        assert_eq!(cfg.pg_bind, "127.0.0.1:5432");
         assert_eq!(cfg.ssh_port, 22);
         assert_eq!(cfg.repos_root, "/srv/git/repos");
         assert_eq!(cfg.tls_mode, "none");

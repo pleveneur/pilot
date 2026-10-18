@@ -54,9 +54,10 @@
 # `POSTGRES_PASSWORD` (secret du compte d'administration, cf. spec §6.4),
 # `GDS_DB_ADMIN_USER` (défaut « postgres »), `GDS_DB_ADMIN_PASSWORD` (défaut
 # POSTGRES_PASSWORD), `GDS_DB_ADMIN_HOST` (défaut GDS_DB_HOST puis localhost),
-# `GDS_DB_PORT` (défaut 5432), `GDS_PG_ALLOWED_NETWORKS` (défaut 0.0.0.0/0 :
-# plages CIDR, séparées par des virgules, autorisées à joindre la base par MOT DE
-# PASSE depuis le port publié, cf. `ensure_pg_hba` — jamais de `trust` en TCP),
+# `GDS_DB_PORT` (défaut 5432), `GDS_PG_ALLOWED_NETWORKS` (défaut 172.16.0.0/12 :
+# réseau privé du conteneur — plages CIDR, séparées par des virgules, autorisées
+# à joindre la base par MOT DE PASSE depuis le port publié, cf. `ensure_pg_hba`
+# — jamais de `trust` en TCP),
 # `GDS_REPOS_ROOT` (défaut /srv/git/repos : racine des
 # dépôts bare, sur volume), `GDS_SSH_PORT` (défaut 22 : port INTERNE de sshd, le
 # port publié 2222 étant un réglage du conteneur), `GDS_SSH_HOST_KEYS_DIR`
@@ -78,11 +79,12 @@ GDS_DB_PORT="${GDS_DB_PORT:-5432}"
 # L2.8 — réseaux autorisés à joindre la base EN DIRECT (mot de passe) sur le port
 # publié. Une connexion qui arrive par ce port vient de la passerelle du réseau
 # Docker (ex. 172.18.0.1) et non de 127.0.0.1 : sans cette ouverture, le poste est
-# refusé. Le défaut (0.0.0.0/0) autorise « tout ce qui ATTEINT le port publié » —
-# le filtrage réel est la PUBLICATION des ports côté hôte (docker-compose.yml,
-# plages LAN/Tailscale uniquement) ; restreindre est possible (ex.
-# « 192.168.1.0/24,100.64.0.0/10 »).
-GDS_PG_ALLOWED_NETWORKS="${GDS_PG_ALLOWED_NETWORKS:-0.0.0.0/0}"
+# refusé. Le défaut (172.16.0.0/12, plage des réseaux Docker) n'autorise donc QUE
+# le réseau privé du conteneur — jamais « tout ce qui ATTEINT le port publié ».
+# Pour synchroniser en direct depuis une autre machine du LAN ou du tailnet,
+# lister explicitement les plages CIDR (ex. « 172.16.0.0/12,192.168.1.0/24,100.64.0.0/10 »),
+# jamais au-delà du LAN et du réseau privé Tailscale.
+GDS_PG_ALLOWED_NETWORKS="${GDS_PG_ALLOWED_NETWORKS:-172.16.0.0/12}"
 # Racine des dépôts bare (volume monté). Explicité ici : la valeur alimente la
 # préparation du compte `git` (L2.5) et sera réutilisée par la création des
 # dépôts (L2.6).
