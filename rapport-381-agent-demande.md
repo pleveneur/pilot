@@ -148,3 +148,88 @@ intégrée régénérée.
 (`src-tauri/src/super_agent.rs`) — l'ancienne formule « Pour une demande de code
 importante » a disparu, `plan-maker` reste décrit (facultatif), et le prompt
 réserve son usage à une demande explicite de l'utilisateur.
+
+---
+
+## 7. Relance (2ᵉ passage) — vérification de l'état courant
+
+Cette section est écrite **avant** les suites de tests longues (une session peut
+être coupée par le watchdog : le travail doit rester visible).
+
+### 7.1 Ce qui avait déjà été corrigé (commits `813095c`, `4ce4285`)
+
+Le dispositif existe bien dans le code livré localement, et il a été **relu
+point par point** ici :
+
+| Levier | État vérifié aujourd'hui | Preuve (fichier / ligne) |
+|---|---|---|
+| Estimation préalable automatique (« devis ») | **supprimée** — plus aucune fonction d'estimation | `src/js/super-agent.js` ne contient plus `estimateAndReserve` ; `reservations.js` non plus (fin de fichier : note de suppression) |
+| Lancement du planificateur non demandé | **supprimé** du chemin de lancement | `src/js/super-agent.js` ne contient **aucune** occurrence de `plan-maker` |
+| Accusé de lancement « en préparation » (faux « lancé ») | **supprimé** | aucune construction de `preparing: true` dans le lanceur |
+| Texte de la mission remis à un autre agent | **impossible** : le brief n'est construit que pour les `agent_ids` demandés | `const assignments = agentIds.map((aid) => ({ agentId: aid, brief, … }))` |
+| Réservations de fichiers (`T6`) | **conservées, sans agent** : uniquement des CHEMINS | `reservations.js` : `writeReservations` / `deleteReservations` / `isProjectReserved…`, aucun `start_agent_process` |
+| Prompt système de l'Assistant | **n'impose plus** de plan préalable | `src-tauri/src/super_agent.rs`, `SUPER_AGENT_TOOLS_PROMPT` (« Ne lance **jamais** d'agent de planification de ta propre initiative ») |
+
+### 7.2 Vérification du bus (là où les processus pi démarrent réellement)
+
+`src/js/agents-bus.js` a été relu aux trois endroits qui décident **quel** agent
+démarre :
+
+1. `dispatchParallel` (l. ~2984) : pour chaque part, l'agent est lu par **son
+   identifiant exact** (`busState.agents.get(a.agentId)`). Un identifiant absent
+   produit une part en **échec** (`Agent "<id>" inconnu.`) — **aucun repli** vers
+   un autre agent, aucune substitution.
+2. `runAgentTurn` : démarre la session par `start_agent_process({ agentId })`
+   avec l'identifiant de la part — il n'existe pas de « modèle par défaut »
+   d'agent côté lancement.
+3. `startParallelRun` : le verrou est **libéré avant la livraison** du rapport
+   (ordre critique documenté) : la mission qui suit n'est plus mise en file
+   derrière une run de lecture terminée.
+
+Côté Rust, `AgentService::start` (`src-tauri/src/agent_service.rs`) ne remplace
+jamais l'agent demandé : si la ligne du registre manque, il **crée la ligne du
+même identifiant** (seed) puis démarre **cet** agent ; aucune branche ne renvoie
+vers un autre agent.
+
+### 7.3 Trou restant comblé : preuve d'EXÉCUTION du refus
+
+Les tests existants prouvaient le contrat surtout par **lecture de source**
+(`agent-demande-exact.test.js`) ou sur le planificateur seul
+(`planificateur-plan-complet.test.js`). Il manquait une preuve **d'exécution**
+que rien ne démarre quand l'agent demandé est inconnu.
+
+Nouveau fichier `src/js/agent-inconnu-refus.test.js` (4 tests, bus réel, `invoke`
+espionné) :
+
+| Test | Contrat |
+|---|---|
+| agent inconnu → `spawned == []` | **aucun** `start_agent_process` : ni `codeur` (le repli tentant), ni `plan-maker` |
+| agent inconnu → `send_agent_process_prompt` jamais appelé | le texte de la mission ne part vers personne |
+| agent inconnu → échec explicite nommant l'identifiant + « inconnu » | refus, pas de faux succès |
+| refus → `isRunInProgress(projet) == false` | aucun verrou fantôme, la demande peut être relancée |
+| mission mixte (agent valide + inconnu) → `spawned == ["codeur"]` | seul l'agent **demandé** démarre ; la mission ne va qu'à lui ; le rapport final nomme la part inconnue |
+| mission sur le codeur → `spawned == ["codeur"]`, pas de `plan-maker` | aucun agent auxiliaire **en amont** |
+
+### 7.4 Ce qui reste hors de portée du code (honnêteté)
+
+Le dernier levier possible n'est plus du code mais le **choix du modèle** de
+l'Assistant : s'il décidait, malgré le prompt, d'appeler lui-même
+`run_agents(["plan-maker"], …)` avant une tâche, ce serait un lancement
+**explicitement demandé par lui** (donc conforme à l'outil). Deux garde-fous
+l'en détournent désormais : la consigne système (`SUPER_AGENT_TOOLS_PROMPT`,
+interdiction explicite) et, côté documentation/aide, « plan-maker facultatif,
+jamais automatique ». Ce point ne peut pas être « prouvé » par un test
+automatique : il dépend du modèle.
+
+### 7.5 Vérifications exécutées (relance)
+
+| Commande | Résultat |
+|---|---|
+| `npx vitest run src/js/agent-inconnu-refus.test.js` | **4 tests, 0 échec** (nouveau) |
+| `npm test` | **108 fichiers, 1 864 tests, 0 échec** |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | **641 passés, 1 ignoré, 0 échec** |
+| `npm run build:handbook` | OK (41 blocs, aide régénérée) |
+
+Documentation alignée : `spec_pilot.md` § Agent Pi (RPC) (invariant + preuves)
+et `spec_super_agent.md` (bulletin mission 381 : ajout de la preuve d'exécution),
+aide intégrée régénérée.

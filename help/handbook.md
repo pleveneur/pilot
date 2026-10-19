@@ -1795,6 +1795,8 @@ uniquement un bloc d'instructions dans le prompt système.
   substitution : un agent demandé mais **impossible à démarrer** (modèle non
   réglé, etc.) produit une **erreur nommant cet agent**, jamais son
   remplacement. Preuves : `agent-demande-exact.test.js`,
+  `agent-inconnu-refus.test.js` (preuve d'**exécution** : un identifiant
+  inconnu ne démarre **rien** et ne se replie sur aucun agent du registre),
   `verrou-par-projet.test.js` (T6) et `reservations.test.js`.
 - **Plan structuré sur demande explicite (plan-maker, facultatif)** : si vous
   demandez un plan, l'Assistant peut appeler l'agent **`plan-maker`** (via
