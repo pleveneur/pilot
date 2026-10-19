@@ -110,7 +110,28 @@ le GDS, l'étape 2 du protocole de release ne s'applique pas ici.
 
 ## 3. Vérifications après push
 
-_(section complétée après le push — voir ci-dessous)_
+Commit de bump : `71b5334611685f3ac317638154c2fb5673d60534`
+(`chore: bump version to 0.4.32`, parent `0d36bc5`).
+
+```
+$ git ls-remote origin refs/heads/main
+71b5334611685f3ac317638154c2fb5673d60534   refs/heads/main
+
+$ git ls-remote --tags origin v0.4.32
+71b5334611685f3ac317638154c2fb5673d60534   refs/tags/v0.4.32
+
+$ git rev-parse v0.4.32          # tag local
+71b5334611685f3ac317638154c2fb5673d60534
+```
+
+- ✅ Le commit de bump est bien sur `main` distant (même SHA que le HEAD local).
+- ✅ Le tag `v0.4.32` existe sur le dépôt distant.
+- ✅ Il pointe sur le bon commit : `71b5334`, celui du bump de version (tag
+  léger, même SHA que `refs/heads/main` au moment du push).
+- ✅ Aucun `--force`, aucun tag republié.
+- Le workflow `release.yml` est déclenché par le tag `v*` : il construit et
+  publie les installateurs des 4 plateformes, avec `release-notes/v0.4.32.md`
+  comme notes de version (le fichier est bien présent dans le commit taggé).
 
 ## 4. Interdits respectés
 
