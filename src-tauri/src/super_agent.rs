@@ -1330,35 +1330,56 @@ pub async fn super_agent_schedule_tick(state: State<'_, AppState>, app: AppHandl
 }
 
 #[tauri::command]
-pub fn new_super_agent_session(state: State<AppState>, app: AppHandle) -> Result<(), String> {
-    do_start_super_agent_session(state.inner(), &app)?;
-    let cmd = serde_json::json!({"type": "new_session"});
-    state.agent_service.send_superagent_sync(cmd).map(|_| ())
+pub async fn new_super_agent_session(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    // Async + `spawn_blocking` : le démarrage paresseux de la session (spawn du
+    // processus pi + handshake RPC) et la commande `new_session` sont bloquants.
+    // En commande synchrone, ils gelaient le thread principal — donc toute l'UI —
+    // pendant les timeouts RPC (incident v0.4.30 : pi mort au démarrage → 2 × 30 s
+    // de gel, répété à chaque sondage).
+    let service = state.inner().agent_service.clone();
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = app_handle.state::<AppState>();
+        do_start_super_agent_session(app_state.inner(), &app_handle)?;
+        let cmd = serde_json::json!({"type": "new_session"});
+        service.send_superagent_sync(cmd).map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) new_super_agent_session: {}", e))?
 }
 
 #[tauri::command]
-pub fn set_super_agent_model(state: State<AppState>, app: AppHandle, provider: String, model_id: String) -> Result<(), String> {
-    do_start_super_agent_session(state.inner(), &app)?;
-    let cmd = serde_json::json!({"type": "set_model", "provider": provider, "modelId": model_id});
-    let resp = state.agent_service.send_superagent_sync(cmd)?;
-    // Vérifier le champ success : un set_model qui échoue (provider/modèle
-    // introuvable) répond {success: false, error: "..."}.
-    if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
-        let err = resp
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("set_model a échoué (réponse sans succès)")
-            .to_string();
-        return Err(format!(
-            "pi a refusé set_model(provider='{}', modelId='{}') : {}",
-            provider, model_id, err
-        ));
-    }
-    // Persister le modèle actif pour l'appel bloquant `ask_super_agent`.
-    let mut cfg = state.config.lock().unwrap();
-    cfg.super_agent_model = format!("{}/{}", provider, model_id);
-    crate::save_config_disk(&app, &cfg).ok();
-    Ok(())
+pub async fn set_super_agent_model(state: State<'_, AppState>, app: AppHandle, provider: String, model_id: String) -> Result<(), String> {
+    // Async + `spawn_blocking` (même raison que `new_super_agent_session`).
+    let service = state.inner().agent_service.clone();
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = app_handle.state::<AppState>();
+        let state = app_state.inner();
+        do_start_super_agent_session(state, &app_handle)?;
+        let cmd = serde_json::json!({"type": "set_model", "provider": provider, "modelId": model_id});
+        let resp = service.send_superagent_sync(cmd)?;
+        // Vérifier le champ success : un set_model qui échoue (provider/modèle
+        // introuvable) répond {success: false, error: "..."}.
+        if let Some(false) = resp.get("success").and_then(|v| v.as_bool()) {
+            let err = resp
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("set_model a échoué (réponse sans succès)")
+                .to_string();
+            return Err(format!(
+                "pi a refusé set_model(provider='{}', modelId='{}') : {}",
+                provider, model_id, err
+            ));
+        }
+        // Persister le modèle actif pour l'appel bloquant `ask_super_agent`.
+        let mut cfg = state.config.lock().unwrap();
+        cfg.super_agent_model = format!("{}/{}", provider, model_id);
+        crate::save_config_disk(&app_handle, &cfg).ok();
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) set_super_agent_model: {}", e))?
 }
 
 /// Définit le modèle par défaut DÉDIÉ à l'assistant (issue #88), persisté en
@@ -1411,10 +1432,20 @@ pub async fn abort_super_agent(state: State<'_, AppState>, _app: AppHandle) -> R
 }
 
 #[tauri::command]
-pub fn get_super_agent_state(state: State<AppState>, app: AppHandle) -> Result<Value, String> {
-    do_start_super_agent_session(state.inner(), &app)?;
-    let cmd = serde_json::json!({"type": "get_state"});
-    state.agent_service.send_superagent_sync_timeout(cmd, 8)
+pub async fn get_super_agent_state(state: State<'_, AppState>, app: AppHandle) -> Result<Value, String> {
+    // Async + `spawn_blocking` : cette commande est SONDÉE en boucle par le
+    // frontend et démarre paresseusement la session. En synchrone, elle gelait le
+    // thread principal à chaque sondage tant que pi ne répondait pas.
+    let service = state.inner().agent_service.clone();
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = app_handle.state::<AppState>();
+        do_start_super_agent_session(app_state.inner(), &app_handle)?;
+        let cmd = serde_json::json!({"type": "get_state"});
+        service.send_superagent_sync_timeout(cmd, 8)
+    })
+    .await
+    .map_err(|e| format!("Erreur interne (join) get_super_agent_state: {}", e))?
 }
 
 /// Tâche #136 : expose au frontend le statut des extensions du super-agent

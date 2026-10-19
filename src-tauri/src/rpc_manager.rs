@@ -219,9 +219,26 @@ pub fn send_command_sync(
 
 pub fn send_command_sync_timeout(
     session: &mut RpcSession,
-    mut command: Value,
+    command: Value,
     timeout_secs: u64,
 ) -> Result<Value, String> {
+    let rx = send_command_register(session, command)?;
+    wait_response(rx, timeout_secs)
+}
+
+/// Enregistre la commande dans la table des réponses attendues ET l'écrit sur le
+/// stdin de pi, **sans attendre la réponse**. Retourne le receiver permettant de
+/// l'attendre ensuite via `wait_response`.
+///
+/// Pourquoi séparer l'envoi de l'attente : l'appelant peut ainsi relâcher ses
+/// propres verrous AVANT l'attente bloquante. L'AgentService gardait sinon son
+/// registre de sessions pendant tout le timeout (30 s) ; un `pi` mort ou muet
+/// gelait alors tous les autres accès au registre — dont les commandes
+/// synchrones du thread principal, donc toute l'UI (incident v0.4.30).
+pub fn send_command_register(
+    session: &mut RpcSession,
+    mut command: Value,
+) -> Result<mpsc::Receiver<Value>, String> {
     // Générer un id unique si non fourni
     let id = format!("rpc-{}", uuid_simple());
     command["id"] = Value::String(id.clone());
@@ -229,13 +246,34 @@ pub fn send_command_sync_timeout(
     let (tx, rx) = mpsc::channel();
     {
         let mut pending = session.pending.lock().unwrap();
-        pending.insert(id, tx);
+        pending.insert(id.clone(), tx);
     }
 
-    send_command(session, &command)?;
+    if let Err(e) = send_command(session, &command) {
+        // Ne pas laisser d'entrée orpheline : le writer a échoué, aucune réponse
+        // ne viendra jamais pour cet id (fuite bornée mais inutile).
+        session.pending.lock().unwrap().remove(&id);
+        return Err(e);
+    }
+    Ok(rx)
+}
 
+/// Attend la réponse d'une commande enregistrée par `send_command_register`.
+/// Distincte de l'envoi pour permettre de relâcher les verrous avant l'attente
+/// (cf. `send_command_register`).
+pub fn wait_response(rx: mpsc::Receiver<Value>, timeout_secs: u64) -> Result<Value, String> {
     rx.recv_timeout(std::time::Duration::from_secs(timeout_secs))
-        .map_err(|_| format!("Timeout ({}s) ou canal fermé en attente de réponse", timeout_secs))
+        .map_err(|e| match e {
+            mpsc::RecvTimeoutError::Timeout => {
+                format!("Timeout ({}s) ou canal fermé en attente de réponse", timeout_secs)
+            }
+            // Le thread de lecture a vidé la table des réponses attendues : le
+            // processus pi est mort. Échec IMMÉDIAT (et non après 30 s) → l'UI
+            // n'attend pas un timeout complet pour constater la panne.
+            mpsc::RecvTimeoutError::Disconnected => {
+                "Session pi terminée avant la réponse (processus arrêté)".to_string()
+            }
+        })
 }
 
 /// Arrête proprement le processus pi
@@ -294,6 +332,11 @@ fn read_jsonl_loop(
                     running.store(false, Ordering::Relaxed);
                     involuntary_exit = true;
                 }
+                // Réveiller les commandes synchrones en attente : sans cela,
+                // chaque `send_sync` attendait le timeout complet (30 s) alors
+                // qu'aucune réponse ne pouvait plus arriver (verrou du registre
+                // de sessions tenu → thread principal et UI gelés).
+                pending.lock().unwrap().clear();
                 break;
             }
             Ok(n) => {
@@ -380,6 +423,8 @@ fn read_jsonl_loop(
                     running.store(false, Ordering::Relaxed);
                     involuntary_exit = true;
                 }
+                // Même réveil des attentes que sur EOF (aucune réponse possible).
+                pending.lock().unwrap().clear();
                 break;
             }
         }
@@ -689,6 +734,46 @@ mod tests {
             !project_busy(&activity),
             "la mort involontaire de pi doit libérer l'activité du projet"
         );
+    }
+
+    /// Incident v0.4.30 : à la mort de `pi` (EOF), les commandes synchrones en
+    /// attente doivent échouer IMMÉDIATEMENT (canal fermé) au lieu d'attendre
+    /// leur timeout complet (30 s). Sans le correctif, chaque sondage du frontend
+    /// gelait le thread principal le temps du timeout, en boucle (UI inutilisable
+    /// après un crash de l'Assistant).
+    #[test]
+    fn eof_wakes_pending_sync_waiters() {
+        let running = Arc::new(AtomicBool::new(true));
+        let pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        // Une commande synchrone est en attente de réponse…
+        let (tx, rx) = mpsc::channel();
+        pending.lock().unwrap().insert("rpc-attente".to_string(), tx);
+        let (event_tx, _broadcast_rx) = tokio::sync::broadcast::channel(8);
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(Vec::new()));
+
+        // …et le processus meurt (flux stdout fermé).
+        read_jsonl_loop(
+            reader,
+            &|_v: &Value| {},
+            running.clone(),
+            pending.clone(),
+            event_tx,
+            None,
+            Some(PROJECT),
+            None,
+            None,
+        );
+
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "la table des réponses attendues doit être vidée à la mort de pi"
+        );
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(50)).is_err(),
+            "l'attente doit être réveillée (canal fermé) sans attendre le timeout"
+        );
+        assert!(!running.load(Ordering::Relaxed), "running doit retomber à false");
     }
 
     /// L'arrêt volontaire (running=false) ne doit pas émettre de reset : pi est

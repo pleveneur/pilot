@@ -181,9 +181,7 @@ export default function (pi: ExtensionAPI) {
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
-      return { content: [{ type: "text", text: result + "
-
-" + LAUNCH_FOLLOW_UP }] };
+      return { content: [{ type: "text", text: result + "\n\n" + LAUNCH_FOLLOW_UP }] };
     },
   });
 
@@ -211,9 +209,7 @@ export default function (pi: ExtensionAPI) {
       if (result == null) {
         return { content: [{ type: "text", text: "Lancement de la tâche d'assistant annulé. Aucune réponse de Pilot (délai de 2 min dépassé ou annulation) : l'appel a été interrompu pour ne pas bloquer la session." }] };
       }
-      return { content: [{ type: "text", text: result + "
-
-" + LAUNCH_FOLLOW_UP }] };
+      return { content: [{ type: "text", text: result + "\n\n" + LAUNCH_FOLLOW_UP }] };
     },
   });
 

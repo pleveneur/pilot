@@ -1406,22 +1406,16 @@ impl AgentService {
 
     /// Route une commande synchrone (attend la réponse) vers la session d'un agent.
     pub fn send_sync(&self, project: &str, agent_id: &str, command: Value) -> Result<Value, String> {
-        let key = Self::session_key(project, agent_id);
-        let snapshot = prompt_snapshot(&command);
-        let res = {
-            let mut sessions = self.sessions.lock().unwrap();
-            let entry = sessions.get_mut(&key).ok_or_else(|| {
-                format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
-            })?;
-            rpc_manager::send_command_sync(&mut entry.session, command)
-        };
-        if res.is_ok() {
-            self.record_prompt(key, snapshot);
-        }
-        res
+        self.send_sync_timeout(project, agent_id, command, 30)
     }
 
     /// Route une commande synchrone avec timeout vers la session d'un agent.
+    ///
+    /// Le verrou du registre de sessions n'est tenu que pendant l'ÉCRITURE de la
+    /// commande : il est relâché avant l'attente de la réponse. Un `pi` mort
+    /// (ou muet) ne doit jamais geler le registre entier — donc les autres
+    /// consommateurs du registre, dont les commandes synchrones du thread
+    /// principal (incident v0.4.30 : UI figée sur un timeout de 30 s en boucle).
     pub fn send_sync_timeout(
         &self,
         project: &str,
@@ -1431,13 +1425,14 @@ impl AgentService {
     ) -> Result<Value, String> {
         let key = Self::session_key(project, agent_id);
         let snapshot = prompt_snapshot(&command);
-        let res = {
+        let rx = {
             let mut sessions = self.sessions.lock().unwrap();
             let entry = sessions.get_mut(&key).ok_or_else(|| {
                 format!("Aucune session pour l'agent {} (projet {})", agent_id, project)
             })?;
-            rpc_manager::send_command_sync_timeout(&mut entry.session, command, timeout_secs)
+            rpc_manager::send_command_register(&mut entry.session, command)?
         };
+        let res = rpc_manager::wait_response(rx, timeout_secs);
         if res.is_ok() {
             self.record_prompt(key, snapshot);
         }
