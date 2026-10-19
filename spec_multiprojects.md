@@ -354,8 +354,13 @@ fichier). Sa libération ne dépend plus d'un déclencheur extérieur :
   existant `releaseStuckRunLockForKey` aux runs du projet — ses portes restent la
   seule autorité (`noActive`, `residualParallel`, `ghosts`, `orphanQueue`), avec
   son **plancher d'inactivité** et sa **double mesure**. Une run plus jeune que
-  `RUN_LOCK_SWEEP_START_GRACE_MS` (60 s) n'est jamais examinée ; une run restée
-  en `stopping` au-delà de cette grâce est libérée (elle ne porte plus rien).
+  `RUN_LOCK_SWEEP_START_GRACE_MS` (60 s) n'est jamais examinée. Une run restée
+  en `stopping` au-delà de cette grâce ne porte plus de travail utile, mais
+  deux garde-fous passent **avant** toute libération : des **demandes en file**
+  ne sont jamais abandonnées (la run est réarmée puis drainée, le verrou est
+  conservé tant que la file vit) et une **session du projet qui travaille
+  encore** conserve le verrou (borne « busy-stale » de 25 min : aucun blocage à
+  vie).
 - **Diagnostic et levée manuels** : `getProjectRunLockInfo(project)` et
   `forceReleaseProjectRunLock(project)`, exposés dans la discussion de l'agent
   par `/verrou` et `/verrou libere` (jamais transmis au moteur). La levée forcée
@@ -363,7 +368,11 @@ fichier). Sa libération ne dépend plus d'un déclencheur extérieur :
 - **Commande manuelle jamais condamnée par un orphelin** :
   `canSendManualCommandAsync(project, isRunInProgress, isAgentBusy,
   releaseStaleLock)` tente une levée ciblée **avant** de refuser, puis
-  re-décide ; le refus n'est affiché que si le blocage est réel.
+  re-décide ; le refus n'est affiché que si le blocage est réel. Le rappel
+  `releaseOrphanRunLock` est **exporté par le bus** (définition unique) et passé
+  par **les cinq** points d'entrée de commande manuelle (`agent-pi.js` ×3,
+  `sidebar.js`, `prompt-builder.js`) — un test de source (PREUVE 7) échoue si un
+  site repasse trois arguments.
 - **Côté Rust, garde de vivacité** : `get_project_agent_states` croise `busy`
   avec `AgentService::project_has_alive_session` (règle pure
   `project_busy_with_liveness`). Une activité marquée occupée **sans aucune
@@ -373,8 +382,12 @@ fichier). Sa libération ne dépend plus d'un déclencheur extérieur :
   `agent_activity` — ce croisement ferme ce trou.
 
 Non-régressions : `src/js/verrou-orphelin.test.js` (agent mort, arrêt
-utilisateur, agent sain jamais coupé, commande manuelle, voir/lever) et
-`project_busy_with_liveness_requires_a_live_session` côté Rust.
+utilisateur, agent sain jamais coupé, commande manuelle, voir/lever, armement
+réel du balayage — PREUVE 6 —, les cinq points d'entrée — PREUVE 7 —, arrêt
+jamais terminé avec file et travail vivant — PREUVE 8) et, côté Rust,
+`project_busy_with_liveness_requires_a_live_session` plus les trois cas de
+`AgentService::project_has_alive_session` (aucune session, session morte,
+session vivante).
 
 ---
 

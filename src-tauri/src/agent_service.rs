@@ -3981,6 +3981,152 @@ mod tests {
         assert!(!a.contains("\\u{1f}"));
     }
 
+    // ── Mission 380 : vivacité des sessions d'un projet ──
+    //
+    // `project_has_alive_session` est la garde de VIVACITÉ des sondes
+    // d'admission (`get_project_agent_states`) : une activité marquée « busy »
+    // sans aucune session vivante est un ORPHELIN (agent mort silencieusement)
+    // et ne doit plus bloquer le projet. Les tests ci-dessous couvrent les trois
+    // états qui décident réellement : aucune session, session morte, session
+    // vivante.
+
+    /// Session RPC minimale adossée à un VRAI processus enfant (aucun `pi`
+    /// requis) : `project_has_alive_session` n'observe que la vivacité du
+    /// processus. `stdin` doit être pris AVANT tout `wait()` (un `Child` déjà
+    /// récolté n'a plus de stdin).
+    fn session_avec_processus(
+        child: std::process::Child,
+        stdin: std::process::ChildStdin,
+    ) -> rpc_manager::RpcSession {
+        rpc_manager::RpcSession {
+            child,
+            stdin,
+            running: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            pending: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            last_stderr: std::sync::Arc::new(std::sync::Mutex::new(String::new())),
+        }
+    }
+
+    /// Extrait le stdin d'un processus de test (conservé vivant côté test).
+    fn stdin_du_processus(child: &mut std::process::Child) -> std::process::ChildStdin {
+        child.stdin.take().expect("stdin du processus de test")
+    }
+
+    /// Lance un processus enfant qui reste vivant bien au-delà du test (aucune
+    /// dépendance externe, fenêtre masquée sous Windows).
+    fn processus_long() -> std::process::Child {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            std::process::Command::new("cmd")
+                .args(["/C", "ping -n 30 127.0.0.1"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .spawn()
+                .expect("processus enfant de test")
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("sh")
+                .args(["-c", "sleep 30"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("processus enfant de test")
+        }
+    }
+
+    /// Enregistre une session dans le registre unique du service (clé composite).
+    fn enregistrer_session(
+        service: &AgentService,
+        project: &str,
+        agent_id: &str,
+        session: rpc_manager::RpcSession,
+    ) {
+        service.sessions.lock().unwrap().insert(
+            AgentService::session_key(project, agent_id),
+            SessionEntry {
+                session,
+                project: project.to_string(),
+                state: SessionState::Active,
+                mode: SpawnMode::AgentProcess,
+            },
+        );
+    }
+
+    /// Retire la session du registre et récolte son processus (aucun orphelin).
+    fn nettoyer_session(service: &AgentService, project: &str, agent_id: &str) {
+        let entry = service
+            .sessions
+            .lock()
+            .unwrap()
+            .remove(&AgentService::session_key(project, agent_id));
+        if let Some(mut entry) = entry {
+            let _ = entry.session.child.kill();
+            let _ = entry.session.child.wait();
+        }
+    }
+
+    #[test]
+    fn project_has_alive_session_false_sans_session() {
+        let service = AgentService::new();
+        assert!(
+            !service.project_has_alive_session("/proj/sans-session"),
+            "un service sans session ne doit jamais déclarer le projet occupé"
+        );
+    }
+
+    #[test]
+    fn project_has_alive_session_false_pour_session_morte() {
+        let service = AgentService::new();
+        let mut child = processus_long();
+        let stdin = stdin_du_processus(&mut child);
+        child.kill().expect("arrêt du processus de test");
+        child.wait().expect("récolte du processus de test");
+        enregistrer_session(
+            &service,
+            "/proj/mort",
+            "codeur",
+            session_avec_processus(child, stdin),
+        );
+
+        // Cœur de la mission 380 : une session ENREGISTRÉE mais MORTE (agent tué
+        // ou mort silencieusement) ne doit plus maintenir l'occupation du projet
+        // — sinon la file des missions et la commande manuelle restaient bloquées.
+        assert!(
+            !service.project_has_alive_session("/proj/mort"),
+            "une session dont le processus est terminé ne doit pas occuper le projet"
+        );
+    }
+
+    #[test]
+    fn project_has_alive_session_vraie_pour_session_vivante() {
+        let service = AgentService::new();
+        let mut child = processus_long();
+        let stdin = stdin_du_processus(&mut child);
+        enregistrer_session(
+            &service,
+            "/proj/vivant",
+            "codeur",
+            session_avec_processus(child, stdin),
+        );
+
+        // Non-régression : un agent réellement vivant conserve l'occupation.
+        assert!(service.project_has_alive_session("/proj/vivant"));
+        // Forme de chemin tolérante (slash final) : même projet.
+        assert!(service.project_has_alive_session("/proj/vivant/"));
+        // Un autre projet n'hérite pas de la session.
+        assert!(!service.project_has_alive_session("/proj/autre"));
+        // Sous Windows, la casse et le séparateur `\` désignent le même projet.
+        #[cfg(target_os = "windows")]
+        assert!(service.project_has_alive_session("\\PROJ\\Vivant\\"));
+
+        nettoyer_session(&service, "/proj/vivant", "codeur");
+    }
+
     /// Tâche #167 : priorité de résolution du modèle initial (registre →
     /// fallback croisé → defaultModel), alignée sur le bus JS.
     #[test]

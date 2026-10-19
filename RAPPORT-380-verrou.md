@@ -149,6 +149,34 @@ d'inactivité 2 min et double mesure).
   (`estimateAndReserve` → `forceEndRun` sur toute clé de run du projet) ;
 - permettre de **désactiver** l'estimation préalable dans les Paramètres.
 
+> **Suivi (mission 381, commit `813095c`)** : le chemin d'estimation préalable a
+> été **supprimé** (`estimateAndReserve` / `stopAbandonedEstimation` retirés de
+> `reservations.js`, plus de session `plan-maker` de « devis »). Les lancements
+> `run_agents` / `run_assistant_agents` démarrent **directement** l'agent
+> demandé ; un agent inconnu est refusé explicitement. Les trois pistes ci-dessus
+> sont donc closes par suppression du mécanisme, pas par ajustement.
+
+## 5 bis. Reprise après vérification indépendante (mission 380bis)
+
+La revue indépendante (`VERIF-380.md`) a relevé trois écarts. Ils sont corrigés
+et **prouvés par des tests qui échouent sans le correctif** (mutations vérifiées
+hors du correctif final) :
+
+| Écart | Correctif | Preuve |
+|---|---|---|
+| **E1** — la levée ciblée d'un verrou orphelin n'était branchée que sur **3 des 5** points d'entrée de commande manuelle (le Prompt Builder et le menu contextuel de la barre latérale refusaient encore) | définition **unique** `releaseOrphanRunLock(project)` exportée par `agents-bus.js`, utilisée par **les cinq** points d'entrée (`agent-pi.js` ×3, `sidebar.js`, `prompt-builder.js`) — aucune copie locale possible | PREUVE 4 (comportement) + PREUVE 7 (contrôle de source : 5 sites, tous avec la levée, import unique). Retirer l'argument d'un seul site → PREUVE 7 échoue |
+| **E2** — le **déclencheur autonome** (le balayage périodique) n'était couvert par aucun test : supprimer son armement laissait la suite verte | PREUVE 6 espionne `setInterval`/`clearInterval` : `initAgentsBus` arme **un** minuteur à `RUN_LOCK_SWEEP_MS`, **son rappel est bien le balayage** (deux tirs lèvent un verrou orphelin) et `destroyAgentsBus` le désarme | PREUVE 6. Désarmer l'armement → PREUVE 6 échoue |
+| **E3** — le rapport annonçait un test Rust de `project_has_alive_session` qui n'existait pas | les tests sont **ajoutés** (`src-tauri/src/agent_service.rs`, module `tests`) sur de vrais processus enfants : aucune session → libre ; session **morte** (cœur de la mission) → libre ; session **vivante** → occupée, y compris sous une autre forme du même chemin | 3 tests Rust. Forcer la vivacité à `true` → 3 échecs ; à `false` → l'échec du cas vivant |
+
+**Risque résiduel de la revue (§ 4.1 / 4.2) également traité** : la branche
+`stopping` du balayage libérait le verrou **sans drainer la file d'exclusivité**
+(demandes perdues en silence) ni regarder si une session du projet travaillait
+encore (libération au-dessus d'un processus actif). Elle applique désormais les
+deux garde-fous : demandes en file → la run est **réarmée et drainée** (verrou
+conservé tant que la file vit) ; session du projet encore au travail → verrou
+conservé (borné par la fenêtre « busy-stale » de 25 min, donc aucun blocage à
+vie). Preuves : PREUVE 8 (3 cas).
+
 ## 6. Comment vérifier
 
 ```bash
@@ -173,8 +201,17 @@ Tests de non-régression ajoutés (`src/js/verrou-orphelin.test.js`) :
    la levée puis **autorise** l'envoi ;
 5. **levée à la demande** : `forceReleaseProjectRunLock` libère les clés de run
    (lecture et écriture) et rapporte ce qui a été levé ;
-6. Rust : `project_busy_with_liveness` (occupé **et** session vivante) et
-   `project_has_alive_session` sur un service sans session.
+6. **armement autonome** (PREUVE 6) : `initAgentsBus` arme le balayage
+   périodique à `RUN_LOCK_SWEEP_MS`, son rappel lève réellement un verrou
+   orphelin, `destroyAgentsBus` le désarme ;
+7. **tous les points d'entrée** (PREUVE 7) : les 5 sites d'envoi manuel passent
+   la levée ciblée (`releaseOrphanRunLock`) — aucun ne peut être oublié ;
+8. **arrêt jamais terminé** (PREUVE 8) : une run `stopping` dont une session
+   travaille encore garde son verrou, ses demandes en file sont **relancées**
+   (jamais abandonnées), et elle est bien libérée quand plus rien ne la porte ;
+9. Rust : `project_busy_with_liveness` (occupé **et** session vivante) et les
+   trois cas de `AgentService::project_has_alive_session` — service sans session,
+   session **morte**, session **vivante** — sur de vrais processus enfants.
 
 Vérification manuelle dans Pilot :
 
@@ -185,3 +222,6 @@ Vérification manuelle dans Pilot :
    sans redémarrer Pilot ;
 3. sans rien faire, un verrou orphelin se lève seul en 2 à 3 minutes (balayage) :
    le message « ⏳ Une tâche d'agents est déjà en cours » ne revient plus.
+
+Rappel : le verrou est **en mémoire**, aucun fichier de verrou n'existe sur le
+disque du projet (c'est pourquoi un redémarrage de Pilot le libérait).

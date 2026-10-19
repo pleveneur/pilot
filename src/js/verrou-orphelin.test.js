@@ -20,6 +20,7 @@
 //      ciblée est tentée AVANT le refus puis l'envoi est autorisé ;
 //   5. l'utilisateur peut VOIR et LEVER le verrou sans redémarrer Pilot.
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 // Même harnais minimal que `verrou-par-projet.test.js` (aucun accès Tauri réel).
 vi.hoisted(() => {
@@ -82,9 +83,12 @@ import {
   startParallelRun,
   stopAgentsRun,
   releaseStuckRunLock,
+  releaseOrphanRunLock,
   sweepOrphanRunLocks,
   getProjectRunLockInfo,
   forceReleaseProjectRunLock,
+  destroyAgentsBus,
+  RUN_LOCK_SWEEP_MS,
   RUN_LOCK_SWEEP_START_GRACE_MS,
   __setWatchdogConfirmDelayForTest,
 } from "./agents-bus.js";
@@ -337,6 +341,144 @@ describe("PREUVE 5 — voir et lever un verrou bloqué sans redémarrer Pilot", 
       startParallelRun([{ agentId: "codeur", project: p, brief: "mission suivante" }], "", {}),
     ).resolves.toBeUndefined();
     await flushAsync();
+    expect(isRunInProgress(p)).toBe(false);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Mission 380bis — les trois écarts de la vérification indépendante
+// (`VERIF-380.md` § 1.4, § 2.1 et § 4.1/4.2).
+// ───────────────────────────────────────────────────────────────────────────
+describe("PREUVE 6 — le balayage est ARMÉ automatiquement (aucun appel externe)", () => {
+  it("initAgentsBus arme UN minuteur RUN_LOCK_SWEEP_MS dont le rappel lève un verrou orphelin, destroyAgentsBus le désarme", async () => {
+    const p = "preuve-380-armement";
+    mockNoSession();
+    // Un minuteur peut déjà être armé par les preuves précédentes
+    // (`startRunLockSweep` est idempotent) : on repart d'un bus DÉTRUIT pour
+    // observer réellement l'ARMEMENT — c'est la mutation M1 de VERIF-380 § 2.1
+    // (suppression de l'appel dans initAgentsBus) qui doit faire échouer ce test.
+    destroyAgentsBus();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    try {
+      await initAgentsBus({});
+      const armed = setIntervalSpy.mock.calls
+        .map((call, i) => ({ call, handle: setIntervalSpy.mock.results[i].value }))
+        .filter((c) => c.call[1] === RUN_LOCK_SWEEP_MS);
+      expect(armed.length, "initAgentsBus doit armer le balayage périodique").toBe(1);
+
+      // Le rappel armé est bien le BALAYAGE (un minuteur factice ne suffirait
+      // pas) : deux tirs (double mesure du chien de garde) lèvent un verrou
+      // orphelin, sans qu'aucun autre déclencheur ne soit appelé.
+      const tick = armed[0].call[0];
+      const ctx = seedStuckRun(p, "codeur");
+      expect(isRunInProgress(p)).toBe(true);
+      tick();
+      await flushAsync();
+      tick();
+      await flushAsync();
+      expect(runs()[ctx.runKey], "le rappel armé doit lever le verrou orphelin").toBeUndefined();
+      expect(isRunInProgress(p)).toBe(false);
+
+      // Le balayage ne doit pas survivre au bus (un minuteur orphelin
+      // travaillerait sur un registre détruit).
+      destroyAgentsBus();
+      const handle = armed[0].handle;
+      expect(
+        clearIntervalSpy.mock.calls.some((c) => c[0] === handle),
+        "destroyAgentsBus doit désarmer le balayage",
+      ).toBe(true);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+});
+
+describe("PREUVE 7 — les 5 points d'entrée de commande manuelle passent la levée ciblée", () => {
+  const FILES = ["agent-pi.js", "sidebar.js", "prompt-builder.js"];
+
+  it("chaque appel de canSendManualCommandAsync reçoit releaseOrphanRunLock (définition unique du bus)", () => {
+    let total = 0;
+    for (const file of FILES) {
+      // `.replace(/\r\n/g, "\n")` : neutralise les fins de ligne CRLF du worktree
+      // Windows (quality-gate § 3.4) — les ancres restent lisibles.
+      const src = readFileSync(new URL(file, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+      const calls = src.split("canSendManualCommandAsync(").length - 1;
+      const guarded = src.split("isProjectAgentBusy, releaseOrphanRunLock)").length - 1;
+      expect(calls, `${file} : ce fichier doit porter au moins un envoi manuel`).toBeGreaterThan(0);
+      expect(
+        guarded,
+        `${file} : chaque envoi manuel doit tenter la levée du verrou orphelin avant de refuser`,
+      ).toBe(calls);
+      // La levée est IMPORTÉE du bus (une seule définition) : aucune copie
+      // locale ne peut diverger de la règle du chien de garde.
+      expect(src, `${file} : releaseOrphanRunLock doit venir du bus`).toMatch(
+        /import \{[^}]*releaseOrphanRunLock[^}]*\} from "\.\/agents-bus\.js"/,
+      );
+      expect(src, `${file} : aucune redéfinition locale`).not.toMatch(/const releaseOrphanRunLock\s*=/);
+      total += calls;
+    }
+    expect(total, "5 points d'entrée de commande manuelle").toBe(5);
+  });
+});
+
+describe("PREUVE 8 — un arrêt jamais terminé ne perd ni les demandes en file ni un travail vivant", () => {
+  /** Pose un verrou de run déjà passé en « stopping » (arrêt jamais terminé). */
+  const seedStopping = (project, agentId) => {
+    const ctx = seedStuckRun(project, agentId, { idleMs: 5 * 60 * 1000 });
+    ctx.runState = "stopping";
+    return ctx;
+  };
+
+  it("une run « stopping » dont une session du projet travaille encore garde son verrou", async () => {
+    const p = "preuve-380-stopping-vivant";
+    mockWorkingSession(p, "codeur");
+    await initAgentsBus({});
+    const ctx = seedStopping(p, "codeur");
+
+    const released = await sweepOrphanRunLocks();
+    await flushAsync();
+
+    expect(released).not.toContain(ctx.runKey);
+    expect(runs()[ctx.runKey], "un travail vivant conserve le verrou du projet").toBeTruthy();
+  });
+
+  it("une demande en file est RELANCÉE au lieu d'être abandonnée avec le contexte", async () => {
+    const p = "preuve-380-stopping-file";
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "list_agents") {
+        return {
+          agents: [{ id: "lecteur", name: "Lecteur", readonly: true, models: { pi: "openai/gpt-4o" }, keep_context: false }],
+        };
+      }
+      if (cmd === "get_config") return {};
+      if (cmd === "list_agent_sessions") return { sessions: [] };
+      return undefined;
+    });
+    await initAgentsBus({});
+    const ctx = seedStopping(p, "lecteur");
+    const qk = `${p}\u{1f}lecteur`;
+    ctx.exclusivityQueue[qk] = [{ agentId: "lecteur", brief: "demande en file", project: p }];
+
+    const released = await sweepOrphanRunLocks();
+    await flushAsync();
+
+    expect(released).not.toContain(ctx.runKey);
+    expect(runs()[ctx.runKey], "le verrou doit être conservé pour le travail relancé").toBeTruthy();
+    expect(ctx.exclusivityQueue[qk], "la demande en file doit être RÉELLEMENT relancée").toBeUndefined();
+  });
+
+  it("une run « stopping » sans session ni demande en file est libérée (aucun blocage à vie)", async () => {
+    const p = "preuve-380-stopping-orphelin";
+    mockNoSession();
+    await initAgentsBus({});
+    const ctx = seedStopping(p, "codeur");
+
+    const released = await sweepOrphanRunLocks();
+    await flushAsync();
+
+    expect(released).toContain(ctx.runKey);
     expect(isRunInProgress(p)).toBe(false);
   });
 });

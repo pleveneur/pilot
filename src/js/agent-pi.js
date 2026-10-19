@@ -63,14 +63,11 @@ import { injectSessionSummaryToSuperAgent, isProjectAgentBusy } from "./super-ag
 // passe par la même politique d'admission que les missions (run-policy.js),
 // appliquée au bus d'agents (isRunInProgress).
 import { canSendManualCommand, canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
-import { isRunInProgress, releaseStuckRunLock, RUN_LAUNCH_MIN_STUCK_IDLE_MS, getProjectRunLockInfo, forceReleaseProjectRunLock } from "./agents-bus.js";
+import { isRunInProgress, releaseOrphanRunLock, getProjectRunLockInfo, forceReleaseProjectRunLock } from "./agents-bus.js";
 
-// Mission 380 : levée d'un verrou de run ORPHELIN avant de refuser une commande
-// manuelle. Réutilise le chien de garde du bus (il ne libère que ce qui n'a plus
-// de porteur : agent mort, tâche sans session) avec le plancher d'inactivité de
-// lancement — une run qui travaille réellement n'est jamais coupée ici.
-const releaseOrphanRunLock = (project) =>
-  releaseStuckRunLock(project, { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS });
+// Mission 380 : la levée d'un verrou de run ORPHELIN avant de refuser une
+// commande manuelle est la définition UNIQUE du bus (`releaseOrphanRunLock`,
+// mission 380bis), partagée avec la barre latérale et le Prompt Builder.
 import { shouldRememberExchange } from "./super-agent-exchange-filter.js";
 import { buildWorkStateSnapshot } from "./work-state.js";
 import {

@@ -5,7 +5,7 @@ import { toastError, toastWarning } from "./toast.js";
 // Verrou par projet : « Envoyer à l'agent » est une commande manuelle (elle
 // peut modifier le projet) → même politique d'admission que le chat.
 import { canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
-import { isRunInProgress } from "./agents-bus.js";
+import { isRunInProgress, releaseOrphanRunLock } from "./agents-bus.js";
 import { isProjectAgentBusy } from "./super-agent.js";
 
 // Lazy-load markdown-it pour isoler d'éventuelles erreurs d'import
@@ -317,7 +317,10 @@ export async function createPromptBuilder(container, sidebar) {
     // POINT B2 : ce chemin appelait `invoke("send_agent_prompt")` en direct,
     // sans consulter la politique d'admission → il contournait le verrou par
     // projet. Refus VISIBLE (toast), envoi bloqué (le prompt reste assemblé).
-    if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy))) {
+    // Mission 380bis : la levée ciblée d'un verrou ORPHELIN est tentée AVANT le
+    // refus (même rappel que le chat et le menu contextuel) — sinon ce bouton
+    // restait bloqué 2 à 3 min par un agent mort.
+    if (!(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
       toastWarning(MANUAL_COMMAND_BLOCKED_MESSAGE);
       return;
     }

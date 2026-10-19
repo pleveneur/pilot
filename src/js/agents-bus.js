@@ -570,6 +570,33 @@ export async function releaseStuckRunLock(project, opts = {}) {
   }
 }
 
+// Mission 380bis : plancher d'inactivité de la levée ciblée d'un verrou
+// ORPHELIN (voir `releaseOrphanRunLock`). Posé à part pour ne pas déguiser cet
+// appel en « chemin de LANCEMENT » (les tests de plancher comptent les appels
+// qui passent `requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS` en clair).
+const ORPHAN_RELEASE_OPTS = { requireIdleMs: RUN_LAUNCH_MIN_STUCK_IDLE_MS };
+
+/**
+ * Levée CIBLÉE d'un verrou de run ORPHELIN, tentée AVANT de refuser une
+ * COMMANDE MANUELLE de l'utilisateur (mission 380).
+ *
+ * Définition UNIQUE, partagée par les cinq points d'entrée de commande manuelle
+ * (saisie du chat, choix/reprise et sélection de prompt dans `agent-pi.js`, menu
+ * contextuel « Envoyer à l'agent » de `sidebar.js`, bouton du Prompt Builder) :
+ * mission 380bis, la levée n'était branchée que sur trois d'entre eux, les deux
+ * autres refusant « une tâche d'agents est déjà en cours » face à un verrou
+ * orphelin. Une définition unique interdit cette divergence.
+ *
+ * Elle réutilise le chien de garde (`releaseStuckRunLock`) avec le plancher
+ * d'inactivité de LANCEMENT : rien n'est libéré tant qu'un agent travaille
+ * réellement.
+ * @param {string} project - projet ciblé (chemin réel)
+ * @returns {Promise<void>}
+ */
+export function releaseOrphanRunLock(project) {
+  return releaseStuckRunLock(project, ORPHAN_RELEASE_OPTS);
+}
+
 async function releaseStuckRunLockForKey(key, opts = {}) {
   const ctx = busState.runs[key];
   if (!ctx || ctx.runState !== "running") return;
@@ -818,7 +845,36 @@ export async function sweepOrphanRunLocks(now = Date.now()) {
       const since = ctx.lastActivityAt || ctx.startedAt || 0;
       if (!since || now - since < RUN_LOCK_SWEEP_START_GRACE_MS) continue;
       if (ctx.runState === "stopping") {
-        // Arrêt demandé mais jamais terminé : le verrou ne porte plus rien.
+        // Arrêt demandé mais jamais terminé (événement terminal perdu, I/O
+        // bloquée) : le verrou ne porte plus de travail utile. Deux garde-fous
+        // AVANT de le rendre au projet (VERIF-380 § 4.1 / 4.2) :
+        //  1. une demande EN FILE n'est jamais abandonnée en silence : la run
+        //     est réarmée puis drainée (même règle que
+        //     releaseStuckRunLockForKey, qui CONSERVE le verrou tant que la
+        //     file vit) — sinon les demandes mouraient avec le contexte ;
+        //  2. une session du projet qui travaille encore conserve le verrou :
+        //     le libérer laisserait une nouvelle run écrire par-dessus un
+        //     processus encore actif. Borne dans le temps par la fenêtre
+        //     « busy-stale » (25 min) : une session figée ne bloque pas à vie.
+        if (pendingExclusivityCount(ctx) > 0) {
+          ctx.runState = "running";
+          const relaunched = await drainExclusivityQueues(ctx, key);
+          if (relaunched || pendingExclusivityCount(ctx) > 0) {
+            resetTimeout(ctx);
+            console.warn(
+              "[agents-bus] balayage : run restée « stopping » avec des demandes en file → relance des demandes en attente (verrou conservé).",
+            );
+            continue;
+          }
+        }
+        if (await projectHasWorkingSession(key)) {
+          console.warn(
+            "[agents-bus] balayage : run restée « stopping » mais une session du projet travaille encore → verrou conservé (",
+            key,
+            ").",
+          );
+          continue;
+        }
         const generation = ctx.generation;
         settleMission(ctx.runKey, "stop", {});
         endRun(key, generation);
@@ -1603,7 +1659,8 @@ async function ensureFallbackModel(ctx) {
 }
 
 export function destroyAgentsBus() {
-  // Mission 380 : le balayage périodique ne doit pas survivre au bus.
+  // Mission 380 : le balayage périodique ne doit pas survivre au bus (protégé
+  // par `verrou-orphelin.test.js` PREUVE 6).
   stopRunLockSweep();
   for (const key of Object.keys(busState.runs)) {
     const ctx = busState.runs[key];
