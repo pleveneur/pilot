@@ -106,6 +106,18 @@ normalement** l'agent au lieu de rester en file derrière un couple
   n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
   le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
   exécution).
+- **Aucune fausse alerte** : un agent qui progresse (événements RPC réguliers)
+  n'est jamais signalé ni arrêté. Un agent actif **sans aucun événement** depuis
+  le seuil déclenche l'alerte (une fois par blocage, réarmé à la prochaine
+  exécution).
+- **Verdict vérifié sur le disque** : avant de conclure qu'un agent n'a rien
+  fait, Pilot regarde le travail réellement écrit pendant l'exécution (commits et
+  fichiers modifiés) : du travail présent n'est **jamais** annoncé comme un
+  échec. Une mission de **lecture** (planificateur, architecte, reviewer) est un
+  cas particulier : elle n'écrit rien, donc un changement survenu pendant qu'elle
+  tourne vient d'ailleurs et ne compte pas. Une session de lecture qui se termine
+  **sans livrable** (aucun plan produit) est signalée en **échec**, avec le nom
+  de l'agent — jamais comme une réussite.
 <!-- /HELP:anomaly -->
 
 ---
@@ -348,6 +360,15 @@ d'événements, avec deux angles morts :
    une mission d'écriture → rapport « travail présent sur le disque, pas un
    échec » au lieu d'un échec mensonger (qui relançait une mission déjà faite).
    Le message d'échec mentionne explicitement l'absence de travail nouveau.
+   **Mission de LECTURE = aucune preuve disque possible (mission 384)** :
+   `provesWorkOnDisk` renvoie `false` dès que `readonly` est vrai (plan-maker,
+   architecte, reviewer…). Un commit tombé pendant une mission de lecture vient
+   forcément d'ailleurs : il ne prouve aucun travail de CETTE mission. Sans cette
+   règle, une session de planification qui s'arrêtait **sans plan** était
+   rapportée « travail présent sur le disque, pas un échec » — un faux succès.
+   Les deux `workOnDiskDuringRun` (watchdog, fin de tour) restant *fail-safe*
+   (`false` en cas d'erreur de sonde), une lecture silencieuse est un **échec
+   honnête**, jamais un succès inventé.
 3. **Aucune vérification du disque sur la fin de tour silencieuse** : une run
    dont l'agent avait exécuté ses outils (write/edit/bash) puis s'arrêtait **sans
    phrase de conclusion** était livrée en **échec** (`finishAgentTurn` →

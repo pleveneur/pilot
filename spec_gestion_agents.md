@@ -59,6 +59,13 @@ concernés + coût estimé en tokens + contraintes suggérées + dépendances).
   et une validation avant délégation au codeur — **sur demande** uniquement. Il
   n'est **jamais lancé automatiquement** avant un codeur : un lancement démarre
   exactement les agents demandés (mission 381).
+- **Livrable obligatoire (mission 384)** : nommé seul dans une mission, il doit
+  produire un **plan exploitable** (au moins une tâche, chacune avec un intitulé
+  et des fichiers) ; la session **reste ouverte** tant que le plan n'est pas
+  arrivé. Une session qui se termine **sans livrable** est rapportée en **échec**
+  explicite nommant l'agent — jamais un faux succès. Une mission de **lecture**
+  ne prouve jamais son travail par le disque (un commit tombé pendant la run
+  vient d'ailleurs).
 - **Utilisation par l'Assistant (Magnus)** : l'Assistant peut appeler le
   `plan-maker` via `run_agents` (extension `pilot-assistant-actions`) pour
   obtenir un plan structuré, le présenter à l'utilisateur (via `ask_multi_choice`

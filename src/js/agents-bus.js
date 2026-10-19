@@ -162,11 +162,33 @@ const DISK_CLOCK_SLACK_MS = 2000;
  */
 export function provesWorkOnDisk(status, startedAt, readonly) {
   if (!status || status.is_repo !== true) return false;
+  // Mission de LECTURE (plan-maker, architecte, reviewer…) : elle n'écrit RIEN
+  // sur le disque. Un commit tombé pendant la run vient donc forcément
+  // d'AILLEURS (vous, un autre outil) : il ne prouve aucun travail de CETTE
+  // mission. Sans cette règle, une session de planification qui s'arrête sans
+  // plan était rapportée « travail présent sur le disque, pas un échec » — un
+  // faux succès qui laissait l'Assistant croire que le plan existait.
+  if (readonly === true) return false;
   const start = Number(startedAt) || 0;
   const headTs = Number(status.head_ts) || 0;
   if (start > 0 && headTs > 0 && headTs * 1000 >= start - DISK_CLOCK_SLACK_MS) return true;
-  if (readonly !== true && Number(status.pending) > 0) return true;
+  if (Number(status.pending) > 0) return true;
   return false;
+}
+
+/**
+ * Pure (testable) : la mission d'un groupe parallèle a-t-elle ÉCHOUÉ dans son
+ * ensemble (aucune part exploitable) ? Sert à ne jamais livrer comme « done »
+ * une run dont tous les agents se sont terminés sans livrable (ex. le
+ * plan-maker qui s'arrête sans plan). Une part peut être en échec sans que la
+ * mission le soit (les autres parts ont produit leur résultat).
+ * @param {Record<string, {status?: string}>} results - résultats par agent
+ * @returns {boolean}
+ */
+export function parallelMissionFailed(results) {
+  const parts = Object.entries(results || {});
+  if (parts.length === 0) return false;
+  return parts.every(([, r]) => !!r && r.status === "error");
 }
 
 /**
@@ -2162,10 +2184,24 @@ async function finishAgentTurn(agentId, ctx) {
     // concluait à l'échec et relançait la mission. Même preuve DISQUE que le
     // watchdog (mission 310) avant d'enregistrer la part.
     let partText = text;
-    if (!partText.trim() && (await workOnDiskDuringRun(ctx))) {
-      partText = `Travail PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec, même si l'agent n'a produit aucun texte final. Vérifiez le résultat produit au lieu de la relancer.`;
+    let partStatus = "done";
+    if (!partText.trim()) {
+      if (await workOnDiskDuringRun(ctx)) {
+        partText = `Travail PRÉSENT sur le disque (commit ou fichiers modifiés pendant l'exécution) : la mission n'est PAS un échec, même si l'agent n'a produit aucun texte final. Vérifiez le résultat produit au lieu de la relancer.`;
+      } else {
+        // Aucun livrable ET aucune preuve disque : la part est un ÉCHEC
+        // explicite. Avant, elle restait « done » avec un texte vide, agrégé en
+        // « (aucun texte) » : l'Assistant recevait un SUCCÈS alors que rien
+        // n'avait été produit (cas du plan-maker qui « s'arrête en quelques
+        // secondes » sans plan). Une mission de lecture ne peut rien prouver par
+        // le disque (voir `provesWorkOnDisk`), donc son silence EST un échec.
+        partStatus = "error";
+        partText = ctx.readonly === true
+          ? `L'agent ${agentId} a terminé sans produire de livrable (aucun texte final) et une mission de lecture ne modifie rien sur le disque : la demande n'a donc PAS été exécutée. Relancez-la en précisant le livrable attendu.`
+          : `L'agent ${agentId} a terminé sans produire de livrable (aucun texte final) et aucun travail n'a été détecté sur le disque : la demande n'a donc PAS été exécutée. Relancez-la en reformulant la tâche.`;
+      }
     }
-    ctx.parallelGroup.results[agentId] = { status: "done", text: partText };
+    ctx.parallelGroup.results[agentId] = { status: partStatus, text: partText };
     ctx.parallelGroup.pending--;
     if (ctx.parallelGroup.pending <= 0) {
       const group = ctx.parallelGroup;
@@ -2430,6 +2466,11 @@ export async function startParallelRun(assignments, projectContext = "", options
   try {
     await dispatchParallel(assignments, async (results) => {
       const aggregated = aggregateParallelResults(results);
+      // Statut de la MISSION : une run dont AUCUNE part n'a produit de livrable
+      // est un ÉCHEC, pas un succès avec du texte vide. C'est la voie par
+      // laquelle le plan-maker « qui s'arrête sans plan » était rapporté comme
+      // réussi à l'Assistant (mission 384).
+      const missionFailed = parallelMissionFailed(results);
       emit("parallelDone", { results });
       emit("done", { agentId: "parallel", text: aggregated });
       // Objectif 5 : les agents lancés (run_agents) ont fini leur mission —
@@ -2450,7 +2491,11 @@ export async function startParallelRun(assignments, projectContext = "", options
       // {nature:"write"})` et mise en file — tandis que l'agent de l'estimation
       // (le planificateur, JAMAIS nommé pour cette mission) en avait exécuté le
       // texte à sa place : aucun fichier, aucun commit.
-      settleMission(ctx.runKey, "done", { text: aggregated });
+      if (missionFailed) {
+        settleMission(ctx.runKey, "error", { message: aggregated });
+      } else {
+        settleMission(ctx.runKey, "done", { text: aggregated });
+      }
     }, options, runProject, ctx);
   } catch (e) {
     // Sécurité : si dispatchParallel échoue de façon synchrone, libérer le verrou

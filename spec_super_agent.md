@@ -707,6 +707,21 @@ uniquement un bloc d'instructions dans le prompt système.
   explicite** : elle n'est plus jamais automatique ni imposée avant un
   lancement. L'Assistant ne lance **jamais** cet agent de lui-même — il faut
   le demander.
+- **Le plan-maker va au bout et livre un plan complet (mission 384)** : une
+  mission qui le **nomme seul** produit un plan **exploitable** — au moins une
+  tâche, chacune avec un intitulé et des fichiers — et la session **reste
+  ouverte** tant que ce plan n'est pas arrivé (aucune clôture « au bout de
+  quelques secondes »). Si le planificateur se termine **sans livrable**, la
+  mission est rapportée en **ÉCHEC explicite** nommant l'agent (« la demande n'a
+  donc PAS été exécutée ») : plus de faux succès ni de rapport vide qui laissait
+  croire que le plan existait, et le projet est **immédiatement libre** pour
+  relancer la planification. Technique : une mission de **LECTURE** ne prouve
+  jamais son travail par le disque (`provesWorkOnDisk` renvoie `false` dès que
+  `readonly` — un commit tombé pendant la run vient d'ailleurs), une part sans
+  livrable et sans preuve disque est enregistrée `error` (au lieu de `done`
+  vide agrégé en « (aucun texte) »), et `parallelMissionFailed` (pures, dans
+  `agents-bus.js`) fait livrer la mission en échec dès qu'**aucune** part n'a
+  livré. Couverture : `src/js/planificateur-plan-complet.test.js`.
 
 ### Contexte de suivi joint automatiquement à la demande déléguée
 - Avant de **lancer un agent** — agent du projet (`run_agents`), agent hors

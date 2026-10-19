@@ -126,12 +126,24 @@ describe("POINT I — le verrou est libéré AVANT la livraison du résultat de 
     // bien quelque chose) : une écriture est refusée à ce moment-là.
     let delivered = false;
     let writableAtDelivery = null;
-    await runAgentsForAssistant([{ agentId: "plan-maker", brief: "mission", project: p }]).then(() => {
+    // Mission 384 : une run dont AUCUNE part n'a livré de résultat est livrée en
+    // ÉCHEC (et non plus en faux succès « done »). L'invariant mesuré ici porte
+    // sur l'ORDRE (verrou libéré AVANT la livraison), pas sur la nature de la
+    // livraison : on mesure à la livraison, succès ou échec.
+    let settlement = null;
+    const measureAtDelivery = () => {
       delivered = true;
       writableAtDelivery = !isRunInProgress(p, { nature: "write" });
-    });
+    };
+    await runAgentsForAssistant([{ agentId: "plan-maker", brief: "mission", project: p }])
+      .then(() => { settlement = "done"; })
+      .catch(() => { settlement = "error"; })
+      .finally(measureAtDelivery);
 
     expect(delivered).toBe(true);
+    // Un agent SANS modèle ne peut pas produire de plan : c'est un ÉCHEC explicite
+    // (jamais un faux succès avec un rapport vide).
+    expect(settlement, "une session sans livrable doit être livrée en échec").toBe("error");
     // AVANT le correctif : false (la run de lecture était encore « running »,
     // donc l'agent NOMMÉ pour la suite était mis en file et le planificateur
     // avait exécuté la mission à sa place).
