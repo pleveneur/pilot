@@ -64,6 +64,25 @@ import { injectSessionSummaryToSuperAgent, isProjectAgentBusy } from "./super-ag
 // appliquée au bus d'agents (isRunInProgress).
 import { canSendManualCommand, canSendManualCommandAsync, MANUAL_COMMAND_BLOCKED_MESSAGE } from "./run-policy.js";
 import { isRunInProgress, releaseOrphanRunLock, getProjectRunLockInfo, forceReleaseProjectRunLock } from "./agents-bus.js";
+// Mission 385 : file d'attente des tâches PAR PROJET. Une seule tâche tourne à la
+// fois sur un projet ; une commande tapée pendant ce temps était REFUSÉE et la
+// place perdue. Elle est désormais mise en file et démarre automatiquement à la
+// libération (sonde périodique), et la file est visible dans l'onglet de l'agent
+// (+ commande `/file`). Aucune modification du lancement d'agent : la relance
+// réutilise le chemin d'envoi existant, à l'identique.
+import {
+  enqueueProjectCommand,
+  setProjectQueueProbe,
+  setProjectQueueNotify,
+  setProjectQueueOnChange,
+  startProjectQueueLoop,
+  buildProjectQueueView,
+  formatQueueLines,
+  formatQueueClearedMessage,
+  formatQueuedNotice,
+  rankLabel,
+} from "./project-task-queue.js";
+import { readProjectQueueView, formatProjectQueueReport, abandonProjectQueue } from "./project-queue-view.js";
 
 // Mission 380 : la levée d'un verrou de run ORPHELIN avant de refuser une
 // commande manuelle est la définition UNIQUE du bus (`releaseOrphanRunLock`,
@@ -334,6 +353,39 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
   `;
   wrapper.appendChild(toolbar);
 
+  // ── Mission 385 : bloc DISCRET de la file d'attente du projet ──
+  // Une seule tâche tourne à la fois par projet ; les autres attendent leur tour
+  // avec leur rang (« en attente (2e) »). Le bloc n'apparaît que s'il y a
+  // quelque chose à dire (tâche en cours ou demandes en attente) et se met à jour
+  // tout seul (démarrage automatique, fin de tâche, `/file vide`).
+  const queueBlockEl = document.createElement("div");
+  queueBlockEl.className = "agent-queue-block hidden";
+  queueBlockEl.setAttribute("role", "status");
+  queueBlockEl.setAttribute("aria-live", "polite");
+  wrapper.appendChild(queueBlockEl);
+
+  /** Rafraîchit le bloc de la file d'attente du projet (jamais bloquant). */
+  const refreshQueueBlock = () => {
+    try {
+      if (!wrapper.isConnected) return;
+      const project = projectPath || window._pilotProjectPath || ".";
+      const view = readProjectQueueView(project);
+      if (!view || (!view.running.length && !view.waiting.length)) {
+        queueBlockEl.classList.add("hidden");
+        queueBlockEl.textContent = "";
+        return;
+      }
+      const lines = formatQueueLines(view);
+      queueBlockEl.innerHTML = lines
+        .map((line, i) => `<div class="agent-queue-line${i === 0 ? " agent-queue-title" : ""}">${escapeHtml(line)}</div>`)
+        .join("");
+      queueBlockEl.classList.remove("hidden");
+    } catch (e) {
+      // L'affichage de la file ne doit jamais gêner le chat.
+      console.warn("[agent-pi] file d'attente : rafraîchissement impossible", e);
+    }
+  };
+
   // Quality-gate (Évolution 7) : init l'état du bouton depuis la config persistée.
   const qgBtn = wrapper.querySelector("#agent-qg-btn");
   async function refreshQualityGate() {
@@ -489,6 +541,29 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
 
   container.appendChild(wrapper);
   refreshIcons(wrapper);
+
+  // ── Mission 385 : sonde de place libre + boucle de la file d'attente ──
+  // La sonde est la politique d'admission EXISTANTE (aucune règle nouvelle) :
+  // une demande en file ne démarre que si la place du projet est réellement
+  // libre. Fail-closed : sonde en échec → la demande reste en file.
+  setProjectQueueProbe(async (queueProject) => {
+    try {
+      const free = await canSendManualCommandAsync(queueProject, isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock);
+      return free === true;
+    } catch (_) {
+      return false;
+    }
+  });
+  setProjectQueueNotify((message) => {
+    try {
+      if (wrapper.isConnected) appendSystemMessage(messagesEl, message);
+    } catch (_) {
+      /* jamais bloquant */
+    }
+  });
+  startProjectQueueLoop();
+  onGlobal(window, "pilot-queue-changed", refreshQueueBlock);
+  refreshQueueBlock();
 
   // ── État interne ──
   const state = {
@@ -1112,6 +1187,45 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     state.lastAssistantText = "";
   };
 
+  // Mission 385 : une commande refusée (projet occupé) n'est plus PERDUE — elle
+  // prend sa place dans la file d'attente du projet et démarrera automatiquement
+  // à la libération de la place. Le lanceur réutilise le chemin d'envoi EXISTANT
+  // (`sendPrompt`), sans aucune modification du lancement d'agent.
+  let replayingQueuedCommand = false;
+  const queueRefusedCommand = (text) => {
+    const queueProject = projectPath || window._pilotProjectPath || ".";
+    const res = enqueueProjectCommand({
+      project: queueProject,
+      text,
+      agentId: agentId || "default",
+      label: text,
+      launch: async () => {
+        if (!wrapper.isConnected) return false;
+        replayingQueuedCommand = true;
+        try {
+          inputEl.value = text;
+          autoResizeTextarea();
+          const sent = await sendPrompt();
+          return sent !== false;
+        } finally {
+          replayingQueuedCommand = false;
+        }
+      },
+    });
+    if (res.duplicate) {
+      appendSystemMessage(messagesEl, "⏳ Cette demande est déjà dans la file d'attente du projet : elle démarrera automatiquement à la libération. `/file` pour la voir.");
+      return true;
+    }
+    if (!res.entry) {
+      // File pleine (garde-fou) : l'appelant affiche le refus, le texte reste
+      // dans la zone de saisie.
+      return false;
+    }
+    appendSystemMessage(messagesEl, `${MANUAL_COMMAND_BLOCKED_MESSAGE}\n\n${formatQueuedNotice(res.rank)}`);
+    refreshQueueBlock();
+    return true;
+  };
+
   // Envoi du message
   const sendPrompt = async () => {
     // Issue #59 : si la saisie de l'agent est bloquée (option activée + onglet
@@ -1130,15 +1244,41 @@ export async function createAgentPi(container, resumed = false, agentId = "defau
     // silence. Le texte saisi RESTE dans la zone de saisie pour être renvoyé
     // une fois la tâche terminée.
     if (!isSlashCommand && !canSendManualCommand(window._pilotProjectPath || ".", isRunInProgress)) {
-      appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
-      return;
+      // Mission 385 : la place du projet n'est pas perdue — la demande prend sa
+      // place dans la file et démarrera seule à la libération (refus visible si
+      // la file est pleine, ou si la relance depuis la file est elle-même
+      // refusée).
+      if (replayingQueuedCommand || !queueRefusedCommand(text)) {
+        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      }
+      return false;
     }
     // POINT D (sens inverse) : deux commandes MANUELLES concurrentes (même projet,
     // deux onglets d'agent) n'inscrivent aucune run dans le bus → la sonde du bus
     // ne les voit pas. On sonde donc aussi l'activité réelle de l'agent du projet
     // (même sonde que la délégation). Refus visible, texte conservé.
     if (!isSlashCommand && !(await canSendManualCommandAsync(window._pilotProjectPath || ".", isRunInProgress, isProjectAgentBusy, releaseOrphanRunLock))) {
-      appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      if (replayingQueuedCommand || !queueRefusedCommand(text)) {
+        appendSystemMessage(messagesEl, MANUAL_COMMAND_BLOCKED_MESSAGE);
+      }
+      return false;
+    }
+    // Mission 385 : file d'attente des tâches du projet. `/file` l'affiche (tâche
+    // en cours + demandes en attente avec leur rang) ; `/file vide` abandonne les
+    // demandes EN ATTENTE en annonçant le nombre abandonné (la tâche en cours
+    // n'est jamais arrêtée). Commandes LOCALES : jamais transmises au moteur.
+    if (text === "/file" || text === "/file vide") {
+      const queueProject = projectPath || window._pilotProjectPath || ".";
+      inputEl.value = "";
+      autoResizeTextarea();
+      hideAutocomplete();
+      if (text === "/file") {
+        appendSystemMessage(messagesEl, formatProjectQueueReport(queueProject));
+      } else {
+        const counts = abandonProjectQueue(queueProject);
+        appendSystemMessage(messagesEl, formatQueueClearedMessage(counts));
+      }
+      refreshQueueBlock();
       return;
     }
     // Mission 380 : commandes LOCALES de diagnostic du verrou par projet. Elles
@@ -6234,6 +6374,8 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
   switch (type) {
     case "agent_start":
       state.isStreaming = true;
+      // Mission 385 : la tâche en cours change → le bloc de la file se met à jour.
+      refreshQueueBlock();
       state.lastStopReason = "";  // réinit pour la détection de troncation (length) à l'agent_end
       // Issue #2 : forcer un rafraîchissement des stats dès le 1er delta du tour.
       state.lastStatsRefresh = 0;
@@ -6298,6 +6440,9 @@ async function handleRpcEvent(payload, messagesEl, state, statusEl, parsePlanFn,
       }
       state.isStreaming = false;
       state.pendingRender = false;
+      // Mission 385 : la place se libère → la demande suivante en file démarre
+      // (sonde périodique) et le bloc de la file est rafraîchi immédiatement.
+      refreshQueueBlock();
       // Fin de flux de l'agent : une fois la dernière frame de rendu peinte, le
       // rendu de l'onglet est au repos (le son de fin armé peut être joué).
       flushAgentRenderThenSoundIdle();

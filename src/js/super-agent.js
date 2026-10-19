@@ -462,6 +462,62 @@ let runAgentsWatchdogByProject = {}; // project → timer id
 // tour et repousse l'échéance tant que la run progresse.
 const RUN_AGENTS_WATCHDOG_MS = 15 * 60 * 1000; // 15 min
 
+// ── Mission 385 : file d'attente VISIBLE du projet ─────────────────────────
+// LECTURE seule et ABANDON de la file de missions, pour la file d'attente
+// affichée dans l'onglet de l'agent et la commande `/file` (`/file vide`).
+// Aucune logique de lancement n'est modifiée ici : ce sont des accesseurs.
+
+/**
+ * Missions de l'assistant en attente pour un projet, dans l'ordre de démarrage.
+ * @param {string} projectPath
+ * @returns {Array<{label:string}>}
+ */
+export function getProjectMissionQueue(projectPath) {
+  const target = projectPath || "";
+  return (runAgentsQueueByProject[target] || []).map((entry) => ({
+    label: String((entry && entry.label) || "mission de l'assistant"),
+  }));
+}
+
+/**
+ * Abandonne les missions de l'assistant en attente d'un projet (mission 385).
+ * Le nombre abandonné est retourné (toujours annoncé à l'utilisateur).
+ * @param {string} projectPath
+ * @returns {number}
+ */
+export function abandonProjectMissionQueue(projectPath) {
+  const target = projectPath || "";
+  const queue = runAgentsQueueByProject[target];
+  const removed = queue ? queue.length : 0;
+  if (removed > 0) {
+    queue.length = 0;
+    delete runAgentsQueueByProject[target];
+  }
+  return removed;
+}
+
+/**
+ * Délégations (issue #66) en attente pour un projet, dans l'ordre.
+ * @param {string} projectPath
+ * @returns {Array<{label:string}>}
+ */
+export function getProjectDelegationQueue(projectPath) {
+  const queue = (delegationState(projectPath).queue || []);
+  return queue.map((item) => ({ label: String((item && item.request) || "délégation") }));
+}
+
+/**
+ * Abandonne les délégations en attente d'un projet (mission 385).
+ * @param {string} projectPath
+ * @returns {number}
+ */
+export function abandonProjectDelegationQueue(projectPath) {
+  const ds = delegationState(projectPath);
+  const removed = ds.queue.length;
+  if (removed > 0) ds.queue.length = 0;
+  return removed;
+}
+
 // POINT G : déclencheur de rejeu GARANTI de la file de missions.
 // Une mission peut être mise en file derrière : une run du bus, une commande
 // MANUELLE (le bus ne la voit pas), un prompt distant, ou une run d'assistant.

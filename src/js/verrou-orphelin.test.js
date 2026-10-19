@@ -419,7 +419,12 @@ describe("PREUVE 7 — les 5 points d'entrée de commande manuelle passent la le
       expect(src, `${file} : aucune redéfinition locale`).not.toMatch(/const releaseOrphanRunLock\s*=/);
       total += calls;
     }
-    expect(total, "5 points d'entrée de commande manuelle").toBe(5);
+    // Mission 385 : 6e point d'entrée — la SONDE de la file d'attente du projet
+    // (`setProjectQueueProbe` dans agent-pi.js) applique la MÊME politique
+    // d'admission, donc la même levée ciblée du verrou orphelin : sans elle, une
+    // commande en file pourrait démarrer derrière un verrou mort (ou attendre
+    // indéfiniment). L'invariant « 1 appel = 1 levée » est inchangé.
+    expect(total, "6 points d'entrée de commande manuelle").toBe(6);
   });
 });
 

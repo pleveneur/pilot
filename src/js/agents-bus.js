@@ -947,6 +947,75 @@ export function getProjectRunLockInfo(project) {
 }
 
 /**
+ * File d'attente d'EXCLUSIVITÉ d'un projet, dans l'ordre (mission 385) :
+ * demandes d'agents mises en file derrière un agent de la même spécialité.
+ * Lecture seule, toutes clés de run du projet confondues (une mission de
+ * LECTURE a sa propre clé de run mais partage la file du projet réel).
+ * @param {string} project - projet ciblé (chemin réel)
+ * @returns {Array<{agentId:string, label:string, runKey:string}>}
+ */
+export function listProjectExclusivityEntries(project) {
+  const entries = [];
+  for (const key of runKeysOfProject(project)) {
+    const ctx = busState.runs[key];
+    const queue = (ctx && ctx.exclusivityQueue) || {};
+    const realProject = ctx.project || project;
+    for (const queueKey of Object.keys(queue)) {
+      const idx = queueKey.indexOf('\u{1f}');
+      if (idx < 0) continue;
+      if (queueKey.slice(0, idx) !== realProject) continue;
+      const keyAgentId = queueKey.slice(idx + 1);
+      for (const assignment of queue[queueKey] || []) {
+        const brief = assignment && (assignment.brief || assignment.task);
+        entries.push({
+          agentId: (assignment && assignment.agentId) || keyAgentId,
+          label: String(brief == null ? "" : brief),
+          runKey: key,
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Abandonne les demandes d'AGENTS en file d'exclusivité d'un projet (mission 385,
+ * commande `/file vide`). Chaque demande abandonnée reçoit un résultat d'erreur
+ * dans son groupe parallèle et décrémente son `pending` (même règle que le
+ * chemin « agent introuvable ») : la run ne reste jamais bloquée en attente d'un
+ * travail qui ne sera pas fait. Le nombre abandonné est retourné (annoncé).
+ * @param {string} project - projet ciblé (chemin réel)
+ * @returns {number}
+ */
+export function abandonProjectExclusivityQueues(project) {
+  let removed = 0;
+  for (const key of runKeysOfProject(project)) {
+    const ctx = busState.runs[key];
+    const queue = (ctx && ctx.exclusivityQueue) || {};
+    const realProject = ctx.project || project;
+    for (const queueKey of Object.keys(queue)) {
+      const idx = queueKey.indexOf('\u{1f}');
+      if (idx < 0) continue;
+      if (queueKey.slice(0, idx) !== realProject) continue;
+      const assignments = queue[queueKey] || [];
+      for (const assignment of assignments) {
+        const agentId = (assignment && assignment.agentId) || queueKey.slice(idx + 1);
+        if (ctx.parallelGroup && ctx.parallelGroup.assignments.some((a) => a.agentId === agentId)) {
+          ctx.parallelGroup.results[agentId] = {
+            status: "error",
+            text: `Demande en file d'attente abandonnée par l'utilisateur (agent ${agentId}).`,
+          };
+          ctx.parallelGroup.pending--;
+        }
+      }
+      removed += assignments.length;
+      delete queue[queueKey];
+    }
+  }
+  return removed;
+}
+
+/**
  * Libère À LA DEMANDE tous les verrous de run d'un projet (mission 380,
  * commande `/verrou libere`). Action EXPLICITE de l'utilisateur : elle ne
  * consulte pas les portes du chien de garde. Elle reste honnête : chaque

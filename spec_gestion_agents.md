@@ -38,6 +38,11 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 ### Conseils
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
+
+### File d'attente du projet
+- Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
+- Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
+- La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
 <!-- /HELP:agents -->
 
 ### Agent `plan-maker` (planificateur)
@@ -286,6 +291,54 @@ toucher une map `agent_sessions` d'`AppState` (champ retiré en phase 2).
 | `src/js/agents.js` | Fonctions pures : registre, modèles, prompts, parsing (`[[CALL]]`, `[[PARALLEL]]`), agrégation, garde-fous. |
 | `src/js/agents-bus.js` | Bus d'exécution : pile, timeouts, envois/réceptions, dispatch parallèle (`dispatchParallel`, `startParallelRun`), buffers par agent. |
 | `src/js/agents-ui.js` | Rendu de l'onglet Agents : **configuration** (liste + éditeur, dont le sélecteur de compétences) et panneau d'**activité** des runs. |
+| `src/js/project-task-queue.js` | File d'attente **par projet** (mission 385) : rangs et libellés en français (purs), vue de la file, textes affichés, et état de la file des **commandes manuelles** du chat (mise en file + démarrage automatique à la libération). |
+| `src/js/project-queue-view.js` | Composition de la file **visible** d'un projet à partir des files réelles (commandes, missions, délégations, agents en file) + abandon des demandes en attente (`/file vide`). Aucune logique de lancement. |
+
+### File d'attente des tâches par projet (mission 385)
+
+**Invariant** : sur un projet, une seule tâche tourne à la fois ; les suivantes
+attendent leur tour, avec leur rang, et démarrent **automatiquement** à la
+libération de la place. La place est rendue sur **réussite, erreur, arrêt
+utilisateur, mort de session et par le chien de garde** ; une activité résiduelle
+sans session vivante ne bloque plus le projet.
+
+La file **n'invente aucune file parallèle** : elle compose celles qui existent
+(dans l'ordre de démarrage observé) et n'ajoute que celle qui manquait, les
+**commandes manuelles** du chat d'agent (auparavant un refus sec perdait la place).
+
+| Famille | Source de vérité (existante) | Rejeu |
+|---|---|---|
+| Commande manuelle du chat | `project-task-queue.js` (nouvelle file) | sonde périodique `QUEUE_TICK_MS` (5 s) |
+| Mission de l'assistant (`run_agents`) | `runAgentsQueueByProject` (`super-agent.js`) | `armQueueReplay` (existant) |
+| Délégation (`delegate_to_coder`, #66) | `delegationState(p).queue` (`super-agent.js`) | `armDelegationQueueReplay` (existant) |
+| Demande d'agent (spécialité occupée) | `exclusivityQueue` (`agents-bus.js`) | `launchNextQueued` / drains (existants) |
+
+- **Sonde d'admission** : la politique existante `canSendManualCommandAsync(...)`
+  (`isRunInProgress` + activité réelle de l'agent + `releaseOrphanRunLock`).
+  **Fail-closed** : sonde en échec ou absente → rien ne démarre, la demande
+  reste en file. Une commande en file ne démarre donc jamais en parallèle d'une
+  tâche en cours.
+- **Le lanceur d'une commande en file réutilise `sendPrompt()` à l'identique** :
+  aucune modification du lancement d'agent, de l'estimation préalable ni du
+  plan-maker (périmètre strict de la mission).
+- **Démarrage non confirmé** (toujours libre après `QUEUE_CONFIRM_MS` = 10 s, ou
+  lanceur en échec) : la demande est remise **en tête** de file ; après
+  `QUEUE_MAX_ATTEMPTS` (3) elle est abandonnée **avec un message** — jamais en
+  silence. Une demande identique déjà en file n'est jamais dupliquée ; la file
+  est plafonnée à `QUEUE_MAX_LENGTH` (50).
+- **Affichage** : bloc discret `.agent-queue-block` sous la barre d'outils de
+  l'onglet de l'agent (masqué si la file est vide), titré « 🧾 File d'attente —
+  N en cours · M en attente », lignes « en cours : … », « en attente (2e) : … ».
+  Rafraîchi par l'événement `pilot-queue-changed` (émis par la boucle) et aux
+  `agent_start` / `agent_end`.
+- **Commandes de chat** : `/file` affiche la file (`formatProjectQueueReport`) ;
+  `/file vide` abandonne les demandes **en attente** et annonce les décomptes par
+  famille (`formatQueueClearedMessage`). Traitées **localement** (jamais envoyées
+  au moteur), sur le modèle de `/verrou`.
+- **Tests** : `src/js/project-task-queue.test.js` (ordre, une seule tâche
+  démarre, la suivante démarre seule, place rendue, rien perdu) et
+  `src/js/project-queue-wiring.test.js` (composition de la file visible,
+  `/file vide`, câblage de l'onglet, style).
 
 #### Fiche d'agent (éditeur, deux colonnes)
 

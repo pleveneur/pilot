@@ -1021,6 +1021,11 @@ L'onglet **🎭 Agents** sert à **configurer l'équipe d'agents** et à **suivr
 - Donnez un modèle puissant au coordinateur : c'est lui qui route les tâches.
 - Le codeur et le testeur peuvent utiliser un modèle local plus léger.
 
+### File d'attente du projet
+- Sur un projet, **une seule tâche tourne à la fois**. Les demandes suivantes ne sont **pas perdues** : elles **attendent leur tour** et démarrent **automatiquement** dès que la place se libère.
+- Un **bloc discret** sous la barre d'outils de l'onglet de l'agent montre la file : la tâche **en cours**, puis les demandes **en attente** avec leur rang (« en attente (2e) »). Il n'apparaît que s'il y a quelque chose à dire.
+- La commande **`/file`** affiche la file complète du projet dans la discussion ; **`/file vide`** abandonne les demandes **en attente** et annonce **combien** ont été abandonnées (la tâche en cours n'est jamais arrêtée).
+
 ---
 
 ### 📄 Générer / mettre à jour AGENTS.md
